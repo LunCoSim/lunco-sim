@@ -8,8 +8,8 @@
 # ── Drive-allocation spec rig ────────────────────────────────────────────────
 #
 # The scene `scenarios/tests/allocation_spec.rhai` runs against. It exists because the
-# allocation spec needs TWO rovers that differ in exactly ONE authored opinion:
-# the name of their drive kernel.
+# allocation spec needs THREE rovers off one asset, differing in exactly ONE
+# authored opinion each: how their drive kernel is selected.
 #
 #   RoverSkid   — stock `vessels/rovers/skid_rover.usda`. Its
 #                 `PhysxVehicleTankDifferentialAPI` derives `DriveMix::skid`, so
@@ -23,6 +23,11 @@
 #                 rhai hook. It is the scenario-level form of the unit test's
 #                 `reg.get("nope").is_none()`.
 #
+#   RoverLazy   — the SAME asset with an authored `DriveMix` scope, so it
+#                 composes the LINEAR kernel instead of skid. It is the control
+#                 for the steer-priority assertion: the "lazy arc" the skid
+#                 kernel exists to beat. See its prim for the full argument.
+#
 # WHY THE BOGUS ROVER IS WORTH A WHOLE PRIM. The lookup MISS is not an academic
 # case — it is a load-bearing mechanism. `components/mobility/drive_laws/*.usda`
 # deliberately author `lunco:driveKernel = "external"`, a name that resolves to
@@ -32,8 +37,8 @@
 # second writer on its ports. So this rig asserts the FAIL-SAFE, not merely the
 # lookup: under full throttle, a rover with an unresolvable kernel does not move.
 #
-# The two rovers are 50 m apart in X and drive along -Z, so their paths never
-# meet. Geometry, ground, friction and spawn height are copied from
+# The rovers are spread along X (-100, -25, +25) and drive along -Z, so their
+# paths never meet. Geometry, ground, friction and spawn height are copied from
 # `drivetrain_parity.usda` — a rig whose numbers are already known-good — so the
 # only new variable in this scene is the kernel name.
 #
@@ -42,7 +47,7 @@
 def Xform "AllocationSpec" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Two skid rovers differing only in drive-kernel name — one resolvable, one not — for the drive-allocation spec."
+    doc = "Three rovers off one asset differing only in how their drive kernel is selected — skid, unresolvable (fail-safe), and an authored linear mix (steer-priority control) — for the drive-allocation spec."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
@@ -147,10 +152,70 @@ def Xform "AllocationSpec" (
         }
     }
 
+    # ── The steer-priority CONTROL ───────────────────────────────────────────
+    # The same asset with an authored `DriveMix` scope, which `derive_drive_mix`
+    # checks BEFORE the inherited `PhysxVehicleTankDifferentialAPI` — so this
+    # rover composes `DriveMix::linear` with the two entries below instead of
+    # `DriveMix::skid`, on the same chassis, wheels, mass and surface.
+    #
+    # WHY: `skid_mix_norm` claims two properties a plain linear mix lacks —
+    # steer-priority (`drive = forward * (1 - 0.5*|steer|)`, so the inner side can
+    # counter-rotate) and PROPORTIONAL saturation (both sides scale by the larger
+    # magnitude, preserving the commanded L/R ratio). Its own comment says that
+    # without them "the outer side saturates and steering becomes a lazy arc".
+    # This mix IS that lazy arc, stated as data:
+    #
+    #     throttle +1, steer +1  ->  left  = 1 + 1 =  2  -> clamped to  1.0
+    #                                right = 1 - 1 =  0  ->             0.0
+    #
+    # one side driven, the other merely stopped. Skid under the same command
+    # gives (1.0, -0.333): the inner bank drives BACKWARD.
+    #
+    # This exists because the spec's yaw-authority assertion was a bare constant
+    # calibrated against a since-replaced tyre model, so it measured the tyres as
+    # much as the allocation. Yaw swept by the steer-priority mix RELATIVE to the
+    # lazy mix on an otherwise identical rover is a claim about allocation alone,
+    # and it survives the next physics change.
+    def Xform "RoverLazy" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string drivetrain = "raycast"
+        }
+    )
+    {
+        # Far enough out that the arc it sweeps under full throttle never reaches
+        # RoverSkid's lane — this control is only honest if the two rovers never
+        # touch each other.
+        double3 xformOp:translate = (-100.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Child prim NAME is the port name; the factors are the linear
+        # projection `throttle*forward + steer*steer + brake*brake`, clamped
+        # per-port to +-1 (`linear_kernel`).
+        def Scope "DriveMix"
+        {
+            def Scope "drive_left"
+            {
+                double lunco:factor:throttle = 1.0
+                double lunco:factor:steer = 1.0
+            }
+            def Scope "drive_right"
+            {
+                double lunco:factor:throttle = 1.0
+                double lunco:factor:steer = -1.0
+            }
+        }
+
+        over "Chassis"
+        {
+            color3f[] primvars:displayColor = [(0.85, 0.8, 0.2)]
+        }
+    }
+
     # ── The test itself ──────────────────────────────────────────────────────
-    # A non-physical prim owning the harness and reaching both rovers by path,
-    # rather than hanging off either one: the two rovers must differ in exactly
-    # one opinion, and hosting the program on one of them is a second.
+    # A non-physical prim owning the harness and reaching every rover by path,
+    # rather than hanging off one of them: the rovers must differ in exactly
+    # one opinion each, and hosting the program on one of them is a second.
     def Scope "Scenario"
     {
         custom string lunco:scenario = "allocation-spec"

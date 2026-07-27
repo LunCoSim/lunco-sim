@@ -75,6 +75,7 @@ fn wire_ports(app: &mut App, extra: impl Bundle) -> Entity {
         end_connector: PORT_NAME.to_string(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
     target
 }

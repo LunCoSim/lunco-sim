@@ -162,6 +162,7 @@ fn test_propagate_sim_component_to_sim_component() {
         end_connector: "force_in".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
 
     // Run wire propagation
@@ -203,6 +204,7 @@ fn test_propagate_with_scale() {
         end_connector: "current_in".into(),
         scale: 0.5,
         offset: 0.0,
+        start_is_input: false,
     });
 
     app.world_mut()
@@ -245,6 +247,7 @@ fn test_propagate_avian_to_sim_component() {
         end_connector: "height".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
 
     // Propagate — the source `height` is read live from Position (no snapshot
@@ -317,6 +320,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
     app.world_mut().spawn(SimConnection {
         start_element: source,
@@ -325,6 +329,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
 
     // Propagate — both wires sum into the force_y input, which lands in

@@ -63,6 +63,18 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
     /// into the canonical physics frame. The returned [`RayHitData::distance`]
     /// is frame-independent; compute the corresponding render point as
     /// `render_origin + dir * distance`.
+    ///
+    /// A non-finite origin yields `None` — a ray from nowhere hits nothing. This is
+    /// a HARD requirement of the backend, not defensiveness: obvhs asserts
+    /// `origin.is_finite()`, so a single NaN reaching it panics the compute pool and
+    /// kills the run. Bodies do go non-finite (a diverging solve), and when they do
+    /// every probe attached to them casts from garbage in the same tick.
+    ///
+    /// Deliberately SILENT. `lunco_physics::escape` already reports a body that left
+    /// the world, by name and position, once. This helper runs per-probe per-frame —
+    /// a wheel-suspension ray, a sensor, a clearance fan — so warning here would
+    /// flood the log at precisely the moment it has to stay readable, and would say
+    /// less than the report the escape guard already prints.
     #[inline]
     pub fn cast_ray_render(
         &self,
@@ -72,6 +84,9 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
+        if !render_origin.is_finite() {
+            return None;
+        }
         self.spatial.cast_ray(
             self.to_physics(render_origin)?,
             direction,

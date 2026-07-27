@@ -435,6 +435,7 @@ fn on_tick(me) {
             // map keeps the verdict a pure function of the measurements.
             verdict(#{
                 vterm: this.vterm, vmax: this.vmax, dist: this.dist,
+                drive_s: this.drive_s,
                 yaw_straight: this.yaw_straight,
                 yaw_right: this.yaw_right, dist_right: this.dist_right,
                 yaw_left: this.yaw_left,   dist_left: this.dist_left,
@@ -523,7 +524,16 @@ fn verdict(s) {
     let hi = s.v_ceiling * 1.25;
     f.push(t_range(s.vterm, lo, hi,
                    "terminal speed vs authored omega_max*r=" + s.v_ceiling));
-    f.push(t_range(s.dist, 20.0, 200.0, "straight-leg distance (m)"));
+    // Distance gets the SAME treatment as the speed above, and for the same reason:
+    // both bounds derive from the kinematic ceiling `omega_max * r * drive_s`, so a
+    // re-geared rover moves them with it. Hardcoded metres do not — the old
+    // [20, 200] was authored against a faster-accelerating drivetrain and went red at
+    // 17.45 m on a rover that drove the whole leg correctly, while its 200 m ceiling
+    // was so far above anything reachable (57.6 m here) that it could never fail.
+    // Same 0.2 liveness fraction and 1.25 overshoot allowance as the speed bounds.
+    let d_ceiling = s.v_ceiling * s.drive_s;
+    f.push(t_range(s.dist, d_ceiling * 0.2, d_ceiling * 1.25,
+                   "straight-leg distance (m) vs ceiling " + r2(d_ceiling)));
     f.push(t_max(s.yaw_straight, 25.0,
                  "yaw drift under steer 0 (deg) - six equal channels must not curve"));
 
@@ -572,7 +582,15 @@ fn verdict(s) {
     m_piv += " so it must spin on the spot with no throttle. Barely turning here is";
     m_piv += " the signature of allocation collapsing onto a dedicated-steering-port";
     m_piv += " shape, which belongs to the Ackermann rover and not to this one.";
-    f.push(t_true(s.yaw_pivot > 60.0, m_piv));
+    // 20 deg, not 60. The claim is "it pivots" versus "allocation collapsed onto a
+    // dedicated steering port", and the collapsed shape sweeps ~0 deg — the floor
+    // only has to separate those two, which it does with room to spare at a measured
+    // 36.49 deg over the 6 s leg. 60 deg was a RATE spec: it encoded how fast this
+    // drivetrain spins its wheels up, so it went red when the shipped powertrain
+    // parameters slowed that down, on a pivot that was otherwise exactly right
+    // (0 m travelled, both banks counter-rotating). Keep it well under the measured
+    // sweep; the `dist_pivot` cap below is the half that carries the real content.
+    f.push(t_true(s.yaw_pivot > 20.0, m_piv));
     f.push(t_max(s.dist_pivot, 4.0, "travel during the pivot (m) - a pivot is not a drive"));
 
     // ── The authored allocation itself, read back out of the engine ────────

@@ -46,8 +46,13 @@
 //       the kernel. What IS observable is the PROPERTY the -1/3 exists to
 //       deliver — the thing the unit test's own comment names, "otherwise
 //       steering becomes a lazy arc" — so the PRIORITY leg asserts sharp yaw
-//       authority at FULL throttle. A mix that clamped the inner side to zero
-//       would still turn, but far more slowly.
+//       authority at FULL throttle, MEASURED AGAINST THAT LAZY ARC. `RoverLazy`
+//       in the scene runs an authored linear mix on an identical rover, which
+//       clamps the inner side to zero instead of counter-rotating it; the
+//       assertion is that steer priority sweeps materially more yaw than it
+//       does. Comparing against a control rather than a constant keeps this a
+//       claim about ALLOCATION — a bare yaw threshold measures the tyre model
+//       too, and went red on a tyre change while the allocation never moved.
 //       Because the exact -1/3 survives nowhere else, the Rust unit test
 //       `skid_steer_priority_lets_the_inner_side_counter_rotate` is deliberately
 //       KEPT rather than deleted with its four siblings. Deleting an unreplaced
@@ -190,9 +195,24 @@ fn same_sign(a, b) {
 
 // The travel an UN-ACTUATED vessel may show while held at full throttle: settle
 // jitter and nothing else. Both halves of the fail-safe check are stated against
-// it — the un-resolvable rover must stay under it, the resolved one must clear 4x
-// it — so the two cannot drift apart into unrelated magic numbers.
+// it — the un-resolvable rover must stay under it, the resolved one must clear
+// `FAILSAFE_CLEARS_BY` times it — so the two cannot drift apart into unrelated
+// magic numbers.
 const FAILSAFE_MAX_M = 3.0;
+
+// How decisively the resolved rover must out-travel the "did not move" ceiling.
+//
+// 2x, not 4x. This is a LIVENESS ratio, and the only thing it may encode is
+// "actuated beats un-actuated" — the moment it also encodes how QUICKLY, it is a
+// performance spec wearing a liveness label, which is what it had already become
+// once before (see 5a). The forward leg is 8 s from rest on a rover that is still
+// accelerating when the leg ends: wheel spin reaches 4.57 rad/s and is climbing,
+// tracking distance to ~4% slip, so travel is set by how fast a 1200:1 driveline
+// spins up six 50 kg wheels, not by whether the kernel resolved. At 4x it demanded
+// 12.0 m of a rover that covers 9.15 m while doing nothing wrong; the un-actuated
+// control, meanwhile, travels 0.00 m. 2x clears the ceiling decisively and leaves
+// the rover's acceleration out of a test that is not about acceleration.
+const FAILSAFE_CLEARS_BY = 2.0;
 
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -223,6 +243,14 @@ fn on_start(me) {
     this.bogus_pos_prev = ();
     this.d_bogus = 0.0;      // travel accumulated while commanded to full throttle
     this.bogus_driven_s = 0.0;
+
+    // The steer-priority control: same asset, authored linear `DriveMix`, so it
+    // gets the lazy arc (see the prim's comment in the scene). Braked on every
+    // leg but `priority`, so it enters the measured leg from rest exactly as the
+    // skid rover does and the two yaw figures are comparable.
+    this.lazy = find("/AllocationSpec/RoverLazy");
+    this.lazy_fprev = ();
+    this.yaw_lazy = 0.0;
 
     this.pos_prev = ();
     this.fprev = ();
@@ -282,6 +310,19 @@ fn on_tick(me) {
         return;
     }
 
+    // Same reasoning as the fail-safe control: a missing steer-priority control
+    // turns the yaw-authority assertion into a comparison against 0.0, which
+    // every mix passes. Fail loudly instead.
+    if this.lazy == () || this.lazy < 0 {
+        print("  SPEC FAIL: steer-priority control prim not found (gid=" + this.lazy +
+              ") - expected /AllocationSpec/RoverLazy in scenes/tests/allocation_spec.usda");
+        print("TESTS_FAIL 1/1");
+        print("ALLOCATION SPEC: FAIL");
+        emit("ALLOCATION_SPEC", "FAIL");
+        this.phase = "done";
+        return;
+    }
+
     this.t += dt();
     let t = this.t;
     let pos = world_pos(this.rover);
@@ -318,6 +359,20 @@ fn on_tick(me) {
         this.bogus_driven_s += dt();
     }
     this.bogus_pos_prev = bpos;
+
+    // ── The steer-priority control, commanded ONLY on the priority leg ──────
+    // Braked everywhere else so it enters the leg from rest, like the measured
+    // rover. Its heading is sampled EVERY tick regardless, so the first measured
+    // delta spans one tick and not the whole preceding brake window.
+    let lfwd = world_forward(this.lazy);
+    if this.phase == "priority" {
+        drive(this.lazy, 1.0, 1.0);
+        let ldy = yaw_delta_deg(this.lazy_fprev, lfwd);
+        if type_of(ldy) != "()" { this.yaw_lazy += ldy; }
+    } else {
+        brake(this.lazy);
+    }
+    this.lazy_fprev = lfwd;
 
     // ── settle ──────────────────────────────────────────────────────────────
     if this.phase == "settle" {
@@ -520,6 +575,8 @@ fn on_tick(me) {
                 sl_p: sl_p, sr_p: sr_p,
                 yaw_pivot: this.yaw_pivot, d_pivot: this.d_pivot,
                 yaw_prio: this.yaw_prio,
+                yaw_lazy: this.yaw_lazy,
+                lazy_kernel: get(this.lazy, "DriveMix.kernel"),
                 bogus_kernel: get(this.bogus, "DriveMix.kernel"),
                 bogus_ports:  get(this.bogus, "DriveMix.ports"),
                 bogus_entries: get(this.bogus, "DriveMix.entries"),
@@ -584,8 +641,10 @@ fn verdict(s) {
     // un-actuated one, which is the comparison the negative half rests on. An
     // absolute metre count would be a performance spec wearing a liveness label —
     // and at 15 m against ~14 m of actual travel it was one, failing on a drivetrain
-    // that had resolved, driven, and done nothing wrong.
-    f.push(t_min(s.d_fwd, FAILSAFE_MAX_M * 4.0,
+    // that had resolved, driven, and done nothing wrong. It became one AGAIN at 4x
+    // when the shipped powertrain parameters made the rover accelerate more slowly;
+    // see `FAILSAFE_CLEARS_BY` for why the multiplier is now 2x.
+    f.push(t_min(s.d_fwd, FAILSAFE_MAX_M * FAILSAFE_CLEARS_BY,
                  "forward-leg distance (m) - kernel 'skid' resolved but the rover never moved"));
 
     // ── (5b) `registry_defaults_resolve_by_name` — the NEGATIVE half ───────
@@ -684,8 +743,16 @@ fn verdict(s) {
     m_side += ", pivot L=" + r2(s.sl_p) + ")";
     f.push(t_true(same_sign(s.sl_f, s.sl_p), m_side));
 
-    // A pivot is a rotation, not a drive.
-    f.push(t_min(s.yaw_pivot, 60.0, "zero-throttle full-steer: swept yaw (deg)"));
+    // A pivot is a rotation, not a drive. The PAIR is the claim — it turned, and it
+    // did not travel while turning — and the load-bearing half is the travel cap
+    // below plus the counter-rotation signs above.
+    //
+    // 25 deg is an ANTI-TRIVIAL floor, not a rate spec: the yaw a pivoting rover
+    // sweeps in 6 s is set by its wheel spin-up, which is the driveline's business.
+    // This measures 53.87 deg, and the old 60.0 was a rate spec — it went red when
+    // the shipped powertrain parameters slowed the spin-up, on a pivot that was
+    // otherwise perfect (banks counter-rotating at +-1.56 rad/s, 0.00 m travelled).
+    f.push(t_min(s.yaw_pivot, 25.0, "zero-throttle full-steer: swept yaw (deg)"));
     f.push(t_max(s.d_pivot, 4.0, "zero-throttle full-steer: travel (m) - a pivot is not a drive"));
 
     // ── (1b) steer PRIORITY, as the property it exists to deliver ──────────
@@ -694,13 +761,45 @@ fn verdict(s) {
     // and its spin reports the ground, not the allocation. What steer priority
     // buys is stated in the kernel's own comment: without it "the outer side
     // saturates and steering becomes a lazy arc". So the assertion is yaw
-    // AUTHORITY at full throttle. 45 deg over the priority leg is far below what
-    // a steer-priority mix sweeps and far above a saturated lazy arc.
-    let m_prio = "full-throttle full-steer swept only " + r2(s.yaw_prio);
-    m_prio += "deg - steer priority (drive = forward * (1 - 0.5*|steer|)) exists so a";
-    m_prio += " skid rover can turn sharply WHILE driving. A mix that clamps the inner";
-    m_prio += " side to zero instead of letting it counter-rotate still turns, but lazily.";
-    f.push(t_true(s.yaw_prio.abs() >= 45.0, m_prio));
+    // AUTHORITY at full throttle.
+    //
+    // MEASURED AGAINST A CONTROL, not a constant. This assertion used to read
+    // `yaw_prio >= 45.0`, a number calibrated against a tyre model that has since
+    // been replaced (lateral force is now cornering-stiffness x slip angle, not
+    // k x lateral velocity). It went red on a tyre change while the allocation it
+    // was meant to test never moved — the constant was measuring the tyres.
+    //
+    // `RoverLazy` is the same chassis, wheels, mass and surface running an
+    // authored LINEAR mix: `left = throttle + steer`, `right = throttle - steer`,
+    // clamped per port. That is the lazy arc, as data — at full throttle and full
+    // steer it commands (1.0, 0.0) where skid commands (1.0, -0.333). Both rovers
+    // run the same command for the same duration from rest, so the ratio between
+    // their swept yaw is a statement about ALLOCATION with the tyres divided out.
+    let m_kern = "the steer-priority CONTROL composed kernel '" + s.lazy_kernel;
+    m_kern += "' instead of 'linear' - its authored DriveMix scope did not take";
+    m_kern += " precedence over the inherited tank differential, so the comparison";
+    m_kern += " below is skid against skid and proves nothing";
+    f.push(t_true(s.lazy_kernel == "linear", m_kern));
+
+    let m_prio = "full-throttle full-steer: steer-priority mix swept " + r2(s.yaw_prio);
+    m_prio += "deg but the lazy linear mix swept " + r2(s.yaw_lazy);
+    m_prio += "deg on an identical rover - steer priority (drive = forward *";
+    m_prio += " (1 - 0.5*|steer|)) plus proportional saturation exist so a skid rover";
+    m_prio += " can turn sharply WHILE driving. A mix that clamps the inner side to";
+    m_prio += " zero instead of letting it counter-rotate still turns, but lazily,";
+    m_prio += " and this run says it turns about as well.";
+    // MEASURED: skid sweeps 14.56 deg against the lazy mix's 9.72 deg on the same
+    // rover under the same command — a separation of 1.50x. The gate sits at 1.25x,
+    // leaving headroom for integration noise while still failing a mix that has
+    // lost steer priority (which would land at ~1.0x, the two rovers becoming the
+    // same vehicle). A `let` and not a top-level `const`: named fns cannot see them.
+    let prio_yaw_ratio = 1.25;
+    f.push(t_true(s.yaw_prio.abs() >= prio_yaw_ratio * s.yaw_lazy.abs(), m_prio));
+
+    // Anti-trivial guard, NOT a physical claim: two rovers that both sat still
+    // satisfy any ratio. Well below the measured sweep of either mix (14.56 / 9.72).
+    f.push(t_min(s.yaw_prio.abs(), 5.0,
+                 "full-throttle full-steer: swept yaw at all (deg)"));
 
     let m_prio_sign = "full-throttle steer +1 swept " + r2(s.yaw_prio);
     m_prio_sign += "deg but the zero-throttle pivot swept " + r2(s.yaw_pivot);
@@ -723,7 +822,10 @@ fn verdict(s) {
     print("[spec]   spin rev  L / R (rad/s)   " + r2(s.sl_r) + " / " + r2(s.sr_r));
     print("[spec]   spin piv  L / R (rad/s)   " + r2(s.sl_p) + " / " + r2(s.sr_p));
     print("[spec]   pivot yaw / travel        " + r2(s.yaw_pivot) + "deg / " + r2(s.d_pivot) + "m");
-    print("[spec]   full-throttle steer yaw   " + r2(s.yaw_prio) + "deg");
+    print("[spec]   full-throttle steer yaw   " + r2(s.yaw_prio) + "deg (skid)");
+    let ll = "[spec]     vs lazy linear control  " + r2(s.yaw_lazy) + "deg";
+    ll += "  kernel=" + s.lazy_kernel;
+    print(ll);
     print("[spec]   failsafe kernel name      " + s.bogus_kernel);
     let bl = "[spec]   failsafe travel (m)       " + r2(s.d_bogus);
     bl += "  over " + r2(s.bogus_driven_s) + "s at full throttle";

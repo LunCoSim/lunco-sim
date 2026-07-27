@@ -1665,6 +1665,27 @@ pub fn sense_clearance(
         if registry.owner_of(gid.get()).is_none() {
             continue;
         }
+        // A body whose solve has diverged has no clearance to sense. `SpatialQuery`
+        // does not tolerate this: obvhs asserts `origin.is_finite()` on every ray, so
+        // one non-finite pose does not degrade the probe, it PANICS the compute pool
+        // and takes the whole sim down — which is how a rocker-bogie blow-up in
+        // `scenes/tests/rover_comparison.usda` surfaced as a crash inside this system,
+        // several systems away from anything that went wrong.
+        //
+        // Skipping is not papering over the blow-up. `lunco_physics::escape` is the
+        // system that owns "this body left the world" and reports it by name and
+        // position; this one has no standing to diagnose it and must not out-shout it.
+        // But it must not be silent either — a vessel that vanishes from the clearance
+        // field would otherwise read as "sensor returned nothing" to every consumer.
+        if !pos.0.is_finite() || !rot.0.is_finite() {
+            warn!(
+                "[autopilot] non-finite pose for gid {}, skipping clearance probe: \
+                 pos={:?} — physics has diverged for this body; see the escape guard",
+                gid.get(),
+                pos.0
+            );
+            continue;
+        }
         // Level forward: drop the pitch so the probe skims a horizontal plane instead
         // of aiming into the ground (downhill) or the sky (uphill).
         let f = (rot.0 * bevy::math::DVec3::NEG_Z).as_vec3();

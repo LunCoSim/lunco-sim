@@ -88,6 +88,8 @@ fn compile_balloon_model(
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
+            // Worker-stepped, not client-predicted: solver choice comes off the DAE.
+            realtime_safe: false,
         });
 
         eprintln!("test: dispatched Modelica Compile for '{name}'");
@@ -125,6 +127,7 @@ fn setup_balloon_wires(
             end_connector: "force_y".into(),
             scale: 1.0,
             offset: 0.0,
+            start_is_input: false,
         });
         commands.spawn(SimConnection {
             start_element: entity,
@@ -133,6 +136,7 @@ fn setup_balloon_wires(
             end_connector: "height".into(),
             scale: 1.0,
             offset: 0.0,
+            start_is_input: false,
         });
         commands.spawn(SimConnection {
             start_element: entity,
@@ -141,6 +145,7 @@ fn setup_balloon_wires(
             end_connector: "velocity".into(),
             scale: 1.0,
             offset: 0.0,
+            start_is_input: false,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();

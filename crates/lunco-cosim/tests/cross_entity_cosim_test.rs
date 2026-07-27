@@ -162,6 +162,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
         end_connector: "signal".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
     app.world_mut().spawn(SimConnection {
         start_element: amplifier,
@@ -170,6 +171,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
         end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
 
     // ── Wire engines to nodes ───────────────────────────────────────
@@ -197,6 +199,8 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
+            // Worker-stepped, not client-predicted: solver choice comes off the DAE.
+            realtime_safe: false,
         });
     }
 

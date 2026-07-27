@@ -49,6 +49,7 @@ fn test_balloon_force_propagation() {
         end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
     app.world_mut().spawn(SimConnection {
         start_element: balloon,
@@ -57,6 +58,7 @@ fn test_balloon_force_propagation() {
         end_connector: "height".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
 
     // Run propagation
@@ -111,6 +113,7 @@ fn test_balloon_connection_accumulation() {
         end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
     app.world_mut().spawn(SimConnection {
         start_element: balloon,
@@ -119,6 +122,7 @@ fn test_balloon_connection_accumulation() {
         end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
+        start_is_input: false,
     });
 
     // Run propagation — accumulates into PendingForces.f.y

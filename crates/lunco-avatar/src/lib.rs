@@ -1427,16 +1427,21 @@ fn spring_arm_system(
         let excluded = vessel_collision_exclusions(arm.target, &q_children, &joints);
         let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
         filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
-        let hit = if let Some(ref sq) = spatial_query {
-            sq.cast_ray(
+        // A non-finite origin is not a camera problem to solve, but it IS one this
+        // cast cannot survive: obvhs asserts `origin.is_finite()`, so following a
+        // vessel whose solve has diverged would panic the compute pool from inside
+        // the camera. No hit means the arm simply does not shorten, which is the
+        // right behaviour for a frame with nothing valid to look at.
+        let castable = ray_origin.is_finite() && ray_len.is_finite();
+        let hit = match spatial_query {
+            Some(ref sq) if castable => sq.cast_ray(
                 ray_origin,
                 bevy::math::Dir3::new(ray_dir.as_vec3()).unwrap_or(bevy::math::Dir3::Y),
                 ray_len,
                 true,
                 &filter,
-            )
-        } else {
-            None
+            ),
+            _ => None,
         };
 
         // Collision response: only the arm LENGTH is smoothed, and only when an

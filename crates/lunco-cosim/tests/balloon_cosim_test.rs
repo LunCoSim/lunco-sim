@@ -85,6 +85,9 @@ fn compile_balloon_model(
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
+            // Not a client-predicted body: this balloon is stepped by the
+            // co-sim worker, so the solver choice comes off the DAE alone.
+            realtime_safe: false,
         });
 
         eprintln!("test: sent Compile for balloon '{name}'");
@@ -124,6 +127,7 @@ fn setup_balloon_wires(
             end_connector: "force_y".into(),
             scale: 1.0,
             offset: 0.0,
+            start_is_input: false,
         });
         commands.spawn(SimConnection {
             start_element: entity,
@@ -132,6 +136,7 @@ fn setup_balloon_wires(
             end_connector: "height".into(),
             scale: 1.0,
             offset: 0.0,
+            start_is_input: false,
         });
         commands.spawn(SimConnection {
             start_element: entity,
@@ -140,6 +145,7 @@ fn setup_balloon_wires(
             end_connector: "velocity".into(),
             scale: 1.0,
             offset: 0.0,
+            start_is_input: false,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();
