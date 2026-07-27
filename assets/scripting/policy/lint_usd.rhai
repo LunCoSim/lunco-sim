@@ -145,6 +145,56 @@ fn potential_setting_classes() {
     ["Battery.mo"]
 }
 
+/// Whether one program is an electrical device, and whether it sets the potential.
+///
+/// `[is_electrical, is_source]`, as 0/1 ints so the caller can sum them.
+///
+/// A device qualifies on its acausal interface — the `p` pin — AND on being backed
+/// by a Modelica source. Asking the CONNECTOR rather than the file path keeps a
+/// twin's own device in scope alongside the shipped library.
+///
+/// The `.mo` half is not redundant: a built-in `info:id` program that authors
+/// `connectors:p` is already reported by `invalid-network-program-source`, and it
+/// contributes no equations at all, so calling it a reference-less electrical
+/// island would be a second, wronger diagnosis of the same prim.
+fn electrical_role(program) {
+    if !program.source_asset.ends_with(".mo") { return [0, 0]; }
+    let pinned = false;
+    for c in program.connectors {
+        if c == "p" { pinned = true; }
+    }
+    if !pinned { return [0, 0]; }
+    let source = 0;
+    for cls in potential_setting_classes() {
+        if program.source_asset.ends_with(cls) { source = 1; }
+    }
+    [1, source]
+}
+
+/// `[electrical_member_count, potential_setting_count]` for one network scope.
+///
+/// ⚠ A SEPARATE FUNCTION FOR A MECHANICAL REASON, not for tidiness. Inlined into
+/// `electrical_island_reference_device` this is three nested `for`s over a
+/// `finding(...)` call, and rhai's EXPRESSION COMPLEXITY CAP rejects it at COMPILE
+/// time — which does not disable one rule, it fails the whole policy to compile and
+/// the linter then registers nothing at all and reports zero findings on every
+/// scene. MEASURED here: `Expression exceeds maximum complexity (line 177)`, and
+/// `lint_selftest` went from 3 failures to 10 because every OTHER rule had silently
+/// stopped running too. Same trap the `finding()` helper exists to prevent.
+fn electrical_tally(facts, scope) {
+    let electrical = 0;
+    let sources = 0;
+    for member in scope.members {
+        for program in facts.connector_programs {
+            if program.path != member { continue; }
+            let role = electrical_role(program);
+            electrical += role[0];
+            sources += role[1];
+        }
+    }
+    [electrical, sources]
+}
+
 /// An electrical island needs EXACTLY ONE potential-setting device.
 ///
 /// Zero leaves the node voltage free and the DAE structurally singular; two
@@ -159,25 +209,17 @@ fn potential_setting_classes() {
 fn electrical_island_reference_device(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        let electrical = 0;
-        let sources = 0;
-        for member in scope.members {
-            for program in facts.connector_programs {
-                if program.path != member { continue; }
-                // An electrical member is one whose acausal interface is the `p`
-                // pin. Asking the CONNECTOR rather than the file path keeps a
-                // twin's own device in scope alongside the shipped library.
-                let is_electrical = false;
-                for c in program.connectors {
-                    if c == "p" { is_electrical = true; }
-                }
-                if !is_electrical { continue; }
-                electrical += 1;
-                for cls in potential_setting_classes() {
-                    if program.source_asset.ends_with(cls) { sources += 1; }
-                }
-            }
-        }
+        // ONE NODE IS THE PREMISE. This rule counts per SCOPE, and that is only the
+        // same thing as counting per NODE while the scope holds a single connected
+        // island. A scope holding two disconnected islands legitimately carries two
+        // voltage sources — one per node — and `disconnected-component-network` has
+        // already reported the split as its own error. Without this the rule fires
+        // on `/LintSelftest/DisconnectedElectrical` and calls two correctly
+        // referenced buses over-determined.
+        if scope.island_count > 1 { continue; }
+        let tally = electrical_tally(facts, scope);
+        let electrical = tally[0];
+        let sources = tally[1];
         if electrical == 0 { continue; }
         if sources == 1 { continue; }
 
