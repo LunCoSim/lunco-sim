@@ -48,6 +48,7 @@ pub mod ports;
 pub mod sensors;
 pub mod suggestion;
 pub mod systems;
+pub mod telemetry;
 
 pub use avian::*;
 pub use component::*;
@@ -239,6 +240,20 @@ impl Plugin for CoSimPlugin {
         // See `docs/architecture/render-decoupling.md`.
 
         app.add_systems(Update, systems::collider::sync_collider);
+
+        // A model's own variables — the INTERNAL Modelica state included — become
+        // retained, plottable history without anyone authoring a channel per
+        // variable. Runs AFTER propagation so a sample is the post-step value the
+        // rest of the frame sees, never the previous tick's. See `telemetry.rs`
+        // for the namespace that keeps it out of authored channels' buffers and
+        // for the rate/retention/memory arithmetic.
+        app.init_resource::<telemetry::CosimTelemetrySettings>();
+        app.init_resource::<telemetry::CosimTelemetryClock>();
+        app.init_resource::<lunco_signal::SignalRegistry>();
+        app.add_systems(
+            FixedUpdate,
+            telemetry::publish_cosim_variables.after(systems::propagate::CosimSet::Propagate),
+        );
 
         // Register the typed command observers generated below (the
         // `register_commands!` list turns into `register_all_commands(app)`).

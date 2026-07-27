@@ -18,6 +18,16 @@
 //! only channels appearing/disappearing do. Latest-value cells are
 //! O(1) `samples.back()` reads per visible row.
 //!
+//! ## Scoping to the selection
+//!
+//! A channel is owned by the prim it measures — a motor, a battery, a wheel —
+//! while the user selects a VESSEL. "Selected only" therefore filters by an
+//! ANCESTOR test against [`lunco_signal::TelemetryFocus`]
+//! ([`entity_in_focus`]), not by entity equality, which would show nothing for
+//! every rover ever selected. The focus resource is written by whichever app owns
+//! selection (`lunco-sandbox-edit` mirrors `SelectedEntities` into it); a host
+//! without one leaves it empty and the toggle disabled.
+//!
 //! ## Getting a channel onto a canvas
 //!
 //! Two doors, both landing on the existing dirty-checked plot node
@@ -42,14 +52,14 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::{Entity, Name};
+use bevy::prelude::{ChildOf, Entity, Name};
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
 use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
 use crate::registry::VisualizationRegistry;
-use crate::signal::{ScalarHistory, SignalRef, SignalRegistry};
+use crate::signal::{ScalarHistory, SignalRef, SignalRegistry, TelemetryFocus};
 use crate::view::ViewTarget;
 use crate::viz::{SignalBinding, VisualizationConfig, VizId};
 use crate::{LINE_PLOT_KIND, VIZ_PANEL_KIND};
@@ -175,11 +185,19 @@ struct Row {
 struct Group {
     label: String,
     rows: Vec<Row>,
+    /// True when this group's owning entity is the focused root or a descendant
+    /// of one (see [`TelemetryFocus`]). Resolved at build time — the ancestor
+    /// walk is not something to redo per frame per row.
+    in_focus: bool,
 }
 
 #[derive(Default)]
 struct Catalog {
     key: u64,
+    /// [`TelemetryFocus::fingerprint`] the groups' `in_focus` flags were built
+    /// against. Selecting a different rover changes no channel, so the channel-set
+    /// key alone would leave every flag stale.
+    focus_key: u64,
     groups: Vec<Group>,
 }
 
@@ -205,6 +223,7 @@ fn catalog_key(reg: &SignalRegistry) -> u64 {
 fn build_groups(
     reg: &SignalRegistry,
     name_of: impl Fn(Entity) -> Option<String>,
+    in_focus: impl Fn(Entity) -> bool,
 ) -> Vec<Group> {
     use std::collections::HashMap;
     let mut by_entity: HashMap<Entity, Vec<Row>> = HashMap::new();
@@ -224,11 +243,43 @@ fn build_groups(
             } else {
                 name_of(entity).unwrap_or_else(|| format!("Entity {entity}"))
             };
-            Group { label, rows }
+            Group {
+                label,
+                rows,
+                in_focus: entity != Entity::PLACEHOLDER && in_focus(entity),
+            }
         })
         .collect();
     groups.sort_by(|a, b| a.label.cmp(&b.label));
     groups
+}
+
+/// Depth cap for the ancestor walk that decides focus membership. A vessel is a
+/// handful of levels deep (rover → rocker → motor); the cap exists so a cyclic or
+/// corrupt hierarchy can't spin the UI thread, not because 32 is a real limit.
+const MAX_ANCESTOR_DEPTH: usize = 32;
+
+/// Is `entity` one of `roots`, or a descendant of one?
+///
+/// This is why the focus resource carries ROOTS and not channel owners: the user
+/// selects a rover, but its channels sit on the motor / battery / wheel prims
+/// underneath it. `parent_of` is the caller's hierarchy accessor (the panel passes
+/// `PanelCtx::get::<ChildOf>`), so this stays a pure function and is testable
+/// without a `World`.
+fn entity_in_focus(
+    entity: Entity,
+    roots: &[Entity],
+    parent_of: impl Fn(Entity) -> Option<Entity>,
+) -> bool {
+    let mut cursor = Some(entity);
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(e) = cursor else { return false };
+        if roots.contains(&e) {
+            return true;
+        }
+        cursor = parent_of(e);
+    }
+    false
 }
 
 /// Case-insensitive substring filter over `path` and group label.
@@ -307,12 +358,29 @@ fn fmt_value(v: f64) -> String {
 /// Telemetry channel browser panel. Registered by
 /// [`crate::LuncoVizPlugin`]; no host wiring needed for the panel
 /// itself. See the module docs for the two plot-creation doors.
-#[derive(Default)]
 pub struct TelemetryBrowserPanel {
     filter: String,
     catalog: Catalog,
     selected: Option<SignalRef>,
     preview: Option<PreviewCache>,
+    /// Narrow the list to [`TelemetryFocus`] — the selected vessel and everything
+    /// under it. On by default: in an editor with a selection, "the thing I clicked"
+    /// is what a telemetry panel is being opened to look at. Ignored (with the
+    /// checkbox disabled) while nothing is selected, so the panel never goes blank
+    /// just because the user hasn't clicked anything yet.
+    focus_only: bool,
+}
+
+impl Default for TelemetryBrowserPanel {
+    fn default() -> Self {
+        Self {
+            filter: String::new(),
+            catalog: Catalog::default(),
+            selected: None,
+            preview: None,
+            focus_only: true,
+        }
+    }
 }
 
 /// Pixel budget for the inline preview decimation. Fixed (not
@@ -349,6 +417,37 @@ impl Panel for TelemetryBrowserPanel {
                 .hint_text("Filter channels…")
                 .desired_width(f32::INFINITY),
         );
+
+        // ── Selection scope ──────────────────────────────────────
+        // The focus resource is written by whichever app owns selection
+        // (`lunco-sandbox-edit` mirrors `SelectedEntities` into it); absent ⇒ a host
+        // with no selection concept at all, and the toggle simply has nothing to do.
+        let focus: Vec<Entity> = ctx
+            .resource::<TelemetryFocus>()
+            .map(|f| f.roots.clone())
+            .unwrap_or_default();
+        let focus_key = ctx
+            .resource::<TelemetryFocus>()
+            .map(|f| f.fingerprint())
+            .unwrap_or(0);
+        ui.horizontal(|ui| {
+            ui.add_enabled(
+                !focus.is_empty(),
+                egui::Checkbox::new(&mut self.focus_only, "Selected only"),
+            )
+            .on_hover_text(
+                "Show only the selected vessel's channels — including every part \
+                 underneath it (motors, battery, wheels).",
+            )
+            .on_disabled_hover_text("Select something in the scene to scope the list.");
+            if focus.is_empty() {
+                ui.label(
+                    egui::RichText::new("nothing selected")
+                        .small()
+                        .color(subdued),
+                );
+            }
+        });
         ui.separator();
 
         let Some(registry) = ctx.resource::<SignalRegistry>() else {
@@ -357,18 +456,46 @@ impl Panel for TelemetryBrowserPanel {
         };
 
         // ── Change-driven catalog rebuild ────────────────────────
+        // Two independent invalidators: the channel SET (a sim started, a vessel
+        // spawned) and the FOCUS (the user clicked a different rover — same channels,
+        // different membership).
         let key = catalog_key(registry);
-        if self.catalog.key != key || (self.catalog.groups.is_empty() && key != 0) {
-            let groups = build_groups(registry, |e| {
-                ctx.get::<Name>(e).map(|n| n.as_str().to_string())
-            });
-            self.catalog = Catalog { key, groups };
+        if self.catalog.key != key
+            || self.catalog.focus_key != focus_key
+            || (self.catalog.groups.is_empty() && key != 0)
+        {
+            let groups = build_groups(
+                registry,
+                |e| ctx.get::<Name>(e).map(|n| n.as_str().to_string()),
+                |e| entity_in_focus(e, &focus, |c| ctx.get::<ChildOf>(c).map(|p| p.parent())),
+            );
+            self.catalog = Catalog {
+                key,
+                focus_key,
+                groups,
+            };
         }
 
         if self.catalog.groups.is_empty() {
             ui.label(
                 egui::RichText::new(
                     "No telemetry channels yet — run a simulation to populate the registry.",
+                )
+                .color(subdued),
+            );
+            return;
+        }
+
+        // Scoping is applied at RENDER time, not at build time: flipping the
+        // checkbox must not invalidate the catalog, and the "selection has no
+        // channels" case below needs to know the difference between "no channels"
+        // and "none in scope".
+        let scoped = self.focus_only && !focus.is_empty();
+        if scoped && !self.catalog.groups.iter().any(|g| g.in_focus) {
+            ui.label(
+                egui::RichText::new(
+                    "The selection publishes no telemetry — author `lunco:telemetry` \
+                     on its prims, or untick “Selected only”.",
                 )
                 .color(subdued),
             );
@@ -387,6 +514,9 @@ impl Panel for TelemetryBrowserPanel {
             .max_height((ui.available_height() - detail_reserve).max(60.0))
             .show(ui, |ui| {
                 for group in &self.catalog.groups {
+                    if scoped && !group.in_focus {
+                        continue;
+                    }
                     let visible: Vec<&Row> = group
                         .rows
                         .iter()
@@ -615,9 +745,11 @@ mod tests {
             },
         );
 
-        let groups = build_groups(&reg, |e| {
-            (e == ent(1)).then(|| "Alpha Rover".to_string())
-        });
+        let groups = build_groups(
+            &reg,
+            |e| (e == ent(1)).then(|| "Alpha Rover".to_string()),
+            |_| false,
+        );
         assert_eq!(groups.len(), 2);
         // Sorted by label: "Alpha Rover" < "Entity …".
         assert_eq!(groups[0].label, "Alpha Rover");
@@ -635,6 +767,59 @@ mod tests {
         assert!(filter_match("SPEED", "Rover", "wheel.speed"));
         assert!(filter_match("rov", "Rover", "wheel.speed"));
         assert!(!filter_match("thrust", "Rover", "wheel.speed"));
+    }
+
+    #[test]
+    fn focus_membership_is_an_ancestor_test_not_an_equality_test() {
+        // rover ← rocker ← motor: the channel sits on the motor, the user
+        // selected the rover.
+        let rover = ent(1);
+        let rocker = ent(2);
+        let motor = ent(3);
+        let other = ent(9);
+        let parent = |e: Entity| match e {
+            e if e == motor => Some(rocker),
+            e if e == rocker => Some(rover),
+            _ => None,
+        };
+        assert!(entity_in_focus(motor, &[rover], parent));
+        assert!(entity_in_focus(rover, &[rover], parent));
+        assert!(!entity_in_focus(other, &[rover], parent));
+        assert!(!entity_in_focus(motor, &[], parent), "no focus ⇒ no member");
+    }
+
+    #[test]
+    fn a_hierarchy_cycle_terminates_the_walk() {
+        let a = ent(1);
+        let b = ent(2);
+        // Corrupt hierarchy: a → b → a. Must return, not hang.
+        let parent = |e: Entity| Some(if e == a { b } else { a });
+        assert!(!entity_in_focus(a, &[ent(7)], parent));
+    }
+
+    #[test]
+    fn groups_carry_focus_membership() {
+        let mut reg = SignalRegistry::default();
+        reg.push_scalar(SignalRef::new(ent(1), "a"), 0.0, 1.0);
+        reg.push_scalar(SignalRef::new(ent(2), "b"), 0.0, 1.0);
+        let groups = build_groups(&reg, |_| None, |e| e == ent(1));
+        let focused: Vec<bool> = groups.iter().map(|g| g.in_focus).collect();
+        assert_eq!(focused.iter().filter(|f| **f).count(), 1);
+    }
+
+    #[test]
+    fn focus_fingerprint_moves_with_the_selection() {
+        use lunco_signal::TelemetryFocus;
+        let empty = TelemetryFocus::default();
+        let one = TelemetryFocus {
+            roots: vec![ent(1)],
+        };
+        let two = TelemetryFocus {
+            roots: vec![ent(2)],
+        };
+        assert_ne!(empty.fingerprint(), one.fingerprint());
+        assert_ne!(one.fingerprint(), two.fingerprint());
+        assert_eq!(one.fingerprint(), one.clone().fingerprint());
     }
 
     #[test]

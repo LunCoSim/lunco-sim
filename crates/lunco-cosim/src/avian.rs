@@ -256,6 +256,19 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
             write: None,
         },
+        // Ground speed — the MAGNITUDE of the linear velocity, frame-free.
+        //
+        // The per-axis ports are world-frame, so "how fast is this rover going"
+        // is not any one of them: a vehicle driving north reads its whole speed
+        // on `velocity_z` and zero once it turns. Every consumer that wanted a
+        // speedometer (telemetry channel, HUD, a model's drag term) was左 to
+        // recompute the magnitude from three ports it had to wire separately.
+        AvianPort {
+            name: "speed",
+            dir: PortDirection::Out,
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.length())),
+            write: None,
+        },
         // Attitude as a quaternion (canonical, gimbal-safe). Avian's `Rotation`
         // wraps a `DQuat` in the f64 build. Read-only — write attitude via torque.
         AvianPort {

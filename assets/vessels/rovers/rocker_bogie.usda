@@ -119,6 +119,20 @@ def Xform "RockerBogie" (
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
 
+    # --- Telemetry: the vehicle's own ground speed ---
+    # `speed` is a PHYSICS port (the magnitude of this body's linear velocity, from
+    # the avian backend), not a model variable — which is why it is authored on the
+    # chassis and not on a component: the chassis IS the rigid body being measured.
+    #
+    # It is the one number "is this rover moving, and how fast" needs, and reading it
+    # from a single port beats plotting `velocity_x/y/z` and doing the arithmetic by
+    # eye — those are world-frame, so a rover that turns hands its speed from one
+    # trace to another.
+    uniform bool lunco:telemetry = true
+    uniform token lunco:telemetry:port = "speed"
+    uniform token lunco:telemetry:name = "ground_speed"
+    uniform token lunco:telemetry:unit = "m/s"
+
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
     def "Controls" (

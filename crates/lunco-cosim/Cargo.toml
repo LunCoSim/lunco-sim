@@ -10,6 +10,11 @@ bevy.workspace = true
 avian3d.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
+# The render-free signal core: `telemetry.rs` publishes every co-simulated
+# model's variables into the same ring buffers the plot surfaces read. It is a
+# ring buffer of `f64`s — no GPU stack rides in on this edge, which is exactly why
+# `lunco-signal` was split out of `lunco-viz`.
+lunco-signal = { path = "../lunco-signal" }
 
 [dev-dependencies]
 avian3d = { workspace = true }

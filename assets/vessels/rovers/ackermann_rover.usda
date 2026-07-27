@@ -53,6 +53,15 @@ def Xform "AckermannRover" (
 
     float physics:mass = 1000.0
     float lunco:spawnLift = 1.0
+
+    # Ground speed as a retained channel — the avian `speed` port on this body
+    # (magnitude of its linear velocity). See `rocker_bogie.usda` for why speed is
+    # authored on the chassis rather than on a component.
+    uniform bool lunco:telemetry = true
+    uniform token lunco:telemetry:port = "speed"
+    uniform token lunco:telemetry:name = "ground_speed"
+    uniform token lunco:telemetry:unit = "m/s"
+
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
 

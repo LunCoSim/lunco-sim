@@ -7056,6 +7056,7 @@ dependencies = [
  "lunco-physics",
  "lunco-scene-commands",
  "lunco-scripting",
+ "lunco-signal",
 ]
 
 [[package]]
@@ -7443,6 +7444,7 @@ dependencies = [
  "lunco-render",
  "lunco-scene-commands",
  "lunco-settings",
+ "lunco-signal",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",

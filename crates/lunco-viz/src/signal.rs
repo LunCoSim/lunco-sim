@@ -12,7 +12,7 @@
 
 pub use lunco_signal::{
     ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
-    DEFAULT_CAPACITY,
+    TelemetryFocus, DEFAULT_CAPACITY,
 };
 
 #[cfg(feature = "ui")]

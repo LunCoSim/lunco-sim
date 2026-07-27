@@ -39,7 +39,9 @@ pub use kinds::line_plot::{LinePlot, LINE_PLOT_KIND};
 pub use panel::{VizPanel, VIZ_PANEL_KIND};
 #[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
-pub use signal::{ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType};
+pub use signal::{
+    ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
+};
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{
     drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest, TelemetryBrowserPanel,

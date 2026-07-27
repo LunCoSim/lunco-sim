@@ -29,10 +29,15 @@ use lunco_doc_bevy::DocumentRegistry;
 pub mod browser_dispatch;
 pub mod browser_section;
 pub mod loaded_stages;
+pub mod scene_files;
 pub mod session_codec;
 pub mod viewport;
 
 pub use browser_section::UsdSceneSection;
+pub use scene_files::{
+    produce_scene_file_view, SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView,
+    SceneFilesSection,
+};
 pub use loaded_stages::{
     produce_usd_browser_view, LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage,
 };
@@ -63,6 +68,17 @@ impl Plugin for UsdUiPlugin {
         app.world_mut()
             .resource_mut::<BrowserSectionRegistry>()
             .register(UsdSceneSection);
+
+        // "What files is this scene made of" — the resolved reference closure,
+        // in the Files scope beside the raw folder tree. Its producer is gated on
+        // the scene-root set (the walk parses layers off disk), so it costs
+        // nothing per frame; see `scene_files.rs`.
+        app.init_resource::<SceneFileView>();
+        app.init_resource::<SceneFileRescan>();
+        app.add_systems(Update, produce_scene_file_view);
+        app.world_mut()
+            .resource_mut::<BrowserSectionRegistry>()
+            .register(SceneFilesSection);
 
         app.add_observer(register_workspace_stage_on_doc_opened);
         app.add_observer(drop_workspace_stage_on_doc_closed);
