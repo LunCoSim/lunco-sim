@@ -109,6 +109,101 @@ derived from the path. When a source contains several definitions, author the st
 `info:sourceAsset:subIdentifier` property on the program facet; it is the authoritative
 Modelica class name.
 
+## 2a. Authoring a device model: the four rules that are not obvious
+
+Every rule below was learned by breaking it, and each break was silent — a compiled,
+stepping, plausible-looking island that was wrong. They are stated as rules because none
+of them is inferable from the Modelica language reference alone.
+
+### One pin, no `Ground` — and exactly one potential-setting device per island
+
+MSL's `Modelica.Electrical.Analog` builds devices on `OnePort` (two pins, `v = p.v − n.v`)
+and requires a `Ground` to pin the reference node. LunCo's devices carry **one** `Pin` and
+no ground, because the vehicle bus *is* the reference: every device hangs off the same
+node, and the chassis return is not modelled. That is a deliberate deviation, and it moves
+one obligation onto the author.
+
+With no `Ground`, **`v` at the node is set by whichever device states it.** `Battery` is
+that device:
+
+```modelica
+p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;   // sets the node potential
+```
+
+Every other device must *read* `p.v` and state its **current**, never its voltage. Two
+voltage-setting devices on one island over-determine the node; zero leaves `v` free and
+the DAE structurally singular. Neither is reported as such — the first shows up as a
+solver failure with an unrelated-looking message, the second as an island that never
+publishes.
+
+### A source states CURRENT, not POWER
+
+The bug that cost the most. Both the panel and the motor were originally written as
+constant-power devices:
+
+```modelica
+p.i = -power_rating / p.v;      // ✗ nonlinear in the unknown
+```
+
+`p.v` is an unknown of the same algebraic system, so `p.i · p.v = const` closes a
+**nonlinear** loop across every device on the bus. The live backend pairs each algebraic
+row with a variable and secant-solves it, and it cannot invert that pairing:
+
+```
+algebraic refresh row 2 cannot be solved for `…Battery.p.i`:
+the residual does not depend on it
+```
+
+Written as current sources, the same island is linear in its unknowns and steps:
+
+```modelica
+p.i = -(area * efficiency * irradiance * max(0.0, cos_incidence)) / v_mp;   // panel
+p.i = (rated_power / v_rated) * abs(demand) / max(0.01, efficiency);        // motor
+```
+
+This is also the physically honest direction: a PV module is a **photocurrent** source, and
+a motor drive regulates **current** (torque ∝ current) while the bus voltage sets how fast
+that current can be pushed. Divide by a **parameter** (`v_mp`, `v_rated` — the nameplate),
+never by the solved node voltage.
+
+⚠ **A constant-power device hides while the vehicle is parked.** At `demand = 0` the motor's
+`p.i` is zero, the division collapses, and the bus solves. The fault appears the moment
+current flows. A test that only asserts an island *steps* will not see it — which is why
+`scenarios/tests/solar_domain_nested_ref.rhai` drives its rovers and asserts a non-zero
+motor draw, rather than reading ports at rest.
+
+### `output Real`, or nothing can read it
+
+The domain projection publishes a member's **`output`** variables as ports on the island.
+A plain `Real` is computed every step and observable by nobody — no scenario, no HUD, no
+telemetry channel. `DCMotor.electrical_power` was a plain `Real` for exactly this reason
+and read back as an absent port, which is indistinguishable from an island that failed to
+publish.
+
+Marking a reported quantity `output` is **not** a causality claim about the circuit: `p.v`
+and `p.i` are still solved acausally by the connection set. It says only that the number
+leaves the model.
+
+### Port names are the MANGLED prim path, and the mangling is total
+
+A member's variable surfaces on the island as `<mangled member prim path>.<var>`. The
+escaping (`instance_identifier` → `modelica_path_identifier`) is injective, not cosmetic:
+
+| in the prim path | in the port name |
+|---|---|
+| `/` | `_x2f_` |
+| `_` | `__` (doubled) |
+| any other non-alphanumeric | `_x<hex>_` |
+
+So `/Rover/RockerL/Motor_FL` reads as `Rover_x2f_RockerL_x2f_Motor__FL` — **two**
+underscores in `Motor__FL`. Prims without an underscore in their name (`Battery`,
+`SolarPanel`) hide this rule completely; every motor trips it. A misspelled port name
+returns absent, which reads exactly like a broken island, so check the spelling before
+believing the island.
+
+The network's own authored `outputs:soc` is a *boundary* name and is not how a member's
+interior variable is addressed — `get(elec, "soc")` reads nothing.
+
 ## 3. Why library loading looks the way it does
 
 `assets/models/LunCo/` is a standard structured Modelica package — `package.mo` +

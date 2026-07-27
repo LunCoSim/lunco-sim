@@ -74,23 +74,76 @@ What is actually in the code, as of 2026-07-12 (finding `A4`):
 | `uniform bool lunco:program:realtimeSafe`, read at prim-read time (`lunco-usd-sim/src/cosim.rs`) → the `RealtimeSafe` component (`crates/lunco-cosim/src/connection.rs`) | **implemented** |
 | Gate: a program **without** `RealtimeSafe` wiring a force/torque port on a client-predicted `Dynamic` body | **warns at wire-build time** (`rewire_usd_connections`); does **not** refuse the wire |
 | `lunco:replication` → always-on `Replication` metadata (§5, §"declared in USD") | **not implemented** — no code reads it |
-| Promise ↔ solver/caps validation at load ("rejected loudly on conflict") | **not implemented** |
+| Promise ↔ solver/caps validation | **implemented** (2026-07-27) — `lunco_experiments::solver` resolves by capability and refuses an incapable pairing at stepper construction |
 | A fixed-step deterministic solver good enough to honour the promise | **not available** — see below |
+| Effect of the promise on live solver choice | **plumbed, currently inert** — `realtime_safe` reaches `resolve` as `RuntimeProfile::predicted`, but `rk45` is the only registered backend with `usable_live`, so every live model resolves to it either way. The wiring is what makes item 1 below a registration rather than a refactor; it changes no outcome until a second live-capable backend exists. |
 
-The live/interactive stepper no longer shares the batch runner's solver
-configuration (it used to: adaptive-implicit BDF/diffsol, `atol = rtol = 1e-6`,
-driven at 3 fixed sub-steps — an adaptive implicit solver inside the
-client-predicted loop, i.e. precisely the §1 anti-goal). The live path now has its
-own configuration, in `worker::live_stepper_options`:
+### Solver selection is resolved, not hardcoded (2026-07-27)
 
-- **explicit family** (`SimSolverMode::RkLike`) — no Newton/LU iteration whose
-  *count* varies with the machine's rounding;
+The live path used to name its own solver family, and that was a second,
+independent selection site: `worker::live_stepper_options` hardcoded the explicit
+family for **every** live model while the batch path resolved one properly. The
+two silently disagreed.
+
+MEASURED CONSEQUENCE: a rover's generated electrical island (battery + solar
+panel) carries algebraic unknowns. Handed the explicit stepper it failed every
+step with `rk45 backend only supports a narrow explicit ODE subset: algebraic
+refresh row 2 cannot be solved for …Battery.p.i`, published no ports, and
+reported nothing a driver would see. Every solar rover in the repo was dead,
+including the shipped `scenes/sandbox/solar_rover_demo.usda` — which is the class
+of model §2 above calls the adaptive solver's *sweet spot*.
+
+Both paths now call `lunco_experiments::solver::resolve`, from two facts — and
+**both are facts about WHERE the model runs**, never claims about the model:
+
+- **`live`** — is it stepped inside the fixed-step frame loop, as opposed to an
+  offline batch solve that owns its own time;
+- **`predicted`** — does it drive a client-predicted body, i.e. the declared
+  `RealtimeSafe` promise, carried to the worker on `ModelicaCommand::Compile`
+  because the worker thread has no ECS.
+
+There is deliberately **no** third fact for whether the model is *solvable*, and
+the first attempt at one is worth recording because it was plausible and wrong:
+`implicit = (dae.variables.algebraics non-empty)`, read off the compiled DAE. A
+healthy battery island has algebraic variables too, so that predicate routed live
+islands onto the adaptive backend — which owns its own step sequence and stalled
+the worker so badly that one of three models finished compiling in 30 s of sim
+time, with no error. Solvability is the backend's own lowering to answer and the
+authored domain rules to constrain. A thin substrate does not get an opinion.
+
+### The registry is the vocabulary
+
+`SolverChoice` was a closed enum; it is a registry now, and that changes the
+public surface in two ways worth stating plainly:
+
+- **The old spellings are gone, not aliased.** Ids normalise case, `-`, `_` and
+  spaces, so a stored `"rk_like"` normalises to `"rklike"` and matches no
+  registered backend (the registered id is `"rk45"`). An API caller or saved
+  `RunBounds` carrying a pre-registry name gets an `Unknown` error naming every
+  valid id. There is no compatibility shim: one form, discoverable.
+- **`ListSolvers` is how you discover them** (`lunco-modelica/src/api_queries.rs`)
+  — id, label, rank and every capability flag, straight from the registry. It
+  exists so that "what may I pass?" has an answer that cannot drift from what
+  `resolve` accepts.
+
+An unknown or incapable authored solver **fails the run**. It is not downgraded to
+one that happens to work — `parse_solver_arg` used to warn and drop, which meant a
+typo produced numbers under a different integrator than the caller believed, with
+only a log line to say so. Refusal is reported to the console, not just the log,
+because a run that never started otherwise looks like one still compiling.
+
+What remains genuinely live-specific is stepping POLICY, not solver choice:
+
 - a **fixed micro-step ladder**: every macro step is an integer number of
   `LIVE_MICRO_DT = SECS_PER_TICK / 3` micro-steps (`micro_steps_for(dt)`), so the
   model's stop-time lattice is a pure function of the fixed-step clock and the
   requested `dt` — identical on every peer;
 - a fixed tolerance, **not** the model's `experiment(Tolerance=…)` annotation (an
   offline-accuracy knob must not reach into the realtime loop).
+
+A predicted model still resolves to the explicit backend, so that class's
+behaviour is unchanged — but it does so because that backend *declares*
+`realtime_tolerated`, not because a function body asserted it.
 
 **This is not yet determinism strong enough to honour the promise, and the doc will not
 pretend it is.**
@@ -101,10 +154,18 @@ stepper today. Driving it at fixed micro-steps bounds the divergence to *within*
 one micro-step and pins the macro stop-times, which is as far as the client layer
 can go alone.
 
+The gap is now DATA rather than an assertion buried in a function: the `rk45`
+backend registers as `fixed_step: false, deterministic: false,
+realtime_tolerated: true`, and a test asserts that any backend which is genuinely
+fixed-step and deterministic outranks the tolerated one for a predicted model. So
+item 1 below closes by *registering the new backend* — no call-site edit, and the
+concession retires itself.
+
 > **TODO(A4)** — to close this properly:
 > 1. *Upstream (rumoca):* a fixed-step tableau with no error control — the
 >    "Realtime profile" of §7. This is the load-bearing missing piece; until it
 >    lands, no Modelica model can genuinely keep the promise it declares.
+>    Landing it is now a registration in `lunco-modelica/src/solver_backends.rs`.
 > 2. *Enforcement:* promote the `rewire_usd_connections` warn to a **refusal**
 >    (drop the wire, surface a diagnostic). Enforcement point:
 >    `crates/lunco-usd-sim/src/cosim.rs::rewire_usd_connections` — the gate is the
