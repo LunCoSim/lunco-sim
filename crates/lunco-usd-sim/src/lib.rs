@@ -1187,12 +1187,7 @@ fn process_usd_sim_prim_read(
             port_map.insert(name.clone(), port_ent);
         }
 
-        commands.entity(entity).try_insert((
-            lunco_core::SelectableRoot,
-            // Rovers have a meaningful "upright" — opt into overturn
-            // recovery (see `lunco_terrain_surface::collider_ring`).
-            lunco_core::KeepUpright,
-        ));
+        commands.entity(entity).try_insert(lunco_core::SelectableRoot);
 
         // The input surface is AUTHORED, in the vessel's `Controls` scope: the
         // intents it binds name exactly the ports this vessel accepts.

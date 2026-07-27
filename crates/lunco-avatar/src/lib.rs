@@ -615,6 +615,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_core::SpawnToolActive>();
         app.init_resource::<lunco_core::TerrainToolActive>();
         app.init_resource::<lunco_core::WaypointToolActive>();
+        app.init_resource::<lunco_core::ArmedScriptTool>();
         app.init_resource::<lunco_core::WaypointMenuOpen>();
         // Populated by `lunco-workbench` when egui is present; guaranteed here so
         // the keyboard gate (`scene_keyboard_active`) has a resource to read on
@@ -1263,7 +1264,7 @@ pub fn vessel_collision_exclusions_for_test(world: &mut World, target: Entity) -
 /// dropped inside the rover it was meant to be looking at.
 ///
 /// Joint connectivity is what "part of this vehicle" actually means, and it is
-/// the same set `rescue_overturned_vessels` moves as a unit for the same reason.
+/// the same set `RecoverVessel` moves as a unit for the same reason.
 fn vessel_collision_exclusions(
     target: Entity,
     q_children: &Query<&Children>,
@@ -2800,6 +2801,7 @@ pub fn avatar_raycast_possession(
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
     waypoint_tool_active: Res<lunco_core::WaypointToolActive>,
+    armed_script_tool: Res<lunco_core::ArmedScriptTool>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
@@ -2846,6 +2848,10 @@ pub fn avatar_raycast_possession(
     }
     // Waypoint Move/Insert armed: that click places the waypoint, don't possess.
     if waypoint_tool_active.0 {
+        return;
+    }
+    // A script tool is armed: that click belongs to the tool, don't possess.
+    if armed_script_tool.armed() {
         return;
     }
 

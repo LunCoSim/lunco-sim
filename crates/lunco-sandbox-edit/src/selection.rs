@@ -321,6 +321,7 @@ pub fn on_scene_click_select(
     spawn_state: Res<SpawnState>,
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
     waypoint_tool_active: Res<lunco_core::WaypointToolActive>,
+    armed_script_tool: Res<lunco_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
@@ -351,6 +352,10 @@ pub fn on_scene_click_select(
     }
     // Waypoint Move/Insert armed: that click places the waypoint, not select.
     if waypoint_tool_active.0 {
+        return;
+    }
+    // A script tool is armed: that click belongs to the tool, not to selection.
+    if armed_script_tool.armed() {
         return;
     }
 

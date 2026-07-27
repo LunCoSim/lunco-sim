@@ -155,8 +155,10 @@ impl Plugin for TerrainSurfacePlugin {
         // assembly so its wheels clear the one-sided heightfield instead of starting
         // embedded (authored chassis-at-surface + wheels-hang-below) and sinking.
         app.add_systems(Update, crate::collider_ring::settle_grounded_assemblies);
-        // Overturn recovery: a `KeepUpright` vessel resting on its roof gets
-        // righted (whole jointed assembly, rigidly) after a settle delay.
-        app.add_systems(FixedUpdate, crate::collider_ring::rescue_overturned_vessels);
+        // NO automatic overturn recovery. A vessel on its roof stays there until
+        // someone recovers it — the Recover tool, or `recover::vessel(id)` from
+        // rhai, both landing on the `RecoverVessel` command in `collider_ring`.
+        // The old `FixedUpdate` auto-righting hid the terrain/suspension problem
+        // that put the rover there in the first place.
     }
 }

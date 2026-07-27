@@ -82,6 +82,11 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-assets = { path = "../lunco-assets" }
+# Script-authored click tools: the palette lists every tool exposing
+# `on_click/1` (discovery via `lunco-tools`) and arms it; the click is handed to
+# the tool's own rhai handler through `RunRhai` (`lunco-scripting`).
+lunco-tools = { path = "../lunco-tools" }
+lunco-scripting = { path = "../lunco-scripting" }
 
 [features]
 default = ["ui"]

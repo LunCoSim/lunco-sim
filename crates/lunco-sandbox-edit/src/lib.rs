@@ -57,6 +57,8 @@ pub mod selection;
 #[cfg(feature = "ui")]
 pub mod spawn;
 #[cfg(feature = "ui")]
+pub mod script_tools;
+#[cfg(feature = "ui")]
 pub mod terrain_tools;
 
 /// UI panels — WorkbenchPanel implementations (for editor mode).
@@ -83,6 +85,7 @@ impl Plugin for SandboxEditPlugin {
             .init_resource::<lunco_core::TerrainToolActive>()
             .init_resource::<lunco_core::WaypointToolActive>()
             .init_resource::<lunco_core::WaypointMenuOpen>()
+            .init_resource::<lunco_core::ArmedScriptTool>()
             .init_resource::<terrain_tools::TerrainToolState>()
             // Shader source is a journaled domain: edits record to the Twin
             // journal + hot-reload. The recorder attaches when the journal appears.
@@ -113,6 +116,10 @@ impl Plugin for SandboxEditPlugin {
                 terrain_tools::terrain_tool_state_system,
                 terrain_tools::terrain_brush_size_input,
                 terrain_tools::update_terrain_brush_ghost,
+                // Script-authored click tools: keyboard exit + drop an armed
+                // name whose tool has gone away (libraries hot-reload).
+                script_tools::disarm_script_tool_on_cancel,
+                script_tools::forget_missing_script_tool,
             ),
         );
 
@@ -123,6 +130,7 @@ impl Plugin for SandboxEditPlugin {
         app.add_observer(selection::on_scene_click_select);
         app.add_observer(spawn::on_scene_click_spawn);
         app.add_observer(terrain_tools::on_scene_click_terrain);
+        app.add_observer(script_tools::on_scene_click_script_tool);
 
         spawn::register_all_commands(app);
 

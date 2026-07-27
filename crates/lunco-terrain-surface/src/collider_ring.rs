@@ -27,7 +27,7 @@ use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
 use lunco_core::coords::GridPos;
-use lunco_core::WorldGrid;
+use lunco_core::{on_command, register_commands, Command, WorldGrid};
 use lunco_terrain_core::{quantize, HeightSource};
 
 use crate::band::SurfaceBand;
@@ -807,62 +807,42 @@ pub fn settle_grounded_assemblies(
     }
 }
 
-/// How long a `KeepUpright` root must rest overturned and near-motionless before
-/// auto-righting kicks in — long enough that a rover mid-tumble or being driven
-/// out of trouble is never snatched.
-const OVERTURN_SETTLE_SECS: f32 = 3.0;
-/// `up · world_up` below which the body counts as overturned (~78° of roll).
-const OVERTURN_UP_DOT: f64 = 0.2;
-/// Resting speed gates (m/s, rad/s) for the settle timer.
-const OVERTURN_REST_SPEED: f64 = 0.5;
-/// After this many consecutive righting attempts that fail to stick, stop
-/// intervening and emit ONE structured failure instead of re-firing forever. A
-/// pose that reverts to overturned every time — a body re-authored by USD
-/// projection each step, or a static structure wrongly given `KeepUpright` — is a
-/// scene bug the runtime cannot fix by repeating the rotation, and the old code
-/// logged a fresh "auto-righted" success on every cycle (~once/min, indefinitely).
-const MAX_RESCUE_ATTEMPTS: u32 = 3;
-
-/// Rescue progress for a `KeepUpright` root resting overturned (see
-/// [`rescue_overturned_vessels`]). Inserted when the body first settles
-/// overturned, removed the moment it is upright or moving again. `secs` is the
-/// settle timer; `attempts` counts righting interventions so an ineffective loop
-/// can be capped at [`MAX_RESCUE_ATTEMPTS`].
-#[derive(Component, Default)]
-pub struct OverturnedTimer {
-    secs: f32,
-    attempts: u32,
-}
-
-/// Marks a vessel whose righting kept reverting: [`rescue_overturned_vessels`]
-/// gives up on it (one failure diagnostic, then silence) until it is upright or
-/// moving again, at which point the marker and its [`OverturnedTimer`] are cleared.
-#[derive(Component)]
-pub struct RescueFailed;
-
-/// Auto-right overturned vessels: a [`lunco_core::KeepUpright`] Dynamic root that
-/// rests near-motionless with its up-axis at or below the horizon for
-/// [`OVERTURN_SETTLE_SECS`] is rotated upright about its own position (shortest
-/// arc, so heading is approximately preserved), together with its whole
-/// joint-connected assembly, then reseated just above the composed surface with
-/// velocities zeroed. A rover on its roof is a dead end the player can only fix
-/// by editing the scene — while a tipped ROCK staying tipped is correct, which is
-/// why this keys on the explicit marker and not on `RigidBody::Dynamic`.
+/// Right one overturned vessel, NOW — the primitive behind the Recover tool and
+/// the rhai `recover::vessel(id)` verb.
+///
+/// USER-INVOKED ONLY. This used to run itself: a `KeepUpright` marker plus a
+/// `FixedUpdate` system (`rescue_overturned_vessels`) that watched every marked
+/// vessel, waited 3 s of near-motionless overturned rest, and rotated it upright
+/// — up to three times before giving up. That is gone, deliberately. A rover
+/// ending up on its roof is *information* about the terrain, the suspension or
+/// the driving, and a runtime that quietly undoes it hides the very thing worth
+/// looking at; it also fought any scene whose pose is authored elsewhere. When a
+/// vessel is stuck, someone now says so.
+///
+/// Rotates the whole joint-connected assembly upright about the target's own
+/// position (shortest arc, so heading is approximately preserved), reseats it
+/// [`RESCUE_CLEARANCE`] above the composed surface, and zeroes velocities.
 ///
 /// Operates on avian's f64 `Position`/`Rotation` — under the big_space physics
 /// bridge a Dynamic body's `Transform` is a writeback TARGET (overwritten from
 /// `Position` next step), so poses must be written through `Position`.
-pub fn rescue_overturned_vessels(
-    time: Res<Time>,
+#[Command(default)]
+pub struct RecoverVessel {
+    /// API-stable global entity id (the `api_id` from `ListEntities`) of the
+    /// vessel to right. `u64` rather than `Entity` for the same reason
+    /// `MoveEntity` uses one: `#[Command(default)]` derives `Default`, and
+    /// `Entity` has none.
+    pub entity_id: u64,
+}
+
+#[on_command(RecoverVessel)]
+fn on_recover_vessel(
+    trigger: On<RecoverVessel>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
     terrains: Query<
         (&GlobalTransform, &crate::stream_viz::DemHeightField),
         With<TerrainColliderRing>,
     >,
-    // Pose/velocities are read through `bodies` (a read borrow of the same query
-    // that later writes them) — reading them here too would be a B0001 conflict.
-    roots: Query<Entity, With<lunco_core::KeepUpright>>,
-    mut timers: Query<&mut OverturnedTimer>,
-    failed: Query<(), With<RescueFailed>>,
     mut bodies: Query<(
         &RigidBody,
         &mut avian3d::prelude::Position,
@@ -872,55 +852,58 @@ pub fn rescue_overturned_vessels(
     )>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
-    mut commands: Commands,
 ) {
     use bevy::math::DQuat;
-    for root in &roots {
-        let Ok((rb, pos, rot, lin, ang)) = bodies.get(root) else {
-            continue;
+    let global_id = lunco_core::GlobalEntityId::from_raw(trigger.event().entity_id);
+    let Some(root) = registry.resolve(&global_id) else {
+        warn!(
+            "[recover] no api_id={} in registry",
+            trigger.event().entity_id
+        );
+        return;
+    };
+    {
+        let Ok((rb, pos, rot, _, _)) = bodies.get(root) else {
+            warn!("[recover] {root:?} is not a rigid body — nothing to right");
+            return;
         };
         if !matches!(rb, RigidBody::Dynamic) {
-            continue;
+            warn!("[recover] {root:?} is not Dynamic — a static body has no pose to fix");
+            return;
         }
         let up = rot.0 * DVec3::Y;
-        let resting = lin.is_none_or(|v| v.0.length() < OVERTURN_REST_SPEED)
-            && ang.is_none_or(|w| w.0.length() < OVERTURN_REST_SPEED);
         let pivot = GridPos(pos.0);
-        if up.y > OVERTURN_UP_DOT || !resting {
-            // Upright or moving: healthy. Clear both the settle timer and any
-            // prior give-up marker so a legitimate one-shot rescue resets to a
-            // zero attempt count and a re-tip starts fresh.
-            if timers.contains(root) {
-                commands.entity(root).try_remove::<OverturnedTimer>();
-            }
-            if failed.contains(root) {
-                commands.entity(root).try_remove::<RescueFailed>();
-            }
-            continue;
-        }
-        // Still overturned after we already gave up on it: stay silent.
-        if failed.contains(root) {
-            continue;
-        }
-        // Overturned and at rest: run the settle timer before intervening.
-        let Ok(mut timer) = timers.get_mut(root) else {
-            commands.entity(root).try_insert(OverturnedTimer::default());
-            continue;
-        };
-        timer.secs += time.delta_secs();
-        if timer.secs < OVERTURN_SETTLE_SECS {
-            continue;
-        }
-        // Consume the settle window and record the attempt. The timer persists
-        // (not removed) so consecutive ineffective righting attempts accumulate
-        // toward the cap instead of each looking like a first-time success.
-        timer.secs = 0.0;
-        timer.attempts += 1;
-        let attempt = timer.attempts;
-        // Rigid righting transform about the root's own position: shortest arc
+        // Rigid righting transform about the target's own position: shortest arc
         // from the current up to world up (an exact 180° flip picks an arbitrary
         // axis — any righting is fine there).
         let q_fix = DQuat::from_rotation_arc(up.normalize(), DVec3::Y);
+        recover_assembly(root, pivot, q_fix, up.y, &terrains, &mut bodies, &dynamics, &joints);
+    }
+}
+
+/// The righting itself, split out so the command reads as intent and the pose
+/// arithmetic stays testable on its own terms.
+#[allow(clippy::too_many_arguments)]
+fn recover_assembly(
+    root: Entity,
+    pivot: GridPos,
+    q_fix: bevy::math::DQuat,
+    was_up_y: f64,
+    terrains: &Query<
+        (&GlobalTransform, &crate::stream_viz::DemHeightField),
+        With<TerrainColliderRing>,
+    >,
+    bodies: &mut Query<(
+        &RigidBody,
+        &mut avian3d::prelude::Position,
+        &mut avian3d::prelude::Rotation,
+        Option<&mut avian3d::prelude::LinearVelocity>,
+        Option<&mut avian3d::prelude::AngularVelocity>,
+    )>,
+    dynamics: &Query<&RigidBody>,
+    joints: &JointGraph,
+) {
+    {
         let adj = joints.adjacency(|e| {
             dynamics
                 .get(e)
@@ -972,31 +955,18 @@ pub fn rescue_overturned_vessels(
                 w.0 = DVec3::ZERO;
             }
         }
-        warn!(
-            "[collider-ring] auto-right attempt {attempt}/{MAX_RESCUE_ATTEMPTS} on \
-             overturned vessel {root:?} ({} bodies): up·Y was {:.2}, lifted {lift:.1} m, \
-             velocities zeroed",
+        // ONE line per invocation, and it says what the user asked for and what
+        // happened — no attempt counter, because there is no retry loop to count.
+        // A recover that does not stick is now visible as the user clicking again.
+        info!(
+            "[recover] righted vessel {root:?} ({} bodies): up·Y was {was_up_y:.2}, \
+             lifted {lift:.1} m, velocities zeroed",
             members.len(),
-            up.y,
         );
-        // If the pose keeps reverting to overturned across the cap, the rotation
-        // is not the fix (the pose is re-authored elsewhere, or this entity should
-        // not be `KeepUpright`). Give up with one structured diagnostic; the marker
-        // clears itself once the vessel is upright or moving again.
-        if attempt >= MAX_RESCUE_ATTEMPTS {
-            commands.entity(root).try_insert(RescueFailed);
-            error!(
-                "[collider-ring] auto-right FAILED for vessel {root:?} ({} bodies): \
-                 still overturned (up·Y {:.2}) after {MAX_RESCUE_ATTEMPTS} attempts, \
-                 lift {lift:.1} m — pose reverts every cycle; check that this entity \
-                 should carry KeepUpright and is not being re-authored each step. \
-                 No further attempts until it is upright again.",
-                members.len(),
-                up.y,
-            );
-        }
     }
 }
+
+register_commands!(on_recover_vessel);
 
 #[cfg(test)]
 mod tests {

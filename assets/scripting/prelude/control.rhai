@@ -34,6 +34,39 @@ fn clear_scene()               { cmd("ClearScene") }
 // Picks up .usda edits; pair with pause() for "reload then freeze".
 fn restart_scene()             { cmd("RestartScene") }
 fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: key, value: val }) }
+
+// ── Pose writing — the write half of `world_pos` / `world_rotation` ──────────
+//
+// Read with `world_pos(id)` / `world_rotation(id)` (math.rhai derives world_up,
+// tilt_deg, … from the latter); write with these. Same representations both
+// ways: position is `[x, y, z]`, orientation is `[x, y, z, w]` — so a script can
+// read a pose, transform it with `qrot`/`vadd`, and write it straight back.
+//
+// FRAME: position is GRID-ABSOLUTE — the frame USD authors `xformOp:translate`
+// in, and the frame `world_pos` reports. It is NOT the raw `Transform`
+// translation, which is only the remainder within the entity's big_space cell
+// (short by cell x edge — 2 km per cell at the moonbase, 0 in the sandbox,
+// which is why frame bugs of this family hide in the sandbox and only bite at a
+// site). Rotation is frame-invariant, so it needs no such care.
+//
+// Both pin the body Kinematic for the write, so the physics solver treats the
+// authored pose as authoritative for a tick instead of immediately arguing with
+// it, and both carry the pose to joint-connected descendants.
+
+/// Move an entity to a grid-absolute position `[x, y, z]`.
+fn set_world_pos(id, p)        { cmd("MoveEntity", #{ entity_id: id, translation: p }) }
+
+/// Set an entity's world orientation from a quaternion `[x, y, z, w]` — the
+/// same form `world_rotation(id)` returns. A degenerate quaternion is refused.
+fn set_world_rotation(id, q)   { cmd("RotateEntity", #{ entity_id: id, rotation: q }) }
+
+/// Write both halves of a pose at once. Two commands, not one: they are
+/// separately useful and separately meaningful, and ordering them here keeps
+/// the "position then orientation" convention in one place.
+fn set_world_pose(id, p, q) {
+    set_world_pos(id, p);
+    set_world_rotation(id, q);
+}
 fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
 fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 

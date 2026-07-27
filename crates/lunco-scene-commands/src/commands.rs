@@ -751,6 +751,106 @@ pub fn on_move_entity_command(
     );
 }
 
+/// Set an entity's world ORIENTATION — the rotational twin of [`MoveEntity`].
+///
+/// Reachable as `cmd("RotateEntity", #{entity_id, rotation: [x, y, z, w]})`, or
+/// `set_world_rotation(id, q)` from the rhai prelude. The quaternion is the same
+/// `[x, y, z, w]` form `world_rotation(id)` returns and `qrot` consumes, so a
+/// script can read an orientation, transform it, and write it back without ever
+/// converting representation.
+///
+/// **Rotation is frame-invariant**, which is what makes this simpler than
+/// `MoveEntity`: there is no cell split, no grid-absolute-versus-remainder trap.
+/// A world orientation written into `Transform.rotation` IS the world
+/// orientation, at the site and at the origin alike.
+///
+/// Written through `Transform`, never through avian's `Rotation`, for exactly
+/// the reason `MoveEntity` never hand-writes `Position`:
+/// `BigSpacePhysicsBridgePlugin::pose_to_position` fires on the external
+/// `Transform` write and derives the physics pose from it (carrying it to
+/// jointed descendants); a hand-written `Rotation` is a second, wronger opinion
+/// that the bridge's writeback then undoes. The body is pinned Kinematic for the
+/// move, as `MoveEntity` does, so the solver treats the new pose as
+/// authoritative rather than fighting it.
+#[Command(default)]
+pub struct RotateEntity {
+    /// API-stable global entity ID (the `api_id` from `ListEntities`). `u64`
+    /// rather than `Entity` for the same reason `MoveEntity` uses one:
+    /// `#[Command(default)]` derives `Default`, and `Entity` has none.
+    pub entity_id: u64,
+    /// Target world orientation as `[x, y, z, w]`. Normalised on arrival — a
+    /// quaternion that has been interpolated or sampled is unit only to float
+    /// tolerance, and refusing it would make this fail for poses that are
+    /// perfectly usable. A degenerate (near-zero) quaternion IS refused: it
+    /// names no orientation, and silently substituting identity would spin the
+    /// body to an attitude the caller never asked for.
+    pub rotation: Vec4,
+}
+
+/// Observer for `RotateEntity`.
+#[on_command(RotateEntity)]
+pub fn on_rotate_entity_command(
+    trigger: On<RotateEntity>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    mut commands: Commands,
+    mut q: Query<&mut Transform>,
+    q_rb: Query<&RigidBody>,
+    q_marker: Query<&JustMovedKinematic>,
+) {
+    let cmd = trigger.event();
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = registry.resolve(&global_id) else {
+        warn!("ROTATE_ENTITY: no api_id={} in registry", cmd.entity_id);
+        return;
+    };
+    let q_in = Quat::from_xyzw(
+        cmd.rotation.x,
+        cmd.rotation.y,
+        cmd.rotation.z,
+        cmd.rotation.w,
+    );
+    if !q_in.is_finite() || q_in.length_squared() < 1e-12 {
+        warn!(
+            "ROTATE_ENTITY: {:?} (api_id={}) given a degenerate quaternion {:?} — \
+             refusing rather than substituting identity",
+            target, cmd.entity_id, cmd.rotation
+        );
+        return;
+    }
+    let Ok(mut tf) = q.get_mut(target) else {
+        warn!(
+            "ROTATE_ENTITY: entity {:?} (api_id={}) has no Transform",
+            target, cmd.entity_id
+        );
+        return;
+    };
+    tf.rotation = q_in.normalize();
+
+    // Same Kinematic pin as `MoveEntity`: an authored pose on a Dynamic body is
+    // otherwise just an initial condition the solver immediately argues with.
+    // `restore` remembers what to put back, and prefers an existing marker's
+    // value so two writes in one frame don't latch Kinematic permanently.
+    let restore = match q_marker.get(target) {
+        Ok(marker) => marker.restore,
+        Err(_) => q_rb
+            .get(target)
+            .ok()
+            .copied()
+            .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
+    };
+    if q_rb.get(target).is_ok() {
+        commands.entity(target).try_insert(RigidBody::Kinematic);
+        commands
+            .entity(target)
+            .try_insert(JustMovedKinematic { restore });
+    }
+
+    info!(
+        "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
+        cmd.entity_id, cmd.rotation.x, cmd.rotation.y, cmd.rotation.z, cmd.rotation.w
+    );
+}
+
 /// Persist a runtime move into the active USD document's **runtime** layer
 /// (Phase C4b producer). Observes `MoveEntity` alongside the physics handler
 /// [`on_move_entity_command`] but is fully decoupled from it — it touches no
@@ -3147,6 +3247,7 @@ register_commands!(
     on_focus_entity_by_id,
     on_import_shader,
     on_move_entity_command,
+    on_rotate_entity_command,
     on_reload_shader,
     on_rescan_shaders,
     on_rescan_spawn_catalog,

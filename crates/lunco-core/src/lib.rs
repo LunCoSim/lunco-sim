@@ -411,13 +411,6 @@ pub struct Ground;
 #[derive(Component)]
 pub struct SystemManaged;
 
-/// Marker for vessel root bodies that have a meaningful "upright" (rovers,
-/// landers): recovery systems may auto-right the body — and its joint-connected
-/// assembly — when it comes to rest overturned. Plain props and rocks must NOT
-/// carry this; a tipped rock staying tipped is correct.
-#[derive(Component)]
-pub struct KeepUpright;
-
 /// Physical properties used for gravity, collision, and mass-based calculations.
 ///
 /// These properties use double precision (`f64`) to maintain simulation integrity
@@ -558,6 +551,33 @@ pub fn scene_click_ray(
 #[derive(Resource, Default)]
 pub struct TerrainToolActive(pub bool);
 
+/// The SCRIPT-AUTHORED click tool currently armed, by tool name (`"recover"`),
+/// or `None`.
+///
+/// A script tool is any registered `lunco_tools` tool exposing `on_click/1`;
+/// the editor lists them in the Tools palette and hands the clicked entity to
+/// the tool's own handler. So this is deliberately a NAME and not an enum:
+/// the set of tools is data (a `.rhai` file), not a Rust type, and adding one
+/// must not require editing this crate.
+///
+/// Read by avatar possession and entity selection so a click while a tool is
+/// armed goes to the tool instead of possessing or selecting. Mirrors
+/// [`SpawnToolActive`] / [`TerrainToolActive`], which gate the Rust-side tools.
+#[derive(Resource, Default)]
+pub struct ArmedScriptTool(pub Option<String>);
+
+impl ArmedScriptTool {
+    /// Whether any script tool is armed.
+    pub fn armed(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether `name` is the armed tool.
+    pub fn is(&self, name: &str) -> bool {
+        self.0.as_deref() == Some(name)
+    }
+}
+
 /// "A cursor-driven editor mode owns the pointer" — the one gate, in one place.
 ///
 /// The waypoint placement/menu, the spawn ghost and the terrain brush all park a mode
@@ -570,6 +590,7 @@ pub struct CursorModeActive<'w> {
     waypoint_menu: Option<Res<'w, WaypointMenuOpen>>,
     spawn_tool: Option<Res<'w, SpawnToolActive>>,
     terrain_tool: Option<Res<'w, TerrainToolActive>>,
+    script_tool: Option<Res<'w, ArmedScriptTool>>,
 }
 
 impl CursorModeActive<'_> {
@@ -579,6 +600,7 @@ impl CursorModeActive<'_> {
             || self.waypoint_menu.as_ref().is_some_and(|m| m.0)
             || self.spawn_tool.as_ref().is_some_and(|t| t.0)
             || self.terrain_tool.as_ref().is_some_and(|t| t.0)
+            || self.script_tool.as_ref().is_some_and(|t| t.armed())
     }
 }
 

@@ -128,6 +128,40 @@ pub fn index() -> Vec<ToolInfo> {
     v
 }
 
+/// The function a tool must expose to become a CLICK TOOL in the editor's Tools
+/// palette: `on_click(entity_id)`, called with the id of the vessel/prim under
+/// the cursor when the tool is armed and the user clicks the scene.
+///
+/// Declared as a signature rather than a separate registration call so a tool
+/// opts into the UI by *being usable from it* — write the handler and the button
+/// appears. There is no second list to keep in step, and no way to register a
+/// palette entry that then has nothing to run.
+pub const UI_CLICK_FN: &str = "on_click/1";
+
+/// Optional companions to [`UI_CLICK_FN`], read the same way. Absent is fine:
+/// the palette falls back to the tool's own name and no hint.
+pub const UI_LABEL_FN: &str = "ui_label/0";
+/// Optional hover text, as `ui_hint/0`.
+pub const UI_HINT_FN: &str = "ui_hint/0";
+
+/// Every registered tool that can be armed as a click tool — i.e. exposes
+/// [`UI_CLICK_FN`] — sorted by name.
+///
+/// This is the palette's whole source of truth. Dropping a `.rhai` into
+/// `assets/scripting/tools/` with an `on_click(id)` puts a button in the editor,
+/// with no Rust involved on either side.
+pub fn ui_click_tools() -> Vec<ToolInfo> {
+    index()
+        .into_iter()
+        .filter(|t| t.functions.iter().any(|f| f == UI_CLICK_FN))
+        .collect()
+}
+
+/// Does tool `name` expose function signature `sig` (e.g. `"ui_hint/0"`)?
+pub fn has_function(name: &str, sig: &str) -> bool {
+    get(name).is_some_and(|t| t.functions().iter().any(|f| f == sig))
+}
+
 /// The textual source of a registered tool, when it is source-defined.
 pub fn source(name: &str) -> Option<String> {
     registry()
