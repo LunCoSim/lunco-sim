@@ -1950,11 +1950,15 @@ mod observables_smoke {
             .expect("compile ok");
         // Options come from the canonical builder, never `SimOptions::default()`:
         // the session clamps every advance at `t_end`, whose default is 1.0.
-        let opts = crate::experiments_runner::stepper_options_from_bounds(&RunBounds {
-            t_start: 0.0,
-            t_end: 10.0,
-            ..Default::default()
-        });
+        let opts = crate::experiments_runner::stepper_options_for(
+            &RunBounds {
+                t_start: 0.0,
+                t_end: 10.0,
+                ..Default::default()
+            },
+            crate::solver_backends::model_caps(&r.dae),
+        )
+        .expect("solver resolves for this model");
         let mut stepper = crate::simulation_session::interactive(&r.dae, opts).expect("stepper ok");
         stepper
             .set_input("throttle", 1.0)

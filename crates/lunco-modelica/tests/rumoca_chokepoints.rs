@@ -43,22 +43,24 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
-/// **`SimOptions` may only be constructed by the two canonical builders.**
+/// **`SimOptions` may only be constructed by the ONE canonical translator.**
 ///
 /// `SimulationSession` silently clamps every `step`/`advance_to` at
 /// `SimOptions::t_end`, and the `Default` is `1.0` — so a hand-rolled
 /// `SimOptions` parks the model clock at t=1s and reports a frozen model as a
 /// successful run (a 60 s rocket burn once drained exactly 1 s of propellant).
 ///
-/// The only two places allowed to build one:
-/// * `experiments_runner::stepper_options_from_bounds` — batch / offline / FastRun
+/// `solver_backends::rumoca_options` is the only place that builds one: it turns
+/// a resolved `SolverSpec` plus `SolverParams` into rumoca's options. The two
+/// policy entry points state parameters and delegate to it, never construct:
+/// * `experiments_runner::stepper_options_for` — batch / offline / FastRun
 /// * `worker::live_stepper_options` — live co-sim (`t_end = u32::MAX`, no ceiling)
 ///
 /// Everything else — including `src/bin/` — must take options from one of those.
 #[test]
 fn sim_options_are_built_only_by_the_canonical_builders() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let allowed = ["experiments_runner.rs", "worker.rs"];
+    let allowed = ["solver_backends.rs"];
 
     let mut offenders = Vec::new();
     for file in rust_files(&src) {
@@ -78,9 +80,10 @@ fn sim_options_are_built_only_by_the_canonical_builders() {
 
     assert!(
         offenders.is_empty(),
-        "SimOptions must come from `stepper_options_from_bounds` (batch) or \
-         `live_stepper_options` (live) — a hand-rolled one inherits t_end=1.0 and \
-         silently freezes the model clock. See docs/architecture/29-rumoca-workarounds.md §1.\n\
+        "SimOptions is built only by `solver_backends::rumoca_options`, reached \
+         through `stepper_options_for` (batch) or `live_stepper_options` (live) — \
+         a hand-rolled one inherits t_end=1.0 and silently freezes the model \
+         clock. See docs/architecture/29-rumoca-workarounds.md §1.\n\
          Offending sites:\n  {}",
         offenders.join("\n  ")
     );

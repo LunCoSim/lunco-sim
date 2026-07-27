@@ -856,12 +856,24 @@ pub fn drive_run(
         return;
     }
     // Solver options (tolerance / family / initial step) — the SINGLE source
-    // (`stepper_options_from_bounds`) both runtimes derive from.
-    let stepper_opts = stepper_options_from_bounds(bounds);
+    // (`stepper_options_for`) both runtimes derive from. Capabilities are read
+    // off the DAE in hand, so an implicit model cannot be handed an explicit
+    // stepper and an incapable authored solver fails the run here rather than
+    // per-step later.
+    let stepper_opts = match stepper_options_for(bounds, crate::solver_backends::model_caps(dae)) {
+        Ok(opts) => opts,
+        Err(err) => {
+            sink.emit(RunUpdate::Failed {
+                error: format!("solver selection failed: {err}"),
+                partial: None,
+            });
+            return;
+        }
+    };
     match bounds.runtime {
         lunco_experiments::RuntimeMode::Batch => {
             // The batch solver reads its output grid from `opts.dt` (one column
-            // per `dt` step). `stepper_options_from_bounds` leaves `opts.dt` as
+            // per `dt` step). `stepper_options_for` leaves `opts.dt` as
             // the *initial step* (`h0`) for the interactive path; for batch we
             // instead resolve the requested output spacing — from either the
             // `Interval` (`dt`) or the `NumberOfIntervals` (`n_intervals`) knob
@@ -1169,22 +1181,24 @@ pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 ///   `opts.t_end`**. With the default horizon an interactive run parks at t=1s
 ///   and quietly reports a frozen model instead of erroring — the failure mode
 ///   that made a 60 s rocket burn drain exactly 1 s of propellant.
-pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
-    stepper_options_for(bounds, lunco_experiments::ModelCaps::default())
-}
-
-/// [`stepper_options_from_bounds`] when the caller already knows what the model
-/// requires (it has compiled the DAE). Prefer this: with real [`ModelCaps`] an
-/// authored solver that cannot serve the model is refused here instead of dying
-/// per-step later.
+///
+/// `needs` comes from [`model_caps`](crate::solver_backends::model_caps) on the
+/// DAE the caller just compiled — never defaulted. Claiming a model is explicit
+/// when it is not is how an implicit system reaches a stepper that cannot solve
+/// it, and it also disarms the check that refuses an incapable authored solver.
 ///
 /// Both this and the live path resolve through `lunco_experiments::solver`, which
 /// is the point: two paths choosing independently is how a live model ends up on
 /// a family the batch path would have refused.
+///
+/// Fallible on purpose. A solver that cannot be resolved or built is reported to
+/// the caller, never swapped for one that happens to work: a run that silently
+/// used a different integrator than the one asked for produces numbers the user
+/// attributes to their choice.
 pub fn stepper_options_for(
     bounds: &RunBounds,
     needs: lunco_experiments::ModelCaps,
-) -> rumoca_sim::SimOptions {
+) -> Result<rumoca_sim::SimOptions, lunco_experiments::solver::SolverError> {
     use lunco_experiments::solver;
     crate::solver_backends::ensure_builtin_solvers();
 
@@ -1205,33 +1219,8 @@ pub fn stepper_options_for(
         t_end: bounds.t_end,
     };
 
-    // A batch run must not vanish because a solver could not be resolved, but it
-    // must not pretend either: fall back to the highest-ranked capable backend
-    // and say what happened — an unresolvable name must never degrade to another
-    // backend without a diagnostic.
-    let resolved = solver::resolve(&request).or_else(|err| {
-        bevy::log::warn!(
-            "[solver] {err}; falling back to the default backend for this batch run"
-        );
-        solver::resolve(&solver::SolverRequest {
-            authored: None,
-            ..request.clone()
-        })
-    });
-
-    match resolved.and_then(|spec| crate::solver_backends::rumoca_options(&spec, &params)) {
-        Ok(opts) => opts,
-        Err(err) => {
-            bevy::log::error!("[solver] {err}; using rumoca's own defaults");
-            let mut opts = rumoca_sim::SimOptions::default();
-            opts.t_start = params.t_start;
-            opts.t_end = params.t_end;
-            opts.atol = params.atol;
-            opts.rtol = params.rtol;
-            opts.dt = params.h0;
-            opts
-        }
-    }
+    let spec = solver::resolve(&request)?;
+    crate::solver_backends::rumoca_options(&spec, &params)
 }
 
 /// Emit a `Failed` update carrying everything sampled so far as a partial
@@ -1841,7 +1830,8 @@ mod tests {
             h0: None,
             runtime: lunco_experiments::RuntimeMode::Batch,
         };
-        let opts = stepper_options_from_bounds(&bounds);
+        let opts = stepper_options_for(&bounds, crate::solver_backends::model_caps(&compiled.dae))
+            .expect("solver resolves for this model");
         let mut stepper =
             crate::simulation_session::interactive(&compiled.dae, opts).expect("build stepper");
         let step_dt =

@@ -90,7 +90,13 @@ mod native {
             t_end: t_end_hint,
             ..Default::default()
         };
-        let mut opts = lunco_modelica::experiments_runner::stepper_options_from_bounds(&bounds);
+        let mut opts = match lunco_modelica::experiments_runner::stepper_options_for(
+            &bounds,
+            lunco_modelica::solver_backends::model_caps(&result.dae),
+        ) {
+            Ok(o) => o,
+            Err(e) => anyhow::bail!("solver selection failed: {e}"),
+        };
         opts.atol = atol;
         opts.rtol = rtol;
         let mut stepper = match lunco_modelica::simulation_session::cli(&result.dae, opts) {

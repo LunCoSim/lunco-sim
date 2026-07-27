@@ -18,9 +18,13 @@ use lunco_experiments::solver::{
 /// unknowns needs a solver that can refresh them; handed an explicit stepper it
 /// dies at step time with `algebraic refresh row N cannot be solved for …` and
 /// publishes no ports.
-pub fn model_caps(comp_res: &rumoca_compile::compile::DaeCompilationResult) -> ModelCaps {
+///
+/// Takes the `Dae` rather than the whole compilation result so that every caller
+/// holding a DAE — the live path, the batch runner, the headless binaries — can
+/// state real capabilities instead of defaulting them.
+pub fn model_caps(dae: &rumoca_compile::compile::Dae) -> ModelCaps {
     ModelCaps {
-        implicit: !comp_res.dae.variables.algebraics.is_empty(),
+        implicit: !dae.variables.algebraics.is_empty(),
     }
 }
 

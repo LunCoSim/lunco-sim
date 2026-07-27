@@ -49,7 +49,7 @@ fn live_stepper_options(
     crate::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
-        needs: crate::solver_backends::model_caps(comp_res),
+        needs: crate::solver_backends::model_caps(&comp_res.dae),
         profile,
         // The live path takes no authored override: an `experiment(...)`
         // annotation is an offline knob, and the same reasoning that keeps its

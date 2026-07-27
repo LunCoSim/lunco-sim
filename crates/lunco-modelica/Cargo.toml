@@ -170,7 +170,7 @@ image = { workspace = true }
 #
 # The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
 # `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
-# it through `experiments_runner::stepper_options_from_bounds`, never from
+# it through `experiments_runner::stepper_options_for`, never from
 # `SimOptions::default()` — see the docs there.
 rumoca-sim = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }

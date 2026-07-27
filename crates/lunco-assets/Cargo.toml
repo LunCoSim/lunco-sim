@@ -35,6 +35,10 @@ include_dir = "0.7"
 # Native-only — the wasm path uses OPFS / IndexedDB instead and skips
 # this helper entirely.
 dirs = "5"
+# Not native-only: `download::source_pool_path` keys the source pool by URL hash,
+# and that resolver is target-neutral — `datasets.rs` and the Modelica UI call it
+# on wasm to learn WHERE a product lives. Only the fetching around it is gated.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -53,10 +57,9 @@ path = "src/bin/build_msl_assets.rs"
 name = "build_asset_manifest"
 path = "src/bin/build_asset_manifest.rs"
 
-# Desktop-only: HTTP client for asset downloads, tarball extraction, hashing
+# Desktop-only: HTTP client for asset downloads, tarball extraction
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }
-sha2 = { workspace = true }
 # `which` is used by the glb process step to verify that `npx`
 # (Node.js) is on PATH before shelling out to gltf-transform. Native
 # only — the wasm path doesn't run process steps.
