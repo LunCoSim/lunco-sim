@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use lunco_modelica::{
-    extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
+    extract_input_names_from_ast, extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
     extract_parameters_from_ast, ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice,
     NoticeLevel,
 };
@@ -357,9 +357,20 @@ pub fn project_domain_islands(
             model_path: PathBuf::from(&doc_uri),
             model_name: compiled_name.clone(),
             parameters: extract_parameters_from_ast(&ast),
-            inputs: extract_inputs_with_defaults_from_ast(&ast)
-                .into_iter()
-                .collect(),
+            // Interface = every declared input; the defaults map is only the
+            // subset with an authored numeric binding. See the same seeding in
+            // `cosim::dispatch_loaded_modelica_sources` — an unbound input is the
+            // normal shape of a WIRED input, and must still get a port.
+            inputs: {
+                let defaults = extract_inputs_with_defaults_from_ast(&ast);
+                extract_input_names_from_ast(&ast)
+                    .into_iter()
+                    .map(|name| {
+                        let seed = defaults.get(&name).copied().unwrap_or(0.0);
+                        (name, seed)
+                    })
+                    .collect()
+            },
             session_id,
             is_stepping: true,
             is_compiling: true,

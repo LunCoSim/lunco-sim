@@ -30,7 +30,7 @@ use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
-    extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
+    extract_input_names_from_ast, extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
     extract_parameters_from_ast, ModelicaChannels, ModelicaCommand, ModelicaModel,
 };
 use lunco_scripting::source_asset::PythonSource;
@@ -675,8 +675,19 @@ pub fn dispatch_loaded_modelica_sources(
             .clone();
         let model_name = extract_model_name_from_ast(&ast).unwrap_or_else(|| "Model".into());
         let parameters = extract_parameters_from_ast(&ast);
-        let inputs = extract_inputs_with_defaults_from_ast(&ast)
+        // The INTERFACE is every declared input; the defaults map only covers the
+        // subset that authored a numeric binding. `ModelicaModel::inputs` is a
+        // write buffer seeded from the authored interface (see its doc), and
+        // `wrap_modelica_into_simcomponent` copies it into `SimComponent::inputs`
+        // — the port surface a wire writes to. Seeding it from defaults alone gave
+        // an unbound `input Real drive_left` no port at all.
+        let defaults = extract_inputs_with_defaults_from_ast(&ast);
+        let inputs = extract_input_names_from_ast(&ast)
             .into_iter()
+            .map(|name| {
+                let seed = defaults.get(&name).copied().unwrap_or(0.0);
+                (name, seed)
+            })
             .collect();
 
         commands.entity(entity).try_insert(ModelicaModel {

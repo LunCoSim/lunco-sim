@@ -19,7 +19,7 @@ use rumoca_compile::parsing::{
     Causality, ClassDef, ClassType, Expression, StoredDefinition, TerminalType, Variability,
 };
 use rumoca_phase_parse::parse_to_ast;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 // ---------------------------------------------------------------------------
 // Parsing entry point
@@ -329,6 +329,27 @@ pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<
     inputs
 }
 
+/// Every `input` this model declares, bound or not — the model's INPUT
+/// INTERFACE, as opposed to [`extract_inputs_with_defaults_from_ast`]'s map of
+/// the subset that authored a numeric default.
+///
+/// The two answer different questions, and conflating them cost a whole class of
+/// wiring. A driven input is normally declared UNBOUND —
+/// `input Real drive_left "Normalized left-side drive command";` — precisely
+/// because a wire supplies it. The defaults map skips those (correctly: there is
+/// no authored default to report), so using it as the port list published an
+/// interface with no inputs at all. Every wire into such a model was then
+/// dropped by `PortRegistry::write_port` with
+/// `[cosim] connection targets unknown input port …`, while its OUTPUTS arrived
+/// normally from the solver — so the entity looked live, reported a port
+/// surface, and silently accepted nothing. `RoverMotorThermal`'s
+/// `drive_left`/`drive_right` are the shipped case.
+pub fn extract_input_names_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    collect_input_names_from_classes(&ast.classes, &mut names);
+    names
+}
+
 /// Strip default values from `input` declarations in source code.
 ///
 /// Rumoca compiles `input Real g = 9.81` as a constant (not a runtime slot).
@@ -531,6 +552,22 @@ fn collect_inputs_with_defaults_from_classes(
             }
         }
         collect_inputs_with_defaults_from_classes(&class.classes, inputs);
+    }
+}
+
+/// Recursive half of [`extract_input_names_from_ast`]. Unlike the defaults
+/// collector, an unbound `input` is exactly what this is looking for.
+fn collect_input_names_from_classes(
+    classes: &AstIndexMap<String, ClassDef>,
+    names: &mut BTreeSet<String>,
+) {
+    for class in classes.values() {
+        for component in class.components.values() {
+            if matches!(component.causality, Causality::Input(_)) {
+                names.insert(component.name.clone());
+            }
+        }
+        collect_input_names_from_classes(&class.classes, names);
     }
 }
 
@@ -1018,6 +1055,46 @@ mod tests {
         assert_eq!(modified, source, "no input binding → source unchanged");
         // `p` is a parameter, not an input default.
         assert!(defaults.is_empty());
+    }
+
+    // --- extract_input_names (the INTERFACE, vs the defaults map) ---
+
+    /// An UNBOUND input is the normal shape of a wired input, and it must still
+    /// appear in the interface. Publishing the port surface from the defaults map
+    /// instead gave `RoverMotorThermal` no inputs at all, so every wire into it
+    /// was dropped as an "unknown input port" while its outputs solved normally.
+    #[test]
+    fn input_names_include_unbound_inputs_the_defaults_map_omits() {
+        let source = concat!(
+            "model M\n",
+            "  input Real drive_left \"wired, no default\";\n",
+            "  input Real gain = 2.5;\n",
+            "  parameter Real p = 1.0;\n",
+            "  output Real y;\n",
+            "equation\n",
+            "  y = gain * drive_left;\n",
+            "end M;\n",
+        );
+        let ast = parse(source).expect("parses");
+
+        let names = extract_input_names_from_ast(&ast);
+        assert!(
+            names.contains("drive_left"),
+            "unbound input missing from the interface: {names:?}"
+        );
+        assert!(names.contains("gain"), "bound input missing: {names:?}");
+        assert!(
+            !names.contains("p") && !names.contains("y"),
+            "only `input` causality belongs in the interface: {names:?}"
+        );
+
+        // The defaults map keeps its own meaning: only the authored binding.
+        let defaults = extract_inputs_with_defaults_from_ast(&ast);
+        assert_eq!(defaults.get("gain"), Some(&2.5));
+        assert!(
+            !defaults.contains_key("drive_left"),
+            "an unbound input has no authored default to report"
+        );
     }
 
     // --- extract_model_name ---

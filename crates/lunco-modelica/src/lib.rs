@@ -1923,8 +1923,9 @@ pub struct FrameTimeProbe {
 // These functions live in `ast_extract` but are re-exported here so external
 // callers (workbench binaries, UI panels) can import from the crate root.
 pub use ast_extract::{
-    extract_inputs_with_defaults, extract_inputs_with_defaults_from_ast, extract_model_name,
-    extract_model_name_from_ast, extract_parameters, extract_parameters_from_ast, hash_content,
+    extract_input_names_from_ast, extract_inputs_with_defaults, extract_inputs_with_defaults_from_ast,
+    extract_model_name, extract_model_name_from_ast, extract_parameters, extract_parameters_from_ast,
+    hash_content,
 };
 // `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
 // above and is available publicly through the `pub mod ast_extract` declaration.
