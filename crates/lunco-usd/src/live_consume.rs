@@ -80,7 +80,18 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
             resynced.extend(c.resynced.iter().map(|p| p.to_string()));
-            info_only.extend(c.info_only.iter().map(|p| p.to_string()));
+            // ⚠ NORMALISE TO THE PRIM. An info-only notice names the thing that
+            // changed, and for a value edit on an EXISTING attribute that is the
+            // PROPERTY path (`/World/Pin.xformOp:translate`) — only a change that
+            // creates the spec names the prim. Every consumer below reads
+            // attributes OFF a prim, so a property path made
+            // `get_attribute_as_vec3` look for
+            // `/World/Pin.xformOp:translate.xformOp:translate`, find nothing, and
+            // drop the edit: the move journalled, saved, and re-composed on the
+            // stage while the live entity never moved. Exactly the silent failure
+            // `apply_translates_live`'s own debug line was written to catch —
+            // except the path never reached it.
+            info_only.extend(c.info_only.iter().map(|p| p.prim_path().to_string()));
         }
         resynced.sort();
         resynced.dedup();

@@ -1,4 +1,5 @@
 ServoAxis
+RateIntegrator
 DishPattern
 SunTracker
 EarthTracker

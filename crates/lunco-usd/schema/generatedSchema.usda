@@ -1139,9 +1139,13 @@ class "LunCoTriggerZoneAPI" (
     so it detects overlaps and blocks nothing."""
 )
 {
-    string lunco:triggerZone = "" (
+    token lunco:triggerZone = "" (
         doc = """The zone's name, reported with its overlap events. Non-empty IS
-        the opt-in; empty means no trigger zone."""
+        the opt-in; empty means no trigger zone.
+
+        `token`: the name is an IDENTIFIER — it is compared (`enter:<zone>` /
+        `exit:<zone>` event matching in rhai), never presented as prose. Open
+        vocabulary — a scene names its own zones — so no `allowedTokens`."""
     )
 }
 
