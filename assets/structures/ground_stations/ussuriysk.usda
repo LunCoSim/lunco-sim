@@ -18,10 +18,10 @@
 def Xform "Ussuriysk" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     kind = "component"
+    displayName = "Ussuriysk · RT-70"
     doc = "Ussuriysk / Galenki, Primorsky Krai — P-2500 (RT-70), 70 m. Eastern half of the Russian deep-space pair."
 )
 {
-    custom string lunco:label = "Ussuriysk · RT-70"
 
     double lunco:anchor:lat = 44.02
     double lunco:anchor:lon = 131.76

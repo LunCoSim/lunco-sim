@@ -19,7 +19,7 @@ def Xform "CommsDemoScene" (
     kind = "assembly"
 )
 {
-    bool lunco:spawnable = false
+    uniform bool lunco:spawnable = false
 
     # This scene wants a sky: Sun, Earth and Moon. Celestial content is opt-in per
     # scene (doc 19 §11e) — the bodies, their globes, the orbit views and the

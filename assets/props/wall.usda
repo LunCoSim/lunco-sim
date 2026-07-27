@@ -26,6 +26,6 @@ def Xform "Wall" (
         uniform token[] xformOpOrder = ["xformOp:scale"]
         color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
         bool physics:collisionEnabled = true
-        bool lunco:occluder = true
+        uniform bool lunco:occluder = true
     }
 }

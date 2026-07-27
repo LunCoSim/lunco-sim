@@ -1064,7 +1064,7 @@ def Xform "DescentLander" (
         # `load_frac` to 0..1, which leaves the (physically impossible here)
         # tension case dark rather than inventing a colour for it.
             float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
-            float lunco:factor:load_frac = 0.00066667
+            custom float lunco:factor:load_frac = 0.00066667
         }
 
         def Cylinder "PadPX" (
@@ -1200,7 +1200,7 @@ def Xform "DescentLander" (
 
             # see LegPX for the sign and the rating.
             float inputs:load_frac.connect = </DescentLander/LegNX_Spring.outputs:force>
-            float lunco:factor:load_frac = 0.00066667
+            custom float lunco:factor:load_frac = 0.00066667
         }
 
         def Cylinder "PadNX" (
@@ -1262,7 +1262,7 @@ def Xform "DescentLander" (
 
             # see LegPX for the sign and the rating.
             float inputs:load_frac.connect = </DescentLander/LegPZ_Spring.outputs:force>
-            float lunco:factor:load_frac = 0.00066667
+            custom float lunco:factor:load_frac = 0.00066667
         }
 
         def Cylinder "PadPZ" (
@@ -1324,7 +1324,7 @@ def Xform "DescentLander" (
 
             # see LegPX for the sign and the rating.
             float inputs:load_frac.connect = </DescentLander/LegNZ_Spring.outputs:force>
-            float lunco:factor:load_frac = 0.00066667
+            custom float lunco:factor:load_frac = 0.00066667
         }
 
         def Cylinder "PadNZ" (

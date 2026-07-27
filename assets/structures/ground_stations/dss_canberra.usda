@@ -13,10 +13,10 @@
 def Xform "DSSCanberra" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     kind = "component"
+    displayName = "DSN Canberra · DSS-43"
     doc = "DSN Canberra (DSS-43), Tidbinbilla — 70 m deep-space dish."
 )
 {
-    custom string lunco:label = "DSN Canberra · DSS-43"
 
     double lunco:anchor:lat = -35.4014
     double lunco:anchor:lon = 148.9817

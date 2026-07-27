@@ -22,10 +22,10 @@
 def Xform "Kalyazin" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     kind = "component"
+    displayName = "Kalyazin · RT-64"
     doc = "Kalyazin, Tver oblast — RT-64, 64 m. Radio-astronomy dish used as a deep-space and VLBI backup, not an operational command station."
 )
 {
-    custom string lunco:label = "Kalyazin · RT-64"
 
     double lunco:anchor:lat = 57.22
     double lunco:anchor:lon = 37.90

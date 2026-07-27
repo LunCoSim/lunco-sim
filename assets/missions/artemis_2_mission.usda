@@ -67,8 +67,8 @@ def Xform "Artemis2Mission" (
     # than inheriting: a trajectory and its spacecraft marker legitimately differ
     # (you may want the path drawn past the point the vehicle is shown), so an
     # inherited window would be a constraint the data does not actually have.
-    double lunco:mission:startEpochJd = 2461132.58
-    double lunco:mission:durationDays = 10.3
+    double lunco:mission:start = 2461132.58
+    double lunco:mission:duration = 10.3
 
     def Xform "EarthRelative" (
         doc = """The headline trajectory: Orion's path as seen from Earth.

@@ -12,8 +12,10 @@ def Xform "Orion" (
 )
 {
     uniform bool lunco:spawnable = true
-    custom int lunco:ephemeris_id = -1024
-    custom float lunco:hit_radius_m = 1000.0
+    int lunco:spacecraft:ephemerisId = -1024
+    # 1000 m as authored = 1.0 km. See the note in `missions/artemis_2_mission.usda`
+    # </Artemis2Mission/Orion>, which authors 1000.0 KM for the same pick target.
+    float lunco:spacecraft:hitRadiusKm = 1.0
 
     def Sphere "Capsule"
     {
