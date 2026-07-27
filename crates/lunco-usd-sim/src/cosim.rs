@@ -1253,6 +1253,29 @@ pub fn rewire_usd_connections(
             if is_structural_binding(&view, &sink_sdf, sink_conn) {
                 continue;
             }
+            // Same reasoning, one level up — but for `outputs:` ONLY.
+            //
+            // An `outputs:` connection authored on a domain network root is read
+            // at parse time by `domain_projection` and becomes an equation inside
+            // the generated model (`soc = <battery>.soc_out;`). Its source prim is
+            // a MEMBER of that island with no `SimComponent` of its own, so a
+            // runtime wire could never fire. MEASURED: the electrical islands'
+            // `outputs:soc` / `outputs:solar_power` were reported as five
+            // connections that "never landed" on a scene whose islands were
+            // stepping and publishing those very ports.
+            //
+            // ⚠ NOT `inputs:`. A network root's `inputs:` are the island's
+            // BOUNDARY — `read_network` declares them `input Real` on the
+            // generated model and something OUTSIDE must drive them, which is
+            // exactly a runtime wire. `rocker_bogie.usda` authors
+            // `Electrical.inputs:drive_left.connect = </RockerBogie.outputs:drive_left>`;
+            // skipping that would leave the island's demand inputs permanently
+            // unwritten and every motor's electrical draw at zero.
+            if attr.starts_with("outputs:")
+                && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+            {
+                continue;
+            }
             // SSP `LinearTransformation`: the propagated value is `src * factor +
             // offset`. Authored on the sink prim, keyed by the consuming port
             // (`lunco:factor:<port>` / `:offset:<port>`), so each input carries its

@@ -439,19 +439,33 @@ fn source_fingerprint(source: &str) -> u64 {
     hasher.finish()
 }
 
+/// Is `prim` the root of a projected domain network — i.e. does it carry a
+/// component collection this module compiles into one generated model?
+///
+/// Shared with `cosim::rewire_usd_connections`, which must NOT build runtime
+/// wires for the connections authored on such a root: they are read here at
+/// parse time and become equations INSIDE the generated model. Building a wire
+/// as well produces an edge whose source prim has no `SimComponent` of its own
+/// (it was absorbed into the island), so it can never fire — a permanent
+/// "connection never landed" fault against a model that is working correctly.
+///
+/// One definition, used by both, so the two passes cannot disagree about what a
+/// network root is.
+pub fn is_domain_network_root(view: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath) -> bool {
+    // Codeless multiple-apply schemas are not consistently surfaced by every
+    // OpenUSD binding through `HasAPI`; their standard authored properties are
+    // authoritative and round-trip in all runtimes.
+    view.attr_names(prim)
+        .iter()
+        .any(|name| name.starts_with("collection:components:"))
+}
+
 fn read_network(
     view: &lunco_usd_bevy::StageView<'_>,
     root: &SdfPath,
 ) -> Result<Option<DomainNetwork>, Vec<DomainProjectionError>> {
     let root_string = root.to_string();
-    // Codeless multiple-apply schemas are not consistently surfaced by every
-    // OpenUSD binding through `HasAPI`; their standard authored properties are
-    // authoritative and round-trip in all runtimes.
-    if !view
-        .attr_names(root)
-        .iter()
-        .any(|name| name.starts_with("collection:components:"))
-    {
+    if !is_domain_network_root(view, root) {
         return Ok(None);
     }
     let member_paths = view
