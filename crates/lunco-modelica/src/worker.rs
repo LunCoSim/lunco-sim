@@ -31,25 +31,19 @@ use lunco_experiments::solver;
 /// reach the realtime loop.
 ///
 /// WHAT IS NOT LIVE-SPECIFIC: **which solver**. Hardcoding a family here would
-/// bypass the resolver the batch path uses, and the two would disagree silently:
-/// a co-simulated electrical island — implicit by construction, never
-/// client-predicted — handed an explicit ODE stepper dies per-step in a `WARN`
-/// and publishes no ports. See `lunco_experiments::solver`.
+/// bypass the resolver the batch path uses, and the two would disagree silently.
+/// See `lunco_experiments::solver`.
 ///
 /// So the family comes from [`solver::resolve`], the same call the batch path
-/// makes, from two facts: what the compiled model requires
-/// ([`model_caps`](crate::solver_backends::model_caps), derived from the DAE's
-/// algebraic variables) and whether this model drives a client-predicted body.
-/// A predicted model resolves to the explicit backend because that backend
-/// *declares* `realtime_tolerated`, not because a function body asserts it.
-fn live_stepper_options(
-    comp_res: &rumoca_compile::compile::DaeCompilationResult,
-    profile: solver::RuntimeProfile,
-) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
+/// makes, from where the model runs: stepped inside the frame loop, and whether
+/// it drives a client-predicted body. A live model resolves to a backend that
+/// declares `usable_live`, and a predicted one to a backend that declares
+/// `realtime_tolerated` — because those backends *declare* it, not because a
+/// function body asserts it.
+fn live_stepper_options(profile: solver::RuntimeProfile) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
     crate::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
-        needs: crate::solver_backends::model_caps(&comp_res.dae),
         profile,
         // The live path takes no authored override: an `experiment(...)`
         // annotation is an offline knob, and the same reasoning that keeps its
@@ -99,6 +93,8 @@ fn profile_for(
     realtime_models: &std::collections::HashSet<Entity>,
 ) -> solver::RuntimeProfile {
     solver::RuntimeProfile {
+        // Everything the worker steps is driven by the frame loop.
+        live: true,
         predicted: realtime_models.contains(&entity),
     }
 }
@@ -107,7 +103,7 @@ fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
 ) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    let opts = live_stepper_options(comp_res, profile).map_err(|e| {
+    let opts = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
     crate::simulation_session::live(&comp_res.dae, opts)

@@ -3,30 +3,12 @@
 //! This crate owns rumoca, so this is where rumoca's two-axis selection
 //! (`SimSolverMode` family × `DiffsolMethod` tableau) is expressed — ONCE, in
 //! [`rumoca_options`]. Above this line nobody knows those types exist: callers
-//! state what the model needs and take back a [`SolverSpec`].
+//! state where the model runs and take back a [`SolverSpec`].
 //!
 //! Adding a backend is a registration, not an edit to an enum, a parser and a UI
 //! list — see `lunco_experiments::solver` for why selection is data.
 
-use lunco_experiments::solver::{
-    self, ModelCaps, SolverCaps, SolverError, SolverId, SolverParams, SolverSpec,
-};
-
-/// What the MODEL requires, read off the compiled DAE.
-///
-/// DERIVED, never authored and never guessed. A model carrying algebraic
-/// unknowns needs a solver that can refresh them; handed an explicit stepper it
-/// dies at step time with `algebraic refresh row N cannot be solved for …` and
-/// publishes no ports.
-///
-/// Takes the `Dae` rather than the whole compilation result so that every caller
-/// holding a DAE — the live path, the batch runner, the headless binaries — can
-/// state real capabilities instead of defaulting them.
-pub fn model_caps(dae: &rumoca_compile::compile::Dae) -> ModelCaps {
-    ModelCaps {
-        implicit: !dae.variables.algebraics.is_empty(),
-    }
-}
+use lunco_experiments::solver::{self, SolverCaps, SolverError, SolverId, SolverParams, SolverSpec};
 
 /// Register the built-in backends. Idempotent, and called from both option
 /// builders so neither the ECS app, the worker thread, the wasm worker nor a CLI
@@ -42,7 +24,9 @@ pub fn ensure_builtin_solvers() {
         solver::register(SolverSpec {
             id: SolverId::from("bdf"),
             caps: SolverCaps {
-                implicit: true,
+                // Adaptive: owns its own step sequence and its per-step cost is
+                // unbounded, so it must not be driven by the frame loop.
+                usable_live: false,
                 fixed_step: false,
                 deterministic: false,
                 realtime_tolerated: false,
@@ -55,7 +39,9 @@ pub fn ensure_builtin_solvers() {
         solver::register(SolverSpec {
             id: SolverId::from("esdirk34"),
             caps: SolverCaps {
-                implicit: true,
+                // Adaptive: owns its own step sequence and its per-step cost is
+                // unbounded, so it must not be driven by the frame loop.
+                usable_live: false,
                 fixed_step: false,
                 deterministic: false,
                 realtime_tolerated: false,
@@ -66,7 +52,9 @@ pub fn ensure_builtin_solvers() {
         solver::register(SolverSpec {
             id: SolverId::from("trbdf2"),
             caps: SolverCaps {
-                implicit: true,
+                // Adaptive: owns its own step sequence and its per-step cost is
+                // unbounded, so it must not be driven by the frame loop.
+                usable_live: false,
                 fixed_step: false,
                 deterministic: false,
                 realtime_tolerated: false,
@@ -87,7 +75,7 @@ pub fn ensure_builtin_solvers() {
         solver::register(SolverSpec {
             id: SolverId::from("rk45"),
             caps: SolverCaps {
-                implicit: false,
+                usable_live: true,
                 fixed_step: false,
                 deterministic: false,
                 realtime_tolerated: true,
@@ -161,23 +149,41 @@ mod tests {
         }
     }
 
-    /// End to end through the real backend table: a co-simulated electrical
-    /// island (implicit, not predicted) must resolve to an implicit backend.
-    /// With the explicit family it fails at step time with `algebraic refresh
-    /// row 2 cannot be solved for …Battery.p.i` and silently publishes no ports.
+    /// A LIVE model resolves to a frame-loop-safe backend. Handing the frame loop
+    /// an adaptive implicit backend was MEASURED to stall the worker: only one of
+    /// three islands finished compiling in 30 s of sim time, with no error.
     #[test]
-    fn an_implicit_cosim_model_resolves_to_an_implicit_backend() {
+    fn a_live_model_resolves_to_a_frame_loop_safe_backend() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
-            needs: ModelCaps { implicit: true },
-            profile: RuntimeProfile { predicted: false },
+            profile: RuntimeProfile { live: true, predicted: false },
             authored: None,
         })
-        .expect("the built-in implicit backends are registered");
+        .expect("a frame-loop-safe backend is registered");
 
         assert!(
-            spec.caps.implicit,
-            "resolved `{}` for an implicit model",
+            spec.caps.usable_live,
+            "resolved `{}`, which is not usable inside the frame loop",
+            spec.id
+        );
+    }
+
+    /// A BATCH run gets the adaptive family — it owns its own time loop, so a
+    /// backend that is not frame-loop safe is not merely allowed but wanted, and
+    /// the highest-ranked of those wins.
+    #[test]
+    fn a_batch_model_resolves_to_the_adaptive_family() {
+        ensure_builtin_solvers();
+        let spec = solver::resolve(&SolverRequest {
+            profile: RuntimeProfile { live: false, predicted: false },
+            authored: None,
+        })
+        .expect("the adaptive backends are registered");
+
+        assert_eq!(
+            spec.id,
+            SolverId::from("bdf"),
+            "batch resolved `{}` instead of the highest-ranked adaptive backend",
             spec.id
         );
     }
@@ -188,8 +194,7 @@ mod tests {
     fn a_predicted_model_still_gets_the_realtime_tolerated_backend() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
-            needs: ModelCaps { implicit: false },
-            profile: RuntimeProfile { predicted: true },
+            profile: RuntimeProfile { live: true, predicted: true },
             authored: None,
         })
         .expect("the realtime-tolerated backend is registered");

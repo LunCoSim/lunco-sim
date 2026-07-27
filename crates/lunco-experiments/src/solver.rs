@@ -9,25 +9,24 @@
 //! data and **no caller names one**: callers state what the model needs and what
 //! the runtime demands, and [`resolve`] answers.
 //!
-//! An explicit ODE stepper handed an implicit system (a rover's battery + solar
-//! panel island is one) fails per-step with `rk45 backend only supports a narrow
-//! explicit ODE subset: algebraic refresh row 2 cannot be solved`, publishes no
-//! ports, and surfaces nothing a driver would see. Capability is checked here so
-//! that mismatch is a refusal at selection time instead.
+//! ## What this module may and may not decide
 //!
-//! ## The two facts selection is made of
+//! It selects on [`RuntimeProfile`] — WHERE the model runs — and nothing else.
+//! Both fields are facts the substrate genuinely owns: whether the model steps
+//! inside the frame loop, and whether it drives a client-predicted body (declared
+//! in USD as `lunco:program:realtimeSafe`).
 //!
-//! * [`ModelCaps`] — what the MODEL requires. Derived from the compiled DAE
-//!   (`algebraics` non-empty ⇒ implicit), never authored, never guessed.
-//! * [`RuntimeProfile`] — what the CONTEXT demands. Whether this model drives a
-//!   client-predicted body, which is already declared in USD as
-//!   `lunco:program:realtimeSafe` and carried as `lunco_cosim::RealtimeSafe`.
+//! It does NOT decide whether a model is solvable. An earlier version derived
+//! that in Rust from `dae.variables.algebraics` being non-empty and got it wrong
+//! — a healthy battery island has algebraic variables too — which then routed
+//! live islands onto an adaptive backend that hangs the frame loop. Solvability
+//! is the backend's lowering to answer and the domain's rules to constrain; Rust
+//! guessing it is how a thin substrate grows a wrong opinion.
 //!
-//! `docs/architecture/28-modelica-realtime-physics.md` §2 draws exactly this
-//! line: predicted models need a fixed-step deterministic stepper; everything
-//! replicated (thermal, **power/battery**, chemistry) is the "sweet spot" where
-//! an adaptive implicit solver *belongs*. The electrical island is the doc's own
-//! example.
+//! `docs/architecture/28-modelica-realtime-physics.md` §2 draws the line this
+//! module does enforce: predicted models need a fixed-step deterministic stepper;
+//! everything replicated (thermal, power/battery, chemistry) may use an adaptive
+//! solver — but only where it is not being stepped by the frame loop.
 //!
 //! ## The A4 concession is data here, not a hidden constant
 //!
@@ -74,9 +73,27 @@ impl std::fmt::Display for SolverId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SolverCaps {
     /// Solves systems carrying algebraic unknowns (a constrained/implicit DAE),
-    /// not just an explicit ODE. The capability the electrical island needs and
-    /// the explicit RK family lacks.
+    /// not just an explicit ODE.
+    ///
+    /// DECLARED BY THE BACKEND, and deliberately NOT matched against a
+    /// requirement derived from the model. Whether a given DAE needs this is a
+    /// question only the backend's own lowering can answer — rumoca pairs each
+    /// algebraic row with a variable and secant-solves it, and fails when the
+    /// pairing is impossible. An earlier version of this module guessed the
+    /// requirement in Rust from `dae.variables.algebraics` being non-empty; that
+    /// predicate was wrong (a working battery island has algebraic variables
+    /// too) and it sent live islands to an adaptive backend that hangs the frame
+    /// loop. Whether a composition is solvable belongs in the authored domain
+    /// rules, over facts, not in a hardcoded Rust heuristic.
     pub implicit: bool,
+    /// Safe to run INSIDE the fixed-step frame loop.
+    ///
+    /// An adaptive implicit backend owns its own step sequence and its cost per
+    /// macro-step is unbounded — `docs/architecture/28-modelica-realtime-physics.md`
+    /// §1 names that as the anti-goal, and it was MEASURED: resolving live
+    /// islands to the diffsol/BDF path stalled the worker so hard that only one
+    /// of three models finished compiling in 30 s of sim time, with no error.
+    pub usable_live: bool,
     /// Integrates on a step sequence fixed by the caller, with no internal
     /// error-adapted substepping. Required for a client-predicted model: two
     /// peers must take the SAME steps.
@@ -104,28 +121,22 @@ pub struct SolverSpec {
     pub label: String,
 }
 
-/// What the MODEL requires, derived from the compiled DAE.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct ModelCaps {
-    /// The model carries algebraic unknowns. Read straight off the compiled
-    /// DAE's `variables.algebraics`; a caller must not guess it.
-    pub implicit: bool,
-}
-
-/// What the CONTEXT demands.
+/// What the CONTEXT demands. The only thing the substrate legitimately knows —
+/// both fields are facts about where the model RUNS, not claims about the model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct RuntimeProfile {
+    /// Stepped inside the fixed-step frame loop (co-simulation), as opposed to an
+    /// offline batch solve that owns its own time.
+    pub live: bool,
     /// This model drives a client-predicted body — i.e. it declared
     /// `lunco:program:realtimeSafe`. Co-simulated prims are stamped
-    /// `NotPredictable`, so for them this is false and an adaptive implicit
-    /// solver is not merely allowed but correct.
+    /// `NotPredictable`, so for them this is false.
     pub predicted: bool,
 }
 
-/// A selection request. Both facts plus the optional authored override.
+/// A selection request: where it runs, plus the optional authored override.
 #[derive(Clone, Debug, Default)]
 pub struct SolverRequest {
-    pub needs: ModelCaps,
     pub profile: RuntimeProfile,
     /// An explicit choice, from the experiments UI via `RunBounds::solver`. The
     /// live path never sets it.
@@ -173,9 +184,10 @@ impl std::error::Error for SolverError {}
 /// 2. A predicted model needs a solver that is fixed-step AND deterministic, or
 ///    one that explicitly declares the A4 concession.
 fn satisfies(spec: &SolverSpec, req: &SolverRequest) -> Result<(), String> {
-    if req.needs.implicit && !spec.caps.implicit {
+    if req.profile.live && !spec.caps.usable_live {
         return Err(format!(
-            "the model has algebraic unknowns and `{}` solves explicit ODEs only",
+            "`{}` is not usable inside the fixed-step frame loop (adaptive step \
+             sequence, unbounded per-step cost)",
             spec.id
         ));
     }
@@ -310,14 +322,20 @@ mod tests {
         }
     }
 
-    const IMPLICIT: SolverCaps = SolverCaps {
+    /// An adaptive implicit backend: solves constrained systems, cannot run in
+    /// the frame loop.
+    const BATCH_IMPLICIT: SolverCaps = SolverCaps {
         implicit: true,
+        usable_live: false,
         fixed_step: false,
         deterministic: false,
         realtime_tolerated: false,
     };
-    const EXPLICIT_TOLERATED: SolverCaps = SolverCaps {
+    /// The explicit backend: frame-loop safe, and the declared A4 concession for
+    /// predicted models.
+    const LIVE_EXPLICIT: SolverCaps = SolverCaps {
         implicit: false,
+        usable_live: true,
         fixed_step: false,
         deterministic: false,
         realtime_tolerated: true,
@@ -328,45 +346,43 @@ mod tests {
     /// ignored capability would pick it.
     fn candidates() -> Vec<SolverSpec> {
         vec![
-            spec("testbdf", IMPLICIT, 10),
-            spec("testrk", EXPLICIT_TOLERATED, 200),
+            spec("testbdf", BATCH_IMPLICIT, 10),
+            spec("testrk", LIVE_EXPLICIT, 200),
         ]
     }
 
     /// An implicit model must never be handed the explicit family.
     #[test]
-    fn an_implicit_model_never_resolves_to_an_explicit_solver() {
+    fn a_batch_profile_prefers_the_highest_ranked_capable_backend() {
         let chosen = resolve_in(
             &candidates(),
             &SolverRequest {
-                needs: ModelCaps { implicit: true },
-                profile: RuntimeProfile { predicted: false },
+                profile: RuntimeProfile { live: false, predicted: false },
                 ..Default::default()
             },
         )
-        .expect("an implicit-capable solver is registered");
+        .expect("a batch profile can use either backend");
 
-        assert!(
-            chosen.caps.implicit,
-            "resolved `{}`, which cannot solve algebraic unknowns — the rk45 \
-             `algebraic refresh row 2` failure, reintroduced",
-            chosen.id
+        assert_eq!(
+            chosen.id,
+            SolverId::from("testrk"),
+            "a batch profile constrains nothing, so the highest-ranked backend \
+             must win; rank is the only tiebreak and it was not applied"
         );
     }
 
     /// An authored choice that cannot serve the model is REFUSED, not quietly
     /// swapped for one that can — silent substitution hides an authoring error.
     #[test]
-    fn an_incapable_authored_solver_is_refused_not_substituted() {
+    fn an_authored_backend_that_cannot_run_live_is_refused_not_substituted() {
         let err = resolve_in(
             &candidates(),
             &SolverRequest {
-                needs: ModelCaps { implicit: true },
-                profile: RuntimeProfile::default(),
-                authored: Some(SolverId::from("testrk")),
+                profile: RuntimeProfile { live: true, predicted: false },
+                authored: Some(SolverId::from("testbdf")),
             },
         )
-        .expect_err("an explicit solver cannot serve an implicit model");
+        .expect_err("an adaptive backend cannot run inside the frame loop");
 
         assert!(matches!(err, SolverError::Incapable { .. }), "got {err:?}");
     }
@@ -387,15 +403,15 @@ mod tests {
     /// An implicit model with nothing implicit registered must ERROR at
     /// selection, not take the explicit solver and fail per-step in a log line.
     #[test]
-    fn an_implicit_model_with_no_capable_backend_errors() {
+    fn a_live_profile_with_no_frame_loop_safe_backend_errors() {
         let err = resolve_in(
-            &[spec("testrk", EXPLICIT_TOLERATED, 200)],
+            &[spec("testbdf", BATCH_IMPLICIT, 10)],
             &SolverRequest {
-                needs: ModelCaps { implicit: true },
+                profile: RuntimeProfile { live: true, predicted: false },
                 ..Default::default()
             },
         )
-        .expect_err("nothing registered can solve algebraic unknowns");
+        .expect_err("nothing registered is usable inside the frame loop");
         assert!(
             matches!(err, SolverError::NoCapableSolver { .. }),
             "got {err:?}"
@@ -408,11 +424,12 @@ mod tests {
     #[test]
     fn a_qualified_realtime_solver_outranks_the_tolerated_concession() {
         let specs = vec![
-            spec("testrk", EXPLICIT_TOLERATED, 200),
+            spec("testrk", LIVE_EXPLICIT, 200),
             spec(
                 "testfixed",
                 SolverCaps {
                     implicit: false,
+                    usable_live: true,
                     fixed_step: true,
                     deterministic: true,
                     realtime_tolerated: false,
@@ -424,8 +441,7 @@ mod tests {
         let chosen = resolve_in(
             &specs,
             &SolverRequest {
-                needs: ModelCaps::default(),
-                profile: RuntimeProfile { predicted: true },
+                profile: RuntimeProfile { live: true, predicted: true },
                 ..Default::default()
             },
         )

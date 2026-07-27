@@ -15,8 +15,7 @@
 
 pub mod solver;
 pub use solver::{
-    ModelCaps, RuntimeProfile, SolverCaps, SolverError, SolverId, SolverParams, SolverRequest,
-    SolverSpec,
+    RuntimeProfile, SolverCaps, SolverError, SolverId, SolverParams, SolverRequest, SolverSpec,
 };
 
 use std::collections::BTreeMap;

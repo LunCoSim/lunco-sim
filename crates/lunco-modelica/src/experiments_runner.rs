@@ -856,11 +856,9 @@ pub fn drive_run(
         return;
     }
     // Solver options (tolerance / family / initial step) — the SINGLE source
-    // (`stepper_options_for`) both runtimes derive from. Capabilities are read
-    // off the DAE in hand, so an implicit model cannot be handed an explicit
-    // stepper and an incapable authored solver fails the run here rather than
-    // per-step later.
-    let stepper_opts = match stepper_options_for(bounds, crate::solver_backends::model_caps(dae)) {
+    // (`stepper_options_from_bounds`) both runtimes derive from. An incapable
+    // authored solver fails the run here rather than per-step later.
+    let stepper_opts = match stepper_options_from_bounds(bounds) {
         Ok(opts) => opts,
         Err(err) => {
             sink.emit(RunUpdate::Failed {
@@ -873,7 +871,7 @@ pub fn drive_run(
     match bounds.runtime {
         lunco_experiments::RuntimeMode::Batch => {
             // The batch solver reads its output grid from `opts.dt` (one column
-            // per `dt` step). `stepper_options_for` leaves `opts.dt` as
+            // per `dt` step). `stepper_options_from_bounds` leaves `opts.dt` as
             // the *initial step* (`h0`) for the interactive path; for batch we
             // instead resolve the requested output spacing — from either the
             // `Interval` (`dt`) or the `NumberOfIntervals` (`n_intervals`) knob
@@ -1182,11 +1180,6 @@ pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 ///   and quietly reports a frozen model instead of erroring — the failure mode
 ///   that made a 60 s rocket burn drain exactly 1 s of propellant.
 ///
-/// `needs` comes from [`model_caps`](crate::solver_backends::model_caps) on the
-/// DAE the caller just compiled — never defaulted. Claiming a model is explicit
-/// when it is not is how an implicit system reaches a stepper that cannot solve
-/// it, and it also disarms the check that refuses an incapable authored solver.
-///
 /// Both this and the live path resolve through `lunco_experiments::solver`, which
 /// is the point: two paths choosing independently is how a live model ends up on
 /// a family the batch path would have refused.
@@ -1195,18 +1188,19 @@ pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 /// the caller, never swapped for one that happens to work: a run that silently
 /// used a different integrator than the one asked for produces numbers the user
 /// attributes to their choice.
-pub fn stepper_options_for(
+pub fn stepper_options_from_bounds(
     bounds: &RunBounds,
-    needs: lunco_experiments::ModelCaps,
 ) -> Result<rumoca_sim::SimOptions, lunco_experiments::solver::SolverError> {
     use lunco_experiments::solver;
     crate::solver_backends::ensure_builtin_solvers();
 
     let request = solver::SolverRequest {
-        needs,
-        // Batch is offline: nothing here drives a client-predicted body, so the
+        // Batch owns its own time loop and drives no predicted body, so the
         // adaptive implicit family is not merely allowed but wanted.
-        profile: solver::RuntimeProfile { predicted: false },
+        profile: solver::RuntimeProfile {
+            live: false,
+            predicted: false,
+        },
         authored: bounds.solver.clone(),
     };
 
@@ -1830,8 +1824,8 @@ mod tests {
             h0: None,
             runtime: lunco_experiments::RuntimeMode::Batch,
         };
-        let opts = stepper_options_for(&bounds, crate::solver_backends::model_caps(&compiled.dae))
-            .expect("solver resolves for this model");
+        let opts =
+            stepper_options_from_bounds(&bounds).expect("solver resolves for this model");
         let mut stepper =
             crate::simulation_session::interactive(&compiled.dae, opts).expect("build stepper");
         let step_dt =
