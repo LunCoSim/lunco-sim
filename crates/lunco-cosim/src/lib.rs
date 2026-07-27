@@ -348,6 +348,13 @@ fn on_set_ports(
                 continue;
             }
             let global_id = world.get::<lunco_core::GlobalEntityId>(target).copied();
+            // `Name` carries the USD prim path (the reader stamps it on every prim
+            // entity). An entity id in a warning — `1277v0` — is unactionable in a
+            // tester's log; `/SandboxScene/Avatar` is a bug report.
+            let label = world
+                .get::<Name>(target)
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| format!("{target:?}"));
             let mut diag = world.resource_mut::<diagnostics::CosimDiagnostics>();
             let key = (target, port.clone());
             if diag.landed.contains(&key) {
@@ -355,9 +362,9 @@ fn on_set_ports(
             }
             if let std::collections::hash_map::Entry::Vacant(e) = diag.faults.entry(key) {
                 warn!(
-                    "[cosim] SetPorts targets unknown input port '{}' on {:?} — value \
+                    "[cosim] SetPorts targets unknown input port '{}' on {} ({:?}) — value \
                      dropped (declare the port or fix the caller)",
-                    port, target
+                    port, label, target
                 );
                 e.insert(diagnostics::BrokenConnection {
                     entity: target,

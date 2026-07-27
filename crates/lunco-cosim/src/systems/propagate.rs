@@ -571,17 +571,23 @@ pub fn propagate_connections(
                 dropped_value: acc[i],
             });
             if reported.insert(t.name.clone()) {
+                // `Name` carries the USD prim path. An entity id — `1732v0` — is
+                // unactionable in a tester's log; the path names the wire's end.
+                let label = world
+                    .get::<Name>(t.entity)
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| format!("{:?}", t.entity));
                 if has_port_surface {
                     warn!(
-                        "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
+                        "[cosim] connection targets unknown input port '{}' on {} ({:?}) — value dropped \
                          (declare the port or fix the wire)",
-                        t.name, t.entity
+                        t.name, label, t.entity
                     );
                 } else {
                     debug!(
-                        "[cosim] connection targets '{}' on {:?}, which exposes no ports yet — \
+                        "[cosim] connection targets '{}' on {} ({:?}), which exposes no ports yet — \
                          value dropped (structural endpoint, or a model still loading)",
-                        t.name, t.entity
+                        t.name, label, t.entity
                     );
                 }
             }

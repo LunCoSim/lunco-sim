@@ -997,15 +997,50 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
         ("MoveUp".to_string(), "up".to_string(), 1.0),
         ("MoveDown".to_string(), "up".to_string(), -1.0),
     ]);
-    let mut ec = commands.entity(trigger.entity);
     // No `ActuatorPorts` (no hardware actuators — `apply_fly` reads the command
     // inputs directly) and no `DriveMix` (an avatar is not a wheeled chassis; it is
-    // not a drive-allocation target and must stay out of the chassis queries). The
-    // `forward`/`side`/`up` surface is seeded empty and filled from the binding.
-    ec.try_insert(lunco_core::InputPorts::default());
-    if let Some(b) = binding {
-        ec.try_insert(b);
-    }
+    // not a drive-allocation target and must stay out of the chassis queries).
+    //
+    // The input surface is SEEDED FROM THE BINDING, via `ControlBinding::ports()`,
+    // which exists for exactly this ("an endpoint seeds exactly these into its
+    // `inputs`"). Seeding matters because the port surface is strict: only keys
+    // present in `InputPorts::values` are writable, and
+    // `INPUT_PORTS_BACKEND::write_input` returns `false` for anything else. This
+    // used to insert `InputPorts::default()` — an EMPTY map — so every
+    // `forward`/`side`/`up` write `drive_self_drivers` produced was dropped by the
+    // registry, `apply_fly`'s `inputs.cmd("forward")` read a constant 0.0, and the
+    // avatar could not move. The only trace was a per-port
+    // `[cosim] SetPorts targets unknown input port` warning, which reads like a
+    // scene-authoring mistake rather than a dead control path.
+    //
+    // Applied as a world command so an EXISTING surface is merged, not replaced: a
+    // prim that authored its own `inputs:*` ports already has an `InputPorts`, and
+    // a blind `insert` would wipe those keys while adding the binding's.
+    let entity = trigger.entity;
+    commands.queue(move |world: &mut World| {
+        let Ok(mut ent) = world.get_entity_mut(entity) else {
+            return;
+        };
+        let ports: Vec<String> = binding
+            .iter()
+            .flat_map(|b| b.ports())
+            .map(str::to_string)
+            .collect();
+        match ent.get_mut::<lunco_core::InputPorts>() {
+            Some(mut existing) => {
+                for port in ports {
+                    existing.values.entry(port).or_insert(0.0);
+                }
+            }
+            None => {
+                let refs: Vec<&str> = ports.iter().map(String::as_str).collect();
+                ent.insert(lunco_core::InputPorts::new(&refs));
+            }
+        }
+        if let Some(b) = binding {
+            ent.insert(b);
+        }
+    });
 }
 
 // ─── Shared Math Helpers (CQ-113 DRY) ────────────────────────────────────────
