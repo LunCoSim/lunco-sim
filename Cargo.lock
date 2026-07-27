@@ -7850,6 +7850,7 @@ dependencies = [
  "lunco-doc",
  "lunco-environment",
  "lunco-hardware",
+ "lunco-hash",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
@@ -7861,7 +7862,6 @@ dependencies = [
  "lunco-usd-avian",
  "lunco-usd-bevy",
  "openusd",
- "rumoca-phase-parse",
  "serde_json",
 ]
 

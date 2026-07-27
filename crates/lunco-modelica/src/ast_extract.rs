@@ -37,6 +37,50 @@ fn parse(source: &str) -> Option<StoredDefinition> {
 // Public extraction functions (drop-in replacements for regex versions)
 // ---------------------------------------------------------------------------
 
+/// The declared, solver-independent face of a model: what it is called, what it
+/// takes, what it is tuned by.
+#[derive(Debug, Default, Clone)]
+pub struct ModelInterface {
+    /// First non-package class, fully qualified when nested.
+    pub model_name: Option<String>,
+    /// `parameter` declarations with their authored values.
+    pub parameters: HashMap<String, f64>,
+    /// Every declared input, seeded with its authored default (`0.0` when it has
+    /// none). The INTERFACE is every input; the defaults map covers only the
+    /// subset that authored a numeric binding — seeding from defaults alone
+    /// gives an unbound `input Real drive_left` no port at all.
+    pub inputs: HashMap<String, f64>,
+}
+
+/// Read a model's interface from source, in one lenient parse.
+///
+/// The ONE way any USD-driven path derives a `ModelicaModel` stub, whether the
+/// source was fetched as an asset (`cosim::dispatch_loaded_modelica_sources`)
+/// or emitted by the network projector (`domain_projection`). Both used to
+/// open-code the same four extracts, and the copies drifted in exactly the
+/// place that matters — which inputs become ports.
+///
+/// Lenient (`best_effort`): a model with a semantic error still yields usable
+/// name/parameter/input snapshots, the same recovery `Session::recovered_file_query`
+/// gives the engine side.
+pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
+    let ast = rumoca_phase_parse::parse_to_syntax(source, file_label)
+        .best_effort()
+        .clone();
+    let defaults = extract_inputs_with_defaults_from_ast(&ast);
+    ModelInterface {
+        model_name: extract_model_name_from_ast(&ast),
+        parameters: extract_parameters_from_ast(&ast),
+        inputs: extract_input_names_from_ast(&ast)
+            .into_iter()
+            .map(|name| {
+                let seed = defaults.get(&name).copied().unwrap_or(0.0);
+                (name, seed)
+            })
+            .collect(),
+    }
+}
+
 /// Extract the model name from Modelica source code.
 ///
 /// Returns the name of the first non-package class found (model, block, class,

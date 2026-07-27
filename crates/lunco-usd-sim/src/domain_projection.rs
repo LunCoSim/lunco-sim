@@ -4,21 +4,24 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use lunco_modelica::{
-    extract_input_names_from_ast, extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
-    extract_parameters_from_ast, ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice,
-    NoticeLevel,
-};
+use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    ModelicaNotice, NoticeLevel};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 
-use crate::cosim::{UsdSourcedCosim, WiringDirty};
+// The USD side of a Modelica program facet — the class an asset names, the
+// lexical rules for member/instance identifiers — is ONE reader, shared with the
+// lint fact producer. See `lunco_usd_bevy::program`.
+pub use lunco_usd_bevy::program::is_domain_network_root;
+use lunco_usd_bevy::program::{
+    is_modelica_identifier, modelica_identifier, modelica_member_class, modelica_path_identifier,
+};
+
+use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
 
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
@@ -32,10 +35,15 @@ pub struct DomainProjectionState {
     fingerprint: u64,
 }
 
-/// Inspectable runtime artifact for diagnostics and API/UI projection.
+/// Inspectable runtime artifact for diagnostics and API/UI projection —
+/// readable through the `GeneratedModelicaSource` query
+/// ([`GeneratedSourceProvider`]).
 ///
 /// This is derived state, never persisted back into USD. Keeping the exact
-/// compiler input beside the run entity makes a compiler line actionable.
+/// compiler input beside the run entity makes a compiler line actionable: the
+/// worker reports errors against `generated://<model>.mo`, a document that
+/// exists nowhere on disk, so without a read path those line numbers name text
+/// nobody can obtain.
 #[derive(Component, Clone, Debug)]
 pub struct GeneratedModelicaSource {
     /// Composed USD scope that owns this compilation unit.
@@ -89,38 +97,13 @@ pub struct DomainProjectionError {
     pub message: String,
 }
 
-/// Partition components by acausal connector connectivity.
-///
-/// The serialized USD edge has an authoring direction, but Modelica `connect()`
-/// does not: both endpoint owners are unioned.
-pub fn partition_islands(mut components: Vec<DomainComponent>) -> Vec<Vec<DomainComponent>> {
-    components.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut parent: Vec<usize> = (0..components.len()).collect();
-    let owners: BTreeMap<_, _> = components
-        .iter()
-        .enumerate()
-        .map(|(index, component)| (component.path.as_str(), index))
-        .collect();
-
-    for (index, component) in components.iter().enumerate() {
-        for targets in component.connectors.values() {
-            for target in targets {
-                if let Some((target_prim, _)) = target.split_once(".connectors:") {
-                    if let Some(&other) = owners.get(target_prim) {
-                        union(&mut parent, index, other);
-                    }
-                }
-            }
-        }
-    }
-
-    let mut groups = BTreeMap::<usize, Vec<DomainComponent>>::new();
-    for (index, component) in components.into_iter().enumerate() {
-        let root = find(&mut parent, index);
-        groups.entry(root).or_default().push(component);
-    }
-    groups.into_values().collect()
-}
+// A `Scope` is ONE compilation unit: one generated model on one entity carrying
+// one `ModelicaModel`. There is deliberately no runtime island partition — a
+// collection holding several electrically independent islands is an authoring
+// error, reported by the `network-scope-multiple-islands` lint rule, which is
+// where that policy lives. A partitioner here would have to invent extra
+// entities to host the extra models, and the two definitions of "island" would
+// then have to agree forever.
 
 /// Emit one deterministic Modelica wrapper for a composed network scope.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
@@ -248,6 +231,15 @@ pub fn project_domain_islands(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<lunco_usd_bevy::UsdInstanceRoot>>,
+    // A runtime-instanced descendant is PARKED as `Provenance::Local` until its
+    // root's id is minted (`resolve_usd_instance_identities`), and `instance_key`
+    // answers `None` for the whole window. Projecting then compiles the island
+    // under an unqualified name — which the second, identity-carrying pass
+    // immediately supersedes (a wasted serial compile ahead of everything on the
+    // critical path), and which two spawns of one asset SHARE, so their
+    // `generated://…` worker sessions clobber each other. The marker is the
+    // explicit "identity still pending" signal; it is removed on upgrade.
+    q_instance_member: Query<(), With<lunco_usd_bevy::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     dirty: Res<WiringDirty>,
@@ -260,6 +252,13 @@ pub fn project_domain_islands(
     let Some(channels) = channels else { return };
 
     for (entity, prim, previous, installed_model) in &prims {
+        // Identity still pending — wait for it rather than compile under a name
+        // that is neither stable nor unique. The upgrade lands a
+        // `GlobalEntityId`, which re-triggers this system through
+        // `identity_added`.
+        if q_instance_member.contains(entity) {
+            continue;
+        }
         // Runtime-spawned copies may have byte-identical stage-relative paths.
         // Use the same stable instance-root identity as the USD wiring resolver;
         // scene-owned prims need no suffix because their composed paths are unique.
@@ -303,6 +302,11 @@ pub fn project_domain_islands(
                 });
                 error!("[domain-projection] `{}` rejected: {message}", prim.path);
                 retire_sim_interface(&mut commands, entity);
+                // A rejected projection has no interface to hold anyone to; the
+                // rejection itself is the error the user must act on.
+                commands
+                    .entity(entity)
+                    .remove::<UsdModelicaPortContract>();
                 commands.entity(entity).try_insert((
                     ModelicaModel {
                         model_path: PathBuf::from(format!("generated://{model_name}.mo")),
@@ -333,6 +337,7 @@ pub fn project_domain_islands(
                 commands.entity(entity).remove::<(
                     ModelicaModel,
                     UsdSourcedCosim,
+                    UsdModelicaPortContract,
                     DomainProjectionState,
                     GeneratedModelicaSource,
                 )>();
@@ -347,30 +352,18 @@ pub fn project_domain_islands(
             continue;
         }
 
-        let ast = rumoca_phase_parse::parse_to_syntax(&source, "usd-network-projection.mo")
-            .best_effort()
-            .clone();
-        let compiled_name = extract_model_name_from_ast(&ast).unwrap_or_else(|| model_name.clone());
+        // ONE parse-and-extract, shared with `cosim::dispatch_loaded_modelica_sources`:
+        // the interface of a model is read the same way whether the source came
+        // off disk or out of this emitter.
+        let interface = parse_model_interface(&source, "usd-network-projection.mo");
+        let compiled_name = interface.model_name.unwrap_or_else(|| model_name.clone());
         let session_id = installed_model.map_or(1, |model| model.session_id + 1);
         let doc_uri = format!("generated://{model_name}.mo");
         let mut model = ModelicaModel {
             model_path: PathBuf::from(&doc_uri),
             model_name: compiled_name.clone(),
-            parameters: extract_parameters_from_ast(&ast),
-            // Interface = every declared input; the defaults map is only the
-            // subset with an authored numeric binding. See the same seeding in
-            // `cosim::dispatch_loaded_modelica_sources` — an unbound input is the
-            // normal shape of a WIRED input, and must still get a port.
-            inputs: {
-                let defaults = extract_inputs_with_defaults_from_ast(&ast);
-                extract_input_names_from_ast(&ast)
-                    .into_iter()
-                    .map(|name| {
-                        let seed = defaults.get(&name).copied().unwrap_or(0.0);
-                        (name, seed)
-                    })
-                    .collect()
-            },
+            parameters: interface.parameters,
+            inputs: interface.inputs,
             session_id,
             is_stepping: true,
             is_compiling: true,
@@ -417,6 +410,16 @@ pub fn project_domain_islands(
         commands.entity(entity).try_insert((
             model,
             UsdSourcedCosim,
+            // The same USD-declares / compiler-confirms contract the per-prim
+            // program path has carried all along: the network's boundary is an
+            // authored promise, and `validate_usd_modelica_port_contracts` is
+            // what turns a promise the DAE does not keep into one durable,
+            // actionable error instead of an island that steps and publishes
+            // nothing.
+            UsdModelicaPortContract::new(
+                network.inputs.iter().cloned(),
+                network.outputs.keys().cloned(),
+            ),
             DomainProjectionState { fingerprint },
             GeneratedModelicaSource {
                 network_root: network.root.clone(),
@@ -428,6 +431,49 @@ pub fn project_domain_islands(
                     .collect(),
             },
         ));
+    }
+}
+
+/// `GeneratedModelicaSource` — read back the exact Modelica text a projected
+/// network was compiled from.
+///
+/// `curl … {"command":"GeneratedModelicaSource","params":{}}` lists every
+/// projected network; `{"network_root":"/Rover/Electrical"}` returns one. This
+/// is the read path for the `generated://…` documents the compiler reports
+/// errors against, and the only way to see what USD actually emitted.
+pub struct GeneratedSourceProvider;
+
+impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
+    fn name(&self) -> &'static str {
+        "GeneratedModelicaSource"
+    }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let wanted = params
+            .get("network_root")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        let mut q = world.query::<(&GeneratedModelicaSource, Option<&ModelicaModel>)>();
+        let networks: Vec<serde_json::Value> = q
+            .iter(world)
+            .filter(|(generated, _)| {
+                wanted
+                    .as_deref()
+                    .is_none_or(|root| root == generated.network_root)
+            })
+            .map(|(generated, model)| {
+                serde_json::json!({
+                    "network_root": generated.network_root,
+                    "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
+                    "doc_uri": model
+                        .map(|model| model.model_path.display().to_string())
+                        .unwrap_or_default(),
+                    "error": model.and_then(|model| model.last_error.clone()),
+                    "components": generated.component_paths,
+                    "source": generated.source,
+                })
+            })
+            .collect();
+        lunco_api::ApiResponse::ok(serde_json::json!({ "networks": networks }))
     }
 }
 
@@ -444,32 +490,23 @@ fn network_model_name(root: &str, global_id: Option<u64>) -> String {
     }
 }
 
+/// The workspace hashing substrate, not `DefaultHasher`: this value decides
+/// whether a live edit recompiles, and one definition of "same source" is worth
+/// more than a std default whose stability is unspecified.
 fn source_fingerprint(source: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    source.hash(&mut hasher);
-    hasher.finish()
+    lunco_hash::fnv1a64(source.as_bytes())
 }
 
-/// Is `prim` the root of a projected domain network — i.e. does it carry a
-/// component collection this module compiles into one generated model?
+/// Read one composed `Scope` as a network, or say why it cannot be one.
 ///
-/// Shared with `cosim::rewire_usd_connections`, which must NOT build runtime
-/// wires for the connections authored on such a root: they are read here at
-/// parse time and become equations INSIDE the generated model. Building a wire
-/// as well produces an edge whose source prim has no `SimComponent` of its own
-/// (it was absorbed into the island), so it can never fire — a permanent
-/// "connection never landed" fault against a model that is working correctly.
+/// `Ok(None)` = not a network root (or nothing solvable is left in it);
+/// `Err` = authored opinions that would produce a model the compiler could only
+/// reject, reported against the property that carries them.
 ///
-/// One definition, used by both, so the two passes cannot disagree about what a
-/// network root is.
-pub fn is_domain_network_root(view: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath) -> bool {
-    // Codeless multiple-apply schemas are not consistently surfaced by every
-    // OpenUSD binding through `HasAPI`; their standard authored properties are
-    // authoritative and round-trip in all runtimes.
-    view.any_attr_with_prefix(prim, "collection:components:")
-}
-
-fn read_network(
+/// Public because this is the layer worth testing against REAL composed USD:
+/// every unit test below builds a `DomainNetwork` by hand, and the composition
+/// arcs are exactly where this has broken in the field.
+pub fn read_network(
     view: &lunco_usd_bevy::StageView<'_>,
     root: &SdfPath,
 ) -> Result<Option<DomainNetwork>, Vec<DomainProjectionError>> {
@@ -492,38 +529,27 @@ fn read_network(
             continue;
         }
         if !view.has_api_schema(&path, "LunCoProgramAPI") {
+            // A member that lost `LunCoProgramAPI` through composition is not an
+            // opinion about anything — it is almost always a reference arc that
+            // failed to remap, and staying silent here is what makes the first
+            // symptom a confusing boundary error about a prim the author can see
+            // in their file. Name it where it happens.
+            warn!(
+                "[domain-projection] `{path}` is in collection `{root_string}/components` but \
+                 applies no LunCoProgramAPI — it contributes nothing to the generated model. \
+                 Check that the reference arc composing it survived."
+            );
             continue;
         }
-        let implementation = view
-            .value_str(&path, "info:implementationSource")
-            .unwrap_or_default();
-        if implementation != "sourceAsset" {
-            extraction_errors.push(DomainProjectionError {
-                path: format!("{path}.info:implementationSource"),
-                message:
-                    "a Modelica network member must use info:implementationSource = sourceAsset"
-                        .into(),
-            });
-            continue;
-        }
-        let Some(source) = view.asset(&path, "info:sourceAsset") else {
-            extraction_errors.push(DomainProjectionError {
-                path: format!("{path}.info:sourceAsset"),
-                message: "a Modelica network member must author a .mo info:sourceAsset".into(),
-            });
-            continue;
-        };
-        let sub_identifier = view
-            .value_str(&path, "info:sourceAsset:subIdentifier")
-            .filter(|value| !value.is_empty());
-        let Some(model_class) = model_class_from_asset(&source, sub_identifier.as_deref()) else {
-            extraction_errors.push(DomainProjectionError {
-                path: format!("{path}.info:sourceAsset"),
-                message: format!(
-                    "`{source}` is not a Modelica source asset; use a .mo asset and optional info:sourceAsset:subIdentifier"
-                ),
-            });
-            continue;
+        let model_class = match modelica_member_class(view, &path) {
+            Ok(class) => class,
+            Err(issue) => {
+                extraction_errors.push(DomainProjectionError {
+                    path: issue.property,
+                    message: issue.message,
+                });
+                continue;
+            }
         };
         let attrs = view.attr_names(&path);
         let mut constants = BTreeMap::new();
@@ -553,6 +579,19 @@ fn read_network(
                 } else if let Some(target) = targets.first() {
                     inputs.insert(name.to_string(), target.to_string());
                 } else if let Some(value) = view.real(&path, &attr) {
+                    // A non-finite opinion would be emitted verbatim (`NaN`,
+                    // `inf`) and come back as a compiler error against generated
+                    // source, blaming the model for the authoring.
+                    if !value.is_finite() {
+                        extraction_errors.push(DomainProjectionError {
+                            path: format!("{path}.{attr}"),
+                            message: format!(
+                                "`{value}` is not a finite value; a generated Modelica \
+                                 modification must be a real number"
+                            ),
+                        });
+                        continue;
+                    }
                     constants.insert(name.to_string(), value);
                 } else {
                     extraction_errors.push(DomainProjectionError {
@@ -585,7 +624,7 @@ fn read_network(
     // generated island rather than rejecting unrelated connected equipment.
     // Causal-only components remain: they may be complete models without an
     // acausal connector at all.
-    retain_connected_acausal_components(&mut components);
+    let omitted = retain_connected_acausal_components(&mut components);
     if components.is_empty() {
         return Ok(None);
     }
@@ -621,12 +660,50 @@ fn read_network(
                 path: format!("{root}.{attr}"),
                 message: "a network output must have exactly one component source".into(),
             });
-        } else {
-            outputs.insert(name.to_string(), targets[0].to_string());
+            continue;
         }
+        // A boundary output whose source was OMITTED above (an installed but
+        // unwired part) drops with it. Rejecting the network instead is what
+        // took a whole rover's electrical domain offline when one reference arc
+        // stopped composing the solar panel into the collection: no `soc`, no
+        // `solar_power`, and an error blaming the collection. The two policies
+        // have to agree — omitting a part means omitting what it published.
+        let source_prim = targets[0]
+            .split_once(".outputs:")
+            .map(|(prim, _)| prim.to_string())
+            .unwrap_or_default();
+        if omitted.contains(&source_prim) {
+            warn!(
+                "[domain-projection] `{root}.{attr}` publishes `{}`, which is installed but has \
+                 no acausal connection, so it is not part of this generated network — the output \
+                 is dropped. Wire its `connectors:*` to bring both back.",
+                source_prim
+            );
+            continue;
+        }
+        outputs.insert(name.to_string(), targets[0].to_string());
     }
     if !extraction_errors.is_empty() {
         return Err(extraction_errors);
+    }
+    // A boundary input nothing consumes is authored intent that reaches no
+    // equation: the wire into it lands, the value updates every tick, and the
+    // DAE never reads it. Silent, and indistinguishable from a working feed.
+    for input in &inputs {
+        let boundary = format!("{root_string}.inputs:{input}");
+        let consumed = components.iter().any(|component| {
+            component
+                .inputs
+                .values()
+                .any(|target| *target == boundary || input_sources.get(input) == Some(target))
+        });
+        if !consumed {
+            warn!(
+                "[domain-projection] `{boundary}` is declared on the network but no member \
+                 consumes it — nothing in the generated model reads this input. Connect a \
+                 member's `inputs:*` to it, or remove it."
+            );
+        }
     }
     let network = DomainNetwork {
         root: root_string,
@@ -635,7 +712,23 @@ fn read_network(
         input_sources,
         outputs,
     };
-    let errors = validate_network(&network);
+    let mut errors = validate_network(&network);
+    // Say WHY a causal source is missing when the answer is "it was installed
+    // but never wired, so the island omitted it" — otherwise the only report is
+    // `outside collection`, about a prim the author can see listed in their own
+    // `collection:components:includes`.
+    for error in &mut errors {
+        if let Some(path) = omitted
+            .iter()
+            .find(|path| error.message.contains(path.as_str()))
+        {
+            error.message.push_str(&format!(
+                " — `{path}` IS in the collection, but it declares an acausal connector that \
+                 nothing connects to, so it is not part of the generated network. Wire its \
+                 `connectors:*`."
+            ));
+        }
+    }
     if errors.is_empty() {
         Ok(Some(network))
     } else {
@@ -811,7 +904,11 @@ pub fn validate_network(network: &DomainNetwork) -> Vec<DomainProjectionError> {
 /// with an acausal connector and no edge at all has no solvable electrical
 /// context; it remains a perfectly valid physical component, just not a member
 /// of this runtime Modelica model.
-fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) {
+///
+/// Returns the paths it dropped, because everything the network published
+/// THROUGH those parts has to drop with them (see the boundary-output handling
+/// in [`read_network`]).
+fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) -> BTreeSet<String> {
     let connected: BTreeSet<String> = components
         .iter()
         .flat_map(|component| {
@@ -825,150 +922,19 @@ fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) {
         })
         .flatten()
         .collect();
+    let mut omitted = BTreeSet::new();
     components.retain(|component| {
-        component.declared_connectors.is_empty() || connected.contains(&component.path)
+        let keep = component.declared_connectors.is_empty() || connected.contains(&component.path);
+        if !keep {
+            omitted.insert(component.path.clone());
+        }
+        keep
     });
-}
-
-fn model_class_from_asset(asset: &str, sub_identifier: Option<&str>) -> Option<String> {
-    if let Some(class) = sub_identifier {
-        return is_modelica_class_name(class).then(|| class.to_string());
-    }
-    let path = asset
-        .strip_prefix("lunco://")
-        .or_else(|| asset.strip_prefix("twin://"))
-        .unwrap_or(asset);
-    let model_path = path.split("models/").nth(1)?;
-    let class = model_path.strip_suffix(".mo")?;
-    Some(class.replace('/', "."))
-}
-
-fn is_modelica_class_name(class: &str) -> bool {
-    !class.is_empty() && class.split('.').all(is_modelica_identifier)
+    omitted
 }
 
 fn instance_identifier(root: &str, path: &str) -> String {
     modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
-}
-
-fn find(parent: &mut [usize], node: usize) -> usize {
-    if parent[node] != node {
-        parent[node] = find(parent, parent[node]);
-    }
-    parent[node]
-}
-
-fn union(parent: &mut [usize], left: usize, right: usize) {
-    let left = find(parent, left);
-    let right = find(parent, right);
-    if left != right {
-        parent[right] = left;
-    }
-}
-
-fn is_modelica_identifier(raw: &str) -> bool {
-    const KEYWORDS: &[&str] = &[
-        "algorithm",
-        "and",
-        "annotation",
-        "block",
-        "break",
-        "class",
-        "connect",
-        "connector",
-        "constant",
-        "constrainedby",
-        "der",
-        "discrete",
-        "each",
-        "else",
-        "elseif",
-        "elsewhen",
-        "encapsulated",
-        "end",
-        "enumeration",
-        "equation",
-        "expandable",
-        "extends",
-        "external",
-        "false",
-        "final",
-        "flow",
-        "for",
-        "function",
-        "if",
-        "import",
-        "impure",
-        "in",
-        "initial",
-        "inner",
-        "input",
-        "loop",
-        "model",
-        "not",
-        "operator",
-        "or",
-        "outer",
-        "output",
-        "package",
-        "parameter",
-        "partial",
-        "protected",
-        "public",
-        "pure",
-        "record",
-        "redeclare",
-        "replaceable",
-        "return",
-        "stream",
-        "then",
-        "true",
-        "type",
-        "when",
-        "while",
-        "within",
-    ];
-    let mut chars = raw.chars();
-    chars
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
-        && !KEYWORDS.contains(&raw)
-}
-
-/// Injective ASCII spelling for arbitrary USD path/name text.
-///
-/// `_` is escaped too, so punctuation replacement cannot collapse `Motor-A`
-/// and `Motor_A` onto one Modelica instance.
-fn modelica_identifier(raw: &str) -> String {
-    if is_modelica_identifier(raw) {
-        return raw.to_string();
-    }
-    let mut result = modelica_path_identifier(raw);
-    if !result.starts_with("usd_") {
-        result.insert_str(0, "usd_");
-    }
-    result
-}
-
-fn modelica_path_identifier(raw: &str) -> String {
-    let mut result = String::with_capacity(raw.len() + 1);
-    for character in raw.chars() {
-        if character.is_ascii_alphanumeric() {
-            result.push(character);
-        } else if character == '_' {
-            result.push_str("__");
-        } else {
-            result.push_str(&format!("_x{:x}_", character as u32));
-        }
-    }
-    if result.is_empty() {
-        result.push_str("ModelicaNetwork");
-    }
-    if result.as_bytes()[0].is_ascii_digit() || !is_modelica_identifier(&result) {
-        result.insert_str(0, "usd_");
-    }
-    result
 }
 
 #[cfg(test)]
@@ -987,24 +953,6 @@ mod tests {
             inputs: BTreeMap::new(),
             declared_outputs: BTreeSet::new(),
         }
-    }
-
-    #[test]
-    fn partitions_direct_pin_connections_into_independent_islands() {
-        let islands = partition_islands(vec![
-            component("/Power/Battery/Model", None),
-            component(
-                "/Power/MotorA/Model",
-                Some("/Power/Battery/Model.connectors:p"),
-            ),
-            component("/Payload/Battery/Model", None),
-            component(
-                "/Payload/Camera/Model",
-                Some("/Payload/Battery/Model.connectors:p"),
-            ),
-        ]);
-        assert_eq!(islands.len(), 2);
-        assert!(islands.iter().all(|island| island.len() == 2));
     }
 
     #[test]
@@ -1087,30 +1035,16 @@ mod tests {
         );
         let motor = component("/Electrical/Motor", None);
         let mut components = vec![panel, battery, motor];
-        retain_connected_acausal_components(&mut components);
+        let omitted = retain_connected_acausal_components(&mut components);
         assert_eq!(
             components.iter().map(|component| component.path.as_str()).collect::<Vec<_>>(),
             ["/Electrical/Battery", "/Electrical/Motor"],
             "only explicitly wired program facets enter a generated acausal island"
         );
-    }
-
-    #[test]
-    fn derives_qualified_class_from_model_asset_path() {
-        assert_eq!(
-            model_class_from_asset("lunco://models/LunCo/Electrical/Battery.mo", None),
-            Some("LunCo.Electrical.Battery".into())
-        );
-        assert_eq!(
-            model_class_from_asset(
-                "lunco://models/vendor/package.mo",
-                Some("Vendor.Power.CustomBattery")
-            ),
-            Some("Vendor.Power.CustomBattery".into())
-        );
-        assert_eq!(
-            model_class_from_asset("lunco://models/vendor/package.mo", Some("bad-class")),
-            None
+        assert!(
+            omitted.contains("/Electrical/SolarPanel"),
+            "what the island omits has to be nameable — a boundary output published \
+             through an omitted part drops with it instead of rejecting the network"
         );
     }
 
@@ -1138,17 +1072,6 @@ mod tests {
             source_fingerprint(source),
             source_fingerprint("model A\n  Real y;\nend A;\n")
         );
-    }
-
-    #[test]
-    fn generated_identifiers_are_injective_and_avoid_keywords() {
-        assert_ne!(
-            modelica_path_identifier("Motor-A"),
-            modelica_path_identifier("Motor_A")
-        );
-        assert_eq!(modelica_identifier("model"), "usd_model");
-        assert_eq!(modelica_identifier("3phase"), "usd_3phase");
-        assert!(is_modelica_identifier(&modelica_identifier("left/right")));
     }
 
     #[test]

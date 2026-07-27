@@ -67,6 +67,7 @@ pub mod curve_sweep;
 pub mod lathe;
 pub mod mount;
 pub mod nurbs;
+pub mod program;
 pub mod read;
 pub mod scene_lifecycle;
 pub mod trim;
