@@ -27,7 +27,7 @@
 //! across `ephemeris_update_system`, `update_solar_poses`,
 //! `trajectory_alignment_system`, `update_sun_light_system` and
 //! `anchor_solar_frame_to_site`. See
-//! `docs/reviews/2026-07-26-fps-regression-analysis.md`.
+//! `docs/architecture/42-ui-frame-discipline.md` §6.
 
 use bevy::prelude::*;
 use lunco_settings::SettingsSection;

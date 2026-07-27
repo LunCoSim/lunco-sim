@@ -21,7 +21,7 @@
 //!   lunco-canvas (per-domain projectors live in domain crates)
 //! ```
 //!
-//! ## Ontology Alignment (specs/ontology.md, Article IX)
+//! ## Ontology Alignment (docs/architecture/01-ontology.md, Article IX)
 //!
 //! This module implements the graph-level concepts from the Engineering Ontology:
 //!

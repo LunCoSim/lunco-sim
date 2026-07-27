@@ -33,24 +33,33 @@ Each report has these sections (in order):
 6. **Validation** — sweep results / numbers that prove it works.
 7. **TBDs / future work** — design debt + concrete next-step ideas.
 
+A report is deleted once its findings are folded into the solver-tuning
+reference below (git remembers the full diagnosis). The reference is the
+living part; reports are the evidence trail.
+
 ## Index
 
-- [2026-05-28 — Lunar rover thermal model](2026-05-28-lunar-thermal.md):
-  stiff radiative DAE failing at t=2.5e-7 across all solvers; root cause
-  was FD-Jacobian degeneracy at the consistent-IC solve combined with
-  insufficient retry budgets. Working configuration: TR-BDF2 + tol=1e-3
-  + dt=3600 + new rumoca defaults. Scales linearly to multi-month
-  horizons.
+- *2026-05-28 — Lunar rover thermal model* (deleted; `git log -- docs/numeric-experiments/`):
+  stiff radiative DAE failing at t=2.5e-7 across all solvers; root cause was
+  FD-Jacobian degeneracy at the consistent-IC solve combined with insufficient
+  retry budgets. Its durable conclusions live in the reference below — note
+  that its TR-BDF2 recommendation was later **overturned** (see next section).
 
 ## Solver tuning reference — known configs, known-failing models, and the rumoca/lunco-modelica backlog
 
 ### Known working solver configurations
 
 - **Stiff radiative thermal models** (lunar rover, anything with σT⁴
-  networks + tanh hysteresis): `solver = "tr_bdf2"`, `tolerance = 1e-3`
-  (not 1e-6), `dt = 3600`. Background:
-  [`docs/numeric-experiments/2026-05-28-lunar-thermal.md`](2026-05-28-lunar-thermal.md).
+  networks + tanh hysteresis): `tolerance = 1e-3` (not 1e-6), `dt = 3600`.
   Scales linearly to multi-year horizons.
+- **Solver choice — BDF is the robust default again.** The 2026-05-28 session
+  concluded TR-BDF2 ("BDF dies at the second sunrise louver crossing"), but
+  that predates the rumoca solve-IR fix for connection flow-sum unknowns. With
+  that fix BDF completes the full multi-lunar-cycle horizon on the stiff
+  thermal models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34)
+  hit "nonlinear solver failures (50)" within the first lunar hour on the same
+  models. SDIRK stays opt-in. (Source of truth:
+  `crates/lunco-modelica/src/experiments_runner.rs` default-solver comment.)
 
 ### Known-failing models — don't waste time tuning solvers
 
@@ -81,7 +90,7 @@ Priority ranking; each links back to the originating experiment report.
 2. **Symbolic Jacobian via rumoca AST + cranelift** (~weeks, highest leverage).
    Replaces finite-difference Jacobian which loses ~9 sig digits on radiative
    terms. Closes most of the remaining gap to OMC/DASSL on stiff models.
-   Origin: [2026-05-28 lunar thermal](2026-05-28-lunar-thermal.md).
+   Origin: the 2026-05-28 lunar-thermal session (report deleted; git).
 3. **Per-state `atol` vector honoring Modelica `nominal=`** (~1 day).
    `SimVariableMeta.nominal` is parsed but ignored by the solver.
 4. **`EmptySystem` compile bug** investigation. Trivial models like

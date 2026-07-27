@@ -483,7 +483,7 @@ fn process_usd_sim_prims(
     // a direct path→spec lookup. (Sibling spots: `shader.rs` reads scan
     // the whole stage per prim; `loaded_stages.rs` `prim_type_name` is an
     // O(n²) tree render.) Deferred per request — not modifying USD here.
-    // See docs/code-quality-remediation.md (CQ-212).
+    // Tracked in docs/architecture/engineering-backlog-and-standards.md.
     let mut seen_stages: std::collections::HashSet<Handle<UsdStageAsset>> = Default::default();
     for prim_path in q_all_prims.iter() {
         if !seen_stages.insert(prim_path.stage_handle.clone()) {

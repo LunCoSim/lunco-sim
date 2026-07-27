@@ -93,35 +93,52 @@ Modelica→physics chain is real.
 
 ## Your turn: a battery on a rover
 
-The bundled `assets/models/Battery.mo` is a state-of-charge integrator:
+The bundled `assets/models/LunCo/Electrical/Battery.mo` sets the bus voltage and
+integrates its own charge from whatever current flows through its pin:
 
 ```modelica
-input  Real current_in "Raw input current in Amperes";
-output Real soc_out;
-output Real voltage_out;
+within LunCo.Electrical;
+model Battery
+  Pin p;
+  Real soc(start = soc_init) "State of charge, 0..1";
+  output Real soc_out;
 equation
-  der(soc) = -current / (capacity * 3600.0);   // charge balance
+  p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;   // droops with SoC and ESR
+  der(soc) = p.i / (capacity * 3600.0);                       // charge balance
+  soc_out = soc;
+end Battery;
 ```
+
+**Note what it is *not*.** There is no `input Real current_in`. `Pin` carries a
+`flow` variable, so the current is decided by the circuit — every load and source
+on the bus at once — not written in by a caller. Nobody sums the draw; Kirchhoff
+does. That is the whole reason the electrical domain is acausal (see
+[54 — The Electrical Domain](../architecture/54-electrical-domain-and-modelica-libraries.md)).
 
 To cosim it onto a rover:
 
-1. **Attach** — add a `def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"])` child prim on the rover with
-   `uniform asset info:sourceAsset = @models/Battery.mo@`. It is a subsystem
-   bolted on, not the rover's own control law, so it is a child prim.
-2. **Wire** — connect the rover's motor current (or a proxy proportional to throttle)
-   into the program's `inputs:current_in`, and read `outputs:soc_out` from wherever you
-   want to observe it.
-3. **Observe** — `watch_ports` on `soc_out` while you drive; it falls as current
-   flows.
+1. **Attach** — add a `def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"])`
+   child prim on the rover with
+   `uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@`.
+   It is a subsystem bolted on, not the rover's own control law, so it is a child
+   prim — and a shipped asset is addressed `@lunco://…@`, never by a bare relative
+   path.
+2. **Wire the circuit, not a number** — the battery, the PDU and each load are
+   `connect()`-ed pin to pin inside one Modelica model. A rover motor pulling
+   current is a load on that bus; adding a second load changes the first one's
+   share without editing either.
+3. **Observe** — `watch_ports` on `soc_out` while you drive; it falls as the bus
+   draws.
 
-> **Status note:** the `Battery.mo` model ships, but no scene currently wires it
-> to a rover's current draw — so this last section is the exercise, not a
-> pre-baked example. The lander above is the proven, runnable reference.
+> **Status note:** the model ships and `assets/scenes/tests/lint_selftest.usda`
+> references it, but no gameplay scene currently wires a battery to a rover's
+> real current draw — so this last section is the exercise, not a pre-baked
+> example. The lander above is the proven, runnable reference.
 
 ## Where models live and how to edit them
 
 The full Modelica IDE is embedded in the sandbox as the **Design workspace** —
-open `Lander.mo`, `Battery.mo`, or any [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary)
+open `Lander.mo`, `LunCo/Electrical/Battery.mo`, or any [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary)
 class, edit the source or the diagram, compile, and run with live plots. That is
 the same workbench the standalone *lunica* app provides; in the sandbox it sits
 alongside the 3D scene so a model and the physics it drives can be open at once.

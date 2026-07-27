@@ -973,7 +973,7 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
 ///   `Assets<T>`. Identity for a resource is meaningless.
 ///
 /// A missing `Provenance` now fails the honest way: no id, and whatever needed
-/// one says so. See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
+/// one says so. See `docs/architecture/42-ui-frame-discipline.md` §6.
 fn assign_global_entity_ids(
     mut commands: Commands,
     // `Provenance` is OPTIONAL, and a runtime instance is admitted on its own

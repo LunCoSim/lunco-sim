@@ -142,7 +142,7 @@ fn invalidate_source_memos_on_doc_changed(_trigger: On<lunco_doc_bevy::DocumentC
 #[derive(Resource, Default)]
 struct ClassRemovedWatermark(std::collections::HashMap<lunco_doc::DocumentId, u64>);
 
-/// Cross-truth rule R4 (see `docs/architecture/B0_CROSS_TRUTH_POLICY.md`):
+/// Cross-truth rule R4 (see `docs/architecture/20-domain-modelica.md` §5):
 /// when a `RemoveClass` op lands, every tab drilled into the
 /// removed class — or a descendant of it — closes. Without this
 /// observer the dangling tab falls through to first-tab behaviour

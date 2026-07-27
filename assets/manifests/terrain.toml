@@ -1,8 +1,7 @@
 # lunco-terrain-streaming Assets
 #
 # External rasters for the terrain COLOUR/layer pipeline (design
-# `docs/terrain-layered-pipeline-design.md` Part C; tracker
-# `docs/terrain-layered-pipeline-IMPL.md`). Fetched + preprocessed by the shared
+# `docs/architecture/terrain-layered-rendering.md`). Fetched + preprocessed by the shared
 # asset pipeline — runtime never hits the network:
 #
 #   cargo run -p lunco-assets -- download     # fetch (ureq, sha256 skip-if-present)

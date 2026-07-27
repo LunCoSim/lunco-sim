@@ -1,6 +1,11 @@
 # 44 — Surface & Orbital Views: Local Space / Celestial Space Split
 
-Status: **proposed** (target architecture). Doc 43's site-anchored solar
+> Status: Design · Audience: contributors on the surface/celestial space split
+>
+> The target architecture — doc [45](45-big-space-correct-usage.md) §2.1
+> establishes why, and cites the two-space split here as the correct target.
+
+Doc 43's site-anchored solar
 hierarchy is the as-built baseline; this doc explains why that design is
 structurally fragile and specifies the replacement.
 

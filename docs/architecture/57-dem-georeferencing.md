@@ -1,6 +1,8 @@
-# DEM Georeferencing — the raster is the source of truth
+# 57 — DEM Georeferencing — the raster is the source of truth
 
-**Status:** implemented — [`crates/lunco-geotiff`](../../crates/lunco-geotiff/src/lib.rs)
+> Status: Active · Audience: contributors on DEMs, terrain baking, and geo assets
+
+[`crates/lunco-geotiff`](../../crates/lunco-geotiff/src/lib.rs)
 is the one place georeferencing is encoded and decoded, shared by the writer
 (`lunco-assets`) and the reader (`lunco-terrain-bake`). Companion to
 [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md) and

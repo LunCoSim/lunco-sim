@@ -1,6 +1,6 @@
 # 43 — Orbital view: satellites, ground stations & the site frame
 
-Status: design + implementation · Audience: engine + content authors
+> Status: Active · Audience: engine and content authors
 
 The celestial placement substrate: a Keplerian satellite, geodetically-placed
 ground stations (Earth + Moon), the **site frame** that grounds scene-local prims

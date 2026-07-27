@@ -1133,7 +1133,7 @@ impl Panel for CodeEditorPanel {
 /// source for `doc` and emit a minimal `EditText` splice if they
 /// differ. Clears `pending_commit_at` either way.
 ///
-/// Public so cross-truth rule R3 (`B0_CROSS_TRUTH_POLICY.md`) can
+/// Public so cross-truth rule R3 (`docs/architecture/20-domain-modelica.md` §5) can
 /// force-flush before a tab-mode switch transitions away from the
 /// text view: any uncommitted typing turns into a real op before
 /// the canvas tab activates, so its first render observes the new

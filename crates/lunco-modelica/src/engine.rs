@@ -636,7 +636,7 @@ impl ModelicaEngine {
         // (`msl_remote.rs`) drop its synchronous full tree traversal. Deferred:
         // multi-file (engine/class_cache/msl_remote) and MSL resolution is
         // regression-prone (nested-URI / within-prefix). See
-        // docs/code-quality-remediation.md (CQ-211).
+        // docs/architecture/engineering-backlog-and-standards.md.
         let file_uri = file_uri.or_else(|| {
             let bundle = crate::msl_remote::parsed_msl_bundle()?;
             // A `.mo` that declares top-level qualified class `q` (= within +

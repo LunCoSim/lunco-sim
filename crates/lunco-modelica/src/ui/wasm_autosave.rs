@@ -276,7 +276,7 @@ fn restore_from_localstorage(world: &mut World) {
     }
 }
 
-/// Cross-truth rule R1 (see `docs/architecture/B0_CROSS_TRUTH_POLICY.md`):
+/// Cross-truth rule R1 (see `docs/architecture/20-domain-modelica.md` §5):
 /// "active gesture wins until idle". When any field is `true`,
 /// `autosave_on_changed` bails — autosave fires again on the next
 /// `DocumentChanged` after every source clears.

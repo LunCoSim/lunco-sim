@@ -1,12 +1,16 @@
 # Rhai Integration Design — scripting & scenarios
 
+> Status: Active · Audience: contributors on `lunco-scripting` and the scenario runtime
+>
+> The *how-to* is [`../scripting-guide.md`](../scripting-guide.md); this is the why.
+
 Rhai drives scenarios — *"rover moves along a path via checkpoints, loads next
 goals"* — and, more broadly, **manipulates every object in the sim (Twin, USD,
 Modelica, cosim, scene, vehicles) from script.** The engine builds on native
 (default), `--no-default-features` (script-free), `python`, and
 `wasm32-unknown-unknown`.
 
-> **Authoring a scenario?** Read the **[Scripting Guide](./scripting-guide.md)** —
+> **Authoring a scenario?** Read the **[Scripting Guide](../scripting-guide.md)** —
 > a task-oriented how-to. This document is the architecture + design rationale.
 
 ### Capabilities

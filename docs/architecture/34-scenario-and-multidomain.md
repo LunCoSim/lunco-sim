@@ -54,19 +54,18 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)        # the rigid body (avian port
     float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body
 
     def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @models/LanderGNC.mo@
+        uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
         float inputs:altitude.connect      = </Lander.outputs:height>
         float inputs:descent_rate.connect  = </Lander.outputs:velocity_y>
         float inputs:g.connect             = </Environment.outputs:gravity_accel>
-        float inputs:engine_enable.connect = </Lander/Power.outputs:soc>
+        float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>
     }
     def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @models/Battery.mo@
-        float inputs:load.connect = </Lander/GNC.outputs:thrust>
-    }
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+    }                                       # no inputs:load — the pin's current is the circuit's answer
     def Scope "Therm" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @models/ThermalNode.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
     }
 }
 ```
@@ -148,8 +147,8 @@ def Scope "Scenario" ( kind = "component" )
 ## Decision 4 — Lander GNC: reuse MSL `LimPID`, gravity from env, gains live
 
 - Control law: `Modelica.Blocks.Continuous.LimPID` (chosen). Connector flattening
-  is proven in-tree; **smoke-test `LimPID` specifically**, keep a flat-equation
-  `LanderGNC.mo` PID as the guaranteed fallback.
+  is proven in-tree; **smoke-test `LimPID` specifically**, keep the flat-equation
+  law in `DescentGuidance.mo` as the guaranteed fallback.
 - **Gravity is an `input g`** wired `gravity_accel:g` — never hardcode 9.81 (lunar
   g ≈ 1.62). The env feed is position-correct.
 - **Gains + set-point are `input Real`** (`kp,ki,kd,target_altitude,manual,
@@ -160,27 +159,25 @@ def Scope "Scenario" ( kind = "component" )
   `manual_throttle*max_thrust`; release → PID resumes. The descent is auto;
   handover is the same model, no runtime model-swap.
 
-## Resource models for the progressive tasks (new authoring)
+## Resource models for the progressive tasks
 
-| Budget | Model (new) | Wires | Gap |
-|---|---|---|---|
-| Energy | `Battery.mo` (SoC integral, solar in, load out) | solar-tracker → battery → consumers | small |
-| Thermal | `ThermalNode.mo` (reuse lunar thermal solver settings) | env flux → node → heater load | small |
-| Bandwidth | `CommsLink.mo` (range → data-rate → buffer) | rover↔lander range → link | **biggest — no model yet** |
+All three ship. The remaining work is **wiring them onto a rover in a gameplay
+scene** and gating tasks on their ports — not authoring the maths.
 
-## Implementation phasing
+| Budget | Model | Wires |
+|---|---|---|
+| Energy | `LunCo/Electrical/Battery.mo` (+ `SolarPanel`, `PDU`, `Pin`) — one acausal bus | pins `connect()`-ed inside one model; only signals cross as USD ports |
+| Thermal | `LunCo/Thermal/ThermalMass.mo` (+ `ThermalConductor`, `Radiator`, `ThermostatHeater`) | env flux → mass → heater load |
+| Bandwidth | `CommsLink.mo` (range → data-rate → buffer) | rover↔lander range → link |
 
-1. **Now (unblocks play):** legs orientation + footpad/​hull colliders **(done)**;
-   `LanderGNC.mo` (flat PID, gravity input, input-gains, manual override); rewire
-   `lander_ops.usda` to GNC sub-prim + `gravity_accel:g`; fix embedded script
-   `set_input`→`set`; switch `lander_manual_control` to write `manual`/
-   `manual_throttle`.
-2. **Port-path unification (Decision 2):** port-first `apply_set_model_input`.
-3. **Scenario concept (Decision 3):** typed scenario prim + orchestration script +
-   objective predicates; split lander/rover/mission scripts.
-4. **Domain models (Decision 1):** `Battery.mo`, `ThermalNode.mo`, then `CommsLink.mo`;
-   add as rover sub-prims; gate tasks on their ports.
-5. **MSL LimPID swap** once smoke-tested.
+## What remains
+
+- **Wire the resource models onto a rover** as sub-prims and gate progressive
+  tasks on their ports. The models exist; no gameplay scene consumes them yet.
+- **MSL `LimPID` swap.** The shipped GNC (`DescentGuidance.mo`) is a flat
+  velocity-scheduled law. `Modelica.Blocks.Continuous.LimPID` is the intended
+  replacement; connector flattening is proven in-tree, but `LimPID` itself needs
+  a smoke test first, and the flat law stays as the guaranteed fallback.
 
 ## Non-goals / explicitly deferred
 

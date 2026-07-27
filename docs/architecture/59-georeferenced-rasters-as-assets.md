@@ -1,6 +1,8 @@
-# Georeferenced Rasters as Assets
+# 59 — Georeferenced Rasters as Assets
 
-**Status:** proposal, 2026-07-19. Companion to
+> Status: Design · Audience: contributors bringing external GIS rasters into a twin
+>
+> Companion to
 [`57-dem-georeferencing.md`](57-dem-georeferencing.md) (writing georeferencing out)
 and [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md)
 (identity → bytes). This one is about reading georeferencing **in**.
@@ -138,7 +140,7 @@ through before estimating.
 ## Routes are not rasters
 
 The fourth product — the route — needs none of this. Waypoints are USD prims
-(`docs/waypoints-in-usd-design.md`), so a GIS route becomes a `.usda` overlay via a
+(`waypoints-in-usd.md`), so a GIS route becomes a `.usda` overlay via a
 coordinate conversion at authoring time. **No engine change.** It is also the fix
 for the duplicated `route()` in the school lessons, so it pays twice and should be
 done first regardless of whether raster import ever happens.

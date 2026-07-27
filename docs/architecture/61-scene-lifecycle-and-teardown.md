@@ -1,5 +1,7 @@
 # 61 — Scene lifecycle and teardown
 
+> Status: Active · Audience: contributors on scene load/unload and `SceneTeardown`
+
 What a scene OWNS, and what has to be given back when it unloads.
 
 ## The invariant

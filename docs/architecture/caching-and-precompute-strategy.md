@@ -1,6 +1,6 @@
 # Caching & Precompute Strategy
 
-> Audience: contributors optimizing derived-data pipelines.
+> Status: Active · Audience: contributors optimizing derived-data pipelines
 
 A strategy to make LunCoSim run well on low-end machines by **computing each deterministic thing at most once** and reusing it — in RAM within a session, on disk across sessions.
 
@@ -38,7 +38,8 @@ is just one axis of the same cache key, not a special case.
 > practice it is **not** a hot-path lever: the per-tick static/kinematic skip it
 > was scoped for is already captured (the USD→avian path classifies bodies and
 > avian's solver already skips `Static`), and USD hands the structure/state split
-> to the derive cache directly (see `derive-substrate.md` §8, `mobility-substrate.md`).
+> to the derive cache directly (see `derive-substrate.md` §8 and
+> `efficiency-and-maintainability.md` § Substrate C).
 > `Mobility` (Substrate C) is a **unification / correctness** play — a queryable
 > declared-intent label — not a speedup, and not a prerequisite for the cache.
 > The cache keys off USD composed opinions and change signals whether or not C
@@ -197,7 +198,7 @@ struct CacheKey {
 
 > **How this maps to the code:** Substrate B's `Bake` trait keys on a fast
 > **`fnv1a` `u64`** under a `NAMESPACE` dir — *no* `lod`/`variant` (see
-> `precompute-substrate.md`). This richer `CacheKey{domain, content: Cid, lod,
+> `efficiency-and-maintainability.md` § Substrate B). This richer `CacheKey{domain, content: Cid, lod,
 > variant}` is the target shape for cross-peer/persisted entries: fast `fnv1a`
 > addresses ephemeral/local blobs; the sha2-256 `Cid` tier is reserved for
 > on-disk/on-wire artifacts that must be collision-safe and IPFS-interoperable

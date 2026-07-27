@@ -1,4 +1,6 @@
-# Asset Resolution and the Cache
+# 56 — Asset Resolution and the Cache
+
+> Status: Active · Audience: contributors on asset loading, `lunco://`, and the twin cache
 
 Companion to [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md)
 — same principle (*identity is not location*), applied to referenced assets

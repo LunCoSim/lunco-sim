@@ -360,6 +360,32 @@ behind than the retention window — caller must then do a full rebuild
 from the current AST. Panels (diagram, inspector) use this to patch
 their render state incrementally rather than rebuild on every frame.
 
+### 5.5a Cross-truth rules (R1–R4)
+
+Three views read the same document — text editor, canvas diagram, and the
+autosave/sync machinery — and each holds transient state the others cannot see
+(an uncommitted keystroke, a drag in progress, an open modal). The cross-truth
+rules are the contract that keeps them from trampling each other. They are
+numbered because the code and tests cite them by number
+(`tests/cross_truth_policy.rs`; the definition lives here).
+
+- **R1 — active gesture wins until idle.** While any gesture source is active
+  (`IsGestureActive` in `ui/wasm_autosave.rs`: `canvas` drag, `text` pending
+  commit, `modal` dialog), autosave bails and retries on the next
+  `DocumentChanged` after all sources clear. Per-source booleans, one writer
+  each — a single global flag would race when two gestures overlap.
+- **R3 — mode-switch flush.** Leaving the text view with an uncommitted buffer
+  force-flushes the diff into a real `EditText` op *before* the canvas tab
+  activates, so the canvas's first render observes the new generation
+  (`code_editor.rs` `commit_editor_buffer`). Entering text mode never flushes.
+- **R4 — a removed class closes its tabs.** When a `RemoveClass` op lands,
+  every tab drilled into the removed class or a descendant closes
+  (`close_drilled_tabs_on_class_removed`, watermarked via `changes_since` so
+  it is O(new changes)). Without it the dangling tab falls through to
+  first-tab behaviour and renders an unrelated class.
+
+(No R2 is cited anywhere in the tree — the numbering simply skips it.)
+
 ### 5.6 Type resolution (MLS §5.3)
 
 Modelica's type lookup follows the rules in

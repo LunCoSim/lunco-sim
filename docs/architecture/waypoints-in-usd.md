@@ -1,5 +1,7 @@
 # Missions: BT.CPP XML + USD waypoint prims
 
+> Status: Active · Audience: contributors on waypoints, routes, and mission authoring
+
 ## The mistake this corrects
 
 The merged checkpoint feature invented a private domain: `AppendCheckpoint` /

@@ -1,6 +1,8 @@
-# Telemetry subsystem — design
+# Telemetry subsystem
 
-**Status: Phases 0 and 1 have LANDED (2026-07-13).** Phases 2–5 are proposal.
+> Status: Active · Audience: contributors on telemetry channels, plots, and the status bus
+>
+> Phases 0 and 1 are built. Phases 2–5 are proposal — each is marked inline.
 
 Landed in Phase 1: `ChannelSource::{Port, Reflect}`, **per-channel `rate_hz`**, `enabled`,
 `deadband`, clock binding via `TimeBinding`, `TelemetrySettings` (a persisted

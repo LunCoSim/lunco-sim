@@ -1,6 +1,8 @@
 # 46 — big_space Deep Analysis: Root Cause of Celestial Jitter and the Corrected Architecture
 
-Status: analysis / decision record. Supersedes the interim reasoning in
+> Status: Active · Audience: anyone debugging jitter or the physics/render split
+>
+> A decision record. Supersedes the interim reasoning in
 [45](45-big-space-correct-usage.md) and the view-pin workarounds it motivated.
 
 ---
@@ -570,7 +572,8 @@ origin-transfer easing.
 **First-hand (this repo / vendored crates):** big_space 0.12.0
 (`grid/mod.rs`, `grid/cell.rs`, `grid/propagation.rs`, `grid/local_origin.rs`,
 `examples/minimal.rs`, `examples/planets.rs`); avian3d 0.6.1
-(`physics_transform/mod.rs`); `lunco-celestial` (`big_space_setup.rs`,
+(`physics_transform/mod.rs`) — the workspace is now on 0.7, so re-verify any
+exact system name before relying on it; `lunco-celestial` (`big_space_setup.rs`,
 `systems.rs`, `placement.rs`, `trajectories.rs`, `gravity.rs`, `missions.rs`,
 `globe_lod.rs`), `lunco-celestial-ephemeris/src/lib.rs`, `lunco-core/src/world.rs`,
 `lunco-avatar/src/lib.rs`, `lunco-networking/src/sync.rs`,

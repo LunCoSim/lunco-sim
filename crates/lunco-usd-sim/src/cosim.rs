@@ -1577,7 +1577,7 @@ pub fn rewire_usd_connections(
                     // which despawns and respawns every edge, which mints fresh
                     // ids… Steady state cost was a full wiring rebuild EVERY
                     // FRAME (8.6 ms on sandbox_scene) with nothing changing.
-                    // See docs/reviews/2026-07-26-fps-regression-analysis.md.
+                    // See docs/architecture/42-ui-frame-discipline.md §6.
                     lunco_core::Provenance::Local,
                 ));
             }

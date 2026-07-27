@@ -1,4 +1,6 @@
-# 55. Building Vessels, Rovers, and Landers: Architectural Guide
+# 55 — Building Vessels, Rovers, and Landers: Architectural Guide
+
+> Status: Active · Audience: anyone assembling a rover, lander, or satellite
 
 This document is the step-by-step architectural guide for assembling mission-grade space vessels (wheeled rovers, powered descent landers, spider-rovers, and satellites) in LunCoSim using the 3-plane modular architecture.
 

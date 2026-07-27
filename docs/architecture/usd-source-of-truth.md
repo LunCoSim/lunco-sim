@@ -1,13 +1,17 @@
 # USD as source of truth → ECS projection
 
-**Status:** **PARTIALLY implemented — the rest of this document is a PLAN, not a
-description of the code.**
+> Status: Design · Audience: contributors on the USD→ECS boundary
+>
+> **Partially implemented.** The principle holds throughout; the sections below
+> marked as plan are not yet the shape of the code. For the as-built projection
+> machinery see [`21-domain-usd.md`](21-domain-usd.md) and the
+> [`usd-projection`](../../skills/usd-projection/SKILL.md) skill.
 
 *Built:* the op-driven projection pipeline. An `ApplyUsdOp` edit lands in the
 `UsdDocument` (base⊕runtime layers), `twin_projection::sync_twin_overlays` replays
 the typed op onto the `CanonicalStage` (`lunco-usd-bevy/src/canonical.rs`), openusd's
 change sink fires, and `live_consume::project_stage_changes` reconciles the ECS. See
-[`architecture/21-domain-usd.md`](architecture/21-domain-usd.md) § "Op-driven
+[`21-domain-usd.md`](21-domain-usd.md) § "Op-driven
 projection". Spawn / remove / reference are USD-first through this path.
 
 *Also built — the gizmo authors USD.* Drag-end fires `MoveEntity`, whose
@@ -24,7 +28,7 @@ Twin journal like every other edit.
 
 *Not built:* `SetObjectProperty` still mutates ECS in place — `Visibility`,
 `WheelRaycast`, and the appearance **intent** components `PbrLook` / `ShaderLook`
-(see [`architecture/render-decoupling.md`](architecture/render-decoupling.md); the
+(see [`render-decoupling.md`](render-decoupling.md); the
 crate names no material type, and `lunco-render-bevy` binds the intent to a real
 material). Its shadow-write excludes shader/visible/PBR/colour. And every type
 named in the plan below — `UsdPrimIndex`, `UsdAttrProjection`,

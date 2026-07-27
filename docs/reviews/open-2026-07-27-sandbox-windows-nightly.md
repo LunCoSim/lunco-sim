@@ -5,7 +5,7 @@
 **Install dir:** `C:\Users\user\Desktop\sandbox-windows-x86_64\`
 **Locale:** ru-RU (first line of the capture is `Операция успешно завершена.`)
 **Scene:** `twin://sandbox/sandbox_scene.usda`, 571 prims, 243 assets, 135 USD assets, 16 bundled Modelica examples
-**Predecessor:** [`BUG-REPORT-sandbox-2026-07-26.md`](./BUG-REPORT-sandbox-2026-07-26.md)
+**Predecessor:** the 2026-07-26 tester session on the same build (five runs, no scene load) — `git log -- docs/reviews/`
 
 ---
 

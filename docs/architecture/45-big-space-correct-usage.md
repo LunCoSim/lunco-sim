@@ -1,6 +1,8 @@
 # 45 — big_space: Contract Audit & Corrective Plan
 
-Status: **analysis / decision record** (2026-07-07). Companion to doc 44; supersedes
+> Status: Active · Audience: anyone touching `big_space`, grids, or world-scale precision
+>
+> A decision record. Companion to doc 44; supersedes
 its "interim hardening" framing with a precise diagnosis: the jitter/flicker family
 is not bad luck or missing workarounds — LunCo violated three load-bearing contracts
 of `big_space` 0.12, and every symptom followed from them. Citations are to the
@@ -10,7 +12,7 @@ crate source (`big_space-0.12.0`).
 >
 > | | Status |
 > |---|---|
-> | **V1** — `Transform` on the `BigSpace` root | **resolved.** The root is `BigSpace + Grid + GlobalTransform` with **no `Transform`** — big_space's canonical root shape. See the correction sections at the end of this doc, and doc [47](47-bigspace-option-b-execution.md) Phase 5/6. |
+> | **V1** — `Transform` on the `BigSpace` root | **resolved.** The root is `BigSpace + Grid + GlobalTransform` with **no `Transform`** — big_space's canonical root shape. See the correction sections at the end of this doc. |
 > | **V2** — cell binning disabled | **resolved.** `WorldGridConfig::switching_threshold` is **`100.0`** (it was `1e10`). |
 > | **V3** — per-frame re-posing of the Solar Grid | **resolved.** The floating origin travels with the observer; the world is not re-posed around a point. |
 >
@@ -82,7 +84,7 @@ are `CellTransform*` / `grid_position_double` / `Grids::parent_grid`, or a
 same-instant `GlobalTransform` **delta** (origin cancels; its *length* is
 convention-independent).
 
-## 2.1 The Avian constraint (verified in avian3d 0.6.1 source)
+## 2.1 The Avian constraint (verified in avian3d 0.6.1 source; workspace is now 0.7 — re-verify before relying on the exact system names)
 
 `PhysicsTransformPlugin` runs Bevy's own `mark_dirty_trees →
 propagate_parent_transforms → sync_simple_transforms` **inside the physics

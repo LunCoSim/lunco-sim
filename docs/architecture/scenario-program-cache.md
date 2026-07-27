@@ -1,8 +1,8 @@
 # Scenario program cache
 
-**Status:** implemented (rhai backend) · **Audience:** anyone touching `lunco-scripting` or the event/scenario runtime.
+> Status: Active · Audience: anyone touching `lunco-scripting` or the event/scenario runtime
 
-A scenario (`.rhai`) is a *derived artifact of its source*, and its event routing is a *derived artifact of its compiled AST*. Both follow the one rule of the [derive substrate](derive-substrate.md): **derive at the cheapest correct tier, key on structure, invalidate on change — never on a clock.** This doc is the scenario-runtime instance of that pattern; it adds no new infrastructure, only reuses [`lunco-hash`](hashing-substrate.md).
+A scenario (`.rhai`) is a *derived artifact of its source*, and its event routing is a *derived artifact of its compiled AST*. Both follow the one rule of the [derive substrate](derive-substrate.md): **derive at the cheapest correct tier, key on structure, invalidate on change — never on a clock.** This doc is the scenario-runtime instance of that pattern; it adds no new infrastructure, only reuses [`lunco-hash`](efficiency-and-maintainability.md#substrate-e--lunco-hash-one-hashing-primitive).
 
 ## The firewall: structure vs. state
 
@@ -20,7 +20,7 @@ The trap the old code fell into: `compile()` *parsed and ran the top-level body*
 
 ## What's cached
 
-`RhaiScenarioRuntime` holds `compiled: HashMap<u64, Arc<CompiledProgram>>`, keyed by `fnv1a64(source)` — the [Substrate E](hashing-substrate.md) *fast tier* (local/ephemeral, **never on the wire**; not a CID). `compile()`:
+`RhaiScenarioRuntime` holds `compiled: HashMap<u64, Arc<CompiledProgram>>`, keyed by `fnv1a64(source)` — the [Substrate E](efficiency-and-maintainability.md#substrate-e--lunco-hash-one-hashing-primitive) *fast tier* (local/ephemeral, **never on the wire**; not a CID). `compile()`:
 
 1. `key = fnv1a64(source)` → hit? clone the `Arc` (refcount bump, zero parse). Miss? `engine.compile` + prelude-merge + derive the hook mask → insert.
 2. **Always, per entity:** seed a fresh `scope` + `this` (the stateful part).
@@ -34,7 +34,7 @@ The trap the old code fell into: `compile()` *parsed and ran the top-level body*
 - **Eviction:** the memo is retained across entity despawns (for replay reuse), so it is **bounded, not GC'd** — a `COMPILED_CACHE_CAP` (512) triggers a full `clear()` when hit (a cold re-parse on the next compile; the distinct-source working set is far below the cap, so this is rare). A finer byte-budget/LRU is a deferral, same status as the precompute cache's eviction.
 
 ### Why no disk tier
-rhai's `AST` is **not `Serialize`**, so [`lunco-precompute`](precompute-substrate.md) (Substrate B, content-addressed *disk*) does **not** apply — you cannot `bake_or_load` an AST across process runs. The memo is RAM-only, tier-1. The *source* is already embedded/on-disk at the asset layer; only the parsed form lives in RAM. (Don't reach for the disk cache just because it exists — it's for byte-serializable structure like meshes and flattened stages.)
+rhai's `AST` is **not `Serialize`**, so [`lunco-precompute`](efficiency-and-maintainability.md#substrate-b--lunco-precompute-the-content-addressed-cache-tier-3) (Substrate B, content-addressed *disk*) does **not** apply — you cannot `bake_or_load` an AST across process runs. The memo is RAM-only, tier-1. The *source* is already embedded/on-disk at the asset layer; only the parsed form lives in RAM. (Don't reach for the disk cache just because it exists — it's for byte-serializable structure like meshes and flattened stages.)
 
 ## Event routing
 

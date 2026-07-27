@@ -1,11 +1,10 @@
-> **Status:** Implemented — G1/G1b/G2/G3/G4/G4b/G5/G6/G7/G9/G10/G11 done (G5 on an
-> isolated differential rig; G9 = generic joint actuation + USD drive schema;
-> G7 = spherical/distance joints; G10 = USD-authored sensors; G11 = single-track
-> lean wheel). All Avian joint-building consolidated in `lunco-usd-avian`. G8
-> (determinism/FMI) is a separate track.
-> **Audience:** Engineers working on vehicle, cosim, and USD-physics subsystems
-
 # 33 — Modeling Spacecraft (Landers & Rovers) in LunCoSim
+
+> Status: Active · Audience: engineers on vehicle, cosim, and USD-physics subsystems
+>
+> All Avian joint-building is consolidated in `lunco-usd-avian`. Goals G1–G11
+> are built (G5 on an isolated differential rig); G8 (determinism/FMI) is a
+> separate track.
 
 ## Goal
 

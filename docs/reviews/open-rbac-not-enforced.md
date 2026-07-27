@@ -1,12 +1,13 @@
-# TODO — LunCoSim does not enforce access control
+# OPEN — LunCoSim does not enforce access control
 
 **Status: accepted, by design, for now.** This is a deliberate decision, not an oversight.
 It is written down so that nobody "discovers" it again in a future audit and so that nobody
 deploys the current build somewhere it does not belong.
 
-The 2026-07-12 full code review ([`2026-07-12-full-code-review.md`](2026-07-12-full-code-review.md))
-found seven authorization defects. All the *other* findings in that review have been fixed.
-These have not been, and will not be until we decide to enforce RBAC.
+The 2026-07-12 full code review found seven authorization defects. All the *other*
+findings in that review have been fixed; the review itself is closed and deleted
+(`git log -- docs/reviews/`). These seven have not been fixed, and will not be
+until we decide to enforce RBAC.
 
 ## The operating assumption
 

@@ -28,7 +28,7 @@
 //! invalidates every stale entry (content-addressed → no explicit purge). For a
 //! blob that must be addressed *cross-peer* (streamed over the wire), also take
 //! its [`blob_cid`] (feature `cid`) — the fast key is process-local, the CID is
-//! the IPFS-interop identity. See `docs/architecture/hashing-substrate.md`.
+//! the IPFS-interop identity. See `docs/architecture/efficiency-and-maintainability.md` § Substrate E.
 //!
 //! ## Layout
 //!

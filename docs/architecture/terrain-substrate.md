@@ -1,6 +1,6 @@
 # Terrain Substrate — the Height Oracle
 
-> Audience: contributors working on terrain, LOD, or surface physics.
+> Status: Active · Audience: contributors working on terrain, LOD, or surface physics
 
 How LunCoSim represents planetary surfaces from orbit down to a rover wheel,
 with one abstraction that keeps **visuals and physics in lockstep**, composes
@@ -282,7 +282,7 @@ trait), and `flatten → sdf::Data → ECS` demoted to a derived cache slated fo
 deletion (*"remove flatten entirely, canonical only"*). ECS is a **projection
 membrane** — render / physics / cosim / **terrain** read Send ECS components, never
 the `!Send` Stage. (Full design: see `21-domain-usd.md` §USD layers and the
-canonical USD architecture notes in `docs/usd-source-of-truth-ecs-projection-design.md`.)
+canonical USD architecture notes in `usd-source-of-truth.md`.)
 
 Terrain is **one more projection consumer** on that membrane, exactly like the
 policy-as-projection pattern in networking. This is not a parallel pipeline;
@@ -503,5 +503,5 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
   `lunco-precompute` content-address substrate terrain tiles ride on.
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as the description plane; the
   canonical live-Stage source-of-truth model terrain projects from.
-- [`mobility-substrate.md`](mobility-substrate.md) — the rovers that drive the
-  collider ring.
+- [`efficiency-and-maintainability.md` § Substrate C](efficiency-and-maintainability.md#substrate-c--mobility-the-structurevolatility-classifier)
+  — the mobility classifier behind the rovers that drive the collider ring.

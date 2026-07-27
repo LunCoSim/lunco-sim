@@ -1,9 +1,10 @@
 # Command Journal — one op log for identity, undo, sync, and replay
 
-> **Status: DESIGN. The name of this document is aspirational — the journal does
-> NOT journal commands today.** Audience: contributors adding new domain mutations.
+> Status: Design · Audience: contributors adding new domain mutations
 >
-> ### What exists (2026-07)
+> **The title is aspirational — the journal does NOT journal commands today.**
+>
+> ### What exists
 >
 > - **The op-log substrate is real and load-bearing:** `lunco-twin-journal`
 >   (`record_op` forward+inverse, `EntryId`, `LamportClock`, `ChangeSet`, `Marker`,

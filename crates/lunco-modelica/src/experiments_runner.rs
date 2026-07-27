@@ -1138,7 +1138,7 @@ impl RunSink for ChannelSink {
 ///     models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34) hit
 ///     "nonlinear solver failures (50)" within the first lunar hour on the same
 ///     models. BDF is the robust default again; the SDIRK tableaus stay opt-in.)
-/// Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
+/// Background: docs/numeric-experiments/README.md § Known working solver configurations
 ///
 /// The worker's live interactive sim (`worker::build_stepper`) previously had
 /// its OWN defaults (`rtol = 1e-3`, `atol = 1e-6`) with *no* solver selection,

@@ -1,7 +1,7 @@
 //! Debug-build runtime checks for the big_space architectural invariants.
 //!
 //! These fire warnings when code violates the rules from
-//! `docs/architecture/big_space.md` (canonical: `CellCoord` lives only on
+//! `docs/architecture/45-big-space-correct-usage.md` (canonical: `CellCoord` lives only on
 //! direct children of a `Grid`). They are gated to debug builds so they
 //! impose no release-build cost.
 

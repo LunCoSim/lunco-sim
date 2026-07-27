@@ -693,7 +693,8 @@ pub fn trajectory_alpha_update_system(
     // change detection — even when the clock is paused or unchanged. Gate on
     // `world.is_changed()` (+ a per-view epoch/color stamp), and skip the
     // re-upload when the alpha curve hasn't moved. See
-    // docs/code-quality-remediation.md (CQ-214).
+    // docs/architecture/42-ui-frame-discipline.md; deferred, tracked in
+    // docs/architecture/engineering-backlog-and-standards.md.
     for (path, view, children) in q_paths.iter() {
         if path.points.len() < 2 {
             continue;

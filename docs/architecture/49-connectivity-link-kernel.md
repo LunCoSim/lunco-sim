@@ -1,6 +1,6 @@
 # 49 — Connectivity: the generic link kernel
 
-Status: **as-built**.
+> Status: Active · Audience: contributors on comms, links, and radio shadow
 
 ## 1. The principle
 

@@ -26,7 +26,7 @@
 //!
 //! `geometric_error(depth)` is 3D-Tiles-compatible (`rootError / 2^depth`), so the
 //! same numbers can later be authored into a 3D-Tiles-style implicit-quadtree
-//! descriptor (see `docs/terrain-streaming-IMPL.md`).
+//! descriptor (see `docs/architecture/terrain-substrate.md`).
 //!
 //! Pure + `no-bevy` → unit-tested and wasm-safe. The Bevy streaming manager (S3) and
 //! the collider ring (S4) both consume this.

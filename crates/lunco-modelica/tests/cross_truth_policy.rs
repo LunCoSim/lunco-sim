@@ -1,5 +1,5 @@
 //! Headless tests for cross-truth policy chokepoints
-//! (`docs/architecture/B0_CROSS_TRUTH_POLICY.md`).
+//! (`docs/architecture/20-domain-modelica.md` §5 — text is canonical, the AST is a cache).
 //!
 //! Each rule's *helper-level* contract pins here; observer wiring is
 //! exercised in single-file harness tests where Bevy is required.

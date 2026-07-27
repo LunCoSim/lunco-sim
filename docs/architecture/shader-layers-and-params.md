@@ -1,5 +1,7 @@
 # Shader looks: dynamic parameters and texture layers
 
+> Status: Active · Audience: contributors giving something a custom shader look
+
 How to give something a custom shader look in LunCoSim — what a parameter is, what a
 texture layer is, when to spend a **channel** instead of a **slot**, and how to get
 higher quality in some places than others.

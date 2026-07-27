@@ -1,6 +1,8 @@
 # Command Sequences & the Visual Sequence Editor — design
 
-**Status:** design/analysis · 2026-07-11 · Companion: `behaviour-trees.md`, `rhai-integration-design.md`
+> Status: Design · Audience: contributors on command sequencing and the visual sequence editor
+>
+> Companions: [`../behaviour-trees.md`](../behaviour-trees.md) · [`rhai-integration.md`](rhai-integration.md)
 
 Goal: dynamically build **sequences of commands**, author them with **in-scene tools** (drop
 numbered waypoints joined by a line), let sequences **reference other sequences**, and see a running
@@ -19,14 +21,14 @@ we already produce*, plus two small kernel/format additions. Don't build a new s
 | **BT kernel** — Sequence, Selector, Parallel(RequireAll/One), Repeat, Retry, Invert, Force, Reactive{Sequence,Selector}, Action leaf, event predicates | `lunco-behavior` (`node.rs`) | language/engine-agnostic, deterministic, unit-tested; **every node maps 1:1 to a JSON `BehaviorSpec`** |
 | **Sequences ARE serializable data** | `lunco-scripting/task_tree.rs` | the prelude's `seq/par_all/par_race/repeat/forever/once/wait/…` build **pure data maps**, compiled once to the kernel tree |
 | **Flat timeline sequence + runner** | `lunco-scripting/timelines.rs`, `RunTimeline` cmd, `compile_timeline` | a mission as a serializable step array (`move_to/wait/emit/wait_event/cmd`), runnable over the API with **zero rhai** |
-| **Op journal / oplog** | `lunco-twin-journal`, `registration_journal.rs` | records **document** ops (`Usd`/`Modelica`/`Script`/…) and **registrations** (`RegisterToolLibrary`, `RegisterTimeline`). ⚠️ It does **not** record executed commands — `api_command_dispatcher` has no journal interaction (see [`architecture/command-journal.md`](architecture/command-journal.md) Status). A "planned vs actual" view needs that first. |
+| **Op journal / oplog** | `lunco-twin-journal`, `registration_journal.rs` | records **document** ops (`Usd`/`Modelica`/`Script`/…) and **registrations** (`RegisterToolLibrary`, `RegisterTimeline`). ⚠️ It does **not** record executed commands — `api_command_dispatcher` has no journal interaction (see [`command-journal.md`](command-journal.md) Status). A "planned vs actual" view needs that first. |
 | **Reusable node/edge graph canvas** | `lunco-canvas` (Nodes/Edges/Grid/Selection/ToolPreview layers, `VisualRegistry`) | the Modelica diagram runs on it; it is the ready-made substrate for a **graph-of-actions** view |
 | **Waypoint markers** | `vessels/markers/waypoint.usda` | present and spawnable; **no on-terrain polyline** yet (known route-line gap) |
 
 So a "sequence of commands" is already a first-class, serializable, executable artifact — but **not a
 journaled one**: its *definition* (a `Timeline` registration) journals; its *execution* does not.
 The missing pieces are **references, views, an authoring tool** — and, for any "actual run" view,
-command journaling itself (unbuilt: see [`architecture/command-journal.md`](architecture/command-journal.md)).
+command journaling itself (unbuilt: see [`command-journal.md`](command-journal.md)).
 
 ---
 
@@ -81,7 +83,7 @@ can express and *reports what it drops* (a guard the flight target can't evaluat
 our journal" is a concrete **twin↔flight validation pipeline**. ⚠️ It has one unbuilt prerequisite:
 **we do not record dispatched commands.** The journal records document ops and registrations, not the
 executed command stream (`api_command_dispatcher` does no journaling —
-[`architecture/command-journal.md`](architecture/command-journal.md)). The export side is plumbing;
+[`command-journal.md`](command-journal.md)). The export side is plumbing;
 the "actual" side is a feature that does not exist yet.
 
 **Which reactive target first is the one open call** — PLEXIL (space-native, closest to a flight

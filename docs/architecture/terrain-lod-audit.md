@@ -1,4 +1,9 @@
-# Terrain LOD, shadows, and determinism — audit and fixes
+# Terrain LOD, shadows, and determinism — what measurement overturned
+
+> Status: Active · Audience: anyone about to reason about CDLOD cost from code reading
+>
+> Kept because measurement **falsified** the intuitive story. The wrong version
+> is the one the next reader will re-derive.
 
 Audit of the CDLOD surface streamer (`lunco-terrain-surface`, `lunco-terrain-core`) against
 four reported symptoms, with every claim measured against the **real moonbase DEM**
@@ -17,7 +22,9 @@ falsified**. They are recorded here because the wrong version is intuitive and w
 re-derived by the next reader.
 
 The diagnostic composed the real DEM with the twin's crater + overzoom stack and ran the
-production selection walk (`crates/lunco-terrain-bake/tests/lod_budget_diagnostic.rs`).
+production selection walk. The diagnostic harness itself is no longer in the tree —
+the numbers below are the record; reproducing them means re-writing it against
+`lunco-terrain-bake`.
 
 **Claim 1 — "measured error never converges, so the tile count diverges." FALSE.**
 

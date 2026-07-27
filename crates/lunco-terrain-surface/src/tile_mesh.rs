@@ -8,7 +8,7 @@
 //! so a tile geomorphs smoothly into its parent with no popping and no
 //! texture fetch. The same baked grid also yields the avian collider heights
 //! (`HeightGrid::to_avian_heights`), so one bake feeds visuals *and* physics and
-//! becomes one cached `TerrainTile` (see `docs/terrain-streaming-IMPL.md`).
+//! becomes one cached `TerrainTile` (see `docs/architecture/terrain-substrate.md`).
 //!
 //! Pure + Bevy-free → unit-tested and wasm-safe; the plugin runs it off-thread
 //! and assembles the attributes into a Bevy `Mesh`.

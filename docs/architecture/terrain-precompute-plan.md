@@ -1,5 +1,11 @@
 # Terrain: precomputed tiles + monotone progressive refinement
 
+> Status: Design · Audience: contributors on terrain streaming, LOD, and bakes
+>
+> The measurement steps are live tests:
+> `lunco-terrain-surface/tests/precompute_sparse_set.rs` (step 1) and
+> `precompute_bake_time.rs` (step 2).
+
 Target architecture for the streamed terrain. Supersedes the runtime-bake streaming path;
 finding #6 of [terrain-lod-audit.md](terrain-lod-audit.md) is what this replaces.
 
