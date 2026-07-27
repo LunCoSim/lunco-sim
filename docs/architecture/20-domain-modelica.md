@@ -158,7 +158,7 @@ Verb semantics:
 
 | Verb | Effect |
 |---|---|
-| `CompileModel` / `CompileActiveModel` | Compile only, idempotent. Skips the worker dispatch when `is_compiled && !stale && !is_compiling` (logged at debug); pass `force: true` to override. Never changes `paused`. |
+| `CompileModel` | Compile only, idempotent. Skips the worker dispatch when `is_compiled && !stale && !is_compiling` (logged at debug); pass `force: true` to override. Never changes `paused`. |
 | `RunActiveModel` | Compile-if-stale, then play. If already compiled & clean, just sets `paused = false` (no recompile); otherwise sets `resume_after_compile = true` and triggers `CompileModel`, which resumes on success. |
 | `ResumeActiveModel` | Unpause (`paused = false`); no compile. |
 | `PauseActiveModel` | Pause (`paused = true`). |
@@ -167,7 +167,7 @@ Verb semantics:
 | `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
 
 The toolbar (`ui/panels/model_view/render.rs`) maps these to one
-Compile button (🚀 → `CompileActiveModel`, compile only), a Run/Pause
+Compile button (🚀 → `CompileModel`, compile only), a Run/Pause
 toggle (▶ → `RunActiveModel`, ⏸ → `PauseActiveModel`), Reset (⟲), and
 Restart (⟳ → `RestartActiveModel`). The `CompileStatus` API query
 reports the run-state (`is_compiled`, `is_compiling`, `paused`,

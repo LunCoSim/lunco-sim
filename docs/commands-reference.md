@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**181 commands** across **24** crates. 21 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**179 commands** across **24** crates. 21 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -34,7 +34,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Modelica modeling & simulation**
 
-- [`lunco-modelica`](#lunco-modelica) (45 commands)
+- [`lunco-modelica`](#lunco-modelica) (43 commands)
 
 **Vessels, mobility & control**
 
@@ -777,23 +777,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `experiment_id` | `Option < String >` |  Cancel one run by id (uuid string). Ignored when `all` is set. |
 | `all` | `bool` |  Cancel every in-flight run. |
 
-#### `CompileActiveModel`
-
- API shim for `CompileModel`: same effect (rumoca compile + DAE
- + simulator setup) but takes `doc: u64` (0 = active) so it can
- be triggered from the reflect-registered API. Inner `CompileModel`
- stays as a typed Bevy event for in-process callers; this exposes
- it to curl / scripts. Type-check / parse / DAE errors land in
- `WorkbenchState.compilation_error` which the Diagnostics panel
- already surfaces.
-
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `DocumentId` |  0 ⇒ active document. |
-| `class` | `String` |  Optional target class. Empty = inherit picker / drilled-in /  detected-name behaviour. When non-empty, the compile bypasses  the GUI class-picker for documents with multiple non-package  classes — required for headless / agent-driven workflows where  no human is available to click the modal (cf. spec 033 P0).  Lookup is by short name (e.g. `"RocketStage"`) matched against  the document's `collect_non_package_classes_qualified`. |
-
 #### `CompileModel`
 
 *(no description — add a `///` doc on the struct)*
@@ -802,7 +785,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document to compile. |
+| `doc` | `DocumentId` |  The document to compile. Unassigned (`0` over the API) means the  **active** document, which is what a toolbar click and a headless  `cmd("CompileModel", #{})` both want. |
 | `class` | `Option < String >` |  Optional explicit target class. When `Some`, bypass both the  drilled-in pin and the picker — compile this exact class.  Used by API callers that need deterministic behaviour without  a GUI (cf. spec 033 User Story 1.5). |
 | `force` | `bool` |  Force a recompile even if the model is already compiled and  clean (same document generation). Defaults to `false` so a  Compile on an up-to-date model is an idempotent no-op. |
 | `resume_after_compile` | `bool` |  When `true`, the post-compile success handler unpauses the model  so it starts live-stepping the instant the stepper is installed.  Set by `RunActiveModel` ("Run live") so a single click compiles  *and* plays — crucially including the first-ever compile, where  no model entity yet exists to carry the resume intent. Defaults  to `false`: a plain Compile leaves the model paused/ready. |
@@ -885,21 +868,11 @@ actually call, with the fields the deserializer actually accepts. See the
 | `from` | `String` |   |
 | `to` | `String` |   |
 
-#### `DuplicateActiveDoc`
-
- API shim: duplicate the active read-only document into a fresh
- editable workspace tab.
-
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `DocumentId` |   |
-
 #### `DuplicateModelFromReadOnly`
 
- Request to duplicate a read-only (library) model into a new
- editable Untitled document.
+ Duplicate a read-only (library) model into a new editable Untitled
+ document. Unassigned `source_doc` (`0` over the API) means the active
+ document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
 
@@ -1208,7 +1181,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SaveActiveDocument`
 
- API shim for Save.
+ Save the document — the one save verb, in-process and over the API alike.
+ Unassigned `doc` (`0` over the API) means the active document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
 
@@ -1218,7 +1192,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SaveActiveDocumentAs`
 
- API shim for SaveAs.
+ Save the document to `path`. Unassigned `doc` means the active document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
 
@@ -2946,7 +2920,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 181 commands from the runtime schema; scanned 746 .rs files for docs (0 parse failure(s) skipped).
+<!-- 179 commands from the runtime schema; scanned 746 .rs files for docs (0 parse failure(s) skipped).
      In the schema but no `#[Command]` struct found in source (macro-generated?): SpawnEntity
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Report, RunPython, SetActiveUsdViewport, SpawnThing, TestEcho

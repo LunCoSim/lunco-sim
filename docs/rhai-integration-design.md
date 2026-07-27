@@ -145,7 +145,7 @@ Representative commands already covering the user's surface:
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
 | Scene editing | `SpawnEntity`, `MoveEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-sandbox-edit/src/commands.rs`) |
-| Modelica/cosim | `CompileActiveModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
+| Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
 | Queries (return data) | `QueryEntity`, `ListEntities`, `DiscoverSchema`, `QueryCommandResult` (`lunco-api/src/executor.rs` — `ApiRequest` variants, not commands) |
