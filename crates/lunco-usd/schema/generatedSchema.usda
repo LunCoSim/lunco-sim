@@ -1705,6 +1705,22 @@ class "LunCoSolarAPI" (
     )
 }
 
+class "LunCoMarkerAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A screen-constant marker — geometry held at a fixed APPARENT size so
+    a thing that is physically correct but sub-pixel still reads on screen."""
+)
+{
+    float lunco:marker:angularSizeDeg = 0.15 (
+        doc = "Apparent DIAMETER in degrees, held constant with range."
+    )
+    float lunco:marker:showBeyondM = 200000 (
+        doc = "Hide the marker closer than this (metres)."
+    )
+}
+
 class "LunCoSurfaceAPI" (
     customData = {
         token apiSchemaType = "singleApply"

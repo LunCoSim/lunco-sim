@@ -192,6 +192,14 @@ impl Plugin for UsdSimPlugin {
         // of invisible deadlock into a loud `error!` AND recovers by building the
         // physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
+        // Screen-constant markers. `PostUpdate` before transform propagation:
+        // the scale is a function of the camera's position THIS frame, and the
+        // markers sit on other bodies' grids, which `place_celestial_bound_entities`
+        // may have just re-parented.
+        app.add_systems(
+            PostUpdate,
+            marker::scale_screen_constant_markers.before(TransformSystems::Propagate),
+        );
         // USD → cosim wiring through native `connectionPaths` — see `cosim.rs`.
         cosim::install(app);
         // `GET /api/diagnostics` read side — exposes the cosim dangling-wire report.
@@ -203,6 +211,9 @@ impl Plugin for UsdSimPlugin {
 /// declares its own label content, including live geolocation.
 pub mod billboard;
 pub mod celestial;
+/// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
+/// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
+pub mod marker;
 pub mod cosim;
 pub mod cosim_diagnostics;
 pub mod domain_projection;
@@ -695,6 +706,20 @@ fn process_usd_sim_prim_read(
                 .real_f32(&sdf_path, "lunco:billboard:fadeEnd")
                 .unwrap_or(default.fade_end),
         });
+    }
+    // Screen-constant marker, keyed on the size that IS the request: a prim
+    // authoring no `angularSizeDeg` is not a half-declared marker, it is simply
+    // not one. Same opt-in shape as the billboard above.
+    if let Some(angular_deg) = reader.real_f32(&sdf_path, "lunco:marker:angularSizeDeg") {
+        let default = marker::ScreenConstantMarker::default();
+        commands
+            .entity(entity)
+            .try_insert(marker::ScreenConstantMarker {
+                angular_deg,
+                show_beyond_m: reader
+                    .real_f32(&sdf_path, "lunco:marker:showBeyondM")
+                    .unwrap_or(default.show_beyond_m),
+            });
     }
 
     let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
