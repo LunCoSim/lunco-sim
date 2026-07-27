@@ -23,7 +23,7 @@
 //! results on every platform (fixed integer bucketing; the min/max overprint
 //! combine is order-independent by construction).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::overzoom::nyquist_fade;
 use crate::source::HeightSource;
@@ -32,6 +32,29 @@ use crate::source::HeightSource;
 /// the [`crater_profile`] contribution is exactly zero (bowl ends at `d=1`, rim at
 /// `d≈1`, ejecta apron at `d<1.6`). Matches the rasteriser's `radius * 1.6` reach.
 pub const CRATER_REACH: f64 = 1.6;
+
+/// Smallest rim radius (metres) the ANALYTIC crater field bothers to place, and
+/// the floor the size-frequency population count is scaled against.
+///
+/// The SFD `N(>r) ∝ r^-1.8` means every halving of this floor roughly triples
+/// the population, and the placements below it are the ones that cost most and
+/// show least: a 2 m bowl is a couple of vertices even on the finest visual LOD,
+/// is Nyquist-gated away on every LOD past the leaf ring, and is exactly the
+/// band the [`Overzoom`](crate::overzoom::Overzoom) synthesiser already covers
+/// procedurally — for free, at any resolution, with no placement to index. Let
+/// the analytic field own the craters that need to be REAL geometry (colliders
+/// agree with visuals, edits can address them) and let over-zoom own the carpet.
+///
+/// Consumers must apply this floor to BOTH the count scaling and the size draw,
+/// or the population count stops describing the population.
+pub const ANALYTIC_RADIUS_FLOOR_M: f64 = 4.0;
+
+/// Ceiling on analytic craters per hectare after the SFD count scaling. The
+/// authored `density` is a per-hectare rate for the AUTHORED size band; the SFD
+/// scale-up can multiply it several-fold, and an authored value meant for a
+/// sparse field then mints a population no sampling budget can carry. Bites only
+/// pathological specs — the shipped defaults land near a quarter of it.
+pub const MAX_CRATERS_PER_HA: f64 = 100.0;
 
 /// One crater placement in the terrain XZ plane (metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -232,8 +255,9 @@ pub fn crater_profile_limited(
 /// (multiple crater layers) still accumulate in stack order.
 #[derive(Debug, Clone)]
 pub struct Craters {
-    /// Shared placement index — Nyquist-gated variants (per-bake, one per tile
-    /// LOD) are `Arc` clones of the same index, never a re-placement.
+    /// Shared placement index. Nyquist-gated variants (one per tile LOD, plus
+    /// the contact and derived-map bands) are memoised PRUNED indexes — never a
+    /// re-placement, and never the whole population re-walked per bake.
     index: Arc<CraterIndex>,
     /// Sampling wavelength (m) of the consumer this instance serves: features
     /// below it widen/fade instead of aliasing. `0` = full detail. Set per
@@ -266,12 +290,19 @@ fn octave_of(radius: f64) -> usize {
     (exp2 - OCTAVE_BASE).clamp(0, OCTAVE_COUNT as i32 - 1) as usize
 }
 
-/// Soft cap on dense bucket-grid cells. The cell size is derived from the largest
-/// crater reach, so a field of ONLY tiny craters spread over kilometres would
-/// otherwise mint millions of cells; doubling the cell size until the grid fits is
-/// output-neutral (bucketing only decides which candidates a sample *considers* —
-/// out-of-reach candidates contribute exactly zero either way).
+/// Soft ceiling on the dense cell count of ONE octave grid. Each grid's cell
+/// size is derived from that octave's largest reach, so a stratum of tiny
+/// craters spread over kilometres would otherwise mint millions of cells;
+/// doubling that grid's cell size until it fits is output-neutral (bucketing
+/// only decides which candidates a sample *considers* — out-of-reach candidates
+/// contribute exactly zero either way).
 const MAX_BUCKET_CELLS: u128 = 1 << 21;
+
+/// Cells per crater one grid may spend before the doubling kicks in. Keeps grid
+/// memory O(craters) instead of O(area / smallest reach²) — the growth that made
+/// the smallest octaves unaffordable once the size-frequency distribution filled
+/// them.
+const CELLS_PER_CRATER: u128 = 4;
 
 /// Largest world coordinate / reach a crater may carry (metres). Beyond it — and for
 /// any non-finite value — the cell index saturates and the CSR build panics; such a
@@ -279,88 +310,105 @@ const MAX_BUCKET_CELLS: u128 = 1 << 21;
 /// [`crate::carve`].
 const MAX_COORD: f64 = 1e12;
 
-/// The immutable placement set + spatial bucket index behind [`Craters`].
-#[derive(Debug)]
-struct CraterIndex {
-    /// The crater set (order only matters for bucket construction determinism —
-    /// the per-point min/max combine is order-independent).
-    craters: Vec<Crater>,
-    /// Radius-octave stratum per crater (parallel to `craters`), precomputed so
-    /// the per-sample combine doesn't pay a `log2` per candidate.
-    octaves: Vec<u8>,
-    /// Metres per bucket cell.
-    cell_size: f64,
-    /// Bucket-grid AABB origin: the cell coordinate of grid slot `(0, 0)`.
-    bucket_min: (i64, i64),
-    /// Bucket-grid dimensions (cells).
-    bucket_nx: usize,
-    bucket_nz: usize,
-    /// Dense row-major CSR bucket grid over the field's cell AABB: cell
-    /// `(cx, cz)` holds `entries[starts[k]..starts[k + 1]]`
-    /// (`k = (cz − min_z)·nx + (cx − min_x)`) — indices into `craters` whose
-    /// reach bbox overlaps that cell. A crater is inserted into every cell its
-    /// `[center ± reach]` box touches, so the single cell containing a query
-    /// point holds every crater that can affect it — one lookup, no neighbour
-    /// scan. Replaces a `HashMap<(i64, i64), Vec<u32>>`: the per-sample lookup
-    /// is the tile/collider bake inner loop, and the tuple hash per sample cost
-    /// more than the two subtracts + multiply the dense grid pays. Queries
-    /// outside the AABB fall back to empty.
-    bucket_starts: Vec<u32>,
-    bucket_entries: Vec<u32>,
-}
+/// How many Nyquist-gated variants one index memoises before the cache resets.
+/// A terrain serves one gate per LOD depth plus the collider and derived-map
+/// bands — a handful.
+const MAX_GATED_VARIANTS: usize = 24;
 
-impl CraterIndex {
-    /// Candidate craters for bucket cell `(cx, cz)` — empty outside the grid AABB.
-    #[inline]
-    fn bucket(&self, cx: i64, cz: i64) -> &[u32] {
-        let ux = cx.wrapping_sub(self.bucket_min.0);
-        let uz = cz.wrapping_sub(self.bucket_min.1);
-        if ux < 0 || uz < 0 || ux >= self.bucket_nx as i64 || uz >= self.bucket_nz as i64 {
-            return &[];
-        }
-        let k = uz as usize * self.bucket_nx + ux as usize;
-        &self.bucket_entries[self.bucket_starts[k] as usize..self.bucket_starts[k + 1] as usize]
+/// The cell box a crater's reach bbox covers at `cell_size`, or `None` for a
+/// crater that must not be bucketed at all.
+///
+/// A non-finite (or absurd) reach/centre — an authored divide-by-zero —
+/// saturates `(x / cell) as i64` to `i64::MIN/MAX`, whose span overflows the CSR
+/// sizing (debug panic) or wraps to a zero-sized grid the fill loop then indexes
+/// out of bounds (release panic). Such a crater is simply never bucketed, so it
+/// is never sampled either: it contributes nothing.
+#[inline]
+fn cell_box(c: &Crater, inv_cell: f64) -> Option<(i64, i64, i64, i64)> {
+    let reach = c.reach();
+    if !reach.is_finite() // NaN / ±inf
+        || reach <= 0.0
+        || reach > MAX_COORD
+        || !c.center.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD)
+    {
+        return None;
     }
+    let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, inv_cell);
+    let (max_cx, max_cz) = cell_of(c.center[0] + reach, c.center[1] + reach, inv_cell);
+    Some((min_cx, min_cz, max_cx, max_cz))
 }
 
-impl Craters {
-    /// Build the bucket index. Cell size is derived from the largest crater reach so
-    /// each bucket holds a bounded candidate set; an empty set contributes nothing.
-    pub fn new(craters: Vec<Crater>) -> Self {
-        // Cell just big enough that the biggest crater spans a bounded 3×3 of cells.
-        // Only SANE reaches size the cell (a non-finite one would make it `inf`).
-        let max_reach = craters
+/// One radius octave's dense row-major CSR bucket grid.
+///
+/// **Why per octave.** A single grid must size its cell to the LARGEST crater's
+/// reach or the biggest bowl spans unboundedly many cells. But the population is
+/// a power law: the overwhelming majority are near the size floor, and with one
+/// global grid each of those tiny craters is looked up in a cell two orders of
+/// magnitude wider than its own footprint — so every sample walked ~all craters
+/// within `max_reach²` instead of ~all within its own reach². That single fact
+/// is what made a dense analytic crater field too slow to ship. Stratifying by
+/// [`octave_of`] (which the per-point combine already stratifies by) lets each
+/// grid pick a cell matched to ITS craters, and a query does one O(1) lookup per
+/// occupied octave.
+///
+/// Cell `(cx, cz)` holds entries `starts[k]..starts[k + 1]`
+/// (`k = (cz − min.1)·nx + (cx − min.0)`). A crater is inserted into every cell
+/// its `[center ± reach]` box touches, so the single cell containing a query
+/// point holds every crater of this octave that can affect it — one lookup, no
+/// neighbour scan. Queries outside the AABB fall back to empty.
+///
+/// Entries are **SoA and inlined**, not indices into `craters`: the reject test
+/// needs only `(center, reach)` but a `Vec<Crater>` gather pulled a 56-byte
+/// struct through cache for each of the ~98 % of candidates that reject. Three
+/// contiguous `f64` runs vectorise; only survivors touch the full [`Crater`] via
+/// `idx`.
+#[derive(Debug)]
+struct OctaveGrid {
+    /// Metres per cell — this octave's largest reach (then doubled to fit).
+    /// `1 / cell_size`, stored so the per-sample lookup multiplies instead of
+    /// dividing (a query hits one cell per occupied octave — the divisions added
+    /// up). Insertion uses the SAME reciprocal, so the partition stays
+    /// consistent; see [`cell_of`].
+    inv_cell_size: f64,
+    /// Cell coordinate of grid slot `(0, 0)`.
+    min: (i64, i64),
+    /// Grid dimensions (cells).
+    nx: usize,
+    nz: usize,
+    /// CSR row offsets (`nx·nz + 1` entries).
+    starts: Vec<u32>,
+    /// Per-entry crater centre X / centre Z / reach — the reject-test hot arrays.
+    cx: Vec<f64>,
+    cz: Vec<f64>,
+    reach: Vec<f64>,
+    /// Per-entry index into [`CraterIndex::craters`] for the survivors.
+    idx: Vec<u32>,
+}
+
+impl OctaveGrid {
+    /// Build the grid for `members` (indices into `craters`, ascending).
+    /// `None` if no member is bucketable.
+    fn build(craters: &[Crater], members: &[u32]) -> Option<OctaveGrid> {
+        // Cell just big enough that this octave's biggest crater spans a bounded
+        // 3×3. Only SANE reaches size it (a non-finite one would make it `inf`).
+        let max_reach = members
             .iter()
-            .map(|c| c.reach())
+            .map(|&i| craters[i as usize].reach())
             .filter(|r| r.is_finite() && *r <= MAX_COORD)
             .fold(0.0_f64, f64::max);
-        let mut cell_size = max_reach.max(1.0);
-        // Cell box a crater's reach bbox covers (`None` for zero-reach craters).
-        let cell_box = |c: &Crater, cell_size: f64| -> Option<(i64, i64, i64, i64)> {
-            let reach = c.reach();
-            // A non-finite (or absurd) reach/centre — an authored divide-by-zero —
-            // saturates `(x / cell) as i64` to `i64::MIN/MAX`, whose span overflows
-            // the CSR sizing (debug panic) or wraps to a zero-sized grid the fill
-            // loop then indexes out of bounds (release panic). Such a crater is not
-            // bucketed: it simply contributes nothing.
-            if !reach.is_finite() // NaN / ±inf
-                || reach <= 0.0
-                || reach > MAX_COORD
-                || !c.center.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD)
-            {
-                return None;
-            }
-            let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, cell_size);
-            let (max_cx, max_cz) = cell_of(c.center[0] + reach, c.center[1] + reach, cell_size);
-            Some((min_cx, min_cz, max_cx, max_cz))
-        };
-        // Grid AABB over every crater's cell box; grow the cell until the dense
-        // grid stays bounded (see [`MAX_BUCKET_CELLS`] — output-neutral).
-        let (bucket_min, bucket_nx, bucket_nz) = loop {
+        if max_reach <= 0.0 {
+            return None;
+        }
+        let mut cell_size = max_reach;
+        let mut inv_cell = 1.0 / cell_size;
+        // Cells this grid may spend: O(members), never past the hard ceiling.
+        let budget = ((members.len() as u128) * CELLS_PER_CRATER)
+            .clamp(1024, MAX_BUCKET_CELLS);
+        let (min, nx, nz) = loop {
             let (mut min_cx, mut min_cz) = (i64::MAX, i64::MAX);
             let (mut max_cx, mut max_cz) = (i64::MIN, i64::MIN);
-            for c in &craters {
-                let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else {
+            for &i in members {
+                let Some((x0, z0, x1, z1)) = cell_box(&craters[i as usize], inv_cell) else {
                     continue;
                 };
                 min_cx = min_cx.min(x0);
@@ -369,25 +417,26 @@ impl Craters {
                 max_cz = max_cz.max(z1);
             }
             if min_cx > max_cx {
-                break ((0, 0), 0, 0); // no craters with reach
+                return None; // no member with a bucketable reach
             }
             // i128 so a saturated span can never overflow the subtraction.
             let nx = (max_cx as i128 - min_cx as i128 + 1) as u128;
             let nz = (max_cz as i128 - min_cz as i128 + 1) as u128;
-            if nx * nz <= MAX_BUCKET_CELLS {
+            if nx * nz <= budget {
                 break ((min_cx, min_cz), nx as usize, nz as usize);
             }
             cell_size *= 2.0;
+            inv_cell = 1.0 / cell_size;
         };
-        // CSR fill: count per cell, prefix-sum into starts, then place indices
-        // (ascending crater order per cell — same order the HashMap push gave).
-        let cells = bucket_nx * bucket_nz;
+        // CSR fill: count per cell, prefix-sum into starts, then place entries in
+        // ascending crater order per cell.
+        let cells = nx * nz;
         let slot = |cx: i64, cz: i64| -> usize {
-            (cz - bucket_min.1) as usize * bucket_nx + (cx - bucket_min.0) as usize
+            (cz - min.1) as usize * nx + (cx - min.0) as usize
         };
         let mut counts = vec![0u32; cells];
-        for c in &craters {
-            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else {
+        for &i in members {
+            let Some((x0, z0, x1, z1)) = cell_box(&craters[i as usize], inv_cell) else {
                 continue;
             };
             for cz in z0..=z1 {
@@ -396,43 +445,245 @@ impl Craters {
                 }
             }
         }
-        let mut bucket_starts = vec![0u32; cells + 1];
+        let mut starts = vec![0u32; cells + 1];
         for k in 0..cells {
-            bucket_starts[k + 1] = bucket_starts[k] + counts[k];
+            starts[k + 1] = starts[k] + counts[k];
         }
-        let mut cursor: Vec<u32> = bucket_starts[..cells].to_vec();
-        let mut bucket_entries = vec![0u32; bucket_starts[cells] as usize];
-        for (i, c) in craters.iter().enumerate() {
-            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else {
+        let total = starts[cells] as usize;
+        let mut cursor: Vec<u32> = starts[..cells].to_vec();
+        let mut grid = OctaveGrid {
+            inv_cell_size: inv_cell,
+            min,
+            nx,
+            nz,
+            starts,
+            cx: vec![0.0; total],
+            cz: vec![0.0; total],
+            reach: vec![0.0; total],
+            idx: vec![0; total],
+        };
+        for &i in members {
+            let c = &craters[i as usize];
+            let Some((x0, z0, x1, z1)) = cell_box(c, inv_cell) else {
                 continue;
             };
             for cz in z0..=z1 {
                 for cx in x0..=x1 {
                     let k = slot(cx, cz);
-                    bucket_entries[cursor[k] as usize] = i as u32;
+                    let e = cursor[k] as usize;
+                    grid.cx[e] = c.center[0];
+                    grid.cz[e] = c.center[1];
+                    grid.reach[e] = c.reach();
+                    grid.idx[e] = i;
                     cursor[k] += 1;
                 }
             }
         }
-        let octaves = craters.iter().map(|c| octave_of(c.radius) as u8).collect();
+        Some(grid)
+    }
+
+    /// Entry range of the cell containing `(x, z)` — empty outside the AABB.
+    #[inline]
+    fn entries_at(&self, x: f64, z: f64) -> std::ops::Range<usize> {
+        let (qx, qz) = cell_of(x, z, self.inv_cell_size);
+        let ux = qx.wrapping_sub(self.min.0);
+        let uz = qz.wrapping_sub(self.min.1);
+        if ux < 0 || uz < 0 || ux >= self.nx as i64 || uz >= self.nz as i64 {
+            return 0..0;
+        }
+        let k = uz as usize * self.nx + ux as usize;
+        self.starts[k] as usize..self.starts[k + 1] as usize
+    }
+
+    /// Entry ranges of every cell overlapping the world box `[min, max]`, as a
+    /// cell-coordinate span clamped to the grid AABB (`None` = no overlap).
+    fn cell_span(&self, min: [f64; 2], max: [f64; 2]) -> Option<(usize, usize, usize, usize)> {
+        let (x0, z0) = cell_of(min[0], min[1], self.inv_cell_size);
+        let (x1, z1) = cell_of(max[0], max[1], self.inv_cell_size);
+        let lo_x = x0.max(self.min.0).wrapping_sub(self.min.0);
+        let lo_z = z0.max(self.min.1).wrapping_sub(self.min.1);
+        let hi_x = x1.min(self.min.0 + self.nx as i64 - 1).wrapping_sub(self.min.0);
+        let hi_z = z1.min(self.min.1 + self.nz as i64 - 1).wrapping_sub(self.min.1);
+        if lo_x > hi_x || lo_z > hi_z || hi_x < 0 || hi_z < 0 {
+            return None;
+        }
+        Some((
+            lo_x.max(0) as usize,
+            lo_z.max(0) as usize,
+            hi_x as usize,
+            hi_z as usize,
+        ))
+    }
+}
+
+/// The immutable placement set + per-octave spatial index behind [`Craters`].
+#[derive(Debug)]
+struct CraterIndex {
+    /// The crater set (order only matters for bucket construction determinism —
+    /// the per-point min/max combine is order-independent).
+    craters: Vec<Crater>,
+    /// One grid per OCCUPIED radius octave, in ascending octave order — the
+    /// order the combine sums in.
+    grids: Vec<OctaveGrid>,
+    /// Memoised Nyquist-gated sub-indexes, keyed by `min_wavelength.to_bits()`.
+    ///
+    /// Gating is a real PRUNE (see [`Craters::band_limited`]), and composing a
+    /// terrain re-derives the same handful of gates — one per LOD depth, plus
+    /// the contact and derived-map bands — for every tile and collider bake.
+    /// Building the pruned index once per gate instead of once per bake is the
+    /// difference between "the coarse LODs are free" and "every coarse tile
+    /// re-walks the whole small-crater carpet to reject it".
+    gated: Mutex<Vec<(u64, Arc<CraterIndex>)>>,
+}
+
+impl CraterIndex {
+    /// Stratify by radius octave and build one grid per occupied stratum.
+    fn build(craters: Vec<Crater>) -> CraterIndex {
+        let mut members: Vec<Vec<u32>> = vec![Vec::new(); OCTAVE_COUNT];
+        for (i, c) in craters.iter().enumerate() {
+            members[octave_of(c.radius)].push(i as u32);
+        }
+        let grids = members
+            .iter()
+            .filter(|m| !m.is_empty())
+            .filter_map(|m| OctaveGrid::build(&craters, m))
+            .collect();
+        CraterIndex {
+            craters,
+            grids,
+            gated: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Craters {
+    /// Build the spatial index (one bucket grid per radius octave). An empty set
+    /// contributes nothing.
+    pub fn new(craters: Vec<Crater>) -> Self {
         Self {
-            index: Arc::new(CraterIndex {
-                craters,
-                octaves,
-                cell_size,
-                bucket_min,
-                bucket_nx,
-                bucket_nz,
-                bucket_starts,
-                bucket_entries,
-            }),
+            index: Arc::new(CraterIndex::build(craters)),
             min_wavelength: 0.0,
         }
     }
 
-    /// Number of craters.
+    /// Number of craters **in this variant** — a gated or region-scoped variant
+    /// (see [`band_limited`] / [`for_region`]) reports only what it kept.
+    ///
+    /// [`band_limited`]: Craters::band_limited
+    /// [`for_region`]: Craters::for_region
     pub fn crater_count(&self) -> usize {
         self.index.craters.len()
+    }
+
+    /// This field's Nyquist gate (metres); `0` = full detail.
+    pub fn min_wavelength(&self) -> f64 {
+        self.min_wavelength
+    }
+
+    /// A variant gated for a consumer sampling every `min_wavelength` metres,
+    /// with every crater the gate would zero out **removed from the index**.
+    ///
+    /// [`nyquist_fade`] returns exactly `0` for `2·radius ≤ min_wavelength`, so
+    /// dropping those craters cannot change a single sampled value — but it is
+    /// the difference between a 64 m-pitch tile walking the entire sub-metre
+    /// carpet to reject it per sample and never seeing it at all. Results are
+    /// memoised on the root index (see [`CraterIndex::gated`]), so the pruned
+    /// index for a given band is built once per terrain, not once per bake.
+    pub fn band_limited(&self, min_wavelength: f64) -> Craters {
+        // No gate → nothing is zeroed, so nothing may be dropped (and the
+        // ungated index is the one we already hold).
+        if !(min_wavelength > 0.0) {
+            return Craters {
+                index: self.index.clone(),
+                min_wavelength: 0.0,
+            };
+        }
+        let key = min_wavelength.to_bits();
+        {
+            let cache = self.index.gated.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, idx)) = cache.iter().find(|(k, _)| *k == key) {
+                return Craters {
+                    index: idx.clone(),
+                    min_wavelength,
+                };
+            }
+        }
+        let kept: Vec<Crater> = self
+            .index
+            .craters
+            .iter()
+            .copied()
+            .filter(|c| 2.0 * c.radius > min_wavelength)
+            .collect();
+        let index = Arc::new(CraterIndex::build(kept));
+        let mut cache = self.index.gated.lock().unwrap_or_else(|e| e.into_inner());
+        // Live slider-drag tuning mints a distinct band per value; cap so a
+        // session of tweaking cannot grow this without bound.
+        if cache.len() >= MAX_GATED_VARIANTS {
+            cache.clear();
+        }
+        cache.push((key, index.clone()));
+        Craters {
+            index,
+            min_wavelength,
+        }
+    }
+
+    /// A compact variant holding only the craters that can affect the world box
+    /// `[min, max]` at `min_wavelength` — the form every REGION-scoped consumer
+    /// (tile bake, collider tile, derived-map bake) should sample.
+    ///
+    /// A bake knows its footprint and its pitch up front, so the per-sample loop
+    /// has no business rediscovering "which craters are near?" tens of thousands
+    /// of times. Gathering once turns the inner loop into a walk over a handful
+    /// of contiguous entries that stay in L1, and lets a coarse tile drop the
+    /// whole small-crater population in one pass.
+    ///
+    /// Sampled values are **identical to the full field anywhere inside
+    /// `[min, max]`** (dropped craters are out of reach or Nyquist-zeroed there,
+    /// so they contribute exactly `0.0`); outside it they are not — this is a
+    /// bake-scoped view, never a replacement for the field.
+    pub fn for_region(&self, min: [f64; 2], max: [f64; 2], min_wavelength: f64) -> Craters {
+        let gated = self.band_limited(min_wavelength);
+        let index = &gated.index;
+        // Gather from the grids rather than scanning the placement list: a leaf
+        // tile covers a few cells of each octave, and the scan is otherwise
+        // O(population) per tile bake.
+        let mut seen = vec![0u64; index.craters.len().div_ceil(64)];
+        let mut kept: Vec<Crater> = Vec::new();
+        for g in &index.grids {
+            let Some((lo_x, lo_z, hi_x, hi_z)) = g.cell_span(min, max) else {
+                continue;
+            };
+            for uz in lo_z..=hi_z {
+                for ux in lo_x..=hi_x {
+                    let k = uz * g.nx + ux;
+                    for e in g.starts[k] as usize..g.starts[k + 1] as usize {
+                        let reach = g.reach[e];
+                        // Reach bbox vs the region box — a cell overlapping the
+                        // region does not mean the crater in it does.
+                        if g.cx[e] + reach < min[0]
+                            || g.cx[e] - reach > max[0]
+                            || g.cz[e] + reach < min[1]
+                            || g.cz[e] - reach > max[1]
+                        {
+                            continue;
+                        }
+                        let i = g.idx[e] as usize;
+                        let (w, b) = (i / 64, 1u64 << (i % 64));
+                        if seen[w] & b != 0 {
+                            continue; // already gathered from another cell
+                        }
+                        seen[w] |= b;
+                        kept.push(index.craters[i]);
+                    }
+                }
+            }
+        }
+        Craters {
+            index: Arc::new(CraterIndex::build(kept)),
+            min_wavelength,
+        }
     }
 
     /// Combined crater delta (metres) at `(x, z)`, band-limited to this
@@ -453,33 +704,45 @@ impl Craters {
     /// scale-separated impacts are physically additive. Per-octave min/max +
     /// cross-octave sum gives both, stays order-independent, and needs no fixed
     /// walk order for determinism.
+    /// Each octave is its own grid, so the walk is one O(1) cell lookup per
+    /// occupied stratum and the min/max pair lives in registers instead of a
+    /// 16-wide scratch array. Summation order is unchanged (ascending octave); a
+    /// stratum with no candidate here would have contributed an exact
+    /// `0.0 + 0.0`, so skipping it leaves every bit identical.
     pub fn delta_at(&self, x: f64, z: f64) -> f64 {
-        let (cx, cz) = cell_of(x, z, self.index.cell_size);
-        let indices = self.index.bucket(cx, cz);
-        if indices.is_empty() {
-            return 0.0;
-        }
-        let mut deepest = [0.0_f64; OCTAVE_COUNT];
-        let mut tallest = [0.0_f64; OCTAVE_COUNT];
-        // Track the touched octave band so the combine below only walks occupied
-        // strata — an untouched stratum adds an exact `0.0 + 0.0`, so skipping it
-        // (and only leading/trailing ones — interior gaps still add their zeros in
-        // order) leaves the summation order, and thus every bit, unchanged.
-        let (mut lo, mut hi) = (OCTAVE_COUNT, 0);
-        for &i in indices {
-            let d = self.index.craters[i as usize].delta_at_limited(x, z, self.min_wavelength);
-            if d == 0.0 {
+        let mut sum = 0.0;
+        for g in &self.index.grids {
+            let entries = g.entries_at(x, z);
+            if entries.is_empty() {
                 continue;
             }
-            let o = self.index.octaves[i as usize] as usize;
-            deepest[o] = deepest[o].min(d);
-            tallest[o] = tallest[o].max(d);
-            lo = lo.min(o);
-            hi = hi.max(o);
-        }
-        let mut sum = 0.0;
-        for o in lo..=hi {
-            sum += deepest[o] + tallest[o];
+            let (mut deepest, mut tallest) = (0.0_f64, 0.0_f64);
+            for e in entries {
+                // Reject FIRST, off the contiguous SoA arrays: the bucket hands
+                // us candidates whose CELL overlaps, and only a couple are
+                // within reach. Rejecting here keeps the 56-byte `Crater` (and
+                // its transcendentals) out of the common path entirely.
+                let reach = g.reach[e];
+                let dx = x - g.cx[e];
+                if dx >= reach || dx <= -reach {
+                    continue;
+                }
+                let dz = z - g.cz[e];
+                if dz >= reach || dz <= -reach {
+                    continue;
+                }
+                if dx * dx + dz * dz >= reach * reach {
+                    continue;
+                }
+                let i = g.idx[e] as usize;
+                let d = self.index.craters[i].delta_at_limited(x, z, self.min_wavelength);
+                if d == 0.0 {
+                    continue;
+                }
+                deepest = deepest.min(d);
+                tallest = tallest.max(d);
+            }
+            sum += deepest + tallest;
         }
         sum
     }
@@ -492,16 +755,26 @@ impl crate::modifier::HeightModifier for Craters {
 
     /// Craters ARE band-limitable: the rim lip (σ = 0.14·r) is far narrower than
     /// a coarse tile's vertex spacing, so an ungated crater renders as sawtooth
-    /// rims and dotted rings on distant LODs. The gated variant shares the
-    /// placement index (cheap `Arc` clone per bake).
+    /// rims and dotted rings on distant LODs. The gated variant is a memoised
+    /// PRUNED index — craters the gate zeroes are dropped, not rejected per
+    /// sample (see [`Craters::band_limited`]).
     fn with_min_wavelength(
         &self,
         min_wavelength: f64,
     ) -> Option<Arc<dyn crate::modifier::HeightModifier>> {
-        Some(Arc::new(Craters {
-            index: self.index.clone(),
-            min_wavelength,
-        }))
+        Some(Arc::new(self.band_limited(min_wavelength)))
+    }
+
+    /// Craters are region-scopable: a bake gathers the craters over its own
+    /// footprint once instead of resolving "which craters are near?" per sample
+    /// (see [`Craters::for_region`]).
+    fn for_region(
+        &self,
+        min: [f64; 2],
+        max: [f64; 2],
+        min_wavelength: f64,
+    ) -> Option<Arc<dyn crate::modifier::HeightModifier>> {
+        Some(Arc::new(self.for_region(min, max, min_wavelength)))
     }
 }
 
@@ -547,15 +820,20 @@ impl<S: HeightSource> HeightSource for CraterField<S> {
     }
 }
 
-/// Integer bucket coordinate of a world position under a given cell size. `floor`
-/// keeps the mapping continuous and identical on every platform (no rounding-mode
-/// surprises).
+/// Integer bucket coordinate of a world position, given the RECIPROCAL of the
+/// cell size. `floor` keeps the mapping continuous and identical on every
+/// platform (no rounding-mode surprises), and both IEEE multiply and the
+/// reciprocal are correctly rounded, so the partition is peer-identical.
+///
+/// It takes `1/cell` rather than `cell` because this is the per-sample entry
+/// point: a query touches one cell per occupied radius octave, so a division
+/// here is ~6 divisions per height sample. `x * inv` is NOT `x / cell` to the
+/// last bit — which is fine and invisible, because bucketing only PARTITIONS.
+/// The one hard requirement is that insertion and query use the SAME mapping;
+/// they do (both go through here, off the grid's stored `inv_cell_size`).
 #[inline]
-fn cell_of(x: f64, z: f64, cell_size: f64) -> (i64, i64) {
-    (
-        (x / cell_size).floor() as i64,
-        (z / cell_size).floor() as i64,
-    )
+fn cell_of(x: f64, z: f64, inv_cell: f64) -> (i64, i64) {
+    ((x * inv_cell).floor() as i64, (z * inv_cell).floor() as i64)
 }
 
 #[cfg(test)]
@@ -793,15 +1071,15 @@ mod tests {
         // Reference: the pre-dense-grid implementation, verbatim (HashMap
         // buckets at the UNDOUBLED cell size + full 0..OCTAVE_COUNT sum).
         let max_reach = craters.iter().map(|c| c.reach()).fold(0.0_f64, f64::max);
-        let cell_size = max_reach.max(1.0);
+        let inv_cell = 1.0 / max_reach.max(1.0);
         let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for (i, c) in craters.iter().enumerate() {
             let reach = c.reach();
             if reach <= 0.0 {
                 continue;
             }
-            let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, cell_size);
-            let (max_cx, max_cz) = cell_of(c.center[0] + reach, c.center[1] + reach, cell_size);
+            let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, inv_cell);
+            let (max_cx, max_cz) = cell_of(c.center[0] + reach, c.center[1] + reach, inv_cell);
             for cz in min_cz..=max_cz {
                 for cx in min_cx..=max_cx {
                     buckets.entry((cx, cz)).or_default().push(i as u32);
@@ -809,7 +1087,7 @@ mod tests {
             }
         }
         let reference = |x: f64, z: f64| -> f64 {
-            let Some(indices) = buckets.get(&cell_of(x, z, cell_size)) else {
+            let Some(indices) = buckets.get(&cell_of(x, z, inv_cell)) else {
                 return 0.0;
             };
             let mut deepest = [0.0_f64; OCTAVE_COUNT];
@@ -847,6 +1125,212 @@ mod tests {
         // …and far outside every reach AND the grid AABB the field is exact zero.
         assert_eq!(cs.delta_at(1.0e6, -1.0e6), 0.0);
         assert_eq!(cs.delta_at(-1.0e6, 1.0e6), 0.0);
+    }
+
+    /// A deterministic LCG population spanning several radius octaves — the
+    /// shape the perf work is about (many small craters, a few large).
+    fn population(n: usize, span: f64) -> Vec<Crater> {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut rng = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        (0..n)
+            .map(|_| Crater {
+                center: [rng() * span - span * 0.5, rng() * span - span * 0.5],
+                radius: 0.3 + rng() * rng() * 60.0,
+                depth: 0.5 + rng() * 4.0,
+                rim_height: rng(),
+                softness: rng() * 0.3,
+                bowl_power: 2.0 + rng() * 3.0,
+            })
+            .collect()
+    }
+
+    /// The Nyquist prune must be INVISIBLE: a dropped crater is one whose
+    /// `nyquist_fade` is exactly 0 at that gate, so the pruned index must agree
+    /// with the un-pruned one BIT-FOR-BIT — the gated field feeds content-addressed
+    /// tile/collider bakes.
+    #[test]
+    fn band_limited_prune_is_bitwise_identical_to_the_unpruned_gate() {
+        let craters = population(600, 900.0);
+        let full = Craters::new(craters.clone());
+        for &wl in &[0.5, 4.0, 20.0, 96.0] {
+            let pruned = full.band_limited(wl);
+            // Reference: same placements, NOT pruned, same gate.
+            let reference = Craters {
+                index: full.index.clone(),
+                min_wavelength: wl,
+            };
+            assert!(
+                pruned.crater_count() <= reference.crater_count(),
+                "the prune may only drop"
+            );
+            for gz in -60..=60 {
+                for gx in -60..=60 {
+                    let (x, z) = (gx as f64 * 7.3, gz as f64 * 7.3);
+                    assert_eq!(
+                        pruned.delta_at(x, z).to_bits(),
+                        reference.delta_at(x, z).to_bits(),
+                        "bit mismatch at ({x},{z}) under gate {wl}"
+                    );
+                }
+            }
+        }
+        // …and the prune actually bites: a 96 m gate keeps only craters ≥ 48 m.
+        assert!(full.band_limited(96.0).crater_count() < full.crater_count() / 10);
+    }
+
+    /// A region-scoped variant is a BAKE VIEW: identical to the full field
+    /// everywhere inside the box it was built for (outside it, nothing is
+    /// promised — the craters that reach in from further away are gone).
+    #[test]
+    fn for_region_matches_the_full_field_inside_the_box() {
+        let craters = population(600, 900.0);
+        let full = Craters::new(craters.clone());
+        let (min, max) = ([-120.0, 40.0], [30.0, 210.0]);
+        for &wl in &[0.0, 3.0, 15.0] {
+            let scoped = full.for_region(min, max, wl);
+            let reference = Craters {
+                index: full.index.clone(),
+                min_wavelength: wl,
+            };
+            assert!(scoped.crater_count() < full.crater_count(), "scope drops");
+            for gz in 0..=40 {
+                for gx in 0..=40 {
+                    let x = min[0] + (max[0] - min[0]) * gx as f64 / 40.0;
+                    let z = min[1] + (max[1] - min[1]) * gz as f64 / 40.0;
+                    assert_eq!(
+                        scoped.delta_at(x, z).to_bits(),
+                        reference.delta_at(x, z).to_bits(),
+                        "bit mismatch at ({x},{z}) in region under gate {wl}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The gated index is memoised on the root — a second request for the same
+    /// band must hand back the SAME allocation, not rebuild it (every tile and
+    /// collider bake re-requests its LOD's band).
+    #[test]
+    fn gated_variants_are_memoized_per_band() {
+        let full = Craters::new(population(200, 400.0));
+        let a = full.band_limited(8.0);
+        let b = full.band_limited(8.0);
+        assert!(Arc::ptr_eq(&a.index, &b.index), "same band → same index");
+        let c = full.band_limited(16.0);
+        assert!(!Arc::ptr_eq(&a.index, &c.index), "different band → own index");
+    }
+
+    /// Not an assertion — a report. `cargo test -p lunco-terrain-core --
+    /// crater_sampling_report --ignored --nocapture` prints what a tile bake
+    /// actually pays per sample, so the next person tuning this argues with
+    /// numbers instead of the cost model in
+    /// `docs/architecture/terrain-crater-perf-plan.md`.
+    #[test]
+    #[ignore = "perf report, not a pass/fail test"]
+    fn crater_sampling_report() {
+        use std::time::Instant;
+        // A REPRESENTATIVE field: the layer's own size-frequency distribution
+        // (`N(>r) ∝ r^-1.8` over `[ANALYTIC_RADIUS_FLOOR_M, 60]`) at the shipped
+        // density — 8 craters/ha scaled by the SFD factor over a 1 km
+        // half-extent (400 ha). Uniform-ish radii would misreport the whole
+        // problem: the cost model is ABOUT the population being dominated by
+        // craters near the floor.
+        let mut state = 0xD1B5_4A32_D192_ED03_u64;
+        let mut rng = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (rmin, rmax, a) = (ANALYTIC_RADIUS_FLOOR_M, 60.0_f64, 1.8_f64);
+        let q = (rmin / rmax).powf(a);
+        let count = (8.0 * (8.0_f64 / rmin).powf(a) * 400.0) as usize;
+        let craters: Vec<Crater> = (0..count)
+            .map(|_| {
+                let radius = rmin * (1.0 - rng() * (1.0 - q)).powf(-1.0 / a);
+                let u = rng();
+                Crater {
+                    center: [rng() * 2000.0 - 1000.0, rng() * 2000.0 - 1000.0],
+                    radius,
+                    depth: radius * 0.4 * (1.0 - 0.85 * u.powf(0.7)),
+                    rim_height: radius * 0.4 * 0.18 * (1.0 - u) * (1.0 - u),
+                    softness: 0.03 + 0.45 * u * u,
+                    bowl_power: 2.0 + 4.0 * u,
+                }
+            })
+            .collect();
+        let full = Craters::new(craters.clone());
+
+        // Candidates a sample considers: per-octave grids vs. the ONE global
+        // grid this replaced (cell = the largest reach, so every tiny crater
+        // shares a cell two orders of magnitude wider than its own footprint).
+        let global_cell = craters.iter().map(|c| c.reach()).fold(0.0_f64, f64::max);
+        let (mut per_octave, mut one_grid, mut n) = (0usize, 0usize, 0usize);
+        for gz in -20..=20 {
+            for gx in -20..=20 {
+                let (x, z) = (gx as f64 * 23.0, gz as f64 * 23.0);
+                for g in &full.index.grids {
+                    per_octave += g.entries_at(x, z).len();
+                }
+                let (cx, cz) = cell_of(x, z, 1.0 / global_cell);
+                one_grid += craters
+                    .iter()
+                    .filter(|c| {
+                        cell_box(c, 1.0 / global_cell).is_some_and(|(x0, z0, x1, z1)| {
+                            cx >= x0 && cx <= x1 && cz >= z0 && cz <= z1
+                        })
+                    })
+                    .count();
+                n += 1;
+            }
+        }
+        println!(
+            "population {} | candidates/sample: {:.1} (per-octave) vs {:.1} (single grid) — {:.1}× fewer",
+            full.crater_count(),
+            per_octave as f64 / n as f64,
+            one_grid as f64 / n as f64,
+            one_grid as f64 / per_octave.max(1) as f64,
+        );
+
+        // Per-sample cost at three bands, and what a region-scoped bake pays.
+        // 129² is one CDLOD tile's lattice.
+        let tile = 64.0_f64;
+        let res = 129;
+        for &(label, step) in &[("leaf", 0.5), ("mid", 4.0), ("coarse", 32.0)] {
+            let wl = 2.0 * step;
+            let side = tile * (step / 0.5);
+            let sample = |c: &Craters| {
+                let t = Instant::now();
+                let mut acc = 0.0;
+                for iz in 0..res {
+                    for ix in 0..res {
+                        let x = -side * 0.5 + side * ix as f64 / (res - 1) as f64;
+                        let z = -side * 0.5 + side * iz as f64 / (res - 1) as f64;
+                        acc += c.delta_at(x, z);
+                    }
+                }
+                (t.elapsed().as_secs_f64() / (res * res) as f64 * 1e9, acc)
+            };
+            let gated = full.band_limited(wl);
+            let scoped = full.for_region(
+                [-side * 0.5 - side, -side * 0.5 - side],
+                [side * 0.5 + side, side * 0.5 + side],
+                wl,
+            );
+            let (t_gated, _) = sample(&gated);
+            let (t_scoped, _) = sample(&scoped);
+            println!(
+                "{label:>6} tile ({side:>5.0} m, gate {wl:>4.0} m): {:>6} craters after prune, \
+                 {:>5} after region scope | {t_gated:>6.1} ns/sample → {t_scoped:>6.1} ns/sample",
+                gated.crater_count(),
+                scoped.crater_count(),
+            );
+        }
     }
 
     #[test]

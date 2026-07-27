@@ -40,7 +40,11 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// (`crater_profile_rim_limited`) — tile heights changed.
 // 8: fine normals moved from fixed 0.5 m probes to the padded-lattice central
 // difference (T14) — identical keys would otherwise ship old-stencil normals.
-const CACHE_FORMAT_VERSION: u64 = 8;
+/// v9: morph normals are the parent lattice's own central difference (sampled
+/// once as a padded `(even+2)²` lattice) instead of a 4-tap 0.5 m analytic probe
+/// per even vertex — same contract, computed the way the parent computes it, and
+/// ~44 % fewer oracle samples per tile.
+const CACHE_FORMAT_VERSION: u64 = 9;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -80,8 +84,16 @@ impl lunco_precompute::Bake for TileBake<'_> {
         // morph-target band lives on the parent's 2×-spaced lattice so it gates
         // at 4·step (a fully-morphed tile IS the parent surface).
         let step = self.region.side() / (self.res.max(2) - 1) as f64;
-        let limited = SurfaceBand::visual(step).limited(self.oracle);
-        let parent_limited = SurfaceBand::visual_parent(step).limited(self.oracle);
+        // Scoped to THIS tile's footprint: the bake samples a `(res+2)²` lattice
+        // (one ghost step past each edge) plus a 0.5 m morph-normal probe, so the
+        // margin covers everything sampled and nothing more. Crater fields then
+        // gather their handful of nearby placements once per tile instead of
+        // per vertex — and a coarse tile's gate drops the small-crater carpet
+        // outright rather than rejecting it 16 k times.
+        let margin = 2.0 * step + 1.0;
+        let limited = SurfaceBand::visual(step).limited_region(self.oracle, self.region, margin);
+        let parent_limited =
+            SurfaceBand::visual_parent(step).limited_region(self.oracle, self.region, margin);
         // Anchor Y at the FULL-oracle surface height under the tile centre — the same
         // value `spawn_tile`/the collider ring use to place the tile's `CellCoord`, so
         // mesh geometry and entity origin agree. (Full oracle, not `limited`, so the

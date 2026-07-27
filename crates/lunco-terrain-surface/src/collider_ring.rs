@@ -190,7 +190,12 @@ fn sample_heights_xz(
     // gate rounds the sharp crater rim LIP into a rollable bump — a chassis
     // nosing over an un-rounded lip stopped dead on a ~60° face ("stuck on a
     // wall inside the crater"). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
-    let limited = band.limited(oracle);
+    // Scoped to this collider tile's own square (+ a metre of slack): the crater
+    // field gathers the placements over the tile once instead of per lattice
+    // point. Values inside the region are identical — the contract of
+    // `detail_limited_region` — so the collider still samples exactly the band
+    // the visual leaf carries.
+    let limited = band.limited_region(oracle, region, 1.0);
     let mut cols = Vec::with_capacity(res);
     for ix in 0..res {
         let wx = x0 + ix as f64 * step;

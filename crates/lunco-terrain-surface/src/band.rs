@@ -96,6 +96,30 @@ impl SurfaceBand {
     pub fn limited(&self, oracle: &SurfaceOracle) -> SurfaceOracle {
         oracle.detail_limited(self.min_wavelength)
     }
+
+    /// Apply this band to an oracle **scoped to one bake's footprint** — the
+    /// square a tile / collider tile / map bake is about to sample, grown by
+    /// `margin` metres so ghost rings and stencils stay inside the scope.
+    ///
+    /// Same filter policy as [`Self::limited`], plus the region prune: a bake
+    /// that knows its box gathers the placement-backed modifiers (crater
+    /// fields) once rather than per sample. Values inside the box are identical
+    /// to [`Self::limited`] — see [`SurfaceOracle::detail_limited_region`] for
+    /// the contract (do not sample outside the box).
+    #[inline]
+    pub fn limited_region(
+        &self,
+        oracle: &SurfaceOracle,
+        region: crate::quadtree::Square,
+        margin: f64,
+    ) -> SurfaceOracle {
+        let half = region.half + margin;
+        oracle.detail_limited_region(
+            self.min_wavelength,
+            [region.center[0] - half, region.center[1] - half],
+            [region.center[0] + half, region.center[1] + half],
+        )
+    }
 }
 
 #[cfg(test)]

@@ -216,6 +216,41 @@ impl SurfaceOracle {
         }
     }
 
+    /// A variant that is BOTH Nyquist-gated for `min_wavelength` and scoped to
+    /// the world box `[min, max]` — the form every region-shaped bake (tile
+    /// mesh, collider tile, derived maps) should sample.
+    ///
+    /// Placement-backed modifiers (crater fields) gather their footprint once
+    /// here instead of resolving "which placements are near?" per sample;
+    /// modifiers with no region form fall back to the plain gate, and those with
+    /// neither pass through untouched. The result is value-identical to
+    /// [`detail_limited`] **inside the box only** — never hold it past the bake
+    /// that scoped it.
+    ///
+    /// [`detail_limited`]: SurfaceOracle::detail_limited
+    pub fn detail_limited_region(
+        &self,
+        min_wavelength: f64,
+        min: [f64; 2],
+        max: [f64; 2],
+    ) -> SurfaceOracle {
+        let modifiers = self
+            .modifiers
+            .iter()
+            .map(|m| {
+                m.for_region(min, max, min_wavelength)
+                    .or_else(|| m.with_min_wavelength(min_wavelength))
+                    .unwrap_or_else(|| m.clone())
+            })
+            .collect();
+        SurfaceOracle {
+            base: self.base.clone(),
+            modifiers,
+            content_key: self.content_key,
+            base_key: self.base_key,
+        }
+    }
+
     /// Rasterise the composed surface at the base grid's own resolution — for
     /// the consumers that genuinely need a grid (the static full-DEM mesh and
     /// collider). Detail below the grid's own spacing is Nyquist-gated out.

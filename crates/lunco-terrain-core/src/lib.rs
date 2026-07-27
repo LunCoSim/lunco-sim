@@ -43,7 +43,8 @@ pub mod transfer;
 pub use carve::{CarveField, CarvePrimitive};
 pub use collider::{prepare_collider_heights, slope_limit_grid};
 pub use crater::{
-    crater_profile, crater_profile_rim_limited, Crater, CraterField, Craters, CRATER_REACH,
+    crater_profile, crater_profile_rim_limited, Crater, CraterField, Craters,
+    ANALYTIC_RADIUS_FLOOR_M, CRATER_REACH, MAX_CRATERS_PER_HA,
 };
 pub use error::measure_node_error;
 // `FieldKind` is NOT re-exported: it has no definition (optimization removed it as dead
