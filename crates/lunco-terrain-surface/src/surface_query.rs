@@ -327,10 +327,10 @@ mod tests {
     #[test]
     fn height_at_returns_absolute_elevation() {
         let (mut app, _) = world_with_terrain(SITE_ELEVATION);
-        let mut sys = app
+        let sys = app
             .world_mut()
             .register_system(|q: GridSurfaceQuery| q.height_at(GridPos(DVec3::new(10.0, 0.0, -20.0))));
-        let got = app.world_mut().run_system(&mut sys).unwrap();
+        let got = app.world_mut().run_system(sys).unwrap();
         assert_eq!(got, Some(SITE_ELEVATION));
     }
 
@@ -340,10 +340,10 @@ mod tests {
         // Origin 100 m above the real ground — not 100 m above y=0, which is
         // 1.9 km up and would still "work" under the old frame confusion.
         let origin = GridPos(DVec3::new(0.0, SITE_ELEVATION + 100.0, 0.0));
-        let mut sys = app.world_mut().register_system(move |q: GridSurfaceQuery| {
+        let sys = app.world_mut().register_system(move |q: GridSurfaceQuery| {
             q.raycast(origin, Dir3::NEG_Y, 1000.0)
         });
-        let hit = app.world_mut().run_system(&mut sys).unwrap().expect("hit");
+        let hit = app.world_mut().run_system(sys).unwrap().expect("hit");
         assert!((hit.point.0.y - SITE_ELEVATION).abs() < 0.05, "{hit:?}");
         assert!((hit.distance - 100.0).abs() < 0.05, "{hit:?}");
     }
@@ -358,10 +358,10 @@ mod tests {
         let (mut app, _) = world_with_terrain(SITE_ELEVATION);
         let origin = GridPos(DVec3::new(-300.0, SITE_ELEVATION + 60.0, -300.0));
         let dir = Dir3::new(Vec3::new(0.6, -0.2, 0.77)).unwrap();
-        let mut sys = app
+        let sys = app
             .world_mut()
             .register_system(move |q: GridSurfaceQuery| q.raycast(origin, dir, f64::INFINITY));
-        let hit = app.world_mut().run_system(&mut sys).unwrap();
+        let hit = app.world_mut().run_system(sys).unwrap();
         assert!(hit.is_some(), "shallow cursor ray found no ground");
         assert!((hit.unwrap().point.0.y - SITE_ELEVATION).abs() < 0.05);
     }
@@ -369,10 +369,10 @@ mod tests {
     #[test]
     fn no_terrain_is_distinguishable_from_no_hit() {
         let mut app = App::new();
-        let mut sys = app
+        let sys = app
             .world_mut()
             .register_system(|q: GridSurfaceQuery| (q.has_terrain(), q.height_at(GridPos(DVec3::ZERO))));
-        let (has, height) = app.world_mut().run_system(&mut sys).unwrap();
+        let (has, height) = app.world_mut().run_system(sys).unwrap();
         assert!(!has);
         assert_eq!(height, None);
     }
