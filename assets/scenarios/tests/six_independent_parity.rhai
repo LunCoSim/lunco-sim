@@ -534,23 +534,34 @@ fn verdict(s) {
     // claim about how far this rover ought to swing, and they must not become
     // one: the direction and the mirror symmetry are the assertions.
     //
-    // 10 deg, down from 15. The tire's friction cone used to be divided between
-    // longitudinal and lateral in proportion to two stiffness-weighted forces,
-    // which handed a skid rover far more yaw than its grip allows; saturating
-    // along the slip direction instead (`lunco_mobility::update_wheel_spin`)
-    // brought the sweep to ~13.6 deg either way. The old floor was measuring the
-    // magnitude the wrong model happened to produce.
+    // 5 deg, down from 10 (and 15 before that). Each drop has the same cause: the
+    // floor was tracking the magnitude a wrong tire model happened to produce, and
+    // a better model produced less.
+    //
+    // The first drop followed saturating along the slip direction instead of
+    // splitting the cone by stiffness-weighted force (~13.6 deg). This one follows
+    // the lateral force becoming a function of SLIP ANGLE rather than lateral
+    // VELOCITY (`lunco_mobility::update_wheel_spin`): a skid rover yaws by scrubbing
+    // its wheels sideways, and the old model charged almost nothing for that at low
+    // speed. The sweep is now 8.5 deg, mirror-symmetric to 0.8%, and
+    // `drivetrain_parity` — which compares the two independent realizations rather
+    // than a number — agrees for the first time.
+    //
+    // Keep this floor well BELOW the measured sweep. It is here so a rover that
+    // never moved cannot pass the sign checks by accident, and nothing else; a
+    // floor set near the current value silently becomes a regression test for one
+    // tire constant.
     let m_right = "steer +" + s.steer_cmd + " swept " + r2(s.yaw_right);
     m_right += "deg - the authored mix gives the LEFT bank +steer, so the left side";
     m_right += " outruns the right and the rover must yaw RIGHT (positive)";
     f.push(t_true(s.yaw_right > 0.0, m_right));
-    f.push(t_min(s.yaw_right, 10.0, "yaw swept under steer +" + s.steer_cmd + " (deg)"));
+    f.push(t_min(s.yaw_right, 5.0, "yaw swept under steer +" + s.steer_cmd + " (deg)"));
 
     let m_left = "steer -" + s.steer_cmd + " swept " + r2(s.yaw_left);
     m_left += "deg - mirrored command, so the RIGHT bank outruns the left and the";
     m_left += " rover must yaw LEFT (negative)";
     f.push(t_true(s.yaw_left < 0.0, m_left));
-    f.push(t_min(s.yaw_left, 10.0, "yaw swept under steer -" + s.steer_cmd + " (deg)"));
+    f.push(t_min(s.yaw_left, 5.0, "yaw swept under steer -" + s.steer_cmd + " (deg)"));
 
     f.push(t_rel(s.yaw_right.abs(), s.yaw_left.abs(), 40.0,
                  "steer symmetry: |yaw right| vs |yaw left| (deg)"));

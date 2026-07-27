@@ -165,6 +165,26 @@ def Xform "CommsDemoScene" (
         prepend references = @lunco://vessels/satellites/relay_sat.usda@</RelaySat>
     )
     {
+        # ANCHOR THE ELEMENTS TO THIS SCENE'S EPOCH.
+        #
+        # `lunco:orbit:meanAnomalyDeg = 180` in `relay_sat.usda` means apolune —
+        # the whole point of the authored ELFO, whose apolune dwells over the
+        # lunar south pole and so hangs above this Malapert site for hours.
+        #
+        # But mean anomaly is only meaningful WITH the epoch it was measured at,
+        # and `lunco:orbit:epochJd` defaults to J2000. This scene authors
+        # `lunco:time:epochJd = 2461395.5`, so the satellite was propagated ~24
+        # years from J2000 before the first frame and arrived at an arbitrary
+        # phase: measured at 3971 km from the Moon's centre with a local-up
+        # component of −2.2°, i.e. just BELOW the site's horizon. Every
+        # surface↔relay and relay↔DSN edge was severed, the graph held exactly one
+        # edge (base↔rover, 14 m), and the routing assertions failed on geometry
+        # rather than on routing.
+        #
+        # Stating the epoch is what makes "apolune" mean apolune HERE. It also
+        # makes the demo deterministic: the relay is in the same place every run,
+        # independent of when the elements happened to be authored.
+        double lunco:orbit:epochJd = 2461395.5
     }
 
     # Earth ground stations — the three DSN complexes, ~120° apart so at

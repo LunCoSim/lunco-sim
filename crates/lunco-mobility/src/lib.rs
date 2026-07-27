@@ -482,7 +482,16 @@ pub struct WheelRaycast {
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
     /// like ice.
-    pub lateral_grip_stiffness: f64,
+    /// Tire CORNERING stiffness, NORMALISED BY LOAD: side force per radian of
+    /// slip angle per newton of normal force (dimensionless, per rad).
+    ///
+    /// NOT force per m/s of lateral velocity — that was the old model, and the
+    /// rename is deliberate: the units changed, so a value carried across without
+    /// thought fails to compile instead of being silently wrong by ~100×.
+    ///
+    /// Full side force arrives at `α = μ / cornering_stiffness`, so ~10 puts a
+    /// μ = 0.8 tyre at its peak near 4.6° of slip.
+    pub cornering_stiffness: f64,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
     /// Steering rotation axis in the wheel's local frame
@@ -525,7 +534,7 @@ impl Default for WheelRaycast {
             max_rotation_speed: 0.0,
             friction_mu: 0.0,
             slip_stiffness: 0.0,
-            lateral_grip_stiffness: 0.0,
+            cornering_stiffness: 0.0,
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
             steer_axis: DVec3::Y,

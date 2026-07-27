@@ -220,7 +220,11 @@ pub struct LinkPeer {
     /// range because for anything Earth↔Moon (1.28 s) the DELAY, not the range,
     /// is what the mission actually has to design around.
     pub light_time_s: f64,
-    pub elevation_deg: f64,
+    /// Elevation above THIS endpoint's own horizon, or `None` when it has none
+    /// (an orbiting relay, a libration point). Not zero and not 90 — unmeasured.
+    /// The port surface publishes the `None` case as NaN, which is what a
+    /// scalar wire can carry and what a Modelica model reads as "no value".
+    pub elevation_deg: Option<f64>,
     /// The PEER's authored `class`, denormalized here at solve time.
     ///
     /// Identity stays the GID above; this is the peer's ROLE, copied because the
@@ -421,15 +425,18 @@ pub(crate) fn update_links(
             } else {
                 DVec3::ZERO
             };
-            let elev = |up: DVec3, dir: DVec3| -> f64 {
-                if up == DVec3::ZERO {
-                    90.0
-                } else {
-                    up.dot(dir).clamp(-1.0, 1.0).asin().to_degrees()
-                }
+            // Elevation above the endpoint's OWN horizon — `None` when it has none.
+            // The `Option` is the contract: a free-flyer is not at 0° and not at 90°,
+            // it is unmeasured, and a mask has nothing to compare against.
+            let elev = |h: crate::pose::Horizon, dir: DVec3| -> Option<f64> {
+                h.up()
+                    .map(|up| up.dot(dir).clamp(-1.0, 1.0).asin().to_degrees())
             };
-            let elev_a = elev(a.pose.up, dir);
-            let elev_b = elev(b.pose.up, -dir);
+            let elev_a = elev(a.pose.horizon, dir);
+            let elev_b = elev(b.pose.horizon, -dir);
+            // No horizon ⇒ the mask does not gate. Said once, here, instead of at
+            // every reader.
+            let above_mask = |elev: Option<f64>, min: f64| elev.is_none_or(|e| e >= min);
 
             let occluded_by = bodies
                 .iter()
@@ -437,8 +444,8 @@ pub(crate) fn update_links(
                 .map(|(n, _, _)| n.clone());
 
             let cheap_ok = range_m <= a.node.max_range_m.min(b.node.max_range_m)
-                && elev_a >= a.node.min_elevation_deg
-                && elev_b >= b.node.min_elevation_deg
+                && above_mask(elev_a, a.node.min_elevation_deg)
+                && above_mask(elev_b, b.node.min_elevation_deg)
                 && occluded_by.is_none();
             // Terrain relief (a rille rim / hill between the endpoints) shadows the
             // link. March the DEM in the site-local frame — `SolarFramePose::local`
@@ -469,8 +476,12 @@ pub(crate) fn update_links(
                 ),
                 ("range_m", HookValue::Float(range_m)),
                 ("light_time_s", HookValue::Float(light_time_s(range_m))),
-                ("elev_a", HookValue::Float(elev_a)),
-                ("elev_b", HookValue::Float(elev_b)),
+                // `()` — NOT a number — when the endpoint has no horizon. A policy
+                // that compares it numerically gets rhai's unit, which is a type
+                // error at the comparison rather than a plausible angle that
+                // quietly passes or fails a mask. There is no honest float here.
+                ("elev_a", elev_a.map_or(HookValue::Unit, HookValue::Float)),
+                ("elev_b", elev_b.map_or(HookValue::Unit, HookValue::Float)),
                 ("min_elev_a", HookValue::Float(a.node.min_elevation_deg)),
                 ("min_elev_b", HookValue::Float(b.node.min_elevation_deg)),
                 ("occluded", HookValue::Bool(occluded_by.is_some())),
@@ -739,13 +750,25 @@ fn best_per_class(state: &LinkState) -> std::collections::HashMap<String, &LinkP
     best
 }
 
-/// The three scalars a class publishes, as `(suffix, value)`.
-fn class_ports(p: &LinkPeer) -> [(&'static str, f64); 3] {
+/// The scalars a class publishes, as `(suffix, value)`.
+///
+/// `elevation_deg` is published **only when the peer has a horizon**. A peer that
+/// does not — an orbiting relay, a libration point — has no elevation, and this
+/// surface refuses to invent one: the port simply is not there, so
+/// `link_relay_elevation_deg` fails to resolve and a wire into it is reported as
+/// the dangling wire it is, instead of feeding a model a number that looks like an
+/// angle. Same rule the rest of this module follows — no snapping to a fake value.
+///
+/// `list` and `read_output` both go through here, so the two can never disagree
+/// about which ports exist.
+fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
     [
-        ("range_m", p.range_m),
-        ("connected", if p.connected { 1.0 } else { 0.0 }),
-        ("elevation_deg", p.elevation_deg),
+        Some(("range_m", p.range_m)),
+        Some(("connected", if p.connected { 1.0 } else { 0.0 })),
+        p.elevation_deg.map(|e| ("elevation_deg", e)),
     ]
+    .into_iter()
+    .flatten()
 }
 
 /// Link state as first-class **ports**, read on demand.
@@ -830,6 +853,7 @@ mod tests {
     /// A peer entry. `class` is denormalized onto the peer by the solver, so a port
     /// test needs no second entity — which is the point: reads are purely local.
     fn peer(gid: u64, class: &str, connected: bool, range_m: f64, elevation_deg: f64) -> LinkPeer {
+        let elevation_deg = Some(elevation_deg);
         LinkPeer {
             peer: gid,
             connected,
@@ -918,7 +942,7 @@ mod tests {
                         connected: true,
                         range_m: 10.0,
                         light_time_s: 0.0,
-                        elevation_deg: 0.0,
+                        elevation_deg: Some(0.0),
                         class: None,
                     },
                     peer(2, "base", true, 674.0, -4.9),
@@ -994,8 +1018,7 @@ mod tests {
                 SolarFramePose {
                     pos,
                     local: pos,
-                    up: DVec3::Y,
-                    body: 301,
+                    horizon: crate::pose::Horizon::Surface { body: 301, up: DVec3::Y },
                 },
             ))
             .id()
@@ -1367,8 +1390,7 @@ mod tests {
                 SolarFramePose {
                     pos: DVec3::ZERO,
                     local: DVec3::ZERO,
-                    up: DVec3::Y,
-                    body: 301,
+                    horizon: crate::pose::Horizon::Surface { body: 301, up: DVec3::Y },
                 },
             ))
             .id();
@@ -1442,8 +1464,7 @@ mod tests {
             SolarFramePose {
                 pos: DVec3::new(10.0, 0.0, 0.0),
                 local: DVec3::new(10.0, 0.0, 0.0),
-                up: DVec3::Y,
-                body: 301,
+                horizon: crate::pose::Horizon::Surface { body: 301, up: DVec3::Y },
             },
         ));
 

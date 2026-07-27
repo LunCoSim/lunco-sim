@@ -269,8 +269,8 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
                     "{wheel} slip stiffness"
                 );
                 assert_eq!(
-                    pa.lateral_stiffness, pb.lateral_stiffness,
-                    "{wheel} lateral stiffness"
+                    pa.cornering_stiffness, pb.cornering_stiffness,
+                    "{wheel} cornering stiffness"
                 );
                 assert_eq!(pa.brake_torque_max, pb.brake_torque_max, "{wheel} brake");
                 checked += 1;

@@ -190,7 +190,10 @@ struct LinkInfo {
     /// Peer prim name, or a GID fallback if the peer has no `Name`.
     peer_label: String,
     range_m: f64,
-    elevation_deg: f64,
+    /// `None` when the peer has no horizon to be measured against (an orbiting
+    /// relay). The row shows an em dash — a driver reading "+0°" would believe the
+    /// dish is on the horizon.
+    elevation_deg: Option<f64>,
     /// True when the node has no peers at all — a different failure from "severed":
     /// nothing to talk to, rather than something in the way.
     no_peers: bool,
@@ -235,7 +238,7 @@ fn resolve_link(
             connected: false,
             peer_label: "—".into(),
             range_m: 0.0,
-            elevation_deg: 0.0,
+            elevation_deg: None,
             no_peers: true,
         });
     }
@@ -1089,7 +1092,11 @@ pub(crate) fn draw_rover_hud(
                                 ui,
                                 &[
                                     ("range", range),
-                                    ("elev", format!("{:+.0}°", link.elevation_deg)),
+                                    (
+                                        "elev",
+                                        link.elevation_deg
+                                            .map_or_else(|| "—".to_string(), |e| format!("{e:+.0}°")),
+                                    ),
                                 ],
                                 &pal,
                             );

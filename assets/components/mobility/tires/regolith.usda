@@ -62,7 +62,7 @@ over "Tire" (
     # oscillates), which is what drove the original fit downwards. It no longer
     # can: `lunco_mobility::update_wheel_spin` bounds the lateral force by the
     # impulse that exactly arrests the slip, so the term cannot overshoot.
-    float physxVehicleTire:lateralStiffness = 100
+    float physxVehicleTire:lateralStiffness = 6.0
 
     # --- Contact-solver friction (UsdPhysicsMaterialAPI) ---
     # THE SAME GRIP, STATED IN THE SOLVER'S UNITS. `lunco:tire:frictionCoefficient`
