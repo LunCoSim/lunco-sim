@@ -349,31 +349,39 @@ pub(crate) fn render_fast_run_setup(
                              (TR-BDF2 — event-robust, recommended for stiff \
                              multi-day horizons).",
                         );
-                    // Vocabulary + labels come from the single source of truth
-                    // `SolverChoice`. `None` = "Auto" (backend default, TR-BDF2).
-                    let current = entry.bounds.solver;
-                    let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
+                    // The list IS the registry — a newly registered backend shows
+                    // up here with no list to update, which is the point of
+                    // replacing the closed enum. `None` = "Auto": let
+                    // `solver::resolve` pick from what the model needs.
+                    crate::solver_backends::ensure_builtin_solvers();
+                    let current = entry.bounds.solver.clone();
+                    let sel_label = current
+                        .as_ref()
+                        .and_then(lunco_experiments::solver::get)
+                        .map_or_else(|| "Auto".to_string(), |spec| spec.label.clone());
                     egui::ComboBox::from_id_salt("fastrun_setup_solver")
                         .selected_text(sel_label)
                         .width(240.0)
                         .show_ui(ui, |ui| {
                             if ui
-                                .selectable_label(current.is_none(), "Auto (TR-BDF2)")
+                                .selectable_label(current.is_none(), "Auto")
                                 .on_hover_text(
-                                    "Let the backend pick. Currently TR-BDF2 — \
-                                     event-robust default for stiff horizons.",
+                                    "Let the resolver pick the highest-ranked solver \
+                                     that can actually serve this model.",
                                 )
                                 .clicked()
                             {
                                 entry.bounds.solver = None;
                             }
-                            for c in lunco_experiments::SolverChoice::ALL {
+                            for spec in lunco_experiments::solver::registered() {
                                 if ui
-                                    .selectable_label(current == Some(c), c.label())
-                                    .on_hover_text(c.hover())
+                                    .selectable_label(
+                                        current.as_ref() == Some(&spec.id),
+                                        &spec.label,
+                                    )
                                     .clicked()
                                 {
-                                    entry.bounds.solver = Some(c);
+                                    entry.bounds.solver = Some(spec.id.clone());
                                 }
                             }
                         });
@@ -1167,6 +1175,10 @@ pub fn on_compile_model(
             doc_uri: primary_doc_uri,
             extra_sources,
             stream: Some(stream),
+            // A model opened in the workbench is being authored and inspected,
+            // not driving a client-predicted body — the realtime promise is
+            // declared in USD on a program prim, which this path has none of.
+            realtime_safe: false,
         });
     } else {
         console.error("Modelica worker channel not available — compile dispatch dropped.");
@@ -1375,27 +1387,36 @@ struct BoundsOverride {
     dt: Option<f64>,
     n_intervals: Option<u32>,
     tolerance: Option<f64>,
-    solver: Option<lunco_experiments::SolverChoice>,
+    solver: Option<lunco_experiments::SolverId>,
     h0: Option<f64>,
 }
 
-/// Parse an API solver string into a typed [`SolverChoice`](lunco_experiments::SolverChoice).
-/// `None`/empty/`"auto"` → `None` (= backend default, TR-BDF2). An unknown
-/// string is logged and treated as `None` rather than silently degrading to
-/// BDF deep in the solver layer.
-fn parse_solver_arg(s: Option<&str>) -> Option<lunco_experiments::SolverChoice> {
+/// Parse an API solver string into a registered [`SolverId`](lunco_experiments::SolverId).
+///
+/// `None`/empty/`"auto"` → `None`, meaning "let `solver::resolve` pick from what
+/// the model needs" — which is the normal case, not a fallback.
+///
+/// An id that is not registered is REPORTED and dropped rather than silently
+/// becoming some other solver. Names come from the registry, so this validates
+/// against what is actually available instead of a hand-maintained alias table.
+fn parse_solver_arg(s: Option<&str>) -> Option<lunco_experiments::SolverId> {
     let raw = s?;
     let t = raw.trim();
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {
         return None;
     }
-    match t.parse() {
-        Ok(c) => Some(c),
-        Err(e) => {
-            warn!("[FastRun] {e}; using backend default solver (TR-BDF2)");
-            None
-        }
+    crate::solver_backends::ensure_builtin_solvers();
+    let id = lunco_experiments::SolverId::from(t);
+    if lunco_experiments::solver::get(&id).is_some() {
+        return Some(id);
     }
+    let known = lunco_experiments::solver::registered()
+        .into_iter()
+        .map(|s| s.id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    warn!("[FastRun] unknown solver `{t}`; registered: {known}. Letting the resolver pick.");
+    None
 }
 
 /// Parse a textual override/input value into a typed `ParamValue`.

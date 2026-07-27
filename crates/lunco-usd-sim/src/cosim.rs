@@ -623,6 +623,10 @@ pub fn dispatch_loaded_modelica_sources(
     asset_server: Res<AssetServer>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
+    // Half of the solver-selection input, and the half only the ECS knows: the
+    // DECLARED `lunco:program:realtimeSafe` promise. The worker derives the other
+    // half (does the model carry algebraic unknowns) from the compiled DAE.
+    q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
 ) {
     let Some(channels) = channels else { return };
 
@@ -701,6 +705,10 @@ pub fn dispatch_loaded_modelica_sources(
             doc_uri: pending.asset_path.to_string(),
             extra_sources: Vec::new(),
             stream: None,
+            // Declared, never inferred. A program without the promise is not
+            // client-predicted, so an adaptive implicit solver is correct for it
+            // — which is exactly what a battery/solar electrical island needs.
+            realtime_safe: q_realtime_safe.contains(entity),
         });
 
         commands.entity(entity).remove::<PendingModelicaSource>();

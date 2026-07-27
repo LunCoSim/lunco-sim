@@ -153,6 +153,11 @@ pub mod model_tabs_types;
 pub mod package_tree;
 /// Default-simulation-class resolution + run-target overrides
 /// (was `ui::panels::model_view::context::default_simulation_class` & friends).
+/// The rumoca backends, registered into `lunco_experiments::solver`. Solver
+/// selection itself lives there; this module is only where rumoca's two-axis
+/// option shape is expressed, once.
+pub mod solver_backends;
+
 pub mod sim_default;
 /// Workbench-side document registry + shared UI-agnostic state (was `ui::state`).
 pub mod state;

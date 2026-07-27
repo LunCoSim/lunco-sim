@@ -1279,6 +1279,8 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         doc_uri: "model.mo".to_string(),
         extra_sources: Vec::new(),
         stream: None,
+        // A transport smoke-test compile drives no predicted body.
+        realtime_safe: false,
     };
     if let Err(e) = tx.send(cmd) {
         bevy::log::error!("[worker_transport] dispatch_compile: send failed: {e}");

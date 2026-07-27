@@ -74,7 +74,7 @@ pub struct ModelDefaults {
     pub interval: Option<f64>,
     /// Modelica `NumberOfIntervals` — the count alternative to `interval`.
     pub number_of_intervals: Option<f64>,
-    pub solver: Option<lunco_experiments::SolverChoice>,
+    pub solver: Option<lunco_experiments::SolverId>,
 }
 
 /// Platform default for the number of runs allowed to execute
@@ -1135,24 +1135,6 @@ impl RunSink for ChannelSink {
 /// silently running BDF where the batch path runs TR-BDF2. `build_stepper` now
 /// delegates here, collapsing that divergence: one tolerance default, one
 /// `atol`/`rtol` policy, one solver family across live + batch.
-/// The ONLY place a [`SolverChoice`](lunco_experiments::SolverChoice) is
-/// mapped to rumoca's two-axis selection: `SimSolverMode` (family) +
-/// `DiffsolMethod` (implicit tableau on the BDF-family path). Keeping this in
-/// one function is the point of the typed enum — there's no string to parse
-/// twice and no `unwrap_or_default()` that could silently pick BDF.
-fn solver_choice_to_rumoca(
-    c: lunco_experiments::SolverChoice,
-) -> (rumoca_sim::SimSolverMode, rumoca_sim::DiffsolMethod) {
-    use lunco_experiments::SolverChoice as C;
-    use rumoca_sim::{DiffsolMethod as D, SimSolverMode as M};
-    match c {
-        C::Bdf => (M::Bdf, D::Bdf),
-        C::Esdirk34 => (M::Bdf, D::Esdirk34),
-        C::TrBdf2 => (M::Bdf, D::TrBdf2),
-        C::RkLike => (M::RkLike, D::Bdf),
-    }
-}
-
 /// Default solver tolerance when neither the run bounds nor the model's
 /// `experiment(Tolerance=…)` annotation supplies one. Applied to BOTH `atol`
 /// and `rtol` (scalar). This is the standard Modelica default (`1e-6`, the same
@@ -1188,26 +1170,68 @@ pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 ///   and quietly reports a frozen model instead of erroring — the failure mode
 ///   that made a 60 s rocket burn drain exactly 1 s of propellant.
 pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
-    let mut opts = rumoca_sim::SimOptions::default();
-    opts.t_start = bounds.t_start;
-    opts.t_end = bounds.t_end;
-    opts.atol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
-    opts.rtol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
-    // Single typed source of truth: `SolverChoice` already resolved the
-    // vocabulary at the parse boundary, so here we just map it to rumoca's
-    // (family, tableau) pair once — no re-parsing of strings, no silent
-    // unknown→BDF degradation. `None` = backend default (BDF; see the rationale
-    // on `stepper_options_from_bounds` for why this is no longer TR-BDF2).
-    let (mode, method) = solver_choice_to_rumoca(
-        bounds
-            .solver
-            .unwrap_or(lunco_experiments::SolverChoice::Bdf),
-    );
-    opts.solver_mode = mode;
-    opts.diffsol_method = method;
-    // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
-    opts.dt = bounds.h0;
-    opts
+    stepper_options_for(bounds, lunco_experiments::ModelCaps::default())
+}
+
+/// [`stepper_options_from_bounds`] when the caller already knows what the model
+/// requires (it has compiled the DAE). Prefer this: with real [`ModelCaps`] an
+/// authored solver that cannot serve the model is refused here instead of dying
+/// per-step later.
+///
+/// Both this and the live path resolve through `lunco_experiments::solver`, which
+/// is the point — they used to choose independently, and the live side's
+/// hardcoded explicit family silently killed every implicit co-simulated model.
+pub fn stepper_options_for(
+    bounds: &RunBounds,
+    needs: lunco_experiments::ModelCaps,
+) -> rumoca_sim::SimOptions {
+    use lunco_experiments::solver;
+    crate::solver_backends::ensure_builtin_solvers();
+
+    let request = solver::SolverRequest {
+        needs,
+        // Batch is offline: nothing here drives a client-predicted body, so the
+        // adaptive implicit family is not merely allowed but wanted.
+        profile: solver::RuntimeProfile { predicted: false },
+        authored: bounds.solver.clone(),
+    };
+
+    let params = solver::SolverParams {
+        atol: bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE),
+        rtol: bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE),
+        // `h0` is the solver's initial step on the diffsol path.
+        h0: bounds.h0,
+        t_start: bounds.t_start,
+        t_end: bounds.t_end,
+    };
+
+    // A batch run must not vanish because a solver could not be resolved, but it
+    // must not pretend either: fall back to the highest-ranked capable backend
+    // and say what happened. The old code's silent `unwrap_or(Bdf)` on an
+    // unparseable name is the failure being avoided here.
+    let resolved = solver::resolve(&request).or_else(|err| {
+        bevy::log::warn!(
+            "[solver] {err}; falling back to the default backend for this batch run"
+        );
+        solver::resolve(&solver::SolverRequest {
+            authored: None,
+            ..request.clone()
+        })
+    });
+
+    match resolved.and_then(|spec| crate::solver_backends::rumoca_options(&spec, &params)) {
+        Ok(opts) => opts,
+        Err(err) => {
+            bevy::log::error!("[solver] {err}; using rumoca's own defaults");
+            let mut opts = rumoca_sim::SimOptions::default();
+            opts.t_start = params.t_start;
+            opts.t_end = params.t_end;
+            opts.atol = params.atol;
+            opts.rtol = params.rtol;
+            opts.dt = params.h0;
+            opts
+        }
+    }
 }
 
 /// Emit a `Failed` update carrying everything sampled so far as a partial
