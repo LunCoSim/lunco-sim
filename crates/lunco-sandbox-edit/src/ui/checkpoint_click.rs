@@ -28,9 +28,9 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
-    append_waypoint_leaf, catmull_rom_path, format_coord_target, insert_waypoint_after,
+    append_waypoint_leaf, catmull_rom_path, insert_waypoint_after,
     remove_waypoint_leaf, route_is_smooth, set_route_smooth, set_waypoint_dwell,
-    set_waypoint_target, BehaviorXml, ReachedWaypoints, TargetBindings,
+    BehaviorXml, ReachedWaypoints, TargetBindings,
 };
 use lunco_controller::ControllerLink;
 use lunco_core::commands::SessionId;
@@ -50,6 +50,14 @@ use crate::SelectedEntities;
 /// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
 /// parented under the rover, the waypoints would ride along as it drives.
 const BEHAVIORS_SCOPE: &str = "Behaviors";
+/// Scope holding a scene's waypoint MARKER prims. Scene-authored routes already
+/// use this name (`/Traverse/Route/W0`), so a dropped waypoint joins the same
+/// scope rather than inventing a parallel one.
+const ROUTE_SCOPE: &str = "Route";
+/// The authored marker. A dropped waypoint REFERENCES this asset instead of
+/// having its geometry rebuilt in Rust: colour, opacity, emission, dome and
+/// trigger zone are authored content, and there is exactly one of them.
+const WAYPOINT_ASSET: &str = "lunco://vessels/markers/waypoint.usda";
 
 /// Name of the `LunCoProgramAPI` child that carries a vessel's mission tree.
 const MISSION_PROGRAM: &str = "Mission";
@@ -57,7 +65,7 @@ const MISSION_PROGRAM: &str = "Mission";
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
 pub struct WaypointContextMenuState {
-    /// The waypoint VISUAL entity (carries [`WaypointVisual`]), not a prim.
+    /// The authored waypoint MARKER prim entity.
     pub entity: Option<Entity>,
     pub position: Vec2,
     pub just_opened: bool,
@@ -401,11 +409,20 @@ pub fn on_scene_click_checkpoint(
         });
     }
 
+    // ── The MARKER is an authored prim ────────────────────────────────────────
+    // Not a Rust-built sphere: `vessels/markers/waypoint.usda` already defines
+    // the dome, its livery and its arrival trigger zone. Referencing it means
+    // one marker implementation for scene-authored and click-dropped waypoints
+    // alike — the two used to be different objects that only looked alike, and
+    // the Rust one drew itself in the vessel's hull colour.
+    let marker_path = author_marker_prim(&mut commands, host, doc, &root, hit);
+
     // ── The mission's topology ────────────────────────────────────────────────
     // Append the leaf FIRST: if the tree is a shape the editor must not restructure,
-    // bail out.
+    // bail out. The leaf targets the marker PRIM, so the mission and the map
+    // refer to the same object — a coordinate string could drift from the pin.
     let current = q_xml.get(vessel).ok().map(|(_, x)| x.0.as_str());
-    let wp_coord_str = format_coord_target(hit);
+    let wp_coord_str = marker_path.clone();
     let xml = match append_waypoint_leaf(current, &wp_coord_str) {
         Ok(xml) => xml,
         Err(err) => {
@@ -435,13 +452,13 @@ pub fn on_scene_click_checkpoint(
 
 /// Global `Pointer<Click>` observer: right-click a waypoint sphere to open its menu.
 ///
-/// Targets the coordinate-waypoint VISUALS ([`WaypointVisual`], spawned by
-/// `sync_waypoint_visuals`) — the pick can land on the sphere mesh itself, so walk up
-/// to whichever ancestor carries the marker.
+/// Targets the authored marker PRIM — the pick lands on its `Dome` mesh, so walk
+/// up to whichever ancestor is a waypoint of some mission.
 pub fn on_scene_right_click_waypoint(
     mut click: On<Pointer<Click>>,
     egui_focus: Res<EguiFocus>,
-    q_visual: Query<&WaypointVisual>,
+    q_prim: Query<&UsdPrimPath>,
+    q_vessels: Query<(Entity, &BehaviorXml, Option<&ReachedWaypoints>)>,
     q_parents: Query<&ChildOf>,
     q_xml: Query<&BehaviorXml>,
     mut menu_state: ResMut<WaypointContextMenuState>,
@@ -455,16 +472,16 @@ pub fn on_scene_right_click_waypoint(
 
     let mut entity = click.entity;
     for _ in 0..8 {
-        if let Ok(visual) = q_visual.get(entity) {
+        if let Some((vessel, target, _, _)) = resolve_marker(entity, &q_prim, &q_vessels) {
             click.propagate(false);
             menu_state.entity = Some(entity);
             menu_state.position = click.pointer_location.position;
             menu_state.just_opened = true;
             // Seed the dwell buffer from the authored leg.
             menu_state.dwell = q_xml
-                .get(visual.vessel)
+                .get(vessel)
                 .ok()
-                .and_then(|x| lunco_autopilot::usd_tree::waypoint_dwell(&x.0, &visual.coord_key))
+                .and_then(|x| lunco_autopilot::usd_tree::waypoint_dwell(&x.0, &target))
                 .unwrap_or(0.0);
             return;
         }
@@ -529,13 +546,37 @@ pub fn on_scene_click_place_waypoint(
         return;
     };
 
-    let new_target = format_coord_target(world);
-    let edited = match pending.mode {
-        PlacementMode::Move => set_waypoint_target(&xml.0, &pending.coord_key, &new_target),
-        PlacementMode::InsertAfter => {
-            insert_waypoint_after(&xml.0, &pending.coord_key, &new_target)
-        }
+    // MOVE repositions the MARKER, and touches the mission not at all: the leg
+    // targets the prim by path, and the prim's pose is the prim's business. The
+    // coordinate-in-the-XML spelling had to rewrite the whole mission to drag a
+    // pin, which is why a move could reorder or lose a leg.
+    if pending.mode == PlacementMode::Move {
+        info!("[waypoint] Move → {} to {:?}", pending.coord_key, world);
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::SetTranslate {
+                edit_target: LayerId::runtime(),
+                path: pending.coord_key.clone(),
+                value: [world.x, world.y, world.z],
+            },
+        });
+        *placement = WaypointPlacement::default();
+        return;
+    }
+
+    // INSERT-AFTER authors a new marker and splices its path into the route.
+    let root = vessel_prim
+        .path
+        .split('/')
+        .nth(1)
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
+    let Some(host) = doc_ctx.usd_registry.host(doc) else {
+        warn!("[waypoint] placement failed: no USD host for document {doc:?}");
+        return;
     };
+    let new_target = author_marker_prim(&mut commands, host, doc, &root, world);
+    let edited = insert_waypoint_after(&xml.0, &pending.coord_key, &new_target);
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
@@ -573,7 +614,8 @@ pub fn draw_waypoint_context_menu(
     mut menu_state: ResMut<WaypointContextMenuState>,
     mut placement: ResMut<WaypointPlacement>,
     mut menu_open: ResMut<lunco_core::WaypointMenuOpen>,
-    q_visual: Query<&WaypointVisual>,
+    q_prim: Query<&UsdPrimPath>,
+    q_markers: Query<(Entity, &BehaviorXml, Option<&ReachedWaypoints>)>,
     q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
     usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -585,13 +627,15 @@ pub fn draw_waypoint_context_menu(
         }
         return;
     };
-    // The visual can vanish under the menu (route edited elsewhere) — close, don't panic.
-    let Ok(visual) = q_visual.get(vis_entity) else {
+    // The marker can vanish under the menu (route edited elsewhere) — close, don't panic.
+    let Some((marker_vessel, marker_target, marker_index, marker_passed)) =
+        resolve_marker(vis_entity, &q_prim, &q_markers)
+    else {
         menu_state.entity = None;
         menu_open.0 = false;
         return;
     };
-    let Ok((xml, vessel_prim)) = q_vessel.get(visual.vessel) else {
+    let Ok((xml, vessel_prim)) = q_vessel.get(marker_vessel) else {
         menu_state.entity = None;
         menu_open.0 = false;
         return;
@@ -626,8 +670,8 @@ pub fn draw_waypoint_context_menu(
         .show(ctx, |ui| {
             egui::Frame::menu(ui.style()).show(ui, |ui| {
                 ui.set_width(190.0);
-                ui.label(egui::RichText::new(format!("Waypoint {}", visual.index + 1)).strong());
-                if visual.passed {
+                ui.label(egui::RichText::new(format!("Waypoint {}", marker_index + 1)).strong());
+                if marker_passed {
                     ui.label(egui::RichText::new("visited (this session)").weak().small());
                 }
                 ui.separator();
@@ -640,8 +684,8 @@ pub fn draw_waypoint_context_menu(
                     .clicked()
                 {
                     placement.0 = Some(PendingPlacement {
-                        vessel: visual.vessel,
-                        coord_key: visual.coord_key.clone(),
+                        vessel: marker_vessel,
+                        coord_key: marker_target.clone(),
                         mode: PlacementMode::Move,
                     });
                     open = false;
@@ -654,16 +698,16 @@ pub fn draw_waypoint_context_menu(
                     )
                     .clicked()
                 {
-                    info!("[waypoint] armed Insert-after of '{}'", visual.coord_key);
+                    info!("[waypoint] armed Insert-after of '{}'", marker_target);
                     placement.0 = Some(PendingPlacement {
-                        vessel: visual.vessel,
-                        coord_key: visual.coord_key.clone(),
+                        vessel: marker_vessel,
+                        coord_key: marker_target.clone(),
                         mode: PlacementMode::InsertAfter,
                     });
                     open = false;
                 }
                 if ui.button("❌  Delete").clicked() {
-                    match remove_waypoint_leaf(&xml.0, &visual.coord_key) {
+                    match remove_waypoint_leaf(&xml.0, &marker_target) {
                         Ok(new_xml) => edited = Some(new_xml),
                         Err(err) => warn!("[waypoint] delete failed: {err}"),
                     }
@@ -680,7 +724,7 @@ pub fn draw_waypoint_context_menu(
                             .suffix(" s"),
                     );
                     if resp.changed() {
-                        match set_waypoint_dwell(&xml.0, &visual.coord_key, dwell) {
+                        match set_waypoint_dwell(&xml.0, &marker_target, dwell) {
                             Ok(new_xml) => edited = Some(new_xml),
                             Err(err) => warn!("[waypoint] dwell failed: {err}"),
                         }
@@ -795,203 +839,6 @@ fn collect_targets(v: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// Marker component for local waypoint visual entities.
-#[derive(Component)]
-pub struct WaypointVisual {
-    /// The vessel entity this waypoint is for.
-    pub vessel: Entity,
-    /// Stable identity: the raw "x;y;z" coordinate string from the BehaviorXml.
-    /// Keyed by string rather than sequence index so that removing the first
-    /// waypoint (which shifts all subsequent indices down by one) does not
-    /// cause every remaining sphere to be despawned and respawned.
-    pub coord_key: String,
-    /// The index of this waypoint in the patrol sequence (for label display).
-    pub index: usize,
-    /// Absolute world position of the waypoint.
-    pub position: DVec3,
-    /// Whether this waypoint has been reached on a previous run.
-    /// Passed waypoints render differently (grey) but stay visible.
-    pub passed: bool,
-}
-
-/// Resolve a picked sub-part (wheel, hull panel, antenna, ...) to the vehicle
-/// whose mission owns the route.  Selection is intentionally granular; routes
-/// are intentionally vehicle-level.
-fn route_owner(
-    entity: Option<Entity>,
-    q_parents: &Query<&ChildOf>,
-    vessels: &std::collections::HashSet<Entity>,
-) -> Option<Entity> {
-    let mut current = entity?;
-    loop {
-        if vessels.contains(&current) {
-            return Some(current);
-        }
-        current = q_parents.get(current).ok()?.parent();
-    }
-}
-
-/// System that spawns and updates local visual-only translucent green spheres
-/// for all coordinate-based waypoints stored in vessels' BehaviorXml.
-/// This prevents polluting the USD stage with waypoint prims.
-pub fn sync_waypoint_visuals(
-    q_vessels: Query<(
-        Entity,
-        &BehaviorXml,
-        Option<&TargetBindings>,
-        Option<&ReachedWaypoints>,
-        Option<&UsdPrimPath>,
-    )>,
-    selected: Res<SelectedEntities>,
-    q_avatar: Query<&ControllerLink, With<Avatar>>,
-    q_visuals: Query<(Entity, &WaypointVisual)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<(Entity, &big_space::prelude::Grid)>,
-    q_grids_only: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-    // Route visuals borrow the resolved look of the USD body prim.  The route
-    // carries no palette: its livery remains the vehicle's authored display color.
-    q_hull_looks: Query<(&PbrLook, &UsdPrimPath)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut commands: Commands,
-) {
-    let vessel_entities: std::collections::HashSet<Entity> =
-        q_vessels.iter().map(|(entity, ..)| entity).collect();
-    let selected_vessel = route_owner(selected.primary(), &q_parents, &vessel_entities);
-    let possessed_vessel = route_owner(
-        q_avatar.iter().next().map(|link| link.vessel_entity),
-        &q_parents,
-        &vessel_entities,
-    );
-
-    // 1. Gather desired waypoints only for the active route.  Every rover still
-    // owns its own USD route; showing all seven simultaneously hides the course.
-    // Key: (vessel, coord_key) → (index, world_pos, passed, USD-derived livery).
-    // coord_key is the raw "x;y;z" string or USD prim path — stable across sequence-index shifts.
-    // `passed` is read from the live-only `ReachedWaypoints` set, never the XML.
-    let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool, LinearRgba)> =
-        std::collections::HashMap::new();
-    for (vessel, xml, bindings, reached, vessel_path) in q_vessels.iter() {
-        if Some(vessel) != selected_vessel && Some(vessel) != possessed_vessel {
-            continue;
-        }
-        let livery = q_hull_looks
-            .iter()
-            .find_map(|(look, path)| {
-                vessel_path
-                    .is_some_and(|vessel_path| path.path == format!("{}/Body", vessel_path.path))
-                    .then_some(look.base_color)
-            })
-            .unwrap_or(LinearRgba::WHITE);
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
-            continue;
-        };
-        let mut targets = Vec::new();
-        collect_targets(&value, &mut targets);
-        let mut idx = 0usize;
-        for target in &targets {
-            let pos = parse_coord_target(target).or_else(|| {
-                bindings.and_then(|b| b.0.get(target)).and_then(|&entity| {
-                    lunco_core::coords::world_position(
-                        entity,
-                        &q_parents,
-                        &q_grids_only,
-                        &q_spatial,
-                    )
-                    .map(|p| p.0)
-                })
-            });
-            let Some(pos) = pos else { continue };
-            let passed = reached.map(|r| r.0.contains(target)).unwrap_or(false);
-            desired.insert((vessel, target.clone()), (idx, pos, passed, livery));
-            idx += 1;
-        }
-    }
-
-    // 2. Identify existing visuals, keyed by stable (vessel, coord_key).
-    // Value is (visual_entity, current_passed_state) so we can re-spawn when colour changes.
-    let mut existing: std::collections::HashMap<(Entity, String), (Entity, bool)> =
-        std::collections::HashMap::new();
-    for (entity, visual) in q_visuals.iter() {
-        existing.insert(
-            (visual.vessel, visual.coord_key.clone()),
-            (entity, visual.passed),
-        );
-    }
-
-    // Get active grid for placing visuals.
-    let Some((grid_entity, grid)) = q_grids.iter().next() else {
-        return;
-    };
-    let grid_world =
-        lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
-            .unwrap_or(lunco_core::coords::GridPos(DVec3::ZERO));
-
-    // 3. Spawn or update desired visuals.
-    for ((vessel, coord_key), (index, pos, passed, livery)) in desired {
-        let (cell, local_pos) = lunco_core::coords::world_to_grid_local(
-            lunco_core::coords::GridPos(pos),
-            grid_world,
-            grid,
-        );
-
-        let mut base_color = livery;
-        base_color.alpha = if passed { 0.12 } else { 0.28 };
-        let mut emissive = livery;
-        emissive.alpha = 1.0;
-        if let Some((entity, existing_passed)) = existing.remove(&(vessel, coord_key.clone())) {
-            if existing_passed == passed {
-                // `try_insert`, not `insert`: a scene
-                // load can despawn this visual between the query snapshot and command
-                // application, and a bare `insert` on the dead entity panics the schedule.
-                commands.entity(entity).try_insert((
-                    PbrLook {
-                        base_color,
-                        emissive,
-                        alpha: SurfaceAlpha::Blend,
-                        unlit: true,
-                        no_shadow_cast: true,
-                        ..default()
-                    },
-                    cell,
-                    Transform::from_translation(local_pos),
-                ));
-                continue;
-            }
-            // Passed state changed (green → grey): despawn and fall through to re-spawn.
-            commands.entity(entity).despawn();
-        }
-        commands.spawn((
-            Mesh3d(meshes.add(Sphere::new(2.5).mesh().ico(5).unwrap())),
-            PbrLook {
-                base_color,
-                emissive,
-                alpha: SurfaceAlpha::Blend,
-                unlit: true,
-                // Same reason as the route ribbon: an editor pin must not cast a
-                // shadow onto the scene it annotates.
-                no_shadow_cast: true,
-                ..default()
-            },
-            cell,
-            Transform::from_translation(local_pos),
-            GlobalTransform::default(),
-            ChildOf(grid_entity),
-            WaypointVisual {
-                vessel,
-                coord_key,
-                index,
-                position: pos,
-                passed,
-            },
-        ));
-    }
-
-    // 4. Despawn only the visuals whose coord_key is no longer in the XML.
-    for (_, (entity, _)) in existing {
-        commands.entity(entity).despawn();
-    }
-}
 
 /// Single egui overlay that draws both waypoint labels (numbers) and route
 /// lines in screen space.
@@ -1147,6 +994,108 @@ pub fn draw_waypoint_overlay(
     }
 }
 
+/// Resolve a picked sub-part (wheel, hull panel, antenna, ...) to the vehicle
+/// whose mission owns the route.  Selection is intentionally granular; routes
+/// are intentionally vehicle-level.
+fn route_owner(
+    entity: Option<Entity>,
+    q_parents: &Query<&ChildOf>,
+    vessels: &std::collections::HashSet<Entity>,
+) -> Option<Entity> {
+    let mut current = entity?;
+    loop {
+        if vessels.contains(&current) {
+            return Some(current);
+        }
+        current = q_parents.get(current).ok()?.parent();
+    }
+}
+
+/// Resolve a picked marker prim to the route it belongs to: the vessel whose
+/// mission targets it, the target string, its position in the route, and whether
+/// it has been reached.
+///
+/// The marker is an authored PRIM, so its identity IS its path — there is no
+/// parallel visual entity to key off. `None` when the prim is not a waypoint of
+/// any current mission (a random prim was right-clicked).
+fn resolve_marker(
+    marker: Entity,
+    q_prim: &Query<&UsdPrimPath>,
+    q_vessels: &Query<(Entity, &BehaviorXml, Option<&ReachedWaypoints>)>,
+) -> Option<(Entity, String, usize, bool)> {
+    let path = &q_prim.get(marker).ok()?.path;
+    for (vessel, xml, reached) in q_vessels.iter() {
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            continue;
+        };
+        let mut targets = Vec::new();
+        collect_targets(&value, &mut targets);
+        if let Some(index) = targets.iter().position(|t| t == path) {
+            let passed = reached.map(|r| r.0.contains(path)).unwrap_or(false);
+            return Some((vessel, path.clone(), index, passed));
+        }
+    }
+    None
+}
+
+/// Author a waypoint MARKER: a prim referencing `vessels/markers/waypoint.usda`
+/// under the scene's `Route` scope, translated to `at`. Returns its path, which
+/// is also its identity — the mission targets it by path.
+///
+/// One implementation for every way a waypoint comes into being (drop,
+/// insert-after), so a marker is never half-authored: the geometry, livery and
+/// trigger zone all come from the referenced asset.
+fn author_marker_prim(
+    commands: &mut Commands,
+    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    root: &str,
+    at: DVec3,
+) -> String {
+    let route_scope = join_prim(root, ROUTE_SCOPE);
+    // `AddPrim` on an existing prim is a rejection, not a merge.
+    if !prim_exists(host, &route_scope) {
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::AddPrim {
+                edit_target: LayerId::runtime(),
+                parent_path: root.to_string(),
+                name: ROUTE_SCOPE.to_string(),
+                type_name: Some("Scope".to_string()),
+                reference: None,
+            },
+        });
+    }
+    // First free `W<n>` — the name a scene author would have written by hand.
+    let marker_name = (0..)
+        .map(|n| format!("W{n}"))
+        .find(|name| !prim_exists(host, &join_prim(&route_scope, name)))
+        .expect("an unbounded search always finds a free name");
+    let marker_path = join_prim(&route_scope, &marker_name);
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: route_scope,
+            name: marker_name,
+            type_name: Some("Xform".to_string()),
+            reference: Some(WAYPOINT_ASSET.to_string()),
+        },
+    });
+    // The picked point is grid-absolute, the frame authored translates are in
+    // (`persist_move_to_runtime_layer` writes a world position straight into
+    // `SetTranslate`).
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: marker_path.clone(),
+            value: [at.x, at.y, at.z],
+        },
+    });
+    marker_path
+}
+
 /// Join a parent prim path and a child name, handling the stage root (`"/"`).
 fn join_prim(parent: &str, name: &str) -> String {
     if parent == "/" {
@@ -1209,121 +1158,97 @@ fn prim_exists(
         || host.document().runtime_data().spec(&sdf).is_some()
 }
 
-/// How close (world units) the vessel must get for a waypoint to count as reached.
-pub const WAYPOINT_ARRIVAL: f64 = 4.0;
-
-/// Parse a `"x;y;z"` coord target. `None` for a prim-path target.
-fn parse_coord_target(target: &str) -> Option<DVec3> {
-    let p: Vec<&str> = target.split(';').collect();
-    if p.len() != 3 {
-        return None;
-    }
-    match (
-        p[0].trim().parse(),
-        p[1].trim().parse(),
-        p[2].trim().parse(),
-    ) {
-        (Ok(x), Ok(y), Ok(z)) => Some(DVec3::new(x, y, z)),
-        _ => None,
-    }
-}
-
 /// System that checks if a vessel is close to any of its waypoints.
 ///
-/// A **coordinate** waypoint is recorded in the vessel's runtime [`ReachedWaypoints`]
-/// set — LIVE-ONLY state that greys the pin and strips the leg from the compiled tree
-/// so the rover advances. It is deliberately never written to the XML or USD: the
-/// waypoint-drop path re-authors the whole mission `info:sourceCode` string through
-/// `ApplyUsdOp`, so a flag living in that XML would get journaled and baked into the
-/// saved `.usda` and survive a reload. Keeping it in a component means it simply
-/// resets each session.
+/// Arrival, driven by the marker's OWN trigger zone — never a distance poll.
 ///
-/// A **prim** waypoint is also live-only arrival state.  A path may name a
-/// reusable scene route, not an editor-created disposable prim; deleting it
-/// changes composed source data and makes another rover's comparison invalid.
-/// The compiled tree consumes reached targets from [`ReachedWaypoints`], so no
-/// authored mission or target needs mutation to advance a rover.
-pub fn delete_reached_waypoints(
-    mut q_vessels: Query<(
-        Entity,
-        &BehaviorXml,
-        Option<&TargetBindings>,
-        Option<&mut ReachedWaypoints>,
-    )>,
-    q_waypoints: Query<Entity, With<UsdPrimPath>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+/// `vessels/markers/waypoint.usda` authors a `lunco:triggerZone` sensor around
+/// every waypoint, and `lunco-mobility` fires `enter:<zone>` when a body crosses
+/// it, carrying the ZONE's gid as the event source and the entrant's as payload.
+/// That makes arrival an event about a specific pair of entities: zone names may
+/// repeat across a scene without ambiguity, because the zone is identified by
+/// entity, not by string.
+///
+/// Reaching a waypoint **deletes nothing**. Two states are written:
+///
+/// 1. the vessel's runtime [`ReachedWaypoints`] set — what the compiled tree
+///    consumes to advance past a completed leg (so the autopilot skips it), and
+/// 2. `lunco:waypoint:reached` on the marker prim, authored into the RUNTIME
+///    layer — session state that never reaches the saved `.usda`.
+///
+/// The mission keeps its leg and the map keeps its pin, so a route can be
+/// reviewed, replayed and re-run. The previous implementation swept every
+/// vessel × every target every tick, measuring distances, to discover the same
+/// fact the physics engine had already reported.
+pub fn mark_reached_waypoints_on_zone_enter(
+    trigger: On<lunco_core::TelemetryEvent>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    q_prim: Query<&UsdPrimPath>,
+    mut q_vessels: Query<(Entity, &BehaviorXml, Option<&mut ReachedWaypoints>)>,
+    doc_ctx: WaypointDocContext,
     mut commands: Commands,
 ) {
-    for (vessel, xml, bindings, mut reached) in q_vessels.iter_mut() {
-        let Some(vessel_pos) =
-            lunco_core::coords::world_position(vessel, &q_parents, &q_grids, &q_spatial)
-        else {
-            continue;
-        };
+    let event = trigger.event();
+    if !event.name.starts_with("enter:") {
+        return;
+    }
+    // The zone entity is the event SOURCE; its marker prim is its parent path.
+    let Some(zone) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(event.source)) else {
+        return;
+    };
+    let Ok(zone_prim) = q_prim.get(zone) else {
+        return;
+    };
+    let Some((marker_path, _)) = zone_prim.path.rsplit_once('/') else {
+        return;
+    };
+    let marker_path = marker_path.to_string();
 
-        // Parse all targets from behavior XML
+    // Which vessel owns a leg pointing at this marker? A scene can hold several
+    // routes, and only the one that authored this target has arrived.
+    for (vessel, xml, reached) in q_vessels.iter_mut() {
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             continue;
         };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
-
-        let mut newly_reached: Vec<String> = Vec::new();
-        for target in &targets {
-            // 1. Coordinate waypoint → runtime-only reached set.
-            if let Some(wp_pos) = parse_coord_target(target) {
-                if (lunco_core::coords::GridPos(wp_pos) - vessel_pos).length() < WAYPOINT_ARRIVAL {
-                    let known = reached
-                        .as_ref()
-                        .map(|r| r.0.contains(target))
-                        .unwrap_or(false);
-                    if !known && !newly_reached.iter().any(|t| t == target) {
-                        info!("Waypoint reached (live-only, not persisted): {}", target);
-                        newly_reached.push(target.clone());
-                    }
-                }
-                continue;
+        if !targets.iter().any(|t| *t == marker_path) {
+            continue;
+        }
+        let known = reached
+            .as_ref()
+            .map(|r| r.0.contains(&marker_path))
+            .unwrap_or(false);
+        if known {
+            continue;
+        }
+        info!("[waypoint] reached {marker_path} (zone enter)");
+        // Writing the component fires `Changed<ReachedWaypoints>`, which
+        // `compile_behavior_xml` watches, so the tree re-strips the completed leg
+        // and the rover advances immediately.
+        match reached {
+            Some(mut r) => {
+                r.0.insert(marker_path.clone());
             }
-
-            // 2. USD-prim target → the same live-only arrival state.
-            if let Some(bindings) = bindings {
-                if let Some(&wp_entity) = bindings.0.get(target) {
-                    if let Ok(entity) = q_waypoints.get(wp_entity) {
-                        let Some(wp_pos) = lunco_core::coords::world_position(
-                            entity, &q_parents, &q_grids, &q_spatial,
-                        ) else {
-                            continue;
-                        };
-                        let distance = (wp_pos - vessel_pos).length();
-                        if distance < WAYPOINT_ARRIVAL {
-                            let known = reached
-                                .as_ref()
-                                .map(|r| r.0.contains(target))
-                                .unwrap_or(false);
-                            if !known && !newly_reached.iter().any(|t| t == target) {
-                                info!("Waypoint reached (live-only): {}", target);
-                                newly_reached.push(target.clone());
-                            }
-                        }
-                    }
-                }
+            None => {
+                commands
+                    .entity(vessel)
+                    .insert(ReachedWaypoints(std::iter::once(marker_path.clone()).collect()));
             }
         }
-
-        // Commit this tick's arrivals to the live-only set. Writing the component
-        // fires `Changed<ReachedWaypoints>`, which `compile_behavior_xml` watches, so
-        // the tree re-strips and the rover advances immediately — with nothing
-        // touching the document.
-        if !newly_reached.is_empty() {
-            match reached.as_mut() {
-                Some(r) => r.0.extend(newly_reached),
-                None => {
-                    commands
-                        .entity(vessel)
-                        .insert(ReachedWaypoints(newly_reached.into_iter().collect()));
-                }
+        // Author the same fact onto the marker, in the runtime layer only.
+        if let Ok(vessel_prim) = q_prim.get(vessel) {
+            if let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) {
+                commands.trigger(ApplyUsdOp {
+                    doc,
+                    op: UsdOp::SetAttribute {
+                        edit_target: LayerId::runtime(),
+                        path: marker_path.clone(),
+                        name: "lunco:waypoint:reached".to_string(),
+                        type_name: "bool".to_string(),
+                        value: "true".to_string(),
+                    },
+                });
             }
         }
     }
@@ -1669,16 +1594,14 @@ pub fn sync_waypoint_path_mesh(
         let pts: Vec<(DVec3, bool)> = targets
             .iter()
             .filter_map(|t| {
-                let pos = parse_coord_target(t).or_else(|| {
-                    bindings.and_then(|b| b.0.get(t)).and_then(|&entity| {
-                        lunco_core::coords::world_position(
-                            entity,
-                            &q_parents,
-                            &q_grids_only,
-                            &q_spatial,
-                        )
-                        .map(|p| p.0)
-                    })
+                let pos = bindings.and_then(|b| b.0.get(t)).and_then(|&entity| {
+                    lunco_core::coords::world_position(
+                        entity,
+                        &q_parents,
+                        &q_grids_only,
+                        &q_spatial,
+                    )
+                    .map(|p| p.0)
                 });
                 pos.map(|p| (p, reached.map(|r| r.0.contains(t)).unwrap_or(false)))
             })

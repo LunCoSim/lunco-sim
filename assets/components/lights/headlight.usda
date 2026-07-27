@@ -29,9 +29,11 @@ def Xform "Headlight"
     )
     {
         # Photometric power for a rover work beam. `normalize` keeps it
-        # independent of the physically authored emitter size below. At 5 klm
-        # it is useful after sunset without competing with 128 klx lunar Sun.
-        float inputs:intensity = 5000.0
+        # independent of the physically authored emitter size below. 5 klm read
+        # as barely-there on regolith (albedo ~0.11) at the beam's working
+        # distance; 20 klm lights the path ahead while still losing to the
+        # 128 klx lunar Sun, so it stays a NIGHT/shadow tool, not a day light.
+        float inputs:intensity = 20000.0
         float inputs:exposure = 0.0
         # Match the 9 cm visible lens: the UsdLux schema default is 0.5 m, which
         # made this a one-metre emitter with an implausibly soft, wheel-filling
@@ -44,7 +46,7 @@ def Xform "Headlight"
         # is therefore a 40° full beam: it lights the path, not the wheel wells.
         float inputs:shaping:cone:angle = 20.0
         float inputs:shaping:cone:softness = 0.3
-        float lunco:light:range = 60.0
+        float lunco:light:range = 90.0
     }
 
     # Casing of the headlight
@@ -80,7 +82,7 @@ def Xform "Headlight"
             uniform token info:id = "UsdPreviewSurface"
             color3f inputs:diffuseColor = (1.0, 0.95, 0.85)
             # HDR (>1) so the lens reads as a GLOW the sun cannot wash out.
-            color3f inputs:emissiveColor = (5.0, 4.75, 4.25)
+            color3f inputs:emissiveColor = (12.0, 11.4, 10.2)
             token outputs:surface
         }
     }

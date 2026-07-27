@@ -65,12 +65,23 @@ fn test_detach_joint_command() {
 }
 
 #[test]
-fn test_delete_reached_coordinate_waypoint() {
+fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
     let mut app = App::new();
 
     // Initialize required resources and register event / types
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    // Provides `DocumentRegistry<UsdDocument>` — the arrival observer resolves
+    // the marker's document to author its runtime-layer flag.
+    app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+    app.init_resource::<lunco_usd::twin_projection::DocBackedTwinScenes>();
     app.init_resource::<lunco_workspace::WorkspaceResource>();
+    app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
     app.register_type::<lunco_usd::commands::ApplyUsdOp>();
+    // The system under test: arrival driven by the marker's own trigger zone.
+    app.add_observer(
+        lunco_sandbox_edit::ui::checkpoint_click::mark_reached_waypoints_on_zone_enter,
+    );
 
     // Setup a resource to store triggered ApplyUsdOp events
     #[derive(Default, Resource)]
@@ -92,70 +103,80 @@ fn test_delete_reached_coordinate_waypoint() {
         .active_document = Some(doc_id);
 
     // Spawn a vessel entity with BehaviorXml and UsdPrimPath
-    let xml_content = r#"<root BTCPP_format="4" main_tree_to_execute="MainTree">
+    // Waypoints are authored MARKER PRIMS; a mission leg targets one by path.
+    const MARKER: &str = "/SandboxScene/Route/W0";
+    let xml_content = format!(
+        r#"<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
-        <Action ID="drive_to" target="10.0;0.0;20.0"/>
-        <Action ID="drive_to" target="30.0;0.0;40.0"/>
+        <Action ID="drive_to" target="{MARKER}"/>
+        <Action ID="drive_to" target="/SandboxScene/Route/W1"/>
       </Sequence>
     </Repeat>
   </BehaviorTree>
-</root>"#;
+</root>"#
+    );
 
     let vessel_entity = app
         .world_mut()
         .spawn((
-            lunco_autopilot::usd_tree::BehaviorXml(xml_content.to_string()),
+            lunco_autopilot::usd_tree::BehaviorXml(xml_content.clone()),
             lunco_usd_bevy::UsdPrimPath {
                 stage_handle: Default::default(),
                 path: "/SandboxScene/Skid_Raycast_2".to_string(),
             },
-            Transform::from_xyz(10.0, 0.0, 20.0), // Vessel is exactly at the first waypoint!
+            Transform::from_xyz(10.0, 0.0, 20.0),
         ))
         .id();
 
-    // Run the system
-    let mut schedule = Schedule::new(Update);
-    schedule.add_systems(lunco_sandbox_edit::ui::checkpoint_click::delete_reached_waypoints);
-    schedule.run(app.world_mut());
+    // The marker's trigger ZONE — arrival is this zone reporting an entrant, not
+    // a distance the editor measured itself.
+    let zone = app
+        .world_mut()
+        .spawn(lunco_usd_bevy::UsdPrimPath {
+            stage_handle: Default::default(),
+            path: format!("{MARKER}/Zone"),
+        })
+        .id();
+    let zone_gid = lunco_core::GlobalEntityId::from_raw(7);
+    app.world_mut()
+        .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+        .assign(zone, zone_gid);
 
-    // "Reached" is LIVE-ONLY: it is recorded in the runtime `ReachedWaypoints`
-    // component and must NEVER touch the XML or the document. The XML is left byte-for
-    // byte alone, and NO ApplyUsdOp is emitted — otherwise the flag would be journaled,
-    // saved into the .usda and survive a reload (which is what emptied the route and
-    // made the autopilot drive forward instead of following it).
+    app.world_mut().trigger(lunco_core::TelemetryEvent {
+        name: "enter:waypoint".to_string(),
+        source: zone_gid.get(),
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::I64(0),
+        timestamp: 0.0,
+    });
+
+    // The observer inserts through `Commands`, which apply at the next flush.
+    app.update();
+
+    // "Reached" is LIVE-ONLY in the ECS: recorded in `ReachedWaypoints`, never
+    // written into the XML. The mission keeps its leg — reaching a waypoint does
+    // not delete it — and the authored flag goes to the runtime layer instead.
     let updated_xml = app
         .world()
         .get::<lunco_autopilot::usd_tree::BehaviorXml>(vessel_entity)
         .unwrap();
     assert_eq!(
         updated_xml.0, xml_content,
-        "the behaviour XML must be untouched — 'reached' is not authored"
-    );
-    assert!(
-        !updated_xml.0.contains("passed"),
-        "no passed flag may ever be written into the XML"
+        "the behaviour XML must be untouched — 'reached' is not authored into it"
     );
 
-    // The reached waypoint is recorded in the runtime component; the next one is not.
     let reached = app
         .world()
         .get::<lunco_autopilot::usd_tree::ReachedWaypoints>(vessel_entity)
         .expect("vessel must have gained a ReachedWaypoints component");
     assert!(
-        reached.0.contains("10.0;0.0;20.0"),
-        "the reached waypoint must be recorded live-only"
+        reached.0.contains(MARKER),
+        "the entered marker must be recorded, so the compiled tree advances"
     );
     assert!(
-        !reached.0.contains("30.0;0.0;40.0"),
-        "the not-yet-reached waypoint must not be recorded"
-    );
-
-    // Nothing may be authored: no journal / save / replication for a transient flag.
-    let triggered = app.world().resource::<TriggeredOps>();
-    assert!(
-        triggered.0.is_empty(),
-        "reaching a coordinate waypoint must author NOTHING to USD"
+        !reached.0.contains("/SandboxScene/Route/W1"),
+        "a waypoint whose zone was never entered must not be marked reached"
     );
 }
