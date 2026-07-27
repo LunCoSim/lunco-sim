@@ -67,6 +67,7 @@ use crate::{Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, BehaviorSpec};
 use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
+use lunco_core::coords::GridPos;
 use bevy::prelude::*;
 use serde_json::Value;
 
@@ -647,7 +648,7 @@ fn expand_editor_route_in_place(v: &mut Value) {
 fn bake_targets(
     v: &mut Value,
     bindings: &TargetBindings,
-    pose: &dyn Fn(Entity) -> Option<DVec3>,
+    pose: &dyn Fn(Entity) -> Option<GridPos>,
     missing: &mut Vec<String>,
 ) {
     match v {
@@ -656,7 +657,7 @@ fn bake_targets(
                 Some(Value::String(s)) => {
                     if s.starts_with('/') {
                         match bindings.0.get(s.as_str()).and_then(|e| pose(*e)) {
-                            Some(p) => Some(serde_json::json!([p.x, p.y, p.z])),
+                            Some(p) => Some(serde_json::json!([p.0.x, p.0.y, p.0.z])),
                             None => {
                                 missing.push(s.clone());
                                 None
@@ -834,7 +835,7 @@ mod bake_frame_tests {
         let mut v = drive_to("1200.5;-53;-800");
         let mut missing = Vec::new();
         let pose =
-            |_: Entity| -> Option<DVec3> { panic!("a literal target must not resolve a prim") };
+            |_: Entity| -> Option<GridPos> { panic!("a literal target must not resolve a prim") };
 
         bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
 
@@ -854,8 +855,9 @@ mod bake_frame_tests {
         let mut v = drive_to("/Scene/Pin");
         let mut missing = Vec::new();
         // Two cells up on a 2 km grid, 53 m down within the cell.
-        let pose =
-            |e: Entity| -> Option<DVec3> { (e == pin).then_some(DVec3::new(10.0, 3947.0, 4.0)) };
+        let pose = |e: Entity| -> Option<GridPos> {
+            (e == pin).then_some(GridPos(DVec3::new(10.0, 3947.0, 4.0)))
+        };
 
         bake_targets(&mut v, &bindings, &pose, &mut missing);
 
@@ -869,7 +871,7 @@ mod bake_frame_tests {
     fn an_unresolved_prim_target_is_reported() {
         let mut v = drive_to("/Scene/Deleted");
         let mut missing = Vec::new();
-        let pose = |_: Entity| -> Option<DVec3> { None };
+        let pose = |_: Entity| -> Option<GridPos> { None };
 
         bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
 
@@ -886,7 +888,7 @@ mod bake_frame_tests {
             "children": [drive_to("100;0;200"), drive_to("300;0;400")],
         });
         let mut missing = Vec::new();
-        let pose = |_: Entity| -> Option<DVec3> { None };
+        let pose = |_: Entity| -> Option<GridPos> { None };
 
         bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
 

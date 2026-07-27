@@ -34,6 +34,8 @@ use lunco_behavior::{
     Action, BoxNode, Force, Invert, Node, Parallel, ParallelPolicy, ReactiveSelector,
     ReactiveSequence, Repeat, Retry, Selector, Sequence, Status,
 };
+use bevy::math::DVec3;
+use lunco_core::coords::GridPos;
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
@@ -112,12 +114,12 @@ impl Autopilot {
 /// Live kinematic state of a track/follow/intercept target this tick.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TargetState {
-    /// World position.
-    pub pos: Vec3,
+    /// World position (grid-absolute).
+    pub pos: GridPos,
     /// World velocity (units/s), finite-differenced across ticks — zero on the first
     /// sighting and while the sim is paused. Lead-pursuit ([`BehaviorSpec::Intercept`])
     /// aims ahead along this; plain [`BehaviorSpec::Follow`] ignores it.
-    pub vel: Vec3,
+    pub vel: DVec3,
 }
 
 /// Live kinematic state of candidate targets this tick, keyed by [`GlobalEntityId`]
@@ -159,8 +161,8 @@ pub struct DriveCtx {
     /// themselves from the [`targets`](Self::targets) snapshot (a vessel isn't its own
     /// obstacle). `0` when unknown.
     pub self_gid: u64,
-    /// Vessel world position.
-    pub pos: Vec3,
+    /// Vessel world position (grid-absolute).
+    pub pos: GridPos,
     /// Vessel forward (unit).
     pub fwd: Vec3,
     /// Current mission time in seconds — [`lunco_time::WorldTime::sim_secs`], the one
@@ -644,22 +646,18 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
             target,
             speed,
             radius,
-        } => leaf_drive_to(Vec3::from_array(*target), *speed, *radius),
+        } => leaf_drive_to(grid_target(*target), *speed, *radius),
         BehaviorSpec::Patrol {
             waypoints,
             speed,
             radius,
             dwell,
         } => build_patrol(waypoints, *speed, *radius, *dwell),
-        BehaviorSpec::Arrived { target, radius } => {
-            leaf_arrived(Vec3::from_array(*target), *radius)
-        }
+        BehaviorSpec::Arrived { target, radius } => leaf_arrived(grid_target(*target), *radius),
         BehaviorSpec::Wait { seconds } => Box::new(WaitNode::new(*seconds)),
         BehaviorSpec::Cruise { throttle, steer } => leaf_cruise(*throttle, *steer),
         BehaviorSpec::Brake => leaf_brake(),
-        BehaviorSpec::Face { target, tolerance } => {
-            leaf_face(Vec3::from_array(*target), *tolerance)
-        }
+        BehaviorSpec::Face { target, tolerance } => leaf_face(grid_target(*target), *tolerance),
         BehaviorSpec::Succeed => Box::new(Action::new(|_: &mut DriveCtx| Status::Success)),
         BehaviorSpec::Fail => Box::new(Action::new(|_: &mut DriveCtx| Status::Failure)),
         BehaviorSpec::ReactiveSequence { children } => {
@@ -688,7 +686,7 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         } => leaf_intercept(*target, *speed, *radius, *lead),
         BehaviorSpec::ObstacleAhead { distance, cone } => leaf_obstacle_ahead(*distance, *cone),
         BehaviorSpec::Facing { target, tolerance } => {
-            leaf_facing(Vec3::from_array(*target), *tolerance)
+            leaf_facing(grid_target(*target), *tolerance)
         }
         BehaviorSpec::Hold => Box::new(Action::new(|ctx: &mut DriveCtx| {
             ctx.out = (0.0, 0.0, 1.0);
@@ -703,6 +701,14 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
             Box::new(RunToolNode::new(tool.clone(), args.clone()))
         }
     }
+}
+
+/// Type an authored `[x,y,z]` spec target at the compile boundary: spec coordinates
+/// are GRID-ABSOLUTE world data (baked by `usd_tree` / authored JSON), so they enter
+/// the tree as [`GridPos`]. The spec keeps `[f32; 3]` on the wire; this is the one
+/// place that widens it.
+fn grid_target(a: [f32; 3]) -> GridPos {
+    GridPos(Vec3::from_array(a).as_dvec3())
 }
 
 /// Half-angle of the forward-left/right obstacle probes, radians (~30°). Shared by
@@ -741,7 +747,7 @@ fn build_patrol(
             // ARMED so the first arrival fires even if the rover is engaged while
             // already standing on the waypoint.
             let arm = (!wp.on_arrival.is_empty()).then(|| Arc::new(AtomicBool::new(true)));
-            let drive = leaf_drive_to_arming(Vec3::from_array(wp.pos), speed, radius, arm.clone());
+            let drive = leaf_drive_to_arming(grid_target(wp.pos), speed, radius, arm.clone());
             // Per-waypoint dwell overrides the patrol's top-level default.
             let wp_dwell = wp.dwell.unwrap_or(dwell);
             let mut steps: Vec<BoxNode<DriveCtx>> = vec![drive];
@@ -798,7 +804,7 @@ fn build_sequence_children(children: &[BehaviorSpec]) -> Vec<BoxNode<DriveCtx>> 
                 let a = Arc::new(AtomicBool::new(true));
                 arm = Some(a.clone());
                 out.push(leaf_drive_to_arming(
-                    Vec3::from_array(*target),
+                    grid_target(*target),
                     *speed,
                     *radius,
                     Some(a),
@@ -818,7 +824,7 @@ fn build_sequence_children(children: &[BehaviorSpec]) -> Vec<BoxNode<DriveCtx>> 
 }
 
 /// Leaf: steer toward `target` (Rust nav math); `Success` once within `radius`.
-fn leaf_drive_to(target: Vec3, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
+fn leaf_drive_to(target: GridPos, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
     leaf_drive_to_arming(target, speed, radius, None)
 }
 
@@ -830,7 +836,7 @@ fn leaf_drive_to(target: Vec3, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
 /// an outside-radius tick, so it never re-arms, so its tools cannot re-fire — see
 /// [`RunToolNode::arm`] for why the node's own latch can't carry this.
 fn leaf_drive_to_arming(
-    target: Vec3,
+    target: GridPos,
     speed: f64,
     radius: f32,
     arm: Option<Arc<AtomicBool>>,
@@ -870,9 +876,9 @@ fn leaf_brake() -> BoxNode<DriveCtx> {
 /// Condition leaf: `Success` if within `radius` of `target`, else `Failure`. Reads
 /// the pose only — writes no setpoint — so a [`Selector`] can branch on it without
 /// disturbing the drive command chosen by the taken branch.
-fn leaf_arrived(target: Vec3, radius: f32) -> BoxNode<DriveCtx> {
+fn leaf_arrived(target: GridPos, radius: f32) -> BoxNode<DriveCtx> {
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        if (target - ctx.pos).length() < radius {
+        if (target - ctx.pos).length() < radius as f64 {
             Status::Success
         } else {
             Status::Failure
@@ -886,16 +892,16 @@ fn leaf_arrived(target: Vec3, radius: f32) -> BoxNode<DriveCtx> {
 /// Writes no setpoint. Vessel-vs-vessel only (no terrain/collider raycast — that
 /// needs a spatial-query provider the headless crate deliberately doesn't pull in).
 fn leaf_obstacle_ahead(distance: f32, cone_deg: f64) -> BoxNode<DriveCtx> {
-    let cos_half = (cone_deg * 0.5).to_radians().cos() as f32;
+    let cos_half = (cone_deg * 0.5).to_radians().cos();
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        let fwd = ctx.fwd.normalize_or_zero();
+        let fwd = ctx.fwd.normalize_or_zero().as_dvec3();
         for (gid, st) in ctx.targets.iter() {
             if *gid == ctx.self_gid {
                 continue; // not my own obstacle
             }
-            let to = st.pos - ctx.pos;
+            let to = st.pos - ctx.pos; // grid − grid = frame-free offset (f64)
             let d = to.length();
-            if d < 1e-3 || d > distance {
+            if d < 1e-3 || d > distance as f64 {
                 continue;
             }
             if fwd.dot(to / d) >= cos_half {
@@ -962,15 +968,15 @@ fn leaf_steer_clear(speed: f64) -> BoxNode<DriveCtx> {
 /// Condition leaf: `Success` if the vessel's heading is within `tolerance_deg`
 /// degrees of `target`, else `Failure`. Read-only guard counterpart to
 /// [`leaf_face`] — gate a drive on being pointed the right way.
-fn leaf_facing(target: Vec3, tolerance_deg: f64) -> BoxNode<DriveCtx> {
+fn leaf_facing(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
     let align_dot = tolerance_deg.to_radians().cos();
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        let to = target - ctx.pos;
+        let to = target - ctx.pos; // grid − grid = frame-free offset (f64)
         let dist = to.length();
         if dist < 1e-3 {
             return Status::Success;
         }
-        if ctx.fwd.normalize_or_zero().dot(to / dist) as f64 >= align_dot {
+        if ctx.fwd.normalize_or_zero().as_dvec3().dot(to / dist) >= align_dot {
             Status::Success
         } else {
             Status::Failure
@@ -1012,12 +1018,12 @@ fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNod
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
         match ctx.targets.get(&target_gid) {
             Some(st) => {
-                let aim = st.pos + st.vel * lead as f32; // predicted lead point
+                let aim = st.pos + st.vel * lead; // predicted lead point (GridPos + DVec3)
                 let (throttle, steer, brake, _) =
                     nav_setpoint(ctx.pos, ctx.fwd, aim, speed, radius);
                 ctx.out = (throttle, steer, brake);
                 // Done when we reach the TARGET itself (not the lead point) within radius.
-                if (st.pos - ctx.pos).length() < radius {
+                if (st.pos - ctx.pos).length() < radius as f64 {
                     Status::Success
                 } else {
                     Status::Running
@@ -1035,16 +1041,17 @@ fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNod
 /// the skid rover pivots without translating; `Success` once the heading is within
 /// `tolerance_deg` degrees of the target. Uses the same yaw-plane steering sign as
 /// [`nav_setpoint`]. Relative direction, so floating-origin invariant.
-fn leaf_face(target: Vec3, tolerance_deg: f64) -> BoxNode<DriveCtx> {
+fn leaf_face(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
     let align_dot = tolerance_deg.to_radians().cos();
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        let to = target - ctx.pos;
+        let to = target - ctx.pos; // grid − grid = frame-free offset (f64)
         let dist = to.length();
         if dist < 1e-3 {
             ctx.out = (0.0, 0.0, 0.0);
             return Status::Success; // sitting on the target: nothing to face
         }
-        let to = to / dist;
+        // Unit direction: frame-free, so f32 is fine for the yaw cross below.
+        let to = (to / dist).as_vec3();
         let fwd = ctx.fwd.normalize_or_zero();
         let dot = fwd.dot(to) as f64;
         if dot >= align_dot {
@@ -1345,18 +1352,20 @@ impl AutopilotBehaviorSpec {
 /// within `radius`. COMPUTATION, so it lives in Rust — rhai is glue-only. Steering
 /// is a *relative* direction, so it's invariant to the floating-origin offset.
 pub fn nav_setpoint(
-    pos: Vec3,
+    pos: GridPos,
     fwd: Vec3,
-    target: Vec3,
+    target: GridPos,
     speed: f64,
     radius: f32,
 ) -> (f64, f64, f64, bool) {
-    let to = target - pos;
+    let to = target - pos; // grid − grid = frame-free offset (f64)
     let dist = to.length();
-    if dist < radius {
+    if dist < radius as f64 {
         return (0.0, 0.0, 1.0, true); // arrived → brake
     }
-    let to = to / dist; // unit direction to goal
+    // Unit direction to goal: frame-free and unit-length, so f32 is exact enough
+    // for steering — only absolute grid positions must stay f64.
+    let to = (to / dist).as_vec3();
     let fwd = fwd.normalize_or_zero();
     // Yaw-plane cross `(forward × to).y` and forward/goal alignment `dot`. Skid mix
     // is `left = drive + steer`, so `+steer` yaws right; we steer `-cy` to turn
@@ -1454,7 +1463,7 @@ pub fn setup_autopilot_session(
 /// ([`BehaviorSpec::Intercept`]). Held in a `Local`, so it is private to the system.
 #[derive(Default)]
 pub struct PrevTargets {
-    poses: std::collections::HashMap<u64, Vec3>,
+    poses: std::collections::HashMap<u64, GridPos>,
     now: f64,
 }
 
@@ -1474,16 +1483,11 @@ pub fn drive_autopilots(
     // is safe to read here — unlike `translation()`, see `pose` below.
     q_xf: Query<&GlobalTransform>,
     q_targets: Query<(Entity, &GlobalEntityId)>,
-    // POSITIONS come from the cell chain, in the BigSpace ROOT frame — the frame
-    // avian's `Position` and `SpatialQuery` use, the frame `sense_clearance`
-    // already reads, and the frame a literal `target: [x,y,z]` from rhai/the API
-    // is documented in ("a world point"). This tick used to run entirely on
-    // `GlobalTransform`, which is the RENDER frame: origin-relative, and rebased
-    // by big_space whenever the floating origin moves. In the sandbox everything
-    // sits in the origin cell so the two frames coincide and the autopilot
-    // worked; at the moonbase the origin is cells away, so an authored world
-    // target was compared against a render-frame position and the rover chased a
-    // phantom point kilometres off (or "arrived" on the spot).
+    // POSITIONS are typed [`GridPos`] (BigSpace ROOT frame, off the cell chain).
+    // NOT `GlobalTransform`: that is the RENDER frame, origin-relative and rebased
+    // by big_space — the two only coincide in the origin cell, which is why a
+    // render-frame tick worked in the sandbox and chased phantom points at the
+    // moonbase. The type now carries that rule.
     q_parents: Query<&ChildOf>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
@@ -1506,18 +1510,17 @@ pub fn drive_autopilots(
             // Root-frame, from the cell chain. A waypoint pin is a plain prim with
             // no physics body, so this (not avian's `Position`) is what resolves
             // every target uniformly.
-            let pos = lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial)?
-                .as_vec3();
+            let pos = lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial)?;
             Some((gid, pos))
         })
         .map(|(gid, pos)| {
             let vel = if dt > 1e-6 {
                 prev.poses
                     .get(&gid.get())
-                    .map(|&p| (pos - p) / dt as f32)
-                    .unwrap_or(Vec3::ZERO)
+                    .map(|&p| (pos - p) / dt) // GridPos − GridPos = DVec3
+                    .unwrap_or(DVec3::ZERO)
             } else {
-                Vec3::ZERO
+                DVec3::ZERO
             };
             (gid.get(), TargetState { pos, vel })
         })
@@ -1554,7 +1557,7 @@ pub fn drive_autopilots(
                     self_gid: gid.get(),
                     // Root frame, matching `targets` above and the authored world
                     // coordinates the leaves compare against.
-                    pos: self_pos.as_vec3(),
+                    pos: self_pos,
                     fwd: xf.forward().as_vec3(),
                     now,
                     // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
@@ -1635,20 +1638,19 @@ fn collect_hierarchy(root: Entity, q_children: &Query<&Children>, out: &mut Vec<
 /// For every **controlled vessel** (owned by *any* session — a human or an autopilot,
 /// since an autopilot is just a user with a specialty), cast a forward ray-fan from
 /// the **vessel's** pose (ahead + `±`[`PROBE_SPREAD`], at each [`PROBE_HEIGHTS`]) via
-/// avian [`SpatialQuery`], excluding the vessel's own hierarchy, and record the
+/// [`lunco_physics::spatial::GridSpatialQuery::cast_ray_grid`], excluding the
+/// vessel's own hierarchy, and record the
 /// nearest hit per lane into [`ClearanceField`] keyed by the vessel entity.
 /// `drive_autopilots` reads it for an autopilot's vessel; a human-driven rover gets
 /// the same readings (for a HUD / driver-assist). Gated on the physics pipeline
 /// existing, so a physics-free app just skips it (leaves then read all-clear).
 pub fn sense_clearance(
-    spatial: avian3d::prelude::SpatialQuery,
+    spatial: lunco_physics::spatial::GridSpatialQuery,
     q_children: Query<&Children>,
     registry: Res<SessionRegistry>,
-    // Pose from avian `Position`/`Rotation` (GRID-ABSOLUTE, the frame `SpatialQuery`
-    // casts in) — NOT `GlobalTransform` (origin-relative). On an elevated site the
-    // floating origin is ~2 km from grid-zero, so a render-frame ray origin cast
-    // into grid-absolute colliders started ~2 km off and the fan read permanent
-    // "all clear" (autopilot/driver-assist blind).
+    // Pose from avian `Position`/`Rotation` — already GRID-ABSOLUTE, so the origin
+    // goes straight into `cast_ray_grid` as a `GridPos` (never `GlobalTransform`,
+    // which is origin-relative render frame).
     q_vessels: Query<(
         Entity,
         &GlobalEntityId,
@@ -1701,16 +1703,17 @@ pub fn sense_clearance(
         // probe reads "wall at 0 m" in every direction.
         let mut filter = SpatialQueryFilter::from_excluded_entities(excluded);
         filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
-        let base = pos.0.as_vec3();
+        let base = GridPos(pos.0);
         // Cast each lane at every body height, keep the nearest hit across them.
         let lane = |dir: Vec3| -> Option<f32> {
             let d = Dir3::new(dir).ok()?;
             PROBE_HEIGHTS
                 .iter()
                 .filter_map(|h| {
-                    let origin = (base + Vec3::Y * *h).as_dvec3();
+                    // Body-local up-offset: a bare delta onto the grid point.
+                    let origin = base + DVec3::Y * *h as f64;
                     spatial
-                        .cast_ray(origin, d, SENSOR_RANGE as f64, true, &filter)
+                        .cast_ray_grid(origin, d, SENSOR_RANGE as f64, true, &filter)
                         .map(|hit| hit.distance as f32)
                 })
                 .reduce(f32::min)

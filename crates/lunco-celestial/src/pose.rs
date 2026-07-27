@@ -229,7 +229,7 @@ pub fn update_solar_poses(
             let local = lunco_core::coords::world_position_seeded(
                 entity, &cell, tf, &q_parents, &q_grids, &q_spatial,
             );
-            let pos = frame.to_frame(local);
+            let pos = frame.to_frame(local.0);
             // The horizon, however, belongs to the nearest ANCHORED ancestor — the
             // scene's own site frame only when nothing above this node claims a body.
             let ancestor_body = std::iter::successors(Some(entity), |e| {

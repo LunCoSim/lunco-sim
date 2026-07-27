@@ -14,6 +14,80 @@ use big_space::prelude::*;
 use crate::markers::GridAnchor;
 use crate::world::WorldGrid;
 
+// ─────────────────────────────────────────────────────────────────────
+// Frame newtypes — grid-absolute vs floating-origin render
+// ─────────────────────────────────────────────────────────────────────
+//
+// The two frames that actually get MIXED (three fixed-by-symptom incidents:
+// the CQ-201 wheel lever arm, the elevated-site ray origin, the autopilot
+// render-frame target). Typing follows `lunco-celestial/src/frames.rs`'s own
+// criterion — "type frames where they get mixed, not everywhere" — so these
+// wrap the values that cross crate boundaries; body-local offsets and
+// frame-free deltas stay bare.
+//
+// Idiom: public tuple field, math through `.0`. Deliberately NO `Deref` —
+// deref would let a `GridPos` flow back into a bare-`DVec3` slot silently,
+// which is the exact mixing this type exists to stop.
+
+/// A position in the GRID-ABSOLUTE world frame — the f64 frame avian
+/// `Position` carries, authored placement uses, and the cell chain composes
+/// to. NOT camera-relative; never write it into a render `Transform` except
+/// through the big_space bridge writeback.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct GridPos(pub DVec3);
+
+/// A rotation composed in the grid-absolute chain. big_space never rotates
+/// the render frame, so render-side rotations are numerically identical —
+/// see [`GridRot::from_render_rotation`], the documented identity bridge.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct GridRot(pub DQuat);
+
+/// A point in the FLOATING-ORIGIN render frame (camera-relative). f64 so the
+/// blessed conversions don't round-trip through f32; construct from render
+/// `Transform`/`GlobalTransform` data via [`RenderPos::from_render_f32`].
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct RenderPos(pub DVec3);
+
+impl GridPos {
+    pub fn new(v: DVec3) -> Self {
+        Self(v)
+    }
+}
+
+impl GridRot {
+    /// big_space translates the render frame but never rotates it, so a
+    /// rotation read from `GlobalTransform` is the same quaternion in both
+    /// frames. This constructor exists so that fact is stated at the call
+    /// site instead of implied by a bare cast.
+    pub fn from_render_rotation(q: Quat) -> Self {
+        Self(q.as_dquat())
+    }
+}
+
+impl RenderPos {
+    pub fn from_render_f32(v: Vec3) -> Self {
+        Self(v.as_dvec3())
+    }
+}
+
+/// grid − grid = a frame-free lever arm / offset vector. This is the CQ-201
+/// invariant as a type: subtracting two grid-absolute points is always legal;
+/// subtracting a grid point from a render point no longer compiles.
+impl std::ops::Sub for GridPos {
+    type Output = DVec3;
+    fn sub(self, rhs: Self) -> DVec3 {
+        self.0 - rhs.0
+    }
+}
+
+/// grid + frame-free offset = grid.
+impl std::ops::Add<DVec3> for GridPos {
+    type Output = GridPos;
+    fn add(self, rhs: DVec3) -> GridPos {
+        GridPos(self.0 + rhs)
+    }
+}
+
 /// The canonical conversion boundary between rendered points (which are
 /// floating-origin relative) and the simulation's world frame.
 ///
@@ -34,7 +108,7 @@ impl<'w, 's> WorldFrame<'w, 's> {
 
     /// Convert a floating-origin-relative render point to world-grid absolute
     /// coordinates.
-    pub fn render_to_world(&self, render_point: DVec3) -> Option<DVec3> {
+    pub fn render_to_world(&self, render_point: RenderPos) -> Option<GridPos> {
         self.grid()
             .map(|(_, grid)| render_to_grid_absolute(grid, render_point))
     }
@@ -44,11 +118,11 @@ impl<'w, 's> WorldFrame<'w, 's> {
     /// child.
     pub fn render_to_world_grid_local(
         &self,
-        render_point: DVec3,
+        render_point: RenderPos,
     ) -> Option<(Entity, CellCoord, Vec3)> {
         let (entity, grid) = self.grid()?;
         let world = render_to_grid_absolute(grid, render_point);
-        let (cell, local) = grid.translation_to_grid(world);
+        let (cell, local) = grid.translation_to_grid(world.0);
         Some((entity, cell, local))
     }
 }
@@ -91,7 +165,7 @@ pub fn world_position(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-) -> Option<DVec3> {
+) -> Option<GridPos> {
     world_pose(entity, q_parents, q_grids, q_spatial).map(|(p, _)| p)
 }
 
@@ -105,7 +179,7 @@ pub fn world_pose<F: QueryFilter>(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> Option<(DVec3, DQuat)> {
+) -> Option<(GridPos, GridRot)> {
     // Collect the chain entity → root. Each step records the entity's local
     // offset in its PARENT's frame (cell×edge + translation; edge comes from
     // the parent grid if any) and its local rotation.
@@ -158,7 +232,7 @@ pub fn world_pose<F: QueryFilter>(
         pos += rot * off;
         rot *= local_rot.as_dquat();
     }
-    Some((pos, rot))
+    Some((GridPos(pos), GridRot(rot)))
 }
 
 /// Position of `entity` in its parent Grid's frame: `cell × edge + local`.
@@ -181,7 +255,7 @@ pub fn grid_absolute<F: QueryFilter>(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> Option<DVec3> {
+) -> Option<GridPos> {
     let (cell, tf) = q_spatial.get(entity).ok()?;
     Some(grid_absolute_seeded(
         entity,
@@ -201,16 +275,18 @@ pub fn grid_absolute_seeded(
     tf: &Transform,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
-) -> DVec3 {
+) -> GridPos {
     let Some(edge) = parent_grid(entity, q_parents, q_grids).map(|g| g.cell_edge_length() as f64)
     else {
-        return tf.translation.as_dvec3();
+        return GridPos(tf.translation.as_dvec3());
     };
-    DVec3::new(
-        cell.x as f64 * edge,
-        cell.y as f64 * edge,
-        cell.z as f64 * edge,
-    ) + tf.translation.as_dvec3()
+    GridPos(
+        DVec3::new(
+            cell.x as f64 * edge,
+            cell.y as f64 * edge,
+            cell.z as f64 * edge,
+        ) + tf.translation.as_dvec3(),
+    )
 }
 
 /// Split a grid-absolute position back into the `(CellCoord, Transform)` pair
@@ -221,16 +297,16 @@ pub fn grid_absolute_seeded(
 /// write and the value is already the local translation.
 pub fn grid_local_from_absolute(
     entity: Entity,
-    abs: DVec3,
+    abs: GridPos,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
 ) -> (Option<CellCoord>, Vec3) {
     match parent_grid(entity, q_parents, q_grids) {
         Some(grid) => {
-            let (cell, local) = grid.translation_to_grid(abs);
+            let (cell, local) = grid.translation_to_grid(abs.0);
             (Some(cell), local)
         }
-        None => (None, abs.as_vec3()),
+        None => (None, abs.0.as_vec3()),
     }
 }
 
@@ -260,8 +336,8 @@ pub fn world_vector(
 /// target Grid. `target_grid_world` is the target Grid's own absolute
 /// world position (obtain via [`world_position`] on the Grid entity).
 pub fn world_to_grid_local(
-    world_pos: DVec3,
-    target_grid_world: DVec3,
+    world_pos: GridPos,
+    target_grid_world: GridPos,
     target_grid: &Grid,
 ) -> (CellCoord, Vec3) {
     target_grid.translation_to_grid(world_pos - target_grid_world)
@@ -275,8 +351,8 @@ pub fn world_to_grid_local(
 /// grid's accumulated translation and rotation before decomposing the local
 /// point into `CellCoord + Transform`.
 pub fn world_pose_to_live_grid_local<F: QueryFilter>(
-    world_pos: DVec3,
-    world_rotation: DQuat,
+    world_pos: GridPos,
+    world_rotation: GridRot,
     target_grid_entity: Entity,
     target_grid: &Grid,
     q_parents: &Query<&ChildOf>,
@@ -292,12 +368,12 @@ pub fn world_pose_to_live_grid_local<F: QueryFilter>(
         q_grids,
         q_spatial,
     );
-    let grid_local = grid_rotation.inverse() * (world_pos - grid_world);
+    let grid_local = grid_rotation.0.inverse() * (world_pos - grid_world);
     let (cell, translation) = target_grid.translation_to_grid(grid_local);
     Some((
         cell,
         Transform::from_translation(translation)
-            .with_rotation((grid_rotation.inverse() * world_rotation).as_quat()),
+            .with_rotation((grid_rotation.0.inverse() * world_rotation.0).as_quat()),
     ))
 }
 
@@ -310,13 +386,13 @@ pub fn world_pose_to_live_grid_local<F: QueryFilter>(
 /// needs to become a `CellCoord` + `Transform` or a physics-frame position.
 /// Do not estimate this through an arbitrary body's `Position - GlobalTransform`:
 /// that loses the target grid's nesting and rotation.
-pub fn render_to_grid_absolute(grid: &Grid, render_point: DVec3) -> DVec3 {
+pub fn render_to_grid_absolute(grid: &Grid, render_point: RenderPos) -> GridPos {
     let local_origin = grid.local_floating_origin();
     let grid_relative = local_origin
         .grid_transform()
         .inverse()
-        .transform_point3(render_point);
-    grid_relative + grid.cell_to_float(&local_origin.cell())
+        .transform_point3(render_point.0);
+    GridPos(grid_relative + grid.cell_to_float(&local_origin.cell()))
 }
 
 /// Absolute world position of `entity`, seeded with an explicit
@@ -329,7 +405,7 @@ pub fn world_position_seeded<F: QueryFilter>(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> bevy::math::DVec3 {
+) -> GridPos {
     world_pose_seeded(
         entity,
         initial_cell,
@@ -350,7 +426,7 @@ pub fn world_pose_seeded<F: QueryFilter>(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> (bevy::math::DVec3, DQuat) {
+) -> (GridPos, GridRot) {
     // Same rotation-aware chain composition as [`world_position`], but seeded
     // with an explicit (cell, transform) for entities not present in
     // `q_spatial` (disjoint-query / `Without<…>` cases).
@@ -406,7 +482,7 @@ pub fn world_pose_seeded<F: QueryFilter>(
         pos += rot * off;
         rot *= local_rot.as_dquat();
     }
-    (pos, rot)
+    (GridPos(pos), GridRot(rot))
 }
 
 #[cfg(test)]
@@ -448,7 +524,7 @@ mod tests {
             DVec3::new(1.737e6, 0.0, 0.0),       // lunar-radius scale (the precision case)
         ];
         for p in cases {
-            let (cell, off) = world_to_grid_local(p, DVec3::ZERO, &g);
+            let (cell, off) = world_to_grid_local(GridPos(p), GridPos(DVec3::ZERO), &g);
             // translation_to_grid centres the cell, so |offset| <= edge/2.
             assert!(
                 (off.abs().max_element() as f64) <= EDGE as f64 / 2.0 + 1e-3,
@@ -511,11 +587,11 @@ mod tests {
         let abs = grid_absolute(prim, &q_parents, &q_grids, &q_spatial).expect("prim is spatial");
         let expected = DVec3::new(1.0 * EDGE as f64 - 53.0, 2.0 * EDGE as f64 + 120.5, 7.25);
         assert!(
-            (abs - expected).length() < 1e-6,
+            (abs.0 - expected).length() < 1e-6,
             "grid_absolute {abs:?} != cell×edge + local {expected:?}"
         );
         assert!(
-            (abs - local.as_dvec3()).length() > 1000.0,
+            (abs.0 - local.as_dvec3()).length() > 1000.0,
             "the local translation must NOT pass for the absolute — that is the bug"
         );
 
@@ -527,14 +603,14 @@ mod tests {
             &Transform::from_translation(back_local),
         );
         assert!(
-            (back - abs).length() < 1e-3,
+            (back - abs.0).length() < 1e-3,
             "round-trip {abs:?} -> {back:?}"
         );
 
         // A prim with no parent Grid has no cell: its translate IS its local.
         let nested_abs =
             grid_absolute(nested, &q_parents, &q_grids, &q_spatial).expect("nested is spatial");
-        assert_eq!(nested_abs, DVec3::new(1.0, 2.0, 3.0));
+        assert_eq!(nested_abs.0, DVec3::new(1.0, 2.0, 3.0));
         let (no_cell, same) = grid_local_from_absolute(nested, nested_abs, &q_parents, &q_grids);
         assert!(
             no_cell.is_none(),
@@ -555,7 +631,7 @@ mod tests {
         let expected = grid.grid_position_double(&cell, &local);
 
         assert_eq!(
-            render_to_grid_absolute(&grid, rendered),
+            render_to_grid_absolute(&grid, RenderPos(rendered)).0,
             expected,
             "the render-to-grid inverse must recover a cursor hit's cell-absolute position"
         );
@@ -568,7 +644,7 @@ mod tests {
         let g = grid();
         let grid_world = DVec3::new(10_000.0, 0.0, -5_000.0);
         let p = DVec3::new(12_500.0, 300.0, -5_000.0);
-        let (cell, off) = world_to_grid_local(p, grid_world, &g);
+        let (cell, off) = world_to_grid_local(GridPos(p), GridPos(grid_world), &g);
         let back = g.grid_position_double(&cell, &Transform::from_translation(off)) + grid_world;
         assert!((back - p).length() < 1e-3, "p {p:?} -> {back:?}");
     }
@@ -613,11 +689,11 @@ mod tests {
             &Transform::from_translation(child_off),
         );
         assert!(
-            (abs - expected).length() < 1e-6,
+            (abs.0 - expected).length() < 1e-6,
             "abs {abs:?} expected {expected:?}"
         );
 
-        let (cell, off) = world_to_grid_local(abs, DVec3::ZERO, &g);
+        let (cell, off) = world_to_grid_local(abs, GridPos(DVec3::ZERO), &g);
         assert_eq!((cell.x, cell.y, cell.z), (1, 0, 0), "cell {cell:?}");
         assert!(
             (off - child_off).length() < 1e-3,
@@ -669,7 +745,7 @@ mod tests {
         let pos = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
         let expected = DVec3::new(0.0, 0.0, -100.0);
         assert!(
-            (pos - expected).length() < 1e-3,
+            (pos.0 - expected).length() < 1e-3,
             "world_position ignored parent grid rotation: got {pos:?}, expected {expected:?} \
              (90° +Y should map child +X(100) to -Z(100))"
         );
@@ -701,8 +777,8 @@ mod tests {
         // root-frame position is -Z. Possession must recover +X before storing
         // the avatar under that grid.
         let (cell, local) = world_pose_to_live_grid_local(
-            DVec3::new(0.0, 0.0, -100.0),
-            DQuat::IDENTITY,
+            GridPos(DVec3::new(0.0, 0.0, -100.0)),
+            GridRot(DQuat::IDENTITY),
             target_grid,
             grid_ref,
             &q_parents,

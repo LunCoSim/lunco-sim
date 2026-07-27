@@ -151,7 +151,7 @@ pub fn update_local_gravity_field(
                 &q_spatial,
             )
         } else {
-            DVec3::ZERO
+            lunco_core::coords::GridPos(DVec3::ZERO)
         };
 
         let rel = cam_abs - body_abs;
@@ -169,7 +169,7 @@ pub fn update_local_gravity_field(
                 body_ent, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
             )
         } else {
-            DVec3::ZERO
+            lunco_core::coords::GridPos(DVec3::ZERO)
         };
 
         let rel = cam_abs - body_abs;
@@ -180,7 +180,7 @@ pub fn update_local_gravity_field(
         };
         (rel, g)
     } else {
-        (cam_abs, 0.0)
+        (cam_abs.0, 0.0)
     };
 
     field.surface_g = surface_g;

@@ -663,7 +663,7 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
         )> = SystemState::new(world);
         let (q_parents, q_grids, q_spatial) =
             state.get(world).expect("read-only queries always validate");
-        coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
+        coords::world_position(entity, &q_parents, &q_grids, &q_spatial).map(|p| p.0)
     })
     .flatten()
 }
@@ -704,7 +704,7 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
         Some(lunco_celestial::geo::local_to_geodetic(
             &anchor.geodetic,
             radius_m,
-            local,
+            local.0,
         ))
     })
     .flatten()
@@ -1025,7 +1025,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                     "unknown"
                 };
                 let pos = coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-                    .map(|v| vec3_value(b, v.x, v.y, v.z))
+                    .map(|v| vec3_value(b, v.0.x, v.0.y, v.0.z))
                     .unwrap_or_else(|| b.unit());
                 b.map(vec![
                     ("id".to_string(), b.int(gid.get() as i64)),

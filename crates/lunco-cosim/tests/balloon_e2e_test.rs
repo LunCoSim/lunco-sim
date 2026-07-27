@@ -45,6 +45,7 @@ fn test_balloon_force_propagation() {
     app.world_mut().spawn(SimConnection {
         start_element: balloon,
         start_connector: "netForce".into(),
+        start_is_input: false,
         end_element: balloon,
         end_connector: "force_y".into(),
         scale: 1.0,
@@ -54,6 +55,7 @@ fn test_balloon_force_propagation() {
     app.world_mut().spawn(SimConnection {
         start_element: balloon,
         start_connector: "height".into(),
+        start_is_input: false,
         end_element: balloon,
         end_connector: "height".into(),
         scale: 1.0,
@@ -109,6 +111,7 @@ fn test_balloon_connection_accumulation() {
     app.world_mut().spawn(SimConnection {
         start_element: balloon,
         start_connector: "netForce".into(),
+        start_is_input: false,
         end_element: balloon,
         end_connector: "force_y".into(),
         scale: 1.0,
@@ -118,6 +121,7 @@ fn test_balloon_connection_accumulation() {
     app.world_mut().spawn(SimConnection {
         start_element: balloon,
         start_connector: "buoyancy".into(),
+        start_is_input: false,
         end_element: balloon,
         end_connector: "force_y".into(),
         scale: 1.0,

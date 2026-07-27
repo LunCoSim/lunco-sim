@@ -25,6 +25,7 @@ use avian3d::prelude::{
 use avian3d::schedule::{Physics, PhysicsSchedule, Substeps};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use lunco_core::coords::GridPos;
 use lunco_core::{on_command, register_commands, Command};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -103,14 +104,17 @@ struct InterpSample {
     /// Host generation time in seconds (`tick × SECS_PER_TICK`). The
     /// interpolation/extrapolation clock (`render_t`) lives in this same timebase.
     gen_t: f64,
-    /// f32 render-space pose (cell-relative). Used by `reconcile_owned_prediction`
-    /// to compare against the f32 predicted-Transform history (apples-to-apples).
+    /// f32 RENDER-LOCAL pose — deliberately NOT a frame newtype: this is the wire
+    /// `t` offset currency (cell-relative), kept raw so
+    /// `reconcile_owned_prediction` compares it against the f32
+    /// predicted-Transform history apples-to-apples. Never mix with `pos_world`.
     pos: Vec3,
     rot: Quat,
-    /// Authoritative **absolute** position (avian f64 `Position`, gap A) — the
-    /// remote-proxy interpolation seats `Position` from this so lunar/orbital-scale
-    /// bodies keep f64 precision instead of collapsing to the f32 `pos`.
-    pos_world: DVec3,
+    /// Authoritative **grid-absolute** position (avian f64 `Position`, gap A) —
+    /// the remote-proxy interpolation seats `Position` from this so
+    /// lunar/orbital-scale bodies keep f64 precision instead of collapsing to the
+    /// f32 render-local `pos`.
+    pos_world: GridPos,
     /// Authoritative velocities from the snapshot (owned-rover prediction uses
     /// these; remote interpolation ignores them).
     lv: Vec3,
@@ -264,7 +268,7 @@ fn ang_vel_to_track(from: Quat, to: Quat, h: f64) -> DVec3 {
 /// along `a.lv`, capped by [`INTERP_MAX_EXTRAPOLATION`] (time) and
 /// [`INTERP_MAX_EXTRAP_DIST`] (distance) — a single sample has no second point for
 /// a cubic, and an unbounded cubic extrapolation would fly off.
-fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(DVec3, Quat, DVec3, DVec3)> {
+fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(GridPos, Quat, DVec3, DVec3)> {
     // Samples are time-ordered: `a` = latest at/just before t, `b` = first after.
     let mut a: Option<&InterpSample> = None;
     let mut b: Option<&InterpSample> = None;
@@ -282,8 +286,8 @@ fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(DVec3, Quat, DV
             let s = (((t - a.gen_t) / span).clamp(0.0, 1.0)) as f64;
             // Cubic Hermite. Tangents are velocity·span (curve param is s∈[0,1],
             // ds = dt/span, so dp/ds = v·span). lv is units/sec.
-            let p0 = a.pos_world;
-            let p1 = b.pos_world;
+            let p0 = a.pos_world.0;
+            let p1 = b.pos_world.0;
             let m0 = a.lv.as_dvec3() * span;
             let m1 = b.lv.as_dvec3() * span;
             let s2 = s * s;
@@ -294,7 +298,7 @@ fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(DVec3, Quat, DV
             let h11 = s3 - s2;
             let pos = p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
             let rot = a.rot.slerp(b.rot, s as f32);
-            Some((pos, rot, a.lv.as_dvec3(), a.av.as_dvec3()))
+            Some((GridPos(pos), rot, a.lv.as_dvec3(), a.av.as_dvec3()))
         }
         // t before the oldest sample → snap to oldest.
         (None, Some(b)) => Some((b.pos_world, b.rot, b.lv.as_dvec3(), b.av.as_dvec3())),
@@ -363,7 +367,9 @@ pub fn ingest_snapshots(
             gen_t,
             pos: Vec3::from(s.t),
             rot: Quat::from_array(s.r),
-            pos_world: DVec3::from_array(s.pos),
+            // Wire boundary: `s.pos` is the raw grid-absolute [f64;3] (byte-locked
+            // serde array) — it becomes typed here, at ingest.
+            pos_world: GridPos(DVec3::from_array(s.pos)),
             lv: Vec3::from(s.lv),
             av: Vec3::from(s.av),
             last_input_seq: s.last_input_seq,
@@ -477,13 +483,15 @@ pub fn interpolate_proxies(
             continue;
         };
 
-        // Seat the precise f64 physics `Position`; the f32 render `Transform` is
-        // its projection (cell-relative — identical to absolute while cells stay
-        // 0; once recentering is enabled this must subtract the body's cell origin).
-        tf.translation = out_world.as_vec3();
+        // Seat the precise f64 physics `Position`; the f32 render `Transform`
+        // write is SANCTIONED here (proxy interpolation, render frame) — it is
+        // the grid-absolute projection (cell-relative — identical to absolute
+        // while cells stay 0; once recentering is enabled this must subtract the
+        // body's cell origin).
+        tf.translation = out_world.0.as_vec3();
         tf.rotation = out_rot;
         if let Some(mut p) = pos {
-            p.0 = out_world;
+            p.0 = out_world.0;
         }
         // Also write avian's f64 `Rotation` (the physics truth), not just the f32
         // `Transform.rotation`. Without this, avian's writeback re-derives Transform
@@ -601,12 +609,13 @@ pub fn drive_kinematic_proxies(
             continue;
         };
 
-        let off = (pos.0 - here).length();
+        // avian `Position` is grid-absolute — same frame as the curve's `GridPos`.
+        let off = (pos.0 - here.0).length();
         if snapped || off > PROXY_SNAP_DIST {
             // Teleport: seat pose, kill velocity. Covers first sight / long stall /
             // authoritative discontinuity — closing this gap with one tick of
             // velocity would be a violent kick into anything in contact.
-            pos.0 = here;
+            pos.0 = here.0;
             rot.0 = here_rot.as_dquat();
             lin.0 = DVec3::ZERO;
             ang.0 = DVec3::ZERO;
@@ -615,7 +624,7 @@ pub fn drive_kinematic_proxies(
             // deadbeat: the old `(target−pos)/h` commanded ~50 m/s → jitter +
             // contact tunnelling). The body moves at the host's real chassis speed
             // and the small residual error eases in.
-            let mut corr = (here - pos.0) / PROXY_CORRECT_TAU;
+            let mut corr = (here.0 - pos.0) / PROXY_CORRECT_TAU;
             let cl = corr.length();
             if cl > PROXY_CORRECT_MAX {
                 corr *= PROXY_CORRECT_MAX / cl;
@@ -837,7 +846,7 @@ pub fn maintain_owned_locally(
                             return;
                         };
                         if let Some(mut p) = em.get_mut::<Position>() {
-                            p.0 = s.pos_world;
+                            p.0 = s.pos_world.0;
                         }
                         if let Some(mut r) = em.get_mut::<Rotation>() {
                             r.0 = s.rot.as_dquat();
@@ -1430,7 +1439,7 @@ pub fn rollback_owned_prediction(world: &mut World) {
 
         // Authoritative chassis state (f64 absolute position — gap A).
         let auth = RbState {
-            pos: sample.pos_world,
+            pos: sample.pos_world.0,
             rot: sample.rot.as_dquat(),
             lv: sample.lv.as_dvec3(),
             av: sample.av.as_dvec3(),
@@ -2127,7 +2136,7 @@ pub fn reconcile_predicted_dynamic(
             continue;
         };
 
-        let err = here - pos.0; // DVec3, absolute world
+        let err = here.0 - pos.0; // DVec3, frame-free error (both grid-absolute)
         let dist = err.length();
         let cur_rot = rot.0.as_quat();
         let mut rot_err = (here_rot * cur_rot.inverse()).normalize();
@@ -2155,7 +2164,7 @@ pub fn reconcile_predicted_dynamic(
             // resets `bevy_transform_interpolation` → the historical jitter) and seat
             // velocity so it stops diverging. Closing a >2 m gap with velocity would
             // be a violent kick into anything in contact.
-            pos.0 = here;
+            pos.0 = here.0;
             rot.0 = here_rot.as_dquat();
             if let Some(mut l) = lin {
                 l.0 = lv;
@@ -2215,6 +2224,9 @@ pub fn reconcile_predicted_dynamic(
 /// The producer (`reconcile_owned_prediction`) and the drain stay here; the
 /// rationale for parking a correction instead of writing `Transform` is on the type.
 /// Re-exported so existing call sites are unchanged.
+///
+/// Frame note (P8): `PendingCorrection::pos` is a world-metres **delta**, not a
+/// point — frame-free by construction, so it deliberately stays a bare `Vec3`.
 pub use lunco_core::PendingCorrection;
 
 /// Time-constant (s) for draining a pending correction: ~63% applied per
@@ -2619,7 +2631,7 @@ mod pose_write_tests {
                 gen_t: 0.0,
                 pos: Vec3::ZERO,
                 rot: authoritative,
-                pos_world: DVec3::ZERO,
+                pos_world: GridPos(DVec3::ZERO),
                 lv: Vec3::ZERO,
                 av: Vec3::ZERO,
                 last_input_seq: 1,
@@ -2706,7 +2718,7 @@ mod pose_write_tests {
                 gen_t: 0.0,
                 pos: Vec3::ZERO,
                 rot: target,
-                pos_world: DVec3::ZERO,
+                pos_world: GridPos(DVec3::ZERO),
                 lv: Vec3::ZERO,
                 av: Vec3::ZERO,
                 last_input_seq: 0,
@@ -2853,7 +2865,7 @@ mod pose_write_tests {
                 gen_t: 0.5,
                 pos: Vec3::new(50.0, 0.0, 0.0), // ≫ snap_pos (6.0) from origin
                 rot: Quat::IDENTITY,
-                pos_world: DVec3::new(50.0, 0.0, 0.0),
+                pos_world: GridPos(DVec3::new(50.0, 0.0, 0.0)),
                 lv: Vec3::new(2.0, 0.0, 0.0),
                 av: Vec3::ZERO,
                 last_input_seq: 0,
@@ -2915,7 +2927,7 @@ mod pose_write_tests {
                 gen_t: 0.5,
                 pos: Vec3::new(0.05, 0.0, 0.0), // within eps_pos (0.25) of the body
                 rot: Quat::IDENTITY,
-                pos_world: DVec3::new(0.05, 0.0, 0.0),
+                pos_world: GridPos(DVec3::new(0.05, 0.0, 0.0)),
                 lv: Vec3::ZERO, // authority says 0 — must NOT overwrite local 5.0
                 av: Vec3::ZERO,
                 last_input_seq: 0,
@@ -2996,7 +3008,7 @@ mod pose_write_tests {
                 gen_t: 0.0,
                 pos: Vec3::new(100.0, 0.0, 0.0),
                 rot: Quat::IDENTITY,
-                pos_world: DVec3::new(100.0, 0.0, 0.0),
+                pos_world: GridPos(DVec3::new(100.0, 0.0, 0.0)),
                 lv: Vec3::ZERO,
                 av: Vec3::ZERO,
                 last_input_seq: 5000,
@@ -3022,7 +3034,7 @@ mod pose_write_tests {
                 gen_t: 0.1,
                 pos: Vec3::new(100.0, 0.0, 0.0),
                 rot: Quat::IDENTITY,
-                pos_world: DVec3::new(100.0, 0.0, 0.0),
+                pos_world: GridPos(DVec3::new(100.0, 0.0, 0.0)),
                 lv: Vec3::ZERO,
                 av: Vec3::ZERO,
                 last_input_seq: 1,
@@ -3222,7 +3234,7 @@ mod step1_curve_tests {
             gen_t,
             pos: pos.as_vec3(),
             rot,
-            pos_world: pos,
+            pos_world: GridPos(pos),
             lv,
             av: Vec3::ZERO,
             last_input_seq: 0,
@@ -3249,11 +3261,11 @@ mod step1_curve_tests {
         let (p0, _, _, _) = sample_curve(&buf, 0.0).unwrap();
         let (p1, _, _, _) = sample_curve(&buf, 1.0).unwrap();
         assert!(
-            (p0 - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-9,
+            (p0.0 - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-9,
             "start: {p0:?}"
         );
         assert!(
-            (p1 - DVec3::new(5.0, 0.0, 0.0)).length() < 1e-9,
+            (p1.0 - DVec3::new(5.0, 0.0, 0.0)).length() < 1e-9,
             "end: {p1:?}"
         );
     }
@@ -3269,7 +3281,7 @@ mod step1_curve_tests {
 
         let (mid, _, _, _) = sample_curve(&buf, 0.5).unwrap();
         assert!(
-            (mid - DVec3::new(1.0, 0.0, 0.0)).length() < 1e-9,
+            (mid.0 - DVec3::new(1.0, 0.0, 0.0)).length() < 1e-9,
             "constant-v midpoint should be linear; got {mid:?}"
         );
     }
@@ -3288,7 +3300,7 @@ mod step1_curve_tests {
         // Small overshoot within both caps: linear glide = v·dt.
         let (p, _, _, _) = sample_curve(&buf, 0.1).unwrap();
         assert!(
-            (p - DVec3::new(0.1, 0.0, 0.0)).length() < 1e-9,
+            (p.0 - DVec3::new(0.1, 0.0, 0.0)).length() < 1e-9,
             "glide: {p:?}"
         );
 
@@ -3296,10 +3308,13 @@ mod step1_curve_tests {
         // cap binds first (1 m/s × 0.25 s = 0.25 m).
         let (far, _, _, _) = sample_curve(&buf, 100.0).unwrap();
         assert!(
-            far.x <= INTERP_MAX_EXTRAP_DIST + 1e-9,
+            far.0.x <= INTERP_MAX_EXTRAP_DIST + 1e-9,
             "distance cap: {far:?}"
         );
-        assert!((far.x - 0.25).abs() < 1e-9, "time cap should bind: {far:?}");
+        assert!(
+            (far.0.x - 0.25).abs() < 1e-9,
+            "time cap should bind: {far:?}"
+        );
     }
 
     /// Empty buffer ⇒ nothing to sample.

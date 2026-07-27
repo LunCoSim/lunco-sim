@@ -29,6 +29,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
+use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::{ActuatorPorts, InputPorts};
 
 /// they live here rather than in core (see the nothing-into-core rule).
@@ -632,8 +633,8 @@ fn apply_wheel_suspension(
             // to the spin model instead of floating at their authored rest offset.
             let apply_force = !matches!(body, RigidBody::Kinematic);
             let (world_pos, _) = wheel_hub_pose(
-                forces.position().0,
-                forces.rotation().0,
+                GridPos(forces.position().0),
+                GridRot(forces.rotation().0),
                 wheel_tf.translation.as_dvec3(),
                 wheel_tf.rotation.as_dquat(),
             );
@@ -668,8 +669,12 @@ fn apply_wheel_suspension(
                     // Negative relative_vel = wheel moving away from ground (extending).
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
-                    let velocity_at_wheel =
-                        wheel_hub_velocity(lin_vel, ang_vel, world_pos, forces.position().0);
+                    let velocity_at_wheel = wheel_hub_velocity(
+                        lin_vel,
+                        ang_vel,
+                        world_pos,
+                        GridPos(forces.position().0),
+                    );
                     let relative_vel = -velocity_at_wheel.dot(hit.normal);
 
                     let total_force_mag = suspension_force_mag(
@@ -681,7 +686,7 @@ fn apply_wheel_suspension(
 
                     let force_vec = hit.normal * total_force_mag;
                     if apply_force {
-                        forces.apply_force_at_point(force_vec, world_pos);
+                        forces.apply_force_at_point(force_vec, world_pos.0);
                     }
                     wheel.last_normal_force = total_force_mag;
                 } else {
@@ -737,8 +742,8 @@ fn sync_raycast_wheel_physics_pose(
     for (mut wpos, mut wrot, wtf, parent) in q_wheels.iter_mut() {
         if let Ok((cpos, crot)) = q_chassis.get(parent.parent()) {
             let (hub_pos, hub_rot) = wheel_hub_pose(
-                cpos.0,
-                crot.0,
+                GridPos(cpos.0),
+                GridRot(crot.0),
                 wtf.translation.as_dvec3(),
                 wtf.rotation.as_dquat(),
             );
@@ -750,11 +755,11 @@ fn sync_raycast_wheel_physics_pose(
             // than becoming a panic in a system that did nothing wrong. Holding
             // last tick's pose for a frame is strictly better than a crash; if the
             // chassis recovers, the wheel snaps back on the next tick.
-            if !hub_pos.is_finite() || !hub_rot.is_finite() {
+            if !hub_pos.0.is_finite() || !hub_rot.0.is_finite() {
                 continue;
             }
-            wpos.0 = hub_pos;
-            wrot.0 = hub_rot;
+            wpos.0 = hub_pos.0;
+            wrot.0 = hub_rot.0;
         }
     }
 }
@@ -807,27 +812,23 @@ fn apply_wheel_drive(
                         continue;
                     }
 
-                    // Reconstruct the wheel's world pose in the AVIAN physics frame
-                    // from the chassis Position/Rotation + the wheel's LOCAL transform
-                    // (exactly as `apply_wheel_suspension` does). Using `GlobalTransform`
-                    // here mixed the big_space floating-origin/render frame into avian's
-                    // cell-local frame: `forces.apply_force_at_point` and the lever arm
-                    // `hub - forces.position()` then used a point offset by the whole
-                    // origin-rebasing distance, producing spurious torque/slip once the
-                    // rover drove away from the floating origin (masked near it).
-                    // `wheel_tf.rotation` carries the steer angle (set in
-                    // `apply_wheel_steering`); roll-spin lives on the child visual, so the
-                    // drive direction stays correct.
+                    // Reconstruct the wheel's world pose in the grid-absolute physics
+                    // frame from the chassis Position/Rotation + the wheel's LOCAL
+                    // transform (exactly as `apply_wheel_suspension` does); the
+                    // `GridPos` signature keeps the render-frame `GlobalTransform`
+                    // out (CQ-201). `wheel_tf.rotation` carries the steer angle (set
+                    // in `apply_wheel_steering`); roll-spin lives on the child
+                    // visual, so the drive direction stays correct.
                     let (hub_pos_world, _) = wheel_hub_pose(
-                        forces.position().0,
-                        forces.rotation().0,
+                        GridPos(forces.position().0),
+                        GridRot(forces.rotation().0),
                         wheel_tf.translation.as_dvec3(),
                         wheel_tf.rotation.as_dquat(),
                     );
                     // The tire force was already solved this tick, from the real
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
                     // see `update_wheel_spin`. Applying it is all that is left.
-                    forces.apply_force_at_point(wheel.tire_force, hub_pos_world);
+                    forces.apply_force_at_point(wheel.tire_force, hub_pos_world.0);
                 }
             }
         }

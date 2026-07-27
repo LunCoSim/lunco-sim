@@ -286,7 +286,7 @@ fn cursor_surface_hit(
         .unwrap_or(f64::INFINITY);
     let physics_distance = raycaster
         .cast_ray_render(
-            origin,
+            lunco_core::coords::RenderPos(origin),
             direction,
             physics_limit,
             false,
@@ -469,7 +469,7 @@ pub fn update_spawn_ghost(
                 let ray_origin = corner + DVec3::Y * 50.0;
                 raycaster
                     .cast_ray_render(
-                        ray_origin,
+                        lunco_core::coords::RenderPos(ray_origin),
                         Dir3::NEG_Y,
                         100.0,
                         false,
@@ -547,14 +547,15 @@ pub fn update_spawn_ghost(
         // (0,0,0), so on an elevated site (origin at cell.y≠0) it rendered ~one
         // whole cell (~2 km) underground — "the ghost never appears on the
         // ground". This lands it on the real surface at any origin cell.
-        let Some(ghost_abs) = world_frame.render_to_world(ghost_pos) else {
+        let ghost_render = lunco_core::coords::RenderPos(ghost_pos);
+        let Some(ghost_abs) = world_frame.render_to_world(ghost_render) else {
             if diagnostics.enabled {
                 info!(cursor = ?cursor, render_hit = ?point, "[spawn-trace] ghost rejected: WorldGrid unavailable");
             }
             return;
         };
         let Some((grid_ent, ghost_cell, ghost_local)) =
-            world_frame.render_to_world_grid_local(ghost_pos)
+            world_frame.render_to_world_grid_local(ghost_render)
         else {
             return;
         };
@@ -783,7 +784,7 @@ pub fn on_scene_click_spawn(
             let ray_origin = corner + DVec3::Y * 50.0;
             raycaster
                 .cast_ray_render(
-                    ray_origin,
+                    lunco_core::coords::RenderPos(ray_origin),
                     Dir3::NEG_Y,
                     100.0,
                     false,
@@ -864,13 +865,13 @@ pub fn on_scene_click_spawn(
     // frame. Convert it through the selected grid's own floating-origin affine
     // transform, matching the preview exactly; an Avian-body-derived shift is
     // not a valid inverse for nested/rotated big_space grids.
-    let Some(spawn_abs) = world_frame.render_to_world(spawn_pos) else {
+    let Some(spawn_abs) = world_frame.render_to_world(lunco_core::coords::RenderPos(spawn_pos)) else {
         if diagnostics.enabled {
             info!(spawn_render = ?spawn_pos, "[spawn-trace] click rejected: render-to-world conversion unavailable");
         }
         return;
     };
-    let point3 = spawn_abs.as_vec3();
+    let point3 = spawn_abs.0.as_vec3();
 
     commands.trigger(crate::commands::SpawnEntity {
         target: grid,

@@ -158,6 +158,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     app.world_mut().spawn(SimConnection {
         start_element: oscillator,
         start_connector: "signal".into(),
+        start_is_input: false,
         end_element: amplifier,
         end_connector: "signal".into(),
         scale: 1.0,
@@ -167,6 +168,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     app.world_mut().spawn(SimConnection {
         start_element: amplifier,
         start_connector: "scaled".into(),
+        start_is_input: false,
         end_element: target,
         end_connector: "force_y".into(),
         scale: 1.0,

@@ -71,6 +71,7 @@ fn wire_ports(app: &mut App, extra: impl Bundle) -> Entity {
     app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: PORT_NAME.to_string(),
+        start_is_input: false,
         end_element: target,
         end_connector: PORT_NAME.to_string(),
         scale: 1.0,

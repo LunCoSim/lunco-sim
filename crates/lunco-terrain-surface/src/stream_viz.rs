@@ -189,7 +189,7 @@ pub(crate) fn collect_terrain_detail_demands(
             })
             .filter_map(|(entity, _, _, focus, _)| {
                 let position =
-                    lunco_core::coords::grid_absolute(entity, &parents, &grids, &spatial)?;
+                    lunco_core::coords::grid_absolute(entity, &parents, &grids, &spatial)?.0;
                 let (_, transform) = spatial.get(entity).ok()?;
                 Some(VisualDemand {
                     position,

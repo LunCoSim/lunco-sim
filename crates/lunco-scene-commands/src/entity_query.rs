@@ -90,6 +90,7 @@ impl ApiQueryProvider for QueryEntityProvider {
             .unwrap_or((Vec3::ONE, Quat::IDENTITY, Vec3::ZERO));
         // Position is frame-sensitive, so it comes off the cell chain instead.
         let pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+            .map(|p| p.0)
             .unwrap_or(bevy::math::DVec3::ZERO);
         // Euler YXZ (yaw, pitch, roll) — matches the sun / steering authoring
         // convention, handier than a quat.

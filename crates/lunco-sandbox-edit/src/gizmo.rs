@@ -270,6 +270,7 @@ pub fn capture_gizmo_start(
         };
         let local_pos = tf.translation.as_dvec3();
         let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+            .map(|p| p.0)
             .unwrap_or(local_pos);
 
         info!(
@@ -349,6 +350,7 @@ pub fn sync_gizmo_transforms(
             // ABSOLUTE, not the cell remainder — see `GizmoPrevPos::abs_pos`.
             let abs_pos =
                 lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+                    .map(|p| p.0)
                     .unwrap_or(local_pos);
             let dt = time.delta_secs();
             if dt > 1e-6 {
@@ -472,7 +474,7 @@ pub fn restore_gizmo_dynamic(
                     op: lunco_usd::document::UsdOp::SetTranslate {
                         edit_target: lunco_usd::document::LayerId::runtime(),
                         path: path.clone(),
-                        value: [abs.x, abs.y, abs.z],
+                        value: [abs.0.x, abs.0.y, abs.0.z],
                     },
                 });
                 // The gizmo rotates as well as translates, so the rotation is part of
@@ -529,7 +531,7 @@ pub fn restore_gizmo_dynamic(
         if let (Ok(gid), Some(abs)) = (q_gid.get(entity), abs) {
             commands.trigger(crate::commands::MoveEntity {
                 entity_id: gid.get(),
-                translation: abs.as_vec3(),
+                translation: abs.0.as_vec3(),
             });
         }
     }

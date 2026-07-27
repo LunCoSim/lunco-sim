@@ -226,6 +226,7 @@ fn on_add_camera_here(
     // silently drifts with the origin (doc 50 §5; the repo's classic frame bug).
     let Some((pos, rot)) =
         lunco_core::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
+            .map(|(p, r)| (p.0, r.0))
     else {
         warn!("[cinematic] camera {cam_entity:?} has no resolvable grid pose");
         return;

@@ -158,6 +158,7 @@ fn test_propagate_sim_component_to_sim_component() {
     app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "netForce".into(),
+        start_is_input: false,
         end_element: target,
         end_connector: "force_in".into(),
         scale: 1.0,
@@ -200,6 +201,7 @@ fn test_propagate_with_scale() {
     app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "current".into(),
+        start_is_input: false,
         end_element: target,
         end_connector: "current_in".into(),
         scale: 0.5,
@@ -243,6 +245,7 @@ fn test_propagate_avian_to_sim_component() {
     app.world_mut().spawn(SimConnection {
         start_element: entity,
         start_connector: "height".into(),
+        start_is_input: false,
         end_element: entity,
         end_connector: "height".into(),
         scale: 1.0,
@@ -316,6 +319,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
     app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "netForce".into(),
+        start_is_input: false,
         end_element: target,
         end_connector: "force_y".into(),
         scale: 1.0,
@@ -325,6 +329,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
     app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "buoyancy".into(),
+        start_is_input: false,
         end_element: target,
         end_connector: "force_y".into(),
         scale: 1.0,

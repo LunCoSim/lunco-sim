@@ -63,7 +63,34 @@ use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::coords::world_pose_seeded;
+use lunco_core::coords::{world_pose_seeded, GridPos, GridRot};
+
+// ─── Cell-split composition helpers ──────────────────────────────────────
+// The bridge composes big_space's stored `(CellCoord, Transform)` split in
+// several places; these two helpers name that math once. Deliberately LOCAL
+// to this file: they encode the bridge's single-step composition (the parent
+// grid's edge already resolved), while `lunco_core::coords` keeps the
+// entity-walking variants.
+
+/// `cell × edge + local translation` — reassemble big_space's split into a
+/// point in the parent grid's frame. `edge == None` (not grid-direct) means
+/// there is no cell offset and the translation already IS the point.
+fn grid_from_cell(cell: Option<&CellCoord>, edge: Option<f64>, local_translation: Vec3) -> GridPos {
+    let base = local_translation.as_dvec3();
+    match (cell, edge) {
+        (Some(c), Some(e)) => {
+            GridPos(DVec3::new(c.x as f64 * e, c.y as f64 * e, c.z as f64 * e) + base)
+        }
+        _ => GridPos(base),
+    }
+}
+
+/// Inverse of [`grid_from_cell`] against a FIXED cell: the cell-relative
+/// remainder the writeback stores in `Transform`. The cell itself is never
+/// rewritten by the bridge — big_space's recentring owns the re-split.
+fn cell_local_from_grid(point: GridPos, cell: Option<&CellCoord>, edge: Option<f64>) -> DVec3 {
+    point - grid_from_cell(cell, edge, Vec3::ZERO)
+}
 
 /// The bridge's two passes, as orderable sets.
 ///
@@ -148,6 +175,9 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
 /// entity. A mismatch on the READ pass means an external writer moved the
 /// entity since — the one signal the bridge acts on. Default is a NaN
 /// sentinel so a fresh spawn always mismatches.
+///
+/// `translation` is the CELL-LOCAL render-frame copy (the raw `Transform`
+/// value, not grid-absolute) — deliberately a bare `Vec3`, not a `GridPos`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BridgeShadow {
     cell: CellCoord,
@@ -271,9 +301,13 @@ fn pose_to_position(
             continue;
         }
         let seed_cell = cell.copied().unwrap_or_default();
-        let (p, r) = world_pose_seeded(e, &seed_cell, tf, &q_parents, &q_grids, &q_spatial);
-        pos.0 = p;
-        rot.0 = r;
+        // Typed until the component write: the cell chain composes a
+        // grid-absolute pose, and avian's `Position`/`Rotation` carry exactly
+        // that frame — `.0` at the write IS the frame assertion.
+        let (p, r): (GridPos, GridRot) =
+            world_pose_seeded(e, &seed_cell, tf, &q_parents, &q_grids, &q_spatial);
+        pos.0 = p.0;
+        rot.0 = r.0;
         shadow.capture(cell, tf);
         // avian's `wake_on_changed` only sees Position writes made OUTSIDE
         // the physics schedule (it compares against `LastPhysicsTick`), so an
@@ -289,6 +323,11 @@ fn pose_to_position(
 /// WRITEBACK: solver f64 `Position`/`Rotation` → `Transform` relative to the
 /// parent frame and the CURRENT cell, for Dynamic bodies. Cells are never
 /// written; big_space's recentring owns the re-split.
+///
+/// This is the ONE sanctioned grid→render `Transform` writer: everything else
+/// that wants a solved pose on screen goes through it, never by writing
+/// `Transform` from a grid value directly (the `interpolate_all` law — a
+/// second writer fights avian's interpolation and big_space's propagation).
 #[allow(clippy::type_complexity)]
 fn position_to_pose(
     q_parents: Query<&ChildOf>,
@@ -310,14 +349,18 @@ fn position_to_pose(
     // so building a fresh map per tick and a fresh chain Vec per BODY was a
     // steady-state allocation cost even when nothing moved. Both are cleared
     // where they were previously constructed — same contents, same order.
-    mut body_poses: Local<EntityHashMap<(DVec3, DQuat)>>,
+    mut body_poses: Local<EntityHashMap<(GridPos, GridRot)>>,
+    // NOTE: `chain` stays bare — its entries are parent-frame OFFSETS paired
+    // with LOCAL rotations, not grid-absolute points, so typing them `GridPos`
+    // would assert a frame they are not in.
     mut chain: Local<Vec<(DVec3, Quat)>>,
 ) {
     // Pass A: solved world poses of every body — the parent frames for
-    // jointed sub-bodies, fresher than any Transform this tick.
+    // jointed sub-bodies, fresher than any Transform this tick. avian's
+    // `Position` carries the grid-absolute frame; wrap at the read.
     body_poses.clear();
     for (e, p, r) in &q_poses {
-        body_poses.insert(e, (p.0, r.0));
+        body_poses.insert(e, (GridPos(p.0), GridRot(r.0)));
     }
 
     'bodies: for (e, pos, rot, cell, mut tf, mut shadow, rb) in &mut q_dyn {
@@ -342,7 +385,7 @@ fn position_to_pose(
         // see) skips the body — writing a pose composed against the wrong
         // frame is worse than leaving last tick's Transform.
         enum Anchor {
-            Body(DVec3, DQuat),
+            Body(GridPos, GridRot),
             GridEntity(Entity),
             Root,
         }
@@ -369,13 +412,12 @@ fn position_to_pose(
                 .ok()
                 .and_then(|co2| q_grids.get(co2.parent()).ok())
                 .map(|g| g.cell_edge_length() as f64);
-            let cell_off = match (p_cell, edge) {
-                (Some(c), Some(edge)) => {
-                    DVec3::new(c.x as f64 * edge, c.y as f64 * edge, c.z as f64 * edge)
-                }
-                _ => DVec3::ZERO,
-            };
-            chain.push((cell_off + p_tf.translation.as_dvec3(), p_tf.rotation));
+            // `.0`: the composed point re-enters the mixed-frame chain as a
+            // parent-frame offset (see the `chain` note above).
+            chain.push((
+                grid_from_cell(p_cell, edge, p_tf.translation).0,
+                p_tf.rotation,
+            ));
             cur = parent;
         }
 
@@ -394,16 +436,22 @@ fn position_to_pose(
                     &q_plain,
                 )
             }
-            Anchor::Root => (DVec3::ZERO, DQuat::IDENTITY),
+            Anchor::Root => (GridPos(DVec3::ZERO), GridRot(DQuat::IDENTITY)),
         };
         // Compose accumulated intermediates top-down.
         for (off, local_rot) in chain.iter().rev() {
-            fp += fr * *off;
-            fr *= local_rot.as_dquat();
+            fp = fp + fr.0 * *off;
+            fr.0 *= local_rot.as_dquat();
         }
 
-        let inv = fr.inverse();
-        let local = inv * (pos.0 - fp);
+        // avian's solved `Position` is a grid-absolute point; wrap at the
+        // read, then `GridPos - GridPos` yields the frame-free lever arm the
+        // parent-frame rotation is applied to.
+        let solved = GridPos(pos.0);
+        let inv = fr.0.inverse();
+        // `local` is a point in the parent GRID's frame (grid-absolute in
+        // that grid), ready for the cell split below.
+        let local = GridPos(inv * (solved - fp));
         let local_rot = (inv * rot.0).normalize().as_quat();
 
         // Subtract the current cell only when the direct parent is a Grid —
@@ -413,12 +461,9 @@ fn position_to_pose(
             .ok()
             .and_then(|co| q_grids.get(co.parent()).ok())
             .map(|g| g.cell_edge_length() as f64);
-        let rem = match (cell, direct_edge) {
-            (Some(c), Some(edge)) => {
-                local - DVec3::new(c.x as f64 * edge, c.y as f64 * edge, c.z as f64 * edge)
-            }
-            _ => local,
-        };
+        let rem = cell_local_from_grid(local, cell, direct_edge);
+        // The `Transform` write below stays raw: `rem` leaves the grid frame
+        // here and becomes render currency (cell-local f32).
         let new_t = rem.as_vec3();
 
         // Change-gate: a sleeping body recomputes to identical values — do
@@ -567,26 +612,22 @@ mod tests {
             .get(&world)
             .expect("read-only queries always validate");
 
-        // READ direction: body world pose.
+        // READ direction: body world pose (typed grid-absolute).
         let (p, r) = world_pose(body, &q_parents, &q_grids, &q_spatial).unwrap();
         assert!(
-            p.length() > 1.0e11,
+            p.0.length() > 1.0e11,
             "world pose {p:?} not at astronomical scale"
         );
 
         // WRITEBACK direction: world → parent-grid-local → remainder against
-        // the CURRENT cell (the bridge never rewrites the cell itself).
+        // the CURRENT cell (the bridge never rewrites the cell itself) —
+        // the same `cell_local_from_grid` split the live writeback uses.
         let (gp, grot) = world_pose(grid_e, &q_parents, &q_grids, &q_spatial).unwrap();
-        let inv = grot.inverse();
-        let local = inv * (p - gp);
-        let local_rot = inv * r;
+        let inv = grot.0.inverse();
+        let local = GridPos(inv * (p - gp));
+        let local_rot = inv * r.0;
         let e64 = edge as f64;
-        let rem = local
-            - DVec3::new(
-                b_cell.x as f64 * e64,
-                b_cell.y as f64 * e64,
-                b_cell.z as f64 * e64,
-            );
+        let rem = cell_local_from_grid(local, Some(&b_cell), Some(e64));
 
         assert!(
             (rem.as_vec3() - Vec3::new(120.0, -40.0, 80.0)).length() < 1e-2,

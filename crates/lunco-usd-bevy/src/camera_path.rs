@@ -782,6 +782,7 @@ pub fn drive_camera_paths(
         // would be the render frame: the classic bug.
         let Some((curve_pos, curve_rot)) =
             lunco_core::coords::world_pose(curve_entity, &q_parents, &q_grids, &q_spatial)
+                .map(|(p, r)| (p.0, r.0))
         else {
             // Transient during load (grid ancestry not spawned). If it
             // PERSISTS the camera is never primed and never driven — a whole
@@ -810,7 +811,7 @@ pub fn drive_camera_paths(
                             world,
                             target
                         );
-                        Some((target - world).as_vec3())
+                        Some((target.0 - world).as_vec3())
                     }
                     None => {
                         // Target despawned (or its Transform is gone) — hold the

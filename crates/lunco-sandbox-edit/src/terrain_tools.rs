@@ -219,7 +219,7 @@ pub fn update_terrain_brush_ghost(
         .or_else(|| {
             raycaster
                 .cast_ray_render(
-                    origin,
+                    lunco_core::coords::RenderPos(origin),
                     dir,
                     10_000.0,
                     false,
@@ -239,7 +239,7 @@ pub fn update_terrain_brush_ghost(
     // then split it through the canonical world grid. The cursor hit is in the
     // floating-origin render frame; its `Transform` must remain grid-local.
     let Some((world_grid, brush_cell, brush_local)) =
-        world_frame.render_to_world_grid_local(point + DVec3::Y * 0.05)
+        world_frame.render_to_world_grid_local(lunco_core::coords::RenderPos(point + DVec3::Y * 0.05))
     else {
         return;
     };
