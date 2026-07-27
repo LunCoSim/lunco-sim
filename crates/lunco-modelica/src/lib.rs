@@ -287,6 +287,25 @@ pub struct ModelicaCompiler {
     /// because the two docs legitimately have different URIs; the session
     /// itself must hold only the active compile's user docs.
     seated_user_uris: std::collections::HashSet<String>,
+    /// Numeric `input` defaults captured from every library member seated
+    /// through [`Self::load_source_root_in_memory`], keyed by the LEAF
+    /// component name.
+    ///
+    /// The strip that makes a bound `input Real x = 3.0` a real runtime slot
+    /// runs on every one of those members — but until this map existed the
+    /// captured defaults were dropped on the floor (`let (stripped, _defaults)`),
+    /// so a library class's input reached the stepper as a slot sitting at 0.0
+    /// instead of at its authored default. That is precisely the silent fold the
+    /// strip exists to prevent, just moved one seam along. The worker folds this
+    /// map into each `CompileUnit` and re-seeds it through the same
+    /// `apply_input_defaults_validated` the primary document uses.
+    ///
+    /// Leaf-keyed because that is what `SimulationSession::set_input` addresses;
+    /// a library class is only ever reached by INSTANTIATION, so the worker
+    /// resolves these against the flattened `<instance>.<leaf>` slots. MSL is
+    /// never in here — it returns before the strip loop (it is instantiated, not
+    /// compiled as a target).
+    library_input_defaults: std::collections::HashMap<String, f64>,
 }
 
 impl ModelicaCompiler {
@@ -317,6 +336,7 @@ impl ModelicaCompiler {
             session: Session::new(SessionConfig::default()),
             installed_roots: std::collections::HashSet::new(),
             seated_user_uris: std::collections::HashSet::new(),
+            library_input_defaults: std::collections::HashMap::new(),
         };
         // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
         // behaviour, e.g. to pre-pay the install before a latency-sensitive
@@ -1087,6 +1107,12 @@ impl ModelicaCompiler {
     /// files, twin libraries, disk roots read by
     /// [`Self::load_source_root`]), so no root member can reach the
     /// compiler with a demotable `input x = default` binding.
+    ///
+    /// Stripping alone is only half the contract: the defaults it removes are
+    /// accumulated into [`Self::library_input_defaults`] so the worker can
+    /// RE-SEED them onto the fresh stepper. Discarding them here (the old
+    /// `let (stripped, _defaults)`) left every bound library input starting at
+    /// 0.0 — the same silent-wrong-number failure, one seam later.
     pub fn load_source_root_in_memory(
         &mut self,
         id: &str,
@@ -1096,7 +1122,60 @@ impl ModelicaCompiler {
         let file_count = files.len();
         let mut inserted = 0;
         for (uri, text) in &files {
-            let (stripped, _defaults) = crate::ast_extract::strip_input_defaults(text);
+            let (stripped, defaults, issues) =
+                crate::ast_extract::strip_input_defaults_with_report(text);
+            // A library member has no editor buffer to point diagnostics at, so
+            // the report goes to the log — but it is never dropped: a parse
+            // failure here means NOTHING in this file was stripped and every
+            // bound input in it will be folded to a constant.
+            for issue in &issues {
+                match issue {
+                    crate::ast_extract::InputDefaultIssue::ParseFailed => log::warn!(
+                        "[ModelicaCompiler] source root `{id}`: the bound-`input` strip could not \
+                         parse {uri} — it is seated UNSTRIPPED, so every `input x = <default>` in \
+                         it is demoted to a constant and wires into it will be discarded"
+                    ),
+                    crate::ast_extract::InputDefaultIssue::Unresolvable { name, binding, .. } => {
+                        log::warn!(
+                            "[ModelicaCompiler] source root `{id}`: {uri} declares `input {name} = \
+                             {binding}` — an expression, not a literal, so the slot stays runtime \
+                             but starts at 0.0 unless wired"
+                        )
+                    }
+                    crate::ast_extract::InputDefaultIssue::Collision {
+                        name,
+                        kept_scope,
+                        kept,
+                        dropped_scope,
+                        dropped,
+                    } => log::warn!(
+                        "[ModelicaCompiler] source root `{id}`: {uri} declares `{name}` in two \
+                         scopes with different defaults — keeping {kept} from `{kept_scope}`, \
+                         dropping {dropped} from `{dropped_scope}`"
+                    ),
+                }
+            }
+            for (name, value) in defaults {
+                match self.library_input_defaults.entry(name) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(value);
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot) if *slot.get() != value => {
+                        // Two library members author the same leaf name with
+                        // different defaults. Leaf keying can carry one; first
+                        // seated wins (seating order is sorted, so this is
+                        // deterministic) and the other is named rather than lost.
+                        log::warn!(
+                            "[ModelicaCompiler] source root `{id}`: input default `{}` = {value} \
+                             in {uri} conflicts with {} already captured from another member — \
+                             keeping the first. Rename one if they are different signals.",
+                            slot.key(),
+                            slot.get(),
+                        );
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {}
+                }
+            }
             if self.session.add_document(uri, &stripped).is_ok() {
                 inserted += 1;
             }
@@ -1111,6 +1190,15 @@ impl ModelicaCompiler {
             cache_file: None,
             diagnostics: Vec::new(),
         }
+    }
+
+    /// The `input` defaults captured from every seated library member — the
+    /// other half of the strip that happens in
+    /// [`Self::load_source_root_in_memory`]. The worker folds these into each
+    /// `CompileUnit` so they are re-seeded through the SAME
+    /// `apply_input_defaults_validated` path as the primary document's.
+    pub fn library_input_defaults(&self) -> &std::collections::HashMap<String, f64> {
+        &self.library_input_defaults
     }
 }
 
@@ -1968,28 +2056,18 @@ mod observables_smoke {
     /// FIXME was hiding the one test that covers it. Re-enabled against its real
     /// home.
     ///
-    /// STATUS: re-enabling it (the FIXME was false — `collect_stepper_observables`
-    /// was never removed) proved the thing it was written to catch is REALLY
-    /// HAPPENING, so it is `#[ignore]`d with the truth rather than silently
-    /// `cfg(any())`-deleted, matching how this crate already pins its other
-    /// upstream-rumoca failures.
+    /// The defect this was `#[ignore]`d for is fixed at the source: rumoca's
+    /// reconstructor still evaluates a conditional algebraic as `0`, so the model
+    /// no longer contains one. `RocketEngine.mo` gates on continuous factors
+    /// (`m_dot = m_dot_max * throttle * prop_gate * thr_gate`) instead of an
+    /// `if`, which the reconstructor handles, so `m_dot`/`thrust`/`p_chamber` are
+    /// reachable at full throttle and this test runs.
     ///
-    /// Two separate defects, both real:
-    ///  1. `m_dot = if m_prop > 0.0 and throttle > 0.01 then m_dot_max * throttle
-    ///     else 0.0` reconstructs as **0** at throttle = 1. The model's own comment
-    ///     says the Boolean was inlined *specifically* to dodge rumoca's
-    ///     "continuous substitutions only" reconstructor — that workaround does not
-    ///     work: the conditional still reads 0, which zeroes `thrust` and
-    ///     `p_chamber` with it. Every algebraic observable behind an `if` is dead.
-    ///  2. The `isp` assertion is stale: it expects `v_e = 2900`, but
-    ///     `assets/models/RocketEngine.mo` has said `v_e = 3100.0` for some time.
-    ///     Fixed below, but it could never have passed either.
-    ///
-    /// TODO(rumoca-observables): fix the elimination reconstructor (or stop
-    /// reporting conditional algebraics as observables instead of lying with a 0),
-    /// then remove the `#[ignore]`.
+    /// Regression is prevented by the lint, not by this test alone: the
+    /// `conditional-algebraic-observable` rule in
+    /// `assets/scripting/policy/lint_modelica.rhai` rejects the pattern outright,
+    /// over equation facts produced in `lunco-modelica/src/lint.rs`.
     #[test]
-    #[ignore = "rumoca's elimination reconstructor evaluates conditional algebraics as 0 — m_dot/thrust/p_chamber read 0 at full throttle. Real defect, see TODO(rumoca-observables)."]
     fn rocket_engine_observables_round_trip() {
         let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
         let mut c = ModelicaCompiler::new();
