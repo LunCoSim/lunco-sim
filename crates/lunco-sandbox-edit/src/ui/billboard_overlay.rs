@@ -57,7 +57,18 @@ pub fn world_overlay_layer(id: &'static str) -> egui::LayerId {
 /// Paint every visible [`UsdBillboard`].
 #[allow(clippy::too_many_arguments)]
 pub fn draw_billboard_overlay(
-    q_billboards: Query<(Entity, &UsdBillboard, &Name, Option<&ViewVisibility>)>,
+    // `Callsign` is `ui:displayName` — the standard USD human name, ingested in
+    // `lunco-usd-bevy`. It is what `{label}` means: the ground stations author
+    // "Bear Lakes · RT-64" there, and without this the token fell back to the prim
+    // NAME ("BearLakes") on every label in every scene, because this system passed
+    // `label: None` unconditionally and nothing else ever filled it.
+    q_billboards: Query<(
+        Entity,
+        &UsdBillboard,
+        &Name,
+        Option<&ViewVisibility>,
+        Option<&lunco_core::markers::Callsign>,
+    )>,
     q_camera: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
@@ -113,7 +124,7 @@ pub fn draw_billboard_overlay(
     }
     let mut drawn: Vec<Drawn> = Vec::new();
 
-    for (entity, bb, name, vis) in &q_billboards {
+    for (entity, bb, name, vis, callsign) in &q_billboards {
         // An entity culled or explicitly hidden must not keep a floating label.
         if vis.is_some_and(|v| !v.get()) {
             continue;
@@ -148,7 +159,7 @@ pub fn draw_billboard_overlay(
             &bb.template,
             &BillboardFacts {
                 name: leaf,
-                label: None,
+                label: callsign.map(|c| c.0.as_str()),
                 geo,
             },
         );

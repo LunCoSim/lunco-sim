@@ -26,7 +26,7 @@
 //! |---|---|
 //! | `{name}` | the prim's leaf name (`W3`) |
 //! | `{index}` | trailing digits of the leaf name (`W3` → `3`), else the name |
-//! | `{label}` | `lunco:label` if authored, else the leaf name |
+//! | `{label}` | `ui:displayName` if authored, else the leaf name |
 //! | `{lat}` `{lon}` | geodetic degrees, resolved live through the site anchor |
 //! | `{height}` | metres, body datum |
 //!

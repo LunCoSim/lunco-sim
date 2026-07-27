@@ -505,5 +505,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // pipeline's bloom sees them — clamping here is what makes bright stars read
     // as flat white dots. Tonemapping in the post pass is the only thing that
     // touches this afterwards.
-    return vec4(color, 1.0);
+    //
+    // ⚠ ALPHA IS ZERO, AND THAT IS WHAT MAKES `lunco:surface:additive` ADDITIVE.
+    // `AlphaMode::Add` is PREMULTIPLIED blending in bevy (`BLEND_PREMULTIPLIED_ALPHA`,
+    // bevy_pbr material.rs): `src + dst * (1 - src.a)`. The colour is already
+    // premultiplied (an unlit emissive backdrop), so alpha here means only "how much
+    // of the background do I erase". Returning 1.0 erased ALL of it — the dome came
+    // out an opaque black ball that swallowed the sky from inside and read as a hole
+    // punched in the body from orbit. 0.0 keeps the destination and adds the stars to
+    // it, which is what an emissive sky must do.
+    return vec4(color, 0.0);
 }

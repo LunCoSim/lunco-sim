@@ -79,9 +79,12 @@ def Xform "GroundStation" (
 
     # ── Screen label ──────────────────────────────────────────────────────────
     #
-    # `{label}` resolves to `lunco:label` (authored per station) and falls back to
-    # the prim's leaf name, so a station that forgets its label still reads as
-    # something rather than blank.
+    # `{label}` resolves to `ui:displayName` (authored per station — the STANDARD
+    # USD human name) and falls back to the prim's leaf name, so a station that
+    # forgets its label still reads as something rather than blank. It used to say
+    # `lunco:label`; that attribute was retired in favour of the core-USD spelling,
+    # and the overlay went on passing nothing at all, so every station on screen
+    # read "BearLakes" until the two ends were reconnected.
     #
     # `fadeEnd` is the interesting number. A 70 m dish on a true-scale Earth
     # (6371 km radius) is ~1/91,000 of the body — sub-pixel from any camera that
@@ -96,6 +99,72 @@ def Xform "GroundStation" (
     custom string lunco:billboard:text = "{label}\n{lat:.4}, {lon:.4}"
     custom float lunco:billboard:offsetY = 45.0
     custom float lunco:billboard:fadeEnd = 50000000.0
+
+    # ── The marker pin: what makes the station VISIBLE at globe range ────────
+    #
+    # The dish above is physically correct and therefore invisible from anywhere
+    # you can see Earth: 70 m on a 6371 km body is 1/91,000 of the disc. This
+    # prim is the fix, and it is the fix the README asked for — a screen-constant
+    # shape, so a station reads as a MARK and not only as a line of text.
+    #
+    # `LunCoMarkerAPI` holds the apparent diameter at 0.12°. SIZE THIS AGAINST
+    # THE EARTH DISC, NOT THE SCREEN: Earth from the Moon is 1.9° wide, so half a
+    # degree — a modest-looking number — is a quarter of the planet. 0.12° is ~6%
+    # of the disc: a dot you can point at, on a globe that still reads as a globe,
+    # and ~5 px in the ~19,000 km Earth auto-focus view. The sphere is UNIT-sized
+    # because the engine owns the scale outright — do not author a radius here, it
+    # will be overwritten every frame.
+    #
+    # It hides inside 200 km, where the real facility takes over: an angular
+    # marker never stops scaling down, and a 0.4 m ball hovering over the
+    # pedestal at walking distance is clutter parked on top of a model that is
+    # already telling the truth.
+    #
+    # NOT a `lunco:link:*` participant and NOT an occluder: the link kernel reads
+    # the aperture's geometry, and a 3 km marker sphere in the sight-line would
+    # sever the very link it is drawn to advertise.
+    def Sphere "Marker" (
+        prepend apiSchemas = ["LunCoMarkerAPI"]
+    )
+    {
+        double radius = 1
+        float lunco:marker:angularSizeDeg = 0.12
+        float lunco:marker:showBeyondM = 200000
+        # EMISSIVE-ONLY, the same way `link_beam.usda` states it and for the same
+        # reason: a marker is a SIGNAL, not a lit surface. Lit, it renders pure
+        # black on the night half of Earth — precisely the half where a station is
+        # doing the work of tracking a lunar night — and blows out to a white dot
+        # in direct sun, indistinguishable from a star.
+        rel material:binding = </GroundStation/Looks/MarkerLook>
+        bool primvars:doNotCastShadows = true
+        bool physics:collisionEnabled = false
+        double3 xformOp:translate = (0, 60.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Looks"
+    {
+        def Material "MarkerLook"
+        {
+            token outputs:surface.connect = </GroundStation/Looks/MarkerLook/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.0, 0.0, 0.0)
+                # Cyan, and deliberately UNDER 1.0. An emissive above 1 does not
+                # read as "brighter cyan", it reads as WHITE: the tonemapper
+                # desaturates the highlight and the marker comes out an anonymous
+                # white dot, indistinguishable from a star (measured: 0.35/1.6/2.0
+                # rendered as 253,253,252). Staying inside the display range is
+                # what keeps the mark a COLOUR rather than a blowout. Retint here —
+                # it applies to every station at once.
+                color3f inputs:emissiveColor = (0.10, 0.62, 0.90)
+                float inputs:opacity = 0.9
+                token outputs:surface
+            }
+        }
+    }
 
     # The alidade — the rotating structure a big dish actually stands on. Sized
     # for the 70 m class (~26 m to the elevation axis; DSS-14's is ~24 m). A 64 m

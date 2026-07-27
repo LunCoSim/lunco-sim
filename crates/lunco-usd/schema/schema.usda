@@ -1797,6 +1797,35 @@ class "LunCoSolarAPI" (
     )
 }
 
+class "LunCoMarkerAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A screen-constant marker — geometry held at a fixed APPARENT size so
+    a thing that is physically correct but sub-pixel still reads on screen. The
+    canonical case is a ground station: a 70 m dish is 1/91,000 of Earth and
+    invisible from any camera that can see the globe, and inflating the model
+    would corrupt the aperture the link budget reads.
+
+    The geometry it applies to must be UNIT-sized — the engine owns
+    `Transform.scale` on this prim outright ("unit prim + scale")."""
+)
+{
+    float lunco:marker:angularSizeDeg = 0.15 (
+        doc = """Apparent DIAMETER in degrees, held constant with range. The
+        identifying property: a prim without one is not a marker.
+
+        SIZE IT AGAINST WHAT IT MARKS, not against the screen: Earth seen from
+        the Moon is 1.9° wide, so half a degree is a quarter of the planet."""
+    )
+    float lunco:marker:showBeyondM = 200000 (
+        doc = """Hide the marker closer than this (metres). Angular-constant
+        scaling never stops on its own, and a marker parked inside a facility
+        that is already fully modelled is clutter, not information."""
+    )
+}
+
 class "LunCoSurfaceAPI" (
     inherits = </APISchemaBase>
     customData = {
