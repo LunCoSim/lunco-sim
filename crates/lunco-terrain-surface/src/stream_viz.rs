@@ -221,40 +221,6 @@ pub(crate) fn collect_terrain_detail_demands(
 #[derive(Component)]
 pub struct DemHeightField(pub Arc<SurfaceOracle>);
 
-/// Analytic DEM ground height at world `(x, z)` — reads the retained height grid
-/// directly (no avian collider), so it answers **before** a collider tile streams
-/// in. Returns the world-space `Y` of the terrain surface, or `None` when no DEM
-/// terrain covers the point.
-///
-/// This is the *placement* twin of [`crate::query::TerrainHeightProvider`] (the
-/// `query("TerrainHeight")` API): spawn placement uses it so a rover dropped over
-/// un-streamed terrain lands on the surface instead of free-falling through the
-/// not-yet-baked collider. Mirror its coordinate convention (query `(x,z)` in the
-/// terrain's `GlobalTransform` frame; DEM anchors at the origin cell).
-pub fn dem_ground_height<'a>(
-    terrains: impl IntoIterator<Item = (&'a GlobalTransform, &'a DemHeightField)>,
-    x: f64,
-    z: f64,
-) -> Option<f64> {
-    use lunco_terrain_core::HeightSource;
-    // GRID-ABSOLUTE in, GRID-ABSOLUTE out. The DEM owner is anchored at the grid
-    // ORIGIN cell with an identity transform (`terrain.rs`), so terrain-local ==
-    // grid-absolute and the oracle is sampled directly. This helper feeds the
-    // spawn path, which plants the returned Y as a grid-absolute `Transform` (cell
-    // 0 + avian recenter). Round-tripping through the terrain's *render*
-    // `GlobalTransform` (as this used to) returned an origin-relative Y (and shifted
-    // x,z by the floating-origin offset), so at elevation spawned bodies dropped
-    // ~2 km below the surface and free-fell. `_gt` intentionally unused.
-    for (_gt, hf) in terrains {
-        let grid = hf.0.as_ref();
-        if x.abs() > grid.half_extent() as f64 || z.abs() > grid.half_extent() as f64 {
-            continue;
-        }
-        return Some(HeightSource::height_at(grid, x, z));
-    }
-    None
-}
-
 /// Which shader the streamed LOD tiles draw with — switchable live in the
 /// Inspector (per terrain). Default [`Lit`](TerrainShaderMode::Lit).
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

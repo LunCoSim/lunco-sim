@@ -179,9 +179,8 @@ pub fn update_terrain_brush_ghost(
         ),
         With<TerrainBrushGhost>,
     >,
-    world_frame: lunco_core::coords::WorldFrame,
     raycaster: lunco_physics::GridSpatialQuery,
-    terrains: crate::spawn::TerrainOracles,
+    surface: lunco_terrain_surface::GridSurfaceQuery,
 ) {
     if !state.armed() {
         for (ghost, _, _, _) in q_ghost.iter() {
@@ -213,19 +212,24 @@ pub fn update_terrain_brush_ghost(
     let dir = ray.direction;
 
     // The brush edits the terrain, so the oracle hit IS the target surface;
-    // physics is only the fallback for scenes without a DEM terrain.
-    let Some(point) = crate::spawn::terrain_ray_hit(&terrains, origin, dir.as_dvec3(), 10_000.0)
-        .map(|(_, p)| p)
+    // physics is only the fallback for scenes without a DEM terrain. Both are
+    // asked in the GRID frame — the one conversion happens here, at the ray.
+    let Some(origin_grid) = surface.to_grid(lunco_core::coords::RenderPos(origin)) else {
+        return;
+    };
+    let Some(point) = surface
+        .raycast(origin_grid, dir, 10_000.0)
+        .map(|hit| hit.point.0)
         .or_else(|| {
             raycaster
-                .cast_ray_render(
-                    lunco_core::coords::RenderPos(origin),
+                .cast_ray_grid(
+                    origin_grid,
                     dir,
                     10_000.0,
                     false,
                     &avian3d::prelude::SpatialQueryFilter::default(),
                 )
-                .map(|h| origin + dir.as_dvec3() * h.distance)
+                .map(|h| origin_grid.0 + dir.as_dvec3() * h.distance)
         })
     else {
         return;
@@ -239,7 +243,7 @@ pub fn update_terrain_brush_ghost(
     // then split it through the canonical world grid. The cursor hit is in the
     // floating-origin render frame; its `Transform` must remain grid-local.
     let Some((world_grid, brush_cell, brush_local)) =
-        world_frame.render_to_world_grid_local(lunco_core::coords::RenderPos(point + DVec3::Y * 0.05))
+        surface.grid_local(lunco_core::coords::GridPos(point + DVec3::Y * 0.05))
     else {
         return;
     };
