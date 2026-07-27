@@ -36,8 +36,10 @@
 //! ```
 //!
 //! `host_body` is the nearest ANCESTOR body (empty when there is none) and
-//! `jointed` says whether any joint names this body — together they are the
-//! nested-body question. `missing` lists joint targets that are not bodies.
+//! `jointed` says whether any joint holds this body — together they are the
+//! nested-body question. `missing` lists joint targets that resolve to no body at
+//! all; a target that is not itself a body but sits under one is NOT missing,
+//! because that is how a mounted mechanism names its host (see the joint loop).
 //!
 //! # Topology is not enough
 //!
@@ -291,12 +293,33 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 }
             }
         }
+        // A joint endpoint that is not itself a body RESOLVES TO ITS NEAREST
+        // ANCESTOR BODY — the UsdPhysics rule, and the one
+        // `joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body`
+        // pins in the loader. It is how every mounted mechanism works:
+        // `components/comms/antenna.usda` names its own root Xform, because a
+        // component cannot know the host it will be parented under. So `missing`
+        // is "resolves to NO body", not "is not a body" — the latter reported all
+        // 73 shipped antennas, landers and masts as broken mechanisms while the
+        // asset's own doc comment described the construction as intended.
+        let resolved: Vec<String> = targets
+            .iter()
+            .map(|t| {
+                if bodies.contains(t) {
+                    t.clone()
+                } else {
+                    host_body(&bodies, t).unwrap_or_else(|| t.clone())
+                }
+            })
+            .collect();
         let missing: Vec<String> = targets
             .iter()
-            .filter(|t| !bodies.contains(*t))
+            .filter(|t| !bodies.contains(*t) && host_body(&bodies, t).is_none())
             .cloned()
             .collect();
-        attached.extend(targets.iter().cloned());
+        // The RESOLVED endpoints, so `jointed` answers "is this body held" rather
+        // than "was this body's path typed into a joint".
+        attached.extend(resolved);
         joints.push(H::map([
             ("path", H::str(jp.to_string())),
             (
@@ -681,11 +704,23 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             continue;
         }
         if schemas.iter().any(|schema| schema == "LunCoProgramAPI") {
-            let connectors: Vec<H> = reader
-                .attr_names(p)
-                .into_iter()
-                .filter_map(|name| name.strip_prefix("connectors:").map(H::str))
-                .collect();
+            // DECLARED vs WIRED, kept as two fields. A bare `connectors:p` is an
+            // INTERFACE — the USD spelling of Modelica's `Pin p` — and a catalogue
+            // part cannot know whether the vehicle composing it will wire that pin:
+            // `power = "infinite"` on every rover wires none of them. Only an
+            // authored `.connect` is a claim about topology, and only that claim
+            // can be wrong.
+            let mut connectors: Vec<H> = Vec::new();
+            let mut connected: Vec<H> = Vec::new();
+            for name in reader.attr_names(p) {
+                let Some(short) = name.strip_prefix("connectors:") else {
+                    continue;
+                };
+                connectors.push(H::str(short));
+                if !reader.connections(p, &name).is_empty() {
+                    connected.push(H::str(short));
+                }
+            }
             if !connectors.is_empty() {
                 connector_programs.push(H::map([
                     ("path", H::str(p.to_string())),
@@ -694,6 +729,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                         H::str(reader.asset(p, "info:sourceAsset").unwrap_or_default()),
                     ),
                     ("connectors", H::Array(connectors)),
+                    ("connected", H::Array(connected)),
                 ]));
             }
         }
@@ -878,6 +914,96 @@ mod tests {
         assert_eq!(
             field(&programs[0], "source_asset"),
             &H::str("models/Battery.mo")
+        );
+        assert_eq!(field(&programs[0], "connectors"), &H::Array(vec![H::str("p")]));
+        assert_eq!(
+            field(&programs[0], "connected"),
+            &H::Array(Vec::new()),
+            "a bare `connectors:p` DECLARES an interface; nothing is wired yet"
+        );
+    }
+
+    /// DECLARED and WIRED must be separable, or the rule that reads them cannot
+    /// tell a catalogue part advertising a pin from a phantom wire. Every motor we
+    /// ship declares `connectors:p` unconditionally and is wired only by the
+    /// vehicle's `power = "battery"` variant.
+    #[test]
+    fn a_connected_connector_is_reported_separately_from_a_declared_one() {
+        let f = facts(
+            "#usda 1.0\n\
+             def Scope \"Battery\" ( prepend apiSchemas = [\"LunCoProgramAPI\"] )\n\
+             {\n\
+                 uniform asset info:sourceAsset = @models/Battery.mo@\n\
+                 token connectors:p\n\
+             }\n\
+             def Scope \"Motor\" ( prepend apiSchemas = [\"LunCoProgramAPI\"] )\n\
+             {\n\
+                 uniform asset info:sourceAsset = @models/DCMotor.mo@\n\
+                 token connectors:p.connect = </Battery.connectors:p>\n\
+             }\n",
+        );
+        let programs = entries(&f, "connector_programs");
+        let motor = programs
+            .iter()
+            .find(|p| field(p, "path") == &H::str("/Motor"))
+            .expect("motor fact");
+        assert_eq!(field(motor, "connected"), &H::Array(vec![H::str("p")]));
+    }
+
+    /// A MOUNTED MECHANISM names a plain Xform, because a component referenced
+    /// onto a rover, lander or mast cannot know any of their paths. UsdPhysics
+    /// resolves that endpoint to the nearest ancestor body, so it is not
+    /// `missing`, and the body it resolves to IS held.
+    #[test]
+    fn a_joint_endpoint_under_a_body_is_not_missing_and_joints_that_body() {
+        let f = facts(
+            "#usda 1.0\n\
+             def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsCollisionAPI\"] )\n\
+             {\n\
+                 def Xform \"Mount\"\n\
+                 {\n\
+                     def Xform \"Head\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsCollisionAPI\"] ) {}\n\
+                     def PhysicsRevoluteJoint \"YawJoint\"\n\
+                     {\n\
+                         rel physics:body0 = </Host/Mount>\n\
+                         rel physics:body1 = </Host/Mount/Head>\n\
+                     }\n\
+                 }\n\
+             }\n",
+        );
+        let joints = entries(&f, "joints");
+        assert_eq!(joints.len(), 1);
+        assert_eq!(
+            field(&joints[0], "missing"),
+            &H::Array(Vec::new()),
+            "</Host/Mount> is not a body but hangs under one, so the endpoint resolves"
+        );
+        let bodies = entries(&f, "bodies");
+        assert_eq!(
+            field(body(&bodies, "/Host"), "jointed"),
+            &H::Bool(true),
+            "the joint names the Xform and therefore holds the body it resolves to"
+        );
+    }
+
+    /// The real form of the mistake: an endpoint under NO body at all. Nothing
+    /// resolves, the joint is dropped, and this must stay a finding.
+    #[test]
+    fn a_joint_endpoint_under_no_body_is_still_missing() {
+        let f = facts(
+            "#usda 1.0\n\
+             def Xform \"Anchor\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsCollisionAPI\"] ) {}\n\
+             def Cube \"NotABody\" ( prepend apiSchemas = [\"PhysicsCollisionAPI\"] ) {}\n\
+             def PhysicsFixedJoint \"BadJoint\"\n\
+             {\n\
+                 rel physics:body0 = </Anchor>\n\
+                 rel physics:body1 = </NotABody>\n\
+             }\n",
+        );
+        let joints = entries(&f, "joints");
+        assert_eq!(
+            field(&joints[0], "missing"),
+            &H::Array(vec![H::str("/NotABody")])
         );
     }
 

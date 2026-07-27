@@ -113,6 +113,18 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         .filter(|e| e.starts_with("[usd/"))
         .collect();
 
+    // NO findings and NO rules is the same empty list, and the difference is
+    // always in the errors this filter drops — a scene that failed to compose, or
+    // a policy that failed to compile, reports there. Saying so here is the
+    // difference between a two-minute fix and an afternoon.
+    assert!(
+        !lint_errors.is_empty(),
+        "the deliberately broken scene produced NO lint findings at all — the rules \
+         did not run. Full report: ok={} errors={:?} warnings={:?}",
+        report.ok,
+        report.errors,
+        report.warnings,
+    );
     assert!(
         lint_errors
             .iter()
@@ -208,6 +220,13 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
         ("network_scopes", H::Array(vec![scope])),
+        // The WHOLE fact table, including the keys this case has nothing to say
+        // about. `physics_facts` always emits every key, and a rule reading one
+        // that is absent aborts `lint_usd` — taking every OTHER rule down with it,
+        // and reporting as an empty findings list. A fixture that omits keys is
+        // testing a fact table we do not ship.
+        ("legacy_program_prims", empty()),
+        ("connector_programs", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);

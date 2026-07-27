@@ -155,6 +155,67 @@ def Xform "LintSelftest" (
         rel physics:body1 = </LintSelftest/NotABody>
     }
 
+    # THE CONTROL for that rule, and the shape of every mounted mechanism we ship.
+    #
+    # `Mount` is a plain Xform and `YawJoint` names it — because a COMPONENT
+    # cannot name its host: `components/comms/antenna.usda` is referenced onto
+    # rovers, landers, masts and ground stations, and knows none of their paths.
+    # Parenting IS the attachment. UsdPhysics resolves an endpoint that is not a
+    # body to its nearest ANCESTOR body, so this joint holds `MountHost`, and
+    # `joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body`
+    # in `lunco-usd-avian` pins that the loader does exactly this.
+    #
+    # MEASURED: reading "not itself a body" as the fault reported 73 errors across
+    # the shipped tree — every antenna, dish and boom — as silently rigid
+    # mechanisms, while the asset's own doc comment described the construction as
+    # deliberate. `/LintSelftest/NotABody` above stays a finding because it hangs
+    # under no body at all, which is the real form of that mistake.
+    def Xform "MountHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double3 xformOp:translate = (8.5, 0.25, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:kinematicEnabled = true
+
+        def Cube "Base" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.5
+        }
+
+        def Xform "Mount"
+        {
+            double3 xformOp:translate = (0, 0.5, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            # Carries a collider purely so this fixture tests ONE thing. The real
+            # antenna head has none — a mechanism must not change its host's
+            # contact shape — and trips `dynamic-body-no-collider` (a warn) for
+            # that, which is a different rule's argument.
+            def Cylinder "Head" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+            )
+            {
+                uniform token axis = "Y"
+                double radius = 0.1
+                double height = 0.2
+                double3 xformOp:translate = (0, 0.3, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                float physics:mass = 0.5
+                float3 physics:diagonalInertia = (0.003, 0.003, 0.003)
+            }
+
+            def PhysicsRevoluteJoint "YawJoint"
+            {
+                rel physics:body0 = </LintSelftest/MountHost/Mount>
+                rel physics:body1 = </LintSelftest/MountHost/Mount/Head>
+                uniform token physics:axis = "Y"
+            }
+        }
+    }
+
     # An authored never-collide pair that filters NOTHING: the target prim does
     # not exist. At runtime this is a warning 600 physics ticks in, by which time
     # the two parts have been colliding for ten seconds; on the stage it is a
@@ -305,6 +366,32 @@ def Xform "LintSelftest" (
     {
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [</LintSelftest/DanglingLoad>]
+    }
+
+    # THE PHANTOM WIRE. Two Modelica programs wired to each other, in no
+    # `CollectionAPI:components` scope at all — so no compiler network owns the
+    # `connect()` and the pin is solved as if unconnected, while the USD reads
+    # fully wired. `connector-requires-network-scope` exists for exactly this.
+    #
+    # It takes a CONNECTION, not a declaration: a bare `custom token connectors:p`
+    # is a catalogue part advertising a pin (`OutsideBattery` below, and every
+    # motor on every `power = "infinite"` rover we ship), which is an interface,
+    # not a claim about topology.
+    def Xform "StrandedMotor" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        custom token connectors:p.connect = </LintSelftest/StrandedBattery.connectors:p>
+    }
+    def Xform "StrandedBattery" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
     }
 
     def Scope "BuiltinInCompilerNetwork" (

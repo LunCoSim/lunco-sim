@@ -108,10 +108,23 @@ fn on_tick(me) {
             "a part that falls off the vehicle is not a warning"));
     }
 
-    // A joint pointing at a non-body.
+    // A joint pointing at a prim that resolves to NO body — /LintSelftest/NotABody
+    // hangs under nothing that is a body, so the joint really is dropped.
     let bad = by_rule(findings, "joint-target-not-a-body");
     f.push(t_true(bad.len() == 1,
-        "joint-target-not-a-body fired " + bad.len() + " time(s), expected exactly 1"));
+        "joint-target-not-a-body fired " + bad.len() + " time(s), expected exactly 1 " +
+        "(/LintSelftest/BadJoint, whose target hangs under no body at all)"));
+
+    // THE FALSE-POSITIVE GUARD, and the reason the rule reads "resolves to no
+    // body" rather than "is not a body". A component names its OWN root Xform for
+    // an endpoint because it cannot know the host it will be referenced onto;
+    // UsdPhysics resolves that to the nearest ancestor body. MEASURED: the
+    // stricter reading reported 73 shipped antennas, dishes and booms as silently
+    // rigid.
+    f.push(t_true(!mentions(findings, "/LintSelftest/MountHost/Mount/YawJoint"),
+        "a finding names /LintSelftest/MountHost/Mount/YawJoint — it names a plain " +
+        "Xform under a body, which resolves to that body. That is how every mounted " +
+        "mechanism we ship attaches, and a rule that flags it flags all of them"));
 
     // A body that cannot touch anything. TWO are expected, and the second one is
     // the interesting one: the loose motor has no collider either, so it trips
@@ -165,6 +178,27 @@ fn on_tick(me) {
     f.push(t_true(bad_filter.len() == 1,
         "collision-group-filter-not-a-group fired " + bad_filter.len() + " time(s), " +
         "expected exactly 1 (/LintSelftest/GhostGroup filters against a body)"));
+
+    // ── THE PHANTOM WIRE, AND THE DECLARATION THAT IS NOT ONE ───────────────
+    // `connector-requires-network-scope` takes a `connectors:*.connect` that no
+    // compiler network owns. Both halves are asserted, because the rule was
+    // MEASURED reading the other way: keyed on the DECLARATION it reported 314
+    // errors across the shipped tree — every motor of every rover — since
+    // `components/mobility/motor.usda` declares its pin unconditionally and only
+    // the `power = "battery"` variant wires it. None of those was fixable.
+    let stranded = by_rule(findings, "connector-requires-network-scope");
+    f.push(t_true(mentions(stranded, "/LintSelftest/StrandedMotor"),
+        "connector-requires-network-scope never named /LintSelftest/StrandedMotor, " +
+        "which connects its pin while sitting in no network scope — the wire reads " +
+        "as authored in USD and no solver ever receives it"));
+    f.push(t_true(!mentions(stranded, "/LintSelftest/StrandedBattery"),
+        "connector-requires-network-scope named /LintSelftest/StrandedBattery, which " +
+        "only DECLARES a pin. A bare connector is an interface — the USD spelling of " +
+        "Modelica's `Pin p` — and flagging it flags every catalogue part we ship"));
+    f.push(t_true(!mentions(stranded, "/LintSelftest/OutsideBattery"),
+        "connector-requires-network-scope named /LintSelftest/OutsideBattery, another " +
+        "bare declaration. It IS wrong — something inside a scope wires to it — but " +
+        "that is dangling-network-connector's finding, said once, from the scope side"));
 
     // ── THE ELECTRICAL ISLAND REFERENCE RULES ───────────────────────────────
     // A LunCo electrical device carries one `Pin` and there is no `Ground`, so the

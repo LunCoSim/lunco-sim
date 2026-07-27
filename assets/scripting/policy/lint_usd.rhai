@@ -242,12 +242,27 @@ fn electrical_island_reference_device(facts) {
     out
 }
 
-/// A connector only has meaning inside the one generated Modelica island that
-/// owns its `connect()` equations. A standalone program would otherwise look
-/// wired in USD while no solver ever receives its topology.
+/// A connector WIRE only has meaning inside the one generated Modelica island
+/// that owns its `connect()` equations. A `connectors:*.connect` authored outside
+/// every network scope is a PHANTOM WIRE: it reads as wired in USD while no
+/// solver ever receives the topology.
+///
+/// DECLARING a connector is not wiring one. `custom token connectors:p` with no
+/// `.connect` is an INTERFACE — the USD spelling of Modelica's `Pin p` — and a
+/// catalogue part cannot know whether the vehicle composing it will wire that pin.
+/// `components/mobility/motor.usda` declares its pin unconditionally and
+/// `rocker_bogie.usda` wires it only in the `power = "battery"` variant; every
+/// rover ships defaulting to `power = "infinite"`, which wires nothing at all and
+/// authors no `Electrical` collection to be a member of.
+///
+/// MEASURED: reading the declaration as the fault reported 314 errors across the
+/// shipped tree — every motor of every rover, plus the tutorials — none of which
+/// was fixable without either wiring a battery the scene deliberately omits or
+/// stripping the pin from the catalogue part that owns it.
 fn connector_requires_network_scope(facts) {
     let out = [];
     for program in facts.connector_programs {
+        if program.connected.is_empty() { continue; }
         let collected = false;
         for scope in facts.network_scopes {
             for member in scope.members {
@@ -255,9 +270,10 @@ fn connector_requires_network_scope(facts) {
             }
         }
         if collected { continue; }
-        let m = "declares connectors:* outside a CollectionAPI:components network scope — ";
-        m += "include this Modelica program in exactly one compiler network so its connect() ";
-        m += "topology is generated and solved.";
+        let m = "connects connectors:* outside a CollectionAPI:components network scope — ";
+        m += "the wire is authored but no compiler network owns it, so no connect() ";
+        m += "equation is generated and the pin is solved as if unconnected. Include ";
+        m += "this Modelica program in exactly one network, or drop the connection.";
         out.push(finding("connector-requires-network-scope", "error", program.path, m));
     }
     out
@@ -479,8 +495,11 @@ fn joint_target_not_a_body(facts) {
     for j in facts.joints {
         for m in j.missing {
             let msg = "names <" + m + "> as one of its bodies, but that prim applies";
-            msg += " no PhysicsRigidBodyAPI (or does not exist) — the joint is dropped";
-            msg += " at load and the mechanism is silently rigid.";
+            msg += " no PhysicsRigidBodyAPI and hangs under nothing that does";
+            msg += " (or does not exist) — the joint is dropped at load and the";
+            msg += " mechanism is silently rigid. Naming a non-body is FINE when it";
+            msg += " sits under a body: the endpoint resolves to the nearest ancestor,";
+            msg += " which is how a mounted mechanism names a host it cannot know.";
             out.push(finding("joint-target-not-a-body", "error", j.path, msg));
         }
     }

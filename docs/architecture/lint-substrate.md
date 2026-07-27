@@ -116,9 +116,38 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | Rule | Severity | Says |
 |---|---|---|
 | `nested-body-no-joint` | error | a body inside a body that no joint names — it will fall out of the vehicle. **The motor bug.** Exempt: disabled bodies, and `PhysxVehicleWheelAPI` wheels, which the drivetrain realizes (jointed in `physical`, raycast-driven in `raycast`) |
-| `joint-target-not-a-body` | error | `physics:body0/1` names a prim that applies no `PhysicsRigidBodyAPI` — the joint is dropped at load and the mechanism is silently rigid |
+| `joint-target-not-a-body` | error | `physics:body0/1` names a prim that resolves to **no body at all** — the joint is dropped at load and the mechanism is silently rigid. Naming a non-body that sits *under* a body is fine and is how every mounted mechanism attaches (below) |
+| `connector-requires-network-scope` | error | a `connectors:*.connect` **wire** authored outside every `CollectionAPI:components` scope — no compiler network owns it, so no `connect()` equation is generated and the pin solves as unconnected. A bare declaration is exempt (below) |
 | `dynamic-body-no-collider` | warn | a simulated, non-kinematic body with no collider in its subtree — it cannot touch the world |
 | `mass-outside-any-body` | warn | `PhysicsMassAPI` on a prim that is not a body and sits inside none — the mass reaches no solver |
+
+### Two rules that were measured firing on the whole fleet
+
+Both were tightened after the shipped sweep reported them 387 times, and both
+tightenings say the same thing: **a rule must fire on the claim, not on the
+vocabulary the claim is made in.**
+
+**A joint endpoint resolves upward.** UsdPhysics resolves an endpoint that is not
+itself a body to its nearest ancestor body, and
+`joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body` in
+`lunco-usd-avian` pins that the loader does it. That resolution is the whole
+mounting mechanism for a *component*: `components/comms/antenna.usda` names its
+own root `Xform` for `body0` because it is referenced onto rovers, landers, masts
+and ground stations and knows none of their paths. Parenting **is** the
+attachment. Reading "not itself a body" as the fault reported 73 antennas, dishes
+and booms as broken mechanisms; the fact is now "resolves to no body", and
+`missing` in the fact table means exactly that.
+
+**A declared connector is an interface, not a wire.** `custom token connectors:p`
+is the USD spelling of Modelica's `Pin p`, and a catalogue part cannot know
+whether the vehicle composing it will wire that pin —
+`components/mobility/motor.usda` declares its pin unconditionally, and
+`rocker_bogie.usda` wires it only in the `power = "battery"` variant, while every
+rover ships defaulting to `power = "infinite"`, which authors no `Electrical`
+collection at all. Reading the declaration as the fault reported 314 errors, one
+per motor per rover, none of them fixable without either wiring a battery the
+scene deliberately omits or stripping the pin from the part that owns it. The
+facts now carry `connectors` **and** `connected`, and the rule reads the second.
 
 The authoring rule underneath all of it: **hierarchy is namespace, a joint is
 attachment.** An internal part is mass + geometry with no body; a part that must
