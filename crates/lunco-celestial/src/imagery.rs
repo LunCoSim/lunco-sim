@@ -49,6 +49,20 @@ struct BodyImageryDecl {
 #[derive(Resource, Default)]
 pub(crate) struct BoundBodyImagery(Vec<i32>);
 
+/// Imagery requests that are still being decoded by Bevy's asset pipeline.
+///
+/// Do not build globe materials against the temporary fallback image. Waiting
+/// for a ready raster avoids a throwaway tile/material pass and guarantees a
+/// cold cache cannot leave a body looking permanently untextured.
+#[derive(Resource, Default)]
+pub(crate) struct PendingBodyImagery(Vec<PendingBodyImage>);
+
+struct PendingBodyImage {
+    naif_id: i32,
+    dataset_key: String,
+    image: Handle<Image>,
+}
+
 /// Bind an albedo map onto a globe's look and NEUTRALISE the body colour.
 ///
 /// `surface_color` is the body's untextured appearance (ocean blue, regolith
@@ -91,7 +105,7 @@ pub(crate) fn adopt_authored_body_albedo(
     mut commands: Commands,
 ) {
     for (decl, albedo) in &q_decl {
-        let Some((_, mut lod, mut tiles)) = q_globes
+        let Some((_, mut lod, tiles)) = q_globes
             .iter_mut()
             .find(|(body, _, _)| body.ephemeris_id == decl.naif)
         else {
@@ -99,7 +113,7 @@ pub(crate) fn adopt_authored_body_albedo(
         };
         let image = asset_server.load(albedo.asset.clone());
         lod.look = bind_albedo(&lod.look, image);
-        drop_resident_tiles(&mut tiles, &mut commands);
+        apply_look_to_tiles(&tiles, &lod.look, &mut commands);
         if !bound.0.contains(&decl.naif) {
             bound.0.push(decl.naif);
         }
@@ -110,16 +124,22 @@ pub(crate) fn adopt_authored_body_albedo(
     }
 }
 
-/// Drop the tiles carrying the previous look; `update_globe_lod` respawns the
-/// same set with the new one on the next frame. The look is cloned onto each
-/// tile at spawn, so changing it on the `GlobeLod` alone would leave every
-/// resident tile wearing the old one until it happened to be re-tessellated.
-fn drop_resident_tiles(tiles: &mut GlobeTiles, commands: &mut Commands) {
-    for (_, e) in tiles.resident.drain() {
-        commands.entity(e).try_despawn();
+/// Put a new globe look on every existing tile immediately.
+///
+/// A globe tile owns a cloned [`ShaderLook`]. Changing `GlobeLod::look` alone
+/// therefore changes only future tiles. Updating the component in place lets
+/// the render binder replace its material as soon as the image is ready, with
+/// no deferred despawn/respawn window and no dependence on LOD activity.
+pub(crate) fn apply_look_to_tiles(
+    tiles: &GlobeTiles,
+    look: &lunco_materials::ShaderLook,
+    commands: &mut Commands,
+) {
+    for entity in tiles.resident.values() {
+        commands.entity(*entity).try_insert(look.clone());
     }
-    for (e, _) in tiles.retiring.drain(..) {
-        commands.entity(e).try_despawn();
+    for (entity, _) in &tiles.retiring {
+        commands.entity(*entity).try_insert(look.clone());
     }
 }
 
@@ -155,6 +175,7 @@ pub(crate) fn bind_dataset_body_imagery(
     registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
     asset_server: Res<AssetServer>,
     mut bound: ResMut<BoundBodyImagery>,
+    mut pending: ResMut<PendingBodyImagery>,
     mut q_globes: Query<(&CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
@@ -169,10 +190,11 @@ pub(crate) fn bind_dataset_body_imagery(
         let Some(naif_id) = declared_body(entry) else {
             continue;
         };
-        if bound.0.contains(&naif_id) {
+        if bound.0.contains(&naif_id) || pending.0.iter().any(|request| request.naif_id == naif_id)
+        {
             continue;
         }
-        let Some((_, mut lod, mut tiles)) = q_globes
+        let Some((_, _lod, _tiles)) = q_globes
             .iter_mut()
             .find(|(body, _, _)| body.ephemeris_id == naif_id)
         else {
@@ -182,15 +204,43 @@ pub(crate) fn bind_dataset_body_imagery(
         // The URI, not the path: `lunco://` searches the packed cache and the
         // shared pool in turn, so this one string resolves the same whether the
         // file shipped with the build or was downloaded a moment ago.
-        let image = asset_server.load(entry.artifact_uri());
-        lod.look = bind_albedo(&lod.look, image);
-        drop_resident_tiles(&mut tiles, &mut commands);
+        pending.0.push(PendingBodyImage {
+            naif_id,
+            dataset_key: entry.key.clone(),
+            image: asset_server.load(entry.artifact_uri()),
+        });
+    }
+
+    let mut still_loading = Vec::new();
+    for request in std::mem::take(&mut pending.0) {
+        if asset_server.load_state(&request.image).is_failed() {
+            warn!(
+                "[celestial] imagery dataset '{}' for body {} failed to load",
+                request.dataset_key, request.naif_id
+            );
+            continue;
+        }
+        if !asset_server.load_state(&request.image).is_loaded() {
+            still_loading.push(request);
+            continue;
+        }
+        let Some((_, mut lod, tiles)) = q_globes
+            .iter_mut()
+            .find(|(body, _, _)| body.ephemeris_id == request.naif_id)
+        else {
+            continue;
+        };
+
+        let naif_id = request.naif_id;
+        lod.look = bind_albedo(&lod.look, request.image);
+        apply_look_to_tiles(&tiles, &lod.look, &mut commands);
         bound.0.push(naif_id);
         info!(
-            "[celestial] body {naif_id} took its imagery from dataset '{}'",
-            entry.key
+            "[celestial] body {naif_id} took its ready imagery from dataset '{}'",
+            request.dataset_key
         );
     }
+    pending.0 = still_loading;
 }
 
 #[cfg(test)]
@@ -242,18 +292,31 @@ mod tests {
     fn imagery_is_addressed_as_a_library_uri_not_a_cache_path() {
         let mut r = DatasetRegistry::default();
         r.register(&celestial_manifest(), "celestial");
-        let earth = r
-            .entries()
-            .iter()
-            .find(|e| e.key == "earth")
-            .expect("earth declared");
-        assert_eq!(earth.scope, DatasetScope::Engine);
-        assert_eq!(earth.artifact_uri(), "lunco://textures/earth.png");
-        assert!(
-            earth.path.ends_with("textures/earth_source.jpg"),
-            "the download is the source, not the artifact: {:?}",
-            earth.path
-        );
+        for (key, source, artifact) in [
+            (
+                "earth",
+                "textures/earth_source.jpg",
+                "lunco://textures/earth.png",
+            ),
+            (
+                "moon",
+                "textures/moon_source.tif",
+                "lunco://textures/moon.png",
+            ),
+        ] {
+            let imagery = r
+                .entries()
+                .iter()
+                .find(|e| e.key == key)
+                .unwrap_or_else(|| panic!("{key} declared"));
+            assert_eq!(imagery.scope, DatasetScope::Engine);
+            assert_eq!(imagery.artifact_uri(), artifact);
+            assert!(
+                imagery.path.ends_with(source),
+                "the download is the source, not the artifact: {:?}",
+                imagery.path
+            );
+        }
     }
 
     /// A dataset with no `[*.body]` table is simply not imagery — the ephemeris

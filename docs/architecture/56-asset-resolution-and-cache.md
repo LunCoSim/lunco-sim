@@ -23,12 +23,12 @@ scheme: naming the mistake legibly would make it permanent.
 
 | Scheme | Resolves to | For |
 |---|---|---|
-| `lunco://` | `<cwd>/assets`, then `<cwd>/assets/.cache`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
+| `lunco://` | `assets/`, then `assets/.cache`, then a source tree's sibling `.cache/`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
 | `twin://<name>/…` | the Twin's root, then `<twin>/.cache` | Twin-owned content, and downloaded scenarios |
 | `cached_textures://` | texture cache dir | *derived* pipeline outputs |
 
 Both schemes resolve **authored first, then the cache that travels with the
-unit, then the shared pool**. So a downloaded binary is reachable at its logical
+unit, then (for a source checkout) its staging cache, then the shared pool**. So a downloaded binary is reachable at its logical
 address without any authored file naming a cache, and a file the author
 committed always wins over a materialised copy of it.
 
@@ -49,7 +49,9 @@ we distribute:
   would have written to, and reports those datasets *installed* instead of
   offering to re-fetch files already on disk.
 
-The machine-wide `<cache>` sits underneath both as a shared convenience, never
+During native development, the packer's `<workspace>/.cache` is also a read
+root. It is the source of the package's `assets/.cache`, so `cargo run` and the
+extracted package resolve the same fonts and processed imagery. The machine-wide `<cache>` sits underneath both as a shared convenience, never
 as a prerequisite. Writes still go there ([`DatasetScope::dest_root`]): a
 package may sit on a read-only mount, and one machine should not hold a copy of
 the same product per installation. `lunco_assets::cache_roots()` is the single

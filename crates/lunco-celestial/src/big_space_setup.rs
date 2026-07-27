@@ -112,25 +112,17 @@ pub fn adopt_authored_body_look(
     mut q_globes: Query<(
         &crate::registry::CelestialBody,
         &mut crate::globe_lod::GlobeLod,
-        &mut crate::globe_lod::GlobeTiles,
+        &crate::globe_lod::GlobeTiles,
     )>,
     mut commands: Commands,
 ) {
     for (decl, look) in &q_decl {
-        for (body, mut lod, mut tiles) in &mut q_globes {
+        for (body, mut lod, tiles) in &mut q_globes {
             if body.ephemeris_id != decl.naif {
                 continue;
             }
             lod.look = look.clone();
-            // Resident tiles carry the OLD look (it is cloned onto each at
-            // spawn). Drop them; `update_globe_lod` re-spawns the same set with
-            // the new one on the next frame.
-            for (_, e) in tiles.resident.drain() {
-                commands.entity(e).try_despawn();
-            }
-            for (e, _) in tiles.retiring.drain(..) {
-                commands.entity(e).try_despawn();
-            }
+            crate::imagery::apply_look_to_tiles(&tiles, &lod.look, &mut commands);
             info!(
                 "[celestial] body {} adopted the look authored on its prim",
                 decl.naif

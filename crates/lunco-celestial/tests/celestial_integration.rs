@@ -112,6 +112,57 @@ fn solar_system_root_is_singular() {
     );
 }
 
+/// A scene projection creates its body declarations and site anchor together,
+/// but the celestial hierarchy is deferred until the end of that Update.  The
+/// anchor pass therefore has to wait for the Solar Grid instead of diagnosing a
+/// healthy first load as an unlit scene; the `Added<SolarSystemRoot>` cadence
+/// edge must then run it on the following frame.
+#[test]
+fn site_anchor_waits_for_the_deferred_solar_grid_then_aligns() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+    app.world_mut().spawn((
+        lunco_celestial::geo::SiteAnchor,
+        lunco_celestial::geo::GeodeticAnchor {
+            body: 301,
+            geodetic: lunco_celestial::geo::Geodetic::new(26.13, 3.63, 0.3),
+        },
+    ));
+
+    // The grid is created in Update, after this frame's PreUpdate anchor pass.
+    app.update();
+    assert!(
+        app.world_mut()
+            .query_filtered::<(), With<lunco_celestial::SolarSystemRoot>>()
+            .iter(app.world())
+            .next()
+            .is_some(),
+        "the declared bodies must create the Solar Grid"
+    );
+    assert!(
+        app.world_mut()
+            .query_filtered::<(), With<lunco_celestial::SiteAligned>>()
+            .iter(app.world())
+            .next()
+            .is_none(),
+        "the site cannot align before the deferred Solar Grid exists"
+    );
+
+    // `Added<SolarSystemRoot>` invalidates the cadence gate, so this is not
+    // delayed until the next clock-tolerance interval.
+    app.update();
+    assert!(
+        app.world_mut()
+            .query_filtered::<(), With<lunco_celestial::SiteAligned>>()
+            .iter(app.world())
+            .next()
+            .is_some(),
+        "the site must align on the first frame after the Solar Grid appears"
+    );
+}
+
 /// **P4 regression — the orbit view must be STAR-FIXED.**
 ///
 /// `big_space_setup`'s doc block claimed "Grid Anchor (inertial) — does NOT

@@ -359,7 +359,19 @@ impl Plugin for CelestialPlugin {
                 // ("I move and it jumps back"). The cluster advances together or
                 // not at all; `celestial_needs_solve` also fires on structural
                 // edges, so a scene loading at a standing epoch still anchors.
-                placement::anchor_solar_frame_to_site.run_if(cadence::tracked_needs_solve()),
+                // A scene's USD projection creates `CelestialBodyDecl` during
+                // `Update`, and the hierarchy is then spawned in `Update` too.
+                // The first `PreUpdate` that sees a newly-loaded site therefore
+                // precedes the `SolarSystemRoot` command application.  Do not
+                // call the anchorer in that transitional frame: it is not a
+                // broken scene and reporting it as one made a correctly staged
+                // package look unlit while its Earth/Moon imagery was loading.
+                // `Added<SolarSystemRoot>` bumps the cadence revision on the
+                // following frame, which makes this run as soon as the grid
+                // actually exists.
+                placement::anchor_solar_frame_to_site
+                    .run_if(cadence::tracked_needs_solve())
+                    .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
                 placement::place_celestial_bound_entities,
                 // Defeat stale-GT / compat-strobe frames for the celestial
                 // subtree — measured load-bearing; see the system doc (a deletion
@@ -392,6 +404,7 @@ impl Plugin for CelestialPlugin {
         // package). It runs BEFORE the authored-look adoption so a scene that
         // binds its own Material still wins — content overrules the default.
         app.init_resource::<imagery::BoundBodyImagery>();
+        app.init_resource::<imagery::PendingBodyImagery>();
         app.add_systems(
             Update,
             (

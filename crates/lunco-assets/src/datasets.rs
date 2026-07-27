@@ -751,13 +751,17 @@ output = "textures/earthlike.png"
     }
 
     /// Read roots are wider than the write root, and ordered: a copy packed
-    /// into a distribution outranks the machine-wide pool.
+    /// into a distribution outranks the source-tree and machine-wide pools.
     #[test]
     fn engine_scope_reads_the_packed_cache_before_the_shared_pool() {
         let roots = DatasetScope::Engine.read_roots();
         assert_eq!(roots, crate::cache_roots());
         assert_eq!(roots[0], crate::packed_cache_dir());
-        assert_eq!(roots[1], crate::cache_dir());
+        if let Some(development) = crate::development_cache_dir() {
+            assert_eq!(roots[1], development);
+        }
+        let shared = crate::cache_dir();
+        assert_eq!(roots.last(), Some(&shared));
         // The write root stays the shared pool: a package may be read-only,
         // and one machine should not hold a copy per installation.
         assert_eq!(DatasetScope::Engine.dest_root(), crate::cache_dir());

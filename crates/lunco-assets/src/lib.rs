@@ -289,15 +289,44 @@ pub fn engine_manifest_text(group: &str) -> Option<String> {
     std::fs::read_to_string(manifests_dir().join(format!("{group}.toml"))).ok()
 }
 
+/// Development cache beside an `assets/` source tree (`<workspace>/.cache`).
+///
+/// The native packer materialises its payload here before copying it into
+/// [`packed_cache_dir`]. A source-tree run must read the same bytes through the
+/// same `lunco://` identity; otherwise `cargo run` and an extracted package
+/// resolve different asset sets. It is deliberately a *read* root only — engine
+/// downloads still write to [`cache_dir`], the user-selected/shared cache.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn development_cache_dir() -> Option<PathBuf> {
+    let candidate = assets_dir_abs().parent()?.join(".cache");
+    candidate.is_dir().then_some(candidate)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn development_cache_dir() -> Option<PathBuf> {
+    None
+}
+
 /// Every cache root a library-relative reference is looked up in, in order:
-/// the packed cache beside `assets/`, then the shared machine-wide pool.
+/// the packed cache beside `assets/`, an adjacent source-tree cache when one is
+/// present, then the shared machine-wide pool.
 ///
 /// The ONE place that order is decided. The `lunco://` asset source, the
 /// synchronous resolver ([`engine_asset_local_path`]) and any tool probing for
 /// bytes all ask here, so a file found by the loader is a file found by the
 /// validator.
 pub fn cache_roots() -> Vec<PathBuf> {
-    vec![packed_cache_dir(), cache_dir()]
+    let mut roots = vec![packed_cache_dir()];
+    if let Some(development) = development_cache_dir() {
+        if !roots.contains(&development) {
+            roots.push(development);
+        }
+    }
+    let shared = cache_dir();
+    if !roots.contains(&shared) {
+        roots.push(shared);
+    }
+    roots
 }
 
 /// Where a **Twin's** downloaded assets live: `<twin_root>/.cache`.
