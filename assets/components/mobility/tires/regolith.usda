@@ -33,7 +33,25 @@ over "Tire" (
 {
     # --- Grip ---
     float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
-    double lunco:tire:frictionCoefficient = 0.8                # tyre↔regolith friction
+    # Tyre↔regolith friction. 1.5, up from 0.8: at 0.8 a 1100 kg rover's cone is
+    # ~356 N per wheel against a drivetrain that can ask for far more, so a
+    # throttled rover sat in the saturated branch of `update_wheel_spin` —
+    # wheels visibly spinning, ~1.3 m/s² of actual thrust, and a long crawl up to
+    # the 5 m/s the motor curve allows. The cone is what converts axle torque into
+    # travel, so it is the knob that makes a rover *go*, and a deep-lugged tyre
+    # biting loose soil is the one place a coefficient above 1 is honest.
+    #
+    # This does NOT raise top speed: that is ω_max·r ≈ 12.6 rad/s × 0.4 m ≈ 5 m/s,
+    # set by `motor.usda`'s no-load speed through the 200:1 in `gearbox.usda`.
+    # Grip decides how fast you REACH it (and how much of a slope you keep it on).
+    #
+    # THE PAIR THAT DECIDES WHEELSPIN is this and `motor.usda`'s `stallTorque`:
+    # a wheel slips whenever commanded torque exceeds `μ·N·r`. On a four-wheeler
+    # (N ≈ 445 N, r = 0.4) 1.5 gives a 267 N·m cone; on a six-wheeler the same
+    # vehicle weight spreads to N ≈ 310 N and the cone is 186 N·m. The motor is
+    # sized under the SMALLER of the two — see `motor.usda` — so neither spins on
+    # flat ground, and grip is what stops it rather than a coincidence.
+    double lunco:tire:frictionCoefficient = 1.5                # tyre↔regolith friction
     # Cornering stiffness — side force per m/s of LATERAL slip, capped at μ·N.
     #
     # A SECOND NUMBER, because they are two mechanisms. The longitudinal term
@@ -82,11 +100,18 @@ over "Tire" (
     # belongs to, so re-shoeing a rover moves BOTH coefficients instead of only
     # the analytic one.
     #
-    # 1.9 against the tyre's own 0.8, and the gap is arithmetic, not taste. avian
+    # 4.45 against the tyre's own 1.5, and the gap is arithmetic, not taste. avian
     # combines this with the ground material (default rule: Average) — against the
-    # standard 1.0 ground that is a nominal 1.45 — and delivers ~55% of it under
-    # sustained sliding, i.e. an effective ~0.8: the tyre's real μ, which is what
+    # standard 1.0 ground that is a nominal 2.73 — and delivers ~55% of it under
+    # sustained sliding, i.e. an effective ~1.5: the tyre's real μ, which is what
     # the analytic model is using on the other rover.
+    #
+    # THE RELATION, so this number moves when μ does instead of drifting:
+    #   solver = 2·(μ / 0.55) − ground_μ   (ground_μ = 1.0, the standard surface)
+    # which reproduces the measured pair below exactly (μ 0.8 → 1.9) and gives
+    # μ 1.5 → 4.45. The 0.55 is the solver's delivery under sustained sliding and
+    # is the only measured quantity in it; re-sweep `drivetrain_parity` if the
+    # substep count or the avian version changes.
     #
     # Swept on `drivetrain_parity` (physical terminal speed against a raycast twin
     # at the same authored μ = 0.8):
@@ -99,8 +124,8 @@ over "Tire" (
     #
     # Re-measure if the substep count or the avian version changes — the 55% is a
     # property of the solver, and it is the only thing this number encodes.
-    float physics:dynamicFriction = 1.9
-    float physics:staticFriction = 1.9
+    float physics:dynamicFriction = 4.45
+    float physics:staticFriction = 4.45
 
     # --- Tread ---
     # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`

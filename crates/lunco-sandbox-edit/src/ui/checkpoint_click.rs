@@ -84,10 +84,18 @@ pub enum PlacementMode {
 }
 
 /// A waypoint edit waiting on a ground click, armed from the context menu.
+///
+/// Addressed by DOCUMENT + PRIM PATH, never by the vessel's `Entity`. Authoring the
+/// arming edit can recompose the stage, which despawns and respawns the vessel — a
+/// captured `Entity` is stale by the time the ground click lands, and the placement
+/// then failed silently ("vessel has no BehaviorXml/UsdPrimPath"). The path is stable
+/// across recomposition, so the owning vessel is re-resolved at click time from the
+/// mission that names this waypoint (see [`vessel_for_target`]).
 #[derive(Debug)]
 pub struct PendingPlacement {
-    pub vessel: Entity,
-    /// The leg to move, or the leg to insert after.
+    /// The document that owns the marker (and the mission that names it).
+    pub doc: lunco_doc::DocumentId,
+    /// The waypoint MARKER prim path: the leg to move, or the leg to insert after.
     pub coord_key: String,
     pub mode: PlacementMode,
 }
@@ -471,7 +479,9 @@ pub fn on_scene_right_click_waypoint(
     }
 
     let mut entity = click.entity;
-    for _ in 0..8 {
+    // 16 levels, the same cap the rest of the editor walks with: the pick lands on a
+    // leaf mesh of the referenced marker asset, whose depth is authored content.
+    for _ in 0..16 {
         if let Some((vessel, target, _, _)) = resolve_marker(entity, &q_prim, &q_vessels) {
             click.propagate(false);
             menu_state.entity = Some(entity);
@@ -490,6 +500,15 @@ pub fn on_scene_right_click_waypoint(
         };
         entity = parent.parent();
     }
+    // Right-clicking something that is not a waypoint is ordinary, but a right-click
+    // on a waypoint that resolves to no route is the failure mode worth naming: the
+    // menu simply never appears, which reads as "right-click does nothing".
+    if let Ok(prim) = q_prim.get(click.entity) {
+        debug!(
+            "[waypoint] right-click on '{}' is not a waypoint of any current mission",
+            prim.path
+        );
+    }
 }
 
 /// Global `Pointer<Click>` observer: consume the next scene click to place a waypoint
@@ -504,7 +523,7 @@ pub fn on_scene_click_place_waypoint(
     frame: WaypointClickFrame,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     raycaster: lunco_physics::GridSpatialQuery,
-    q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
+    q_vessel: Query<(Entity, &BehaviorXml, &UsdPrimPath)>,
     doc_ctx: WaypointDocContext,
     mut commands: Commands,
 ) {
@@ -534,22 +553,16 @@ pub fn on_scene_click_place_waypoint(
         info!("[waypoint] placement cancelled: no ground under the cursor");
         return;
     };
-    let Ok((xml, vessel_prim)) = q_vessel.get(pending.vessel) else {
-        warn!(
-            "[waypoint] placement failed: vessel {:?} has no BehaviorXml/UsdPrimPath",
-            pending.vessel
-        );
-        return;
-    };
-    let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) else {
-        warn!("[waypoint] placement failed: no document found for vessel");
-        return;
-    };
+    let doc = pending.doc;
 
     // MOVE repositions the MARKER, and touches the mission not at all: the leg
     // targets the prim by path, and the prim's pose is the prim's business. The
     // coordinate-in-the-XML spelling had to rewrite the whole mission to drag a
     // pin, which is why a move could reorder or lose a leg.
+    //
+    // It therefore needs NOTHING but the marker path and its document — no vessel
+    // lookup, so a stage recomposition between arming the move and clicking the
+    // ground (which respawns the vessel entity) cannot strand it.
     if pending.mode == PlacementMode::Move {
         info!("[waypoint] Move → {} to {:?}", pending.coord_key, world);
         commands.trigger(ApplyUsdOp {
@@ -560,11 +573,19 @@ pub fn on_scene_click_place_waypoint(
                 value: [world.x, world.y, world.z],
             },
         });
-        *placement = WaypointPlacement::default();
         return;
     }
 
-    // INSERT-AFTER authors a new marker and splices its path into the route.
+    // INSERT-AFTER edits the mission, so it does need the vessel — resolved HERE,
+    // from the route that names this waypoint, rather than from an entity captured
+    // when the menu was open.
+    let Some((vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
+        warn!(
+            "[waypoint] placement failed: no vessel's mission names '{}'",
+            pending.coord_key
+        );
+        return;
+    };
     let root = vessel_prim
         .path
         .split('/')
@@ -580,9 +601,7 @@ pub fn on_scene_click_place_waypoint(
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
-            commands
-                .entity(pending.vessel)
-                .insert(BehaviorXml(new_xml.clone()));
+            commands.entity(vessel).insert(BehaviorXml(new_xml.clone()));
             commands.trigger(ApplyUsdOp {
                 doc,
                 op: UsdOp::SetAttribute {
@@ -617,8 +636,7 @@ pub fn draw_waypoint_context_menu(
     q_prim: Query<&UsdPrimPath>,
     q_markers: Query<(Entity, &BehaviorXml, Option<&ReachedWaypoints>)>,
     q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
-    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    doc_ctx: WaypointDocContext,
     mut commands: Commands,
 ) {
     let Some(vis_entity) = menu_state.entity else {
@@ -642,10 +660,13 @@ pub fn draw_waypoint_context_menu(
     };
     // Hold the camera still for as long as the menu is up.
     menu_open.0 = true;
-    let Some(doc) = workspace
-        .and_then(|w| w.0.active_document)
-        .or_else(|| usd_registry.as_ref().and_then(|r| r.ids().next()))
-    else {
+    // The document that owns THIS route — resolved from the vessel's own stage, the
+    // same way every other waypoint path resolves it. (Reading the workspace's active
+    // document instead put the edit on whatever the user last opened, which is not
+    // the route's document once a twin scene is mounted.)
+    let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) else {
+        menu_state.entity = None;
+        menu_open.0 = false;
         return;
     };
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -686,7 +707,7 @@ pub fn draw_waypoint_context_menu(
                     .clicked()
                 {
                     placement.0 = Some(PendingPlacement {
-                        vessel: marker_vessel,
+                        doc,
                         coord_key: marker_target.clone(),
                         mode: PlacementMode::Move,
                     });
@@ -702,7 +723,7 @@ pub fn draw_waypoint_context_menu(
                 {
                     info!("[waypoint] armed Insert-after of '{}'", marker_target);
                     placement.0 = Some(PendingPlacement {
-                        vessel: marker_vessel,
+                        doc,
                         coord_key: marker_target.clone(),
                         mode: PlacementMode::InsertAfter,
                     });
@@ -940,11 +961,14 @@ pub fn draw_waypoint_overlay(
         let empty_bindings = TargetBindings::default();
         let bindings = bindings.unwrap_or(&empty_bindings);
 
+        // EVERY route is labelled, not just the focused vessel's. A waypoint is an
+        // object in the scene you edit by right-clicking it, so hiding the numbers
+        // (and, next door, the ribbon) until the vessel was possessed or selected
+        // made the whole waypoint UI look like it only worked while driving.
+        // Focus now only DIMS: the route you are working on stays the loud one.
         let is_possessed = Some(vessel) == possessed_vessel;
         let is_selected = Some(vessel) == primary_selected;
-        if !is_possessed && !is_selected {
-            continue;
-        }
+        let focused = is_possessed || is_selected;
 
         // TODO(theme): migrate to lunco-theme once the token set covers this.
         // Route-line colour, selected vs unselected vessel. Currently dead (the
@@ -1004,6 +1028,8 @@ pub fn draw_waypoint_overlay(
             } else {
                 (1.0 - ((wp.distance as f32 - 30.0) / 200.0)).clamp(0.1, 1.0)
             };
+            // Another vessel's route is context, not the subject — same labels, quieter.
+            let fade = if focused { fade } else { fade * 0.5 };
 
             let alpha = (255.0 * fade) as u8;
             let text = format!("{}", wp.index + 1);
@@ -1076,6 +1102,25 @@ fn resolve_marker(
         }
     }
     None
+}
+
+/// The vessel whose mission names `target` (a waypoint MARKER prim path).
+///
+/// Resolution by CONTENT, not by a remembered `Entity`: an armed edit outlives at
+/// least one authoring round-trip, and a stage recomposition respawns the vessel in
+/// between. The path is what is stable, so it is what the lookup keys on.
+fn vessel_for_target<'a>(
+    q_vessel: &'a Query<(Entity, &BehaviorXml, &UsdPrimPath)>,
+    target: &str,
+) -> Option<(Entity, &'a BehaviorXml, &'a UsdPrimPath)> {
+    q_vessel.iter().find(|(_, xml, _)| {
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            return false;
+        };
+        let mut targets = Vec::new();
+        collect_targets(&value, &mut targets);
+        targets.iter().any(|t| t == target)
+    })
 }
 
 /// Author a waypoint MARKER: a prim referencing `vessels/markers/waypoint.usda`
@@ -1619,16 +1664,20 @@ pub fn sync_waypoint_path_mesh(
         &vessel_entities,
     );
     for (vessel, xml, bindings, reached) in q_vessels.iter() {
-        if Some(vessel) != selected_vessel && Some(vessel) != possessed_vessel {
-            continue;
-        }
+        // Every route draws. Focus (possessed / selected) only decides how loud it is
+        // — a route that vanishes unless you possess its vessel cannot be clicked on,
+        // and the waypoint editor is right-click-on-the-pin.
+        let focused = Some(vessel) == selected_vessel || Some(vessel) == possessed_vessel;
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             continue;
         };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
         let smooth = route_is_smooth(&xml.0);
-        let signature = route_signature(&targets, smooth, reached);
+        // Focus is part of the signature: it changes the ribbon's colour, so a
+        // selection change has to rebuild it (the mesh is only rebuilt when this
+        // number moves).
+        let signature = route_signature(&targets, smooth, reached) ^ (focused as u64);
 
         // All control points, in order, each tagged with whether it's been driven.
         let pts: Vec<(DVec3, bool)> = targets
@@ -1714,6 +1763,26 @@ pub fn sync_waypoint_path_mesh(
                     LinearRgba::new(0.15, 0.85, 0.45, 0.55),
                     LinearRgba::new(0.10, 0.70, 0.35, 1.0),
                 ),
+            };
+            // Unfocused vessel: same ribbon, held back — visible enough to right-click
+            // a pin on it, quiet enough not to compete with the route being edited.
+            let (base_color, emissive) = if focused {
+                (base_color, emissive)
+            } else {
+                (
+                    LinearRgba::new(
+                        base_color.red,
+                        base_color.green,
+                        base_color.blue,
+                        base_color.alpha * 0.45,
+                    ),
+                    LinearRgba::new(
+                        emissive.red * 0.35,
+                        emissive.green * 0.35,
+                        emissive.blue * 0.35,
+                        1.0,
+                    ),
+                )
             };
             let (cell, local) = lunco_core::coords::world_to_grid_local(
                 lunco_core::coords::GridPos(anchor),

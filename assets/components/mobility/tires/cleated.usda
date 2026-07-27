@@ -22,9 +22,14 @@ over "Tire" (
 {
     double lunco:tire:frictionCoefficient = 1.8
     # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
-    # tyre carries two friction numbers and where the 1.463/1.3 ratio comes from.
-    float physics:dynamicFriction = 2.025
-    float physics:staticFriction = 2.025
+    # tyre carries two friction numbers and for the relation that sets this one:
+    # `solver = 2·(μ / 0.55) − 1`. The flat 1.125·μ this replaces delivered an
+    # effective ~0.83 against an authored 1.8 — the EASY tier gripped worse than
+    # the default regolith tyre on a physical drivetrain, which is backwards.
+    # 5.55 is an extrapolation of a relation measured at μ = 0.8; of the five
+    # tyres this is the one to re-sweep on `drivetrain_parity` first.
+    float physics:dynamicFriction = 5.55
+    float physics:staticFriction = 5.55
 
     # The look states the grip: fewer, deeper cleats at full relief.
     over "TireLook"
