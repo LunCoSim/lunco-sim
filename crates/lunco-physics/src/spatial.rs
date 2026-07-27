@@ -85,7 +85,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !render_origin.is_finite() {
+        if !render_origin.0.is_finite() {
             return None;
         }
         self.spatial.cast_ray(
@@ -103,6 +103,10 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
     /// [`Self::raw`] call sites, each of which was an untyped assertion
     /// "trust me, this is already the physics frame".
     #[inline]
+    /// A non-finite origin yields `None`, for the same hard reason as
+    /// [`Self::cast_ray_render`] — and this is the likelier path into it, since a
+    /// grid-absolute origin usually IS an avian `Position`, which is exactly what
+    /// goes non-finite when a solve diverges.
     pub fn cast_ray_grid(
         &self,
         origin: GridPos,
@@ -111,6 +115,9 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
+        if !origin.0.is_finite() {
+            return None;
+        }
         self.spatial
             .cast_ray(origin.0, direction, max_distance, solid, filter)
     }
