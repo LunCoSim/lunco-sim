@@ -172,6 +172,13 @@ impl CelestialBodyRegistry {
                 BodyDescriptor {
                     name: "Moon".to_string(),
                     ephemeris_id: 301,
+                    // NOTE: this radius is LOAD-BEARING for site placement, not just
+                    // visuals. `geodetic_to_body_fixed` derives the site anchor from
+                    // it, and `assert_dem_frame` requires the result to be
+                    // grid-identity — shrinking it by 10 km to lower the rendered
+                    // globe threw the anchor off by ~772 m and panicked the app on
+                    // load. To move the globe shell, offset the GLOBE RENDER radius
+                    // (see `globe_lod`), never this.
                     radius_m: 1737.0e3,
                     gm: 4.9048695e12,
                     soi_radius_m: Some(66.0e6),

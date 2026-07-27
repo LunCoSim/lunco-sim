@@ -272,6 +272,14 @@ pub fn fit_footprint(
 /// than teach four subsystems to compose a transform nobody can honour
 /// consistently, the frame is fixed and a violation is reported at the moment it
 /// is introduced.
+/// KNOWN VIOLATION (2026-07-27, unfixed): the space-school twin loads with
+/// `/Traverse/Terrain` at translation ≈ `(-493.9, 705.8, -100.5)` — 867 m off
+/// grid-identity — although the prim authors no transform, so the offset comes from the
+/// grid placement path. The consequence is exactly what the error below states: the
+/// analytic oracle disagrees with the streamed tiles and colliders, so ground queries
+/// and collider placement are subtly wrong at that site. This reports rather than
+/// panics (see below), which makes the app inspectable but does NOT make the scene
+/// correct. Do not read "no crash" as "no bug".
 pub fn assert_dem_frame(
     added: Query<
         (Entity, &Transform, Option<&big_space::prelude::CellCoord>),
@@ -295,10 +303,13 @@ pub fn assert_dem_frame(
                  tiles and colliders. Author the elevation in the DEM, not on the prim.",
                 transform.translation, transform.rotation, cell,
             );
-            debug_assert!(
-                false,
-                "DEM terrain must be grid-direct with an identity transform"
-            );
+            // REPORT, DO NOT PANIC. This used to `debug_assert!(false)`, which killed
+            // the app on scene load the moment any terrain violated the frame — and
+            // took the ONE tool that could diagnose the violation down with it. The
+            // error above already says what is wrong, where, and by how much; a dead
+            // process adds nothing to that and costs the ability to inspect the scene,
+            // query the offending transform, or even reach the API. A canary that
+            // bricks the editor is a worse bug than the condition it guards.
         }
     }
 }

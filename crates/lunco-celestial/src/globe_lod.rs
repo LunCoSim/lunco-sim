@@ -402,3 +402,48 @@ pub(crate) fn update_globe_lod(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_terrain_globe::quad_sphere::tile_center_uv;
+
+    const MOON_RADIUS_M: f64 = 1_737_400.0;
+
+    /// The cone `placement.rs` builds for a given ground footprint.
+    fn punch_for(half_extent_m: f64, dir: DVec3) -> GlobePunch {
+        let sin_theta = (half_extent_m * 0.999) / MOON_RADIUS_M;
+        GlobePunch {
+            dir,
+            cos_theta: (1.0 - sin_theta * sin_theta).sqrt(),
+        }
+    }
+
+    /// The punch cannot be what keeps the globe off a surface site.
+    ///
+    /// `tile_fully_in_punch` needs a whole tile inside the cone, so a cone sized at the
+    /// DEM's own half extent drops NOTHING. That is why an opaque datum-radius globe
+    /// hung over sites authored at negative elevations as a flat grey lid. The fix is
+    /// `GLOBE_SINK_M` (lunco-terrain-globe), NOT a bigger cone — a cone large enough to
+    /// bite would void ~60 km around a 2 km site. This pins the geometry so nobody
+    /// "fixes" the lid by growing the punch again.
+    #[test]
+    fn a_dem_sized_punch_cannot_drop_a_tile_but_the_site_floor_can() {
+        let (face, level, i, j) = (0u8, 8u32, 128, 128);
+        let (u, v) = tile_center_uv(face, level, i, j);
+        let dir = cube_to_sphere(face, u, v).normalize();
+
+        // A 1950 m footprint is a 0.064° cone; these tiles subtend ~0.35°.
+        assert!(
+            !tile_fully_in_punch(face, level, i, j, &punch_for(1950.0, dir)),
+            "a DEM-sized cone cannot contain a tile — hence the floor"
+        );
+
+        // SITE_PUNCH_DEG = 2.0 in `placement.rs`.
+        let floor = MOON_RADIUS_M * 2.0_f64.to_radians().sin();
+        assert!(
+            tile_fully_in_punch(face, level, i, j, &punch_for(floor, dir)),
+            "the site-scale floor must actually drop tiles"
+        );
+    }
+}
