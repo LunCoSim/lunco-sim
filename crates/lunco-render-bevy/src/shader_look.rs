@@ -35,7 +35,7 @@ use crate::shader_material::{build_shader_material, ShaderMaterial};
 use bevy::asset::AssetId;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-use bevy::platform::collections::HashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::shader::Shader;
 use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
@@ -114,6 +114,29 @@ fn material_for(
     cache.resolve(look, materials, |l| shader_material(l, asset_server))
 }
 
+/// Does the material carry exactly the texture set the look states?
+///
+/// Slot-by-slot identity compare, so a driven TEXTURED look can take the
+/// param-only update path: the old test was `!look.textures.is_empty()`, which
+/// classified every textured look as a structural change and rebuilt its
+/// material from scratch every tick the look moved.
+fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
+    use TextureLayer::*;
+    [Height, Albedo, Mineral, Surface, Normal, ShadowCache]
+        .iter()
+        .all(|layer| {
+            let slot = match layer {
+                Height => &m.height_map,
+                Albedo => &m.albedo_map,
+                Mineral => &m.mineral_map,
+                Surface => &m.surface_map,
+                Normal => &m.normal_map,
+                ShadowCache => &m.shadow_cache,
+            };
+            slot.as_ref().map(Handle::id) == look.textures.get(layer).map(Handle::id)
+        })
+}
+
 /// `On<Add, ShaderLook>` — the moment intent appears, give it a material.
 fn bind_shader_look(
     add: On<Add, ShaderLook>,
@@ -170,6 +193,12 @@ fn rebind_changed_shader_look(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
+    // Shader path → resolved `AssetId`, so the driven hot path can compare shader
+    // identity WITHOUT `asset_server.load::<Shader>()` per prim per tick. A path's
+    // id is minted once and the bound material's own `Handle<Shader>` keeps the
+    // asset alive, so a cached id stays valid while any look uses it; the
+    // structural branch refreshes the entry from the freshly built material.
+    mut shader_ids: Local<HashMap<String, AssetId<Shader>>>,
 ) {
     // Shared materials already written this run. Every terrain tile carries the same
     // global overlay values, so without this the one material they share would be
@@ -199,18 +228,33 @@ fn rebind_changed_shader_look(
                 // per tick, to express what is usually a single moved float.
                 //
                 // So rebuild only when the SHADER ITSELF changed (a hot-reloaded
-                // `shaderPath`, a new texture set) — and carry the reflected schema
-                // across when we do. Otherwise write the values in place, which is
-                // what `set_many` exists for: one repack for N fields, against the
-                // live schema.
-                let want_shader = asset_server.load::<Shader>(look.shader.clone());
-                let structural = existing.shader.id() != want_shader.id()
+                // `shaderPath`, a genuinely different texture set) — and carry the
+                // reflected schema across when we do. Otherwise write the values in
+                // place, which is what `set_many` exists for: one repack for N
+                // fields, against the live schema. Shader identity comes from the
+                // `shader_ids` cache — `asset_server.load` mints a strong handle
+                // and touches the asset infrastructure, far too heavy for a
+                // per-tick id compare. Textures compare slot-by-slot
+                // (`textures_match`): a TEXTURED look whose texture SET is
+                // unchanged takes the cheap param path like everything else.
+                let want_shader_id = match shader_ids.get(look.shader.as_str()) {
+                    Some(id) => *id,
+                    None => {
+                        let id = asset_server.load::<Shader>(look.shader.clone()).id();
+                        shader_ids.insert(look.shader.clone(), id);
+                        id
+                    }
+                };
+                let structural = existing.shader.id() != want_shader_id
                     || existing.vertex_shader.is_some() != look.vertex_shader.is_some()
-                    || !look.textures.is_empty();
+                    || !textures_match(&existing, look);
                 if structural {
                     let schema = existing.schema.clone();
                     *existing = shader_material(look, &asset_server);
                     existing.set_schema(schema);
+                    // The rebuild loaded the shader afresh; make the id cache agree
+                    // with the material so the compare above stays quiet next tick.
+                    shader_ids.insert(look.shader.clone(), existing.shader.id());
                 } else {
                     existing.set_many(
                         look.values

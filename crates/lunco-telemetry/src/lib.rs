@@ -300,6 +300,40 @@ struct ChannelClock {
     resolve_failed: bool,
 }
 
+/// The cached sampling plan: which entities carry a channel. Rebuilt only when
+/// the channel set changes (see [`mark_sampling_plan_dirty`]), NOT per tick —
+/// the per-tick pass walks this list and reads `Parameter`/`TimeBinding` in
+/// place, so the old full-snapshot clone of every `Parameter` (heap Strings)
+/// per fixed tick is gone.
+#[derive(Resource, Default)]
+struct SamplingPlan {
+    /// Channel entities, in query order. May briefly contain despawned
+    /// entities (removal marks the plan dirty the same tick, and the sampler
+    /// skips dead entities), never miss live ones.
+    channels: Vec<Entity>,
+    /// Set by [`mark_sampling_plan_dirty`]; consumed by the sampler, which
+    /// rebuilds `channels` before the pass.
+    dirty: bool,
+}
+
+/// Cheap change detector in front of the exclusive sampler: any added/changed/
+/// removed `Parameter` or `TimeBinding` invalidates the plan. Runs on normal
+/// (parallel) system params — the archetype-level `Changed` check and the
+/// removal inboxes are near-free when nothing changed, which is every tick of
+/// steady state.
+fn mark_sampling_plan_dirty(
+    changed: Query<(), Or<(Changed<Parameter>, Changed<TimeBinding>)>>,
+    mut removed_params: RemovedComponents<Parameter>,
+    mut removed_bindings: RemovedComponents<TimeBinding>,
+    mut plan: ResMut<SamplingPlan>,
+) {
+    let removed =
+        removed_params.read().next().is_some() | removed_bindings.read().next().is_some();
+    if removed || !changed.is_empty() {
+        plan.dirty = true;
+    }
+}
+
 pub struct LunCoTelemetryPlugin;
 
 impl Plugin for LunCoTelemetryPlugin {
@@ -326,15 +360,27 @@ impl Plugin for LunCoTelemetryPlugin {
         // exist, no way to see anything from before it connected. OpenMCT (and any
         // ground-system UI) needs all three. See `api.rs`.
         api::build(app);
+        // The plan starts dirty so the first sampler pass builds it.
+        app.insert_resource(SamplingPlan {
+            channels: Vec::new(),
+            dirty: true,
+        });
         app.add_systems(
             // FIXED step — see the module docs. Not `Update`: telemetry would then be
             // paced by the frame rate (different sample counts on a fast vs slow
             // machine, a flood on an uncapped headless loop) and replay would diverge.
             FixedUpdate,
-            // The sampler is EXCLUSIVE (`&mut World`) — it forces a sync point whenever
-            // it runs. Don't run it when there's nothing to sample, which is the
-            // overwhelmingly common case: a scene has no channels until one is authored.
-            sample_parameters_system.run_if(any_with_component::<Parameter>),
+            (
+                // Change-driven plan maintenance — the sampler itself never scans
+                // the channel set; it walks the cached plan.
+                mark_sampling_plan_dirty,
+                // The sampler is EXCLUSIVE (`&mut World`) — it forces a sync point
+                // whenever it runs. Don't run it when there's nothing to sample,
+                // which is the overwhelmingly common case: a scene has no channels
+                // until one is authored.
+                sample_parameters_system.run_if(any_with_component::<Parameter>),
+            )
+                .chain(),
         );
     }
 }
@@ -443,30 +489,40 @@ pub fn sample_parameters(world: &mut World) {
                 ..Default::default()
             }
         });
-    // The resolver runs once per frame in `Update`; snapshot its map so the sampling
-    // loop can hold `&World` (and later `&mut World`) without borrowing the resource.
-    let resolved_domains = world
-        .get_resource::<ResolvedDomains>()
-        .map(|r| ResolvedDomains(r.0.clone()))
-        .unwrap_or_default();
+    // The sampling plan: which entities to visit. Rebuilt ONLY when the channel
+    // set changed (see `mark_sampling_plan_dirty`) — steady state pays a Vec
+    // walk, not a query + per-channel `Parameter` clone. The plan is taken OUT
+    // of the world for the pass (reinserted below) so the loop can borrow
+    // `&World` freely. A host driving this function directly without the plugin
+    // has no plan resource and gets a fresh scan every call — the old behavior.
+    let taken_plan = world.remove_resource::<SamplingPlan>();
+    // Whether to give the plan back afterwards: only when the plugin owns it —
+    // a plugin-less world has no dirty-marker, so caching there would go stale.
+    let plan_is_owned = taken_plan.is_some();
+    let mut plan = taken_plan.unwrap_or(SamplingPlan {
+        channels: Vec::new(),
+        dirty: true,
+    });
+    if plan.dirty {
+        plan.channels.clear();
+        plan.channels
+            .extend(world.query_filtered::<Entity, With<Parameter>>().iter(world));
+        plan.dirty = false;
+    }
 
-    // Snapshot the channel set first: the sampling loop needs `&World` to read values
-    // and `&mut World` to update clocks, and it triggers events at the end.
-    // (channel entity, the channel, its clock binding). The value is read from
-    // `param.target` — which may be a DIFFERENT entity: a channel created through the API is
-    // its own entity pointing at what it measures, because `Parameter` is a Component and an
-    // entity can only carry one.
-    let channels: Vec<(Entity, Parameter, Option<TimeBinding>)> = world
-        .query::<(Entity, &Parameter, Option<&TimeBinding>)>()
-        .iter(world)
-        .map(|(e, p, b)| (e, p.clone(), b.copied()))
-        .collect();
+    // The resolver runs once per frame in `Update`. Take the resource OUT for the
+    // pass instead of cloning its HashMap every fixed tick — the loop only reads
+    // it, and it is reinserted before any event fires. (The resolver rewrites it
+    // every frame anyway, so the remove/insert changes no change-detection story.)
+    let resolved_taken = world.remove_resource::<ResolvedDomains>();
+    let resolved_empty = ResolvedDomains::default();
+    let resolved_domains = resolved_taken.as_ref().unwrap_or(&resolved_empty);
 
-    if channels.len() > settings.max_channels {
+    if plan.channels.len() > settings.max_channels {
         warn_once!(
             "telemetry: {} channels exceeds max_channels ({}); sampling the first {} \
              and DROPPING the rest — raise TelemetrySettings::max_channels",
-            channels.len(),
+            plan.channels.len(),
             settings.max_channels,
             settings.max_channels
         );
@@ -475,16 +531,33 @@ pub fn sample_parameters(world: &mut World) {
     let mut samples: Vec<SampledParameter> = Vec::new();
     let mut clock_writes: Vec<(Entity, ChannelClock)> = Vec::new();
 
-    for (entity, param, binding) in channels.into_iter().take(settings.max_channels) {
+    for &entity in plan.channels.iter().take(settings.max_channels) {
+        // The plan may be a tick stale on removal — a dead entity or a stripped
+        // `Parameter` is simply skipped (the dirty flag is already set).
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+        let Some(param) = entity_ref.get::<Parameter>() else {
+            continue;
+        };
         if !param.enabled || param.name.is_empty() {
             continue;
         }
+        let binding = entity_ref.get::<TimeBinding>();
 
         // The channel's OWN time. This is the whole clock-binding feature.
-        let t = domain_time(&resolved_domains, binding.as_ref(), &world_time);
+        let t = domain_time(resolved_domains, binding, &world_time);
 
-        let mut clock = world
-            .get::<ChannelClock>(entity)
+        // Due check BEFORE any clone or read: a not-due channel costs two
+        // component lookups and nothing else.
+        if let Some(clock) = entity_ref.get::<ChannelClock>() {
+            if t < clock.next_due_t {
+                continue;
+            }
+        }
+
+        let mut clock = entity_ref
+            .get::<ChannelClock>()
             .map(clone_clock)
             .unwrap_or_else(|| {
                 // First sight of this channel: due immediately.
@@ -494,13 +567,9 @@ pub fn sample_parameters(world: &mut World) {
                 }
             });
 
-        if t < clock.next_due_t {
-            continue;
-        }
-
-        let rate = effective_rate(&param, &settings);
+        let rate = effective_rate(param, &settings);
         let measured = param.target.unwrap_or(entity);
-        let Some(value) = read_value(world, measured, &param, &mut clock) else {
+        let Some(value) = read_value(world, measured, param, &mut clock) else {
             // Unreadable (port not resolvable, bad reflect path, unsupported type).
             // Still advance the clock so a broken channel doesn't retry every tick.
             advance(&mut clock, t, rate);
@@ -533,6 +602,13 @@ pub fn sample_parameters(world: &mut World) {
 
         advance(&mut clock, t, rate);
         clock_writes.push((entity, clock));
+    }
+
+    if let Some(r) = resolved_taken {
+        world.insert_resource(r);
+    }
+    if plan_is_owned {
+        world.insert_resource(plan);
     }
 
     for (entity, clock) in clock_writes {

@@ -281,7 +281,14 @@ impl Plugin for LunCoScriptingPlugin {
         // script, `sync_script_outputs` reads `ScriptedModel.outputs`). Python
         // only — rhai scenarios run via the world-bridge systems below.
         #[cfg(feature = "python")]
-        app.add_systems(FixedUpdate, run_scripted_models);
+        {
+            // Shared per-document diagnostics store (also init'd by the rhai
+            // branch and Modelica; init_resource is idempotent). Python compile
+            // errors land here and surface via the ScriptStatus query, exactly
+            // like a rhai scenario's compile diagnostics.
+            app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
+            app.add_systems(FixedUpdate, run_scripted_models);
+        }
 
         // World-bound rhai: a queue of (command_id, code) drained by an
         // exclusive system so scripts can `cmd()`/read the live `&mut World`.
@@ -399,16 +406,39 @@ impl Plugin for LunCoScriptingPlugin {
     }
 }
 
+/// A memoized Python compile outcome for one `ScriptDocument`, keyed on the
+/// document generation (CQ-217). Mirrors the rhai scenario runtime's
+/// content-addressed `CompileOutcome` memo: errors are memoized too, so a bad
+/// source is diagnosed ONCE per edit instead of re-parsed (and re-logged)
+/// every FixedUpdate tick.
+#[cfg(feature = "python")]
+struct PyCompiledDoc {
+    /// `ScriptDocument::generation` this outcome was compiled at. A source
+    /// edit bumps the generation → recompile on next tick.
+    generation: u64,
+    /// The cached code object (`builtins.compile(source, ..., 'exec')`), or
+    /// `Err` for a source that failed to compile (already diagnosed).
+    code: Result<pyo3::Py<pyo3::PyAny>, ()>,
+}
+
 /// Per-tick executor for Python `ScriptedModel`s (the legacy inputs/outputs
 /// dict model). Python-only: rhai scenarios run via the world-bridge systems.
 /// Feeds the USD Python-cosim path (`lunco-usd-sim/cosim.rs`), which syncs
 /// `SimComponent` ports into `ScriptedModel.inputs` before this and reads
 /// `ScriptedModel.outputs` after.
+///
+/// Sources are compiled ONCE per document generation (see [`PyCompiledDoc`]);
+/// the per-tick work is executing the cached code object. Compile errors are
+/// published to `DocumentDiagnostics` (Error state, surfaced by the
+/// `ScriptStatus` query) and cleared with `set_ok` on a clean recompile —
+/// the same lifecycle the rhai scenario driver gives its documents.
 #[cfg(feature = "python")]
 fn run_scripted_models(
     mut q_models: Query<&mut ScriptedModel>,
     registry: Res<ScriptRegistry>,
     python_status: Res<python::PythonStatus>,
+    mut diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
+    mut compiled: Local<std::collections::HashMap<u64, PyCompiledDoc>>,
 ) {
     for mut model in q_models.iter_mut() {
         if model.paused {
@@ -433,7 +463,49 @@ fn run_scripted_models(
             continue;
         }
         pyo3::Python::with_gil(|py| {
-            // 1. Prepare inputs
+            // 1. Compile once per document generation (CQ-217). The memo also
+            // caches failures, so a broken source costs one diagnostic per
+            // edit, not one parse attempt per tick.
+            let stale = compiled
+                .get(&doc_id_raw)
+                .map(|c| c.generation != doc.generation)
+                .unwrap_or(true);
+            if stale {
+                let outcome = py
+                    .import("builtins")
+                    .and_then(|b| b.getattr("compile"))
+                    .and_then(|c| {
+                        c.call1((doc.source.as_str(), "<scripted_model>", "exec"))
+                    });
+                let code = match outcome {
+                    Ok(code) => {
+                        // Clean (re)compile clears any prior error state.
+                        diagnostics.set_ok(DocumentId::new(doc_id_raw));
+                        Ok(code.unbind())
+                    }
+                    Err(e) => {
+                        error!("ScriptedModel Python compile error: {}", e);
+                        diagnostics.set_diagnostics(
+                            DocumentId::new(doc_id_raw),
+                            vec![lunco_doc::Diagnostic::error(e.to_string(), None, None)],
+                        );
+                        Err(())
+                    }
+                };
+                compiled.insert(
+                    doc_id_raw,
+                    PyCompiledDoc {
+                        generation: doc.generation,
+                        code,
+                    },
+                );
+            }
+            let Some(Ok(code)) = compiled.get(&doc_id_raw).map(|c| &c.code) else {
+                // Already diagnosed at compile time — nothing to run.
+                return;
+            };
+
+            // 2. Prepare inputs
             let locals = pyo3::types::PyDict::new(py);
             let inputs_dict = pyo3::types::PyDict::new(py);
             for (k, v) in &model.inputs {
@@ -446,23 +518,23 @@ fn run_scripted_models(
             let _ = locals.set_item("inputs", inputs_dict);
             let _ = locals.set_item("outputs", outputs_dict);
 
-            // 2. Run source
-            // TODO(CQ-217): `py.run` re-parses + recompiles the script
-            // source from scratch on *every* FixedUpdate tick. Compile
-            // once (`PyModule`/`compile` → cached code object, keyed on
-            // doc source revision) and only execute the cached code per
-            // tick. See docs/code-quality-remediation.md (CQ-217).
-            let c_str = match std::ffi::CString::new(doc.source.as_str()) {
-                Ok(c) => c,
-                Err(_) => {
-                    error!("ScriptedModel: source contains a NUL byte; skipping");
-                    return;
-                }
-            };
-            if let Err(e) = py.run(&c_str, None, Some(&locals)) {
+            // 3. Execute the cached code object. `exec(code, globals, locals)`
+            // with `__main__`'s dict as globals — the same environment
+            // `py.run(source, None, Some(locals))` used before the compile
+            // cache existed.
+            let ran = py
+                .import("__main__")
+                .and_then(|m| {
+                    let globals = m.dict();
+                    py.import("builtins")?
+                        .getattr("exec")?
+                        .call1((code.bind(py), &globals, &locals))
+                })
+                .map(|_| ());
+            if let Err(e) = ran {
                 error!("ScriptedModel Python Error: {}", e);
             } else {
-                // 3. Extract outputs
+                // 4. Extract outputs
                 if let Ok(Some(outputs)) = locals.get_item("outputs") {
                     if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
                         for (k, v) in dict.iter() {

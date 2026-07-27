@@ -82,11 +82,14 @@ impl<L: CachedLook> LookCache<L> {
         if look.is_unshared() {
             return materials.add(build(look));
         }
-        if let Some(handle) = self.map.get(&look.look_key()) {
+        // Compute the key ONCE — it walks the look's whole param set, and a miss
+        // used to pay for it twice (lookup, then insert).
+        let key = look.look_key();
+        if let Some(handle) = self.map.get(&key) {
             return handle.clone();
         }
         let handle = materials.add(build(look));
-        self.map.insert(look.look_key(), handle.clone());
+        self.map.insert(key, handle.clone());
         handle
     }
 

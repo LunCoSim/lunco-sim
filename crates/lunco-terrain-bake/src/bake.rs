@@ -64,7 +64,13 @@ pub fn crop_centered(grid: &HeightGrid, half_window: f64) -> HeightGrid {
 /// `[-half_extent, half_extent]` on both X and Z (metres). Sample positions
 /// coincide with the grid nodes, so resampling a grid at its own resolution is
 /// exact. `res` is clamped to ≥ 2.
-pub fn resample(src: &dyn HeightSource, half_extent: f64, res: usize) -> HeightGrid {
+///
+/// Generic (monomorphic inner loop), NOT `&dyn HeightSource`: a 4097² upsample
+/// is ~16.8 M `height_at` calls, and virtual dispatch per sample blocked
+/// inlining of the grid's interpolation kernel. Callers pass concrete sources
+/// (`HeightGrid` on both bake paths); values are identical either way —
+/// determinism is untouched, only the dispatch is.
+pub fn resample<S: HeightSource>(src: &S, half_extent: f64, res: usize) -> HeightGrid {
     let res = res.max(2);
     let step = (2.0 * half_extent) / (res as f64 - 1.0);
     let mut heights = vec![0.0f64; res * res];

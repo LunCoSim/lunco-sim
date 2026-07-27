@@ -140,6 +140,11 @@ pub struct ColliderTiles {
     /// tether the rover keeps driving the PRE-swap surface (visibly floating
     /// above every crater the recompose added).
     oracle_key: u64,
+    /// Each focus body's canonical-depth ring node last frame (sorted). The
+    /// cheap gate: when no body crossed a node boundary the wanted set is
+    /// unchanged by construction, so with nothing stale and nothing baking the
+    /// whole wanted/diff/queue rebuild is skipped for the frame.
+    last_foci_nodes: Vec<QuadCoord>,
 }
 
 /// In-flight off-thread collider-tile bakes for a terrain. Sampling the oracle
@@ -289,6 +294,7 @@ pub fn update_collider_ring(
     // traffic for zero work. Each is cleared at the point it was previously
     // constructed, so the logic is unchanged.
     mut foci: Local<Vec<GridPos>>,
+    mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
 ) {
@@ -336,7 +342,8 @@ pub fn update_collider_ring(
         // despawn+respawn the whole ring (the broadphase-churn physics spike on a burst).
         // A whole-terrain change (`None`) invalidates the whole ring, as before.
         let oracle_key = oracle.surface_key();
-        if tiles.oracle_key != oracle_key {
+        let oracle_swapped = tiles.oracle_key != oracle_key;
+        if oracle_swapped {
             let dirty = dirty_region
                 .filter(|d| d.oracle_key == oracle_key)
                 .and_then(|d| d.bounds);
@@ -361,21 +368,46 @@ pub fn update_collider_ring(
             commands.entity(terrain).try_remove::<ColliderDirtyRegion>();
         }
 
-        // The canonical-depth node set wanted this frame: each focus's node + its
-        // 8 neighbours (3×3 build-ahead), deduped across all bodies.
-        wanted.clear();
+        // Each focus body's canonical-depth node this frame. The DEM frame IS
+        // the grid frame: the terrain entity is a grid-direct child at
+        // `CellCoord::default()` (`terrain.rs`), and the tile-placement half
+        // below writes tile origins with `grid.translation_to_grid(<DEM coords>)`
+        // on that same assumption. So a grid-absolute body position is already
+        // DEM-local, and no transform belongs in between (`.0` here IS that
+        // identity).
+        ring_nodes.clear();
         for f in foci.iter() {
-            // The DEM frame IS the grid frame: the terrain entity is a
-            // grid-direct child at `CellCoord::default()` (`terrain.rs`), and the
-            // tile-placement half below writes tile origins with
-            // `grid.translation_to_grid(<DEM coords>)` on that same assumption.
-            // So a grid-absolute body position is already DEM-local, and no
-            // transform belongs in between (`.0` here IS that identity).
             let (lx, lz) = (f.0.x, f.0.z);
             if lx.abs() > h || lz.abs() > h {
                 continue; // body is off the DEM region
             }
-            let centre = qt.node_containing(ring.depth, [lx, lz]);
+            ring_nodes.push(qt.node_containing(ring.depth, [lx, lz]));
+        }
+        // Sorted so the comparison is order-independent (body iteration order
+        // is not a signal; two bodies swapping nodes is still "unchanged").
+        ring_nodes.sort_unstable_by_key(|c| (c.depth, c.x, c.z));
+        // The cheap per-frame gate: no body crossed a node boundary → the
+        // wanted set is unchanged by construction, and with nothing stale and
+        // nothing baking there is no diff to run, no bake to poll, no tile to
+        // queue. This was the only remaining ungated per-frame rebuild in the
+        // crate. (A retune reshapes the node lattice, so its nodes differ.) A
+        // swap frame must fall through even with nothing resident or baking:
+        // the swap above can DROP every in-flight bake (map still empty, foci
+        // still), and skipping then would never re-queue them — the physics
+        // hold waits on those exact tiles.
+        if !oracle_swapped
+            && *ring_nodes == tiles.last_foci_nodes
+            && tiles.stale.is_empty()
+            && pending.0.is_empty()
+        {
+            continue;
+        }
+        tiles.last_foci_nodes.clone_from(&ring_nodes);
+
+        // The canonical-depth node set wanted this frame: each focus's node + its
+        // 8 neighbours (3×3 build-ahead), deduped across all bodies.
+        wanted.clear();
+        for centre in ring_nodes.iter() {
             let (cx, cz) = (centre.x as i64, centre.z as i64);
             for dz in -1..=1 {
                 for dx in -1..=1 {

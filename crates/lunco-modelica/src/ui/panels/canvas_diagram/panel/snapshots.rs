@@ -55,14 +55,16 @@ pub(crate) fn stash_snapshots(
     doc_id: Option<lunco_doc::DocumentId>,
 ) {
     // ─── Signals ───
+    //
+    // Change-driven: we no longer copy every registered signal's ring
+    // here. `stash_signal_snapshot_from_registry` copies only the
+    // signals plot visuals registered interest in last frame, and only
+    // when a signal's history actually changed (Arc-cached otherwise).
+    // This function's job shrinks to building the `doc → entity` table
+    // the producer needs to resolve Doc-bound tiles.
     if let Some(sig_reg) = ctx.resource::<lunco_viz::SignalRegistry>() {
-        let mut snapshot = lunco_viz::kinds::canvas_plot_node::SignalSnapshot::default();
-        for (sig_ref, hist) in sig_reg.iter_scalar() {
-            let pts: Vec<[f64; 2]> = hist.samples.iter().map(|s| [s.time, s.value]).collect();
-            snapshot
-                .samples
-                .insert((sig_ref.entity, sig_ref.path.clone()), pts);
-        }
+        let mut doc_to_entity: std::collections::HashMap<u64, bevy::prelude::Entity> =
+            std::collections::HashMap::new();
         // Seed doc → playback entity first, then overwrite with the
         // live cosim entity (if any) so live wins for docs that have
         // both. The playback entity holds the latest Fast Run's
@@ -71,7 +73,7 @@ pub(crate) fn stash_snapshots(
         // — `(entity, path) → samples` — across live and historical.
         if let Some(playback) = ctx.resource::<crate::experiments_runner::PlaybackEntities>() {
             for (d, e) in &playback.0 {
-                snapshot.doc_to_entity.insert(d.raw(), *e);
+                doc_to_entity.insert(d.raw(), *e);
             }
         }
         // Source-backed plot tiles store a `doc_id` instead of a
@@ -91,8 +93,7 @@ pub(crate) fn stash_snapshots(
         // `(doc, role) → entity` instead.
         if let Some(reg) = ctx.resource::<ModelicaDocumentRegistry>() {
             for (e, d) in reg.iter_doc_for_entity() {
-                snapshot
-                    .doc_to_entity
+                doc_to_entity
                     .entry(d.raw())
                     .and_modify(|cur| {
                         if e.to_bits() < cur.to_bits() {
@@ -102,7 +103,11 @@ pub(crate) fn stash_snapshots(
                     .or_insert(e);
             }
         }
-        lunco_viz::kinds::canvas_plot_node::stash_signal_snapshot(ui, snapshot);
+        lunco_viz::kinds::canvas_plot_node::stash_signal_snapshot_from_registry(
+            ui,
+            sig_reg,
+            doc_to_entity,
+        );
     }
 
     let canvas_sim = doc_id.and_then(|d| crate::state::simulator_for_ctx(ctx, d));

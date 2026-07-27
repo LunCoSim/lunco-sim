@@ -55,7 +55,36 @@ pub fn normal_map<S: HeightSource>(src: &S, region: &Square, res: usize) -> Vec<
     out
 }
 
+/// [`normal_map`] and [`slope_map`] in ONE derive pass, row-major `res×res`.
+/// Slope is `acos(n.y)` of the very normal already computed — exactly what
+/// `HeightSource::slope_at` does internally — so running the two maps as
+/// separate passes sampled every central difference twice. Bit-identical to
+/// the standalone maps (same f64 ops in the same order); prefer this wherever
+/// both maps are needed (the surface-pack bake in `derived_layers`).
+pub fn normal_slope_maps<S: HeightSource>(
+    src: &S,
+    region: &Square,
+    res: usize,
+) -> (Vec<[f32; 3]>, Vec<f32>) {
+    let res = res.max(1);
+    let eps = texel_eps(region, res);
+    let mut normals = Vec::with_capacity(res * res);
+    let mut slopes = Vec::with_capacity(res * res);
+    for iz in 0..res {
+        for ix in 0..res {
+            let (x, z) = texel_world(region, res, ix, iz);
+            let n = src.normal_at(x, z, eps);
+            normals.push([n[0] as f32, n[1] as f32, n[2] as f32]);
+            slopes.push(n[1].clamp(-1.0, 1.0).acos() as f32);
+        }
+    }
+    (normals, slopes)
+}
+
 /// Slope angle from vertical (radians, `0` = flat) over `region`, row-major.
+/// When the normal map is baked alongside (it always is in the surface-pack
+/// bake), use [`normal_slope_maps`] — this standalone walk re-derives the same
+/// central differences the normal pass just computed.
 pub fn slope_map<S: HeightSource>(src: &S, region: &Square, res: usize) -> Vec<f32> {
     let res = res.max(1);
     let eps = texel_eps(region, res);
@@ -465,6 +494,18 @@ mod tests {
         // Normal tilts away from the climb (−x), still mostly up.
         let n = normal_map(&s, &r, 8);
         assert!(n.iter().all(|v| v[0] < 0.0 && v[1] > 0.9));
+    }
+
+    /// The fused pass must be BIT-identical to the two standalone maps — it is
+    /// the same `normal_at` and the same `acos(clamp(n.y))` `slope_at` performs,
+    /// just not sampled twice. Determinism (content-addressable derived maps)
+    /// rides on this equality.
+    #[test]
+    fn fused_normal_slope_matches_standalone_maps() {
+        let r = region();
+        let (n_fused, s_fused) = normal_slope_maps(&Pit, &r, 16);
+        assert_eq!(n_fused, normal_map(&Pit, &r, 16));
+        assert_eq!(s_fused, slope_map(&Pit, &r, 16));
     }
 
     #[test]

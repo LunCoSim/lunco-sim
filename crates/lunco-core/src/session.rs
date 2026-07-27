@@ -95,6 +95,11 @@ pub struct NetStatus {
     /// the invite link's `#fragment` so a browser guest can pin a self-signed
     /// host. Empty when serving a CA cert (guests need no digest then).
     pub invite_digest: String,
+    /// Last connection-setup failure, human-readable (e.g. netcode client
+    /// construction rejected the config). Empty = no error. Cleared when a new
+    /// connect attempt starts; the status UI can surface it instead of the app
+    /// panicking on a malformed address/config.
+    pub last_error: String,
 }
 
 /// UI → wire bridge: "dial this server". Fired by the workbench's **Network**

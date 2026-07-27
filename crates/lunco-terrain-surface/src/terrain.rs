@@ -1644,8 +1644,18 @@ fn swap_terrain_grid(
 /// is the FAST path (clone + stamp only); the expensive static-collider rebuild is
 /// split off into a separate debounced task ([`DemColliderDirty`]/[`DemColliderTask`])
 /// so the visible terrain updates ~immediately and physics catches up after.
+/// Carries the static visual `MeshData` alongside the oracle when the terrain uses
+/// one (`Some` iff it had a `Mesh3d` at spawn time): rasterising the full DEM
+/// (4097² ≈ 16.8 M samples through the whole modifier chain) belongs in the task
+/// body, the same split the initial [`DemBuild`] makes — doing it in
+/// [`finish_dem_restamp`] froze the frame on every static-mesh re-stamp.
 #[derive(Component)]
-pub(crate) struct DemRestampTask(Task<std::sync::Arc<crate::oracle::SurfaceOracle>>);
+pub(crate) struct DemRestampTask(
+    Task<(
+        std::sync::Arc<crate::oracle::SurfaceOracle>,
+        Option<MeshData>,
+    )>,
+);
 
 /// Armed after a visual re-stamp swaps new heights in (non-collider-ring terrains):
 /// once it settles, the static heightfield collider is rebuilt off-thread from the
@@ -1690,13 +1700,16 @@ const RESTAMP_DEBOUNCE_SECS: f32 = 0.15;
 /// layers this is CHEAP (placement generation, no grid-wide rasterisation) — a
 /// raster `stamp` layer still folds into a cloned base first. Just the oracle —
 /// the static-collider rebuild is deferred ([`DemColliderDirty`]) so the visuals
-/// don't wait on it.
+/// don't wait on it. `needs_static_mesh` additionally rasterises the composed
+/// surface into `MeshData` INSIDE the task (full-DEM, ~16.8 M samples) so
+/// [`finish_dem_restamp`] only inserts the finished asset.
 fn spawn_restamp_task(
     commands: &mut Commands,
     entity: Entity,
     base: &DemBaseGrid,
     stack: &crate::terrain_layers::TerrainLayerStack,
     curvature_radius: Option<f64>,
+    needs_static_mesh: bool,
 ) {
     let base_grid = base.0.clone();
     let base_key = base.1;
@@ -1732,7 +1745,12 @@ fn spawn_restamp_task(
             // heights off-thread on every brush stroke.
             crate::oracle::SurfaceOracle::new_with_base_key(base_grid, contributions, base_key)
         };
-        std::sync::Arc::new(oracle)
+        let oracle = std::sync::Arc::new(oracle);
+        // Static-mesh terrains rasterise the composed surface HERE, off-thread —
+        // the same conditional-materialize split the initial build task makes.
+        // Streaming terrains skip it (tiles sample the oracle directly).
+        let mesh = needs_static_mesh.then(|| oracle.materialize().to_mesh_data());
+        (oracle, mesh)
     });
     commands.entity(entity).try_insert(DemRestampTask(task));
 }
@@ -1754,6 +1772,7 @@ fn start_dem_restamp(
         Ref<crate::terrain_layers::TerrainLayerStack>,
         Has<DemRestampTask>,
         Option<&mut DemRestampDebounce>,
+        Has<Mesh3d>,
     )>,
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
@@ -1763,7 +1782,7 @@ fn start_dem_restamp(
     // command-ordering races a one-shot message would have), or when forced.
     let forced = !events.is_empty();
     events.clear();
-    for (entity, base, stack, busy, debounce) in &mut q {
+    for (entity, base, stack, busy, debounce, has_static_mesh) in &mut q {
         if forced || stack.is_changed() {
             // (Re)arm the debounce on every change so a continuous drag keeps
             // pushing the deadline out → exactly one re-stamp once the drag stops.
@@ -1794,7 +1813,14 @@ fn start_dem_restamp(
             commands.entity(entity).try_insert(DemRestampPending);
             continue;
         }
-        spawn_restamp_task(&mut commands, entity, base, &stack, curvature_radius);
+        spawn_restamp_task(
+            &mut commands,
+            entity,
+            base,
+            &stack,
+            curvature_radius,
+            has_static_mesh,
+        );
     }
 }
 
@@ -1812,7 +1838,6 @@ pub(crate) fn finish_dem_restamp(
         &mut crate::stream_viz::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
-        Has<Mesh3d>,
         Has<DemRestampPending>,
         Option<&TerrainDirty>,
         Has<TerrainRescatter>,
@@ -1834,7 +1859,6 @@ pub(crate) fn finish_dem_restamp(
         mut hf,
         tiles,
         pending,
-        has_static_mesh,
         was_pending,
         dirty,
         rescatter,
@@ -1842,7 +1866,7 @@ pub(crate) fn finish_dem_restamp(
         scattered_content,
     ) in &mut tasks
     {
-        let Some(oracle) = future::block_on(future::poll_once(&mut task.0)) else {
+        let Some((oracle, mesh_data)) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         commands.entity(entity).try_remove::<DemRestampTask>();
@@ -1892,15 +1916,17 @@ pub(crate) fn finish_dem_restamp(
                     TimerMode::Once,
                 )));
         }
-        // Rebuild the static visual mesh, if this terrain uses one (not streaming).
-        if has_static_mesh {
+        // Swap in the static visual mesh, if this terrain uses one (not streaming).
+        // The full-DEM rasterisation already happened in the task body
+        // (`spawn_restamp_task`) — 16.8 M oracle samples here stalled `Update`.
+        if let Some(MeshData {
+            positions,
+            normals,
+            uvs,
+            indices,
+        }) = mesh_data
+        {
             if let Some(meshes) = meshes.as_mut() {
-                let MeshData {
-                    positions,
-                    normals,
-                    uvs,
-                    indices,
-                } = oracle.materialize().to_mesh_data();
                 commands.entity(entity).try_insert(Mesh3d(meshes.add(
                     lunco_obstacle_field::grid_mesh(
                         positions,

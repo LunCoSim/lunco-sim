@@ -55,9 +55,60 @@ impl LinePlotStyle {
     fn load(config: &VisualizationConfig) -> Self {
         serde_json::from_value(config.style.clone()).unwrap_or_default()
     }
+    /// Render-path loader: parse the style JSON once and cache the
+    /// result in egui context data, keyed by the blob itself. The blob
+    /// only changes on a user edit, so steady-state frames cost a
+    /// `Value` equality check instead of two serde deserializations
+    /// per plot per frame (toolbar + body both call this).
+    fn load_cached(ctx: &egui::Context, config: &VisualizationConfig) -> Self {
+        let id = egui::Id::new(("line_plot_style", config.id.raw()));
+        if let Some(cached) =
+            ctx.data(|d| d.get_temp::<std::sync::Arc<(serde_json::Value, LinePlotStyle)>>(id))
+        {
+            if cached.0 == config.style {
+                return cached.1.clone();
+            }
+        }
+        let parsed = Self::load(config);
+        ctx.data_mut(|d| {
+            d.insert_temp(id, std::sync::Arc::new((config.style.clone(), parsed.clone())));
+        });
+        parsed
+    }
     fn save(&self, config: &mut VisualizationConfig) {
         config.style = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
     }
+}
+
+/// Change-detector for one ring buffer: length + first/last sample
+/// times. Histories are append-only with monotone time, so any push,
+/// eviction, or clear moves at least one component. Cheap enough to
+/// compute every frame; equality means "reuse the tessellated points".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HistFingerprint {
+    len: usize,
+    first_t: u64,
+    last_t: u64,
+}
+
+fn hist_fingerprint(h: &crate::signal::ScalarHistory) -> HistFingerprint {
+    HistFingerprint {
+        len: h.len(),
+        first_t: h.samples.front().map_or(0, |s| s.time.to_bits()),
+        last_t: h.samples.back().map_or(0, |s| s.time.to_bits()),
+    }
+}
+
+/// Everything a cached tessellation depends on. Stored next to the
+/// points; a mismatch on any component forces a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SeriesKey {
+    y: HistFingerprint,
+    /// Fingerprint of the X signal's history in phase-space mode.
+    x: Option<HistFingerprint>,
+    log_y: bool,
+    /// Plot pixel width bucket — decimation depth depends on it.
+    px_w: u32,
 }
 
 pub const LINE_PLOT_KIND: VizKindId = VizKindId::new_static("line_plot");
@@ -104,7 +155,7 @@ impl Visualization for LinePlot {
             return;
         }
 
-        let style = LinePlotStyle::load(config);
+        let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
         let registry = match ctx.wb.resource::<SignalRegistry>() {
             Some(r) => r,
             None => {
@@ -142,19 +193,39 @@ impl Visualization for LinePlot {
             return;
         }
 
+        // Plot pixel width — needed *before* tessellation because the
+        // decimation depth (and thus the cache key) depends on it.
+        // Taken after the toolbar so it matches the space `plot.show`
+        // gets below.
+        let remaining = ctx.ui.available_size_before_wrap();
+
         // Resolve the X-axis source once. For classic time-series we
         // just use each Y sample's own `time`. For phase-space mode
         // we pull the X signal's history and pair by time below.
-        let x_samples: Option<Vec<ScalarSample>> = style.x_signal.as_ref().and_then(|xs| {
-            registry
-                .scalar_history(xs)
-                .filter(|h| !h.is_empty())
-                .map(|h| h.iter().copied().collect())
-        });
+        // Fingerprint travels into each series' cache key so an X-side
+        // change also dirties the pairing.
+        let x_fp: Option<HistFingerprint> = style
+            .x_signal
+            .as_ref()
+            .and_then(|xs| registry.scalar_history(xs))
+            .filter(|h| !h.is_empty())
+            .map(hist_fingerprint);
+        // Lazily materialised on the first cache miss — an idle frame
+        // (all series clean) never copies the X history at all. The
+        // outer `Option` is "not fetched yet", the inner one is the
+        // classic "no usable X signal → time on X" fallback.
+        let mut x_samples: Option<Option<Vec<ScalarSample>>> = None;
 
         // Build the egui_plot `Line`s up-front so we can release the
         // registry borrow before calling `plot.show()` (which wants a
         // long-lived borrow on `ctx.ui`).
+        //
+        // Tessellation is dirty-checked: the (history fingerprint,
+        // x fingerprint, log_y, pixel width) key is compared against a
+        // per-binding cache in egui context data; only a moved key
+        // re-copies the history, re-logs, and re-decimates. Steady
+        // frames clone the cached (pixel-bounded) point vec only —
+        // that owned copy is the one egui_plot's `PlotPoints` demands.
         let lines: Vec<Line> = y_bindings
             .iter()
             .filter_map(|b| {
@@ -162,18 +233,58 @@ impl Visualization for LinePlot {
                 if hist.is_empty() {
                     return None;
                 }
-                let mut pts: Vec<[f64; 2]> = match &x_samples {
-                    None => {
-                        // Classic time on X. Each sample's own `time`
-                        // is its X coordinate.
-                        hist.iter().map(|s| [s.time, s.value]).collect()
-                    }
-                    Some(xs) => pair_by_time(xs, hist.iter().copied()),
+                let key = SeriesKey {
+                    y: hist_fingerprint(hist),
+                    x: x_fp,
+                    log_y: style.log_y,
+                    px_w: remaining.x.max(1.0) as u32,
                 };
-                if style.log_y {
-                    pts = crate::plot_fmt::log_y_points(&pts);
-                }
-                if pts.is_empty() {
+                let cache_id =
+                    egui::Id::new(("line_plot_series", config.id.raw())).with(&b.source);
+                let cached: Option<std::sync::Arc<(SeriesKey, Vec<[f64; 2]>)>> =
+                    ctx.ui.ctx().data(|d| d.get_temp(cache_id));
+                let series = match cached {
+                    Some(c) if c.0 == key => c,
+                    _ => {
+                        let xs_resolved = x_samples.get_or_insert_with(|| {
+                            style.x_signal.as_ref().and_then(|xs| {
+                                registry
+                                    .scalar_history(xs)
+                                    .filter(|h| !h.is_empty())
+                                    .map(|h| h.iter().copied().collect())
+                            })
+                        });
+                        let time_on_x = xs_resolved.is_none();
+                        let mut pts: Vec<[f64; 2]> = match xs_resolved {
+                            None => {
+                                // Classic time on X. Each sample's own
+                                // `time` is its X coordinate.
+                                hist.iter().map(|s| [s.time, s.value]).collect()
+                            }
+                            Some(xs) => pair_by_time(xs, hist.iter().copied()),
+                        };
+                        if style.log_y {
+                            pts = crate::plot_fmt::log_y_points(&pts);
+                        }
+                        // Decimate to pixel width — min-max buckets so
+                        // spikes survive. Time-series only: a phase-
+                        // space trajectory revisits X, which breaks
+                        // the column bucketing.
+                        if time_on_x {
+                            if let Some(dec) =
+                                crate::plot_fmt::decimate_min_max(&pts, remaining.x)
+                            {
+                                pts = dec;
+                            }
+                        }
+                        let fresh = std::sync::Arc::new((key, pts));
+                        ctx.ui
+                            .ctx()
+                            .data_mut(|d| d.insert_temp(cache_id, fresh.clone()));
+                        fresh
+                    }
+                };
+                if series.1.is_empty() {
                     return None;
                 }
                 // Legend label: explicit binding label wins; otherwise
@@ -197,7 +308,7 @@ impl Visualization for LinePlot {
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
-                Some(Line::new(label, PlotPoints::new(pts)).color(color))
+                Some(Line::new(label, PlotPoints::new(series.1.clone())).color(color))
             })
             .collect();
 
@@ -247,10 +358,9 @@ impl Visualization for LinePlot {
             y_label = format!("{y_label} (log₁₀)");
         }
 
-        // Use the space *remaining* after the toolbar + separator
-        // above; `max_rect()` would double-count that strip and push
-        // the plot off the bottom of the tile.
-        let remaining = ctx.ui.available_size_before_wrap();
+        // `remaining` (computed above, before tessellation) is the
+        // space left after the toolbar + separator; `max_rect()` would
+        // double-count that strip and push the plot off the bottom.
         let mut plot = Plot::new(("line_plot", config.id.raw()))
             .width(remaining.x)
             .height(remaining.y)
@@ -322,7 +432,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
             .collect();
         (available, current)
     };
-    let style = LinePlotStyle::load(config);
+    let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
     let muted = ctx
         .wb
         .resource::<lunco_theme::Theme>()

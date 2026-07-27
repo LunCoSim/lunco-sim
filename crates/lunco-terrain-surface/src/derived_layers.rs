@@ -49,8 +49,8 @@ use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use lunco_terrain_core::{
-    albedo_map, ao_map, normal_map, pack_normal_rgba8, pack_surface_rgba8, roughness_from_slope,
-    slope_map, Square,
+    albedo_map, ao_map, normal_slope_maps, pack_normal_rgba8, pack_surface_rgba8,
+    roughness_from_slope, Square,
 };
 
 use crate::band::SurfaceBand;
@@ -128,7 +128,7 @@ pub struct TerrainAuthoredMaps {
 /// identity (Arc pointer) of the oracle it was started against — a re-compose
 /// mid-bake makes the result stale, and [`finish_derived_bakes`] discards it.
 #[derive(Component)]
-struct DerivedBakeTask(Task<DerivedMaps>, usize);
+struct DerivedBakeTask(Task<DerivedMipped>, usize);
 
 /// Debounce marker: the surface changed at `since`; wait for a short quiescent
 /// window before re-baking so a burst of brush strokes coalesces into one bake.
@@ -141,10 +141,39 @@ struct DerivedMapsStale {
 const REBAKE_DEBOUNCE_SECS: f64 = 0.75;
 
 /// Baked RGBA8 buffers + their square resolution, ready to upload as `Image`s.
+/// Base level only — this is the cache/blob format; the mip chains are derived
+/// from it inside the bake task ([`DerivedMipped`]).
 struct DerivedMaps {
     res: usize,
     surface_rgba: Vec<u8>,
     normal_rgba: Vec<u8>,
+}
+
+/// [`DerivedMaps`] with the full mip chain prebuilt for each map (`(data,
+/// level_count)` per [`mip_chain_rgba8`]). Built INSIDE the async bake body —
+/// mipping two 1024² RGBA8 maps on the main thread after the off-thread bake
+/// was a per-publish `Update` spike — so [`finish_derived_bakes`] only wraps
+/// the buffers into `Image`s.
+struct DerivedMipped {
+    res: usize,
+    surface: (Vec<u8>, u32),
+    normal: (Vec<u8>, u32),
+}
+
+/// Fold the base-level maps into their uploaded form: one box-filtered mip
+/// chain per map. Runs on the task pool (both the fresh-bake and cache-hit
+/// paths mip here).
+fn mip_maps(maps: DerivedMaps) -> DerivedMipped {
+    let DerivedMaps {
+        res,
+        surface_rgba,
+        normal_rgba,
+    } = maps;
+    DerivedMipped {
+        res,
+        surface: mip_chain_rgba8(surface_rgba, res),
+        normal: mip_chain_rgba8(normal_rgba, res),
+    }
 }
 
 /// Set by `finish_dem_restamp` alongside the collider ring's dirty region:
@@ -220,13 +249,12 @@ fn start_derived_bakes(
             // Off-thread body → own Tracy zone (per-system spans don't reach here).
             let _span = bevy::log::info_span!("terrain_derived_maps_bake").entered();
             #[cfg(not(target_arch = "wasm32"))]
-            {
-                bake_or_load(&oracle)
-            }
+            let maps = bake_or_load(&oracle);
             #[cfg(target_arch = "wasm32")]
-            {
-                bake_or_load_web(&oracle).await
-            }
+            let maps = bake_or_load_web(&oracle).await;
+            // Mip HERE, still off-thread — the chain build for two 1024² maps
+            // is real work and used to run on the main thread at publish.
+            mip_maps(maps)
         });
         // Despawn-safe: a load-time / edit re-instantiation can despawn this
         // terrain between queue time and apply — `try_insert` no-ops on a stale
@@ -391,8 +419,9 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // alias it).
     let limited = SurfaceBand::visual(texel).limited(oracle);
 
-    let normals = normal_map(&limited, &region, res);
-    let slope = slope_map(&limited, &region, res);
+    // One derive pass: slope is `acos(n.y)` of the very normal just computed,
+    // so the fused kernel halves the oracle samples per texel.
+    let (normals, slope) = normal_slope_maps(&limited, &region, res);
     // AO is smooth by construction (a horizon integral over AO_RADIUS_FRAC of
     // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
@@ -462,8 +491,8 @@ fn finish_derived_bakes(
             continue;
         }
         let res = maps.res;
-        let surface = images.add(data_texture(maps.res, maps.surface_rgba));
-        let normal = images.add(data_texture(maps.res, maps.normal_rgba));
+        let surface = images.add(data_texture(maps.res, maps.surface));
+        let normal = images.add(data_texture(maps.res, maps.normal));
         // `try_*`: a terrain re-bake / doc-backed scene reload can despawn +
         // re-instantiate this terrain while its derived-layer bake is still in flight,
         // so the entity may be gone by the time these deferred commands apply. No-op
@@ -485,14 +514,31 @@ fn finish_derived_bakes(
 /// Mips matter here: these maps are sampled out to the horizon, and without
 /// them distant texels shimmer and alias under the raking lunar sun.
 fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
+    // Size the whole chain up front so each level is written IN PLACE into the
+    // one buffer (a disjoint `split_at_mut` window) — the old grow-as-you-go
+    // loop `to_vec()`d every source level just to appease the borrow checker.
+    let mut total = 0usize;
+    let mut levels = 0u32;
+    let mut r = res;
+    loop {
+        total += r * r * 4;
+        levels += 1;
+        if r <= 1 {
+            break;
+        }
+        r /= 2;
+    }
     let mut all = base;
-    let mut levels = 1u32;
+    all.resize(total, 0);
     let mut prev_res = res;
     let mut prev_start = 0usize;
     while prev_res > 1 {
         let next_res = prev_res / 2;
-        let prev = all[prev_start..prev_start + prev_res * prev_res * 4].to_vec();
-        let mut next = Vec::with_capacity(next_res * next_res * 4);
+        let next_start = prev_start + prev_res * prev_res * 4;
+        // Read the previous level, write the next — disjoint halves of `all`.
+        let (head, tail) = all.split_at_mut(next_start);
+        let prev = &head[prev_start..];
+        let next = &mut tail[..next_res * next_res * 4];
         for y in 0..next_res {
             for x in 0..next_res {
                 for c in 0..4 {
@@ -501,14 +547,12 @@ fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
                         + i(2 * x + 1, 2 * y)
                         + i(2 * x, 2 * y + 1)
                         + i(2 * x + 1, 2 * y + 1);
-                    next.push(((sum + 2) / 4) as u8);
+                    next[(y * next_res + x) * 4 + c] = ((sum + 2) / 4) as u8;
                 }
             }
         }
-        prev_start = all.len();
+        prev_start = next_start;
         prev_res = next_res;
-        all.extend_from_slice(&next);
-        levels += 1;
     }
     (all, levels)
 }
@@ -516,9 +560,10 @@ fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
 /// A linear (non-sRGB) RGBA8 data texture with a full mip chain and
 /// trilinear/anisotropic filtering — these carry the roughness/AO scalars,
 /// an encoded normal, and the albedo scalar, and are sampled out to the horizon.
-fn data_texture(res: usize, rgba: Vec<u8>) -> Image {
+/// Takes the PREBUILT chain (`(data, level_count)` from [`mip_chain_rgba8`],
+/// run in the bake task) — this only wraps it in an `Image`.
+fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32)) -> Image {
     use bevy::image::ImageSamplerDescriptor;
-    let (data, mip_levels) = mip_chain_rgba8(rgba, res);
     // `new_uninit` + manual data: `Image::new` debug-asserts data == base level,
     // but ours carries the whole mip chain.
     let mut image = Image::new_uninit(

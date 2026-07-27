@@ -182,11 +182,17 @@ pub struct ParamField {
 }
 
 /// A shader's full parameter layout, reflected from its source.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ParamSchema {
     pub fields: Vec<ParamField>,
     /// Total uniform size in bytes (rounded up to 16).
     pub size: usize,
+    /// Field name → index into [`fields`](Self::fields), built once at
+    /// [`parse`](Self::parse) time. [`field`](Self::field) sits on per-frame
+    /// guard paths (the horizon system's uniform compares go through
+    /// `ShaderMaterial::get` → `schema.field`), where the old linear scan was
+    /// an O(fields) string walk per lookup per frame.
+    index: BTreeMap<String, usize>,
 }
 
 impl ParamSchema {
@@ -222,13 +228,13 @@ impl ParamSchema {
 
     /// True if `name` is an `@engine` (Rust-filled) field.
     pub fn is_engine(&self, name: &str) -> bool {
-        self.fields
-            .iter()
-            .any(|f| f.name == name && matches!(f.ui, UiKind::Engine))
+        self.field(name)
+            .is_some_and(|f| matches!(f.ui, UiKind::Engine))
     }
 
+    /// Indexed lookup — see [`index`](Self::index) for why this is not a scan.
     pub fn field(&self, name: &str) -> Option<&ParamField> {
-        self.fields.iter().find(|f| f.name == name)
+        self.index.get(name).map(|&i| &self.fields[i])
     }
 
     /// Reflects a schema from WGSL source, or `None` if it declares no
@@ -270,7 +276,16 @@ impl ParamSchema {
                  uniform block; extra fields will be clipped"
             );
         }
-        Some(ParamSchema { fields, size })
+        let index = fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.name.clone(), i))
+            .collect();
+        Some(ParamSchema {
+            fields,
+            size,
+            index,
+        })
     }
 }
 

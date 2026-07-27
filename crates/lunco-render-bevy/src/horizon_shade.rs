@@ -20,7 +20,10 @@
 //! single-crate `.chain()`.
 
 use crate::shader_material::ShaderMaterial;
+use bevy::asset::AssetId;
 use bevy::camera::visibility::RenderLayers;
+use bevy::math::Affine3A;
+use bevy::platform::collections::HashSet;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use lunco_environment::horizon::{
@@ -68,7 +71,7 @@ pub fn wire_terrain_materials(
     terrains: Query<
         (
             Entity,
-            &GlobalTransform,
+            Ref<GlobalTransform>,
             Option<&HorizonMap>,
             Option<&HorizonShadowCache>,
             Option<&MeshMaterial3d<ShaderMaterial>>,
@@ -81,10 +84,17 @@ pub fn wire_terrain_materials(
     >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
     mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
+    // Cached `affine().inverse()` per terrain. A terrain's transform is static
+    // in the steady state, but the inverse was recomputed per terrain per frame
+    // BEFORE any change gate could reject the work — a full 4×4 inversion whose
+    // inputs had not moved. Refreshed on the transform's change tick via
+    // `Ref<GlobalTransform>`; entries follow `cache_engaged`'s cleanup.
+    mut inv_cache: Local<std::collections::HashMap<Entity, Affine3A>>,
     mut removed_terrains: RemovedComponents<HorizonMap>,
 ) {
     for e in removed_terrains.read() {
         cache_engaged.remove(&e);
+        inv_cache.remove(&e);
     }
     let Some(mut shader_mats) = shader_mats else {
         return;
@@ -107,11 +117,21 @@ pub fn wire_terrain_materials(
     let to_sun_world: Vec3 = sun_gt.back().into();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
-        let sun_local = terrain_gt
-            .affine()
-            .inverse()
-            .transform_vector3(to_sun_world)
-            .normalize_or_zero();
+        // The world→terrain inverse only moves when the terrain does; `sun_local`
+        // is still derived every frame (the sun moves continuously) but from the
+        // cached matrix, not a fresh inversion.
+        let inv = match inv_cache.entry(entity) {
+            std::collections::hash_map::Entry::Occupied(mut o) => {
+                if terrain_gt.is_changed() {
+                    *o.get_mut() = terrain_gt.affine().inverse();
+                }
+                *o.get()
+            }
+            std::collections::hash_map::Entry::Vacant(v) => {
+                *v.insert(terrain_gt.affine().inverse())
+            }
+        };
+        let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
         let (hf_size_v, hf_res, height_map_handle) = match map {
             Some(m) => (
                 m.field.size(),
@@ -279,7 +299,17 @@ pub fn wire_sun_for_non_terrain_materials(
     let to_sun_world: Vec3 = sun_gt.back().into();
     let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
 
+    // Shared materials already handled this run. Batching means MANY meshes share
+    // one `ShaderMaterial` (that is the point of the look cache), so without this
+    // the same shared asset is compared — and, on a sun move, repacked — once per
+    // ENTITY instead of once per ASSET. Same guard as
+    // `rebind_changed_shader_look`'s `written` set.
+    let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
+
     for handle in &meshes {
+        if !written.insert(handle.0.id()) {
+            continue;
+        }
         // Compare before `get_mut`, or every frame re-uploads the asset (MAT-3).
         //
         // Compare via `get_vec3`, not `get_vec4`. `sun_dir_world` is written as a

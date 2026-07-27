@@ -11,11 +11,18 @@
 //! ## Why a snapshot, not a Resource lookup
 //!
 //! `NodeVisual::draw` only sees `&DrawCtx` — no `World`. The host
-//! therefore copies the relevant signals into an `egui` `Context`
-//! data slot once per frame, and visuals read it back via
-//! [`fetch_signal_snapshot`]. This keeps `lunco-canvas` ignorant of
-//! Bevy entities / `SignalRegistry` while still letting plots see
+//! therefore publishes the relevant signals into an `egui` `Context`
+//! data slot once per frame (via
+//! [`stash_signal_snapshot_from_registry`]), and visuals read it back
+//! via [`fetch_signal_snapshot`]. This keeps `lunco-canvas` ignorant
+//! of Bevy entities / `SignalRegistry` while still letting plots see
 //! live data without per-call resource lookups.
+//!
+//! Publication is change-driven, not copy-everything: visuals
+//! register interest in the signals they draw
+//! ([`register_signal_interest`]), and the producer hands out `Arc`'d
+//! immutable chunks that are re-copied only when a signal's history
+//! fingerprint moved.
 //!
 //! ## Future kinds
 //!
@@ -57,7 +64,7 @@ pub const PLOT_NODE_KIND: &str = "lunco.viz.plot";
 /// field presence, not a tag — `{ "entity": 42 }` → `Pinned`,
 /// `{ "doc_id": 7 }` → `Doc`. Pre-enum scenes (which carried only
 /// `entity`) read back as `Pinned` unchanged.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PlotBinding {
     /// Pinned to a specific Bevy entity (Telemetry path). `entity`
@@ -118,9 +125,14 @@ pub type SamplePoint = [f64; 2];
 /// Per-frame snapshot of the signal samples this canvas's plot
 /// nodes need. Built once by the host system, stashed on the
 /// `egui::Context`, read by every plot visual.
+///
+/// Sample vectors are `Arc`'d immutable chunks: the producer only
+/// re-copies a signal out of the registry when its history actually
+/// changed (see [`stash_signal_snapshot_from_registry`]); an
+/// unchanged signal contributes a pointer clone, not a data copy.
 #[derive(Debug, Default, Clone)]
 pub struct SignalSnapshot {
-    pub samples: HashMap<(Entity, String), Vec<SamplePoint>>,
+    pub samples: HashMap<(Entity, String), Arc<Vec<SamplePoint>>>,
     /// Document → currently-bound sim entity. Populated by the host
     /// from `ModelicaDocumentRegistry`. Per-doc plot tiles
     /// (`PlotNodeData.doc_id = Some(_)`) use this to recover the
@@ -149,6 +161,194 @@ pub fn fetch_signal_snapshot(ctx: &egui::Context) -> Arc<SignalSnapshot> {
 
 fn snapshot_id() -> egui::Id {
     egui::Id::new("lunco_viz_signal_snapshot")
+}
+
+// ── Change-driven snapshot production ────────────────────────────────
+//
+// The producer used to deep-copy EVERY registered signal's full ring
+// (2000 samples each) into a fresh HashMap every frame, bound or not.
+// Now plot visuals *register interest* in the signals they actually
+// draw (each frame, while visible), and the producer copies only those
+// — and only when the signal's history fingerprint moved since the
+// last copy. Unchanged signals are re-published as `Arc` clones.
+//
+// Ordering: the host stashes the snapshot *before* `Canvas::ui`, so
+// the interest set it consumes was written by the previous frame's
+// draws. A freshly bound (or freshly scrolled-in) plot therefore shows
+// its curve one frame late — the same degrade-gracefully behaviour an
+// empty snapshot already has.
+
+/// One plot visual's declaration: "I will draw this signal". The
+/// binding is kept unresolved (`PlotBinding`, not `Entity`) because a
+/// Doc-bound tile doesn't know its sim entity — the producer resolves
+/// it through the same `doc_to_entity` table the visual would use.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SignalInterest {
+    pub binding: PlotBinding,
+    pub path: String,
+}
+
+/// Double-buffered interest, rotated by egui pass number. A plain
+/// drain-on-stash would break with several canvases in one frame:
+/// canvas B's producer would drain what canvas A's draws just
+/// registered, so each snapshot would only ever contain the *other*
+/// canvas's signals. Instead, registrations go into `cur` for the
+/// current pass; producers read `prev ∪ cur` without draining; the
+/// rotation on the first registration of a new pass is what makes a
+/// deleted/culled node's interest lapse (after one extra pass).
+#[derive(Debug, Default)]
+struct InterestFrames {
+    pass: u64,
+    cur: std::collections::HashSet<SignalInterest>,
+    prev: std::collections::HashSet<SignalInterest>,
+}
+
+impl InterestFrames {
+    fn rotate_to(&mut self, pass: u64) {
+        if self.pass == pass {
+            return;
+        }
+        if pass == self.pass.wrapping_add(1) {
+            // Consecutive pass: last pass's registrations get one
+            // grace pass so producers that run before the draws still
+            // see them.
+            self.prev = std::mem::take(&mut self.cur);
+        } else {
+            // Pass gap (canvas closed, UI idle) — everything is stale.
+            self.prev.clear();
+            self.cur.clear();
+        }
+        self.pass = pass;
+    }
+}
+
+type InterestSet = Arc<std::sync::Mutex<InterestFrames>>;
+
+fn interest_id() -> egui::Id {
+    egui::Id::new("lunco_viz_signal_interest")
+}
+
+fn interest_set(ctx: &egui::Context) -> InterestSet {
+    ctx.data_mut(|d| {
+        if let Some(existing) = d.get_temp(interest_id()) {
+            existing
+        } else {
+            let fresh: InterestSet = Default::default();
+            d.insert_temp(interest_id(), fresh.clone());
+            fresh
+        }
+    })
+}
+
+/// Called by a plot visual each frame it is visible and bound. Cheap:
+/// one hash-set insert.
+pub fn register_signal_interest(ctx: &egui::Context, interest: SignalInterest) {
+    let set = interest_set(ctx);
+    let Ok(mut guard) = set.lock() else { return };
+    guard.rotate_to(ctx.cumulative_pass_nr());
+    guard.cur.insert(interest);
+}
+
+/// Producer-side read: everything registered last pass or so far this
+/// pass. Non-draining, so several producers in one frame all see the
+/// full set; a node that stops registering (deleted, unbound, culled)
+/// ages out after the next rotation.
+fn read_signal_interest(ctx: &egui::Context) -> std::collections::HashSet<SignalInterest> {
+    let set = interest_set(ctx);
+    let Ok(mut guard) = set.lock() else {
+        return Default::default();
+    };
+    guard.rotate_to(ctx.cumulative_pass_nr());
+    guard.prev.union(&guard.cur).cloned().collect()
+}
+
+/// Cheap change-detector for a ring buffer: length plus the first and
+/// last sample times. Histories are append-only (push + front
+/// eviction) with monotone sim time, so any push, eviction, clear, or
+/// capacity change moves at least one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HistoryFingerprint {
+    len: usize,
+    first_t: u64,
+    last_t: u64,
+}
+
+fn history_fingerprint(h: &crate::signal::ScalarHistory) -> HistoryFingerprint {
+    HistoryFingerprint {
+        len: h.len(),
+        first_t: h.samples.front().map_or(0, |s| s.time.to_bits()),
+        last_t: h.samples.back().map_or(0, |s| s.time.to_bits()),
+    }
+}
+
+/// Producer-side cache: last published fingerprint + `Arc` chunk per
+/// interested signal. Persists across frames in egui context data.
+#[derive(Debug, Default)]
+struct SignalSnapshotCache {
+    entries: HashMap<(Entity, String), (HistoryFingerprint, Arc<Vec<SamplePoint>>)>,
+}
+
+fn snapshot_cache_id() -> egui::Id {
+    egui::Id::new("lunco_viz_signal_snapshot_cache")
+}
+
+/// Build and stash this frame's [`SignalSnapshot`] straight from the
+/// registry, copying **only** the signals plot visuals registered
+/// interest in — and re-copying each of those only when its history
+/// fingerprint moved. The host calls this once per frame *before*
+/// `Canvas::ui`, passing the `doc → entity` table it already builds.
+pub fn stash_signal_snapshot_from_registry(
+    ctx: &egui::Context,
+    registry: &crate::signal::SignalRegistry,
+    doc_to_entity: HashMap<u64, Entity>,
+) {
+    let interest = read_signal_interest(ctx);
+    let cache: Arc<std::sync::Mutex<SignalSnapshotCache>> = ctx.data_mut(|d| {
+        if let Some(existing) = d.get_temp(snapshot_cache_id()) {
+            existing
+        } else {
+            let fresh: Arc<std::sync::Mutex<SignalSnapshotCache>> = Default::default();
+            d.insert_temp(snapshot_cache_id(), fresh.clone());
+            fresh
+        }
+    });
+    let mut samples: HashMap<(Entity, String), Arc<Vec<SamplePoint>>> =
+        HashMap::with_capacity(interest.len());
+    if let Ok(mut cache) = cache.lock() {
+        for i in &interest {
+            let entity = match &i.binding {
+                PlotBinding::Pinned { entity } => Entity::try_from_bits(*entity),
+                PlotBinding::Doc { doc_id } => doc_to_entity.get(doc_id).copied(),
+            };
+            let Some(entity) = entity else { continue };
+            let sig = crate::signal::SignalRef::new(entity, i.path.clone());
+            let Some(hist) = registry.scalar_history(&sig) else {
+                continue;
+            };
+            let key = (entity, i.path.clone());
+            let fp = history_fingerprint(hist);
+            let chunk = match cache.entries.get(&key) {
+                Some((cached_fp, chunk)) if *cached_fp == fp => chunk.clone(),
+                _ => {
+                    let fresh: Arc<Vec<SamplePoint>> =
+                        Arc::new(hist.iter().map(|s| [s.time, s.value]).collect());
+                    cache.entries.insert(key.clone(), (fp, fresh.clone()));
+                    fresh
+                }
+            };
+            samples.insert(key, chunk);
+        }
+        // Interest lapsed (node deleted / unbound / off-screen) —
+        // free the cached copy instead of holding dead history.
+        cache.entries.retain(|k, _| samples.contains_key(k));
+    }
+    stash_signal_snapshot(
+        ctx,
+        SignalSnapshot {
+            samples,
+            doc_to_entity,
+        },
+    );
 }
 
 /// Per-frame snapshot of every component-instance scalar value
@@ -279,6 +479,18 @@ impl NodeVisual for PlotNodeVisual {
         if !ctx.ui.clip_rect().intersects(egui_rect) {
             return;
         }
+        // Visible and bound — tell next frame's snapshot producer to
+        // publish this signal. Registering *after* the cull is what
+        // makes the producer skip off-canvas nodes entirely.
+        if !self.data.signal_path.is_empty() {
+            register_signal_interest(
+                ctx.ui.ctx(),
+                SignalInterest {
+                    binding: self.data.binding.clone(),
+                    path: self.data.signal_path.clone(),
+                },
+            );
+        }
         if egui_rect.width() < 1.0 || egui_rect.height() < 1.0 {
             // Degenerate (zero-area) rect — paint a 1×1 marker
             // anchored at the world centre so the user can still
@@ -350,15 +562,14 @@ impl NodeVisual for PlotNodeVisual {
             PlotBinding::Pinned { entity } => Entity::try_from_bits(*entity),
             PlotBinding::Doc { doc_id } => snapshot.doc_to_entity.get(doc_id).copied(),
         };
-        // Borrow the sample slice out of the (Arc-held) snapshot — it
-        // lives for the whole render, so there's no need to deep-clone
-        // the curve here. The single owned copy egui_plot demands is
-        // made once at `PlotPoints::from` below (CQ-207: was cloned
-        // twice — once on fetch, once into the plot).
-        let points: &[SamplePoint] = resolved_entity
-            .and_then(|e| snapshot.samples.get(&(e, self.data.signal_path.clone())))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        // Borrow the Arc'd chunk out of the snapshot — it lives for
+        // the whole render, so there's no deep-clone here. The Arc
+        // pointer doubles as the revision key for the per-node
+        // decimation cache below: the producer mints a new Arc only
+        // when the signal's history actually changed.
+        let points_arc: Option<&Arc<Vec<SamplePoint>>> = resolved_entity
+            .and_then(|e| snapshot.samples.get(&(e, self.data.signal_path.clone())));
+        let points: &[SamplePoint] = points_arc.map(|a| a.as_slice()).unwrap_or(&[]);
 
         // Adaptive density: at extreme zoom-out we drop to a bare
         // sparkline (under 40×30 px). Above that we *always* keep
@@ -520,14 +731,42 @@ impl NodeVisual for PlotNodeVisual {
                     ))
                 }
             });
+        // Decimate to the plot's pixel width (min-max buckets, so
+        // spikes survive) and cache the result per node, keyed on the
+        // snapshot chunk's identity + the width. The Arc pointer only
+        // changes when the producer re-copied the signal, so an idle
+        // sim costs a pointer compare here, not a retessellation. The
+        // per-frame owned copy egui_plot demands is then bounded by
+        // pixel columns, not by history length.
+        let decimated: Option<Arc<((usize, u32), Vec<SamplePoint>)>> = points_arc.map(|arc| {
+            let key = (Arc::as_ptr(arc) as *const () as usize, plot_w as u32);
+            let cache_id = ctx.ui.id().with(("plot_node_decimated", node.id.0));
+            let cached: Option<Arc<((usize, u32), Vec<SamplePoint>)>> =
+                ctx.ui.ctx().data(|d| d.get_temp(cache_id));
+            match cached {
+                Some(c) if c.0 == key => c,
+                _ => {
+                    let pts = crate::plot_fmt::decimate_min_max(arc, plot_w)
+                        .unwrap_or_else(|| arc.as_ref().clone());
+                    let fresh = Arc::new((key, pts));
+                    ctx.ui
+                        .ctx()
+                        .data_mut(|d| d.insert_temp(cache_id, fresh.clone()));
+                    fresh
+                }
+            }
+        });
         plot.show(&mut child, |plot_ui| {
-            if !points.is_empty() {
-                let line_label = if self.data.title.is_empty() {
-                    self.data.signal_path.as_str()
-                } else {
-                    self.data.title.as_str()
-                };
-                plot_ui.line(Line::new(line_label, PlotPoints::from(points.to_vec())).color(color));
+            if let Some(dec) = &decimated {
+                if !dec.1.is_empty() {
+                    let line_label = if self.data.title.is_empty() {
+                        self.data.signal_path.as_str()
+                    } else {
+                        self.data.title.as_str()
+                    };
+                    plot_ui
+                        .line(Line::new(line_label, PlotPoints::from(dec.1.clone())).color(color));
+                }
             }
         });
 
@@ -675,4 +914,126 @@ pub fn register(reg: &mut lunco_canvas::VisualRegistry) {
             .unwrap_or_default();
         PlotNodeVisual::from_data(payload)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::signal::{SignalRef, SignalRegistry};
+
+    fn pinned(e: Entity, path: &str) -> SignalInterest {
+        SignalInterest {
+            binding: PlotBinding::Pinned {
+                entity: e.to_bits(),
+            },
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn producer_copies_only_interested_signals() {
+        let ctx = egui::Context::default();
+        let mut reg = SignalRegistry::default();
+        let a = Entity::from_raw_u32(1).unwrap();
+        let b = Entity::from_raw_u32(2).unwrap();
+        reg.push_scalar(SignalRef::new(a, "x"), 0.0, 1.0);
+        reg.push_scalar(SignalRef::new(b, "y"), 0.0, 2.0);
+
+        register_signal_interest(&ctx, pinned(a, "x"));
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+
+        let snap = fetch_signal_snapshot(&ctx);
+        assert!(snap.samples.contains_key(&(a, "x".to_string())));
+        assert!(
+            !snap.samples.contains_key(&(b, "y".to_string())),
+            "a signal no visual asked for must never be copied"
+        );
+    }
+
+    #[test]
+    fn unchanged_history_republishes_the_same_arc() {
+        let ctx = egui::Context::default();
+        let mut reg = SignalRegistry::default();
+        let e = Entity::from_raw_u32(1).unwrap();
+        reg.push_scalar(SignalRef::new(e, "x"), 0.0, 1.0);
+        let key = (e, "x".to_string());
+
+        register_signal_interest(&ctx, pinned(e, "x"));
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        let first = fetch_signal_snapshot(&ctx).samples[&key].clone();
+
+        // Idle frame: same history → pointer clone, no re-copy.
+        register_signal_interest(&ctx, pinned(e, "x"));
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        let second = fetch_signal_snapshot(&ctx).samples[&key].clone();
+        assert!(Arc::ptr_eq(&first, &second), "no push ⇒ no fresh copy");
+
+        // A push moves the fingerprint → fresh chunk with the new sample.
+        reg.push_scalar(SignalRef::new(e, "x"), 1.0, 3.0);
+        register_signal_interest(&ctx, pinned(e, "x"));
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        let third = fetch_signal_snapshot(&ctx).samples[&key].clone();
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(third.len(), 2);
+    }
+
+    #[test]
+    fn doc_binding_resolves_through_the_table() {
+        let ctx = egui::Context::default();
+        let mut reg = SignalRegistry::default();
+        let e = Entity::from_raw_u32(7).unwrap();
+        reg.push_scalar(SignalRef::new(e, "P.y"), 0.0, 5.0);
+
+        register_signal_interest(
+            &ctx,
+            SignalInterest {
+                binding: PlotBinding::Doc { doc_id: 42 },
+                path: "P.y".to_string(),
+            },
+        );
+        let mut table = HashMap::new();
+        table.insert(42u64, e);
+        stash_signal_snapshot_from_registry(&ctx, &reg, table);
+
+        let snap = fetch_signal_snapshot(&ctx);
+        assert!(snap.samples.contains_key(&(e, "P.y".to_string())));
+        assert_eq!(snap.doc_to_entity.get(&42), Some(&e));
+    }
+
+    #[test]
+    fn interest_survives_a_second_producer_in_the_same_pass() {
+        // Two canvases per frame each stash a snapshot; the second
+        // must still see the first canvas's registrations (a drain-
+        // on-stash design starved them).
+        let ctx = egui::Context::default();
+        let mut reg = SignalRegistry::default();
+        let e = Entity::from_raw_u32(1).unwrap();
+        reg.push_scalar(SignalRef::new(e, "x"), 0.0, 1.0);
+
+        register_signal_interest(&ctx, pinned(e, "x"));
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        assert_eq!(fetch_signal_snapshot(&ctx).samples.len(), 1);
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        assert_eq!(fetch_signal_snapshot(&ctx).samples.len(), 1);
+    }
+
+    #[test]
+    fn interest_lapses_when_no_node_re_registers() {
+        let ctx = egui::Context::default();
+        let mut reg = SignalRegistry::default();
+        let e = Entity::from_raw_u32(1).unwrap();
+        reg.push_scalar(SignalRef::new(e, "x"), 0.0, 1.0);
+
+        register_signal_interest(&ctx, pinned(e, "x"));
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        assert_eq!(fetch_signal_snapshot(&ctx).samples.len(), 1);
+
+        // Two egui passes with nobody registering (node deleted /
+        // culled) — the double-buffered interest ages out and the
+        // producer stops publishing the signal.
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
+        assert!(fetch_signal_snapshot(&ctx).samples.is_empty());
+    }
 }

@@ -118,11 +118,17 @@ fn drive_range_hit(
             .unwrap_or(DEFAULT_HIT_RADIUS);
         // `distance`, NOT `max_distance` — the point the sensor actually reported.
         let axis = s.axis.normalize_or_zero();
-        *tf = Transform {
+        let want = Transform {
             translation: (s.offset + axis * s.distance).as_vec3(),
             rotation: Quat::IDENTITY,
             scale: Vec3::splat(radius as f32),
         };
+        // Guarded like the `Visibility` write above: `DerefMut` marks the
+        // `Transform` `Changed` and re-runs propagation + the GlobalTransform
+        // rewrite for this subtree even when the sensor reading has not moved.
+        if *tf != want {
+            *tf = want;
+        }
     }
 }
 
@@ -164,11 +170,17 @@ fn drive_range_beam(
         // `radius`/`height` are baked into the mesh at instantiation and never re-read
         // — scaling is the only live channel.
         let axis = s.axis.normalize_or_zero();
-        *tf = Transform {
+        let want = Transform {
             translation: (s.offset + axis * len * 0.5).as_vec3(),
             rotation: Quat::from_rotation_arc(Vec3::Y, axis.as_vec3()),
             scale: Vec3::new(half_width as f32, len as f32, half_width as f32),
         };
+        // Guarded like the `PbrLook` alpha write below: an unconditional write
+        // fires `Changed<Transform>` and re-propagates the subtree every frame
+        // even while the sensor reports the same range.
+        if *tf != want {
+            *tf = want;
+        }
 
         // Fade while the sensor reports its fallback rather than a real hit. Only the
         // ALPHA, and only a choice between two AUTHORED values — the colour is the

@@ -334,6 +334,14 @@ impl Quadtree {
         let nodes = 1i64 << self.max_depth;
         let centre = self.node_containing(self.max_depth, focus_xz);
         let (cx, cz) = (centre.x as i64, centre.z as i64);
+        // Index the cover by coord ONCE for the whole 3×3 footprint. The old
+        // shape linear-scanned the full cover (`iter().position(covers)`) per
+        // target — nine scans of hundreds of nodes per body per frame; against
+        // the map the covering node is found by walking the target's ancestor
+        // chain (O(depth)), because in an exact cover the node covering a
+        // region IS an ancestor-or-self.
+        let mut cover: std::collections::HashMap<QuadCoord, Selected> =
+            sel.drain(..).map(|s| (s.coord, s)).collect();
         for dz in -1..=1i64 {
             for dx in -1..=1i64 {
                 let (nx, nz) = (cx + dx, cz + dz);
@@ -345,9 +353,15 @@ impl Quadtree {
                     x: nx as u32,
                     z: nz as u32,
                 };
-                self.force_refine(sel, target, node_error, pin_morph);
+                self.force_refine(&mut cover, target, node_error, pin_morph);
             }
         }
+        sel.extend(cover.into_values());
+        // Deterministic output. The map iterates in hash order, and the old
+        // `swap_remove` shape depended on the caller's input order anyway —
+        // emit the total (depth, x, z) order instead, the same load-bearing
+        // key the incremental cover walk sorts its edits by.
+        sel.sort_unstable_by_key(|s| (s.coord.depth, s.coord.x, s.coord.z));
     }
 
     /// Split the selected ancestor of `target` (if coarser) down to
@@ -358,7 +372,7 @@ impl Quadtree {
     /// seam lands one ring away from the body rather than under it.
     fn force_refine(
         &self,
-        sel: &mut Vec<Selected>,
+        cover: &mut std::collections::HashMap<QuadCoord, Selected>,
         target: QuadCoord,
         node_error: &impl Fn(QuadCoord, Square) -> f64,
         pin_morph: bool,
@@ -368,18 +382,31 @@ impl Quadtree {
                 && (target.x >> (target.depth - anc.depth)) == anc.x
                 && (target.z >> (target.depth - anc.depth)) == anc.z
         }
-        let Some(i) = sel.iter().position(|s| covers(s.coord, target)) else {
-            return; // not covered (shouldn't happen for an exact cover)
+        // The covering node of `target` in an exact cover is an ancestor (or
+        // `target` itself): walk the parent chain instead of scanning.
+        let mut anc = target;
+        let covering = loop {
+            if cover.contains_key(&anc) {
+                break anc;
+            }
+            match anc.parent() {
+                Some(p) => anc = p,
+                None => return, // not covered (shouldn't happen for an exact cover)
+            }
         };
-        if sel[i].coord.depth >= target.depth {
+        if covering.depth >= target.depth {
             // Already at target depth. If pinning, ensure its morph window is ∞.
             if pin_morph {
-                sel[i].morph_start = f64::INFINITY;
-                sel[i].morph_end = f64::INFINITY;
+                if let Some(s) = cover.get_mut(&covering) {
+                    s.morph_start = f64::INFINITY;
+                    s.morph_end = f64::INFINITY;
+                }
             }
             return;
         }
-        let mut cur = sel.swap_remove(i);
+        let mut cur = cover
+            .remove(&covering)
+            .expect("covering node was just found in the map");
         while cur.coord.depth < target.depth {
             // Children's geomorph window ends where THIS node would refine —
             // the same band the error-driven walk would have assigned them.
@@ -420,7 +447,7 @@ impl Quadtree {
                 if is_target_path {
                     next = Some(s);
                 } else {
-                    sel.push(s);
+                    cover.insert(cc, s);
                 }
             }
             cur = next.expect("exactly one child covers the target");
@@ -434,7 +461,7 @@ impl Quadtree {
             cur.morph_start = f64::INFINITY;
             cur.morph_end = f64::INFINITY;
         }
-        sel.push(cur);
+        cover.insert(cur.coord, cur);
     }
 }
 
@@ -595,6 +622,33 @@ mod tests {
         let n = sel.len();
         q.refine_selection_at(&mut sel, rover, flat);
         assert_eq!(sel.len(), n);
+    }
+
+    /// The refined output is a pure function of the cover CONTENT, not the
+    /// caller's input order. The old `swap_remove` shape reordered the vec
+    /// input-dependently; the map-based walk emits the total (depth, x, z)
+    /// order, so equal covers refine to EQUAL vecs.
+    #[test]
+    fn forced_refinement_output_order_is_input_independent() {
+        let q = qt();
+        let flat = |_c: QuadCoord, _r: Square| 0.05;
+        let rover = [1234.5, -2345.6];
+        let mut a = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
+        q.refine_selection_at(&mut a, rover, flat);
+        // Same cover, reversed input order — must refine to the identical vec.
+        let mut b = a.clone();
+        b.reverse();
+        q.refine_selection_at(&mut b, rover, flat);
+        let mut a2 = a.clone();
+        q.refine_selection_at(&mut a2, rover, flat);
+        assert_eq!(
+            a2.iter().map(|s| s.coord).collect::<Vec<_>>(),
+            b.iter().map(|s| s.coord).collect::<Vec<_>>(),
+            "output must not depend on input order"
+        );
+        // …and it is the total (depth, x, z) order.
+        assert!(a2.windows(2).all(|w| (w[0].coord.depth, w[0].coord.x, w[0].coord.z)
+            < (w[1].coord.depth, w[1].coord.x, w[1].coord.z)));
     }
 
     /// `refine_selection_at_with(.., pin_morph: true)` emits the max-depth

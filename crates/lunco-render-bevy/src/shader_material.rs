@@ -162,12 +162,7 @@ pub struct ShaderMaterial {
 fn empty_schema_arc() -> Arc<ParamSchema> {
     static EMPTY: OnceLock<Arc<ParamSchema>> = OnceLock::new();
     EMPTY
-        .get_or_init(|| {
-            Arc::new(ParamSchema {
-                fields: Vec::new(),
-                size: 0,
-            })
-        })
+        .get_or_init(|| Arc::new(ParamSchema::default()))
         .clone()
 }
 
@@ -321,10 +316,28 @@ impl Material for ShaderMaterial {
         // rejected by WebGPU's stricter validation (frames dropped in-browser).
         // So only swap the fragment shader for non-prepass pipelines; let the
         // prepass keep Bevy's default shader (it only needs depth/normals).
+        //
+        // DETECTION IS BY DEBUG LABEL, and that is a known soft spot (T30): no
+        // structural "this is the prepass" signal reaches `Material::specialize`
+        // — bevy's prepass pipeline calls it with the same `MaterialPipelineKey`
+        // as the main pass (the `MeshPipelineKey` prepass bits describe the
+        // VIEW's enabled prepasses, not which pass is being specialized), so the
+        // pipeline's own label ("prepass_pipeline") is the only discriminator
+        // available here. If a bevy upgrade renames or drops the label, this
+        // silently classifies the prepass as a main pass again and re-installs
+        // the invalid fragment shader. The assert below trips in dev builds the
+        // moment labels disappear entirely; a rename within the "prepass" family
+        // still matches `contains`.
         let is_prepass = descriptor
             .label
             .as_ref()
             .is_some_and(|l| l.contains("prepass"));
+        debug_assert!(
+            descriptor.label.is_some(),
+            "pipeline descriptor carries no debug label; ShaderMaterial::specialize \
+             detects the prepass by label and would mis-specialize it — find a \
+             structural prepass signal for this bevy version"
+        );
         // The ONE place the native/web shading split lives. `lunco::terrain`
         // (terrain_surface.wgsl) keys its noise dimensionality and octave budget
         // off this def, which is what let the six terrain shaders collapse to one

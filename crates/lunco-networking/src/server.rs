@@ -1605,10 +1605,25 @@ fn drain_and_send_asset_chunks(
     q_client: Query<&RemoteId, With<ClientOf>>,
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
+    time: Res<Time>,
     // Carries chunks not yet flushed (per-frame cap / still-arriving tasks) across
     // frames. A `Local` (not a resource) — this is the only reader/writer.
     mut ready: Local<Vec<(SessionId, crate::scenario::AssetChunkMsg)>>,
+    // Per-peer estimate of chunks lightyear still holds unacked (sends minus the
+    // assumed drain) — the sender-side high-water mark. See
+    // [`MAX_UNACKED_CHUNK_ESTIMATE`](crate::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE).
+    mut unacked_estimate: Local<std::collections::HashMap<SessionId, f32>>,
 ) {
+    // Decay the unacked estimate: assume each peer drained at the conservative
+    // rate since last frame. Runs before the empty-check so the budget refills
+    // even on frames with nothing to flush.
+    if !unacked_estimate.is_empty() {
+        let drained = crate::scenario_sync::ASSUMED_DRAIN_CHUNKS_PER_SEC * time.delta_secs();
+        unacked_estimate.retain(|_, est| {
+            *est -= drained;
+            *est > 0.0
+        });
+    }
     // Harvest finished read jobs; keep the still-running ones.
     if !tasks.0.is_empty() {
         let mut still_running = Vec::new();
@@ -1633,7 +1648,11 @@ fn drain_and_send_asset_chunks(
         }
     }
 
-    // Flush FIFO up to the per-frame cap; requeue the remainder.
+    // Flush FIFO up to the per-frame cap AND the per-peer unacked budget;
+    // requeue the remainder. The budget is the real flow control: lightyear's
+    // reliable `buffer_send` never rejects, so past the high-water mark a
+    // stalled client's chunks wait HERE (inert Vec) instead of growing the
+    // resend bookkeeping without bound (C3).
     let mut sent = 0usize;
     let mut requeue = Vec::new();
     for (session, chunk) in std::mem::take(&mut *ready) {
@@ -1643,6 +1662,13 @@ fn drain_and_send_asset_chunks(
         }
         match peer_of.get(&session) {
             Some(&peer) => {
+                let est = unacked_estimate.entry(session).or_insert(0.0);
+                if *est >= crate::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE {
+                    // Over budget for this peer — hold the chunk until the
+                    // estimate drains. FIFO order is preserved by the requeue.
+                    requeue.push((session, chunk));
+                    continue;
+                }
                 server_send(
                     &mut sender,
                     server,
@@ -1650,6 +1676,7 @@ fn drain_and_send_asset_chunks(
                     SyncChannel::BulkData,
                     &SyncEnvelope::AssetChunk(chunk),
                 );
+                *est += 1.0;
                 sent += 1;
             }
             // Peer disconnected mid-transfer → drop its chunks (it re-requests on
@@ -1657,6 +1684,8 @@ fn drain_and_send_asset_chunks(
             None => {}
         }
     }
+    // A disconnected peer's estimate must not linger into a reused session id.
+    unacked_estimate.retain(|session, _| peer_of.contains_key(session));
     *ready = requeue;
 }
 

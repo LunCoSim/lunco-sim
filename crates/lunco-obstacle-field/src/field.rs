@@ -214,6 +214,10 @@ impl HeightGrid {
     /// and a fine probe reports a genuinely different normal at each vertex. The
     /// cure is in the interpolant, where the discontinuity actually lives, rather
     /// than in the probe that merely revealed it.
+    // `#[inline]`: the bake kernels (`resample`, tile lattice fills) call this
+    // per sample through a now-monomorphic path — cross-crate inlining is the
+    // point of that monomorphization.
+    #[inline]
     pub fn height_at(&self, x: f64, z: f64) -> f64 {
         let s = self.spacing() as f64;
         let half = self.half_extent as f64;

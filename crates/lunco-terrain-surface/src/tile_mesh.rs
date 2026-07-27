@@ -53,9 +53,13 @@ pub struct TileMesh {
 /// surface aliased rim-scale features across the 2×-spaced even lattice (the
 /// mid-field "sawtooth craters") and made the tile→parent swap pop. Pass the
 /// same source twice when no distinct parent gate exists (tests, flat ground).
-pub fn bake_tile_mesh(
-    src: &dyn HeightSource,
-    morph_src: &dyn HeightSource,
+pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
+    // Generic, not `&dyn`: the bake samples the source once per lattice point
+    // (plus the morph lattice), and per-sample virtual dispatch blocked
+    // inlining of the whole composed-oracle chain. Callers pass the concrete
+    // band-limited `SurfaceOracle` pair; values are identical either way.
+    src: &S,
+    morph_src: &M,
     region: Square,
     res: usize,
     dem_half_extent: f64,
@@ -78,36 +82,59 @@ pub fn bake_tile_mesh(
 
     let world =
         |ix: usize, iz: usize| -> (f64, f64) { (x0 + ix as f64 * step, z0 + iz as f64 * step) };
-    let height = |wx: f64, wz: f64| -> f32 { (src.height_at(wx, wz) - origin_y) as f32 };
 
-    // Normals are sampled ANALYTICALLY from the composed source, NOT from each
-    // tile's own grid — per-tile finite-difference normals don't agree at shared
-    // edges (visible shading "stitching"); the analytic field removes that.
+    // Fine surface: ONE padded `(res+2)²` height lattice — the vertex grid plus a
+    // one-step ghost ring — sampled once, then positions AND central-difference
+    // normals are read from it. The previous shape (height + a 4-tap analytic
+    // probe per vertex) was 5 oracle evals per vertex; this is ~1.
     //
-    // The central-difference `eps` is a FIXED world scale, identical at every
-    // LOD depth. It used to scale with the tile's vertex spacing ("proper
-    // normal LOD") — but the lunar BRDF (`regolith_factor`) is normal-driven,
-    // so per-depth eps meant per-depth *brightness*: crater tiles (refined to
-    // max depth by the error metric) shaded visibly differently from the
-    // surrounding coarse flat tiles, and every LOD boundary stepped in tone
-    // (the tile-sized "checkerboard" patches). The surface an eps probes is
-    // already band-limited per tile (`detail_limited(step)` in the bake), so
-    // far tiles keep their smoothing through the SURFACE, not the probe — a
-    // fixed feature-scale probe keeps tone continuous across depths.
+    // Two hard-won properties this must keep:
+    // - **No shading "stitching" at shared edges.** Per-tile FD normals off each
+    //   tile's OWN interior grid disagreed at tile seams. The ghost ring fixes
+    //   that a different way than the old analytic probe did: same-depth
+    //   neighbours sample the same band-limited source at the same world lattice
+    //   points (the ghost ring IS the neighbour's first column), so edge normals
+    //   are identical by construction.
+    // - **Tone continuity across LOD depths.** The lunar BRDF is normal-driven,
+    //   and a per-depth probe scale once meant per-depth brightness (tile-sized
+    //   "checkerboard"). The stencil here DOES ride the tile's step — but the
+    //   surface it probes is band-limited per tile (`detail_limited(step)` in
+    //   the bake), so each depth's normals describe that depth's own surface,
+    //   exactly like the morph normals below. If tone stepping ever reappears,
+    //   suspect the band gate, not the stencil width.
     //
-    // A sub-metre eps is only meaningful because the base DEM is interpolated
-    // C1 (Catmull-Rom, `HeightGrid::height_at`). While it was bilinear the
-    // gradient was constant within each ~4 m cell, so every probe in that cell
-    // returned an identical normal and the terrain shaded as per-cell facets.
-    // Widening eps to the cell size hides that, but band-limits the normals to
-    // the DEM posting and erases the sub-cell relief the over-zoom layer adds —
-    // so the interpolant, not the probe, is where that has to be fixed. Do not
-    // "fix" faceting here by growing eps.
-    let eps = 0.5;
-    let normal_at = |wx: f64, wz: f64| -> [f32; 3] {
-        let n = src.normal_at(wx, wz, eps);
-        [n[0] as f32, n[1] as f32, n[2] as f32]
+    // Sub-vertex relief still needs the base DEM interpolated C1 (Catmull-Rom,
+    // `HeightGrid::height_at`) — while it was bilinear, the gradient was
+    // constant per DEM cell and the terrain shaded as facets. The interpolant,
+    // not this stencil, is where that lives.
+    let pad = res + 2;
+    let mut lattice = vec![0.0f64; pad * pad];
+    for iz in 0..pad {
+        let wz = z0 + (iz as f64 - 1.0) * step;
+        for ix in 0..pad {
+            let wx = x0 + (ix as f64 - 1.0) * step;
+            lattice[iz * pad + ix] = src.height_at(wx, wz);
+        }
+    }
+    // Lattice lookup in VERTEX indices (ghost ring at -1 and `res`).
+    let h_at = |ix: isize, iz: isize| -> f64 {
+        lattice[(iz + 1) as usize * pad + (ix + 1) as usize]
     };
+    let fine_normal = |ix: isize, iz: isize| -> [f32; 3] {
+        let hx = h_at(ix + 1, iz) - h_at(ix - 1, iz);
+        let hz = h_at(ix, iz + 1) - h_at(ix, iz - 1);
+        // gradient of height field → normal (−dY/dx, 1, −dY/dz), normalised —
+        // the same formula as `HeightSource::normal_at` with `eps = step`.
+        let nx = -hx / (2.0 * step);
+        let nz = -hz / (2.0 * step);
+        let len = (nx * nx + 1.0 + nz * nz).sqrt();
+        [(nx / len) as f32, (1.0 / len) as f32, (nz / len) as f32]
+    };
+
+    // Morph normals stay ANALYTIC at a fixed sub-metre probe: they must equal
+    // the PARENT surface's own normal at the snapped point (pinned by test), and
+    // there is one per even/even vertex only, so the lattice saving is marginal.
+    let eps = 0.5;
 
     // The normal of the PARENT surface — the one that belongs to the morph target.
     // Sampled from `morph_src` (band-limited to the parent's Nyquist), so it
@@ -142,7 +169,7 @@ pub fn bake_tile_mesh(
     for iz in 0..res {
         for ix in 0..res {
             let (wx, wz) = world(ix, iz);
-            let y = height(wx, wz);
+            let y = (h_at(ix as isize, iz as isize) - origin_y) as f32;
             min_y = min_y.min(y);
             max_y = max_y.max(y);
             positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
@@ -160,7 +187,7 @@ pub fn bake_tile_mesh(
             // surface the tile is morphing AWAY from.
             morph_normals.push(parent_n[k]);
 
-            normals.push(normal_at(wx, wz));
+            normals.push(fine_normal(ix as isize, iz as isize));
             uvs.push([
                 ((wx + dem_half_extent) * inv_uv) as f32,
                 ((wz + dem_half_extent) * inv_uv) as f32,

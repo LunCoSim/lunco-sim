@@ -3114,7 +3114,6 @@ impl Plugin for SyncPlugin {
                     send_tutor_status_updates,
                     send_student_status_updates,
                     apply_tutorial_mirroring,
-                    update_tutor_lifecycle,
                     block_action_states,
                     // B4 Phase 1: compute per-peer AOI interest sets (host-only, throttled
                     // to `interest_hz`). The server-side `assemble_and_send_snapshots`
@@ -3125,8 +3124,22 @@ impl Plugin for SyncPlugin {
                     // Policies ride this too — a `LunCoPolicy` prim is a USD doc op —
                     // so there is no separate policy broadcast.
                     crate::journal_plane::broadcast_journal_entries,
-                ),
+                )
+                    // Standalone skips the whole presence/tutor/journal/interest
+                    // pass (C12) — every system here is a wire producer or
+                    // consumer, and `Standalone` has no wire. The input-blocking
+                    // systems (`block_bevy_inputs`/`block_action_states`) stay
+                    // UNGATED: they also *clear* a block left over from a
+                    // session, so they must keep running after LeaveServer —
+                    // as does `update_tutor_lifecycle` below, whose timeout is
+                    // what exits follow mode when the tutor's stream stops.
+                    .run_if(crate::wire_is_live),
             )
+            // See the gate note above: the lifecycle timeout must fire even
+            // after the wire is gone, or a LeaveServer mid-follow leaves
+            // `follow_mode` latched and the (ungated) input blockers block
+            // forever. Two resource reads/frame — nothing to gate.
+            .add_systems(Update, update_tutor_lifecycle)
             // Scenario asset transfer (Phase 3 + G1/G2/G3), client-side. Split
             // into its own tuple (bevy caps system-tuple arity); ordered after
             // `drain_sync_inbox` so the manifest/chunk queues it fills are current
@@ -3135,19 +3148,29 @@ impl Plugin for SyncPlugin {
             .add_systems(
                 Update,
                 (
-                    crate::scenario_sync::drive_cache_probe,
-                    // Bytes plane: HTTP when the host advertises an endpoint,
-                    // else the in-session chunk request below. Exactly one of the
-                    // two claims each CID (both gate on `requested`).
-                    crate::http_fetch::fetch_missing_assets_http,
-                    crate::scenario_sync::request_missing_assets,
-                    crate::scenario_sync::reassemble_asset_chunks,
-                    crate::scenario_sync::drain_persist_results,
-                    // G1: persist `.scenario.json` once fully cached.
-                    crate::scenario_sync::write_scenario_index,
-                    // G2: refresh the download-progress resource for the overlay.
-                    crate::scenario_sync::update_scenario_download_status,
+                    (
+                        crate::scenario_sync::drive_cache_probe,
+                        // Bytes plane: HTTP when the host advertises an endpoint,
+                        // else the in-session chunk request below. Exactly one of the
+                        // two claims each CID (both gate on `requested`).
+                        crate::http_fetch::fetch_missing_assets_http,
+                        crate::scenario_sync::request_missing_assets,
+                        crate::scenario_sync::reassemble_asset_chunks,
+                        crate::scenario_sync::drain_persist_results,
+                        // G1: persist `.scenario.json` once fully cached.
+                        crate::scenario_sync::write_scenario_index,
+                        // G2: refresh the download-progress resource for the overlay.
+                        crate::scenario_sync::update_scenario_download_status,
+                    )
+                        // The download ferry only moves bytes a HOST advertised —
+                        // standalone skips it (C12). Mid-download LeaveServer just
+                        // stops the bookkeeping; the async persist writes finish
+                        // on their own.
+                        .run_if(crate::wire_is_live),
                     // G3: rebuild the cached-twins registry from index.json (boot).
+                    // UNGATED on purpose: the cached-twins menu lists previously
+                    // downloaded twins in single-player too, and the system is a
+                    // one-shot (internal `kicked` latch) + channel poll.
                     crate::scenario_sync::refresh_cached_twins_registry,
                 )
                     .after(drain_sync_inbox),

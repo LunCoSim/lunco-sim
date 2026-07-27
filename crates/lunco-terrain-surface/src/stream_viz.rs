@@ -565,12 +565,36 @@ fn evolve_cover_for_foci(
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
 ) -> usize {
-    evolve_cover_for_foci_with_retention(qt, cover, foci, node_error, budget, &|_, _| false)
+    evolve_cover_for_foci_with_retention(
+        qt,
+        cover,
+        foci,
+        node_error,
+        budget,
+        &|_, _| false,
+        &mut CoverScratch::default(),
+    )
+    .1
+}
+
+/// Reused candidate collections for [`evolve_cover_for_foci_with_retention`] —
+/// previously three fresh heap collections per terrain per frame, allocated to
+/// apply at most [`MAX_COVER_EDITS`] edits.
+#[derive(Default)]
+struct CoverScratch {
+    parents: HashSet<QuadCoord>,
+    merges: Vec<(f64, QuadCoord)>,
+    splits: Vec<(f64, QuadCoord)>,
+    chain: Vec<QuadCoord>,
 }
 
 /// The persistent-cover evolution with an optional retain band. A retain band
 /// blocks voluntary merges of already-refined tiles, but never requests new
 /// splits; it is therefore hysteresis rather than a larger detail radius.
+///
+/// Returns `(edits applied, splits refused by the budget)`. Zero edits means
+/// the cover is at its fixed point FOR THESE INPUTS — the caller can skip the
+/// pass until an input changes (see [`LodTiles::settled_sig`]).
 fn evolve_cover_for_foci_with_retention(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
@@ -578,7 +602,14 @@ fn evolve_cover_for_foci_with_retention(
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
     retain_refinement: &impl Fn(QuadCoord, Square) -> bool,
-) -> usize {
+    scratch: &mut CoverScratch,
+) -> (usize, usize) {
+    let CoverScratch {
+        parents,
+        merges,
+        splits,
+        chain,
+    } = scratch;
     if cover.is_empty() {
         cover.insert(QuadCoord::ROOT);
     }
@@ -593,31 +624,46 @@ fn evolve_cover_for_foci_with_retention(
     let slack = |c: QuadCoord| dist(c) / range(c).max(1e-9);
 
     // Full quads whose parent could take over, ranked by how far past the band.
-    let mut parents: HashSet<QuadCoord> = HashSet::new();
+    parents.clear();
     for c in cover.iter() {
         if let Some(p) = c.parent() {
             parents.insert(p);
         }
     }
-    let mut merges: Vec<(f64, QuadCoord)> = parents
-        .into_iter()
-        .filter(|p| p.children().iter().all(|k| cover.contains(k)))
-        .map(|p| {
-            let slack = if retain_refinement(p, qt.region(p)) {
-                0.0
-            } else {
-                slack(p)
-            };
-            (slack, p)
-        })
-        .collect();
+    merges.clear();
+    merges.extend(
+        parents
+            .drain()
+            .filter(|p| p.children().iter().all(|k| cover.contains(k)))
+            .map(|p| {
+                let slack = if retain_refinement(p, qt.region(p)) {
+                    0.0
+                } else {
+                    slack(p)
+                };
+                (slack, p)
+            }),
+    );
     // Total order for peer determinism: slack, then coord (a slack-only sort
     // leaves equal keys in HashSet iteration order, so a budget truncation
     // would edit different nodes on different peers/runs).
-    merges.sort_by(|a, b| {
+    let merge_order = |a: &(f64, QuadCoord), b: &(f64, QuadCoord)| {
         b.0.total_cmp(&a.0)
             .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
-    });
+    };
+    // Sorting the FULL merge list was one of the two per-frame O(n log n)
+    // passes run to apply ≤MAX_COVER_EDITS edits. Pass 1 only ever consumes
+    // the candidates past the hysteresis band, so partition those to the
+    // front and order just that (usually empty) prefix; the full ordering is
+    // materialised only on the rare over-budget frame (pass 2 below).
+    let mut band = 0;
+    for i in 0..merges.len() {
+        if merges[i].0 >= REFINE_HYSTERESIS {
+            merges.swap(band, i);
+            band += 1;
+        }
+    }
+    merges[..band].sort_by(merge_order);
 
     let mut edits = 0usize;
     let mut budget_refused = 0usize;
@@ -633,13 +679,12 @@ fn evolve_cover_for_foci_with_retention(
         true
     };
 
-    // 1. Voluntary merges — the node is genuinely past the hysteresis band.
-    for &(s, p) in merges.iter() {
+    // 1. Voluntary merges — the node is genuinely past the hysteresis band
+    //    (the sorted prefix holds exactly those, farthest first).
+    for i in 0..band {
+        let (_, p) = merges[i];
         if edits >= MAX_COVER_EDITS {
             break;
-        }
-        if s < REFINE_HYSTERESIS {
-            break; // sorted: nothing further out remains
         }
         // Restriction guard — also what makes cascade splits STABLE: a node
         // force-split for a neighbour's sake drifts past the hysteresis band, but
@@ -661,13 +706,20 @@ fn evolve_cover_for_foci_with_retention(
     //    no far merge can satisfy the hard budget may this pass touch retained tiles.
     //    Not bounded by `MAX_COVER_EDITS`: being over budget is a frame-rate problem,
     //    and unlike a global metric change this only touches the quads it drops.
+    // Forced merges count toward the RETURNED edit total (a pass that shrank
+    // the cover is not a fixed point) but not toward `MAX_COVER_EDITS` — being
+    // over budget is a frame-rate problem the pass must fully resolve.
+    let mut forced = 0usize;
     if cover.len() > budget {
+        // Only NOW does the whole list need ordering (the fast path above
+        // sorted just the hysteresis prefix).
+        merges.sort_by(merge_order);
         for retained in [false, true] {
             // `merges` is sorted farthest-first (largest slack first). Preserve
             // that order here: the reverse iterator used to drop the nearest
             // non-retained quad before an available far one, producing a fine →
             // coarse → fine pulse as a moving camera crossed successive tiles.
-            for &(_, p) in &merges {
+            for &(_, p) in merges.iter() {
                 if cover.len() <= budget {
                     break;
                 }
@@ -682,7 +734,9 @@ fn evolve_cover_for_foci_with_retention(
                 if merge_violates_restriction(cover, p) {
                     continue;
                 }
-                merge_one(cover, p);
+                if merge_one(cover, p) {
+                    forced += 1;
+                }
             }
             if cover.len() <= budget {
                 break;
@@ -691,21 +745,46 @@ fn evolve_cover_for_foci_with_retention(
     }
 
     // 3. Splits, nearest-first, until the budget is spent.
-    let mut splits: Vec<(f64, QuadCoord)> = cover
-        .iter()
-        .copied()
-        .filter(|c| c.depth < qt.max_depth)
-        .map(|c| (slack(c), c))
-        .filter(|&(s, _)| s < 1.0)
-        .collect();
-    splits.sort_by(|a, b| {
+    splits.clear();
+    splits.extend(
+        cover
+            .iter()
+            .copied()
+            .filter(|c| c.depth < qt.max_depth)
+            .map(|c| (slack(c), c))
+            .filter(|&(s, _)| s < 1.0),
+    );
+    let split_order = |a: &(f64, QuadCoord), b: &(f64, QuadCoord)| {
         a.0.total_cmp(&b.0)
             .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
-    });
-    for &(_, c) in splits.iter() {
+    };
+    // The second full O(n log n) sort per frame: on a moving camera the
+    // wanting-to-split set can approach the whole cover, but at most the
+    // remaining edit budget of them can LAND. Partition the best candidates
+    // to the front (total order ⇒ the partition boundary is exact) and sort
+    // only that prefix; the tail is ordered on demand ONLY if refusals or
+    // consumed cascades leave edit budget unspent — so the visit order, the
+    // applied edits and the `budget_refused` count are all identical to the
+    // full sort.
+    let prefix = MAX_COVER_EDITS.saturating_sub(edits).min(splits.len());
+    if prefix > 0 && prefix < splits.len() {
+        splits.select_nth_unstable_by(prefix - 1, split_order);
+    }
+    splits[..prefix].sort_by(split_order);
+    let mut sorted_upto = prefix;
+    let mut next = 0;
+    while next < splits.len() {
         if edits >= MAX_COVER_EDITS {
             break;
         }
+        if next == sorted_upto {
+            // Earlier candidates were refused/consumed without spending the
+            // edit budget — order the tail before visiting it.
+            splits[sorted_upto..].sort_by(split_order);
+            sorted_upto = splits.len();
+        }
+        let (_, c) = splits[next];
+        next += 1;
         if !cover.contains(&c) {
             continue; // consumed by an earlier chain's cascade
         }
@@ -715,7 +794,8 @@ fn evolve_cover_for_foci_with_retention(
         // such neighbour is exactly one level up, and its own cascade needs (the
         // ancestors the loop pushes transitively), so the chain stays short and
         // the walk terminates at the root.
-        let mut chain = vec![c];
+        chain.clear();
+        chain.push(c);
         let mut i = 0;
         while i < chain.len() {
             let n = chain[i];
@@ -749,8 +829,8 @@ fn evolve_cover_for_foci_with_retention(
             continue;
         }
         // Coarsest first, so every forced split lands on an already-conforming rim.
-        chain.sort_by_key(|q| q.depth);
-        for q in chain {
+        chain.sort_unstable_by_key(|q| q.depth);
+        for &q in chain.iter() {
             if !cover.remove(&q) {
                 continue;
             }
@@ -760,7 +840,7 @@ fn evolve_cover_for_foci_with_retention(
             edits += 1;
         }
     }
-    budget_refused
+    (edits + forced, budget_refused)
 }
 
 fn build_draw_partition(
@@ -826,7 +906,8 @@ pub struct LodTiles {
     mode: TerrainShaderMode,
     gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
-    /// focus + eye height, generation, oracle identity, LOD knobs). When it
+    /// focus + eye height + heading — heading drives bake PRIORITY via
+    /// `benefit()` — generation, oracle identity, LOD knobs). When it
     /// matches last frame's and no bake is in flight, the
     /// resident tile set is already correct and the whole reselection is skipped —
     /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
@@ -854,6 +935,14 @@ pub struct LodTiles {
     /// interval cancelled and replaced the same near tiles repeatedly, producing
     /// coarse → fine → coarse flicker before normal traversal had even begun.
     bootstrap_ready: bool,
+    /// Selection signature at which the last `evolve_cover` pass applied ZERO
+    /// edits — the cover's fixed point for those inputs. While the signature
+    /// still matches, re-running the pass can only rebuild and re-rank the
+    /// same refused split chains: a permanently `budget_refused` terrain
+    /// otherwise retried them EVERY frame the body ran (all through a long
+    /// fill, while bakes are in flight), keeping idle CPU burnt on a decision
+    /// that cannot change until the focus/gen/oracle/budget signature does.
+    settled_sig: Option<u64>,
 }
 
 impl LodTiles {
@@ -1079,6 +1168,13 @@ register_commands!(on_set_terrain_lod);
 /// whenever the composed surface changes (live re-compose). Errors are measured
 /// lazily for nodes the selection walk actually visits (O(visited), a few tens of
 /// µs each, then cached for the surface's lifetime).
+/// Cap on memoized per-node error measurements per terrain. The memo is keyed
+/// by every node the selection ever probed and nothing else evicted it, so a
+/// long traverse grew it without bound. ~32 B/entry ⇒ ≈1 MB at the cap — an
+/// order of magnitude above the live cover plus its ancestor chains (≲8 k
+/// nodes at the default budget), so steady-state selection never hits the trim.
+const NODE_ERROR_CACHE_CAP: usize = 32 * 1024;
+
 #[derive(Component, Default)]
 pub struct TerrainNodeErrors {
     map: HashMap<QuadCoord, f64>,
@@ -1094,16 +1190,86 @@ pub struct TerrainNodeErrors {
 /// function of its `QuadCoord` (deterministic DEM sampling), so a despawned tile
 /// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
-/// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
+/// Bounded: LRU-trimmed against a resident-derived entry cap and a byte
+/// ceiling (see [`mesh_cache_entry_cap`] / [`MESH_CACHE_BYTE_CEILING`]);
+/// entries the current frame's cover needs are never evicted.
 /// Value: the cached mesh handle AND the `origin_y` its vertices were rebased by at
 /// bake time. `origin_y` MUST travel with the mesh — the tile is placed at it, so a
 /// recompute at spawn (against a since-changed oracle, e.g. a crater layer composed
 /// mid-load) would seat the mesh at a different height than it was baked for and the
 /// tile would jump/jitter. Stored together, mesh and placement can never disagree.
+type MeshCacheKey = (Entity, QuadCoord, usize);
+
+/// One cached tile mesh plus its LRU/byte bookkeeping.
+struct MeshCacheEntry {
+    mesh: Handle<Mesh>,
+    /// Surface height the mesh Y was rebased by at bake time (see the type doc).
+    origin_y: f64,
+    /// The cache's monotone clock at last hit/insert — the LRU stamp. Unique
+    /// per touch, so eviction order is a total (deterministic) order.
+    last_used: u64,
+    /// Estimated upload footprint of this mesh ([`tile_mesh_bytes`]).
+    bytes: usize,
+}
+
 #[derive(Resource, Default)]
-pub struct LodMeshCache(HashMap<(Entity, QuadCoord, usize), (Handle<Mesh>, f64)>);
+pub struct LodMeshCache {
+    map: HashMap<MeshCacheKey, MeshCacheEntry>,
+    /// Monotone LRU clock, bumped on every touch.
+    clock: u64,
+    /// Running byte estimate over all entries — kept incrementally because the
+    /// trim check runs every frame and re-summing would be O(n).
+    bytes: usize,
+}
 
 impl LodMeshCache {
+    fn tick(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
+    /// Cache hit: return the mesh + its baked `origin_y`, refreshing the LRU stamp.
+    fn get(&mut self, key: &MeshCacheKey) -> Option<(Handle<Mesh>, f64)> {
+        let now = self.tick();
+        let entry = self.map.get_mut(key)?;
+        entry.last_used = now;
+        Some((entry.mesh.clone(), entry.origin_y))
+    }
+
+    fn insert(&mut self, key: MeshCacheKey, mesh: Handle<Mesh>, origin_y: f64) {
+        let now = self.tick();
+        let bytes = tile_mesh_bytes(key.2);
+        self.bytes += bytes;
+        if let Some(old) = self.map.insert(
+            key,
+            MeshCacheEntry {
+                mesh,
+                origin_y,
+                last_used: now,
+                bytes,
+            },
+        ) {
+            self.bytes -= old.bytes;
+        }
+    }
+
+    /// `retain` with the running byte estimate kept in step.
+    fn retain_entries(&mut self, mut keep: impl FnMut(&MeshCacheKey) -> bool) {
+        let bytes = &mut self.bytes;
+        self.map.retain(|key, entry| {
+            let kept = keep(key);
+            if !kept {
+                *bytes -= entry.bytes;
+            }
+            kept
+        });
+    }
+
+    /// Drop every entry whose terrain is dead (the orphan sweep's eviction).
+    pub(crate) fn retain_terrains(&mut self, keep: impl Fn(Entity) -> bool) {
+        self.retain_entries(|(t, _, _)| keep(*t));
+    }
+
     /// Drop cached meshes a live height edit invalidated, scoped to one `terrain`.
     /// Geometry is a pure function of `(terrain, coord)` only while that terrain's
     /// oracle is fixed; a brush/flatten changes its surface, so a re-selected tile
@@ -1120,16 +1286,74 @@ impl LodMeshCache {
         root_half_extent: f64,
     ) {
         match bounds {
-            None => self.0.retain(|(e, _, _), _| *e != terrain),
-            Some(aabb) => self.0.retain(|(e, coord, _), _| {
+            None => self.retain_entries(|(e, _, _)| *e != terrain),
+            Some(aabb) => self.retain_entries(|(e, coord, _)| {
                 *e != terrain || !node_overlaps_aabb(*coord, root_half_extent, aabb)
             }),
         }
     }
+
+    /// LRU trim to `entry_cap` entries / [`MESH_CACHE_BYTE_CEILING`] bytes.
+    /// `protected` entries — the current frame's cover and its fallback coords —
+    /// are NEVER evicted: dropping what the cover still cycles through is exactly
+    /// the old failure (cap below the resident bound ⇒ every trailing-edge tile
+    /// re-baked on revisit). Victims go oldest-stamp-first, a total order.
+    fn trim(
+        &mut self,
+        entry_cap: usize,
+        byte_cap: usize,
+        protected: impl Fn(&MeshCacheKey) -> bool,
+    ) {
+        if self.map.len() <= entry_cap && self.bytes <= byte_cap {
+            return;
+        }
+        let mut victims: Vec<(u64, MeshCacheKey)> = self
+            .map
+            .iter()
+            .filter(|(key, _)| !protected(key))
+            .map(|(key, entry)| (entry.last_used, *key))
+            .collect();
+        victims.sort_unstable_by_key(|&(stamp, _)| stamp);
+        for (_, key) in victims {
+            if self.map.len() <= entry_cap && self.bytes <= byte_cap {
+                break;
+            }
+            if let Some(entry) = self.map.remove(&key) {
+                self.bytes -= entry.bytes;
+            }
+        }
+    }
 }
 
-/// Soft cap on cached tile meshes before non-resident entries are trimmed.
-const CACHE_CAP: usize = 1024;
+/// Byte estimate of one cached tile mesh as uploaded: per `res²` vertex, four
+/// 12-B vec3 attributes (position, normal, morph target, morph normal) + an
+/// 8-B uv, plus `(res−1)²·6` u32 indices. 49² ⇒ ~190 KB; a 2049² cinematic
+/// tile ⇒ ~330 MB — which is why the ceiling is byte-based, not entry-count.
+fn tile_mesh_bytes(res: usize) -> usize {
+    res * res * (4 * 12 + 8) + (res - 1) * (res - 1) * 6 * 4
+}
+
+/// Memory ceiling for the mesh cache, as the byte estimate of its entries.
+/// Rationale: one default terrain's resident bound is ~1.6 k tiles
+/// (`tile_budget` 768 wanted + up to as many hidden parent fallbacks) at
+/// ~190 KB each ≈ 300 MB; the ceiling admits that plus a comparable
+/// trailing-edge retention band, so a camera reversing over its own trail
+/// hits the cache instead of re-baking (the T2 failure). A cinematic 2049²
+/// tile (~330 MB) fits while wanted — protected entries are never evicted —
+/// and becomes the first LRU victim after the shot.
+const MESH_CACHE_BYTE_CEILING: usize = 640 * 1024 * 1024;
+
+/// Cache-entry cap derived from what streaming terrains can actually keep
+/// RESIDENT — the selected cover (≤ `tile_budget`), one hidden direct-parent
+/// fallback per selected leaf (worst case as many again), the root carpet and
+/// a small stand-in allowance — ×2 retention head-room for the trailing edge.
+/// The old flat `CACHE_CAP = 1024` sat BELOW the resident bound at the
+/// default 768 budget, so the trim evicted exactly the entries the cache
+/// exists for, every frame the camera traversed.
+fn mesh_cache_entry_cap(tile_budget: usize, terrain_count: usize) -> usize {
+    let resident_bound = 2 * tile_budget + 64;
+    2 * resident_bound * terrain_count
+}
 /// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
 /// thousands of tasks). New tasks wait for slots to free.
 const MAX_INFLIGHT_BAKES: usize = 64;
@@ -1590,9 +1814,10 @@ fn bootstrap_cover_is_ready(
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct TerrainStreamLockstep(pub bool);
 
-/// Per-frame scratch for [`update_lod_tiles`] — the five collections the streaming
+/// Per-frame scratch for [`update_lod_tiles`] — the collections the streaming
 /// pass used to heap-allocate EVERY frame per terrain (material swaps, finished
-/// bakes, the sort keys, the hole-cover set, the wanted set). Hoisted into a
+/// bakes, the sort keys, the hole-cover set, the wanted set, the selection
+/// itself and the cover-evolution candidates). Hoisted into a
 /// `Local` so a moving camera reuses the capacity instead of re-allocating; the
 /// idle-signature gate already skips the whole pass when nothing moved.
 #[derive(Default)]
@@ -1615,6 +1840,12 @@ pub struct StreamScratch {
     visual_foci: Vec<TerrainVisualDemand>,
     /// Allocation-free projection of `visual_foci` into the pure CDLOD metric.
     focus_metric: Vec<([f64; 2], f64)>,
+    /// The selection read off the persistent cover (~768 × 40 B) — the one
+    /// per-frame collection this hoist had missed: it was rebuilt fresh per
+    /// terrain per frame.
+    sel: Vec<Selected>,
+    /// Candidate collections for `evolve_cover_for_foci_with_retention`.
+    cover_scratch: CoverScratch,
 }
 
 /// Freeze this terrain's LOD selection once its tiles are up: authored
@@ -1681,6 +1912,8 @@ pub fn update_lod_tiles(
         drop_covered,
         visual_foci,
         focus_metric,
+        sel,
+        cover_scratch,
     } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     let native_shadow_casters = settings
@@ -1842,7 +2075,7 @@ pub fn update_lod_tiles(
         // Quantise focus/eye so sub-tile jitter doesn't defeat the gate; a slow
         // creep re-runs the frame it crosses a quantum (a 1-frame-late reselection
         // is invisible — tiles morph).
-        {
+        let sig = {
             const IDLE_QUANT_M: f64 = 0.5;
             let q = |v: f64| (v / IDLE_QUANT_M).round() as i64 as u64;
             let mut sig = lunco_precompute::Fnv1a::new();
@@ -1850,6 +2083,19 @@ pub fn update_lod_tiles(
                 sig.write_u64(q(visual.focus[0]));
                 sig.write_u64(q(visual.focus[1]));
                 sig.write_u64(q(visual.eye_height));
+                // Heading feeds `benefit()` (bake priority): panning in place
+                // re-ranks which pending tile should bake first, so it must
+                // re-run the body — omitting it left the priority stale.
+                // Quantised coarsely (~7°): priority only needs the general
+                // look direction, and rig jitter must not defeat the gate.
+                let (hx, hz) = visual.heading.map_or((i64::MIN, i64::MIN), |heading| {
+                    (
+                        (heading.x * 8.0).round() as i64,
+                        (heading.y * 8.0).round() as i64,
+                    )
+                });
+                sig.write_u64(hx as u64);
+                sig.write_u64(hz as u64);
             }
             sig.write_u64(cur_gen as u64);
             // Oracle identity — a live re-compose changes the surface without
@@ -1861,7 +2107,9 @@ pub fn update_lod_tiles(
             sig.write_u64(cfg.pixel_error.to_bits());
             sig.write_u64(cfg.tile_budget as u64);
             sig.write_u64(cfg.max_depth as u64);
-            let sig = sig.finish();
+            sig.finish()
+        };
+        {
             if !promoted_tiles
                 && pending.0.is_empty()
                 && tiles.last_sig == Some(sig)
@@ -1941,7 +2189,7 @@ pub fn update_lod_tiles(
         // NOT a full `select_with_error` walk. The cover is persistent state now
         // (`evolve_cover` below); walking the whole tree here and discarding it would
         // reintroduce the per-frame cost this change exists to remove.
-        let mut sel: Vec<Selected>;
+        sel.clear();
         if frozen {
             // NO LOD — ONE tile, meshed at `CINEMATIC_TILE_RES`, covering the whole
             // terrain.
@@ -1959,14 +2207,14 @@ pub fn update_lod_tiles(
             // below what the DEM carries, so it is interpolating detail that is not
             // there. One tile at ~1025² samples the surface oracle (DEM + analytic
             // craters) as finely as it has anything to say, in a single draw call.
-            sel = vec![Selected {
+            sel.push(Selected {
                 coord: QuadCoord::ROOT,
                 region: qt.region(QuadCoord::ROOT),
                 // Geomorph blends a tile toward its coarser parent; the root has no
                 // parent, and there is no LOD transition left to hide.
                 morph_start: f64::INFINITY,
                 morph_end: f64::INFINITY,
-            }];
+            });
         } else {
             // A `pixel_error` change re-derives every refine distance, so the WHOLE cover is
             // re-selected in one frame — measured on moonbase as `wanted` alternating
@@ -1994,54 +2242,82 @@ pub fn update_lod_tiles(
                         .iter()
                         .map(|demand| (demand.focus, demand.eye_height)),
                 );
-                tiles.budget_refused = 0;
                 // One evolve pass can split a branch by one level because candidates
                 // are snapshotted before edits. Build the initial cover to its fixed
                 // point once, then keep it unchanged until its camera tile is visibly
                 // ready. This avoids cancelling/rebuilding startup tiles while the
                 // camera rig settles over its first few frames.
                 if tiles.cover.is_empty() {
+                    tiles.budget_refused = 0;
                     for _ in 0..cfg.max_depth.max(1) {
                         let before = required_focus_depth(&tiles.cover, visual_foci, &qt);
-                        tiles.budget_refused += evolve_cover_for_foci_with_retention(
+                        let (_, refused) = evolve_cover_for_foci_with_retention(
                             &qt,
                             &mut tiles.cover,
                             focus_metric,
                             &node_error,
                             budget,
                             &|_, region| near_field_retains_refinement(region, visual_foci),
+                            cover_scratch,
                         );
+                        tiles.budget_refused += refused;
                         let after = required_focus_depth(&tiles.cover, visual_foci, &qt);
                         if after == before || after == Some(cfg.max_depth) {
                             break;
                         }
                     }
-                } else if tiles.bootstrap_ready {
-                    tiles.budget_refused = evolve_cover_for_foci_with_retention(
+                } else if tiles.bootstrap_ready && tiles.settled_sig != Some(sig) {
+                    // Skipped while the signature still matches the cover's
+                    // recorded fixed point: with splits budget-refused the pass
+                    // would rebuild and re-rank the same refused chains every
+                    // frame the body runs (e.g. while bakes are in flight) —
+                    // only a focus/gen/oracle/budget change can alter the answer.
+                    // This is also what lets the idle gate latch on a starved
+                    // terrain: `budget_refused` keeps reporting from the
+                    // component either way.
+                    let (edits, refused) = evolve_cover_for_foci_with_retention(
                         &qt,
                         &mut tiles.cover,
                         focus_metric,
                         &node_error,
                         budget,
                         &|_, region| near_field_retains_refinement(region, visual_foci),
+                        cover_scratch,
                     );
+                    tiles.budget_refused = refused;
+                    tiles.settled_sig = (edits == 0).then_some(sig);
                 }
             }
-            sel = tiles
-                .cover
-                .iter()
-                .map(|&c| {
-                    let parent_range = c
-                        .parent()
-                        .map(|p| qt.error_refine_range(node_error(p, qt.region(p))))
-                        .unwrap_or(f64::INFINITY);
-                    qt.selected(c, parent_range)
-                })
-                .collect();
+            sel.extend(tiles.cover.iter().map(|&c| {
+                let parent_range = c
+                    .parent()
+                    .map(|p| qt.error_refine_range(node_error(p, qt.region(p))))
+                    .unwrap_or(f64::INFINITY);
+                qt.selected(c, parent_range)
+            }));
         }
         wanted.clear();
         wanted.extend(sel.iter().map(|s| s.coord));
         wanted_parent_fallbacks(wanted, parent_fallbacks);
+
+        // Bound the node-error memo. It only ever wiped on an oracle swap, so a
+        // long traverse accumulated every node the camera ever visited. Past the
+        // cap, keep exactly the cover-relevant set — the wanted leaves, their
+        // parent fallbacks and every ancestor chain (the coords the next
+        // selection pass re-reads) — so the trim costs the live cover no
+        // re-probes (a full clear would re-measure ~1.6 k nodes in one frame).
+        if errs.map.len() > NODE_ERROR_CACHE_CAP {
+            let mut keep: HashSet<QuadCoord> =
+                HashSet::with_capacity(wanted.len() * (cfg.max_depth as usize + 1));
+            for &c in wanted.iter().chain(parent_fallbacks.iter()) {
+                let mut n = c;
+                while keep.insert(n) {
+                    let Some(p) = n.parent() else { break };
+                    n = p;
+                }
+            }
+            errs.map.retain(|c, _| keep.contains(c));
+        }
 
         // Selection is authoritative. Drop superseded generations and camera
         // requests no longer selected before they can occupy every worker slot.
@@ -2188,9 +2464,7 @@ pub fn update_lod_tiles(
             }
             let handle = meshes.add(baked.mesh);
             let oy = baked.origin_y;
-            mesh_cache
-                .0
-                .insert((terrain, coord, baked.res), (handle.clone(), oy));
+            mesh_cache.insert((terrain, coord, baked.res), handle.clone(), oy);
             // No longer selected while it baked → keep the cached mesh, skip spawning.
             // Direct parent fallbacks are also live residents: they stay hidden until
             // a child needs a local no-hole handoff.
@@ -2291,7 +2565,7 @@ pub fn update_lod_tiles(
             } else {
                 1.0e21
             };
-            if let Some((cached, oy)) = mesh_cache.0.get(&(terrain, s.coord, tile_res)) {
+            if let Some((cached, oy)) = mesh_cache.get(&(terrain, s.coord, tile_res)) {
                 // Placed at the mesh's OWN baked `origin_y` (stored beside it), never a
                 // recompute — otherwise a cache hit against a since-composed oracle jumps.
                 let ent = spawn_tile(
@@ -2300,7 +2574,7 @@ pub fn update_lod_tiles(
                     grid_entity,
                     terrain,
                     s.coord,
-                    cached.clone(),
+                    cached,
                     s.region.center,
                     depth,
                     tile_res,
@@ -2310,7 +2584,7 @@ pub fn update_lod_tiles(
                     authored,
                     shadow,
                     overlay,
-                    *oy,
+                    oy,
                     native_shadow_casters,
                 );
                 if let Some(old) = tiles.tiles.insert(
@@ -2448,7 +2722,7 @@ pub fn update_lod_tiles(
         // camera-near patch is prepared it is intentionally immutable: changing
         // that cover while the rig settles only creates startup churn.
         if !tiles.bootstrap_ready
-            && bootstrap_cover_is_ready(&sel, visual_foci, |coord| {
+            && bootstrap_cover_is_ready(sel, visual_foci, |coord| {
                 tiles.tiles.get(&coord).is_some_and(|slot| slot.ready)
             })
         {
@@ -2509,24 +2783,27 @@ pub fn update_lod_tiles(
             },
         );
 
-        // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
-        // non-resident meshes (deterministic geometry → they re-bake on demand).
-        // Other terrains' entries are left untouched — the cap is a soft memory
-        // bound, and dropping a terrain we're not currently processing would just
-        // force it to re-bake next frame.
-        //
-        // The cap is GLOBAL but the cache is keyed by `(terrain, coord)`, so it
-        // scales with the live terrain count: a flat `CACHE_CAP` meant that with two
-        // terrains (or with entries left behind by a DEAD one — now evicted in
-        // `despawn_orphaned_lod_tiles`) `len() > CACHE_CAP` was true EVERY frame, and
-        // the live terrain's non-resident meshes were trimmed every frame — the tile
-        // cache permanently defeated, every trailing-edge tile re-baking on demand.
-        if mesh_cache.0.len() > CACHE_CAP * terrain_count {
-            let resident: HashSet<QuadCoord> = tiles.tiles.keys().copied().collect();
-            mesh_cache
-                .0
-                .retain(|(e, c, _), _| *e != terrain || resident.contains(c));
-        }
+        // Bound the mesh cache. The cap derives from the ACTUAL resident bound
+        // per terrain (`mesh_cache_entry_cap` — cover + parent fallbacks +
+        // stand-ins, with retention head-room) instead of the old flat 1024,
+        // which sat below one default terrain's residents and so trimmed the
+        // trailing edge every frame (every revisited tile re-baked + re-uploaded).
+        // Eviction is LRU (oldest touch first) under both the entry cap and a
+        // byte ceiling; the entries THIS frame's cover needs — the wanted set,
+        // its hidden parent fallbacks and the root carpet — are never evicted.
+        // (An idle terrain's residents keep their `Handle<Mesh>` alive on the
+        // tile entities themselves, so LRU-evicting its cache entries can only
+        // cost a re-bake on a much later re-selection, never a visible hole.)
+        mesh_cache.trim(
+            mesh_cache_entry_cap(cfg.tile_budget.max(16), terrain_count),
+            MESH_CACHE_BYTE_CEILING,
+            |(e, c, _)| {
+                *e == terrain
+                    && (wanted.contains(c)
+                        || parent_fallbacks.contains(c)
+                        || c.depth <= ROOT_FALLBACK_DEPTH)
+            },
+        );
     }
 }
 
@@ -2561,13 +2838,11 @@ pub fn despawn_orphaned_lod_tiles(
     // the only `ShaderLook`s that key them, so `lunco-render-bevy`'s binder cache
     // sweep drops them once they are unreferenced. This crate owns no material.)
     //
-    // Its cached MESHES still are. Nothing else evicts them: the cap-trim in
-    // `update_lod_tiles` only ever touches the terrain it is currently processing,
-    // so up to `CACHE_CAP` strong `Handle<Mesh>` per dead terrain (≈160 KB each ⇒
-    // ~164 MB) leaked FOREVER across every twin reload / scene swap — and once the
-    // dead entries alone exceeded the cap, they also defeated the live terrain's
-    // cache every frame.
-    mesh_cache.0.retain(|(t, _, _), _| !dead(t));
+    // Its cached MESHES still are. The LRU trim in `update_lod_tiles` would
+    // eventually cycle a dead terrain's entries out, but they'd squat the byte
+    // ceiling meanwhile (hundreds of MB per dead terrain across every twin
+    // reload / scene swap) — evict them the moment the owner dies.
+    mesh_cache.retain_terrains(|t| !dead(&t));
 }
 
 /// When a terrain's derived maps finish baking AFTER its tiles exist (the
@@ -3277,6 +3552,129 @@ mod draw_partition_tests {
         );
     }
 
+    /// The cover evolution must be a pure function of its inputs — reusing the
+    /// scratch collections across calls (the per-frame hoist) must not leak
+    /// state between passes or terrains.
+    #[test]
+    fn cover_scratch_reuse_matches_fresh_scratch() {
+        let qt = test_qt();
+        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
+        let mut reused = CoverScratch::default();
+        let mut a = HashSet::new();
+        let mut b = HashSet::new();
+        for step in 0..40 {
+            let x = -900.0 + (step as f64) * 45.0;
+            let ra = evolve_cover_for_foci_with_retention(
+                &qt,
+                &mut a,
+                &[([x, 0.0], 2.0)],
+                &err,
+                64,
+                &|_, _| false,
+                &mut reused,
+            );
+            let rb = evolve_cover_for_foci_with_retention(
+                &qt,
+                &mut b,
+                &[([x, 0.0], 2.0)],
+                &err,
+                64,
+                &|_, _| false,
+                &mut CoverScratch::default(),
+            );
+            assert_eq!(a, b, "step {step}: scratch reuse changed the cover");
+            assert_eq!(ra, rb, "step {step}: scratch reuse changed the returned counts");
+        }
+    }
+
+    /// Zero returned edits ⇔ the cover is at its fixed point for these inputs —
+    /// the contract `LodTiles::settled_sig` latches on, so a budget-starved
+    /// terrain stops re-ranking its refused split chains every frame while
+    /// still reporting the starvation.
+    #[test]
+    fn zero_edits_marks_the_fixed_point_even_when_budget_refused() {
+        let qt = test_qt();
+        let err = |_c: QuadCoord, _r: Square| 120.0f64;
+        let mut scratch = CoverScratch::default();
+        let mut cover = HashSet::new();
+        let mut step = |cover: &mut HashSet<QuadCoord>| {
+            evolve_cover_for_foci_with_retention(
+                &qt,
+                cover,
+                &[([0.0, 0.0], 5.0)],
+                &err,
+                16,
+                &|_, _| false,
+                &mut scratch,
+            )
+        };
+        let mut last = (usize::MAX, 0);
+        for _ in 0..200 {
+            last = step(&mut cover);
+        }
+        assert_eq!(last.0, 0, "a settled cover must report zero edits");
+        assert!(
+            last.1 > 0,
+            "budget 16 starves this metric — refusals must still be reported"
+        );
+        let settled = cover.clone();
+        step(&mut cover);
+        assert_eq!(cover, settled, "zero edits must mean the cover did not change");
+    }
+
+    // ── mesh cache (LRU + resident-derived cap) ──────────────────────────────
+
+    #[test]
+    fn mesh_cache_entry_cap_covers_the_resident_bound() {
+        // T2: the cap must exceed one terrain's worst-case residents (cover +
+        // parent fallbacks + root/stand-ins) or the trim evicts the trailing
+        // edge every frame — the exact failure the flat 1024 cap had at the
+        // default 768 budget.
+        let budget = 768;
+        assert!(mesh_cache_entry_cap(budget, 1) > 2 * budget);
+        assert!(
+            mesh_cache_entry_cap(budget, 1) > 1024,
+            "must exceed the old flat cap"
+        );
+        assert_eq!(
+            mesh_cache_entry_cap(budget, 3),
+            3 * mesh_cache_entry_cap(budget, 1),
+            "cap scales with the live terrain count"
+        );
+    }
+
+    #[test]
+    fn mesh_cache_trims_lru_first_and_never_evicts_protected() {
+        let mut cache = LodMeshCache::default();
+        let terrain = Entity::PLACEHOLDER;
+        let key = |x: u32| (terrain, c(3, x, 0), TILE_RES);
+        for x in 0..4 {
+            cache.insert(key(x), Handle::default(), 0.0);
+        }
+        // Touch 0 so 1 becomes the oldest unprotected entry.
+        assert!(cache.get(&key(0)).is_some());
+        // Trim to 2 entries; 3 stands in for the current frame's cover.
+        cache.trim(2, usize::MAX, |k| *k == key(3));
+        assert_eq!(cache.map.len(), 2);
+        assert!(
+            cache.map.contains_key(&key(3)),
+            "a cover-needed entry must survive any trim"
+        );
+        assert!(
+            cache.map.contains_key(&key(0)),
+            "the most recently touched unprotected entry survives (LRU order)"
+        );
+        // Byte accounting stays in step with the map through insert + trim.
+        assert_eq!(
+            cache.bytes,
+            cache.map.values().map(|e| e.bytes).sum::<usize>()
+        );
+        // The byte ceiling alone also forces eviction.
+        cache.trim(usize::MAX, tile_mesh_bytes(TILE_RES), |k| *k == key(3));
+        assert_eq!(cache.map.len(), 1);
+        assert!(cache.map.contains_key(&key(3)));
+    }
+
     #[test]
     fn budget_pressure_sheds_far_cover_before_a_retained_quad() {
         let qt = test_qt();
@@ -3296,6 +3694,7 @@ mod draw_partition_tests {
             &err,
             13,
             &|coord, _| coord == retained,
+            &mut CoverScratch::default(),
         );
 
         assert!(

@@ -758,8 +758,17 @@ fn sync_raycast_wheel_physics_pose(
             if !hub_pos.0.is_finite() || !hub_rot.0.is_finite() {
                 continue;
             }
-            wpos.0 = hub_pos.0;
-            wrot.0 = hub_rot.0;
+            // Compare-gate like the bridge's writeback: the hub pose is a
+            // deterministic function of the chassis pose and the wheel's local
+            // transform, so an idle chassis recomputes bit-identical values —
+            // exact compare, no epsilon. Writing unconditionally dirtied every
+            // wheel's `Position`/`Rotation` change ticks per tick even parked.
+            if wpos.0 != hub_pos.0 {
+                wpos.0 = hub_pos.0;
+            }
+            if wrot.0 != hub_rot.0 {
+                wrot.0 = hub_rot.0;
+            }
         }
     }
 }

@@ -3,7 +3,8 @@
 //! data-defined tree drives correctly and sequences waypoints — the mechanism a
 //! `SetAutopilotBehavior` command hot-swaps at runtime.
 
-use bevy::math::Vec3;
+use bevy::math::{DVec3, Vec3};
+use lunco_core::coords::GridPos;
 use lunco_autopilot::{
     nav_setpoint, AutopilotBehavior, Clearance, DriveCtx, TargetState, TargetStates,
 };
@@ -20,7 +21,7 @@ fn json_tree_drives_and_sequences_waypoints() {
 
     // At the origin facing +X, far from waypoint 1 → drive forward, not braking.
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -40,7 +41,7 @@ fn json_tree_drives_and_sequences_waypoints() {
     // Arrive at waypoint 1: the sequence advances to wp2 within the SAME tick and
     // starts driving toward it, so the setpoint is still "driving" (not a full stop),
     // and now steers to turn toward +Z.
-    ctx.pos = Vec3::new(10.0, 0.0, 0.0);
+    ctx.pos = GridPos(DVec3::new(10.0, 0.0, 0.0));
     behavior.0.tick(&mut ctx);
     assert!(
         ctx.out.0 > 0.0,
@@ -57,11 +58,11 @@ fn json_tree_drives_and_sequences_waypoints() {
 #[test]
 fn nav_setpoint_brakes_within_radius_drives_when_far() {
     let (_t, _s, brake, arrived) =
-        nav_setpoint(Vec3::ZERO, Vec3::X, Vec3::new(0.5, 0.0, 0.0), 0.6, 2.0);
+        nav_setpoint(GridPos(DVec3::ZERO), Vec3::X, GridPos(DVec3::new(0.5, 0.0, 0.0)), 0.6, 2.0);
     assert!(arrived && brake > 0.5, "within radius → arrived + brake");
 
     let (throttle, _s, _b, arrived) =
-        nav_setpoint(Vec3::ZERO, Vec3::X, Vec3::new(50.0, 0.0, 0.0), 0.6, 2.0);
+        nav_setpoint(GridPos(DVec3::ZERO), Vec3::X, GridPos(DVec3::new(50.0, 0.0, 0.0)), 0.6, 2.0);
     assert!(
         !arrived && throttle > 0.0,
         "far + aligned → driving forward"
@@ -78,9 +79,9 @@ fn bad_spec_is_a_clean_error() {
 /// teleporting the "vessel" onto whatever point the tree steers hard toward once it
 /// gets close — a crude kinematic stand-in that lets multi-waypoint trees advance.
 /// Returns the number of ticks the tree spent braking (`out.2 > 0.5`).
-fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[Vec3], max: usize) -> usize {
+fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[DVec3], max: usize) -> usize {
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -100,7 +101,7 @@ fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[Vec3], max: usize)
         // If a waypoint is set and we're driving toward it, snap there so the tree
         // registers arrival and moves on.
         if wp < waypoints.len() && ctx.out.0 > 0.0 {
-            ctx.pos = waypoints[wp];
+            ctx.pos = GridPos(waypoints[wp]);
             wp += 1;
         }
     }
@@ -115,7 +116,7 @@ fn patrol_loops_waypoints_and_dwells_at_each() {
         [5.0,0.0,0.0],[5.0,0.0,5.0]
     ]}"#;
     let mut behavior = AutopilotBehavior::from_json(json).expect("patrol spec must build");
-    let wps = [Vec3::new(5.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 5.0)];
+    let wps = [DVec3::new(5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 5.0)];
     // With dt=1.0 and dwell=2.0, each waypoint holds ~2 ticks. Over many ticks the
     // rover both drives (throttle) and repeatedly brakes — proving the loop runs.
     let braked = brake_ticks(&mut behavior, &wps, 12);
@@ -140,7 +141,7 @@ fn selector_with_arrived_guard_brakes_when_close_drives_when_far() {
 
     // Far away → guard fails → falls through to drive_to → throttle up, not braking.
     let mut far = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -158,7 +159,7 @@ fn selector_with_arrived_guard_brakes_when_close_drives_when_far() {
 
     // At the goal → guard succeeds → brake branch taken.
     let mut near = DriveCtx {
-        pos: Vec3::new(10.0, 0.0, 0.0),
+        pos: GridPos(DVec3::new(10.0, 0.0, 0.0)),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -179,7 +180,7 @@ fn wait_latches_a_mission_time_deadline_and_resets_across_repeats() {
     // (WorldTime.sim_secs), so a frozen clock freezes the wait.
     let mut behavior = AutopilotBehavior::from_json(r#"{"kind":"wait","seconds":3.0}"#).unwrap();
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -249,7 +250,7 @@ fn parallel_require_one_succeeds_when_first_child_arrives() {
     ]}"#;
     let mut behavior = AutopilotBehavior::from_json(json).expect("parallel spec must build");
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -274,7 +275,7 @@ fn face_pivots_in_place_then_succeeds_when_aligned() {
         AutopilotBehavior::from_json(r#"{"kind":"face","target":[0.0,0.0,5.0],"tolerance":8.0}"#)
             .unwrap();
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -306,7 +307,7 @@ fn invert_negates_the_arrived_condition() {
     .unwrap();
     // Far from the target → arrived Failure → invert Success ("not arrived").
     let mut far = DriveCtx {
-        pos: Vec3::new(50.0, 0.0, 0.0),
+        pos: GridPos(DVec3::new(50.0, 0.0, 0.0)),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -318,7 +319,7 @@ fn invert_negates_the_arrived_condition() {
     assert_eq!(inv.0.tick(&mut far), Status::Success);
     // At the target → arrived Success → invert Failure.
     let mut near = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -334,7 +335,7 @@ fn invert_negates_the_arrived_condition() {
 fn force_and_retry_decorators_map_and_re_attempt() {
     use lunco_behavior::Status;
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -374,7 +375,7 @@ fn reactive_selector_switches_to_brake_the_instant_it_arrives() {
     let mut behavior = AutopilotBehavior::from_json(json).unwrap();
     // Away from the goal → arrived fails → falls through to drive_to → throttle up.
     let mut ctx = DriveCtx {
-        pos: Vec3::new(50.0, 0.0, 0.0),
+        pos: GridPos(DVec3::new(50.0, 0.0, 0.0)),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -390,7 +391,7 @@ fn reactive_selector_switches_to_brake_the_instant_it_arrives() {
         ctx.out
     );
     // Teleport onto the goal → the higher-priority branch preempts → brake.
-    ctx.pos = Vec3::ZERO;
+    ctx.pos = GridPos(DVec3::ZERO);
     assert_eq!(behavior.0.tick(&mut ctx), Status::Success);
     assert!(ctx.out.2 > 0.5, "at goal → brake branch, got {:?}", ctx.out);
 }
@@ -405,7 +406,7 @@ fn timeout_aborts_a_running_child_on_the_mission_clock() {
     )
     .unwrap();
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -449,12 +450,12 @@ fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
     targets.insert(
         42,
         TargetState {
-            pos: Vec3::new(50.0, 0.0, 0.0),
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::new(50.0, 0.0, 0.0)),
+            vel: DVec3::ZERO,
         },
     );
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -479,8 +480,8 @@ fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
     near.insert(
         42,
         TargetState {
-            pos: Vec3::new(1.0, 0.0, 0.0),
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::new(1.0, 0.0, 0.0)),
+            vel: DVec3::ZERO,
         },
     );
     ctx.targets = Arc::new(near);
@@ -517,12 +518,12 @@ fn intercept_leads_a_moving_target_and_succeeds_on_contact() {
     targets.insert(
         7,
         TargetState {
-            pos: Vec3::new(20.0, 0.0, 0.0),
-            vel: Vec3::new(0.0, 0.0, 5.0),
+            pos: GridPos(DVec3::new(20.0, 0.0, 0.0)),
+            vel: DVec3::new(0.0, 0.0, 5.0),
         },
     );
     let mut ctx = DriveCtx {
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         self_gid: 0,
@@ -548,7 +549,7 @@ fn intercept_leads_a_moving_target_and_succeeds_on_contact() {
     );
 
     // Reach the target's actual position → Success (a catch-it pursuit finishes).
-    ctx.pos = Vec3::new(20.0, 0.0, 0.0);
+    ctx.pos = GridPos(DVec3::new(20.0, 0.0, 0.0));
     assert_eq!(
         behavior.0.tick(&mut ctx),
         Status::Success,
@@ -577,20 +578,20 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
     targets.insert(
         1,
         TargetState {
-            pos: Vec3::ZERO,
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::ZERO),
+            vel: DVec3::ZERO,
         },
     ); // self
     targets.insert(
         2,
         TargetState {
-            pos: Vec3::new(4.0, 0.0, 0.0),
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::new(4.0, 0.0, 0.0)),
+            vel: DVec3::ZERO,
         },
     );
     let mut ctx = DriveCtx {
         self_gid: 1,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
@@ -609,15 +610,15 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
     behind.insert(
         1,
         TargetState {
-            pos: Vec3::ZERO,
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::ZERO),
+            vel: DVec3::ZERO,
         },
     );
     behind.insert(
         2,
         TargetState {
-            pos: Vec3::new(-4.0, 0.0, 0.0),
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::new(-4.0, 0.0, 0.0)),
+            vel: DVec3::ZERO,
         },
     );
     ctx.targets = Arc::new(behind);
@@ -632,8 +633,8 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
     just_me.insert(
         1,
         TargetState {
-            pos: Vec3::ZERO,
-            vel: Vec3::ZERO,
+            pos: GridPos(DVec3::ZERO),
+            vel: DVec3::ZERO,
         },
     );
     ctx.targets = Arc::new(just_me);
@@ -654,7 +655,7 @@ fn facing_guards_heading_and_hold_stays_running() {
     .unwrap();
     let mut aligned = DriveCtx {
         self_gid: 0,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
@@ -665,7 +666,7 @@ fn facing_guards_heading_and_hold_stays_running() {
     assert_eq!(facing.0.tick(&mut aligned), Status::Success);
     let mut off = DriveCtx {
         self_gid: 0,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::Z,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
@@ -692,7 +693,7 @@ fn cooldown_blocks_re_entry_for_the_lockout_window() {
     .unwrap();
     let mut ctx = DriveCtx {
         self_gid: 0,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
@@ -726,7 +727,7 @@ fn path_blocked_reads_the_forward_raycast_clearance() {
         AutopilotBehavior::from_json(r#"{"kind":"path_blocked","distance":5.0}"#).unwrap();
     let mut ctx = DriveCtx {
         self_gid: 0,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
@@ -764,7 +765,7 @@ fn steer_clear_goes_straight_when_open_and_turns_toward_the_open_side() {
     // Wide open ahead → drive straight, no steer.
     let mut ctx = DriveCtx {
         self_gid: 0,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
