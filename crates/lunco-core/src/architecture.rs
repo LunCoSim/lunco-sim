@@ -9,7 +9,7 @@
 //! The port/command fabric is consumed by every domain that exchanges a
 //! signal: `lunco-cosim` (SimConnection endpoints ARE [`Port`]s),
 //! `lunco-mobility` (wheel drive/steer ports), `lunco-hardware` (actuators),
-//! `lunco-telemetry` (sampled channels), `lunco-robotics`, `lunco-usd-sim`
+//! `lunco-telemetry` (sampled channels), `lunco-usd-sim`
 //! (port authoring from USD). No domain crate can own it without inverting
 //! the dependency graph — the same argument recorded for `mobility.rs`'s
 //! avian-free classifier. Domain LOGIC does not belong here; only the shared
