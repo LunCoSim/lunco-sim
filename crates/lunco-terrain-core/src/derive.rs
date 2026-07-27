@@ -241,20 +241,29 @@ mod los_tests {
     }
 }
 
+/// Length scale (metres) mapping true curvature (`1/m`) to tonal contrast in
+/// [`albedo_map`]: a bowl/rim of radius ≈ this reaches ~76 % of full darkening/
+/// brightening (`tanh(1)`). A FIXED length — not the texel step — so the same
+/// relief bakes the same tone at every tile size / LOD (the old per-`eps`
+/// normalisation made curvature contrast scale with tile size → tonal seams
+/// across LOD boundaries).
+pub const CURVATURE_TONE_SCALE_M: f64 = 4.0;
+
 /// Relief-correlated albedo scalar in `[0, 1]` (0.5 = neutral) over `region`,
 /// row-major. Convex ground (crater rims, ejecta crests) reads slightly
 /// brighter, concave ground (bowls, hollows) slightly darker, and steep faces
 /// get a touch of mass-wasting brightness — the tonal variation that makes
 /// distant relief legible even where geometry/shading detail has LOD'd away.
-/// Curvature is the central-difference Laplacian normalised by the texel step,
-/// squashed through `tanh` so extreme relief saturates instead of clipping.
+/// Curvature is the true central-difference Laplacian (`Δh / eps²`, units 1/m),
+/// scaled by [`CURVATURE_TONE_SCALE_M`] and squashed through `tanh` so extreme
+/// relief saturates instead of clipping.
 ///
 /// `stencil_texels` widens the curvature stencil (in texels). A 1-texel
 /// Laplacian on a source band-limited at 2 texels sits exactly AT Nyquist and
 /// returns per-texel checker noise instead of curvature — rendered as a hard
 /// mosaic of map texels at mid distance. Pair a stencil of `s` texels with a
-/// source limited to wavelengths ≥ `2·s` texels; the `/ stencil` keeps the
-/// response to SMOOTH curvature at the same visual level regardless of width.
+/// source limited to wavelengths ≥ `2·s` texels; with the `eps²` normalisation
+/// the response to SMOOTH curvature is width-independent by construction.
 pub fn albedo_map<S: HeightSource>(
     src: &S,
     region: &Square,
@@ -274,9 +283,9 @@ pub fn albedo_map<S: HeightSource>(
                 + src.height_at(x, z + eps)
                 + src.height_at(x, z - eps)
                 - 4.0 * h)
-                / eps;
+                / (eps * eps);
             // Concave (positive Laplacian) → darker; convex → brighter.
-            let curve = (-lap * 2.0 / stencil).tanh() as f32;
+            let curve = (-lap * CURVATURE_TONE_SCALE_M).tanh() as f32;
             let slope = src.slope_at(x, z, eps) as f32;
             let a = 0.5 + 0.30 * curve + 0.10 * (slope / 0.6).min(1.0);
             out.push(a.clamp(0.0, 1.0));
@@ -288,27 +297,31 @@ pub fn albedo_map<S: HeightSource>(
 /// Bilinear upsample of a square scalar map from `src_res`² to `dst_res`².
 /// Lets smooth-by-construction channels (AO) bake at reduced resolution —
 /// quarter the hemisphere-march cost at half res — then expand to pack size.
+///
+/// Both maps are TEXEL-CENTRED over the same region (texel `i` samples
+/// `(i+0.5)/res`, see [`texel_world`]), so the mapping is the texel-centred
+/// `src = (dst + 0.5)·src_res/dst_res − 0.5` with edge clamping — a node-based
+/// `(src_res−1)/(dst_res−1)` map here landed the upsampled channel half a
+/// source texel off the full-res channels packed into the same RGBA8.
 pub fn upsample_bilinear(src: &[f32], src_res: usize, dst_res: usize) -> Vec<f32> {
     assert_eq!(src.len(), src_res * src_res);
     if src_res == dst_res {
         return src.to_vec();
     }
     let mut out = Vec::with_capacity(dst_res * dst_res);
-    let scale = if dst_res > 1 {
-        (src_res - 1) as f32 / (dst_res - 1) as f32
-    } else {
-        0.0
+    let scale = src_res as f32 / dst_res as f32;
+    // Texel-centred source coordinate for destination texel `i`, clamped so the
+    // outermost half-texel band extends the edge value.
+    let coord = |i: usize| -> (usize, usize, f32) {
+        let f = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (src_res - 1) as f32);
+        let i0 = (f as usize).min(src_res - 1);
+        let i1 = (i0 + 1).min(src_res - 1);
+        (i0, i1, f - i0 as f32)
     };
     for iz in 0..dst_res {
-        let fz = iz as f32 * scale;
-        let z0 = (fz as usize).min(src_res - 1);
-        let z1 = (z0 + 1).min(src_res - 1);
-        let tz = fz - z0 as f32;
+        let (z0, z1, tz) = coord(iz);
         for ix in 0..dst_res {
-            let fx = ix as f32 * scale;
-            let x0 = (fx as usize).min(src_res - 1);
-            let x1 = (x0 + 1).min(src_res - 1);
-            let tx = fx - x0 as f32;
+            let (x0, x1, tx) = coord(ix);
             let top = src[z0 * src_res + x0] * (1.0 - tx) + src[z0 * src_res + x1] * tx;
             let bot = src[z1 * src_res + x0] * (1.0 - tx) + src[z1 * src_res + x1] * tx;
             out.push(top * (1.0 - tz) + bot * tz);
@@ -492,6 +505,30 @@ mod tests {
         // albedo scalar rides the alpha channel
         let nrm = pack_normal_rgba8(&[[0.0, 1.0, 0.0]], &[0.5]);
         assert_eq!(nrm, vec![128, 255, 128, 128]);
+    }
+
+    #[test]
+    fn upsample_is_texel_centred() {
+        // 2×2 → 4×4, linear in x. Src texel centres sit at u = 0.25 / 0.75; dst
+        // centres at 0.125 / 0.375 / 0.625 / 0.875 → texel-centred interpolation
+        // gives [0, 0.25, 0.75, 1] per row (edges clamp-extended). The node-based
+        // map returned [0, 1/3, 2/3, 1] — half a source texel off.
+        let src = [0.0f32, 1.0, 0.0, 1.0];
+        let up = upsample_bilinear(&src, 2, 4);
+        let want = [0.0f32, 0.25, 0.75, 1.0];
+        for iz in 0..4 {
+            for ix in 0..4 {
+                assert!(
+                    (up[iz * 4 + ix] - want[ix]).abs() < 1e-6,
+                    "({ix},{iz}) = {} want {}",
+                    up[iz * 4 + ix],
+                    want[ix]
+                );
+            }
+        }
+        // A constant map upsamples to the same constant.
+        let flat = upsample_bilinear(&[0.7f32; 9], 3, 8);
+        assert!(flat.iter().all(|&v| (v - 0.7).abs() < 1e-6));
     }
 
     #[test]

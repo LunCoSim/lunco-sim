@@ -49,9 +49,6 @@ pub use diagrams::*;
 pub mod mission_control;
 pub use mission_control::*;
 
-pub mod telemetry;
-pub use telemetry::*;
-
 pub mod busy;
 pub mod modal;
 

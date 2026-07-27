@@ -143,6 +143,11 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
     for stamp in &job.stamps {
         stamp.apply(&mut tile);
     }
+    // Snap the shipped grid to the cache's f32 representation — see
+    // [`quantize_heights_f32`]. This runs on BOTH platforms' live path (native
+    // task and web worker call this same function), so a cache-hit peer and a
+    // fresh-bake peer read bit-identical heights.
+    quantize_heights_f32(&mut tile);
     BakedGrid {
         grid: tile,
         base_grid,
@@ -206,10 +211,23 @@ pub fn grid_cache_key(meta_yaml: &[u8], tif: &[u8], job: &DemBakeJob) -> u64 {
     h.finish()
 }
 
+/// Snap a grid's heights through the f32 representation the OPFS cache blob
+/// stores ([`encode_grid_blob`]) — the ONE quantization both bake paths share.
+/// [`finish_bake`] runs it on the live grid, so a cache-hit peer (f32 blob →
+/// f64) and a fresh-bake peer hold bit-identical heights: an un-quantized live
+/// grid differed from its own cached round-trip by ~1e-4 m, enough to straddle
+/// the collider quantization lattice and diverge contacts between peers. Metre
+/// heights fit f32 comfortably — the same precision the tile meshes render at.
+pub fn quantize_heights_f32(grid: &mut HeightGrid) {
+    for h in &mut grid.heights {
+        *h = *h as f32 as f64;
+    }
+}
+
 /// Encode a stamped grid as the OPFS cache blob — a raw little-endian layout
 /// (no serde, like the tile-mesh cache): `[res: u32][half_extent: f64]
-/// [native_res: u32]` then `res²` **f32** heights (halves the blob; metre
-/// heights fit f32 comfortably — the same precision the tile meshes render at).
+/// [native_res: u32]` then `res²` **f32** heights (halves the blob; lossless for
+/// a [`finish_bake`] grid, which is already snapped by [`quantize_heights_f32`]).
 pub fn encode_grid_blob(grid: &HeightGrid, native_res: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + grid.heights.len() * 4);
     out.extend_from_slice(&(grid.res as u32).to_le_bytes());
@@ -290,6 +308,34 @@ mod tests {
         assert_eq!(native_res, 4097);
         // f32-exact inputs survive the f64→f32→f64 round trip bit-for-bit.
         assert_eq!(back.heights, grid.heights);
+    }
+
+    /// **Cache-hit and fresh-bake peers must hold bit-identical heights.** The
+    /// live grid is snapped through [`quantize_heights_f32`] inside
+    /// [`finish_bake`], so encoding it to the f32 cache blob and decoding back
+    /// is lossless — the T17 divergence (live f64 vs cached f32, ~1e-4 m,
+    /// straddling the collider quantization lattice) cannot recur.
+    #[test]
+    fn finish_bake_output_matches_its_own_cache_round_trip() {
+        let res = 33usize;
+        let raw = HeightGrid {
+            res,
+            half_extent: 1000.0,
+            // Heights with plenty of sub-f32 f64 tail.
+            heights: (0..res * res)
+                .map(|i| -1918.0 + (i as f64) * 0.123456789012345)
+                .collect(),
+        };
+        let job = DemBakeJob {
+            half_window: 900.0,
+            target_res: 0,
+            detail_upsample: 2,
+            stamps: Vec::new(),
+        };
+        let baked = finish_bake(&raw, "site", &job, BakeStage::Full);
+        let blob = encode_grid_blob(&baked.grid, baked.native_res);
+        let (back, _) = decode_grid_blob(&blob).expect("decodes");
+        assert_eq!(back.heights, baked.grid.heights, "cache round trip must be exact");
     }
 
     #[test]
