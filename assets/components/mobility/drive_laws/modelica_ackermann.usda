@@ -51,7 +51,7 @@ def Xform "DriveLaw" (
         uniform bool lunco:program:realtimeSafe = true
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.
-        float inputs:throttle.connect = </DriveLaw.outputs:throttle>
-        float inputs:steer.connect = </DriveLaw.outputs:steer>
+        float inputs:throttle.connect = </DriveLaw.inputs:throttle>
+        float inputs:steer.connect = </DriveLaw.inputs:steer>
     }
 }

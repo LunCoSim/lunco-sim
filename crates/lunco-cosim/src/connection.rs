@@ -78,8 +78,22 @@ pub struct SimPorts {
 pub struct SimConnection {
     /// Entity owning the source port.
     pub start_element: Entity,
-    /// Name of the source port (must be an output).
+    /// Name of the source port.
     pub start_connector: String,
+    /// The source is the endpoint's **input** (commanded) side, not its output.
+    ///
+    /// USD says which by namespace: `</Rover.outputs:speed>` reads what the vessel
+    /// PRODUCES, `</Rover.inputs:throttle>` reads what it was COMMANDED. Both are
+    /// legitimate sources — a drive law consumes the vessel's throttle command —
+    /// and the two can share a name on one entity (a joint's commanded setpoint and
+    /// its measured angle are both `angle`), which is exactly why
+    /// `PortRegistry::read_input_port` exists alongside `read_output_port`.
+    ///
+    /// Default `false` keeps every existing wire reading outputs. Before this flag,
+    /// the wiring pass accepted an authored `inputs:` source and propagation then
+    /// read it with `read_output_port`, which input-only backends answer `None` to —
+    /// so the wire silently contributed nothing, forever, with no diagnostic.
+    pub start_is_input: bool,
     /// Entity owning the target port.
     pub end_element: Entity,
     /// Name of the target port (must be an input).
@@ -95,6 +109,7 @@ impl Default for SimConnection {
         Self {
             start_element: Entity::PLACEHOLDER,
             start_connector: String::new(),
+            start_is_input: false,
             end_element: Entity::PLACEHOLDER,
             end_connector: String::new(),
             scale: 1.0,

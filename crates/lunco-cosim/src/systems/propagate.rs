@@ -87,6 +87,8 @@ fn peer_simulates(world: &World, target: Entity, is_client: bool) -> bool {
 struct CompiledWire {
     src_entity: Entity,
     src_port: String,
+    /// Read the source's input side — see [`SimConnection::start_is_input`].
+    src_is_input: bool,
     src_resolved: Option<ResolvedPort>,
     /// The source's network-stable identity ([`lunco_core::GlobalEntityId`]), or
     /// `None` for a purely local entity. The **sort key** that makes summation
@@ -155,10 +157,17 @@ impl CompiledWiring {
                 i
             });
             // Resolve the source's output handle once.
-            let src_resolved = registry.resolve_output(world, c.start_element, &c.start_connector);
+            // An input-side source has no resolved OUTPUT handle; the name read is
+            // the only correct path for it.
+            let src_resolved = if c.start_is_input {
+                None
+            } else {
+                registry.resolve_output(world, c.start_element, &c.start_connector)
+            };
             self.wires.push(CompiledWire {
                 src_entity: c.start_element,
                 src_port: c.start_connector.clone(),
+                src_is_input: c.start_is_input,
                 src_resolved,
                 src_gid: world
                     .get::<lunco_core::GlobalEntityId>(c.start_element)
@@ -295,14 +304,21 @@ pub fn propagate_connections(
     // a stale handle no longer backs a live value (component removed → re-resolve
     // by name this tick, contributing nothing if truly absent).
     for w in &compiled.wires {
+        let read_src = |w: &CompiledWire| {
+            if w.src_is_input {
+                registry.read_input_port(world, w.src_entity, &w.src_port)
+            } else {
+                registry.read_output_port(world, w.src_entity, &w.src_port)
+            }
+        };
         let src = match w.src_resolved {
             // Fast path; on a stale handle (source component removed/swapped since
             // the last rebuild) fall back to the name read so behaviour matches the
             // pre-resolve master exactly.
             Some(r) => registry
                 .read_resolved(world, w.src_entity, r)
-                .or_else(|| registry.read_output_port(world, w.src_entity, &w.src_port)),
-            None => registry.read_output_port(world, w.src_entity, &w.src_port),
+                .or_else(|| read_src(w)),
+            None => read_src(w),
         };
         let Some(src) = src else {
             continue; // source output absent — contributes nothing this tick

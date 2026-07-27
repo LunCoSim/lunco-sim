@@ -1115,6 +1115,9 @@ pub fn rewire_usd_connections(
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
     q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
     q_defaults: Query<&UsdInputDefaults>,
+    // A vessel's actuator ports are child `Port` entities, so an `outputs:` forward
+    // onto one has to write there, not onto the vessel prim.
+    q_actuators: Query<&lunco_core::ActuatorPorts>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
@@ -1196,8 +1199,45 @@ pub fn rewire_usd_connections(
         let sink_instance = instance_of(entity);
 
         for attr in view.attr_names(&sink_sdf) {
-            // Only `inputs:` attributes are connection sinks; connector = the leaf.
-            let Some(sink_conn) = attr.strip_prefix("inputs:") else {
+            // An `outputs:X.connect` is a FORWARD: this prim publishes an interior
+            // node's result as its own X. It is how a component REPLACES a producer
+            // — a Modelica drive law supplies the vessel's `drive_left`, and not one
+            // consumer of that port moves.
+            //
+            // Materialised as an ordinary edge whose SINK is X's own storage on this
+            // prim, so every existing reader keeps reading the port it always read.
+            // A vessel's actuator ports live on child `Port` entities
+            // (`ActuatorPorts`, one `value` scalar each), which is where the write
+            // has to land; anything else writes the name on the prim itself.
+            //
+            // One hop per authored forward, so a chain resolves as a chain of edges
+            // — no walk, and no second resolution path for consumers to disagree
+            // about. This is the only reader of output connections: before it,
+            // `outputs:*.connect` was authored in three drive-law overlays and in
+            // `skid_rover.usda`'s `Electrical` scope and did nothing at all, which is
+            // why the Modelica rover travelled 0.00 m against a control at 2.12 m/s.
+            // `outputs:` is UsdShade's namespace too. A Material's `outputs:surface`
+            // connects to a Shader terminal — a shading-network edge, not a scalar
+            // port — and materialising it as a wire targets a `surface` port nothing
+            // will ever claim. Same reasoning as the `outputs:` filter in the vessel
+            // actuator-port scan, which drops non-numeric attributes for this exact
+            // reason.
+            let shading_prim = matches!(
+                view.type_name(&sink_sdf).as_deref(),
+                Some("Material" | "Shader" | "NodeGraph")
+            );
+            let forward = attr.strip_prefix("outputs:").filter(|_| !shading_prim).map(|name| {
+                match q_actuators.get(entity).ok().and_then(|a| a.get(name)) {
+                    Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME.to_string()),
+                    None => (entity, name.to_string()),
+                }
+            });
+            // `inputs:` is a sink; `outputs:` is a sink only when it forwards.
+            // Everything else on the prim is not part of the wire fabric.
+            let Some(sink_conn) = attr
+                .strip_prefix("inputs:")
+                .or_else(|| attr.strip_prefix("outputs:").filter(|_| forward.is_some()))
+            else {
                 continue;
             };
             // A structural binding is already resolved; building a phantom wire
@@ -1229,6 +1269,10 @@ pub fn rewire_usd_connections(
             // by `seed_usd_input_defaults` once the model exists.
             let sources = view.connections(&sink_sdf, &attr);
             if sources.is_empty() {
+                // An unconnected `outputs:` is just a declared port, not a parameter.
+                if forward.is_some() {
+                    continue;
+                }
                 if let Some(v) = view.real(&sink_sdf, &attr) {
                     defaults
                         .entry(entity)
@@ -1247,32 +1291,11 @@ pub fn rewire_usd_connections(
                     );
                     continue;
                 };
-                // Follow output-to-output forwards to the attribute that actually
-                // PRODUCES this value — USD's `GetValueProducingAttributes`, in
-                // openusd where USD puts it. A connectable container may publish
-                // an interior node's result as its own (`outputs:drive_left.connect
-                // = </Rover/DriveLaw/Drivetrain.outputs:drive_left>`), which is how
-                // a component REPLACES a producer: every existing consumer of the
-                // vessel's port silently reads the model instead, and not one wire
-                // on the host moves.
-                //
-                // Resolved HERE, at network-extraction time, exactly as a renderer
-                // flattens a shading network — the forward is an identity, not a
-                // dataflow step, so it costs one walk per structural rewire and
-                // nothing per tick.
-                let forwarded = SdfPath::new(&format!("{src_prim}.{src_leaf}"))
-                    .ok()
-                    .map(|p| {
-                        openusd::schemas::shade::value_producing_attribute(
-                            cs.stage(),
-                            &p,
-                        )
-                        .to_string()
-                    });
-                let (src_prim, src_leaf) = forwarded
-                    .as_deref()
-                    .and_then(|s| s.rsplit_once('.'))
-                    .unwrap_or((src_prim, src_leaf));
+                // No forward-following here. A forward is materialised as its own
+                // edge at the prim that authors it (see `forward` above), so a
+                // consumer just reads the port it named and a chain of forwards is a
+                // chain of edges. Walking the chain from this side too would be a
+                // second resolution path for the same fact.
                 let Some(&start_element) = by_path.get(&(sink_instance, src_prim.to_string()))
                 else {
                     // Two very different situations, and they must not look alike.
@@ -1293,6 +1316,12 @@ pub fn rewire_usd_connections(
                     }
                     continue;
                 };
+                // The namespace says WHICH SIDE of the source to read. `outputs:` is
+                // what it produces; `inputs:` is what it was commanded — a drive law
+                // consumes the vessel's throttle command, and both can share a name
+                // on one entity. Carried on the edge because propagation cannot
+                // recover it later.
+                let start_is_input = src_leaf.starts_with("inputs:");
                 let src_conn = src_leaf
                     .strip_prefix("outputs:")
                     .or_else(|| src_leaf.strip_prefix("inputs:"))
@@ -1330,12 +1359,16 @@ pub fn rewire_usd_connections(
                     );
                 }
 
+                let (end_element, end_connector) = forward
+                    .clone()
+                    .unwrap_or_else(|| (entity, sink_conn.to_string()));
                 commands.spawn((
                     SimConnection {
                         start_element,
                         start_connector: src_conn.to_string(),
-                        end_element: entity,
-                        end_connector: sink_conn.to_string(),
+                        start_is_input,
+                        end_element,
+                        end_connector,
                         scale,
                         offset,
                     },

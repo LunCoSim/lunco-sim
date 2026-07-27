@@ -1208,15 +1208,18 @@ def Xform "RockerBogie" (
                 double3 xformOp:translate = (0, 0.55, 0)
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+
+                # The acausal tie to the battery belongs HERE, in the `def` that
+                # introduces the panel — not in a sibling `over "SolarPanel"` in the
+                # same variant block. Two specs for one prim inside one variant is
+                # authoring the same opinion twice and relying on the merge; state it
+                # once, where the prim is declared.
+                custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
             }
             over "Electrical"
             {
                 float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
                 prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
-            }
-            over "SolarPanel"
-            {
-                custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
             }
         }
     }
