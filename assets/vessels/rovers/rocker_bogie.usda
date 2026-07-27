@@ -372,7 +372,7 @@ def Xform "RockerBogie" (
         #
         #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
         # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =
-        # 14400/1200 = 12 rad/s. Wheel index 0 is even ⇒ `drive_left`, the same
+        # 2400/200 = 12 rad/s. Wheel index 0 is even ⇒ `drive_left`, the same
         # index-parity channel the wheel itself binds.
         def Xform "Motor_FL" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
@@ -404,7 +404,7 @@ def Xform "RockerBogie" (
             # ── THE SPEED KNOB. THE NO-LOAD FIGURE IS NOT THE ROAD SPEED. ───────
             # The axle's free-spin cap is `noLoadSpeed / ratio` — the ONE no-load
             # speed both wheel realizations obey (`wheel.usda`). Here that is
-            # 14 400 / 1200 = 12 rad/s, i.e. 4.8 m/s of WHEEL RIM speed.
+            # 2400 / 200 = 12 rad/s, i.e. 4.8 m/s of WHEEL RIM speed.
             #
             # THE ROVER DOES NOT GO 4.8 m/s, AND THAT IS THE POINT. Drive torque
             # rolls off as (1 − ω/ω_noload) while the parts' friction grows with ω,
@@ -413,28 +413,35 @@ def Xform "RockerBogie" (
             # (headless `sandbox --api`, position sampled every 2 s), on the
             # `rover_medium` tier that the summer school actually drives:
             #
-            #     noLoadSpeed   terminal (r = 0.4 m, worn tyres)
-            #       14 400        2.71 m/s  ≈ 9.8 km/h   ← authored
-            #       23 400        5.72 m/s  ≈ 20.6 km/h
+            #     axle no-load   terminal (r = 0.4 m, worn tyres)
+            #       12 rad/s       2.71 m/s  ≈ 9.8 km/h   ← authored
+            #       19.5 rad/s     5.72 m/s  ≈ 20.6 km/h
             #
-            # ⚠ SPEED IS NOT SEPARABLE FROM WHEEL RADIUS — the same 23 400 gave only
-            # 3.59 m/s on the 0.25 m wheels this rover briefly wore, and 1.42 m/s at
-            # 13 200. Every figure above is void if the radius moves. MEASURE, never
-            # derive: the response is non-linear (doubling 13 200 → 26 400 TRIPLED
+            # ⚠ THE FIGURES ABOVE PREDATE LIVE REFLECTED INERTIA and are the terminal
+            # speeds, not the transient. Since `486ce6b0` the rotor's `J · ratio²`
+            # reaches the axle, so a rover takes seconds longer to GET there; the
+            # crossing point itself is unchanged. Stated at the AXLE rather than as a
+            # winding because the winding alone means nothing — `motor.usda` now runs
+            # 2400 rad/s through 200:1 for the same 12 rad/s, which is the pair that
+            # keeps reflected inertia the same order as the wheel's own.
+            #
+            # ⚠ SPEED IS NOT SEPARABLE FROM WHEEL RADIUS — the same 19.5 rad/s gave
+            # only 3.59 m/s on the 0.25 m wheels this rover briefly wore, and 1.42 m/s
+            # at 11 rad/s. Every figure above is void if the radius moves. MEASURE,
+            # never derive: the response is non-linear (doubling 11 → 22 rad/s TRIPLED
             # terminal speed), and deriving "12 rad/s × 0.25 m = 2.75 m/s" from the
             # arithmetic is exactly the mistake that once shipped a rover doing half
             # its claimed speed.
             #
-            # 14 400 is `motor.usda`'s catalogue default — this rover is simply
+            # 2400 is `motor.usda`'s catalogue default — this rover is simply
             # running the stock motor. It was briefly geared to Lunokhod's real
-            # 2.0 km/h (2 640), which is authentic and unusable: it turned the
-            # school's 2.7 km round trip into a multi-hour wait.
+            # 2.0 km/h, which is authentic and unusable: it turned the school's
+            # 2.7 km round trip into a multi-hour wait.
             #
             # SPEED ONLY. `stallTorque` is untouched, so axle torque
-            # (stallTorque · 1200 · 0.85) and with it the whole difficulty ladder in
-            # `variants/rover_*.usda` is exactly what it was. Buying speed by
-            # cutting the gearbox ratio instead would throw the torque away with it.
-            float lunco:motor:noLoadSpeed = 14400.0
+            # (stallTorque · 200 · 0.85) and with it the whole difficulty ladder in
+            # `variants/rover_*.usda` is exactly what it was.
+            float lunco:motor:noLoadSpeed = 2400.0
         }
 
         def Xform "Gearbox_FL" (
@@ -567,7 +574,7 @@ def Xform "RockerBogie" (
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             # 12.9 km/h measured — see Motor_FL. All six must
             # agree, or the fast wheels drag the slow ones and every wheel scrubs.
-            float lunco:motor:noLoadSpeed = 14400.0
+            float lunco:motor:noLoadSpeed = 2400.0
         }
 
         def Xform "Gearbox_FR" (
@@ -721,7 +728,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_ML>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
+            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle, 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_ML" (
@@ -744,7 +751,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_RL>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
+            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle, 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_RL" (
@@ -891,7 +898,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_MR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
+            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle, 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_MR" (
@@ -914,7 +921,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_RR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
+            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle, 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_RR" (

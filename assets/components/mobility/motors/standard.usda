@@ -30,7 +30,7 @@
 #   * `continuousTorque` tracks stall at ~60%, the usual thermal margin, and must
 #     never exceed it.
 #
-# 14 400 rad/s is fast for a machine this size — deliberately so. See `motor.usda`
+# 2400 rad/s is fast for a machine this size — deliberately so. See `motor.usda`
 # for why the speed lives in the winding rather than in the gearbox reduction.
 
 def Xform "MotorClass" (
@@ -38,9 +38,9 @@ def Xform "MotorClass" (
     kind = "component"
 )
 {
-    float lunco:motor:stallTorque = 0.25
-    float lunco:motor:noLoadSpeed = 14400.0
-    float lunco:motor:continuousTorque = 0.15
+    float lunco:motor:stallTorque = 1.5
+    float lunco:motor:noLoadSpeed = 2400.0
+    float lunco:motor:continuousTorque = 0.9
     float lunco:motor:rotorInertia = 0.00012
     float lunco:motor:ratedVoltage = 28.0
 }

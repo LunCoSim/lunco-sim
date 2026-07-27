@@ -95,11 +95,11 @@ def Xform "Motor" (
     # SHAFT quantities, before any reduction.
     #
     # A MOTOR IS SIZED TO THE TRACTION IT CAN USE. Torque past the friction limit does
-    # not move the vehicle; it spins the wheel. 0.25 N·m here is ~255 N·m at the axle
-    # through the 1200:1 harmonic drive at 0.85 efficiency.
+    # not move the vehicle; it spins the wheel. 1.5 N·m here is ~255 N·m at the axle
+    # through the 200:1 harmonic drive at 0.85 efficiency.
     #
     # THIS CATALOGUE FIGURE IS A FLOOR, NOT THE FLEET'S TORQUE. Every shipped rocker-bogie
-    # tier overrides it (`variants/rover_*.usda`: awful 0.37, medium 0.64, easy 0.88), so
+    # tier overrides it (`variants/rover_*.usda`: awful 2.22, medium 3.84, easy 5.28), so
     # the difficulty ladder — not this number — sets what a vehicle actually pulls.
     #
     # ⚠ THE AXLE TORQUE IS WELL ABOVE THE TRACTION LIMIT. For the six-wheel rocker-bogie
@@ -113,29 +113,50 @@ def Xform "Motor" (
     # it. It does mean acceleration transients are traction-limited rather than
     # torque-limited, which is realistic. Size any NEW motor against the 46 N·m figure.
     #
-    # SPEED IS THE MOTOR'S WINDING, NOT THE GEARBOX. 14 400 rad/s is a deliberately fast
-    # winding: it buys road speed while leaving `stallTorque · ratio · efficiency` — and
-    # therefore the whole difficulty ladder — untouched. Cutting the 1200:1 reduction
-    # would buy the same speed by throwing half the axle torque away, and torque is what
-    # climbs a crater wall. It is faster than any real machine of this size; that is a
-    # deliberate usability trade, and the authentic alternative was measured and rejected
+    # SPEED IS THE PAIR (WINDING, RATIO), AND ONLY THE PAIR. What the vehicle feels is
+    # `noLoadSpeed / ratio` = 12 rad/s at the axle and `stallTorque · ratio · efficiency`
+    # = 255 N·m; any (winding, ratio) with those two products drives identically —
+    # EXCEPT for inertia, which is why the pair is chosen and not just the products.
+    #
+    # ⚠ THE REDUCTION IS THE INERTIA. Reflected rotor inertia is `J · ratio²`, so the
+    # ratio is not a free variable to be traded against the winding: at the 1200:1 this
+    # catalogue used to carry, a 1.2e-4 kg·m² rotor reflected to **173 kg·m²** per axle —
+    # 87× the wheel's own ½mr² ≈ 2 kg·m², about 1080 kg of apparent mass per wheel on a
+    # 532 kg rover. MEASURED consequence: `allocation_spec`'s forward leg covered 9.15 m
+    # where it had always covered 13.8 m, and every rover in the fleet was still
+    # accelerating after eight seconds.
+    #
+    # That 1200:1 was chosen while reflected inertia was ORPHANED — computed and never
+    # applied — together with a 14 400 rad/s winding (≈137 000 rpm, no real machine) to
+    # buy road speed back. When `486ce6b0` made the inertia live, the ratio² term arrived
+    # with it and the pair became untenable. Rebalanced to 200:1 with a 2400 rad/s
+    # winding: both axle products are unchanged to the digit, so the difficulty ladder,
+    # the top speed and every authored tier behave exactly as before, while the reflected
+    # inertia falls to 4.8 kg·m² — the same order as the wheel it drives, which is what a
+    # geared rover should feel.
+    #
+    # Size a NEW motor by holding those two products, not by copying a winding: raising
+    # the winding to buy speed costs ratio² in inertia unless the reduction comes down
+    # with it. The authentic-speed alternative was measured and rejected on usability
     # (Lunokhod's real 2.0 km/h turned the school's 2.7 km round trip into a multi-hour
-    # wait). See `rocker_bogie.usda` `Motor_FL` for the measured terminal speeds.
+    # wait) — see `motors/lunokhod.usda`, which keeps that slow axle honestly.
     #
     # The ceiling is not the cruise: drive force rolls off as `1 − v/v_max` while contact
-    # drag grows with v, so a rover settles well short of it — 2.71 m/s measured at
-    # 14 400 on `rover_medium`, against a 4.8 m/s rim ceiling.
-    float lunco:motor:stallTorque = 0.25
-    float lunco:motor:noLoadSpeed = 14400.0
-    # Continuous rating, below stall: what it can hold all day without cooking. 0.15
-    # against a 0.25 stall is 60%, the usual margin. Must always stay ≤ `stallTorque`,
+    # drag grows with v, so a rover settles well short of it — against a 4.8 m/s rim
+    # ceiling (12 rad/s × 0.4 m). See `rocker_bogie.usda` `Motor_FL` for measured
+    # terminal speeds.
+    float lunco:motor:stallTorque = 1.5
+    float lunco:motor:noLoadSpeed = 2400.0
+    # Continuous rating, below stall: what it can hold all day without cooking. 0.9
+    # against a 1.5 stall is 60%, the usual margin. Must always stay ≤ `stallTorque`,
     # or the motor is rated to sustain more than it can ever produce.
-    float lunco:motor:continuousTorque = 0.15
+    float lunco:motor:continuousTorque = 0.9
     float inputs:efficiency = 0.85
     float inputs:rated_power = 2000.0
-    # A small rotor, but through a 1200:1 reduction it reflects to the axle multiplied by
-    # the ratio SQUARED — 1.2e-4 × 1200² ≈ 173 kg·m², an order more than the wheel's own
-    # ½mr² ≈ 2 kg·m². That reflected inertia is most of what a geared rover feels.
+    # A small rotor, reflected to the axle multiplied by the ratio SQUARED —
+    # 1.2e-4 × 200² ≈ 4.8 kg·m², the same order as the wheel's own ½mr² ≈ 2 kg·m².
+    # That reflected inertia is a real part of what a geared rover feels, which is why
+    # the ratio is chosen against it and not only against torque — see the winding note.
     float lunco:motor:rotorInertia = 0.00012
     float lunco:motor:ratedVoltage = 28.0
     # Which drive instance on the wheel's joint the output couples to, when the wheel has

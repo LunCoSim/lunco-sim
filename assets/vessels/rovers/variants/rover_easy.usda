@@ -67,21 +67,21 @@ def Xform "RoverEasy" (
     over "RockerL"
     {
         over "Wheel_FL" (variants = { string tire = "cleated" }) { }
-        over "Motor_FL" { float lunco:motor:stallTorque = 0.88 }
+        over "Motor_FL" { float lunco:motor:stallTorque = 5.28 }
         over "Gearbox_FL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "RockerR"
     {
         over "Wheel_FR" (variants = { string tire = "cleated" }) { }
-        over "Motor_FR" { float lunco:motor:stallTorque = 0.88 }
+        over "Motor_FR" { float lunco:motor:stallTorque = 5.28 }
         over "Gearbox_FR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "BogieL"
     {
         over "Wheel_ML" (variants = { string tire = "cleated" }) { }
         over "Wheel_RL" (variants = { string tire = "cleated" }) { }
-        over "Motor_ML" { float lunco:motor:stallTorque = 0.88 }
-        over "Motor_RL" { float lunco:motor:stallTorque = 0.88 }
+        over "Motor_ML" { float lunco:motor:stallTorque = 5.28 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 5.28 }
         over "Gearbox_ML" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
@@ -89,8 +89,8 @@ def Xform "RoverEasy" (
     {
         over "Wheel_MR" (variants = { string tire = "cleated" }) { }
         over "Wheel_RR" (variants = { string tire = "cleated" }) { }
-        over "Motor_MR" { float lunco:motor:stallTorque = 0.88 }
-        over "Motor_RR" { float lunco:motor:stallTorque = 0.88 }
+        over "Motor_MR" { float lunco:motor:stallTorque = 5.28 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 5.28 }
         over "Gearbox_MR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
@@ -98,7 +98,7 @@ def Xform "RoverEasy" (
     # TORQUE COMES FROM THE MOTOR. It used to be `physxVehicleEngine:peakTorque =
     # 900` on each wheel — a vehicle-level PhysX attribute on a part, and a number
     # that named the AXLE torque directly. The axle torque is now derived:
-    #   τ_axle = stallTorque · ratio · efficiency = stallTorque · 1200 · 0.85
+    #   τ_axle = stallTorque · ratio · efficiency = stallTorque · 200 · 0.85
     # so this tier's 900 N·m becomes a 0.88 N·m shaft stall torque (0.88 · 1020 =
     # 898 N·m at the axle — the same rover, expressed where the quantity lives). The
     # tier is a per-instance attribute override on a real part, which is also how a

@@ -7,7 +7,7 @@
 
 # LUNOKHOD — the authentic machine, and a SMALLER FRAME than the other classes.
 #
-# Sized so the 1200:1 reduction lands the axle at 1.39 rad/s: 0.56 m/s of rim
+# Sized so the 200:1 reduction lands the axle at 1.39 rad/s: 0.56 m/s of rim
 # speed on a 0.4 m wheel, which is Lunokhod's real ~2 km/h.
 #
 # This is the one class where `rotorInertia` differs, because it is the one class
@@ -25,9 +25,9 @@ def Xform "MotorClass" (
     kind = "component"
 )
 {
-    float lunco:motor:stallTorque = 0.24
-    float lunco:motor:noLoadSpeed = 1667.0
-    float lunco:motor:continuousTorque = 0.14
+    float lunco:motor:stallTorque = 1.44
+    float lunco:motor:noLoadSpeed = 277.83
+    float lunco:motor:continuousTorque = 0.84
     # Smaller FRAME, so this one really does differ — see the header.
     float lunco:motor:rotorInertia = 0.00006
     float lunco:motor:ratedVoltage = 28.0

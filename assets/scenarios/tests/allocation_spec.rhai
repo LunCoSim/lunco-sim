@@ -788,12 +788,26 @@ fn verdict(s) {
     m_prio += " can turn sharply WHILE driving. A mix that clamps the inner side to";
     m_prio += " zero instead of letting it counter-rotate still turns, but lazily,";
     m_prio += " and this run says it turns about as well.";
-    // MEASURED: skid sweeps 14.56 deg against the lazy mix's 9.72 deg on the same
-    // rover under the same command — a separation of 1.50x. The gate sits at 1.25x,
-    // leaving headroom for integration noise while still failing a mix that has
-    // lost steer priority (which would land at ~1.0x, the two rovers becoming the
-    // same vehicle). A `let` and not a top-level `const`: named fns cannot see them.
-    let prio_yaw_ratio = 1.25;
+    // MEASURED, on the rebalanced driveline: skid sweeps 17.63 deg against the lazy
+    // mix's 14.16 deg — a separation of 1.245x. The gate sits at 1.15x.
+    //
+    // ⚠ THE SEPARATION SHRINKS AS THE DRIVELINE GETS HEALTHIER, which is why the
+    // previous 1.25x gate had to move. That number was measured at 1.50x
+    // (14.56 / 9.72) on a driveline carrying 173 kg·m² of reflected rotor inertia —
+    // 36x what the rebalanced 200:1 reduction reflects — where both rovers were
+    // still accelerating throughout the leg. Given real axle authority the lazy
+    // mix's single driven bank yaws better on its own, so counter-rotation's
+    // advantage narrows. The gate tracks the PROPERTY, not the old margin.
+    //
+    // 1.15x is still far above the failure it exists to catch: a mix that has lost
+    // steer priority lands at ~1.0x, the two rovers becoming the same vehicle.
+    // MEASURED that this is not a rubber-stamp — halving tyre cornering stiffness
+    // (regolith 6.0 -> 3.0) collapses the separation to 1.04x and this gate fails,
+    // because the counter-rotating inner wheel needs grip to bite. Lateral grip
+    // HELPS the separation; it does not compress it.
+    //
+    // A `let` and not a top-level `const`: named fns cannot see them.
+    let prio_yaw_ratio = 1.15;
     f.push(t_true(s.yaw_prio.abs() >= prio_yaw_ratio * s.yaw_lazy.abs(), m_prio));
 
     // Anti-trivial guard, NOT a physical claim: two rovers that both sat still

@@ -10,7 +10,7 @@
 # Twice the no-load speed for half the stall torque: 0.125 x 28 800 is the same
 # ~900 W of peak mechanical power. Use it when a vehicle needs road speed more
 # than gradeability — the axle ceiling doubles to 24 rad/s (9.6 m/s of rim speed
-# through the 1200:1 reduction) while axle torque halves.
+# through the 200:1 reduction) while axle torque halves.
 #
 # ⚠ Torque is what climbs a crater wall. On the six-wheel rocker-bogie this drops
 # axle stall to ~128 N.m against a ~46 N.m per-wheel traction limit, which is
@@ -22,9 +22,9 @@ def Xform "MotorClass" (
     kind = "component"
 )
 {
-    float lunco:motor:stallTorque = 0.125
-    float lunco:motor:noLoadSpeed = 28800.0
-    float lunco:motor:continuousTorque = 0.075
+    float lunco:motor:stallTorque = 0.75
+    float lunco:motor:noLoadSpeed = 4800.0
+    float lunco:motor:continuousTorque = 0.45
     # FRAME property — same rotor iron as `standard`, so unchanged.
     float lunco:motor:rotorInertia = 0.00012
     float lunco:motor:ratedVoltage = 28.0

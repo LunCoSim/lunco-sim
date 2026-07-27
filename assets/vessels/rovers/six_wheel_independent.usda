@@ -193,7 +193,7 @@ def Xform "SixWheelIndependent" (
     # per bank is stated.
     #
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-    # clamped at the gearbox's `maxOutputTorque`; axle no-load speed = 14400/1200 =
+    # clamped at the gearbox's `maxOutputTorque`; axle no-load speed = 2400/200 =
     # 12 rad/s. A weak or hot wheel on this rover is a per-instance
     # `lunco:motor:stallTorque` override on one of these prims — never a code path.
     #

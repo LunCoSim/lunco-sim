@@ -176,7 +176,7 @@ def Xform "SixWheelRover" (
     #
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
     # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
-    # noLoadSpeed/ratio = 14400/1200 = 12 rad/s. Torque and top speed used to be
+    # noLoadSpeed/ratio = 2400/200 = 12 rad/s. Torque and top speed used to be
     # authored on the wheel as `physxVehicleEngine:peakTorque` /
     # `:maxRotationSpeed`; they belong to the motor and the reduction behind it.
     #

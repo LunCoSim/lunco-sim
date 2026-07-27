@@ -55,10 +55,11 @@ def Xform "Gearbox" (
     )
 
     # --- Reduction (LunCoGearboxAPI) ---
-    # 1200:1 harmonic drive, in the band Curiosity's wheel actuators occupy (~1500:1).
-    # Paired with motor.usda's 0.25 N·m shaft stall torque and 14 400 rad/s no-load
+    # 200:1 harmonic drive. Curiosity’s wheel actuators sit near 1500:1, but a ratio that
+    # high reflects J·ratio² into an axle inertia that dwarfs the wheel — see motor.usda's
+    # winding note. Paired with motor.usda's 1.5 N·m shaft stall torque and 2400 rad/s no-load
     # speed, it delivers ~255 N·m at 12 rad/s on the axle.
-    float lunco:gearbox:ratio = 1200.0
+    float lunco:gearbox:ratio = 200.0
     # Cold, dry-lubricated, multi-stage: 0.85 is a real number for this hardware, not a
     # rounding of 1.0.
     float lunco:gearbox:efficiency = 0.85

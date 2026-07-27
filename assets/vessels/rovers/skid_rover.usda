@@ -222,7 +222,7 @@ def Xform "SkidRover" (
     # they are the MOTOR's, and what reaches the axle is
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
     # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
-    # noLoadSpeed/ratio = 14400/1200 = 12 rad/s — the ONE top-speed number both the
+    # noLoadSpeed/ratio = 2400/200 = 12 rad/s — the ONE top-speed number both the
     # raycast and the physical wheel realization obey.
     #
     # `inputs:demand` wires to the SAME drive channel the wheel binds to: the

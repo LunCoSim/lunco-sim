@@ -157,7 +157,7 @@ def Xform "AckermannRover" (
     # steering command is a separate port and no motor listens to it.
     #
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-    #   axle no-load speed = 14400 / 1200 = 12 rad/s
+    #   axle no-load speed = 2400 / 200 = 12 rad/s
     def Xform "Motor_FL" (
         prepend references = @lunco://components/mobility/motor.usda@</Motor>
     )
