@@ -1198,50 +1198,18 @@ impl ExperimentsPanel {
                         }
                     }
 
-                    // Solver picker. The list IS the registry, so a backend
-                    // registered by any crate appears here without a UI edit.
-                    // `None` = "Auto": `solver::resolve` picks the highest-ranked
-                    // solver that can actually serve the model.
-                    crate::solver_backends::ensure_builtin_solvers();
                     ui.separator();
                     ui.label("solver:").on_hover_text(
-                        "Integration method. Auto resolves from what the model \
-                     requires; an explicit choice is refused if it cannot \
-                     serve the model rather than silently replaced.",
+                        "Integration method. Auto resolves from where the run \
+                     executes; an explicit choice is refused if it cannot serve \
+                     the run rather than silently replaced.",
                     );
-                    let current = bounds.solver.clone();
-                    let sel_label = current
-                        .as_ref()
-                        .and_then(lunco_experiments::solver::get)
-                        .map_or_else(|| "Auto".to_string(), |spec| spec.label.clone());
-                    egui::ComboBox::from_id_salt("setup_solver")
-                        .selected_text(sel_label)
-                        .width(220.0)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(current.is_none(), "Auto")
-                                .on_hover_text(
-                                    "Let the resolver pick from the model's own \
-                             requirements.",
-                                )
-                                .clicked()
-                            {
-                                bounds.solver = None;
-                                bounds_changed = true;
-                            }
-                            for spec in lunco_experiments::solver::registered() {
-                                if ui
-                                    .selectable_label(
-                                        current.as_ref() == Some(&spec.id),
-                                        &spec.label,
-                                    )
-                                    .clicked()
-                                {
-                                    bounds.solver = Some(spec.id.clone());
-                                    bounds_changed = true;
-                                }
-                            }
-                        });
+                    bounds_changed |= crate::ui::solver_picker::solver_picker(
+                        ui,
+                        "setup_solver",
+                        220.0,
+                        &mut bounds.solver,
+                    );
                 });
 
                 // Inputs row(s). Wrap horizontally — a model with many

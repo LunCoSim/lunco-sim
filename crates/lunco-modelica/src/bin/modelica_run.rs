@@ -253,7 +253,7 @@ mod native {
         );
 
         // Solver options come from the library's single source of truth
-        // (`stepper_options_for`), never hand-rolled here: it is what keeps
+        // (`stepper_options_from_bounds`), never hand-rolled here: it is what keeps
         // this headless runner numerically identical to the workbench, and it is the
         // one place that carries the run's real horizon into `SimOptions::t_end`
         // (the session clamps every advance at it). atol/rtol 1e-1 is loose for
@@ -264,9 +264,8 @@ mod native {
             tolerance: Some(1e-1),
             ..Default::default()
         };
-        let stepper_opts = match lunco_modelica::experiments_runner::stepper_options_for(
+        let stepper_opts = match lunco_modelica::experiments_runner::stepper_options_from_bounds(
             &bounds,
-            lunco_modelica::solver_backends::model_caps(&comp_res.dae),
         ) {
             Ok(o) => o,
             Err(e) => die(&format!("solver selection failed: {e}")),

@@ -89,6 +89,7 @@ pub mod input_activity;
 pub mod loaded_classes;
 pub mod panels;
 pub mod text_node;
+pub mod solver_picker;
 pub mod theme;
 pub mod uri_handler;
 pub mod viz;

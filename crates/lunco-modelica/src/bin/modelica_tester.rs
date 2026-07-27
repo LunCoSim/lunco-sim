@@ -90,9 +90,8 @@ mod native {
             t_end: t_end_hint,
             ..Default::default()
         };
-        let mut opts = match lunco_modelica::experiments_runner::stepper_options_for(
+        let mut opts = match lunco_modelica::experiments_runner::stepper_options_from_bounds(
             &bounds,
-            lunco_modelica::solver_backends::model_caps(&result.dae),
         ) {
             Ok(o) => o,
             Err(e) => anyhow::bail!("solver selection failed: {e}"),

@@ -18,7 +18,7 @@ See `docs/architecture/25-experiments.md` for the design rationale.
 | `RunBounds` / `RunStatus` / `RunResult` / `RunMeta` | the run window, lifecycle state, results (`merge_delta` for streaming), metadata |
 | `ParamPath` / `ParamValue` | typed parameter overrides |
 | `SolverId` / `SolverSpec` / `SolverCaps` | a registered solver, what it can do, and its id |
-| `ModelCaps` / `RuntimeProfile` / `SolverRequest` | what the model needs, what the context demands, and `resolve()`'s input |
+| `RuntimeProfile` / `SolverRequest` | where the model runs (`live`, `predicted`) and `resolve()`'s input |
 | `RuntimeMode` | realtime vs. as-fast-as-possible |
 | `ModelRef` / `TwinId` | model + twin references |
 | `ExperimentRunner` | trait — the pluggable simulation backend seam |

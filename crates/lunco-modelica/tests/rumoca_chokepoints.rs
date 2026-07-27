@@ -53,7 +53,7 @@ fn code_only(source: &str) -> String {
 /// `solver_backends::rumoca_options` is the only place that builds one: it turns
 /// a resolved `SolverSpec` plus `SolverParams` into rumoca's options. The two
 /// policy entry points state parameters and delegate to it, never construct:
-/// * `experiments_runner::stepper_options_for` — batch / offline / FastRun
+/// * `experiments_runner::stepper_options_from_bounds` — batch / offline / FastRun
 /// * `worker::live_stepper_options` — live co-sim (`t_end = u32::MAX`, no ceiling)
 ///
 /// Everything else — including `src/bin/` — must take options from one of those.
@@ -81,7 +81,7 @@ fn sim_options_are_built_only_by_the_canonical_builders() {
     assert!(
         offenders.is_empty(),
         "SimOptions is built only by `solver_backends::rumoca_options`, reached \
-         through `stepper_options_for` (batch) or `live_stepper_options` (live) — \
+         through `stepper_options_from_bounds` (batch) or `live_stepper_options` (live) — \
          a hand-rolled one inherits t_end=1.0 and silently freezes the model \
          clock. See docs/architecture/29-rumoca-workarounds.md §1.\n\
          Offending sites:\n  {}",

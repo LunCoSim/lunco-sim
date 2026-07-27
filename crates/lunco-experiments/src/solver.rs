@@ -6,8 +6,8 @@
 //! mapping function, the parser and the UI list — so a caller with a special case
 //! writes a constant instead of participating, and the live and batch paths drift
 //! apart without either one being wrong on its face. Here a solver is registered
-//! data and **no caller names one**: callers state what the model needs and what
-//! the runtime demands, and [`resolve`] answers.
+//! data and **no caller names one**: callers state where the model runs, and
+//! [`resolve`] answers.
 //!
 //! ## What this module may and may not decide
 //!
@@ -16,12 +16,14 @@
 //! inside the frame loop, and whether it drives a client-predicted body (declared
 //! in USD as `lunco:program:realtimeSafe`).
 //!
-//! It does NOT decide whether a model is solvable. An earlier version derived
-//! that in Rust from `dae.variables.algebraics` being non-empty and got it wrong
-//! — a healthy battery island has algebraic variables too — which then routed
-//! live islands onto an adaptive backend that hangs the frame loop. Solvability
-//! is the backend's lowering to answer and the domain's rules to constrain; Rust
-//! guessing it is how a thin substrate grows a wrong opinion.
+//! It does NOT decide whether a model is solvable, and there is deliberately no
+//! capability for that. Solvability is the backend's own lowering to answer —
+//! rumoca pairs each algebraic row with a variable and secant-solves it, failing
+//! when the pairing is impossible — and the authored domain rules to constrain.
+//! Deriving it in Rust from `dae.variables.algebraics` being non-empty is the
+//! obvious guess and it is wrong: a healthy battery island has algebraic
+//! variables too, so that predicate routes live islands onto an adaptive backend
+//! that hangs the frame loop. A thin substrate does not get an opinion here.
 //!
 //! `docs/architecture/28-modelica-realtime-physics.md` §2 draws the line this
 //! module does enforce: predicted models need a fixed-step deterministic stepper;
@@ -72,20 +74,6 @@ impl std::fmt::Display for SolverId {
 /// and that [`resolve`] checks against a requirement — nothing here is inferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SolverCaps {
-    /// Solves systems carrying algebraic unknowns (a constrained/implicit DAE),
-    /// not just an explicit ODE.
-    ///
-    /// DECLARED BY THE BACKEND, and deliberately NOT matched against a
-    /// requirement derived from the model. Whether a given DAE needs this is a
-    /// question only the backend's own lowering can answer — rumoca pairs each
-    /// algebraic row with a variable and secant-solves it, and fails when the
-    /// pairing is impossible. An earlier version of this module guessed the
-    /// requirement in Rust from `dae.variables.algebraics` being non-empty; that
-    /// predicate was wrong (a working battery island has algebraic variables
-    /// too) and it sent live islands to an adaptive backend that hangs the frame
-    /// loop. Whether a composition is solvable belongs in the authored domain
-    /// rules, over facts, not in a hardcoded Rust heuristic.
-    pub implicit: bool,
     /// Safe to run INSIDE the fixed-step frame loop.
     ///
     /// An adaptive implicit backend owns its own step sequence and its cost per
@@ -180,7 +168,7 @@ impl std::error::Error for SolverError {}
 /// Whether `spec` can serve `req`, and why not when it cannot.
 ///
 /// The two rules, in full:
-/// 1. An implicit model needs an implicit-capable solver.
+/// 1. A live model — stepped by the frame loop — needs a frame-loop-safe solver.
 /// 2. A predicted model needs a solver that is fixed-step AND deterministic, or
 ///    one that explicitly declares the A4 concession.
 fn satisfies(spec: &SolverSpec, req: &SolverRequest) -> Result<(), String> {
@@ -325,7 +313,6 @@ mod tests {
     /// An adaptive implicit backend: solves constrained systems, cannot run in
     /// the frame loop.
     const BATCH_IMPLICIT: SolverCaps = SolverCaps {
-        implicit: true,
         usable_live: false,
         fixed_step: false,
         deterministic: false,
@@ -334,16 +321,15 @@ mod tests {
     /// The explicit backend: frame-loop safe, and the declared A4 concession for
     /// predicted models.
     const LIVE_EXPLICIT: SolverCaps = SolverCaps {
-        implicit: false,
         usable_live: true,
         fixed_step: false,
         deterministic: false,
         realtime_tolerated: true,
     };
 
-    /// The two-backend world every test below reasons about: one implicit
-    /// solver, and one explicit solver ranked far higher so a resolver that
-    /// ignored capability would pick it.
+    /// The two-backend world every test below reasons about: one adaptive
+    /// batch-only solver, and one frame-loop-safe solver ranked far higher so a
+    /// resolver that ignored capability would pick it.
     fn candidates() -> Vec<SolverSpec> {
         vec![
             spec("testbdf", BATCH_IMPLICIT, 10),
@@ -351,7 +337,7 @@ mod tests {
         ]
     }
 
-    /// An implicit model must never be handed the explicit family.
+    /// A batch profile constrains nothing, so selection falls through to rank.
     #[test]
     fn a_batch_profile_prefers_the_highest_ranked_capable_backend() {
         let chosen = resolve_in(
@@ -400,8 +386,8 @@ mod tests {
         assert!(matches!(err, SolverError::Unknown { .. }), "got {err:?}");
     }
 
-    /// An implicit model with nothing implicit registered must ERROR at
-    /// selection, not take the explicit solver and fail per-step in a log line.
+    /// A live model with nothing frame-loop-safe registered must ERROR at
+    /// selection, not take an adaptive backend and stall the loop later.
     #[test]
     fn a_live_profile_with_no_frame_loop_safe_backend_errors() {
         let err = resolve_in(
@@ -428,7 +414,6 @@ mod tests {
             spec(
                 "testfixed",
                 SolverCaps {
-                    implicit: false,
                     usable_live: true,
                     fixed_step: true,
                     deterministic: true,
@@ -445,7 +430,7 @@ mod tests {
                 ..Default::default()
             },
         )
-        .expect("both candidates serve a non-implicit predicted model");
+        .expect("both candidates serve a predicted model");
 
         assert_eq!(
             chosen.id,

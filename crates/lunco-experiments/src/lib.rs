@@ -118,11 +118,10 @@ pub enum ParamValue {
 
 // ---------- Solver ----------
 //
-// The vocabulary lives in [`solver`]: a REGISTRY, not an enum. A closed enum of
-// four variants is what let `worker::live_stepper_options` opt out and hardcode
-// the explicit family for every live model — see the module docs there. Callers
-// do not name a solver; they state [`ModelCaps`] + [`RuntimeProfile`] and call
-// `solver::resolve`.
+// The vocabulary lives in [`solver`]: a REGISTRY, not an enum — a closed enum is
+// what lets a caller with a special case hardcode a family instead of
+// participating. Callers do not name a solver; they state [`RuntimeProfile`] —
+// where the model runs — and call `solver::resolve`.
 
 // ---------- Runtime ----------
 

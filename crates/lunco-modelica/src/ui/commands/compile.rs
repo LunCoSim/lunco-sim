@@ -349,42 +349,12 @@ pub(crate) fn render_fast_run_setup(
                              (TR-BDF2 — event-robust, recommended for stiff \
                              multi-day horizons).",
                         );
-                    // The list IS the registry — a newly registered backend shows
-                    // up here with no list to update, which is the point of
-                    // replacing the closed enum. `None` = "Auto": let
-                    // `solver::resolve` pick from what the model needs.
-                    crate::solver_backends::ensure_builtin_solvers();
-                    let current = entry.bounds.solver.clone();
-                    let sel_label = current
-                        .as_ref()
-                        .and_then(lunco_experiments::solver::get)
-                        .map_or_else(|| "Auto".to_string(), |spec| spec.label.clone());
-                    egui::ComboBox::from_id_salt("fastrun_setup_solver")
-                        .selected_text(sel_label)
-                        .width(240.0)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(current.is_none(), "Auto")
-                                .on_hover_text(
-                                    "Let the resolver pick the highest-ranked solver \
-                                     that can actually serve this model.",
-                                )
-                                .clicked()
-                            {
-                                entry.bounds.solver = None;
-                            }
-                            for spec in lunco_experiments::solver::registered() {
-                                if ui
-                                    .selectable_label(
-                                        current.as_ref() == Some(&spec.id),
-                                        &spec.label,
-                                    )
-                                    .clicked()
-                                {
-                                    entry.bounds.solver = Some(spec.id.clone());
-                                }
-                            }
-                        });
+                    crate::ui::solver_picker::solver_picker(
+                        ui,
+                        "fastrun_setup_solver",
+                        240.0,
+                        &mut entry.bounds.solver,
+                    );
                     ui.end_row();
                 });
 

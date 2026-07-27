@@ -121,12 +121,12 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 /// `step`/`advance_to` refuse to advance the model past `SimOptions::t_end`, and
 /// they do it *silently* — the call returns `Ok`, the clock just stops. Every
 /// interactive caller therefore has to declare its real horizon up front
-/// (`experiments_runner::stepper_options_for` is the one place that
+/// (`experiments_runner::stepper_options_from_bounds` is the one place that
 /// does), because with the `SimOptions::default()` horizon of 1.0 a long run
 /// parks at t=1s and reports a frozen model rather than an error.
 ///
 /// If this test starts failing, the clamp is gone: the horizon plumbing in
-/// `stepper_options_for` can be revisited, and the live path's
+/// `stepper_options_from_bounds` can be revisited, and the live path's
 /// `t_end = u32::MAX` sentinel in `worker::live_stepper_options` with it.
 #[test]
 fn simulation_session_clamps_advance_at_t_end() {
