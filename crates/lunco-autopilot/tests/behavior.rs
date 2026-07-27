@@ -79,7 +79,7 @@ fn bad_spec_is_a_clean_error() {
 /// teleporting the "vessel" onto whatever point the tree steers hard toward once it
 /// gets close — a crude kinematic stand-in that lets multi-waypoint trees advance.
 /// Returns the number of ticks the tree spent braking (`out.2 > 0.5`).
-fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[Vec3], max: usize) -> usize {
+fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[DVec3], max: usize) -> usize {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
@@ -101,7 +101,7 @@ fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[Vec3], max: usize)
         // If a waypoint is set and we're driving toward it, snap there so the tree
         // registers arrival and moves on.
         if wp < waypoints.len() && ctx.out.0 > 0.0 {
-            ctx.pos = waypoints[wp];
+            ctx.pos = GridPos(waypoints[wp]);
             wp += 1;
         }
     }
@@ -116,7 +116,7 @@ fn patrol_loops_waypoints_and_dwells_at_each() {
         [5.0,0.0,0.0],[5.0,0.0,5.0]
     ]}"#;
     let mut behavior = AutopilotBehavior::from_json(json).expect("patrol spec must build");
-    let wps = [Vec3::new(5.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 5.0)];
+    let wps = [DVec3::new(5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 5.0)];
     // With dt=1.0 and dwell=2.0, each waypoint holds ~2 ticks. Over many ticks the
     // rover both drives (throttle) and repeatedly brakes — proving the loop runs.
     let braked = brake_ticks(&mut behavior, &wps, 12);
@@ -451,7 +451,7 @@ fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
         42,
         TargetState {
             pos: GridPos(DVec3::new(50.0, 0.0, 0.0)),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     );
     let mut ctx = DriveCtx {
@@ -481,7 +481,7 @@ fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
         42,
         TargetState {
             pos: GridPos(DVec3::new(1.0, 0.0, 0.0)),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     );
     ctx.targets = Arc::new(near);
@@ -519,7 +519,7 @@ fn intercept_leads_a_moving_target_and_succeeds_on_contact() {
         7,
         TargetState {
             pos: GridPos(DVec3::new(20.0, 0.0, 0.0)),
-            vel: Vec3::new(0.0, 0.0, 5.0),
+            vel: DVec3::new(0.0, 0.0, 5.0),
         },
     );
     let mut ctx = DriveCtx {
@@ -579,14 +579,14 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
         1,
         TargetState {
             pos: GridPos(DVec3::ZERO),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     ); // self
     targets.insert(
         2,
         TargetState {
             pos: GridPos(DVec3::new(4.0, 0.0, 0.0)),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     );
     let mut ctx = DriveCtx {
@@ -611,14 +611,14 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
         1,
         TargetState {
             pos: GridPos(DVec3::ZERO),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     );
     behind.insert(
         2,
         TargetState {
             pos: GridPos(DVec3::new(-4.0, 0.0, 0.0)),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     );
     ctx.targets = Arc::new(behind);
@@ -634,7 +634,7 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
         1,
         TargetState {
             pos: GridPos(DVec3::ZERO),
-            vel: Vec3::ZERO,
+            vel: DVec3::ZERO,
         },
     );
     ctx.targets = Arc::new(just_me);
