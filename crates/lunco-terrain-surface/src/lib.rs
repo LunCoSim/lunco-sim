@@ -48,6 +48,7 @@ pub mod overlay;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
+pub mod surface_query;
 pub mod terrain;
 pub mod terrain_layers;
 pub mod tile_cache;
@@ -85,6 +86,9 @@ pub use lunco_terrain_core::{
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
 pub use plugin::TerrainSurfacePlugin;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
+pub use surface_query::{
+    assert_dem_frame, fit_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit,
+};
 pub use stream_viz::{
     DemHeightField, LodFrozen, LodTiles, SetTerrainLod, TerrainLodConfig, TerrainLodViz,
     TerrainNodeErrors, TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus,

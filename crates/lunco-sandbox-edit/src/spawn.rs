@@ -269,6 +269,11 @@ struct CursorSurfaceHit {
     terrain_primary: bool,
     terrain: Option<(f64, DVec3)>,
     physics_distance: Option<f64>,
+    /// WHICH collider answered. "A physics hit happened" does not say whether
+    /// placement landed on the site's streamed terrain ring or on a leftover
+    /// ground plane from a previously-loaded scene — and those are opposite
+    /// bugs. Diagnostics only.
+    physics_entity: Option<Entity>,
 }
 
 fn cursor_surface_hit(
@@ -284,17 +289,23 @@ fn cursor_surface_hit(
     let physics_limit = terrain
         .map(|(distance, _)| distance)
         .unwrap_or(f64::INFINITY);
-    let physics_distance = raycaster
-        .cast_ray_render(
-            lunco_core::coords::RenderPos(origin),
-            direction,
-            physics_limit,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        )
-        .map(|hit| hit.distance);
+    let physics = raycaster.cast_ray_render(
+        lunco_core::coords::RenderPos(origin),
+        direction,
+        physics_limit,
+        false,
+        &avian3d::prelude::SpatialQueryFilter::default(),
+    );
+    let physics_entity = physics.map(|hit| hit.entity);
+    let physics_distance = physics.map(|hit| hit.distance);
 
-    resolve_cursor_surface(origin, direction.as_dvec3(), terrain, physics_distance)
+    resolve_cursor_surface(
+        origin,
+        direction.as_dvec3(),
+        terrain,
+        physics_distance,
+        physics_entity,
+    )
 }
 
 fn resolve_cursor_surface(
@@ -302,6 +313,7 @@ fn resolve_cursor_surface(
     direction: DVec3,
     terrain: Option<(f64, DVec3)>,
     physics_distance: Option<f64>,
+    physics_entity: Option<Entity>,
 ) -> Option<CursorSurfaceHit> {
     match (physics_distance, terrain) {
         (Some(physics_distance), Some((terrain_distance, terrain_point)))
@@ -312,6 +324,7 @@ fn resolve_cursor_surface(
                 terrain_primary: false,
                 terrain: Some((terrain_distance, terrain_point)),
                 physics_distance: Some(physics_distance),
+                physics_entity,
             })
         }
         (_, Some((terrain_distance, terrain_point))) => Some(CursorSurfaceHit {
@@ -319,12 +332,14 @@ fn resolve_cursor_surface(
             terrain_primary: true,
             terrain: Some((terrain_distance, terrain_point)),
             physics_distance,
+            physics_entity,
         }),
         (Some(physics_distance), None) => Some(CursorSurfaceHit {
             point: origin + direction * physics_distance,
             terrain_primary: false,
             terrain: None,
             physics_distance: Some(physics_distance),
+            physics_entity,
         }),
         (None, None) => None,
     }
@@ -364,6 +379,8 @@ pub fn update_spawn_ghost(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
+    // Diagnostics only: names the collider a placement ray actually landed on.
+    q_names: Query<&Name>,
     mut diagnostics: ResMut<SpawnDiagnostics>,
     world_frame: lunco_core::coords::WorldFrame,
     // `GridSpatialQuery`, not raw `SpatialQuery`: the cursor ray + corner probes
@@ -431,9 +448,38 @@ pub fn update_spawn_ghost(
     };
     let trace_cursor = diagnostics.enabled && diagnostics.cursor_moved(cursor);
 
+    if trace_cursor {
+        // WHY the oracle answered or didn't. `terrain_hit=None` on every frame
+        // says only "no analytic hit"; it cannot distinguish "no DEM entity in
+        // the world" from "the ray is outside the footprint" from "the ray
+        // starts BELOW the surface in the oracle's own frame" (which returns
+        // None immediately). Those need different fixes, so name the frame.
+        use lunco_terrain_surface::HeightSource;
+        let mut n = 0;
+        for (hf, t_gt) in terrains.iter() {
+            n += 1;
+            let inv = t_gt.affine().inverse();
+            let local_origin = inv.transform_point3(origin.as_vec3()).as_dvec3();
+            info!(
+                terrain_gt = ?t_gt.translation(),
+                half_extent = hf.0.half_extent(),
+                ray_origin_local = ?local_origin,
+                height_under_origin = hf.0.height_at(local_origin.x, local_origin.z),
+                "[spawn-trace] terrain oracle"
+            );
+        }
+        if n == 0 {
+            info!("[spawn-trace] terrain oracle: NO DemHeightField entity in the world");
+        }
+    }
+
     let surface = cursor_surface_hit(&terrains, &raycaster, origin, direction);
     let terrain_trace = surface.and_then(|hit| hit.terrain);
     let phys = surface.and_then(|hit| hit.physics_distance);
+    let phys_hit = surface.and_then(|hit| hit.physics_entity);
+    let phys_name = phys_hit
+        .and_then(|e| q_names.get(e).ok())
+        .map(|n| n.as_str().to_string());
     let hit = surface.map(|hit| hit.point);
     let terrain_primary = surface.is_some_and(|hit| hit.terrain_primary);
 
@@ -557,6 +603,12 @@ pub fn update_spawn_ghost(
         let Some((grid_ent, ghost_cell, ghost_local)) =
             world_frame.render_to_world_grid_local(ghost_render)
         else {
+            // Same failure as the branch above (no single `WorldGrid`), but it
+            // used to return with no trace at all — the one silent exit in an
+            // otherwise fully-instrumented path, so "no ghost" had no log line.
+            if diagnostics.enabled {
+                info!(cursor = ?cursor, render_hit = ?point, "[spawn-trace] ghost rejected: WorldGrid cell split unavailable");
+            }
             return;
         };
         if trace_cursor {
@@ -574,6 +626,8 @@ pub fn update_spawn_ghost(
                 world_grid = ?grid_ent,
                 ghost_cell = ?ghost_cell,
                 ghost_local = ?ghost_local,
+                physics_hit_entity = ?phys_hit,
+                physics_hit_name = ?phys_name,
                 "[spawn-trace] cursor pipeline"
             );
         }
@@ -623,6 +677,7 @@ pub fn update_spawn_ghost(
             ray_direction = ?direction,
             terrain_hit = ?terrain_trace,
             physics_distance = ?phys,
+            physics_hit_name = ?phys_name,
             "[spawn-trace] ghost has no surface hit"
         );
     }
