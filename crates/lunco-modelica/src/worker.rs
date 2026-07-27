@@ -42,14 +42,10 @@ use lunco_experiments::solver;
 /// algebraic variables) and whether this model drives a client-predicted body.
 /// A predicted model resolves to the explicit backend because that backend
 /// *declares* `realtime_tolerated`, not because a function body asserts it.
-fn live_stepper_options(
-    comp_res: &rumoca_compile::compile::DaeCompilationResult,
-    profile: solver::RuntimeProfile,
-) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
+fn live_stepper_options(profile: solver::RuntimeProfile) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
     crate::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
-        needs: crate::solver_backends::model_caps(comp_res),
         profile,
         // The live path takes no authored override: an `experiment(...)`
         // annotation is an offline knob, and the same reasoning that keeps its
@@ -99,6 +95,8 @@ fn profile_for(
     realtime_models: &std::collections::HashSet<Entity>,
 ) -> solver::RuntimeProfile {
     solver::RuntimeProfile {
+        // Everything the worker steps is driven by the frame loop.
+        live: true,
         predicted: realtime_models.contains(&entity),
     }
 }
@@ -107,7 +105,7 @@ fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
 ) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    let opts = live_stepper_options(comp_res, profile).map_err(|e| {
+    let opts = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
     crate::simulation_session::live(&comp_res.dae, opts)

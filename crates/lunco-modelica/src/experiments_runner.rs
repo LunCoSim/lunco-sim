@@ -1169,30 +1169,20 @@ pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 ///   `opts.t_end`**. With the default horizon an interactive run parks at t=1s
 ///   and quietly reports a frozen model instead of erroring — the failure mode
 ///   that made a 60 s rocket burn drain exactly 1 s of propellant.
-pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
-    stepper_options_for(bounds, lunco_experiments::ModelCaps::default())
-}
-
-/// [`stepper_options_from_bounds`] when the caller already knows what the model
-/// requires (it has compiled the DAE). Prefer this: with real [`ModelCaps`] an
-/// authored solver that cannot serve the model is refused here instead of dying
-/// per-step later.
-///
 /// Both this and the live path resolve through `lunco_experiments::solver`, which
 /// is the point: two paths choosing independently is how a live model ends up on
 /// a family the batch path would have refused.
-pub fn stepper_options_for(
-    bounds: &RunBounds,
-    needs: lunco_experiments::ModelCaps,
-) -> rumoca_sim::SimOptions {
+pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
     use lunco_experiments::solver;
     crate::solver_backends::ensure_builtin_solvers();
 
     let request = solver::SolverRequest {
-        needs,
-        // Batch is offline: nothing here drives a client-predicted body, so the
+        // Batch owns its own time loop and drives no predicted body, so the
         // adaptive implicit family is not merely allowed but wanted.
-        profile: solver::RuntimeProfile { predicted: false },
+        profile: solver::RuntimeProfile {
+            live: false,
+            predicted: false,
+        },
         authored: bounds.solver.clone(),
     };
 
