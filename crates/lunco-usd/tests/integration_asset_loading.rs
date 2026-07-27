@@ -239,15 +239,21 @@ fn test_rover_components_via_bevy_pipeline() {
 
         // --- REQUIRED COMPONENTS ---
 
-        // Physics
+        // Physics. Bodies are born Kinematic and held by `ShouldBeDynamic`
+        // until joints resolve and physics readiness promotes them — this
+        // world has no terrain, so readiness never fires and the hold is the
+        // correct terminal state here. Destined-dynamic is the invariant.
         let rb = app
             .world()
             .get::<RigidBody>(rover_ent)
             .unwrap_or_else(|| panic!("{label}: Missing RigidBody"));
-        assert_eq!(
-            *rb,
-            RigidBody::Dynamic,
-            "{label}: RigidBody must be Dynamic"
+        assert!(
+            *rb == RigidBody::Dynamic
+                || app
+                    .world()
+                    .get::<lunco_usd_avian::ShouldBeDynamic>(rover_ent)
+                    .is_some(),
+            "{label}: RigidBody must be Dynamic (or Kinematic-held via ShouldBeDynamic)"
         );
 
         let mass = app
@@ -758,32 +764,33 @@ fn test_full_scene_loads_with_rovers() {
         .collect();
     assert_eq!(
         rover_info.len(),
-        5,
-        "Must have 5 rovers from scene, got {}: {:?}",
+        6,
+        "Must have 6 rovers from scene, got {}: {:?}",
         rover_info.len(),
         rover_info
     );
 
     // Drivable = carries a `DriveMix` (any kernel) + actuator ports.
-    // 3 skid (2 raycast + 1 physical) + 2 ackermann (1 raycast + 1 physical) = 5
+    // 4 skid (2 raycast + 1 physical + 1 battery/thermal raycast) +
+    // 2 ackermann (1 raycast + 1 physical) = 6
     let mut q_mix = app
         .world_mut()
         .query_filtered::<Entity, (With<DriveMix>, With<ActuatorPorts>)>();
     let drivable: usize = q_mix.iter(app.world()).count();
     assert_eq!(
-        drivable, 5,
-        "All 5 rovers must be drivable (carry DriveMix), got {drivable}"
+        drivable, 6,
+        "All 6 rovers must be drivable (carry DriveMix), got {drivable}"
     );
 
-    // 12 raycast wheels (3 raycast rovers × 4 wheels)
+    // 16 raycast wheels (4 raycast rovers × 4 wheels)
     // Skid_Physical_1 + Ackermann_Physical_1 have physical wheels
     let mut q_wheels = app
         .world_mut()
         .query_filtered::<Entity, With<WheelRaycast>>();
     let wheel_count = q_wheels.iter(app.world()).count();
     assert_eq!(
-        wheel_count, 12,
-        "3 raycast rovers x 4 wheels = 12, got {wheel_count}"
+        wheel_count, 16,
+        "4 raycast rovers x 4 wheels = 16, got {wheel_count}"
     );
 
     // 8 physical wheels (2 physical rovers × 4 wheels)
@@ -811,8 +818,8 @@ fn test_full_scene_loads_with_rovers() {
         })
         .count();
     assert_eq!(
-        visible_count, 5,
-        "All 5 rovers' Chassis must have Mesh3d (visible), got {visible_count}"
+        visible_count, 6,
+        "All 6 rovers' Chassis must have Mesh3d (visible), got {visible_count}"
     );
 
     // Verify rovers have scene paths (from references) not standalone paths
@@ -854,11 +861,11 @@ fn test_full_scene_loads_with_rovers() {
         .filter(|(_, name)| name.as_str().contains("Conn_Steer"))
         .map(|(_, name)| name.as_str().to_string())
         .collect();
-    // 5 rovers × 2 front wheels = 10 steering connections
+    // 6 rovers × 2 front wheels = 12 steering connections
     assert_eq!(
         steering_wires.len(),
-        10,
-        "5 rovers × 2 front wheels = 10 steering connections, got {}: {:?}",
+        12,
+        "6 rovers × 2 front wheels = 12 steering connections, got {}: {:?}",
         steering_wires.len(),
         steering_wires
     );

@@ -3327,7 +3327,14 @@ mod draw_partition_tests {
         let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
         build_draw_partition(
             sel.iter().copied(),
-            |n| n != deep && n.depth >= 1,
+            // Residency as it actually stands mid-stream: nothing BELOW the
+            // selection is resident (deep's children were never baked). Without
+            // the depth cap the predicate marked those children drawable, which
+            // legitimately routes deep through the just-coarsened child-cover
+            // bridge (tested in `unready_coarsened_parent_keeps_its_ready_-
+            // outgoing_children`) — a full cover, but not the ancestor stand-in
+            // this test is about, and one the ancestor-walk helper can't count.
+            |n| n != deep && (1..=3).contains(&n.depth),
             &mut draw,
             &mut scratch,
         );
