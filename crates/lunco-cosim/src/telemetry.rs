@@ -200,14 +200,38 @@ pub fn publish_cosim_variables(
 mod tests {
     use super::*;
 
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    /// Wall-clock ms banked per `app.update()`. Larger than one fixed step so a
+    /// handful of updates crosses several `FixedUpdate` boundaries.
+    const UPDATE_MS: u64 = 20;
+
     fn app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
+        // Without a manual strategy the test's `Time` barely advances, so
+        // `FixedUpdate` — where this system lives — may never run at all.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            UPDATE_MS,
+        )));
         app.init_resource::<SignalRegistry>();
         app.init_resource::<CosimTelemetrySettings>();
         app.init_resource::<CosimTelemetryClock>();
         app.add_systems(FixedUpdate, publish_cosim_variables);
         app
+    }
+
+    /// Run enough updates to cross at least `n` fixed-step boundaries.
+    ///
+    /// NOT the same as `n` calls to `app.update()`: the fixed accumulator starts
+    /// empty, so the first update banks time without necessarily crossing a
+    /// boundary and runs `FixedUpdate` zero times (the same trap
+    /// `lunco-telemetry`'s tests document).
+    fn step_fixed(app: &mut App, n: usize) {
+        for _ in 0..=n {
+            app.update();
+        }
     }
 
     fn with_outputs(app: &mut App, pairs: &[(&str, f64)]) -> Entity {
@@ -222,7 +246,7 @@ mod tests {
     fn variables_land_under_the_sim_namespace() {
         let mut app = app();
         let e = with_outputs(&mut app, &[("soc", 0.9)]);
-        app.update();
+        step_fixed(&mut app, 2);
 
         let reg = app.world().resource::<SignalRegistry>();
         assert!(
@@ -244,7 +268,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<SignalRegistry>()
             .push_scalar(SignalRef::new(e, "torque"), 0.0, 42.0);
-        app.update();
+        step_fixed(&mut app, 2);
 
         let reg = app.world().resource::<SignalRegistry>();
         let authored = reg.scalar_history(&SignalRef::new(e, "torque")).unwrap();
@@ -269,7 +293,7 @@ mod tests {
             .resource_mut::<CosimTelemetrySettings>()
             .max_channels = 1;
         let e = with_outputs(&mut app, &[("a", 1.0)]);
-        app.update();
+        step_fixed(&mut app, 2);
         // A second variable appears after the cap is reached.
         app.world_mut()
             .entity_mut(e)
@@ -281,7 +305,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<CosimTelemetryClock>()
             .next_due = 0.0;
-        app.update();
+        step_fixed(&mut app, 2);
 
         let reg = app.world().resource::<SignalRegistry>();
         assert!(reg.scalar_history(&SignalRef::new(e, "sim.a")).is_some());
@@ -295,7 +319,7 @@ mod tests {
     fn the_owner_is_tagged_so_its_history_dies_with_it() {
         let mut app = app();
         let e = with_outputs(&mut app, &[("x", 1.0)]);
-        app.update();
+        step_fixed(&mut app, 2);
         assert!(
             app.world().entity(e).contains::<SignalSource>(),
             "the publisher must mark the owner for despawn cleanup"
