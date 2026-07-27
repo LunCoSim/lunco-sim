@@ -2315,13 +2315,10 @@ impl Plugin for SandboxCorePlugin {
             // already links, and it is headless by construction (bevy substrate
             // only, no render/winit/egui).
             //
-            // This used to be a bare `init_resource` + the journal plugin, on
-            // the belief that the full plugin was a workbench thing. It was not,
-            // and the difference was `OpenTwin`: a server could run a twin's
-            // scenarios but had no way to MOUNT the twin they belong to, so the
-            // only way in was to open it in a GUI first and let the session
-            // restore. Half a plugin is not a smaller surface, it is a subset
-            // nobody declared.
+            // The WHOLE plugin, not a hand-picked subset: it also registers
+            // `OpenTwin` and the folder-scan pipeline, without which a server
+            // could run a twin's scenarios but never mount the twin they belong
+            // to.
             app.add_plugins(lunco_workspace::WorkspacePlugin);
         }
 

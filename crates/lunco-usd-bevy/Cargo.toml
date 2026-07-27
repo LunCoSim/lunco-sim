@@ -22,7 +22,11 @@ license.workspace = true
 # `ktx2 = dep:ktx2`) — NEITHER pulls `bevy_render`, so the render-free contract
 # above still holds. The IBL components themselves (`Skybox`,
 # `GeneratedEnvironmentMapLight`) live in `bevy_light`, already enabled.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "mesh_picking", "zstd_rust", "hdr", "ktx2"] }
+# NO `mesh_picking`: this crate contains no picking code (it builds scene data),
+# and the feature pulls the raycast BACKEND — cursor-driven hit-testing that a
+# `--no-ui` server has no cursor for. A GUI build still gets it, from the crates
+# that actually pick (`lunco-sandbox`, `lunco-sandbox-edit`, `luncosim`).
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "zstd_rust", "hdr", "ktx2"] }
 # `Mesh`, `Mesh3d`, `Indices`, `PrimitiveTopology` — render-FREE (depends only on
 # `wgpu-types`). Named directly so mesh building never reaches for
 # `bevy::render::render_resource`, which is a `bevy_render` (wgpu + naga)

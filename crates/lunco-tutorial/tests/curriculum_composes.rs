@@ -50,10 +50,9 @@ fn every_lesson_resolves_its_script() {
 
 /// A declared world must exist — and a lesson with NO world is legitimate.
 ///
-/// That second half is why the curriculum moved into USD: `b5_join_team` and the
-/// whole lunica track have no world on purpose, and under the old
-/// `load_scene`-inside-`on_start` model that was indistinguishable from a lesson
-/// that forgot to open one.
+/// That second half is why the world is DECLARED: `b5_join_team` and the whole
+/// lunica track have no world on purpose, and a lesson that opened its own would
+/// make "has none" indistinguishable from "forgot one".
 #[test]
 fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
     let mut with = 0;

@@ -23,7 +23,7 @@ now: the 2h training block is delivered as guided LuncoSim lessons.
 
 ---
 
-## 2. Current coverage (8 lessons, `sandbox/tutorials.json` + scene-backed)
+## 2. Current coverage (8 lessons, `sandbox/curriculum.usda`)
 
 | id | kind | teaches | event-relevant? |
 |---|---|---|---|

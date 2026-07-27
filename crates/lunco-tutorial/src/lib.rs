@@ -84,13 +84,10 @@ pub struct TutorialMeta {
 
 /// One TRACK's presentation, as composed.
 ///
-/// Both fields are now COMPOSITION facts rather than authored ones. A track used
-/// to declare `hosts = ["sandbox"]` and `order = 2` in its own `track.json`,
-/// which put an application's configuration inside scene description and gave
-/// ordering two mechanisms that could disagree. An app now offers a track by
-/// sublayering it ([`assets/tutorials/sandbox.usda`]), so the layer stack answers
-/// both "which tracks" and "in what order", and a track that wants to be shown
-/// somewhere else is composed somewhere else.
+/// Both fields are COMPOSITION facts, never authored. An app offers a track by
+/// sublayering it (`assets/tutorials/<app>.usda`), so the layer stack answers
+/// both "which tracks" and "in what order"; a track shown somewhere else is
+/// composed somewhere else.
 #[derive(Clone, Debug)]
 pub struct TrackMeta {
     /// Heading shown for this track in the 🎓 menu (`lunco:track:label`).
@@ -123,14 +120,8 @@ pub enum CurriculumSource {
 /// [`CurriculumRoots`] and needs no code here, which is what makes the
 /// curriculum an extension rather than a subsystem.
 ///
-/// There used to be two loaders: the bundled walk in the plugin's `build`, and a
-/// separate twin path with its own manifest constant, its own parse, its own
-/// provenance field and its own unload rule. Two loaders meant two sets of rules
-/// for what a track is, and they had already drifted — the bundled one keyed the
-/// track table by DIRECTORY NAME while the twin one keyed it by the lessons'
-/// declared `app`, so a track whose directory did not happen to match its `app`
-/// lost its menu heading. One loader over N roots removes the class of bug, not
-/// just that instance.
+/// ONE loader serves every root ([`CurriculumRoot::load_into`]), so there is one
+/// answer to what a track is and no way for two providers to drift apart.
 #[derive(Clone, Debug)]
 pub struct CurriculumRoot {
     /// Provenance — what gets dropped when this provider goes away.
@@ -208,10 +199,8 @@ impl CurriculumRoot {
         let tracks = composed.tracks.len();
         for track in composed.tracks {
             // Keyed by the track's PRIM PATH — the same key each lesson carries
-            // in `app`, so a heading always lands on its own group. The old
-            // bundled loader keyed by directory name and the twin one by the
-            // lessons' declared app, and a track whose directory did not match
-            // lost its heading. There is only one name here now.
+            // in `app`, and the only name a track has, so a heading always lands
+            // on its own group.
             let order = registry.tracks.len();
             registry
                 .tracks
@@ -244,11 +233,9 @@ pub struct CurriculumRoots(pub Vec<CurriculumRoot>);
 /// Republish the whole catalog from the registered roots.
 ///
 /// A full rebuild rather than an incremental add/remove: the catalog is a few
-/// small manifests, and rebuilding makes "what is registered" a pure function of
-/// "which roots exist". That is what deleted the old `retain_bundled` — an
-/// unload rule that had to be kept in step with the load rule by hand, and once
-/// wasn't (it matched on the literal app name `"school"`, making a twin's chosen
-/// label a reserved word in the engine).
+/// small layers, and rebuilding makes "what is registered" a pure function of
+/// "which roots exist" — so there is no separate unload rule to keep in step
+/// with the load rule.
 fn rebuild_curriculum(roots: &CurriculumRoots, registry: &mut TutorialRegistry) {
     *registry = TutorialRegistry::default();
     let mut tracks = 0;
@@ -425,8 +412,7 @@ pub struct SetSubsystemEnabled {
 /// Drop everything the previous lesson put on screen.
 ///
 /// The ONE place presentation is reset, shared by starting a lesson and stopping
-/// one — two callers that must agree on what "the overlay" is, and previously
-/// didn't.
+/// one — two callers that must agree on what "the overlay" is.
 ///
 /// `TutorialHud` is OPTIONAL for the same reason `on_skip_tutorial` takes it
 /// optionally: it belongs to `lunco_workbench`'s overlay plugin, and a host can
@@ -475,16 +461,11 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         // hint, objectives, spotlight, coach card and "continue to next?" prompt
         // all go, before this one publishes anything.
         //
-        // It must happen HERE and not be left to the incoming lesson, because a
-        // lesson only overwrites the parts it happens to set. One that shows a
-        // coach card but no objectives inherited the previous lesson's
-        // checklist, and a UI tour with no `load_scene` at all (every lunica
-        // lesson) inherited the whole overlay — the scene-change observer in the
-        // app was the only thing that ever cleared it, which made the bug look
-        // like it was about scenes rather than about switching lessons.
-        //
-        // Stopping a lesson already did exactly this (`on_skip_tutorial`);
-        // starting one did not. That asymmetry WAS the bug.
+        // It must happen HERE and not be left to the incoming lesson: a lesson
+        // only overwrites the parts it happens to set, so one that shows a coach
+        // card but no objectives would inherit the previous lesson's checklist,
+        // and a UI tour that mounts no world would inherit the whole overlay.
+        // Starting and stopping a lesson reset the same things.
         clear_tutorial_hud(world);
         world.resource_mut::<PendingAdvance>().0 = None;
         let Some(meta) = world.resource::<TutorialRegistry>().get(&id) else {
@@ -492,10 +473,8 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             return;
         };
         // A lesson's script resolves against the root that CONTRIBUTED it —
-        // provenance, not a search. The previous version tried the active twin's
-        // directory and fell back to `assets/`, so a twin lesson and a bundled
-        // one with the same relative path shadowed each other depending on which
-        // twin happened to be open.
+        // provenance, not a search, so a twin's lesson and a bundled one can
+        // share a relative path without shadowing each other.
         let Some(root) = world
             .resource::<CurriculumRoots>()
             .0
@@ -512,13 +491,10 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         };
         // MOUNT THE DECLARED WORLD, if the lesson declares one.
         //
-        // This is what the `payload` arc bought. A lesson used to open its own
-        // world with `load_scene(...)` as the first statement of `on_start`,
-        // which meant a lesson that HAS no world (every lunica lesson, the
-        // join-team lesson) was indistinguishable from one that forgot — the
-        // reported "switching lessons only changes the overlay, not the scene"
-        // was both cases at once and no way to tell them apart. Declared, the
-        // launcher can act: mount, or deliberately leave the viewport alone.
+        // Declared rather than called, so `None` is a STATEMENT — this lesson
+        // has no world (a UI tour) — and distinguishable from a lesson that
+        // forgot one. The launcher acts on it: mount, or deliberately leave the
+        // viewport alone.
         //
         // Sent as a named command rather than a typed one because this crate
         // sits above USD and does not depend on it — the same arrangement
@@ -929,15 +905,12 @@ fn boot_seam(world: &mut World, mut done: Local<bool>) {
 /// with the active twin, and republish the catalog when it changes.
 ///
 /// All this system does is add and remove a root — it holds no opinion about
-/// what a track is, where a manifest lives, or which lessons belong to whom.
-/// That is the point: a twin's curriculum is not a second kind of curriculum, so
-/// it does not get a second set of rules (it previously had its own manifest
-/// constant, parse, provenance stamp and unload rule, and they had drifted from
-/// the bundled ones).
+/// what a track is, where a layer lives, or which lessons belong to whom. A
+/// twin's curriculum is not a second kind of curriculum and gets no second set
+/// of rules.
 ///
-/// It runs as a system because it is a load-time concern. It used to live inside
-/// the 🎓 menu's DRAW closure, so a twin's lessons appeared only once somebody
-/// opened the menu, and the manifest was re-read on a draw callback.
+/// A system, not a draw callback: mounting a curriculum is a load-time concern,
+/// so a twin's lessons are there whether or not anyone opens the 🎓 menu.
 fn sync_twin_curriculum_root(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut roots: ResMut<CurriculumRoots>,

@@ -38,8 +38,13 @@ embed-assets = []
 #
 # KEPT: `bevy_mesh` (Mesh3d/PrimitiveTopology — render-free), `bevy_camera`
 # (Camera/Projection/Exposure/Visibility/Hdr), `bevy_light` (DirectionalLight,
-# NotShadowCaster), `bevy_gltf`, `mesh_picking`.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_camera", "bevy_light", "mesh_picking"] }
+# NotShadowCaster), `bevy_gltf`, `bevy_picking`.
+#
+# `bevy_picking`, NOT `mesh_picking`: the only use here is `Pickable::IGNORE` on
+# trajectory lines, a COMPONENT from picking's core. `mesh_picking` additionally
+# pulls the mesh raycast backend, which is cursor hit-testing — nothing a
+# headless server can do, and nothing this crate asks for.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_camera", "bevy_light", "bevy_picking"] }
 bevy_mesh = { workspace = true }
 # egui shell used only by `src/ui/` (CelestialUiPlugin) — optional for headless.
 bevy_egui = { workspace = true, optional = true }

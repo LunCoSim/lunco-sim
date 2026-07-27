@@ -5,8 +5,8 @@
 //! way and only the registration differs. That makes the failure silent and
 //! asymmetric: everything works in the GUI, and a server answers
 //! `Command 'X' not found or not API-accessible`, which is also what a typo
-//! looks like. Three commands were lost that way (`Ping`, `Exit`, `OpenTwin`) —
-//! each because the plugin registering it drew egui.
+//! looks like. A command registered from a plugin that draws egui does not
+//! exist on a windowless host, and nothing but this test says so.
 //!
 //! The list below is DELIBERATELY a list, not an enumeration: it is the
 //! session-control contract — probe the host, mount a twin to work on, shut the

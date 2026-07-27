@@ -14,7 +14,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 008 | Developer Experience | Partial | scripting is rhai, not Lua/Python |
 | 009 | Coordinate Frame Tree | Partial | `big_space` floating-origin built; named TF-tree types absent |
 | 010 | Authority / RBAC | Implemented | |
-| 011 | Interactive Tutorials | Implemented | all six tutorial tasks built; §10 — the curriculum IS a USD layer (`LunCoTutorialTrackAPI`/`LunCoTutorialAPI`), tracks composed by sublayer, a lesson's world declared as a `payload` and mounted by the launcher. §9's `CurriculumRoots` remains the provider seam (bundled + twin through one loader) |
+| 011 | Interactive Tutorials | Implemented | a curriculum is a USD layer (`LunCoTutorialTrackAPI`/`LunCoTutorialAPI`); an app offers tracks by sublayering them, and a lesson's world is a declared `payload` the launcher mounts. `CurriculumRoots` is the provider seam — the engine ships no lessons |
 | 012 | Sensor-to-Dashboard | Partial | telemetry bridge + scalar sensing; no camera/RGB sensors, no OpenMCT/Grafana |
 | 013 | SysML Integration | Not built | overlaps 017 (interop/model mapping) |
 | 014 | Modelica Simulation | Implemented | rumoca runtime |

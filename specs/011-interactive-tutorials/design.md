@@ -197,177 +197,9 @@ existing `HelpAnchors` keys) is a clean, isolated follow-up.
 
 ---
 
-## 8. A lesson's ENVIRONMENT must be declared, not called (2026-07-26)
+## 8. The curriculum IS a USD layer
 
-### The defect that forced this
-
-A lesson set up its own world by calling `load_scene(...)` as the first statement
-of `on_start`. Nothing checked that it did. `sandbox/rhai_repl.rhai` did not, so
-opening it drew coach marks over whatever scene happened to be loaded — the
-symptom being "the tutorial doesn't load its scenario, it just overlays the
-current one". A sweep of every shipped lesson found exactly one other shape:
-`lunica/*` lessons legitimately have **no** world at all, so "every lesson calls
-`load_scene`" is not even a valid rule to enforce.
-
-The problem is not the file format. It is that the environment is an imperative
-side effect of running the lesson, so its absence is unrepresentable and
-therefore unverifiable. Two further consequences, both observed live:
-
-- The lesson's own `load_scene` RACES its own HUD publication — the scene mount
-  and the first `hint()` land in one `on_start`. Clearing stale overlay state on
-  a scene change has to happen synchronously on the `LoadScene` trigger, or it
-  wipes the incoming lesson's hint instead of the outgoing lesson's.
-- Chaining a lesson whose successor uses the SAME `.usda` takes the
-  `already loaded — no-op` path (correct), so the world visibly does not change
-  while the avatar/camera is re-derived — which reads to a user as a bug.
-
-### Decision
-
-**The lesson prim declares its world as a `payload`; the launcher mounts it
-before running the scenario.** A lesson with no payload is *declaring* itself a
-UI tour. A lesson that meant to have a world and lacks one is a lint finding, not
-a student's discovery.
-
-```usda
-def Scope "Sandbox" ( prepend apiSchemas = ["LunCoTutorialTrackAPI"] ) {
-    string lunco:track:label = "1️⃣ Sandbox Onboarding"
-
-    def Scope "FirstDrive" (
-        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-        prepend payload = @./first_drive.usda@      # deferred by construction
-    ) {
-        asset  info:sourceAsset     = @./first_drive.rhai@
-        string lunco:tutorial:title = "First Drive"
-        rel    lunco:tutorial:next  = </Sandbox/SandboxIntro>
-    }
-}
-```
-
-Why each part is the canonical spelling, not a preference:
-
-- **`payload`, not a string field or a `rel`.** USD already means by payload what
-  we mean: heavy content, referenced but *unloaded until asked*. It is in the
-  dependency closure, so the world ships with the lesson. A `rel` targets a prim
-  inside the composed stage — it is not an asset dependency at all, and a string
-  path is invisible to every USD tool. `openusd`'s stage carries real load rules
-  (`InitialLoadSet`, `load`/`unload`), so deferral is a mechanism we have.
-- **The payload is a DECLARATION; mounting stays `LoadScene`.** The curriculum
-  stage must not become the world. The launcher reads the arc and mounts it
-  through the one scene path that already exists.
-- **`LunCoProgramAPI` + `info:sourceAsset`** is already how this engine binds a
-  rhai program to a prim. A lesson is that, plus display attributes.
-- **`next` as a `rel`** makes a dangling chain a lint error instead of an
-  unchecked string. Order IS the chain (`TutorialRegistry::ordered()` already
-  walks it), so there is no `order` field.
-- **NO `hosts` attribute.** Which app offers which track is application
-  configuration, not scene description — the same category error as
-  `kind = "tutorialTrack"` (which is also invalid: `kind` is the model hierarchy,
-  a registered token set). The canonical expression is **which layers the app
-  composes**: bundled tracks are sublayers of the app's curriculum stage; a twin
-  contributes by adding its layer on the SESSION layer (runtime, non-persistent,
-  removed when the twin closes). That deletes the hand-rolled twin path —
-  `TWIN_TUTORIALS_MANIFEST`, `from_twin`, `retain_bundled`,
-  `LoadedTwinCurriculum`, a second parse — because composition already answers
-  "these layers, in this order".
-
-### What stays OUT of USD
-
-Lesson **logic**. Objectives, gating, coach steps stay rhai. Encoding control
-flow as prim attributes means writing an interpreter for a language expressed in
-attributes — strictly worse than the rhai already sanctioned for behaviour.
-
-### Prerequisite: the dependency closure must be the library's answer
-
-"Does this lesson's world/script ship" is `UsdUtils.ComputeAllDependencies`.
-Ours re-parsed layers and matched raw spec fields, and stopped at composition
-arcs — so anything bound by an `asset` attribute (`info:sourceAsset`, textures)
-was outside the closure.
-
-- **Landed** (openusd `a198b40`): `Data::composition_asset_dependencies()`
-  (`SdfLayer::GetCompositionAssetDependencies`) and `Data::asset_dependencies()`.
-  `lunco-usd-bevy::closure` now asks the library; `discover_arcs`/`ArcFilter` are
-  deleted.
-- **Pending**: a recursive, resolver-anchored `compute_all_dependencies` in the
-  fork, so `reference_closure` can be deleted and the `TODO(multiplayer)`
-  unconfined-walker note answered (a resolver context has a root; `base.join`
-  does not).
-
-### Current state vs. target
-
-**Implemented (2026-07-27).** See §10.
-
-## 9. Curriculum ROOTS — the composition idea, at the current cost (2026-07-26)
-
-§8's `hosts`-disappears-into-composition argument is right about the *shape* and
-was wrong about the *price*. Composing curricula as USD layers needs a codeless
-schema registered in `plugInfo.json`, payload-mounting in the launcher, and a
-migration of every manifest — to deliver one property: **a provider contributes
-lessons by being composed in, and withdraws them by being composed out.**
-
-That property does not need USD. It is now spelled with the infrastructure that
-already exists:
-
-```rust
-pub struct CurriculumRoot { pub source: CurriculumSource, pub base: Option<PathBuf> }
-pub struct CurriculumRoots(pub Vec<CurriculumRoot>);   // Resource
-```
-
-- The engine **ships no lessons**. The app pushes `CurriculumRoot::bundled()`;
-  an open twin pushes `CurriculumRoot::twin(id, root)`; a downloaded pack or a
-  classroom server is one more push and needs no code in `lunco-tutorial`.
-- **One loader** (`CurriculumRoot::load_into`) serves every root, so there is one
-  answer to "what is a track": a directory holding a `track.json`. A twin may
-  now ship several tracks, which the bespoke twin path could not.
-- **Rebuild, don't unload.** The catalog is a pure function of the mounted
-  roots, which is what let the hand-maintained unload rule be deleted outright.
-
-What this replaced, and why the replacement is not cosmetic — the two paths had
-already drifted into two different sets of rules:
-
-- The bundled path keyed the track table by **directory name**, the twin path by
-  the lessons' declared **`app`** — so a track whose directory did not match its
-  `app` silently lost its menu heading.
-- `StartTutorial` **searched** (active twin's directory, then `assets/`), so a
-  twin lesson and a bundled one sharing a relative path shadowed each other
-  depending on which twin happened to be open. A lesson now resolves against the
-  root that contributed it, by provenance.
-- Deleted: `TWIN_TUTORIALS_MANIFEST`, `TutorialMeta::from_twin`,
-  `TutorialRegistry::retain_bundled`, `LoadedTwinCurriculum`, and the second
-  parse.
-
-### Where USD still wins — SUPERSEDED by §10
-
-This section listed the two properties §9 could not give and only USD could. Both
-are now delivered; see §10.
-
-### Why the tutorial crate is not deleted
-
-The recurring question is whether tutorials can leave Rust entirely, given the
-lessons are already 100% rhai. The residue after §9 is ~1250 lines, and it does
-not move:
-
-| Part | Why it stays |
-|---|---|
-| Menu, launcher panel, advance popup (~300) | egui rendering — same category as `tutorial_overlay.rs` |
-| Curriculum roots + discovery (~180) | directory walk + file reads; rhai has no fs verbs, and adding them hands every script arbitrary disk access |
-| `StartTutorial` / `SkipTutorial` / `SetSubsystemEnabled` (~120) | `#[Command]` is a proc-macro over Rust types — that is what puts them on HTTP/MCP/keymap |
-| `TutorialProgress` / `TutorialSeen` (~40) | `SettingsSection` is a typed Rust trait |
-| Boot seam (~100) | already delegates to `boot.rhai` |
-
-Deleting the crate means inventing fs verbs, dynamic command registration,
-script-owned settings and menu registration from rhai — four general-purpose
-engine features, built to remove one crate.
-
-The accurate statement is subtler: **nothing left in the crate is about
-tutorials.** It discovers content packs, lists them, runs a rhai program on a
-host entity, and remembers progress. The word "tutorial" is the only
-tutorial-specific thing in it — the engine names no track and knows no lesson.
-
-
-## 10. The curriculum IS a USD layer (2026-07-27)
-
-§8 landed, on §9's foundation. A curriculum is now scene description, and the
-JSON catalog is gone — not deprecated, deleted.
+A curriculum is scene description, not a bespoke manifest.
 
 ### Shape
 
@@ -391,48 +223,89 @@ def Scope "Sandbox" (prepend apiSchemas = ["LunCoTutorialTrackAPI"]) {
 - A **track** is a prim applying `LunCoTutorialTrackAPI`; a **lesson** is a child
   applying `LunCoTutorialAPI`. Both schemas are codeless, in `lunco-usd/schema`.
 - **Behaviour** is `LunCoProgramAPI` + `info:sourceAsset` — the engine's existing
-  way of binding a rhai program to a prim. Nothing was invented for tutorials.
+  way of binding a rhai program to a prim. Nothing is invented for tutorials.
 - A lesson's **identity is its prim path**, so `lunco:tutorial:next` is a real
   relationship rather than an id string that nothing checks.
 
-### What composition replaced
+### Composition answers "which tracks", and in what order
 
-| Was | Is |
-|---|---|
-| `hosts = ["sandbox"]` on each track | the app's layer `assets/tutorials/<app>.usda` sublayers the tracks it offers |
-| `order = 2` on each track | sublayer order |
-| `TrackMeta::hosted_by`, `parse_track_meta` | deleted — composition already decided |
-| a track = a directory holding `track.json` | a track = a prim applying the schema |
-| twin discovery walking `sim/tutorials/*/track.json` | one twin layer, `sim/tutorials/curriculum.usda`, which may sublayer as many tracks as it likes |
-
-An app's configuration is no longer inside scene description, and ordering has
-one mechanism instead of two that could disagree.
+An app offers tracks by sublayering them from `assets/tutorials/<app>.usda`; the
+sublayer order is the menu order. Nothing in a track names an app, so a track is
+not owned by the app it happens to be named after — `basic` is offered by
+`sandbox` without saying so anywhere. A twin contributes on identical terms with
+one layer, `<twin>/sim/tutorials/curriculum.usda`, composed when it opens and
+dropped when it closes. An application's configuration therefore stays out of
+scene description, and ordering has one mechanism rather than two that can
+disagree.
 
 ### The world is DECLARED
 
 A lesson's environment is a `payload` arc. The launcher reads it and mounts it
-through `LoadScene` **before** running the script; the script no longer calls
-`load_scene` at all (stripped from all 17 lessons, engine and twin).
+through `LoadScene` **before** running the script; no lesson calls `load_scene`.
 
-This cures the defect §8 was written for. `world: Option<String>` makes
-**absent a statement**: the lunica track and `JoinTeam` declare no world and the
-launcher deliberately leaves the viewport alone, which is exactly the reported
-"switching lessons only changes the overlay, not the scene" — two different
-situations that the imperative form could not tell apart. Five sandbox lessons
-sharing `first_drive.usda` is likewise now visible in the data.
+`world: Option<String>` makes **absent a statement**: the lunica track and
+`JoinTeam` declare no world, and the launcher deliberately leaves the viewport
+alone. A lesson that opened its own world could not express that — "has no
+world" and "forgot to open one" would be the same program. Sharing is visible in
+the data too: five sandbox lessons declare the same `first_drive.usda`, so
+switching between them changes nothing on screen.
 
 **Payloads are never loaded here.** `curriculum::read` opens the stage with
 `InitialLoadSet::LoadNone`, so a world is read as an arc — a declaration — and
-never composed into the curriculum stage. That needed one openusd addition
-(fork `778e553`): `StageBuilder::initial_load_set` and `Prim::payload_asset_paths`.
+never composed into the curriculum stage. Loading it would pull whole terrain
+scenes into a catalogue read. This needs two openusd APIs (fork `778e553`):
+`StageBuilder::initial_load_set` and `Prim::payload_asset_paths`.
+
+### Curriculum ROOTS — the provider seam
+
+```rust
+pub struct CurriculumRoot { pub source: CurriculumSource, pub layer: PathBuf, pub base: Option<PathBuf> }
+pub struct CurriculumRoots(pub Vec<CurriculumRoot>);   // Resource
+```
+
+The engine **ships no lessons**. The app pushes `CurriculumRoot::bundled(app)`;
+an open twin pushes `CurriculumRoot::twin(id, root)`; a downloaded pack or a
+classroom server is one more push and needs no code in `lunco-tutorial`. ONE
+loader serves every root, and the catalog is a pure function of the mounted
+roots — rebuilt, never incrementally unloaded, so there is no unload rule to
+keep in step with the load rule. A lesson resolves its script against the root
+that contributed it, by provenance, so a twin's lesson and a bundled one may
+share a relative path.
 
 ### Render decoupling
 
 `lunco-tutorial` depends on `openusd` **directly**, never on `lunco-usd-bevy`:
 that crate pulls `lunco-render`, and cargo unifies features across the graph, so
-the dependency would relink the GPU stack into the `--no-ui` server. Mounting
-stays a named `ApiCommandEvent { command: "LoadScene" }`, the same arrangement
-`SCENE_LOAD_FAILED` already uses in the other direction.
+the dependency would relink the GPU stack into the `--no-ui` server. Mounting is
+a named `ApiCommandEvent { command: "LoadScene" }`, the same arrangement
+`SCENE_LOAD_FAILED` uses in the other direction.
+
+### What stays OUT of USD
+
+Progress (`settings.json`), the HUD, and the scripts themselves. USD holds the
+catalogue and the environment binding; it is not a database of user state.
+
+### Why the tutorial crate is not deleted
+
+The lessons are 100% rhai, so the recurring question is whether tutorials can
+leave Rust entirely. The residue is ~1250 lines and does not move:
+
+| Part | Why it stays |
+|---|---|
+| Menu, launcher panel, advance popup (~300) | egui rendering — same category as `tutorial_overlay.rs` |
+| Curriculum roots + composition (~180) | file reads + a USD stage; rhai has no fs verbs, and adding them hands every script arbitrary disk access |
+| `StartTutorial` / `SkipTutorial` / `SetSubsystemEnabled` (~120) | `#[Command]` is a proc-macro over Rust types — that is what puts them on HTTP/MCP/keymap |
+| `TutorialProgress` / `TutorialSeen` (~40) | `SettingsSection` is a typed Rust trait |
+| Boot seam (~100) | already delegates to `boot.rhai` |
+
+Deleting the crate means inventing fs verbs, dynamic command registration,
+script-owned settings and menu registration from rhai — four general-purpose
+engine features, built to remove one crate.
+
+The accurate statement is subtler: **nothing left in the crate is about
+tutorials.** It discovers content packs, lists them, runs a rhai program on a
+host entity, and remembers progress. The word "tutorial" is the only
+tutorial-specific thing in it — the engine names no track and knows no lesson.
 
 ### Verification
 
@@ -444,6 +317,7 @@ targets a lesson that does not exist.
 
 ### Still open
 
-The recursive, resolver-anchored `compute_all_dependencies` in the openusd fork,
+A recursive, resolver-anchored `compute_all_dependencies` in the openusd fork,
 so `lunco_usd_bevy::closure::reference_closure` can be deleted (`TODO(openusd)`
-at the call site). Independent of this section.
+at the call site). A resolver context has a root; `base.join` does not. This also
+unblocks binary layers (`.usdc`/`.usdz`) and scheme-aware walking.

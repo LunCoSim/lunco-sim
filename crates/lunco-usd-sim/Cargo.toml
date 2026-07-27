@@ -9,7 +9,8 @@ license.workspace = true
 # `bevy_pbr` / `bevy_core_pipeline` / `bevy_post_process` / `bevy_anti_alias`.
 # This crate states appearance + camera INTENT (`lunco_render::{PbrLook,
 # SceneCamera}`, `lunco_materials::ShaderLook`); `lunco-render-bevy` binds it.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "mesh_picking"] }
+# NO `mesh_picking` — see `lunco-usd-bevy`. This crate does no hit-testing.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light"] }
 openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }

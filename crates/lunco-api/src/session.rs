@@ -1,13 +1,11 @@
 //! Session commands that must exist on **every** binary that can be called.
 //!
-//! WHY HERE. `Ping` used to live in `lunco-modelica::ui::commands::util` and was
-//! registered by `ModelicaCommandsPlugin` — a plugin a headless host never adds.
-//! So a `--no-ui` server answered its own readiness probe with
-//! `Command 'Ping' not found or not API-accessible`, which is the one answer a
-//! readiness probe must never give: indistinguishable from "wrong name" and from
-//! "not up yet". A probe of the API belongs to the API, and registering it with
-//! the command core makes "the API is reachable" and "`Ping` resolves" the same
-//! fact rather than two that can drift.
+//! WHY HERE. Which commands exist is decided by which PLUGINS a host adds, so a
+//! command registered from a UI plugin does not exist on a windowless one — and
+//! the executor reports that exactly as it reports a typo. These belong to the
+//! API and the session, not to any UI, so they register with the command CORE:
+//! "the API is reachable" and "`Ping` resolves" are then one fact, not two that
+//! can drift.
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
@@ -22,12 +20,10 @@ use lunco_core::{on_command, register_commands, Command};
 /// nobody to answer that prompt**, so this exits directly rather than waiting
 /// forever for a modal that will never be drawn.
 ///
-/// WHY HERE. The whole command used to live behind the Modelica `ui` feature,
-/// which meant the one caller who cannot fall back to closing a window — a
-/// headless server — was the one caller it did not exist for. Shutting down is a
-/// session concern, so it lives with the session; hosts that have extra work to
-/// do on the way out (cancel in-flight compiles, prompt to save) observe the
-/// same command and do their part.
+/// Shutting down is a session concern, so it lives with the session and exists
+/// on every binary — a windowless host cannot fall back to closing a window.
+/// Hosts with extra work to do on the way out (cancel in-flight compiles, prompt
+/// to save) observe the same command and do their part.
 #[Command(default)]
 pub struct Exit {
     /// Skip the interactive save prompt and exit immediately.

@@ -2,9 +2,9 @@
 //!
 //! The `Exit` COMMAND lives in `lunco_api::session` — shutting down is a session
 //! concern and must exist on every binary, including one built without this
-//! crate's `ui` feature. What is here is the part that is genuinely Modelica's:
-//! cancelling in-flight compiles, arming the wedge watchdog, and — when there is
-//! a human at a window — the dirty-document save prompt.
+//! crate's `ui` feature. What is here is genuinely Modelica's: cancelling
+//! in-flight compiles, arming the wedge watchdog, and — when there is a human at
+//! a window — the dirty-document save prompt.
 //!
 //! Registered by `ModelicaCorePlugin`, so a headless host still gets the
 //! cancel/watchdog half; the prompt half is skipped for want of a window.

@@ -29,8 +29,10 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   onboarding tutorial instead of loading the default — one load, no race. Rewrite
   it (or hot-replace by id) to change startup behavior with no rebuild.
 - **Shipped lessons**: *sandbox* — Sandbox Intro (teaching WASD, camera cycling, Shift+click selection, ESC/Backspace clear, and Backspace release) → First Drive → Script a Rover → Rhai Editor & REPL → Lander & Rover Mission; *lunica* — a 7-lesson workbench course + the Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json).
-- **Dynamic Twin-scoped lessons**: Scoped lessons (like the *Space School Seminar* track, SS1–SS4) are isolated inside the active Twin directory (`sim/tutorials/tutorials.json`). The loader dynamically scans and appends them to the 🎓 Tutorials menu on the fly when the Twin is loaded.
-- **Add one — data, not Rust**: drop `assets/tutorials/<app>/<name>.rhai` + an entry in `assets/tutorials/<app>/tutorials.json` (or inside a Twin's `sim/tutorials/tutorials.json`). The registry and custom menus scan them automatically at runtime. No rebuild. Full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
+- **The catalog is a USD layer**: a TRACK is a prim applying `LunCoTutorialTrackAPI` in `assets/tutorials/<track>/curriculum.usda`; each child applying `LunCoTutorialAPI` is a LESSON, whose script is `info:sourceAsset` and whose world is a `payload` arc. An APP offers tracks by sublayering them from `assets/tutorials/<app>.usda` — that layer stack is the whole answer to "which tracks, in what order".
+- **A lesson's world is DECLARED, not opened**: the launcher mounts the `payload` through `LoadScene` before running the script. No lesson calls `load_scene`, and a lesson with no payload deliberately leaves the viewport alone — absent is a statement, not a missing value.
+- **Dynamic Twin-scoped lessons**: a Twin contributes on exactly the same terms — one `sim/tutorials/curriculum.usda` (the *Space School Seminar* track, SS1–SS4), composed when the Twin opens and dropped when it closes. No twin-specific manifest, no second parse.
+- **Add one — data, not Rust**: drop `assets/tutorials/<track>/<name>.rhai` and declare a prim for it in that track's `curriculum.usda`. No rebuild. Full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
 
 ## Authoring walkthroughs
 

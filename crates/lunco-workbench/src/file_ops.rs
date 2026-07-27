@@ -23,13 +23,12 @@
 //! - The picker-resolution router ([`on_pick_resolved`]) that turns a
 //!   [`crate::picker::PickResolved`] event into the matching typed verb with the
 //!   chosen path filled in.
-//! - **Picker seams** for the verbs that MOVED. `OpenTwin`, `OpenFolder`,
-//!   `AddTwin` and `AddFolderToWorkspace` — and the whole folder-scan pipeline
-//!   behind them — now live in [`lunco_workspace::open`], because opening a
-//!   folder needs no window and keeping them here made them unreachable on a
-//!   headless host. What remains here is the one part that genuinely needs a
-//!   window: an empty `path` means "ask the human", so these observers show the
-//!   picker and ignore everything else. One implementation, one seam.
+//! - **Picker seams** for `OpenTwin`, `OpenFolder`, `AddTwin` and
+//!   `AddFolderToWorkspace`. Those verbs and the folder-scan pipeline behind
+//!   them live in [`lunco_workspace::open`] — opening a folder needs no window,
+//!   so it must not sit behind one. What remains here is the part that does: an
+//!   empty `path` means "ask the human", so these observers show the picker and
+//!   ignore everything else. One implementation, one seam.
 //! - [`FileOpsPlugin`] which registers the above.
 //!
 //! ## What's deferred

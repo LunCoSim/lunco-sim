@@ -1,14 +1,13 @@
 //! A lesson's autopilot must be gated on the AUDIENCE, never on the build profile.
 //!
 //! Every tutorial that can play itself (`first_drive`, `build_base`,
-//! `lander_mission`, …) carries a `task` behaviour guarded by one condition. That
-//! guard used to be `is_debug()` → `cfg!(debug_assertions)`, which is true for
-//! every `cargo run`: the lesson spawned its own base / drove its own rover,
-//! emitted `MISSION_COMPLETE` seconds after starting and chained on to its
-//! successor, so a student watched the whole curriculum play itself.
+//! `lander_mission`, …) carries a `task` behaviour guarded by one condition. The
+//! build profile does not answer it: `cfg!(debug_assertions)` is true for every
+//! `cargo run`, so gating on it makes a lesson spawn its own base, drive its own
+//! rover and chain to its successor while a student watches.
 //!
-//! The fact that actually answers "should this drive itself?" is whether anything
-//! can receive a click, i.e. whether a window exists. These tests pin that
+//! The fact that answers "should this drive itself?" is whether anything can
+//! receive a click, i.e. whether a window exists. These tests pin that
 //! resolution and the fail-safe default.
 
 use bevy::prelude::*;

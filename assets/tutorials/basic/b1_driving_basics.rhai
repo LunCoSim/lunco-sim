@@ -9,8 +9,9 @@
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
-    // No ordinal: position lives in `tutorials.json` alone. Ordinals duplicated
-    // into scripts are how this track ended up titled "2 ·" while toasting "S3".
+    // No ordinal: position is the `lunco:tutorial:next` chain in the curriculum
+    // layer alone. Ordinals duplicated into scripts are how this track ended up
+    // titled "2 ·" while toasting "S3".
     notify_kind("Basic · Moon Driving Basics", "info");
     hint("Welcome, driver. Click the rover (or press F) to take control.");
 }

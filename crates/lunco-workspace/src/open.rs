@@ -2,18 +2,14 @@
 //!
 //! WHY HERE AND NOT IN THE WORKBENCH. Opening a Twin is a WORKSPACE operation:
 //! it walks a folder, adds the result to [`WorkspaceResource`] and fires
-//! [`TwinAdded`]. None of that needs a window. It nevertheless lived in
-//! `lunco-workbench`, a crate a headless host never adds, so `OpenTwin` came
-//! back over the API as `not found or not API-accessible` — a server could run a
-//! twin's scenarios but could not mount the twin they belong to, and the only
-//! way in was to have opened it in a GUI beforehand and let the session restore.
+//! [`TwinAdded`]. None of that needs a window, and a headless host — which never
+//! adds the workbench — must be able to mount the twin whose scenarios it runs.
 //!
-//! WHAT STAYED BEHIND. Exactly one thing: choosing a folder when the caller
-//! names none. An empty `path` means "ask the human", which is the workbench's
-//! job and nobody else's — so the workbench keeps picker-only observers for that
-//! case alone, and the picker fires these same commands back with a resolved
-//! path. The open pipeline is not duplicated; there is one implementation and
-//! one seam.
+//! WHAT THE WORKBENCH KEEPS. Exactly one thing: choosing a folder when the
+//! caller names none. An empty `path` means "ask the human", which is the
+//! workbench's job and nobody else's — it keeps picker-only observers for that
+//! case, and the picker fires these same commands back with a resolved path. The
+//! open pipeline is not duplicated; there is one implementation and one seam.
 //!
 //! The same split covers [`OpenFolder`], [`AddFolderToWorkspace`] and
 //! [`AddTwin`]. `OpenFile` stays in the workbench: it resolves scene paths and
@@ -49,9 +45,8 @@ fn on_open_twin(
 ) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
-        // A windowed host answers this with a picker (workbench observes the
-        // same command for exactly this case). A headless one cannot, and
-        // saying so beats scanning the current directory by accident.
+        // "Ask the human" — a windowed host answers this with a picker; a
+        // headless one has nobody to ask.
         return;
     }
     let folder = std::path::Path::new(&path);
