@@ -209,9 +209,14 @@ impl BrowserSectionRegistry {
 #[non_exhaustive]
 pub enum BrowserAction {
     /// User clicked a file row → open it in the appropriate editor.
-    /// Path is relative to the open Twin's root.
+    ///
+    /// Relative to the open Twin's root, **or absolute** for a file outside it —
+    /// a scene's reference closure reaches into the shipped asset library, so the
+    /// Scene Files section emits already-resolved paths. Dispatchers anchor only
+    /// the relative form.
     OpenFile {
-        /// Twin-root-relative path of the file the user picked.
+        /// Twin-root-relative path of the file the user picked, or an absolute
+        /// one when the emitter already resolved it.
         relative_path: std::path::PathBuf,
     },
     /// User clicked a class row → open / focus a diagram tab on it.

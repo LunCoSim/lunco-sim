@@ -70,21 +70,26 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
             .and_then(|id| ws.twin(id))
             .map(|t| t.root.clone())
     };
-    let Some(root) = twin_root else {
-        for a in &actions {
-            bevy::log::warn!(
-                "BrowserAction::OpenFile (USD) fired with no active Twin: {:?}",
-                a
-            );
-        }
-        return;
-    };
-
     for action in actions {
         let BrowserAction::OpenFile { relative_path } = action else {
             continue;
         };
-        let abs = root.join(&relative_path);
+        // An ABSOLUTE path is already resolved and needs no Twin — the Scene
+        // Files section lists a scene's reference closure, whose layers routinely
+        // live in the shipped asset library rather than in the open Twin. Only a
+        // Twin-relative path needs a root to anchor on.
+        let abs = if relative_path.is_absolute() {
+            relative_path
+        } else {
+            let Some(root) = twin_root.as_ref() else {
+                bevy::log::warn!(
+                    "BrowserAction::OpenFile (USD) fired with no active Twin: {:?}",
+                    relative_path
+                );
+                continue;
+            };
+            root.join(&relative_path)
+        };
         spawn_usd_load(world, abs);
     }
 }

@@ -148,6 +148,24 @@ Three lanes, and they are not interchangeable:
    String channels belong here, not in the ring buffer. *(This asymmetry is real and must be
    stated, not papered over: a `String` channel has no plot.)*
 
+### 5b. Co-sim variables are published wholesale — authored channels are not the only producer
+
+An authored channel (`Parameter`, `lunco:telemetry`) is a Component, so a prim carries **one**.
+A Modelica model has dozens of observable variables, and the internal ones are exactly what a
+plot is wanted for. `lunco_cosim::telemetry::publish_cosim_variables` therefore publishes every
+`SimComponent` output — which is the whole of `ModelicaModel::variables`, internals included —
+straight into `SignalRegistry`, at `CosimTelemetrySettings` rate/retention, tagged
+`provenance = "cosim"`.
+
+Two producers, one registry, and they must never share a buffer: auto-published variables are
+namespaced `sim.<var>`, authored channels keep their bare mnemonic. Without that, a motor prim
+carrying both a `torque` channel and a `torque` model variable would interleave two cadences into
+one history and the plot would show a signal that never existed.
+
+**Rate and depth are chosen together.** Defaults are 5 Hz × 1500 samples = a 5-minute window that
+does not wrap; one sample is 16 B, so a variable costs ~24 KB and a rover (~7 models × ~20 vars)
+~3.4 MB. Raising the rate alone does not cost memory — it silently shortens the window.
+
 ---
 
 ## 6. Recording → experiments

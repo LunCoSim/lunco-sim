@@ -55,14 +55,22 @@ pub fn drain_browser_actions(world: &mut World) {
     for action in actions {
         match action {
             BrowserAction::OpenFile { relative_path } => {
-                let Some(root) = twin_root.as_ref() else {
-                    log::warn!(
-                        "BrowserAction::OpenFile fired with no active Twin: {:?}",
-                        relative_path
-                    );
-                    continue;
+                // An ABSOLUTE path is already resolved and needs no Twin: the
+                // Scene Files section lists a scene's reference closure, which
+                // routinely reaches out of the Twin into the shipped asset
+                // library. Only a Twin-relative path needs a root to anchor on.
+                let abs = if relative_path.is_absolute() {
+                    relative_path.clone()
+                } else {
+                    let Some(root) = twin_root.as_ref() else {
+                        log::warn!(
+                            "BrowserAction::OpenFile fired with no active Twin: {:?}",
+                            relative_path
+                        );
+                        continue;
+                    };
+                    root.join(&relative_path)
                 };
-                let abs = root.join(&relative_path);
                 // Open in a ModelView tab — same path as Modelica
                 // classes. For non-`.mo` content the parser produces
                 // no classes, so Canvas mode shows empty; the user

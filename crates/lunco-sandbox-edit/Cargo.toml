@@ -39,6 +39,12 @@ avian3d = { workspace = true }
 
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+# The render-free signal core — for `TelemetryFocus` only. The editor owns
+# selection, so it is the crate that can say what the user is looking at; the
+# telemetry surfaces that read it live behind `ui` in other crates and must not
+# depend on this one. No GPU stack rides in on this edge (that is the whole reason
+# `lunco-signal` was split out of `lunco-viz`).
+lunco-signal = { path = "../lunco-signal" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 # NO vehicle-topology dep: the "is a wheeled vehicle" signal was once needed here

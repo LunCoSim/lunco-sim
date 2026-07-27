@@ -630,10 +630,13 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Build mode — Entities + Spawn left, 3D centre, Inspector right.
+/// Build mode — Entities + Spawn left, 3D centre, Inspector right, Telemetry below.
 ///
 /// Entity list and Spawn palette live on the left side dock;
-/// Inspector is on the right dock. Bottom dock is empty — fewer rows of chrome.
+/// Inspector is on the right dock. The bottom dock carries the Telemetry browser:
+/// selecting a rover and watching its channels is a BUILD-time question ("did that
+/// motor actually turn?"), and the browser scopes itself to the selection, so it is
+/// only useful where a selection exists.
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
@@ -666,7 +669,11 @@ impl Perspective for BuildPerspective {
             // workbench doesn't). The workbench filters unknown ids.
             PanelId("rover_code"),
         ]);
-        layout.set_bottom(None);
+        // Registered by `lunco-viz`'s `LuncoVizPlugin` (which the Modelica
+        // workbench plugin installs). Unknown ids are filtered by the workbench,
+        // so an app that doesn't link viz simply gets an empty bottom dock — no
+        // dependency from this crate to the panel's.
+        layout.set_bottom(Some(PanelId("telemetry_browser")));
     }
 }
 

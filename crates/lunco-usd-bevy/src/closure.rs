@@ -81,6 +81,29 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// - **Schemes** — `lunco://`/`twin://` arcs are skipped here because this
 ///   function has no resolver; a resolver would resolve them.
 pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
+    // No resolver ⇒ every schemed arc drops out, which is the historical
+    // behaviour the manifest builder and staleness both rely on.
+    reference_closure_with(roots, |_| None)
+}
+
+/// [`reference_closure`], but with a **resolver for schemed arcs**.
+///
+/// `reference_closure` skips anything anchored (`lunco://`, `twin://`, a leading
+/// `/`) because it has no way to turn such a reference into a file. That is a
+/// silent hole for any caller that wants to ANSWER "what files does this scene
+/// consist of": shipped assets are REQUIRED to be referenced as `@lunco://…@`, so
+/// a scene's rovers, components, `.mo` models and textures are exactly the arcs
+/// the plain walk throws away — it would report a scene as three files.
+///
+/// `resolve_anchored` is handed the raw reference (scheme included) and returns
+/// the file it names, or `None` for one this caller cannot reach (a `twin://` with
+/// no Twin mounted). Returning `None` degrades to the old behaviour for that arc
+/// rather than failing the walk: a browser listing files should show what it can
+/// find, not nothing.
+pub fn reference_closure_with(
+    roots: &[PathBuf],
+    resolve_anchored: impl Fn(&str) -> Option<PathBuf>,
+) -> BTreeSet<PathBuf> {
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     let mut queue: Vec<PathBuf> = roots.iter().map(|p| normalize(p)).collect();
     while let Some(path) = queue.pop() {
@@ -114,6 +137,9 @@ pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
             .chain(data.asset_dependencies());
         for arc in arcs {
             if lunco_assets::asset_path::is_anchored(&arc) {
+                if let Some(resolved) = resolve_anchored(&arc) {
+                    queue.push(normalize(&resolved));
+                }
                 continue;
             }
             queue.push(normalize(&base.join(&arc)));
@@ -203,6 +229,50 @@ mod tests {
         assert!(
             closure.contains(&normalize(&script)),
             "an asset-valued attribute is a dependency: {closure:?}"
+        );
+    }
+
+    /// Shipped assets are REQUIRED to be referenced as `@lunco://…@`, so without a
+    /// resolver a scene made of library parts reports as a single file. With one,
+    /// the schemed arc is followed like any other — including transitively, and
+    /// including the `.mo` a program prim binds by `info:sourceAsset`.
+    #[test]
+    fn a_resolver_follows_schemed_arcs_the_plain_walk_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("assets");
+        std::fs::create_dir_all(assets.join("vessels")).unwrap();
+        std::fs::create_dir_all(assets.join("models")).unwrap();
+
+        let scene = dir.path().join("scene.usda");
+        let rover = assets.join("vessels/rover.usda");
+        let model = assets.join("models/Drive.mo");
+        std::fs::write(
+            &scene,
+            "#usda 1.0\ndef Xform \"R\" (prepend references = @lunco://vessels/rover.usda@) {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &rover,
+            "#usda 1.0\ndef Xform \"P\" { asset info:sourceAsset = @lunco://models/Drive.mo@ }\n",
+        )
+        .unwrap();
+        std::fs::write(&model, "model Drive end Drive;\n").unwrap();
+
+        let plain = reference_closure(&[scene.clone()]);
+        assert!(
+            !plain.contains(&normalize(&rover)),
+            "without a resolver a schemed arc is unreachable — that is the hole"
+        );
+
+        let assets_root = assets.clone();
+        let resolved = reference_closure_with(&[scene], |arc| {
+            let rel = lunco_assets::parse_lunco_uri(arc)?;
+            Some(assets_root.join(rel))
+        });
+        assert!(resolved.contains(&normalize(&rover)), "{resolved:?}");
+        assert!(
+            resolved.contains(&normalize(&model)),
+            "transitively, and across a `.mo` bound by attribute: {resolved:?}"
         );
     }
 }

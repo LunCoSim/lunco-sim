@@ -331,6 +331,44 @@ impl SignalRegistry {
     }
 }
 
+/// What the user is currently looking at — the entity roots a telemetry surface
+/// should narrow itself to ("the selected rover's channels", not every channel in
+/// the sim).
+///
+/// It lives HERE, in the render-free signal core, for the same reason
+/// [`SignalRegistry`] does: the surfaces that read it (`lunco-viz`'s telemetry
+/// browser today, a HUD or a recorder tomorrow) must not depend on whichever app
+/// crate owns the selection UX, and the app crate that WRITES it
+/// (`lunco-sandbox-edit`'s `SelectedEntities` mirror) must not depend on a GPU
+/// stack. Empty ⇒ no focus; every consumer shows everything.
+///
+/// Roots, not channel owners: a channel sits on the prim it measures (a motor, a
+/// battery), while selection targets the vessel. Membership is therefore an
+/// ANCESTOR test, which the consumer does — it has the hierarchy, this resource is
+/// just the intent.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct TelemetryFocus {
+    /// The selected roots, in selection order (last = primary).
+    pub roots: Vec<Entity>,
+}
+
+impl TelemetryFocus {
+    /// True while nothing is selected — "show everything".
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+
+    /// Order-independent fingerprint, for change-gated view-model caches that
+    /// have to rebuild when the focus moves but not every frame.
+    pub fn fingerprint(&self) -> u64 {
+        let mut acc: u64 = 0;
+        for (i, e) in self.roots.iter().enumerate() {
+            acc ^= e.to_bits().rotate_left((i % 64) as u32);
+        }
+        acc ^ (self.roots.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+}
+
 /// Marker for an entity that owns [`SignalRegistry`] entries. Producers tag the
 /// owning entity when they start pushing entity-scoped signals for it;
 /// [`drop_signals_of_removed_source`] then frees the registry slots when the entity

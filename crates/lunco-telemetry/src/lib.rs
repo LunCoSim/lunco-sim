@@ -68,7 +68,7 @@ use serde::{Deserialize, Serialize};
 pub struct TelemetrySettings {
     /// Rate for a channel that doesn't specify one.
     ///
-    /// **10 Hz, not 60.** A channel is a network packet per sample per subscriber; the
+    /// **5 Hz, not 60.** A channel is a network packet per sample per subscriber; the
     /// fixed rate is a ceiling, not a sensible default. Anything that genuinely needs
     /// per-tick fidelity asks for it.
     pub default_rate_hz: f64,
@@ -77,8 +77,13 @@ pub struct TelemetrySettings {
     pub max_channels: usize,
     /// Ring-buffer depth for a channel that doesn't specify one, in SAMPLES.
     ///
-    /// At the default 10 Hz this is ~200 s of history. Matches
-    /// `lunco_signal::DEFAULT_CAPACITY`, which is what the plot surfaces already assume.
+    /// **Chosen WITH the rate, never alone**: the pair is what decides how long a
+    /// window a plot can show without the buffer wrapping. At the default 5 Hz,
+    /// 1500 samples is exactly 5 minutes. Raising the rate without raising this
+    /// silently shortens that window instead of costing memory, which is the
+    /// failure mode that looks like "the plot keeps eating my history".
+    ///
+    /// Costs 16 B per sample: 24 KB per channel, ~24 MB at the 1024-channel cap.
     pub default_retention: usize,
     /// Master switch.
     pub enabled: bool,
@@ -87,9 +92,12 @@ pub struct TelemetrySettings {
 impl Default for TelemetrySettings {
     fn default() -> Self {
         Self {
-            default_rate_hz: 10.0,
+            // 5 Hz for 5 minutes — the same window the wholesale co-sim publisher
+            // keeps (`lunco_cosim::telemetry`), so an authored channel and a model
+            // variable plotted side by side show the same span of history.
+            default_rate_hz: 5.0,
             max_channels: 1024,
-            default_retention: lunco_signal::DEFAULT_CAPACITY,
+            default_retention: 1500,
             enabled: true,
         }
     }
@@ -348,6 +356,11 @@ impl Plugin for LunCoTelemetryPlugin {
         // a `--no-ui` run wants history just as much (that is the whole point of a black
         // box), and `lunco-signal` is render-free precisely so it can.
         app.init_resource::<lunco_signal::SignalRegistry>();
+        // What the user is looking at, so a telemetry surface can narrow to it.
+        // Initialised beside the registry (and for the same reason): the resource is
+        // render-free intent, written by whichever app owns selection and read by
+        // whatever displays channels. Empty here in a headless run — nothing selects.
+        app.init_resource::<lunco_signal::TelemetryFocus>();
         app.add_observer(retain_sample);
         app.add_observer(drop_signal_of_removed_channel);
         app.add_observer(lunco_signal::drop_signals_of_removed_source);
