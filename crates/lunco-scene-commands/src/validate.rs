@@ -248,6 +248,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
         model_name.as_deref().unwrap_or(""),
         &parameters,
         &inputs,
+        ast,
     ));
 
     report.info = json!({

@@ -30,7 +30,7 @@ fn register_modelica_lint_policy() {
 fn facts(params: &[(&str, f64)], inputs: &[(&str, f64)]) -> H {
     let p: BTreeMap<String, f64> = params.iter().map(|(n, v)| (n.to_string(), *v)).collect();
     let i: BTreeMap<String, f64> = inputs.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-    lunco_modelica::lint::modelica_facts("M", &p, &i)
+    lunco_modelica::lint::modelica_facts("M", &p, &i, &Default::default())
 }
 
 /// Every `.mo` under `dir`, recursively.
@@ -63,6 +63,71 @@ fn a_name_declared_input_and_parameter_is_caught() {
     assert!(
         findings.iter().any(|f| f.rule == "input-shadows-parameter"),
         "the shipped policy must flag a shadowed name: {findings:?}"
+    );
+}
+
+/// An algebraic variable defined behind an `if` must be caught.
+///
+/// This one needs its own teeth test rather than relying on the shipped-models
+/// sweep below: every model that carried the pattern has been rewritten
+/// branch-free, so the sweep would pass whether or not the rule fires. The
+/// defect it guards is silent — rumoca's branch-free solver path reconstructs
+/// such an equation as literal `0`, with no compile or run error — so a rule
+/// that quietly stopped working would look exactly like a clean codebase.
+#[test]
+fn a_conditional_algebraic_observable_is_caught() {
+    register_modelica_lint_policy();
+
+    let src = "model M\n  Real f;\n  Real x;\nequation\n  f = if x > 0.0 then x else 0.0;\n  x = 1.0;\nend M;\n";
+    let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
+    let ast = syntax.best_effort();
+    let model = lunco_modelica::extract_model_name_from_ast(ast).unwrap_or_default();
+
+    let findings = lunco_lint::run_lint(
+        lunco_modelica::lint::MODELICA_LINT_DOMAIN,
+        lunco_modelica::lint::modelica_facts(
+            &model,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            ast,
+        ),
+    );
+
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule == "conditional-algebraic-observable"),
+        "the shipped policy must flag an `if`-guarded algebraic observable: {findings:?}"
+    );
+}
+
+/// A `when` clause is a discrete event, not the silent-zero defect, so the error
+/// rule must NOT fire on it — otherwise the only way to keep the lint quiet is to
+/// stop expressing events at all.
+#[test]
+fn a_when_equation_is_not_flagged_as_a_conditional_observable() {
+    register_modelica_lint_policy();
+
+    let src = "model M\n  Real x;\n  discrete Real n;\nequation\n  x = 1.0;\n  when x > 0.5 then\n    n = pre(n) + 1;\n  end when;\nend M;\n";
+    let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
+    let ast = syntax.best_effort();
+    let model = lunco_modelica::extract_model_name_from_ast(ast).unwrap_or_default();
+
+    let findings = lunco_lint::run_lint(
+        lunco_modelica::lint::MODELICA_LINT_DOMAIN,
+        lunco_modelica::lint::modelica_facts(
+            &model,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            ast,
+        ),
+    );
+
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.rule == "conditional-algebraic-observable"),
+        "a `when` event must not trip the conditional-observable rule: {findings:?}"
     );
 }
 
@@ -122,7 +187,7 @@ fn every_shipped_model_lints_clean() {
 
         let findings = lunco_lint::run_lint(
             lunco_modelica::lint::MODELICA_LINT_DOMAIN,
-            lunco_modelica::lint::modelica_facts(&model, &params, &inputs),
+            lunco_modelica::lint::modelica_facts(&model, &params, &inputs, ast),
         );
         for f in findings {
             offenders.push(format!("{}: {} — {}", path.display(), f.rule, f.message));

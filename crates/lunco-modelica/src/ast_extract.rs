@@ -285,10 +285,7 @@ pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
         Some(a) => a,
         None => return HashMap::new(),
     };
-
-    let mut params = HashMap::new();
-    collect_parameters_from_classes(&ast.classes, &mut params);
-    params
+    extract_parameters_from_ast(&ast)
 }
 
 /// AST-based variant — call this from any hot path that already
@@ -296,10 +293,16 @@ pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
 /// re-parse on every call, which is catastrophic (~minutes) on
 /// 150 KB MSL package files; hot paths like `on_compile_model`
 /// MUST use these.
+///
+/// Leaf-name collisions between nested classes are resolved by depth (see
+/// `DefaultCollector`) rather than last-write-wins, but this signature has no
+/// report channel, so a collision here is deterministic yet unreported —
+/// unlike the `input` side, which reports through
+/// [`strip_input_defaults_with_report`].
 pub fn extract_parameters_from_ast(ast: &StoredDefinition) -> HashMap<String, f64> {
-    let mut params = HashMap::new();
-    collect_parameters_from_classes(&ast.classes, &mut params);
-    params
+    let mut collector = DefaultCollector::default();
+    collect_parameters_from_classes(&ast.classes, "", 0, &mut collector);
+    collector.values
 }
 
 /// Extract input variables that have runtime-settable default values.
@@ -316,17 +319,16 @@ pub fn extract_inputs_with_defaults(source: &str) -> HashMap<String, f64> {
         Some(a) => a,
         None => return HashMap::new(),
     };
-
-    let mut inputs = HashMap::new();
-    collect_inputs_with_defaults_from_classes(&ast.classes, &mut inputs);
-    inputs
+    extract_inputs_with_defaults_from_ast(&ast)
 }
 
-/// AST-based variant — see `extract_parameters_from_ast`.
+/// AST-based variant — see `extract_parameters_from_ast`. Callers that need the
+/// collision / unresolvable report must use
+/// [`strip_input_defaults_with_report`], which is the same walk plus the strip.
 pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<String, f64> {
-    let mut inputs = HashMap::new();
-    collect_inputs_with_defaults_from_classes(&ast.classes, &mut inputs);
-    inputs
+    let mut collector = DefaultCollector::default();
+    collect_inputs_with_defaults_from_classes(&ast.classes, "", 0, &mut collector);
+    collector.values
 }
 
 /// Strip default values from `input` declarations in source code.
@@ -341,40 +343,90 @@ pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<
 /// extracted numeric defaults.
 ///
 /// This is a drop-in replacement for the regex-based `strip_input_defaults`.
+///
+/// Discards the [`InputDefaultIssue`] report. Any caller in a position to show
+/// or log a diagnostic MUST use [`strip_input_defaults_with_report`] instead —
+/// an issue dropped here is a slot silently sitting at 0.0.
 pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
-    let (modified, defaults, _unresolved) = strip_input_defaults_with_report(source);
+    let (modified, defaults, _issues) = strip_input_defaults_with_report(source);
     (modified, defaults)
 }
 
-/// A bound `input` whose binding [`strip_input_defaults`] blanks but whose
-/// default it cannot capture — the binding is an expression
-/// (`input Real w = 2*3.14/T`), not a numeric literal. The strip keeps the
-/// input a runtime slot, but with no captured default the slot starts at 0.0.
-/// Callers must surface these (the worker turns them into compile-result
-/// diagnostics) — a model silently running at 0.0 is the expensive failure.
+/// Everything that can go wrong while carrying a bound `input`'s default
+/// across the strip, on ONE report channel.
+///
+/// The strip itself always succeeds where it runs (it is length-preserving
+/// blanking), so none of these are about the text — they are all the same
+/// failure seen from three sides: a runtime input slot that ends up at 0.0 with
+/// no trace of the value the author wrote. Callers MUST surface them (the
+/// worker turns each into a compile-result diagnostic); a model silently
+/// running at 0.0 is the expensive failure this module exists to prevent.
 #[derive(Debug, Clone)]
-pub struct UnresolvedInputDefault {
-    /// Component name of the `input`.
-    pub name: String,
-    /// Verbatim binding expression text from the original source.
-    pub binding: String,
-    /// Byte offset of the binding expression in the original source
-    /// (length-preserving blanking keeps it valid for the stripped text too).
-    pub byte_offset: usize,
+pub enum InputDefaultIssue {
+    /// The binding was blanked (so the input stays a runtime slot) but its
+    /// default could not be captured: the binding is an expression
+    /// (`input Real w = 2*3.14/T`), not a numeric literal.
+    Unresolvable {
+        /// Component name of the `input`.
+        name: String,
+        /// Verbatim binding expression text from the original source.
+        binding: String,
+        /// Byte offset of the binding expression in the original source
+        /// (length-preserving blanking keeps it valid for the stripped text
+        /// too).
+        byte_offset: usize,
+    },
+    /// Two classes in the same file declare a component with the same LEAF
+    /// name and different defaults. The defaults map is leaf-keyed — that is
+    /// what `SimulationSession::set_input` addresses — so only one value can
+    /// be carried. The shallower scope wins and this names the one dropped,
+    /// which used to vanish under a last-write-wins `HashMap::insert`.
+    Collision {
+        /// The leaf component name both scopes declare.
+        name: String,
+        /// Qualified scope (`Outer.Inner`) whose value is carried.
+        kept_scope: String,
+        /// The carried value.
+        kept: f64,
+        /// Qualified scope whose value is dropped.
+        dropped_scope: String,
+        /// The dropped value.
+        dropped: f64,
+    },
+    /// The strip pre-pass could NOT parse the source, so nothing was stripped
+    /// and no default was captured. Every bound `input` in this file is then
+    /// left for rumoca to demote to an algebraic and the model loses those
+    /// runtime slots entirely. rumoca may still compile the file (it drives its
+    /// own parse), so this is often the only warning there is — it must never
+    /// be swallowed.
+    ParseFailed,
 }
 
-/// [`strip_input_defaults`] plus a report of every blanked binding whose
-/// default could NOT be captured as a numeric literal.
+/// [`strip_input_defaults`] plus a report of everything that stopped a bound
+/// `input`'s default from being carried — see [`InputDefaultIssue`].
 pub fn strip_input_defaults_with_report(
     source: &str,
-) -> (String, HashMap<String, f64>, Vec<UnresolvedInputDefault>) {
+) -> (String, HashMap<String, f64>, Vec<InputDefaultIssue>) {
     let ast = match parse(source) {
         Some(a) => a,
-        None => return (source.to_string(), HashMap::new(), Vec::new()),
+        None => {
+            // Returning the source UNSTRIPPED with an empty report is exactly
+            // the silent fold this function exists to prevent: rumoca demotes
+            // every bound input to an algebraic and nobody is told. The source
+            // still goes back unstripped (there is no AST to locate bindings
+            // with), but the caller now learns.
+            return (
+                source.to_string(),
+                HashMap::new(),
+                vec![InputDefaultIssue::ParseFailed],
+            );
+        }
     };
 
-    let mut defaults = HashMap::new();
-    collect_inputs_with_defaults_from_classes(&ast.classes, &mut defaults);
+    let mut collector = DefaultCollector::default();
+    collect_inputs_with_defaults_from_classes(&ast.classes, "", 0, &mut collector);
+    let defaults = collector.values;
+    let mut issues = collector.issues;
 
     // Walk the AST for every `input` component with an explicit binding
     // and collect the source byte range covering `= <expr>` (the
@@ -402,7 +454,6 @@ pub fn strip_input_defaults_with_report(
     // inputs — see [[project_rumoca_input_default_strip]].)
     let mut ranges: Vec<InputBindingRange> = Vec::new();
     collect_input_binding_ranges(&ast.classes, source, &mut ranges);
-    let mut unresolved = Vec::new();
     let mut bytes = source.as_bytes().to_vec();
     for range in ranges {
         let (start, end) = (range.blank_start, range.expr_end);
@@ -419,7 +470,7 @@ pub fn strip_input_defaults_with_report(
             // it: without a report the runtime slot would start at 0.0
             // with no trace of the authored expression.
             if !range.numeric {
-                unresolved.push(UnresolvedInputDefault {
+                issues.push(InputDefaultIssue::Unresolvable {
                     name: range.name,
                     binding: source[range.expr_start..range.expr_end].trim().to_string(),
                     byte_offset: range.expr_start,
@@ -429,7 +480,7 @@ pub fn strip_input_defaults_with_report(
     }
     let modified = String::from_utf8(bytes).unwrap_or_else(|_| source.to_string());
 
-    (modified, defaults, unresolved)
+    (modified, defaults, issues)
 }
 
 /// One `input` declaration binding located in the source — see
@@ -499,38 +550,108 @@ fn collect_input_binding_ranges(
 // Internal AST walkers
 // ---------------------------------------------------------------------------
 
+/// Accumulates leaf-keyed defaults while a walk descends nested classes, and
+/// REPORTS a same-leaf-name clash instead of losing one silently.
+///
+/// The map has to stay keyed by the leaf component name — that is the name
+/// `SimulationSession::set_input` addresses — so two classes in one file that
+/// both declare `input Real k` cannot both be represented. Precedence is by
+/// DEPTH first (a top-level class's own component outranks a nested class's,
+/// because the top-level class is the compile target and its slot is the
+/// unqualified one), then by declaration order. Every discarded value becomes
+/// an [`InputDefaultIssue::Collision`]; the previous `insert` made the LAST
+/// nested class silently win.
+#[derive(Default)]
+struct DefaultCollector {
+    /// Leaf name → carried default.
+    values: HashMap<String, f64>,
+    /// Leaf name → (qualified scope that owns the carried value, its depth).
+    origin: HashMap<String, (String, usize)>,
+    issues: Vec<InputDefaultIssue>,
+}
+
+impl DefaultCollector {
+    fn offer(&mut self, name: &str, scope: &str, depth: usize, value: f64) {
+        let Some((prev_scope, prev_depth)) = self.origin.get(name).cloned() else {
+            self.values.insert(name.to_string(), value);
+            self.origin
+                .insert(name.to_string(), (scope.to_string(), depth));
+            return;
+        };
+        let prev_value = self.values.get(name).copied().unwrap_or(value);
+        if prev_value == value {
+            // The same default authored twice — nothing is lost, so nothing to
+            // report; whichever scope is recorded carries the same number.
+            return;
+        }
+        let take_new = depth < prev_depth;
+        let (kept_scope, kept, dropped_scope, dropped) = if take_new {
+            (scope.to_string(), value, prev_scope, prev_value)
+        } else {
+            (prev_scope, prev_value, scope.to_string(), value)
+        };
+        self.issues.push(InputDefaultIssue::Collision {
+            name: name.to_string(),
+            kept_scope: kept_scope.clone(),
+            kept,
+            dropped_scope,
+            dropped,
+        });
+        if take_new {
+            self.values.insert(name.to_string(), value);
+            self.origin.insert(name.to_string(), (kept_scope, depth));
+        }
+    }
+}
+
+/// `Outer.Inner` — the scope path a nested class sits at, used only to NAME a
+/// collision (the map key stays the leaf, which is what `set_input` takes).
+fn qualify_scope(scope: &str, class_name: &str) -> String {
+    if scope.is_empty() {
+        class_name.to_string()
+    } else {
+        format!("{scope}.{class_name}")
+    }
+}
+
 fn collect_parameters_from_classes(
     classes: &AstIndexMap<String, ClassDef>,
-    params: &mut HashMap<String, f64>,
+    scope: &str,
+    depth: usize,
+    out: &mut DefaultCollector,
 ) {
-    for class in classes.values() {
+    for (class_name, class) in classes.iter() {
+        let class_scope = qualify_scope(scope, class_name);
         for component in class.components.values() {
             if matches!(component.variability, Variability::Parameter(_)) {
                 if let Some(value) = extract_numeric_binding(&component.binding) {
-                    params.insert(component.name.clone(), value);
+                    out.offer(&component.name, &class_scope, depth, value);
                 }
             }
         }
-        collect_parameters_from_classes(&class.classes, params);
+        collect_parameters_from_classes(&class.classes, &class_scope, depth + 1, out);
     }
 }
 
 fn collect_inputs_with_defaults_from_classes(
     classes: &AstIndexMap<String, ClassDef>,
-    inputs: &mut HashMap<String, f64>,
+    scope: &str,
+    depth: usize,
+    out: &mut DefaultCollector,
 ) {
-    for class in classes.values() {
+    for (class_name, class) in classes.iter() {
+        let class_scope = qualify_scope(scope, class_name);
         for component in class.components.values() {
             if matches!(component.causality, Causality::Input(_)) {
                 // An unbound input has no authored default.  Inventing `0.0`
                 // here changes Modelica's initialization semantics and later
                 // makes the CLI/workbench overwrite a model's own start value.
                 if let Some(value) = extract_numeric_binding(&component.binding) {
-                    inputs.insert(component.name.clone(), value);
+                    out.offer(&component.name, &class_scope, depth, value);
                 }
             }
         }
-        collect_inputs_with_defaults_from_classes(&class.classes, inputs);
+        collect_inputs_with_defaults_from_classes(&class.classes, &class_scope, depth + 1, out);
     }
 }
 
@@ -988,25 +1109,75 @@ mod tests {
         // and silence here is silent wrong numbers.
         let source =
             "model M\n  parameter Real T = 2.0;\n  input Real w = 2*3.14/T;\nend M;\n";
-        let (modified, defaults, unresolved) = strip_input_defaults_with_report(source);
+        let (modified, defaults, issues) = strip_input_defaults_with_report(source);
         assert_eq!(modified.len(), source.len(), "strip must preserve length");
         assert!(!modified.contains("2*3.14/T"), "binding must be blanked");
         assert!(
             !defaults.contains_key("w"),
             "an expression binding has no capturable numeric default"
         );
-        assert_eq!(unresolved.len(), 1);
-        assert_eq!(unresolved[0].name, "w");
-        assert_eq!(unresolved[0].binding, "2*3.14/T");
-        assert_eq!(&source[unresolved[0].byte_offset..][..1], "2");
+        assert_eq!(issues.len(), 1);
+        match &issues[0] {
+            InputDefaultIssue::Unresolvable {
+                name,
+                binding,
+                byte_offset,
+            } => {
+                assert_eq!(name, "w");
+                assert_eq!(binding, "2*3.14/T");
+                assert_eq!(&source[*byte_offset..][..1], "2");
+            }
+            other => panic!("expected Unresolvable, got {other:?}"),
+        }
     }
 
     #[test]
     fn strip_input_defaults_literal_binding_is_not_reported() {
         let source = "model M\n  input Real g = 9.81;\nend M;\n";
-        let (_, defaults, unresolved) = strip_input_defaults_with_report(source);
+        let (_, defaults, issues) = strip_input_defaults_with_report(source);
         assert_eq!(defaults.get("g"), Some(&9.81));
-        assert!(unresolved.is_empty());
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn strip_input_defaults_reports_a_parse_failure_instead_of_silently_folding() {
+        // A source the strip pre-pass cannot parse comes back UNSTRIPPED, so
+        // rumoca will demote every bound input to an algebraic. That has to
+        // arrive as a report — an empty report here is the silent fold.
+        let source = "model M\n  input Real g = ;;;\nthis is not modelica\n";
+        let (modified, defaults, issues) = strip_input_defaults_with_report(source);
+        assert_eq!(modified, source, "unparseable source is returned verbatim");
+        assert!(defaults.is_empty());
+        assert!(
+            issues
+                .iter()
+                .any(|i| matches!(i, InputDefaultIssue::ParseFailed)),
+            "a parse failure must be reported, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn same_leaf_name_in_two_nested_classes_reports_a_collision() {
+        // Both nested classes declare `input Real k` with DIFFERENT defaults.
+        // The map is leaf-keyed, so one value cannot be carried — but it must
+        // not vanish silently the way `HashMap::insert` made it.
+        let source = "package P\n  model A\n    input Real k = 1.0;\n  end A;\n  \
+                      model B\n    input Real k = 2.0;\n  end B;\nend P;\n";
+        let (_, defaults, issues) = strip_input_defaults_with_report(source);
+        assert_eq!(defaults.len(), 1, "one leaf key, one value");
+        let collision = issues.iter().find_map(|i| match i {
+            InputDefaultIssue::Collision {
+                name,
+                kept,
+                dropped,
+                ..
+            } => Some((name.clone(), *kept, *dropped)),
+            _ => None,
+        });
+        let (name, kept, dropped) = collision.expect("collision must be reported");
+        assert_eq!(name, "k");
+        assert_ne!(kept, dropped);
+        assert_eq!(defaults.get("k"), Some(&kept));
     }
 
     #[test]

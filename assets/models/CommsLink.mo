@@ -74,6 +74,19 @@ model CommsLink
   parameter Real T_filter = 0.25 "Input filter time constant, s";
   parameter Real range_min_m = 1.0 "Floor on range — d=0 would divide by zero";
 
+  // ── Gate widths ─────────────────────────────────────────────────────────────
+  // rumoca is BRANCH-FREE: an `if` in an equation section is not compiled — the
+  // guarded algebraic is reconstructed as literal 0. So every discrete verdict in
+  // this model is carried by a continuous 0..1 gate built from `max`/`min` instead
+  // of a test. Each gate is exactly 0 on the "off" side and exactly 1 once its
+  // argument clears the band below, so behaviour is unchanged outside a narrow
+  // transition that a real system has anyway (a modem does not lose lock in an
+  // infinitely thin dB, and a buffer does not stop filling in zero bits).
+  parameter Real conn_band = 0.01 "Width of the connected-flag gate, 0..1 units";
+  parameter Real margin_band_db = 0.1 "Width of the demod-threshold gate, dB";
+  parameter Real overflow_band_frac = 1.0e-4
+    "Overflow gate width, as a fraction of buffer_capacity_bits";
+
   // ── Inputs (wired from the link bridge) ─────────────────────────────────────
   input Real link_range_m "Range to the peer the bridge selected, m";
   input Real link_connected "Geometry verdict: 1 = line of sight, 0 = blocked";
@@ -85,7 +98,8 @@ model CommsLink
   output Real buffer_bits "Data waiting on board, bits";
   output Real buffer_frac "Buffer fill, 0..1 — 1 means we are shedding science";
   output Real lost_bits "Cumulative data dropped to overflow, bits";
-  output Real up "1 when the link both closes geometrically AND has SNR margin";
+  output Real up
+    "Link availability, 0..1 — 1 when the link both closes geometrically AND has SNR margin";
 
   // ── Internals ───────────────────────────────────────────────────────────────
   Real range_f(start = 1.0e6) "Filtered range, m";
@@ -101,6 +115,11 @@ model CommsLink
   Real q(start = 0.0) "Buffer charge, bits";
   Real lost(start = 0.0);
   Real drain_bps "What we actually get off the vehicle";
+  Real conn_gate "Geometry verdict as a 0..1 gate";
+  Real margin_gate "Demod-lock verdict as a 0..1 gate";
+  Real fill_gate "Buffer-full verdict as a 0..1 gate";
+  Real inflow_net_bps "Net rate into the buffer before the ceiling, bits/s";
+  Real overflow_bps "Rate shed because the buffer is full, bits/s";
 
 equation
   // Input conditioning ────────────────────────────────────────────────────────
@@ -127,21 +146,32 @@ equation
   // A link is usable only if geometry closes AND the demodulator can lock. Two
   // independent failure modes: the rille wall cuts the ray (conn_f → 0), or the peer
   // is simply too far for the budget (margin_db < 0). Both must gate the rate, or a
-  // "connected" link would appear to carry data at any distance.
-  up = if conn_f > 0.5 and margin_db > 0.0 then 1.0 else 0.0;
+  // "connected" link would appear to carry data at any distance. Both verdicts are
+  // gates, not tests (see "Gate widths"): the product is 0 if either fails and 1 when
+  // both hold with margin.
+  conn_gate = min(max((conn_f - 0.5) / conn_band, 0.0), 1.0);
+  margin_gate = min(max(margin_db / margin_band_db, 0.0), 1.0);
+  up = conn_gate * margin_gate;
   rate_bps = up * rate_efficiency * capacity_bps;
 
   // 4. Buffer. Science accumulates regardless; it drains only while the link is up.
   //    Never drain more than we hold (an empty buffer cannot go negative), and count
   //    what overflows as lost rather than silently clamping — losing data is the
   //    interesting event and must be visible.
-  drain_bps = if q > 0.0 or data_in_bps > 0.0 then min(rate_bps, data_in_bps + q) else 0.0;
-  der(q) = if q >= buffer_capacity_bits and data_in_bps > drain_bps
-           then 0.0
-           else data_in_bps - drain_bps;
-  der(lost) = if q >= buffer_capacity_bits and data_in_bps > drain_bps
-              then data_in_bps - drain_bps
-              else 0.0;
+  //
+  //    `min(rate_bps, max(data_in_bps + q, 0))` needs no emptiness test: q >= 0 and
+  //    rate_bps >= 0, so an empty buffer with no traffic already yields min(rate, 0) = 0.
+  //    The ceiling is a gate on fill: below capacity nothing is shed, at capacity the
+  //    positive part of the net inflow is shed and the buffer holds flat, and a buffer
+  //    that is full but draining (drain > data_in) still empties normally.
+  drain_bps = min(rate_bps, max(data_in_bps + q, 0.0));
+  inflow_net_bps = data_in_bps - drain_bps;
+  fill_gate = min(max((q - buffer_capacity_bits * (1.0 - overflow_band_frac))
+                      / (buffer_capacity_bits * overflow_band_frac), 0.0), 1.0);
+  overflow_bps = fill_gate * max(inflow_net_bps, 0.0);
+
+  der(q) = inflow_net_bps - overflow_bps;
+  der(lost) = overflow_bps;
 
   buffer_bits = q;
   buffer_frac = q / buffer_capacity_bits;
