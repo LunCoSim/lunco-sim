@@ -53,9 +53,16 @@ pub enum ClassAction {
     },
 }
 
+/// Act on a class by its fully-qualified name — how the Package Browser opens
+/// a library model without the caller knowing document ids. `action` decides
+/// whether it is drilled into for viewing or copied into an editable document.
 #[Command(default)]
 pub struct OpenClass {
+    /// Fully-qualified class path, e.g. `"Modelica.Electrical.Analog.Basic.Resistor"`.
     pub qualified: String,
+    /// `View` (default) drills into the class; `Duplicate { name }` copies it
+    /// into a new editable document — the route for editing a read-only
+    /// library model.
     #[serde(default)]
     pub action: ClassAction,
 }
@@ -1357,8 +1364,13 @@ pub fn on_new_modelica_document(
     commands.trigger(CreateNewScratchModel::default());
 }
 
+/// Read a file's text and echo it to the log between `-- BEGIN --` /
+/// `-- END --` markers. A diagnostic for API callers that cannot see the host
+/// filesystem — it does NOT open a document (use `Open` for that). Goes through
+/// `lunco-storage`, so it works in the browser build too.
 #[Command(default)]
 pub struct GetFile {
+    /// Path to read, resolved the same way document sources are.
     pub path: String,
 }
 

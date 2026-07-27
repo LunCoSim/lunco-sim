@@ -6,44 +6,73 @@ use lunco_doc::DocumentId;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
+/// Lay the class's components out on a deterministic grid and persist the
+/// positions as one undo-able batch of `SetPlacement` ops — Dymola's
+/// **Edit → Auto Arrange**. The passive open-time fallback stacks components at
+/// the origin, so this is how an imported model gets a readable diagram.
 #[Command(default)]
 pub struct AutoArrangeDiagram {
+    /// Document to arrange; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
 }
 
+/// Focus the first open tab whose title contains `pattern` — the way an agent
+/// says "switch to the rocket model" without knowing document ids. No match is
+/// a logged no-op, not an error.
 #[Command(default)]
 pub struct FocusDocumentByName {
+    /// Case-insensitive substring of the tab title. Empty = no-op.
     pub pattern: String,
 }
 
+/// Switch how a document is rendered — source text, diagram canvas, icon, or
+/// documentation.
 #[Command(default)]
 pub struct SetViewMode {
+    /// Document to switch; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// `"text"`/`"source"`, `"diagram"`/`"canvas"`, `"icon"`, or
+    /// `"docs"`/`"documentation"`. Anything else leaves the mode unchanged.
     pub mode: String,
 }
 
+/// Set the diagram canvas zoom factor directly, bypassing scroll-wheel steps —
+/// for scripted captures that need a repeatable framing.
 #[Command(default)]
 pub struct SetZoom {
+    /// Document whose canvas to zoom; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// Zoom factor, `1.0` = 100%.
     pub zoom: f32,
 }
 
+/// Zoom and pan the canvas so the whole diagram fits the viewport.
 #[Command(default)]
 pub struct FitCanvas {
+    /// Document to fit; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
 }
 
+/// Centre the canvas on one named component — how a screenshot or a review
+/// walkthrough targets a specific part of a large diagram.
 #[Command(default)]
 pub struct FocusComponent {
+    /// Document to focus in; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// Component instance name as it appears in the diagram.
     pub name: String,
+    /// Margin in canvas units to leave around the component.
     pub padding: f32,
 }
 
+/// Pan the diagram canvas by an offset, leaving zoom alone.
 #[Command(default)]
 pub struct PanCanvas {
+    /// Document to pan; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// Horizontal offset in canvas units.
     pub x: f32,
+    /// Vertical offset in canvas units.
     pub y: f32,
 }
 

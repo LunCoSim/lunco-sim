@@ -140,14 +140,30 @@ fn doc_of(attrs: &[Attribute]) -> String {
     lines.join("\n")
 }
 
-/// True if the item carries the `#[Command]` attribute macro
-/// (matches `Command`, `crate::Command`, `lunco_command_macro::Command`, …).
+/// True if the item is a command struct whose prose we should scrape.
+///
+/// That is `#[Command]` (matching `Command`, `crate::Command`,
+/// `lunco_command_macro::Command`, …) OR a hand-written `#[reflect(Event, …)]`
+/// struct. The second arm is not hypothetical: `lunco-core` cannot use its own
+/// attribute macro (it emits absolute `::lunco_core::…` paths), so
+/// `SpawnEntity` spells out what the macro would expand to. Matching only on
+/// `#[Command]` reported it as undocumented while its `///` docs sat right
+/// there in source — the doc was wrong about the code, which is the one thing
+/// a generated reference must never be.
 fn has_command_attr(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| {
-        a.path()
-            .segments
-            .last()
-            .map(|s| s.ident == "Command")
+        let Some(last) = a.path().segments.last() else {
+            return false;
+        };
+        if last.ident == "Command" {
+            return true;
+        }
+        // `#[reflect(Event, Default)]` — the hand-rolled equivalent.
+        last.ident == "reflect"
+            && a.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .map(|args| args.iter().any(|p| p.is_ident("Event")))
             .unwrap_or(false)
     })
 }
@@ -198,7 +214,14 @@ fn type_str(f: &Field) -> String {
         .replace(" ,", ",")
 }
 
-/// Recursively collect `.rs` files, skipping `target/`.
+/// Recursively collect `.rs` files, skipping `target/` and `tests/`.
+///
+/// `tests/` is skipped because integration tests define throwaway `#[Command]`
+/// fixtures, and some reuse the name of a REAL command (`SetPorts` exists both
+/// as `lunco-cosim`'s controllable-port write and as a two-field stub in
+/// `lunco-scripting/tests`). Whichever the walk hit last won, so the reference
+/// documented the real command with the fixture's file path and its empty
+/// prose. A test fixture can never be the source of truth for a shipped verb.
 fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -206,7 +229,8 @@ fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
-            if p.file_name().and_then(|n| n.to_str()) != Some("target") {
+            let name = p.file_name().and_then(|n| n.to_str());
+            if !matches!(name, Some("target") | Some("tests")) {
                 walk_rs(&p, out);
             }
         } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {

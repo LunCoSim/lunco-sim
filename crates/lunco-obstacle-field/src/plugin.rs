@@ -95,8 +95,12 @@ pub struct RegenerateField;
 /// `ObstacleFieldSpec` resource and fires `RegenerateField`.
 pub struct ObstacleFieldPlugin;
 
+/// Replace the obstacle-field spec and regenerate the field. The whole spec is
+/// sent, not a delta, so a caller that means to change one knob must send the
+/// others back unchanged. Journaled as a `DomainKind::ObstacleField` op.
 #[Command(default)]
 pub struct UpdateObstacleFieldSpec {
+    /// The complete new spec — density, seed, extent, size distribution.
     pub spec: ObstacleFieldSpec,
 }
 

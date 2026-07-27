@@ -494,9 +494,14 @@ fn edit_id(explicit: &str, kind: &str, seq: &mut TerrainEditSeq) -> crate::terra
     }
 }
 
+/// Raise or lower terrain with a radial brush, recorded as a named edit layer
+/// so it can be removed later. Document-free terrains only — a doc-backed
+/// terrain's edits are authored to its USD layer instead.
 #[Command(default)]
 pub struct BrushTerrain {
+    /// Brush centre, world X.
     pub x: f32,
+    /// Brush centre, world Z.
     pub z: f32,
     pub radius: f32,
     pub amplitude: f32,

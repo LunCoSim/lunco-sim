@@ -7,7 +7,13 @@
 //! `ScheduleRunnerPlugin`). Built `-p lunco-sandbox-server`, the GUI stack isn't
 //! linked at all; forcing the mode (vs. inferring it from the absent `ui`
 //! feature) also keeps it headless if a `--workspace` build unifies `ui` on.
-//! Run with `cargo run -p lunco-sandbox-server` — headless, no flags.
+//!
+//! `cargo run -p lunco-sandbox-server` starts the sim and the networking host.
+//! The HTTP command API needs `-- --api [PORT]`: the `server` feature compiles
+//! it in, but headless does NOT imply a listening port, and nothing warns when
+//! it isn't there — a client just gets connection-refused.
+//!
+//!     cargo run -p lunco-sandbox-server -- --api 4101
 fn main() -> lunco_sandbox::AppExit {
     lunco_sandbox::run_headless()
 }

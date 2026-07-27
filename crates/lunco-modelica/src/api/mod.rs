@@ -389,9 +389,15 @@ impl ApiLinePattern {
 
 // ─── Batch Applicator ───────────────────────────────────────────────────────
 
+/// Apply a batch of document ops in one shot — the API's bulk editing verb.
+/// Use it instead of a stream of single-op commands when several edits belong
+/// together: they land as one undo group, and the document is only re-parsed
+/// once at the end.
 #[Command(default)]
 pub struct ApplyModelicaOps {
+    /// Document to edit; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// Ops to apply, in order.
     pub ops: Vec<ApiOp>,
 }
 

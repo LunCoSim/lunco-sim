@@ -35,6 +35,10 @@ use super::{entity_for_doc, resolve_doc_or_active};
 
 // ─── Compile typed command ────────────────────────────────────────────────
 
+/// Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
+/// an already-compiled, unmodified model skips the worker dispatch unless
+/// `force`. Never changes `paused`; type/parse/DAE errors land in
+/// `WorkbenchState.compilation_error` and surface in the Diagnostics panel.
 #[Command(default)]
 pub struct CompileModel {
     /// The document to compile. Unassigned (`0` over the API) means the

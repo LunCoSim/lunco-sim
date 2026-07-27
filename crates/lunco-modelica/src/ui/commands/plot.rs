@@ -5,16 +5,26 @@ use lunco_core::{on_command, Command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
+/// Open a new plot panel. With `source` set it duplicates that plot's signal
+/// bindings and picked series — "open another view of this, then diverge" —
+/// otherwise it starts from `signals`.
 #[Command(default)]
 pub struct NewPlotPanel {
+    /// Panel title. Empty = derived from `source` (`"<title> (copy)"`), or a
+    /// default when there is no source.
     pub title: String,
+    /// Signal names to plot initially.
     pub signals: Vec<String>,
+    /// `VizId` of a plot to clone bindings from. `0` = start empty.
     pub source: u64,
 }
 
+/// Add one signal to an existing plot panel.
 #[Command(default)]
 pub struct AddSignalToPlot {
+    /// `VizId` of the target plot panel.
     pub plot: u64,
+    /// Signal name to add.
     pub signal: String,
 }
 

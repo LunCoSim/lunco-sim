@@ -4,6 +4,10 @@ use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 
+/// Dump the active document's registry state to the log — id, source length,
+/// parse status, linked entities. A debugging verb for "what does the app
+/// actually think is open?", taking no parameters because it always targets
+/// whatever the user is looking at.
 #[Command(default)]
 pub struct InspectActiveDoc {}
 

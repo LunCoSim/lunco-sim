@@ -66,9 +66,18 @@ impl ScenarioDocAllocator {
     }
 }
 
+/// Run a rhai snippet against the live world — the scripting escape hatch when
+/// no typed command covers what you need.
+///
+/// The result arrives one FixedUpdate late: rhai needs full `World` access,
+/// which an observer cannot hold, so the handler enqueues the snippet and the
+/// exclusive `drain_world_scripts` system runs it and overwrites the
+/// provisional outcome with the real stdout. Poll the command result rather
+/// than reading it synchronously.
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RunRhai {
+    /// rhai source to evaluate. The scripting prelude is in scope.
     pub code: String,
 }
 

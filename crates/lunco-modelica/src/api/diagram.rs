@@ -91,11 +91,18 @@ pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Comma
     });
 }
 
+/// Delete the `connect(from, to)` equation joining two component ports. The
+/// inverse of `ConnectComponents`; a connection that isn't there is a logged
+/// no-op.
 #[Command(default)]
 pub struct DisconnectComponents {
+    /// Document to edit; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// Class within the document that owns the connection.
     pub class: String,
+    /// Source port, `"<component>.<port>"`.
     pub from: String,
+    /// Target port, `"<component>.<port>"`.
     pub to: String,
 }
 

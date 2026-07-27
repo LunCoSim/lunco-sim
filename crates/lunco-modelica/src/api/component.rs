@@ -96,10 +96,21 @@ pub fn on_add_modelica_component(trigger: On<AddModelicaComponent>, mut commands
     });
 }
 
+/// Remove a component instance from a class.
+///
+/// Removes ONLY the declaration. Any `connect(...)` equation still naming the
+/// component is left behind and will fail to compile, so issue the matching
+/// `DisconnectComponents` calls FIRST — that is the order the canvas uses
+/// (orphan-edge removals precede the node removal, so rumoca can still resolve
+/// the connect spans). Batch both through `ApplyModelicaOps` to keep them in
+/// one undo group.
 #[Command(default)]
 pub struct RemoveModelicaComponent {
+    /// Document to edit; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
+    /// Class within the document that declares the component.
     pub class: String,
+    /// Component instance name to remove.
     pub name: String,
 }
 
