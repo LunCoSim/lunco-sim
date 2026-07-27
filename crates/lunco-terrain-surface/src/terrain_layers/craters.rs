@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use lunco_obstacle_field::spec::{CraterLayer, SizeDist};
-use lunco_terrain_core::{Crater, Craters};
+use lunco_terrain_core::{Crater, Craters, ANALYTIC_RADIUS_FLOOR_M};
 
 use super::{LayerAttrSource, TerrainLayer};
 use crate::oracle::HeightContribution;
@@ -60,9 +60,11 @@ impl TerrainLayer for CraterFieldLayer {
         // Placement/morphology-algorithm version: bump when the same spec yields
         // different craters (blue-noise → CSR = v2; per-crater degradation
         // states = v3; power-law size mix = v4; full-range SFD + octave overprint
-        // + degradation bowl shape + secondary clusters = v5) so content-addressed
-        // downstream bakes re-key.
-        key.write_u64(5);
+        // + degradation bowl shape + secondary clusters = v5; shared
+        // `ANALYTIC_RADIUS_FLOOR_M` for both the count scaling and the size draw
+        // + per-hectare population ceiling = v6) so content-addressed downstream
+        // bakes re-key.
+        key.write_u64(6);
         key.write_u64(self.seed);
         key.write_u64(half_extent.to_bits() as u64);
         key.write_u64(self.craters.density.to_bits() as u64);
@@ -151,7 +153,11 @@ impl TerrainLayer for CraterFieldLayer {
                 let su = hash_size_mix.hash(i);
                 let radius = if su < 0.85 {
                     let a = 1.8_f64;
-                    let rmin = self.craters.size.min.max(0.5) as f64;
+                    // Same floor the population COUNT is scaled against
+                    // (`crater_placements`) — the two must agree, or the count
+                    // stops describing the population it counts. Below it is the
+                    // over-zoom synthesiser's band.
+                    let rmin = (self.craters.size.min as f64).max(ANALYTIC_RADIUS_FLOOR_M);
                     let rmax = (self.craters.size.max as f64).max(rmin + 0.1);
                     let q = (rmin / rmax).powf(a);
                     let uu = hash_size_draw.hash(i);
@@ -195,7 +201,7 @@ impl TerrainLayer for CraterFieldLayer {
                 let az = lobe + (hash_sec4.hash(i) - 0.5) * 0.9;
                 let range = parent.radius * (2.0 + 3.0 * hash_sec5.hash(i));
                 let radius = (parent.radius * (0.04 + 0.08 * hash_sec6.hash(i)))
-                    .max(self.craters.size.min.max(0.5) as f64);
+                    .max((self.craters.size.min as f64).max(ANALYTIC_RADIUS_FLOOR_M));
                 let u = 0.45 + 0.5 * hash_sec7.hash(i);
                 let mut c = morph(radius, u, 0.8);
                 c.center = [

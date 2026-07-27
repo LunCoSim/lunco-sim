@@ -28,6 +28,7 @@ use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 // mesh derive stay here (on the main thread on web — they're cheap).
 use lunco_terrain_bake::bake::{crop_centered, resample};
 use lunco_terrain_bake::dem::height_grid_from_geotiff;
+use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, MAX_CRATERS_PER_HA};
 #[cfg(target_arch = "wasm32")]
 use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 #[cfg(target_arch = "wasm32")]
@@ -127,19 +128,23 @@ pub(crate) fn crater_placements(
     // floor. The power-law SFD `N(>r) ∝ r^-1.8` says lowering the floor to
     // `size.min` multiplies the population by `(8/min)^1.8` — that growth is the
     // saturation-equilibrium small-crater carpet, not a density change, so scale
-    // the count here instead of asking every scene to re-author density. Capped:
-    // the analytic index stays cheap per-sample, but a pathological min would
-    // otherwise mint millions of placements.
-    #[cfg(target_arch = "wasm32")]
-    let rmin = (craters.size.min as f64).max(1.5);
-    #[cfg(not(target_arch = "wasm32"))]
-    let rmin = (craters.size.min as f64).max(0.5);
-
+    // the count here instead of asking every scene to re-author density.
+    //
+    // The floor is [`ANALYTIC_RADIUS_FLOOR_M`], shared with the size draw in the
+    // craters layer (the two MUST agree or the count stops describing the
+    // population it counts). Below it, craters are the over-zoom synthesiser's
+    // band: procedural, resolution-free, and with no placement to index. This
+    // used to be `0.5` (`1.5` on wasm) and that difference is a ~3.5× population
+    // — the single biggest lever on crater cost, spent on relief no LOD past the
+    // leaf ring can even represent.
+    let rmin = (craters.size.min as f64).max(ANALYTIC_RADIUS_FLOOR_M);
     let sfd_scale = (8.0 / rmin).powf(1.8).max(1.0);
-    let count = ((craters.density as f64 * side * side) / 10_000.0 * sfd_scale)
-        .round()
-        .max(0.0)
-        .min(250_000.0) as usize;
+    let hectares = side * side / 10_000.0;
+    // Two ceilings: a per-hectare rate (an authored density meant for a sparse
+    // field must not become a carpet once the SFD scales it) and an absolute
+    // count (a pathological window would otherwise mint millions).
+    let per_ha = (craters.density as f64 * sfd_scale).min(MAX_CRATERS_PER_HA);
+    let count = (per_ha * hectares).round().max(0.0).min(250_000.0) as usize;
     if count == 0 {
         return Vec::new();
     }

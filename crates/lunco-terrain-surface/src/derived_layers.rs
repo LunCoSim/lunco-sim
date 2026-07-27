@@ -279,7 +279,10 @@ fn start_derived_bakes(
 /// v6: surface-map alpha is no longer a baked slope hazard (nothing sampled it;
 /// hazard is a live per-pixel view off the `overlay_*` uniforms). The frozen
 /// safe/cliff angles left the key with it.
-const CACHE_FORMAT_VERSION: u64 = 6;
+/// v7: tone (albedo) marched at half res and bilinear-expanded — its source is
+/// band-limited to 6 texels, so full-res sampling was resolving detail the
+/// source cannot contain, at ~10 oracle evaluations per texel.
+const CACHE_FORMAT_VERSION: u64 = 7;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
@@ -417,7 +420,11 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // Gate over-zoom synthesis at the map's texel size via the shared filter
     // policy (the map is far coarser than the synthetic detail — skip it, don't
     // alias it).
-    let limited = SurfaceBand::visual(texel).limited(oracle);
+    // Region-scoped (the whole DEM square, plus a texel of stencil slack): the
+    // map is one bake over a known box, so crater fields gather their placements
+    // once here — and at this texel size the gate drops everything below ~2
+    // texels outright instead of rejecting it 1024² times.
+    let limited = SurfaceBand::visual(texel).limited_region(oracle, region, 2.0 * texel);
 
     // One derive pass: slope is `acos(n.y)` of the very normal just computed,
     // so the fused kernel halves the oracle samples per texel.
@@ -427,7 +434,11 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
     let ao_res = (res / 2).max(1);
     let ao_texel = 2.0 * half / ao_res as f64;
-    let ao_limited = SurfaceBand::visual(ao_texel).limited(oracle);
+    // The AO march walks horizon rays out to `half·AO_RADIUS_FRAC` from each
+    // texel, so the scope must grow by that reach — a ray leaving the box would
+    // otherwise sample a view the region prune never promised.
+    let ao_limited = SurfaceBand::visual(ao_texel)
+        .limited_region(oracle, region, half * AO_RADIUS_FRAC + 2.0 * ao_texel);
     let ao_small = ao_map(
         &ao_limited,
         &region,
@@ -447,8 +458,23 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     let tone_limited = SurfaceBand {
         min_wavelength: 2.0 * TONE_STENCIL_TEXELS * texel,
     }
-    .limited(oracle);
-    let albedo = albedo_map(&tone_limited, &region, res, TONE_STENCIL_TEXELS);
+    .limited_region(oracle, region, 2.0 * TONE_STENCIL_TEXELS * texel);
+    // Marched at HALF res and bilinear-expanded, like AO — and for a stronger
+    // reason: the tone source is band-limited to `2·3·texel`, i.e. it carries
+    // nothing finer than 6 texels, so a 2-texel sampling pitch is still three
+    // times finer than its Nyquist. Sampling it at 1024² was resolving detail
+    // the source provably does not contain, at ~10 oracle evaluations per texel
+    // (a 5-tap Laplacian plus the slope probe) — the most expensive pass in the
+    // whole bake. The stencil is halved IN TEXELS so its width IN METRES is
+    // unchanged: same tone, a quarter of the samples.
+    let tone_res = (res / 2).max(1);
+    let albedo_small = albedo_map(
+        &tone_limited,
+        &region,
+        tone_res,
+        TONE_STENCIL_TEXELS * 0.5,
+    );
+    let albedo = lunco_terrain_core::upsample_bilinear(&albedo_small, tone_res, res);
 
     let roughness: Vec<f32> = slope
         .iter()

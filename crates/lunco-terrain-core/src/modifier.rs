@@ -40,6 +40,31 @@ pub trait HeightModifier: Send + Sync {
     fn with_min_wavelength(&self, _min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
         None
     }
+
+    /// For modifiers backed by a **placement set** (crater fields): a variant
+    /// holding only what can affect the world box `[min, max]` at
+    /// `min_wavelength`, for a consumer that bakes a known footprint at a known
+    /// pitch (tile mesh, collider tile, derived maps).
+    ///
+    /// Every such bake knows its region up front, so answering "which
+    /// placements are near?" once beats answering it per sample — and lets a
+    /// coarse bake discard the sub-sample population in one pass instead of
+    /// rejecting it tens of thousands of times. The returned modifier MUST be
+    /// value-identical to `self` (under the same gate) everywhere inside
+    /// `[min, max]`; it is a bake-scoped view, and callers must not sample it
+    /// outside that box.
+    ///
+    /// Default `None`: the modifier has no placement set to scope (brushes,
+    /// flattens, curvature, procedural over-zoom) and the caller falls back to
+    /// [`Self::with_min_wavelength`].
+    fn for_region(
+        &self,
+        _min: [f64; 2],
+        _max: [f64; 2],
+        _min_wavelength: f64,
+    ) -> Option<Arc<dyn HeightModifier>> {
+        None
+    }
 }
 
 /// A base [`HeightSource`] plus an ordered stack of [`HeightModifier`]s folded over

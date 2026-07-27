@@ -131,32 +131,42 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         [(nx / len) as f32, (1.0 / len) as f32, (nz / len) as f32]
     };
 
-    // Morph normals stay ANALYTIC at a fixed sub-metre probe: they must equal
-    // the PARENT surface's own normal at the snapped point (pinned by test), and
-    // there is one per even/even vertex only, so the lattice saving is marginal.
-    let eps = 0.5;
-
-    // The normal of the PARENT surface — the one that belongs to the morph target.
-    // Sampled from `morph_src` (band-limited to the parent's Nyquist), so it
-    // describes the coarse lattice the tile collapses onto rather than the fine
-    // detail that lattice cannot represent.
-    let morph_normal_at = |wx: f64, wz: f64| -> [f32; 3] {
-        let n = morph_src.normal_at(wx, wz, eps);
-        [n[0] as f32, n[1] as f32, n[2] as f32]
-    };
-
-    // Pre-sample the PARENT-gated surface on the even lattice — the heights every
-    // morph target lerps toward, and the normals that go with them. One sample per
-    // even/even vertex (res²/4), each shared by up to four vertices that snap to it.
+    // The PARENT lattice: ONE padded `(even+2)²` sample of the parent-gated
+    // surface on the parent's own 2×-spaced grid — the heights every morph
+    // target lerps toward, central-differenced for the normals that go with
+    // them. Exactly the shape of the fine lattice above, one step coarser.
+    //
+    // This is also what the PARENT TILE ITSELF computes: its `fine_normal` is a
+    // central difference on this very lattice, at this very spacing, off this
+    // very band. The morph contract — a fully-morphed child must shade like the
+    // parent that replaces it — is therefore satisfied by construction rather
+    // than approximated. (It used to be a 4-tap analytic probe at a fixed 0.5 m
+    // per even vertex: `res²` extra oracle evaluations, as many as the entire
+    // fine lattice, to approximate a value the parent derives differently.)
     let even = res.div_ceil(2);
+    let pstep = 2.0 * step;
+    let ppad = even + 2;
+    let mut plattice = vec![0.0f64; ppad * ppad];
+    for iz in 0..ppad {
+        let wz = z0 + (iz as f64 - 1.0) * pstep;
+        for ix in 0..ppad {
+            let wx = x0 + (ix as f64 - 1.0) * pstep;
+            plattice[iz * ppad + ix] = morph_src.height_at(wx, wz);
+        }
+    }
+    let ph_at = |ix: isize, iz: isize| -> f64 { plattice[(iz + 1) as usize * ppad + (ix + 1) as usize] };
     let mut parent_y = vec![0.0f32; even * even];
     let mut parent_n = vec![[0.0f32, 1.0, 0.0]; even * even];
-    for iz in (0..res).step_by(2) {
-        for ix in (0..res).step_by(2) {
-            let (wx, wz) = world(ix, iz);
-            let k = (iz / 2) * even + (ix / 2);
-            parent_y[k] = (morph_src.height_at(wx, wz) - origin_y) as f32;
-            parent_n[k] = morph_normal_at(wx, wz);
+    for ez in 0..even {
+        for ex in 0..even {
+            let k = ez * even + ex;
+            parent_y[k] = (ph_at(ex as isize, ez as isize) - origin_y) as f32;
+            let hx = ph_at(ex as isize + 1, ez as isize) - ph_at(ex as isize - 1, ez as isize);
+            let hz = ph_at(ex as isize, ez as isize + 1) - ph_at(ex as isize, ez as isize - 1);
+            let nx = -hx / (2.0 * pstep);
+            let nz = -hz / (2.0 * pstep);
+            let len = (nx * nx + 1.0 + nz * nz).sqrt();
+            parent_n[k] = [(nx / len) as f32, (1.0 / len) as f32, (nz / len) as f32];
         }
     }
 
@@ -477,13 +487,14 @@ mod tests {
         );
 
         // THE CONTRACT. A fully-morphed child must look like its PARENT — the tile
-        // that would be drawn instead of it. The parent shades from its own
-        // band-limited surface at its own vertices, so `morph_normals` must be
-        // exactly that: `morph_src`'s normal at the SNAPPED position. Checking
-        // against the parent's analytic normal (not the morph grid's faceted
-        // triangle normals, which are a piecewise-constant approximation of it and
-        // differ for both the old and new attribute alike).
+        // that would be drawn instead of it. The parent shades from a central
+        // difference on ITS OWN lattice (see `fine_normal` in the bake), so
+        // `morph_normals` must be exactly that: the 2×-spaced central difference
+        // of `morph_src` at the SNAPPED position. (Not the morph grid's faceted
+        // triangle normals, which are a piecewise-constant approximation of it
+        // and differ for both the old and new attribute alike.)
         let step = region.side() / (res as f64 - 1.0);
+        let pstep = 2.0 * step;
         let x0 = region.center[0] - region.half;
         let z0 = region.center[1] - region.half;
         let mut worst_contract = 0.0f32;
@@ -491,7 +502,12 @@ mod tests {
             for ix in 0..res {
                 let sx = x0 + (ix & !1) as f64 * step;
                 let sz = z0 + (iz & !1) as f64 * step;
-                let want = dem.normal_at(sx, sz, 0.5);
+                // What a parent tile computes for this vertex, verbatim.
+                let hx = dem.height_at(sx + pstep, sz) - dem.height_at(sx - pstep, sz);
+                let hz = dem.height_at(sx, sz + pstep) - dem.height_at(sx, sz - pstep);
+                let (nx, nz) = (-hx / (2.0 * pstep), -hz / (2.0 * pstep));
+                let len = (nx * nx + 1.0 + nz * nz).sqrt();
+                let want = [nx / len, 1.0 / len, nz / len];
                 let got = m.morph_normals[iz * res + ix];
                 let cosang =
                     (want[0] as f32 * got[0] + want[1] as f32 * got[1] + want[2] as f32 * got[2])
@@ -501,9 +517,9 @@ mod tests {
         }
         assert!(
             worst_contract < 0.5,
-            "morph normal must be the PARENT surface normal at the snapped point \
-             (off by up to {worst_contract:.2} deg) — otherwise a fully-morphed \
-             tile shades unlike the parent it stands in for"
+            "morph normal must be the PARENT lattice's own central difference at \
+             the snapped point (off by up to {worst_contract:.2} deg) — otherwise \
+             a fully-morphed tile shades unlike the parent it stands in for"
         );
 
         // And it must actually carry NEW information: if it merely duplicated the
