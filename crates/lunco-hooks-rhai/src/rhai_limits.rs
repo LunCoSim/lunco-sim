@@ -1,4 +1,11 @@
-//! One sandbox policy for every Rhai engine created by this crate.
+//! One sandbox policy for every Rhai engine in the workspace.
+//!
+//! This lives in the rhai-only, bevy-free, wasm-clean leaf crate on purpose:
+//! there are two independent rhai execution planes (the world-bound scripting
+//! backend in `lunco-scripting`, and hook scripts compiled here), and a policy
+//! that only one of them can reach is a policy that drifts. `lunco-scripting`
+//! depends on this crate, so it re-exports this module rather than owning a
+//! second copy of the numbers.
 
 use rhai::Engine;
 

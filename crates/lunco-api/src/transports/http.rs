@@ -23,11 +23,8 @@ pub async fn handle_api_commands(
     State(bridge): State<HttpBridge>,
     Json(req): Json<ApiRequestUnified>,
 ) -> impl IntoResponse {
-    // Read the transport-level `async` flag off the envelope BEFORE conversion —
-    // `ApiRequest` has no notion of it. Default (false) ⇒ wait for the outcome.
-    let want_async = req.is_async;
     let api_req: ApiRequest = req.into();
-    execute_api_request(bridge, api_req, want_async).await
+    execute_api_request(bridge, api_req).await
 }
 
 /// Map a serialized [`lunco_core::CommandOutcome`] to a terminal status string.
@@ -78,7 +75,7 @@ async fn await_command_outcome(bridge: &HttpBridge, id: u64) -> ApiResponse {
             "command_id": id,
             "status": "pending",
             "note": "no terminal outcome recorded within the sync-wait window; \
-                     poll QueryCommandResult, or resend with \"async\": true",
+                     the command was accepted — poll QueryCommandResult for its outcome",
         })),
     }
 }
@@ -104,14 +101,13 @@ pub async fn handle_health() -> impl IntoResponse {
 /// structured status either way — "not ready" is a valid state, not an error.
 pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse {
     // A query provider — returns data inline, never `command_accepted` — so the
-    // sync-wait path is a no-op; pass `true` to skip it.
+    // sync-wait path is a no-op here.
     execute_api_request(
         bridge,
         ApiRequest::ExecuteCommand {
             command: "GetReadiness".to_string(),
             params: serde_json::json!({}),
         },
-        true,
     )
     .await
 }
@@ -123,14 +119,13 @@ pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse
 /// a valid state to report, not a request error.
 pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoResponse {
     // A query provider — returns data inline, never `command_accepted` — so the
-    // sync-wait path is a no-op; pass `true` to skip it.
+    // sync-wait path is a no-op here.
     execute_api_request(
         bridge,
         ApiRequest::ExecuteCommand {
             command: "GetBrokenConnections".to_string(),
             params: serde_json::json!({}),
         },
-        true,
     )
     .await
 }
@@ -140,15 +135,11 @@ pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoRe
 /// browsable and scriptable.
 pub async fn handle_schema(State(bridge): State<HttpBridge>) -> impl IntoResponse {
     // A query — it returns data directly, never `command_accepted` — so the
-    // sync-wait path is a no-op here; pass `true` to skip it explicitly.
-    execute_api_request(bridge, ApiRequest::DiscoverSchema, true).await
+    // sync-wait path is a no-op here.
+    execute_api_request(bridge, ApiRequest::DiscoverSchema).await
 }
 
-pub async fn execute_api_request(
-    bridge: HttpBridge,
-    api_req: ApiRequest,
-    want_async: bool,
-) -> impl IntoResponse {
+pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> impl IntoResponse {
     let response = match bridge.execute(api_req).await {
         Ok(resp) => resp,
         Err(_) => ApiResponse::Error {
@@ -157,16 +148,16 @@ pub async fn execute_api_request(
         },
     };
 
-    // Synchronous by default: a fire-and-forget command answers with
-    // `command_accepted` (a `command_id`, no data). Unless the caller opted into
-    // `async`, wait for its terminal outcome so the reply is authoritative
-    // instead of merely "queued". Query providers and deferred commands already
-    // return their real payload inline, so they never enter this branch.
+    // Always synchronous: a fire-and-forget command answers with
+    // `command_accepted` (a `command_id`, no data). Wait for its terminal outcome
+    // so the reply is authoritative instead of merely "queued". Query providers
+    // and deferred commands already return their real payload inline, so they
+    // never enter this branch.
     let response = match response {
         ApiResponse::Ok {
             command_id: Some(id),
             data: None,
-        } if !want_async => await_command_outcome(&bridge, id).await,
+        } => await_command_outcome(&bridge, id).await,
         other => other,
     };
 

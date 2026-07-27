@@ -719,7 +719,7 @@ pub fn setup_big_space_hierarchy(
             // sphere sits on the origin in any scene that anchors no site), so it must be
             // masked out of suspension/sensor rays or every raycast wheel reports a
             // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
-            Collider::sphere(MOON_MEAN_RADIUS_M as f32),
+            Collider::sphere(MOON_MEAN_RADIUS_M),
             CollisionLayers::new(
                 LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
                 LayerMask::ALL,

@@ -34,24 +34,15 @@ pub struct CelestialBodyRegistry {
 
 pub use lunco_core::CelestialBody;
 
-/// **The** lunar radius, in metres. Every place that needs "how big is the
-/// Moon" — body placement, colliders, ground-relative altitude, the body-radius
-/// citation stamped into a baked GeoTIFF — refers to this.
+/// **The** lunar radius, in metres — declared once in [`lunco_core`] and
+/// re-exported here, where the simulation side has always named it.
 ///
-/// Source: IAU/WGCCRE mean radius of the Moon, 1737.4 km
-/// (Archinal et al., *Report of the IAU Working Group on Cartographic
-/// Coordinates and Rotational Elements*). The same value the LOLA/LRO products
-/// the terrain pipeline ingests are referenced to.
-///
-/// It exists because the tree carried three disagreeing values (`1737.0e3`
-/// here, `1.7374e6` in the sandbox UI, `1_737_400.0` in tests) — a 400 m spread,
-/// i.e. a real altitude/georeferencing bias the moment anything reports a height.
-/// Do not re-type the number; a fourth copy is the bug coming back.
-///
-/// (Home of record: this belongs in `lunco-core`, the one leaf every consumer
-/// already sees. `lunco-assets` cannot reach `lunco-celestial` and so still
-/// carries its own copy of the *value* — see `lunco-assets/src/process.rs`.)
-pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
+/// The number itself lives in `lunco-core` because the offline `lunco-assets`
+/// build tool stamps the same datum into every baked GeoTIFF and must not take
+/// a Bevy-heavy dependency on this crate to reach it. See
+/// [`lunco_core::MOON_MEAN_RADIUS_M`] for the IAU/WGCCRE citation and the
+/// history. Do not re-type the value anywhere.
+pub use lunco_core::MOON_MEAN_RADIUS_M;
 
 /// Component that identifies an entity as a center of a celestial reference frame.
 ///

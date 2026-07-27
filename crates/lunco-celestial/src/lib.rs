@@ -187,7 +187,6 @@ impl Plugin for CelestialPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
-        app.init_resource::<TerrainMapRegistry>();
         app.init_resource::<CelestialConfig>();
         // Generic celestial geometry queries (Occultation / BodyPosition /
         // SolarPose) — the domain-free substrate authored subsystems compose

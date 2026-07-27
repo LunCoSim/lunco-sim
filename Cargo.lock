@@ -7289,17 +7289,12 @@ dependencies = [
 name = "lunco-obstacle-field"
 version = "0.1.0-dev"
 dependencies = [
- "avian3d",
  "bevy",
  "bevy_mesh",
- "big_space",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-physics",
- "lunco-render",
  "lunco-terrain-core",
- "lunco-time",
  "lunco-twin-journal",
  "rand 0.10.2",
  "rand_chacha 0.10.0",

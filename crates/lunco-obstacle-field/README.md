@@ -4,7 +4,8 @@ Procedural **crater + rock field** generation for rover testing.
 
 Generates obstacle fields on the fly with tunable distribution parameters
 (density, size distribution, spatial pattern, seed) so a rover can be tested
-across varied surface conditions. Replaces the flat ground for mobility tests.
+across varied surface conditions. The spec drives the DEM terrain's crater and
+rock layers; this crate itself spawns nothing.
 
 The generation core is **pure and deterministic** — the same `(spec, seed)`
 always yields the same field. So networking replicates only the
@@ -23,12 +24,13 @@ always yields the same field. So networking replicates only the
 
 ## Key types
 
-`ObstacleFieldPlugin`, `ObstacleFieldRoot`, `RegenerateField`,
-`ObstacleFieldSpec`, `Pattern`; plus mesh helpers (`grid_mesh`,
-`grid_indices`, `grid_normals`).
+`ObstacleFieldPlugin`, `UpdateObstacleFieldSpec`, `ObstacleFieldSpec`,
+`Pattern`; plus mesh helpers (`grid_mesh`, `grid_indices`, `grid_normals`).
 
 ## Status
 
-Working generator (server-authoritative colliders; client adds visuals). See
+Working generator. This crate spawns nothing: the DEM terrain
+(`lunco-terrain-surface`) consumes `ObstacleFieldSpec` and observes
+`UpdateObstacleFieldSpec` to rebuild its crater/rock layers. See
 `PLAN.md` for the phased roadmap (streaming, dynamics, tuning UI, bake cache,
 experiment sweep).

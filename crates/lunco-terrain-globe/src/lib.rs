@@ -28,11 +28,9 @@
 use bevy::prelude::*;
 
 pub mod quad_sphere;
-pub mod registry;
 pub mod tile;
 
 pub use quad_sphere::*;
-pub use registry::*;
 pub use tile::*;
 
 /// Marker component for a spawned terrain tile entity.

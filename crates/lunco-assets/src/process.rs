@@ -575,21 +575,16 @@ fn process_dem(
         //
         // The canonical lunar radius: IAU/WGCCRE mean radius, 1737.4 km
         // (Archinal et al., WGCCRE report) — the datum the LOLA/LRO products this
-        // pipeline ingests are themselves referenced to. It replaced a `1737.0e3`
-        // here: the tree used to carry three values 400 m apart, which is a real
-        // georeferencing bias the moment anything reports a height.
+        // pipeline ingests are themselves referenced to.
         //
-        // ⚠ DO NOT re-type this number elsewhere. It is declared once, as
-        // `lunco_celestial::registry::MOON_MEAN_RADIUS_M`, and this crate mirrors
-        // the VALUE only because `lunco-assets` (an offline build tool) does not —
-        // and should not — depend on the Bevy-heavy `lunco-celestial`. The proper
-        // home is `lunco-core`, which both already depend on; move it there and
-        // both sites should import it.
-        const BODY_RADIUS_M: f64 = 1_737_400.0;
+        // ⚠ DO NOT re-type this number. It is declared once, in `lunco-core`
+        // (`lunco_core::MOON_MEAN_RADIUS_M`), precisely so this offline build tool
+        // and the simulation's `lunco_celestial::registry` — which re-exports it —
+        // cannot stamp two different datums. This site used to mirror the VALUE.
         let mut geo = lunco_geotiff::GeoTransform::centred_square(
             win as f64 * scale,
             out_n,
-            BODY_RADIUS_M,
+            lunco_core::MOON_MEAN_RADIUS_M,
             center_lat,
             center_lon,
         );
@@ -657,48 +652,14 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
     }
 
     // ── Decode the source TIFF once (it can be 100+ MB). ──────────────────
-    // LROC mosaics ship as a single giant strip (e.g. the 2 m/px Apollo 15 DTM
-    // is a 2555×14311 float32 raster = ~146 MB in one strip), which blows past
-    // the `tiff` crate's default 128 MB `intermediate_buffer_size`. This is an
-    // offline build-time tool decoding ONE known-large raster into memory, so
-    // `Limits::unlimited()` is appropriate — it is NOT on a wasm/page hot path.
+    // The sample-format match, the lifted `tiff` limits (LROC mosaics ship as a
+    // single giant strip past the crate's 128 MB default) and the nodata→`NaN`
+    // mapping all live in `lunco_geotiff::decode_gray_f64` — the one core this
+    // writer and the terrain baker's reader now share. They used to hold a copy
+    // each and drifted; the copy here is gone deliberately, do not restore it.
     let bytes = std::fs::read(source)?;
-    let mut dec = tiff::decoder::Decoder::new(Cursor::new(bytes.as_slice()))
-        .map_err(|e| io_err(format!("decoding DTM TIFF: {e}")))?
-        .with_limits(tiff::decoder::Limits::unlimited());
-    let (src_w, src_h) = dec
-        .dimensions()
-        .map_err(|e| io_err(format!("reading DTM dimensions: {e}")))?;
-    let (src_w, src_h) = (src_w as usize, src_h as usize);
-    use tiff::decoder::DecodingResult as D;
-    // Before the pixels: `read_image` advances the decoder, and this states which
-    // samples are not measurements.
-    let declared_nodata = lunco_geotiff::read_gdal_nodata(&mut dec);
-    let heights_f64: Vec<f64> = match dec
-        .read_image()
-        .map_err(|e| io_err(format!("reading DTM pixels: {e}")))?
-    {
-        D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::F64(v) => v,
-        D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
-        _ => {
-            return Err(io_err(
-                "unsupported DTM sample format (need numeric Gray)".into(),
-            ))
-        }
-    };
-    // Sentinels → `NaN` at decode, so the resampler's `is_finite()` test below
-    // actually means what it says. Shared with the terrain baker's reader: both
-    // decode rasters, and one of them getting this right is not enough
-    // (`lunco_geotiff::nodata_to_nan`).
-    let heights_f64: Vec<f64> = heights_f64
-        .into_iter()
-        .map(|v| lunco_geotiff::nodata_to_nan(v, declared_nodata))
-        .collect();
+    let (src_w, src_h, heights_f64) = lunco_geotiff::decode_gray_f64(Cursor::new(bytes.as_slice()))
+        .map_err(|e| io_err(format!("decoding DTM TIFF: {e}")))?;
     Ok(GraySource {
         w: src_w,
         h: src_h,

@@ -460,6 +460,98 @@ pub fn nodata_to_nan(v: f64, declared: Option<f64>) -> f64 {
     }
 }
 
+/// Why a single-band raster could not be decoded to elevations.
+///
+/// Deliberately NOT folded into [`GeoReadError`]: that one is `Clone + PartialEq`
+/// (callers compare it in tests) and `tiff::TiffError` is neither.
+#[derive(Debug)]
+pub enum GrayDecodeError {
+    /// The `tiff` crate refused the container or the pixel data.
+    Tiff(tiff::TiffError),
+    /// The raster decoded, but its samples are not a numeric Gray layout
+    /// (e.g. RGB/palette) — there is no single elevation per pixel to read.
+    UnsupportedSamples,
+}
+
+impl std::fmt::Display for GrayDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tiff(e) => write!(f, "failed to decode GeoTIFF: {e}"),
+            Self::UnsupportedSamples => {
+                write!(f, "unsupported TIFF sample format (need numeric Gray)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GrayDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Tiff(e) => Some(e),
+            Self::UnsupportedSamples => None,
+        }
+    }
+}
+
+impl From<tiff::TiffError> for GrayDecodeError {
+    fn from(e: tiff::TiffError) -> Self {
+        Self::Tiff(e)
+    }
+}
+
+/// Decode a single-band GeoTIFF to row-major `f64` samples.
+/// Returns `(width, height, samples[row * width + col])`.
+///
+/// **This is the one decode core.** It used to exist twice — once in
+/// `lunco-terrain-bake::dem` (the runtime reader) and once in
+/// `lunco-assets::process` (the offline writer's own re-read) — and the copies
+/// drifted: only one carried the `Limits::unlimited()` fix, so the reader failed
+/// on exactly the LROC rasters the pipeline exists for. Both now call this.
+///
+/// Two things are decided HERE so no caller can get them wrong:
+///
+/// - **Limits are lifted.** LROC/NAC DTMs ship as a SINGLE giant strip (the
+///   2 m/px Apollo 15 product is a 2555×14311 float32 raster ≈ 146 MB in one
+///   strip), which blows past the `tiff` crate's default 128 MB
+///   `intermediate_buffer_size`. The ceiling buys no safety on a file already
+///   fully in memory — only an unreadable raster.
+/// - **Nodata becomes `NaN`** ([`nodata_to_nan`]), read from `GDAL_NODATA`
+///   *before* the pixels because `read_image` advances the decoder. Everything
+///   downstream tests `is_finite()`, so a finite sentinel that escapes here is
+///   indistinguishable from terrain.
+///
+/// Sample-count validation is the caller's: only it knows whether a short read
+/// is fatal or recoverable.
+pub fn decode_gray_f64<R: Read + Seek>(
+    reader: R,
+) -> Result<(usize, usize, Vec<f64>), GrayDecodeError> {
+    use tiff::decoder::DecodingResult as D;
+
+    let mut dec = tiff::decoder::Decoder::new(reader)?
+        .with_limits(tiff::decoder::Limits::unlimited());
+    let (w, h) = dec.dimensions()?;
+    let (w, h) = (w as usize, h as usize);
+
+    let declared_nodata = read_gdal_nodata(&mut dec);
+
+    let samples: Vec<f64> = match dec.read_image()? {
+        D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::F64(v) => v,
+        D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::U16(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
+        _ => return Err(GrayDecodeError::UnsupportedSamples),
+    };
+
+    let samples = samples
+        .into_iter()
+        .map(|v| nodata_to_nan(v, declared_nodata))
+        .collect();
+    Ok((w, h, samples))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

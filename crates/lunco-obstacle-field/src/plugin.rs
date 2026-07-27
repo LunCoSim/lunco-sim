@@ -20,18 +20,9 @@ use lunco_core::{on_command, register_commands, Command};
 
 use crate::spec::{ObstacleFieldSpec, Pattern};
 
-/// Root of a generated field.
-#[derive(Component)]
-pub struct ObstacleFieldRoot;
-
-/// Fire to (re)build the field from the current `ObstacleFieldSpec` resource.
-///
-/// A buffered message (Bevy 0.18 renamed buffered `Event` → `Message`).
-#[derive(Message, Default)]
-pub struct RegenerateField;
-
-/// Registers the obstacle-field generator. The app supplies (or tunes) the
-/// `ObstacleFieldSpec` resource and fires `RegenerateField`.
+/// Registers the obstacle-field generator: the shared `ObstacleFieldSpec`
+/// resource and the [`UpdateObstacleFieldSpec`] command that edits it. The DEM
+/// terrain observes that command and rebuilds its crater/rock layers.
 pub struct ObstacleFieldPlugin;
 
 /// Replace the obstacle-field spec and regenerate the field. The whole spec is
@@ -47,7 +38,6 @@ pub struct UpdateObstacleFieldSpec {
 fn on_update_obstacle_field_spec(
     trigger: On<UpdateObstacleFieldSpec>,
     mut spec: ResMut<ObstacleFieldSpec>,
-    mut ev: MessageWriter<RegenerateField>,
     // Journal handle: present once wired (networked / persisted sessions). Every
     // local spec edit is recorded as a `DomainKind::ObstacleField` op so it
     // persists + syncs through the journal plane. Remote peers' edits arrive via
@@ -60,8 +50,7 @@ fn on_update_obstacle_field_spec(
         crate::journal::record_set_spec(journal, &spec, &next);
     }
     *spec = next;
-    ev.write(RegenerateField);
-    info!("[ObstacleField] Spec updated and regeneration triggered.");
+    info!("[ObstacleField] Spec updated; DEM terrain observers rebuild from it.");
 }
 
 register_commands!(on_update_obstacle_field_spec);
@@ -70,32 +59,12 @@ impl Plugin for ObstacleFieldPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<ObstacleFieldSpec>()
             .register_type::<UpdateObstacleFieldSpec>()
-            .init_resource::<ObstacleFieldSpec>()
-            .add_message::<RegenerateField>();
-        // NOTE: removing the legacy USD-authored `Ground` prim once a field exists
-        // is owned by `lunco-sandbox-edit` (`remove_legacy_ground_prim`), which has
-        // USD-stage access and authors a `RemovePrim` op so the Twin stays in sync.
+            .init_resource::<ObstacleFieldSpec>();
         // This crate is a pure generator (core + terrain only) and never edits the
-        // stage.
+        // stage: the DEM terrain owns the ground, and there is no field root to
+        // displace a USD-authored one.
         register_all_commands(app);
     }
-}
-
-/// Who owns crater/rock generation from the shared [`ObstacleFieldSpec`].
-///
-/// The spec (and its Inspector + networked [`UpdateObstacleFieldSpec`]) is the
-/// single source of truth; the DEM terrain (`lunco-terrain-surface`) consumes it —
-/// craters stamp into the DEM height grid, rocks scatter on the DEM surface.
-///
-/// There is exactly one mode. The former `Standalone` mode had this plugin build
-/// its own ±200 m flat-slab arena with a per-rock ECS entity + static
-/// `Collider::sphere` (the 43×-FPS regression shape); it floated on / z-fought the
-/// DEM, nothing — scene attr, API, rhai — could select it, and it is gone.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum ObstacleFieldMode {
-    /// The DEM terrain owns crater/rock generation from the shared spec.
-    #[default]
-    DemDelegated,
 }
 
 /// Build a Bevy `Mesh` from raw height-grid vertex arrays. The single

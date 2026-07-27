@@ -191,7 +191,7 @@ pub struct DemTerrainRequest {
 }
 
 /// Retained on a built DEM terrain so its crater layer can be **re-baked live**
-/// (Inspector → `RegenerateField`) without re-reading the GeoTIFF: the cropped /
+/// (Inspector → `UpdateObstacleFieldSpec`) without re-reading the GeoTIFF: the cropped /
 /// resampled grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
 /// regenerate path clones this, re-stamps the current [`ObstacleFieldSpec`]
 /// craters, and swaps the result into [`crate::stream_viz::DemHeightField`].
@@ -1419,7 +1419,7 @@ fn assemble_dem_build(
             e.try_insert((RigidBody::Static, collider));
         }
         // Retain the pristine base grid + source settings so the crater layer can be
-        // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
+        // re-baked live from the Inspector (`UpdateObstacleFieldSpec`) without disk I/O.
         e.try_insert((
             DemBaseGrid(built.base_grid, built.base_key),
             DemTerrainSource { collider_ring },

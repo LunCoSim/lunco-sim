@@ -48,45 +48,16 @@ pub fn read_geotiff_transform(bytes: &[u8]) -> Result<lunco_geotiff::GeoTransfor
 /// Decode a (single-band) GeoTIFF into row-major elevations.
 /// Returns `(width, height, heights[row*width + col])`.
 ///
-/// ## Duplicate decode core — keep in step with `lunco-assets`
+/// Thin wrapper over the shared decode core,
+/// [`lunco_geotiff::decode_gray_f64`], which owns the sample-format match, the
+/// lifted `Limits` (LROC single-strip rasters exceed the `tiff` default) and the
+/// nodata→`NaN` mapping. This crate and `lunco-assets` used to carry a copy each
+/// and they drifted; there is now one.
 ///
-/// The same 7-arm `DecodingResult` match lives in
-/// `lunco-assets/src/process.rs::decode_gray_source`. The two crates share no
-/// dependency other than `lunco-geotiff`, which is where this core belongs
-/// (it is already the one leaf that stops the writer and the reader disagreeing
-/// about the frame). Until it moves there, **any change here must be mirrored**
-/// — the last time the two drifted, only the writer side carried the limits fix
-/// below and this reader failed on exactly the rasters the pipeline exists for.
+/// What stays here is the part only this caller can judge: a short read is fatal
+/// for a height grid, so the sample count is checked against the dimensions.
 pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemError> {
-    use tiff::decoder::DecodingResult as D;
-
-    // LROC/NAC DTMs ship as a SINGLE giant strip (the 2 m/px Apollo 15 product is
-    // a 2555×14311 float32 raster ≈ 146 MB in one strip), which blows past the
-    // `tiff` crate's default 128 MB `intermediate_buffer_size` — the decode fails
-    // outright, so the ceiling buys no safety here, only an unreadable file. The
-    // encoder side (`lunco-assets`) already lifts it; this reader must match or
-    // the pair disagrees about which rasters exist.
-    let mut dec = tiff::decoder::Decoder::new(Cursor::new(bytes))
-        .map_err(DemError::Tiff)?
-        .with_limits(tiff::decoder::Limits::unlimited());
-    let (w, h) = dec.dimensions().map_err(DemError::Tiff)?;
-    let (w, h) = (w as usize, h as usize);
-
-    // Read the nodata declaration BEFORE the pixels: `read_image` advances the
-    // decoder, and the tag is the raster telling us which samples are not
-    // measurements. See `nodata_to_nan` for why this cannot be skipped.
-    let declared_nodata = lunco_geotiff::read_gdal_nodata(&mut dec);
-
-    let heights: Vec<f64> = match dec.read_image().map_err(DemError::Tiff)? {
-        D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::F64(v) => v,
-        D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
-        _ => return Err(DemError::UnsupportedSamples),
-    };
+    let (w, h, heights) = lunco_geotiff::decode_gray_f64(Cursor::new(bytes))?;
 
     if heights.len() != w * h {
         return Err(DemError::SizeMismatch {
@@ -94,10 +65,6 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
             got: heights.len(),
         });
     }
-    let heights = heights
-        .into_iter()
-        .map(|v| lunco_geotiff::nodata_to_nan(v, declared_nodata))
-        .collect();
     Ok((w, h, heights))
 }
 
@@ -339,6 +306,18 @@ impl fmt::Display for DemError {
 }
 
 impl std::error::Error for DemError {}
+
+/// The shared decode core's failures, in this crate's vocabulary. Kept as a
+/// mapping rather than a wrapped variant so `DemError`'s public shape — which
+/// callers match on — does not change now that the decode moved out.
+impl From<lunco_geotiff::GrayDecodeError> for DemError {
+    fn from(e: lunco_geotiff::GrayDecodeError) -> Self {
+        match e {
+            lunco_geotiff::GrayDecodeError::Tiff(e) => DemError::Tiff(e),
+            lunco_geotiff::GrayDecodeError::UnsupportedSamples => DemError::UnsupportedSamples,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
