@@ -405,6 +405,7 @@ mod tests {
                 spin_velocity: 0.0,
                 mass: 8.0,
                 moment_of_inertia: 1.0, // overrides ½mr² ⇒ inertia = 1.0 (clean)
+                reflected_inertia: 0.0,
                 drive_torque_max: 0.0,
                 max_rotation_speed: 12.0,
                 bearing_damping: 0.0,
@@ -495,6 +496,7 @@ mod tests {
                     spin_velocity: 0.0,
                     mass: 25.0,
                     moment_of_inertia: 0.0,
+                    reflected_inertia: 0.0,
                     drive_torque_max: 255.0,
                     max_rotation_speed: max_omega,
                     bearing_damping: 0.45,

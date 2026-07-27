@@ -744,8 +744,30 @@ fn cache_terrain_document(
 #[derive(Component)]
 struct TerrainDocGeneration(u64);
 
+/// Whether `changed` (a prim path from a [`UsdChange`]) lies on or under
+/// `terrain` — the only region whose edits can alter the terrain layer stack.
+fn in_terrain_subtree(changed: &str, terrain: &str) -> bool {
+    changed == terrain
+        || changed
+            .strip_prefix(terrain)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether a structural resync at `changed` can affect the terrain prim: the
+/// change is inside the terrain subtree, or restructures one of its ancestors
+/// (which can move or remove the subtree wholesale). `/` matches everything.
+fn resync_touches_terrain(changed: &str, terrain: &str) -> bool {
+    changed == "/"
+        || in_terrain_subtree(changed, terrain)
+        || terrain
+            .strip_prefix(changed)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Re-bake a doc-backed DEM terrain from its backing registry document whenever
-/// that document's generation advances (an authored crater/rock/edit op). Reads
+/// a change lands **on the terrain's subtree** (an authored crater/rock/edit op) —
+/// the generation counter alone only gates the cheap early-out; the change ring
+/// ([`UsdDocument::changes_since`]) decides whether a re-parse is due. Reads
 /// the composed (`base ⊕ runtime`) layer straight from the registry — the source
 /// of truth — and re-parses the composable `TerrainLayerStack` in place;
 /// `regenerate_dem_layers` then re-stamps off the retained base grid (no GeoTIFF
@@ -794,7 +816,46 @@ fn refresh_docbacked_terrain_from_doc(
                 if g.0 == cur_gen {
                     continue; // document unchanged since our last re-bake
                 }
-                g.0 = cur_gen; // live edit — re-bake from composed below
+                let last = g.0;
+                g.0 = cur_gen;
+                // Path/kind filter over the change ring: a generation bump alone
+                // says nothing about WHERE the edit landed — runtime ops from a
+                // spawn or an unrelated attr edit bump it too, and re-inserting
+                // the stack on those trips change detection into a whole-terrain
+                // re-bake (measured: 791 tile bakes / 9.8 s on an idle scene).
+                // Only a change on the terrain subtree (or a structural resync of
+                // an ancestor / full reload) re-parses.
+                use lunco_usd::document::UsdChange;
+                let mut touched = false;
+                let mut oldest_seen: Option<u64> = None;
+                for (gen, change) in host.document().changes_since(last) {
+                    if oldest_seen.is_none() {
+                        oldest_seen = Some(gen);
+                    }
+                    let hit = match change {
+                        UsdChange::FullReload => true,
+                        UsdChange::Resync { path } => {
+                            resync_touches_terrain(path, &prim_path.path)
+                        }
+                        UsdChange::InfoOnly { path, .. } => {
+                            in_terrain_subtree(path, &prim_path.path)
+                        }
+                    };
+                    if hit {
+                        touched = true;
+                        break;
+                    }
+                }
+                if !touched {
+                    // The ring is capped: if the oldest retained entry is newer
+                    // than `last + 1`, changes were dropped and the view is
+                    // incomplete — re-parse conservatively. A complete view with
+                    // no subtree hit is a proven no-op.
+                    if oldest_seen.is_some_and(|first| first <= last + 1) {
+                        continue;
+                    }
+                }
+                // fall through: re-parse composed + insert stack
             }
             None => {
                 // First sight. The initial bridge parse (`bridge_usd_dem_terrain`) read
@@ -807,11 +868,16 @@ fn refresh_docbacked_terrain_from_doc(
                 // needs the retained `DemBaseGrid`, so wait for the async DEM build to
                 // deposit it before triggering. With no runtime overlay the bridge parse
                 // is authoritative → seed + skip (no wasted startup re-stamp).
-                let has_runtime_override = host
-                    .document()
-                    .runtime_data()
-                    .iter()
-                    .any(|(_, spec)| spec.ty == openusd::sdf::SpecType::Prim);
+                // Only prim specs on the terrain subtree count: any spawned
+                // entity leaves prim specs elsewhere in the runtime layer, and
+                // treating those as a persisted terrain override forced a
+                // startup composed re-bake on scenes whose overlay never
+                // touches the terrain.
+                let has_runtime_override =
+                    host.document().runtime_data().iter().any(|(path, spec)| {
+                        spec.ty == openusd::sdf::SpecType::Prim
+                            && in_terrain_subtree(path.as_str(), &prim_path.path)
+                    });
                 if has_runtime_override && !has_base_grid {
                     continue; // retry next frame, once the base grid is built
                 }
@@ -1579,5 +1645,27 @@ mod dem_bridge_tests {
         assert!(world
             .get::<lunco_terrain_surface::DemTerrainRequest>(e)
             .is_none());
+    }
+
+    /// The change filter that keeps unrelated runtime ops (spawns, attr edits
+    /// elsewhere) from re-parsing the terrain stack — see
+    /// `refresh_docbacked_terrain_from_doc`.
+    #[test]
+    fn terrain_subtree_filter() {
+        use super::{in_terrain_subtree, resync_touches_terrain};
+        let t = "/World/Terrain";
+        assert!(in_terrain_subtree("/World/Terrain", t));
+        assert!(in_terrain_subtree("/World/Terrain/Layers/crater_1", t));
+        assert!(!in_terrain_subtree("/World/TerrainB", t));
+        assert!(!in_terrain_subtree("/World/Rover", t));
+        assert!(!in_terrain_subtree("/World", t));
+
+        // Resyncs additionally match ancestors (a moved/removed parent takes
+        // the subtree with it) and the whole-stage path.
+        assert!(resync_touches_terrain("/", t));
+        assert!(resync_touches_terrain("/World", t));
+        assert!(resync_touches_terrain("/World/Terrain/Layers", t));
+        assert!(!resync_touches_terrain("/World/Rover", t));
+        assert!(!resync_touches_terrain("/World/TerrainB", t));
     }
 }

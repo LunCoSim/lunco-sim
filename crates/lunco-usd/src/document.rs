@@ -204,8 +204,11 @@ pub enum UsdChange {
 /// Forward application routes through [`lunco_usd_bevy::author`] — the op is
 /// authored by SDF path into a transient `Stage` and the updated root layer
 /// is extracted back as [`sdf::Data`]. Inverses are typed where it is cheap
-/// and exact (`AddPrim` ↔ `RemovePrim`) and fall back to a full-source
-/// [`UsdOp::ReplaceSource`] snapshot otherwise — always correct.
+/// and exact — structural pairs (`AddPrim` ↔ `RemovePrim`, `MovePrim`) and
+/// value-carrying ops whose prior opinion is authored in the target layer —
+/// and fall back to a full-source [`UsdOp::ReplaceSource`] snapshot otherwise
+/// (genuinely structural ops, and prior-unauthored cases where undo must
+/// *remove* the new opinion) — always correct.
 #[derive(Debug, Clone, Reflect, serde::Serialize, serde::Deserialize)]
 pub enum UsdOp {
     /// Replace the entire source buffer with `text`. Inverse is the
@@ -299,8 +302,9 @@ pub enum UsdOp {
     /// [`UsdOp::SetAttribute`]) and writes `value` at stage time `time`
     /// instead of as the `default`. Repeated ops at distinct `time`s build
     /// up the animation curve; the translator interpolates between them
-    /// when it evaluates the attribute at a clock time. The inverse is the
-    /// coarse full-source snapshot (sample removal has no typed op yet).
+    /// when it evaluates the attribute at a clock time. A brand-new sample
+    /// inverts to a typed [`UsdOp::RemoveTimeSample`]; overwriting an existing
+    /// one inverts to a typed `SetTimeSample` carrying the prior value.
     SetTimeSample {
         /// Layer to write to.
         edit_target: LayerId,
@@ -321,8 +325,8 @@ pub enum UsdOp {
     /// the last sample goes, the attribute's `timeSamples` field is cleared
     /// entirely (it round-trips as if never keyframed). Removing a sample that
     /// isn't there is an error, not a silent success, so a wrong `time` surfaces.
-    /// The inverse restores the prior full source (re-authoring the exact removed
-    /// value as a typed op would mean reserializing it back to a literal).
+    /// The inverse re-authors the removed value as a typed [`UsdOp::SetTimeSample`]
+    /// (full-source snapshot only when the value has no single-line literal).
     RemoveTimeSample {
         /// Layer to write to.
         edit_target: LayerId,
@@ -338,7 +342,8 @@ pub enum UsdOp {
     /// expresses non-hierarchical links — `material:binding`, collection
     /// membership, light linking, skeleton bindings. Replaces any existing
     /// target list (set-semantics, not append); an empty `targets` authors an
-    /// explicitly-empty relationship. The inverse restores the prior source.
+    /// explicitly-empty relationship. The inverse restores a prior explicit
+    /// target list as a typed op; otherwise the prior source.
     SetRelationship {
         /// Layer to write to.
         edit_target: LayerId,
@@ -361,7 +366,8 @@ pub enum UsdOp {
     /// not-yet-materialised port. `sources` replaces any prior connection list
     /// (explicit list-op, set-semantics — not append); an **empty** `sources`
     /// authors an explicitly-empty list, i.e. clears the connection. The
-    /// inverse restores the prior full source.
+    /// inverse restores a prior explicit connection list as a typed op;
+    /// otherwise the prior full source.
     SetConnection {
         /// Layer to write to.
         edit_target: LayerId,
@@ -1531,26 +1537,41 @@ impl Document for UsdDocument {
                 })?;
                 // Authoring a brand-new sample (no prior opinion at this exact
                 // time, in this layer) is exactly undone by removing it — a typed,
-                // cheap inverse. Overwriting an existing sample needs the prior
-                // value back, so fall back to the full-source snapshot.
-                let overwrote_existing = prim_sdf
+                // cheap inverse. Overwriting an existing sample restores the prior
+                // value as a typed `SetTimeSample`: the value read from the layer
+                // is in the STAGE frame, and so is the op literal (this arm does
+                // no unit conversion in either direction — see the TODO above), so
+                // it reserializes verbatim. Only a value `value_to_literal` cannot
+                // format on one line falls back to the full-source snapshot.
+                let prior_sample = prim_sdf
                     .append_property(name.as_str())
                     .ok()
                     .and_then(|attr| self.layer(target).field(&attr, "timeSamples").cloned())
-                    .map(|v| {
-                        matches!(v, sdf::Value::TimeSamples(ref m)
-                            if m.iter().any(|(t, _)| t.total_cmp(&time).is_eq()))
-                    })
-                    .unwrap_or(false);
-                let inverse = if overwrote_existing {
-                    self.coarse_inverse(target, &id)
-                } else {
-                    UsdOp::RemoveTimeSample {
+                    .and_then(|v| match v {
+                        sdf::Value::TimeSamples(m) => m
+                            .into_iter()
+                            .find(|(t, _)| t.total_cmp(&time).is_eq())
+                            .map(|(_, old)| old),
+                        _ => None,
+                    });
+                let inverse = match prior_sample {
+                    Some(old) => match author::value_to_literal(&type_name, old) {
+                        Some(v) => UsdOp::SetTimeSample {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            name: name.clone(),
+                            type_name: type_name.clone(),
+                            time,
+                            value: v,
+                        },
+                        None => self.coarse_inverse(target, &id),
+                    },
+                    None => UsdOp::RemoveTimeSample {
                         edit_target: id.clone(),
                         path: path.clone(),
                         name: name.clone(),
                         time,
-                    }
+                    },
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1572,10 +1593,40 @@ impl Document for UsdDocument {
                         "RemoveTimeSample: bad attribute `{name}`: {e}"
                     ))
                 })?;
-                // The full-source snapshot restores the removed sample's value
-                // (reserializing it to a typed `SetTimeSample` literal isn't worth
-                // it). Capture it before mutating.
-                let inverse = self.coarse_inverse(target, &id);
+                // Typed inverse: re-author the removed sample. Value and declared
+                // type are both read from the layer BEFORE mutating; the literal
+                // stays in the stage frame, matching `SetTimeSample`'s forward
+                // path (neither converts units). Missing type or a value with no
+                // single-line literal → the always-correct full-source snapshot.
+                let prior_type = match self.layer(target).field(&attr_sdf, "typeName") {
+                    Some(sdf::Value::Token(t)) => Some(t.as_str().to_string()),
+                    _ => None,
+                };
+                let prior_value = self
+                    .layer(target)
+                    .field(&attr_sdf, "timeSamples")
+                    .cloned()
+                    .and_then(|v| match v {
+                        sdf::Value::TimeSamples(m) => m
+                            .into_iter()
+                            .find(|(t, _)| t.total_cmp(&time).is_eq())
+                            .map(|(_, old)| old),
+                        _ => None,
+                    });
+                let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
+                    author::value_to_literal(&ty, old).map(|lit| (ty, lit))
+                });
+                let inverse = match recovered {
+                    Some((type_name, value)) => UsdOp::SetTimeSample {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: name.clone(),
+                        type_name,
+                        time,
+                        value,
+                    },
+                    None => self.coarse_inverse(target, &id),
+                };
                 let mut new_data = self.layer(target).clone();
                 let removed = author::remove_time_sample(&mut new_data, &attr_sdf, time)
                     .map_err(author_err)?;
@@ -1594,7 +1645,7 @@ impl Document for UsdDocument {
                 targets,
                 ..
             } => {
-                self.require_prim_anywhere(&path)?;
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let target_paths = targets
                     .iter()
                     .map(|t| {
@@ -1605,7 +1656,24 @@ impl Document for UsdDocument {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let inverse = self.coarse_inverse(target, &id);
+                // Typed inverse: a prior *explicit* target list is exactly what a
+                // typed `SetRelationship` re-authors (targets are op fields — no
+                // literal round-trip involved). Unauthored, or a prepend/append
+                // list op a set-semantics op can't express, falls back to the
+                // snapshot — which also correctly *removes* the new opinion.
+                let prior = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|rel| self.layer(target).field(&rel, "targetPaths").cloned());
+                let inverse = match prior {
+                    Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetRelationship {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: name.clone(),
+                        targets: op.explicit_items.iter().map(|p| p.to_string()).collect(),
+                    },
+                    _ => self.coarse_inverse(target, &id),
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
                     .create_relationship(format!("{path}.{name}"))
@@ -1624,7 +1692,7 @@ impl Document for UsdDocument {
                 sources,
                 ..
             } => {
-                self.require_prim_anywhere(&path)?;
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let source_paths = sources
                     .iter()
                     .map(|s| {
@@ -1635,7 +1703,22 @@ impl Document for UsdDocument {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let inverse = self.coarse_inverse(target, &id);
+                // Typed inverse — the `SetRelationship` pattern with the
+                // attribute's `connectionPaths` list op instead.
+                let prior = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|attr| self.layer(target).field(&attr, "connectionPaths").cloned());
+                let inverse = match prior {
+                    Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetConnection {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: name.clone(),
+                        type_name: type_name.clone(),
+                        sources: op.explicit_items.iter().map(|p| p.to_string()).collect(),
+                    },
+                    _ => self.coarse_inverse(target, &id),
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 // Create-if-absent (like SetAttribute) so a connection can be
                 // authored on a not-yet-materialised port, then author the
@@ -1675,8 +1758,27 @@ impl Document for UsdDocument {
             }
 
             UsdOp::SetApiSchemas { path, schemas, .. } => {
-                self.require_prim_anywhere(&path)?;
-                let inverse = self.coarse_inverse(target, &id);
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                // Typed inverse: a prior *explicit* schema list restores as a
+                // typed `SetApiSchemas` (same set-semantics as the forward op).
+                // Unauthored, or a `prepend apiSchemas` opinion an explicit set
+                // can't reproduce, falls back to the snapshot.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, openusd::sdf::FieldKey::ApiSchemas.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::TokenListOp(op)) if op.explicit => UsdOp::SetApiSchemas {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        schemas: op
+                            .explicit_items
+                            .iter()
+                            .map(|t| t.as_str().to_string())
+                            .collect(),
+                    },
+                    _ => self.coarse_inverse(target, &id),
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let tokens: Vec<openusd::tf::Token> =
                     schemas.iter().map(openusd::tf::Token::from).collect();
@@ -1702,8 +1804,28 @@ impl Document for UsdDocument {
                 variant,
                 ..
             } => {
-                self.require_prim_anywhere(&path)?;
-                let inverse = self.coarse_inverse(target, &id);
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                // Typed inverse: restore the prior selection of THIS variant set
+                // (the forward op is read-modify-write, so sibling sets are
+                // untouched either way). No prior selection for the set → the
+                // snapshot, the only way to express "unselected" on undo.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, openusd::sdf::FieldKey::VariantSelection.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::VariantSelectionMap(ref m))
+                        if m.contains_key(&variant_set) =>
+                    {
+                        UsdOp::SetVariantSelection {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            variant_set: variant_set.clone(),
+                            variant: m[&variant_set].clone(),
+                        }
+                    }
+                    _ => self.coarse_inverse(target, &id),
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 // Read-modify-write the selection map so selecting `drivetrain`
                 // doesn't silently drop a sibling variant set's selection.
@@ -1729,8 +1851,35 @@ impl Document for UsdDocument {
             UsdOp::SetPayload {
                 path, asset_paths, ..
             } => {
-                self.require_prim_anywhere(&path)?;
-                let inverse = self.coarse_inverse(target, &id);
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                // Typed inverse: a prior explicit payload list whose entries
+                // carry nothing beyond an asset path — all a typed `SetPayload`
+                // can author. A prim path, a layer offset, or a non-explicit
+                // list op falls back to the snapshot rather than restore lossily.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, openusd::sdf::FieldKey::Payload.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::PayloadListOp(op))
+                        if op.explicit
+                            && op
+                                .explicit_items
+                                .iter()
+                                .all(|p| p.prim_path.is_empty() && p.layer_offset.is_none()) =>
+                    {
+                        UsdOp::SetPayload {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            asset_paths: op
+                                .explicit_items
+                                .iter()
+                                .map(|p| p.asset_path.clone())
+                                .collect(),
+                        }
+                    }
+                    _ => self.coarse_inverse(target, &id),
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let payloads: Vec<openusd::sdf::Payload> = asset_paths
                     .iter()
@@ -2473,6 +2622,35 @@ mod tests {
         );
     }
 
+    /// ARRAY-valued attributes invert typed too: `value_to_literal` now formats
+    /// through the fork's single-line writer, so the multi-element case that
+    /// used to miss the literal scrape (and fall back to a whole-source
+    /// snapshot) carries a typed inverse like any scalar.
+    #[test]
+    fn set_attribute_array_overwrite_inverts_to_typed_op() {
+        const SCENE: &str =
+            "#usda 1.0\ndef Mesh \"Patch\"\n{\n    float[] widths = [0.5, 1.5]\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(45), SCENE);
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Patch".into(),
+                name: "widths".into(),
+                type_name: "float[]".into(),
+                value: "[2.5, 3.5, 4.5]".into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetAttribute { value, .. } if value == "[0.5, 1.5]"),
+            "array overwrite must invert to a typed SetAttribute with the prior \
+             array literal, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior array");
+    }
+
     /// Authoring a **brand-new** attribute has no prior value to restore, so it
     /// inverts to the always-correct whole-source snapshot — which also *removes*
     /// the new opinion on undo (something a typed `SetAttribute` cannot express).
@@ -2503,6 +2681,217 @@ mod tests {
             None,
             "undo of a newly-authored attribute removes it"
         );
+    }
+
+    /// One time-sample op at time 5, for the sample-inverse tests.
+    fn time_sample_op(value: &str) -> UsdOp {
+        UsdOp::SetTimeSample {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "lunco:test:t".into(),
+            type_name: "double".into(),
+            time: 5.0,
+            value: value.into(),
+        }
+    }
+
+    /// Overwriting an **existing** time sample inverts to a typed
+    /// `SetTimeSample` carrying the prior value (a brand-new sample already
+    /// inverts to a typed `RemoveTimeSample`); undoing it restores the exact
+    /// prior source.
+    #[test]
+    fn set_time_sample_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(42), TINY_USDA);
+        doc.apply(time_sample_op("1.5")).unwrap();
+        let before = doc.source();
+
+        let inverse = doc.apply(time_sample_op("2.5")).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetTimeSample { value, .. } if value == "1.5"),
+            "overwriting an existing sample must invert to a typed SetTimeSample, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior sample");
+    }
+
+    /// `RemoveTimeSample` inverts to a typed `SetTimeSample` re-authoring the
+    /// removed value — no whole-source snapshot; undoing it restores the sample.
+    #[test]
+    fn remove_time_sample_inverts_to_typed_set_time_sample() {
+        let mut doc = UsdDocument::new(DocumentId::new(43), TINY_USDA);
+        doc.apply(time_sample_op("3.5")).unwrap();
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::RemoveTimeSample {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                name: "lunco:test:t".into(),
+                time: 5.0,
+            })
+            .unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetTimeSample { value, type_name, .. }
+                if value == "3.5" && type_name == "double"),
+            "removing a sample must invert to a typed SetTimeSample, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the removed sample");
+    }
+
+    /// Overwriting an **existing** relationship inverts to a typed
+    /// `SetRelationship` with the prior targets; creating one has no prior list
+    /// to restore, so it inverts to the coarse snapshot — which removes the new
+    /// opinion on undo.
+    #[test]
+    fn set_relationship_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(44), TINY_USDA);
+        let rel = |targets: Vec<String>| UsdOp::SetRelationship {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "material:binding".into(),
+            targets,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(rel(vec!["/World".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "a newly-authored relationship inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(rel(vec![])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetRelationship { targets, .. }
+                if targets == &["/World".to_string()]),
+            "overwriting an existing relationship must invert to a typed SetRelationship, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior targets");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+    }
+
+    /// The `SetRelationship` invariants, for the attribute-connection twin.
+    #[test]
+    fn set_connection_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(45), TINY_USDA);
+        let conn = |sources: Vec<String>| UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "inputs:v".into(),
+            type_name: "float".into(),
+            sources,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(conn(vec!["/World.outputs:v".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "a newly-authored connection inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(conn(vec![])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetConnection { sources, .. }
+                if sources == &["/World.outputs:v".to_string()]),
+            "overwriting an existing connection must invert to a typed SetConnection, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior sources");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+    }
+
+    /// Overwriting an existing (explicit) `apiSchemas` list inverts to a typed
+    /// `SetApiSchemas` with the prior tokens; the first authoring inverts coarse.
+    #[test]
+    fn set_api_schemas_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(46), TINY_USDA);
+        let api = |schemas: Vec<String>| UsdOp::SetApiSchemas {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            schemas,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(api(vec!["PhysicsRigidBodyAPI".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "first apiSchemas authoring inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(api(vec!["PhysicsMassAPI".into()])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetApiSchemas { schemas, .. }
+                if schemas == &["PhysicsRigidBodyAPI".to_string()]),
+            "overwriting an explicit apiSchemas list must invert to a typed SetApiSchemas, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior schema list");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+    }
+
+    /// Re-selecting a variant inverts to a typed `SetVariantSelection` carrying
+    /// the prior selection; the set's first selection inverts coarse (the only
+    /// way to express "unselected").
+    #[test]
+    fn set_variant_selection_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(47), TINY_USDA);
+        let select = |variant: &str| UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            variant_set: "drivetrain".into(),
+            variant: variant.into(),
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(select("raycast")).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "a set's first selection inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(select("physical")).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetVariantSelection { variant, .. } if variant == "raycast"),
+            "re-selecting must invert to a typed SetVariantSelection, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior selection");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+    }
+
+    /// Overwriting an existing payload list inverts to a typed `SetPayload`
+    /// with the prior asset paths; the first authoring inverts coarse.
+    #[test]
+    fn set_payload_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(48), TINY_USDA);
+        let payload = |asset_paths: Vec<String>| UsdOp::SetPayload {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            asset_paths,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(payload(vec!["meshes/hull.usda".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "first payload authoring inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(payload(vec![])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetPayload { asset_paths, .. }
+                if asset_paths == &["meshes/hull.usda".to_string()]),
+            "overwriting an existing payload list must invert to a typed SetPayload, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior payload list");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
     }
 
     #[test]

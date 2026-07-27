@@ -99,6 +99,61 @@ fn undo_covers_verbs_nobody_wrote_undo_code_for() {
 }
 
 #[test]
+fn undo_covers_the_wiring_and_metadata_verbs() {
+    // SetRelationship / SetConnection / SetApiSchemas / SetVariantSelection /
+    // SetPayload each author a brand-new opinion here, so each inverts to the
+    // coarse snapshot (there is no prior list/selection a typed op could
+    // restore — see the typed-inverse tests in `document.rs` for the overwrite
+    // case). Undoing all five must peel every new opinion back off, byte-exact.
+    let mut host = host();
+    let original = host.document().source();
+    let ops = [
+        UsdOp::SetRelationship {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "material:binding".into(),
+            targets: vec!["/World".into()],
+        },
+        UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "inputs:v".into(),
+            type_name: "float".into(),
+            sources: vec!["/World.outputs:v".into()],
+        },
+        UsdOp::SetApiSchemas {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            schemas: vec!["PhysicsRigidBodyAPI".into()],
+        },
+        UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            variant_set: "drivetrain".into(),
+            variant: "raycast".into(),
+        },
+        UsdOp::SetPayload {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            asset_paths: vec!["meshes/hull.usda".into()],
+        },
+    ];
+    for op in ops {
+        host.apply(Mutation::local(op)).expect("op applies");
+    }
+
+    assert_eq!(host.undo_depth(), 5, "five authored ops, five inverses");
+    for _ in 0..5 {
+        assert!(host.undo().expect("undo runs"));
+    }
+    assert_eq!(
+        host.document().source(),
+        original,
+        "undoing every wiring/metadata verb restores the pristine source"
+    );
+}
+
+#[test]
 fn undo_on_a_clean_document_is_a_no_op_not_an_error() {
     let mut host = host();
     assert!(!host.can_undo());

@@ -389,6 +389,7 @@ pub fn raycast_surface(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::DVec3;
     use lunco_terrain_core::{Crater, Craters};
 
     fn flat(res: usize, half: f32) -> Arc<HeightGrid> {

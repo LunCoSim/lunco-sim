@@ -1162,6 +1162,11 @@ fn start_dem_builds(
             } else {
                 tile
             };
+            // Same f32 round-trip the worker bake applies in `finish_bake`:
+            // a native-inline peer and a worker/cache peer must produce
+            // bit-identical heights or their collider quantize lattices
+            // diverge (contact divergence between peers).
+            lunco_terrain_bake::quantize_heights_f32(&mut tile);
             let half_extent = tile.half_extent;
             let res = tile.res;
             // Retain the pristine raster base so a live layer edit re-composes off

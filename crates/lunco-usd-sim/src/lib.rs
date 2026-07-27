@@ -2052,6 +2052,33 @@ fn setup_physical_wheel(
         wheel_tf,
     ));
 
+    // Drivetrain rotor inertia reflected to the axle (`J·ratio²`) — the raycast
+    // twin adds it inside `WheelRaycast::axle_inertia`, so the physical wheel
+    // must carry it too or the realizations spin up at different rates. The
+    // collider-density path can't express it (density scales mass and inertia
+    // together; the reflected term is spin-only), so it is stamped as an
+    // explicit `AngularInertia` whose tire term reproduces the cylinder's own
+    // tensor: about the cylinder axis ½·m·r², transverse m·(3r² + h²)/12 with
+    // h = r/2, in the compound's rotated frame. Same explicit-override pattern
+    // as the chassis proxy-wheel fold in `lunco-mobility`.
+    if params.reflected_inertia > 0.0 {
+        let m = params.mass;
+        let r = params.radius;
+        let i_axle = 0.5 * m * r * r;
+        let i_perp = m * (3.0 * r * r + (r * 0.5) * (r * 0.5)) / 12.0;
+        commands.entity(entity).try_insert((
+            avian3d::prelude::AngularInertia {
+                principal: bevy::math::Vec3::new(
+                    i_perp as f32,
+                    (i_axle + params.reflected_inertia) as f32,
+                    i_perp as f32,
+                ),
+                local_frame: wheel_axis_rot,
+            },
+            avian3d::prelude::NoAutoAngularInertia,
+        ));
+    }
+
     // Spawn the avian joint. Anchors + axis are derived from the wheel's
     // own transform (which mirrors the USD `physics:localPos0` and
     // `physics:axis` of the authored joint, by construction). Reading

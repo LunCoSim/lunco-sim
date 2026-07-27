@@ -444,20 +444,15 @@ impl ModelicaCompiler {
 
     /// Seat a whole library's members as documents, each through the
     /// bound-`input` strip — see [`Self::ensure_root_installed`].
+    /// The strip itself lives in [`Self::load_source_root_in_memory`],
+    /// so every in-memory root shares it.
     fn seat_library_files(
         &mut self,
         id: &str,
         label: &str,
         files: Vec<(String, String)>,
     ) -> rumoca_compile::compile::SourceRootLoadReport {
-        let stripped: Vec<(String, String)> = files
-            .into_iter()
-            .map(|(uri, text)| {
-                let (stripped, _defaults) = crate::ast_extract::strip_input_defaults(&text);
-                (uri, stripped)
-            })
-            .collect();
-        self.load_source_root_in_memory(id, label, stripped)
+        self.load_source_root_in_memory(id, label, files)
     }
 
     /// If a process-wide MSL has been installed, preload it into the
@@ -1020,13 +1015,54 @@ impl ModelicaCompiler {
                     diagnostics: Vec::new(),
                 };
             }
+            // MSL is the one root that stays on the tolerant disk parser:
+            // it is instantiated, not compiled as a top-level target, so
+            // the bound-`input` strip does not apply, and the pre-parsed
+            // bundle path above couldn't strip anyway.
+            return self.session.load_source_root_tolerant(
+                id,
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
+                root_dir,
+                None,
+            );
         }
-        self.session.load_source_root_tolerant(
-            id,
-            rumoca_compile::compile::SourceRootKind::DurableExternal,
-            root_dir,
-            None,
-        )
+        // Every other disk root (twin `models/` trees, system libraries)
+        // holds user classes that can be compile *targets*, so each file
+        // must pass the bound-`input` strip. `load_source_root_tolerant`
+        // parses off disk directly and would skip it (the `within P;`
+        // member trap: rumoca demotes a bound input to an algebraic, the
+        // model loses its runtime input slots and every wire is dropped),
+        // so read the tree here and seat it through the in-memory path.
+        let mut files = Vec::new();
+        let mut stack = vec![root_dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!(
+                        "[ModelicaCompiler] source root `{id}`: cannot read {}: {e}",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "mo") {
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => files.push((path.display().to_string(), text)),
+                        Err(e) => log::warn!(
+                            "[ModelicaCompiler] source root `{id}`: cannot read {}: {e}",
+                            path.display()
+                        ),
+                    }
+                }
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        self.load_source_root_in_memory(id, &root_dir.display().to_string(), files)
     }
 
     /// Merge an in-memory source root (e.g. a bundled `.mo` file or
@@ -1040,6 +1076,12 @@ impl ModelicaCompiler {
     /// (rumoca convention: `"in-memory:<id>"`). `files` is a list
     /// of `(uri, source)` pairs; each `uri` is the filename rumoca
     /// will report errors against.
+    ///
+    /// Every file passes the bound-`input` strip here — this is the
+    /// chokepoint for all in-memory roots (bundled deps, workspace
+    /// files, twin libraries, disk roots read by
+    /// [`Self::load_source_root`]), so no root member can reach the
+    /// compiler with a demotable `input x = default` binding.
     pub fn load_source_root_in_memory(
         &mut self,
         id: &str,
@@ -1049,7 +1091,8 @@ impl ModelicaCompiler {
         let file_count = files.len();
         let mut inserted = 0;
         for (uri, text) in &files {
-            if self.session.add_document(uri, text).is_ok() {
+            let (stripped, _defaults) = crate::ast_extract::strip_input_defaults(text);
+            if self.session.add_document(uri, &stripped).is_ok() {
                 inserted += 1;
             }
         }

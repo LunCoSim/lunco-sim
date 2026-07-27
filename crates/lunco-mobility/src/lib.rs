@@ -463,6 +463,12 @@ pub struct WheelRaycast {
     pub mass: f64,
     /// When `> 0` it overrides the mass-derived `½·m·r²`.
     pub moment_of_inertia: f64,
+    /// Rotor inertia reflected through the gearbox to the axle, kg·m²
+    /// (`J·ratio²`). Added on top of the tire's own inertia in
+    /// [`Self::axle_inertia`] — at high reductions it dominates ½·m·r², which
+    /// is why a geared rover spins up slowly instead of snapping to speed.
+    /// `0` = undriven wheel (castor) or no drivetrain authored.
+    pub reflected_inertia: f64,
     /// (USD `physxVehicleEngine:peakTorque`, required).
     pub drive_torque_max: f64,
     /// the hub in its own right — never inferred from the drive torque.
@@ -513,6 +519,7 @@ impl Default for WheelRaycast {
             spin_velocity: 0.0,
             mass: 0.0,
             moment_of_inertia: 0.0,
+            reflected_inertia: 0.0,
             drive_torque_max: 0.0,
             bearing_damping: 0.0,
             max_rotation_speed: 0.0,
@@ -555,16 +562,19 @@ impl WheelRaycast {
         self.spin_velocity * self.wheel_radius
     }
 
-    /// Rotational inertia of the tire about its axle in kg·m². Uses the
-    /// USD-authored `physxVehicleWheel:moi` when set, else the solid-disk
-    /// estimate `½·m·r²` from mass and radius.
+    /// Rotational inertia about the axle in kg·m²: the tire's own inertia
+    /// (USD-authored `physxVehicleWheel:moi` when set, else the solid-disk
+    /// estimate `½·m·r²` from mass and radius) plus the drivetrain's
+    /// [`reflected rotor inertia`](Self::reflected_inertia).
     #[inline]
     pub fn axle_inertia(&self) -> f64 {
-        if self.moment_of_inertia > 0.0 {
-            return self.moment_of_inertia.max(1e-4);
-        }
-        let r = self.wheel_radius.max(1e-3);
-        (0.5 * self.mass * r * r).max(1e-4)
+        let tire = if self.moment_of_inertia > 0.0 {
+            self.moment_of_inertia
+        } else {
+            let r = self.wheel_radius.max(1e-3);
+            0.5 * self.mass * r * r
+        };
+        (tire + self.reflected_inertia).max(1e-4)
     }
 }
 
