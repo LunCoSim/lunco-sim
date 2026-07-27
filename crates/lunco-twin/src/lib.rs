@@ -110,6 +110,38 @@ pub enum TwinMode {
     Twin(Twin),
 }
 
+/// Twin-relative folder holding the generated runtime overlay — live spawns and
+/// moved transforms, written per document by `lunco_usd::runtime_persistence`.
+///
+/// Hidden, unlike the journal's visible `history/`, because it is a derived,
+/// disposable cache rather than a durable record.
+pub const RUNTIME_SUBDIR: &str = ".lunco/runtime";
+
+/// Is this twin-relative path **session state** rather than twin CONTENT?
+///
+/// One definition, because every consumer that gets this wrong gets it wrong in
+/// a different and expensive way:
+///
+/// * **Scenario sync** — the content plane is content-addressed: a path's CID is
+///   computed at manifest build time and the bytes are assumed immutable until
+///   the next build. A file the running host keeps appending to breaks that
+///   contract; the client fetches it, hashes it, gets a different digest than
+///   the manifest promised, and (correctly) rejects it, forever.
+///   `history/journal.json` is the concrete case — it grows on every authored
+///   edit and is *already* replicated on the journal plane, so shipping it as a
+///   file too was both a duplicate distribution and an unwinnable hash race.
+/// * **Packaging** — `assets/` is itself an open twin, so an ordinary dev run
+///   writes personal session state inside the library we ship. A `.lunco/`
+///   overlay that reaches a release is layered over the authored scene on every
+///   install, and testers then report bugs against someone else's recorded
+///   mouse clicks. The build scripts exclude on this same rule.
+///
+/// Judge the path in its SEMANTIC form — twin-relative, slashed, before any
+/// re-rooting a transport applies.
+pub fn is_runtime_state(twin_rel: &str) -> bool {
+    twin_rel.starts_with(".lunco/") || twin_rel.starts_with("history/")
+}
+
 /// The root folder that owns `file` — the nearest ancestor holding a
 /// `twin.toml`, else the file's own parent directory.
 ///

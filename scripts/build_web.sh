@@ -608,7 +608,12 @@ generate_bindings() {
     # lunica doesn't need this — its models live in the MSL bundle.
     if [ "$binary" = "sandbox" ] && [ -d "$PROJECT_DIR/assets" ]; then
         info "Copying assets/ → $dist_dir/assets/"
-        rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
+        # `.lunco/` (runtime overlay) and `history/` (edit journal) are per-session
+        # state that a dev run writes into `assets/`, which is itself an open twin.
+        # Excluded so a bundle never ships someone's recorded session on top of the
+        # authored scene — the rule is `lunco_twin::is_runtime_state`.
+        rsync -a --delete --exclude='.lunco/' --exclude='history/' \
+            "$PROJECT_DIR/assets/" "$dist_dir/assets/"
 
         # The bundle ships its own file listing. The browser has no `readdir`, so
         # the spawn/shader catalogs cannot discover `*.usda`/`*.wgsl` by walking —

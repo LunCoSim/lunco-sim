@@ -44,10 +44,19 @@ struct BodyImageryDecl {
     naif_id: i32,
 }
 
-/// Datasets already bound, by NAIF id — so the scan is a no-op after the first
-/// frame that finds each one, and a re-bind never churns the tile set.
+/// Globes already dressed — so the scan is a no-op after the first frame that
+/// finds each one, and a re-bind never churns the tile set.
+///
+/// Keyed on the GLOBE ENTITY, not on the NAIF id. Keying on the id made this a
+/// scene-lifetime fact stored in a world-lifetime resource: teardown despawns
+/// every globe (`teardown_celestial_when_undeclared`) but could not despawn a
+/// number in a `Vec`, so the next scene's Earth was skipped as "already bound"
+/// and rendered ocean blue forever — visible only when a session loaded a second
+/// celestial scene, which is why the sandbox always looked right. An entity is
+/// the thing that actually dies, so the memo now dies with it and no teardown
+/// has to remember this resource exists.
 #[derive(Resource, Default)]
-pub(crate) struct BoundBodyImagery(Vec<i32>);
+pub(crate) struct BoundBodyImagery(bevy::platform::collections::HashSet<Entity>);
 
 /// Imagery requests that are still being decoded by Bevy's asset pipeline.
 ///
@@ -89,7 +98,7 @@ fn bind_albedo(
 /// Adopt a body map AUTHORED on the body prim
 /// (`asset lunco:body:albedoMap = @…@`) onto that body's globe.
 ///
-/// Beats the dataset default and is not beaten by it: the naif id is recorded
+/// Beats the dataset default and is not beaten by it: the globe is recorded
 /// in [`BoundBodyImagery`], so a dataset installed later leaves an
 /// author's choice alone. Scene content outranks an engine-wide default —
 /// the same rule `adopt_authored_body_look` follows for full Materials, which
@@ -101,22 +110,20 @@ pub(crate) fn adopt_authored_body_albedo(
     >,
     asset_server: Res<AssetServer>,
     mut bound: ResMut<BoundBodyImagery>,
-    mut q_globes: Query<(&CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
+    mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
     for (decl, albedo) in &q_decl {
-        let Some((_, mut lod, tiles)) = q_globes
+        let Some((globe, _, mut lod, tiles)) = q_globes
             .iter_mut()
-            .find(|(body, _, _)| body.ephemeris_id == decl.naif)
+            .find(|(_, body, _, _)| body.ephemeris_id == decl.naif)
         else {
             continue; // globe not built yet — `Changed` still holds next frame
         };
         let image = asset_server.load(albedo.asset.clone());
         lod.look = bind_albedo(&lod.look, image);
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
-        if !bound.0.contains(&decl.naif) {
-            bound.0.push(decl.naif);
-        }
+        bound.0.insert(globe);
         info!(
             "[celestial] body {} took the imagery authored on its prim ({})",
             decl.naif, albedo.asset
@@ -176,10 +183,14 @@ pub(crate) fn bind_dataset_body_imagery(
     asset_server: Res<AssetServer>,
     mut bound: ResMut<BoundBodyImagery>,
     mut pending: ResMut<PendingBodyImagery>,
-    mut q_globes: Query<(&CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
+    mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
     let Some(registry) = registry else { return };
+    // Forget globes that no longer exist, so a long session that loads many
+    // scenes does not accumulate dead ids. Before the empty check: the
+    // torn-down world is exactly when there is most to forget.
+    bound.0.retain(|globe| q_globes.contains(*globe));
     if q_globes.is_empty() {
         return;
     }
@@ -190,16 +201,18 @@ pub(crate) fn bind_dataset_body_imagery(
         let Some(naif_id) = declared_body(entry) else {
             continue;
         };
-        if bound.0.contains(&naif_id) || pending.0.iter().any(|request| request.naif_id == naif_id)
-        {
+        if pending.0.iter().any(|request| request.naif_id == naif_id) {
             continue;
         }
-        let Some((_, _lod, _tiles)) = q_globes
+        let Some((globe, _, _lod, _tiles)) = q_globes
             .iter_mut()
-            .find(|(body, _, _)| body.ephemeris_id == naif_id)
+            .find(|(_, body, _, _)| body.ephemeris_id == naif_id)
         else {
             continue; // body not in this scene — nothing to dress
         };
+        if bound.0.contains(&globe) {
+            continue;
+        }
 
         // The URI, not the path: `lunco://` searches the packed cache and the
         // shared pool in turn, so this one string resolves the same whether the
@@ -224,17 +237,23 @@ pub(crate) fn bind_dataset_body_imagery(
             still_loading.push(request);
             continue;
         }
-        let Some((_, mut lod, tiles)) = q_globes
+        let Some((globe, _, mut lod, tiles)) = q_globes
             .iter_mut()
-            .find(|(body, _, _)| body.ephemeris_id == request.naif_id)
+            .find(|(_, body, _, _)| body.ephemeris_id == request.naif_id)
         else {
             continue;
         };
+        // The globe may have been replaced while the raster decoded, and the new
+        // one may already carry an authored map — content still outranks the
+        // dataset default.
+        if bound.0.contains(&globe) {
+            continue;
+        }
 
         let naif_id = request.naif_id;
         lod.look = bind_albedo(&lod.look, request.image);
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
-        bound.0.push(naif_id);
+        bound.0.insert(globe);
         info!(
             "[celestial] body {naif_id} took its ready imagery from dataset '{}'",
             request.dataset_key

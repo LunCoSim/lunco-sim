@@ -172,13 +172,22 @@ resolve_cache_dir() {
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash> no-delete
 #
 # The trailing-slash convention matches rsync: "src/" = contents-of-src.
+#
+# NEVER copies per-session runtime state, whatever the source tree. `assets/` is
+# itself an open twin, so an ordinary dev run writes `.lunco/runtime/<scene>.usda`
+# (live spawns + moved transforms) and `history/` (the edit journal) inside the
+# very tree we package. A `.gitignore` entry stops those reaching git; it does
+# NOT stop them reaching a bundle, because packaging copies the WORKING TREE —
+# so a nightly cut on a machine that had ever driven a rover shipped that
+# session, layered over the authored scene on every install. The rule is
+# `lunco_twin::is_runtime_state`; keep the two in step.
 sync_dir() {
     local src="$1" dest="$2" no_delete="${3:-}"
     if command -v rsync &>/dev/null; then
         if [ "$no_delete" = "no-delete" ]; then
-            rsync -a "$src" "$dest"
+            rsync -a --exclude='.lunco/' --exclude='history/' "$src" "$dest"
         else
-            rsync -a --delete "$src" "$dest"
+            rsync -a --delete --exclude='.lunco/' --exclude='history/' "$src" "$dest"
         fi
     else
         # cp -r fallback (Windows Git Bash). No trailing slash semantics —
@@ -207,6 +216,9 @@ sync_dir() {
                 return 1
             }
         fi
+        # `cp` has no --exclude, so the copy is pruned after the fact. Same rule
+        # as the rsync branch above; a bundle must not carry session state.
+        find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
     fi
 }
 

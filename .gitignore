@@ -28,3 +28,19 @@ node_modules/
 
 # graphify generated outputs
 graphify-out/
+
+# Per-session runtime state written INTO a twin, and never content:
+#   .lunco/runtime/ — the generated runtime overlay (live spawns + moved
+#     transforms), written by `lunco_usd::runtime_persistence`
+#
+# The code predicate also covers `history/` (the edit journal, already
+# replicated on its own plane). It is deliberately NOT ignored here: nothing
+# under it is tracked today, and a bare `history/` pattern would swallow any
+# directory of that name anywhere in the tree.
+#
+# `assets/` is itself an open twin, so an ordinary dev run writes personal
+# session state inside the library we ship. A tracked overlay is layered over
+# the authored scene on every install that receives it, which means testers
+# report bugs against someone else's recorded mouse clicks. The same predicate
+# lives in code as `lunco_usd::is_runtime_state` — keep the two in step.
+.lunco/

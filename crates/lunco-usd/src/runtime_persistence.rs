@@ -39,7 +39,12 @@ use lunco_doc_bevy::DocumentRegistry;
 /// (the durable, replayable edit log, kept in the visible `history/` folder), the
 /// runtime overlay is a derived, disposable cache of live spawns/moves — so it
 /// stays hidden under `.lunco/`.
-const RUNTIME_SUBDIR: &str = ".lunco/runtime";
+///
+/// The constant lives in `lunco-twin` alongside
+/// [`is_runtime_state`](lunco_twin::is_runtime_state), the predicate that keeps
+/// this directory out of scenario sync and out of release bundles. Writer and
+/// excluders must not be able to drift apart.
+use lunco_twin::RUNTIME_SUBDIR;
 
 /// `<twin-root>/.lunco/runtime/<scene-rel>` for a document whose file lives
 /// inside an open twin; `None` for untitled docs or files outside every open

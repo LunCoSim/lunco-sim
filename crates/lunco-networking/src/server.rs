@@ -1114,22 +1114,14 @@ struct ScenarioBuildInput {
 
 /// Live-mutating host state that must NOT ride the content plane.
 ///
-/// The content plane is content-addressed: a path's CID is computed at manifest
-/// build time and the bytes are assumed immutable until the next build. Files the
-/// running host keeps appending to break that contract — the client fetches them,
-/// hashes them, gets a different digest than the manifest promised, and (correctly)
-/// rejects them, forever.
+/// Defined once in [`lunco_twin::is_runtime_state`] — see there for why. It used
+/// to live here, which meant the *packaging* scripts had no way to ask the same
+/// question and shipped `.lunco/` into releases.
 ///
-/// `history/journal.json` is the concrete case: it grows on every authored edit, and
-/// it is **already replicated on the journal plane** (`full_journal_msgs` on connect
-/// + `broadcast_journal_entries` thereafter). Shipping it as a file too was both a
-/// duplicate distribution and an unwinnable hash race. `.lunco/` is the same class
-/// of thing (runtime overlay / scratch), never scenario content.
-fn is_runtime_state(rel_path: &str) -> bool {
-    rel_path.starts_with(".lunco/")
-        || rel_path == "history/journal.json"
-        || rel_path.starts_with("history/")
-}
+/// `history/journal.json` is the concrete case for this caller: it grows on every
+/// authored edit and is **already replicated on the journal plane**
+/// (`full_journal_msgs` on connect + `broadcast_journal_entries` thereafter).
+use lunco_twin::is_runtime_state;
 
 /// Main-thread step: walk the Twin tree and resolve the file list — path joins,
 /// extension→media-type, and **path dedup** only, no file I/O. A parent Twin's
