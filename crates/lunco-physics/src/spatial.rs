@@ -85,7 +85,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !render_origin.is_finite() {
+        if !render_origin.0.is_finite() {
             return None;
         }
         self.spatial.cast_ray(

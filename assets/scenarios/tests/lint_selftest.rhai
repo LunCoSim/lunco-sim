@@ -166,5 +166,77 @@ fn on_tick(me) {
         "collision-group-filter-not-a-group fired " + bad_filter.len() + " time(s), " +
         "expected exactly 1 (/LintSelftest/GhostGroup filters against a body)"));
 
+    // ── THE ELECTRICAL ISLAND REFERENCE RULES ───────────────────────────────
+    // A LunCo electrical device carries one `Pin` and there is no `Ground`, so the
+    // node potential is set by whichever member states `p.v`. Zero of them leaves
+    // `v` free and the DAE structurally singular; two over-determine the node.
+    // Both compile. Neither is reported by the solver as what it is — the first
+    // surfaces as an unrelated member's current failing to solve, the second as an
+    // island that publishes nothing — which is why they are lint rules at all, and
+    // why they are asserted BY SUBJECT here.
+
+    let no_ref = by_rule(findings, "electrical-island-has-no-reference");
+    f.push(t_true(mentions(no_ref, "/LintSelftest/PanelOnlyNetwork"),
+        "electrical-island-has-no-reference never named /LintSelftest/PanelOnlyNetwork " +
+        "— a solar panel alone on a bus is a current source with nothing setting the " +
+        "node voltage, which is the exact island this rule exists to catch"));
+    // Asserted by subject rather than by count because `/LintSelftest/DanglingElectrical`
+    // — a lone DCMotor, authored for the dangling-connector rule — is reference-less
+    // for the same real reason and trips this too. That is a true positive, not
+    // double-reporting: the same stage being wrong in two ways is two findings.
+    f.push(t_true(mentions(no_ref, "/LintSelftest/DanglingElectrical"),
+        "electrical-island-has-no-reference skipped /LintSelftest/DanglingElectrical, " +
+        "which is a lone motor on a bus — if the rule only fires on panels it is " +
+        "matching the device rather than the missing reference"));
+    if no_ref.len() > 0 {
+        f.push(t_true(no_ref[0].severity == "error",
+            "electrical-island-has-no-reference is severity " + no_ref[0].severity +
+            ", expected error — a structurally singular island never publishes a port"));
+    }
+
+    // A built-in `info:id` program that authors `connectors:p`
+    // (`/LintSelftest/InvalidProgramNetwork`) contributes no equations at all and is
+    // already reported by `invalid-network-program-source`. Calling it a
+    // reference-less electrical island would be a second, wronger diagnosis of one
+    // prim, so the rule requires a `.mo` source — and this pins that.
+    f.push(t_true(!mentions(no_ref, "/LintSelftest/InvalidProgramNetwork"),
+        "electrical-island-has-no-reference named /LintSelftest/InvalidProgramNetwork, " +
+        "whose only member is a built-in kernel with no Modelica source — it is not " +
+        "an electrical island and already has its own finding"));
+
+    let over = by_rule(findings, "electrical-island-over-determined");
+    f.push(t_true(over.len() == 1,
+        "electrical-island-over-determined fired " + over.len() + " time(s), expected " +
+        "exactly 1 (/LintSelftest/TwoBatteryNetwork, two devices each stating p.v)"));
+    if over.len() == 1 {
+        f.push(t_true(over[0].subject == "/LintSelftest/TwoBatteryNetwork",
+            "electrical-island-over-determined named " + over[0].subject +
+            ", expected the two-battery network"));
+    }
+
+    // ONE NODE IS THE PREMISE, and `/LintSelftest/DisconnectedElectrical` is the
+    // fixture that proves the rule knows it: two batteries in one scope, but on two
+    // DISCONNECTED islands, so each pins its own node and neither is
+    // over-determined. Counting per scope instead of per node flags it — MEASURED,
+    // before `island_count` gated the rule. The split itself is already an error
+    // from `disconnected-component-network`; saying it twice, wrongly, is worse
+    // than saying it once.
+    f.push(t_true(!mentions(over, "/LintSelftest/DisconnectedElectrical"),
+        "electrical-island-over-determined named /LintSelftest/DisconnectedElectrical, " +
+        "whose two batteries sit on two disconnected nodes — one source each, which " +
+        "is correct. The rule is counting per scope where it must count per node"));
+
+    // THE FALSE-POSITIVE GUARD, and the one that matters most: one battery plus one
+    // motor, connected, both collected — the shape of every shipped rover's
+    // `Electrical` scope. A rule that cannot stay silent here fires on the fleet.
+    f.push(t_true(!mentions(findings, "/LintSelftest/HealthyElectrical"),
+        "a finding names /LintSelftest/HealthyElectrical — one voltage source and one " +
+        "current-stating load is a CORRECT island, and a rule that flags it flags " +
+        "every rover we ship"));
+    f.push(t_true(!mentions(findings, "/LintSelftest/HealthyBattery"),
+        "a finding names /LintSelftest/HealthyBattery, a correctly collected member"));
+    f.push(t_true(!mentions(findings, "/LintSelftest/HealthyMotor"),
+        "a finding names /LintSelftest/HealthyMotor, a correctly collected member"));
+
     report_verdict(f, "LINT SELFTEST", "LINT_SELFTEST");
 }

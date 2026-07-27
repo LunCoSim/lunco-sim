@@ -348,6 +348,98 @@ def Xform "LintSelftest" (
         prepend rel collection:components:includes = [</LintSelftest/MultiSourceLoad>]
     }
 
+    # ── ELECTRICAL ISLAND REFERENCE FIXTURES ────────────────────────────────
+    # LunCo's electrical devices carry ONE `Pin` and there is no `Ground`: the bus
+    # node is the reference, so exactly one member must state `p.v` and every other
+    # must state its current against it. Zero leaves `v` free (structurally
+    # singular); two over-determine it. Both compile, and NEITHER is reported by the
+    # solver as what it is — which is the entire reason they are lint rules, and
+    # the reason they need fixtures here rather than a unit test on the policy.
+
+    # Zero voltage sources: a panel alone on a bus. A photovoltaic module is a
+    # CURRENT source, so nothing here pins the node.
+    def Scope "LonePanel" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+        custom token connectors:p
+    }
+
+    def Scope "PanelOnlyNetwork" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</LintSelftest/LonePanel>]
+    }
+
+    # Two voltage sources on one node. Each states `p.v`, so the node has two
+    # equations and one unknown.
+    def Scope "TwinBatteryA" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p.connect = </LintSelftest/TwinBatteryB.connectors:p>
+    }
+
+    def Scope "TwinBatteryB" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+
+    def Scope "TwoBatteryNetwork" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </LintSelftest/TwinBatteryA>,
+            </LintSelftest/TwinBatteryB>,
+        ]
+    }
+
+    # ── THE CONTROL ─────────────────────────────────────────────────────────
+    # One battery (states `p.v`) and one motor (states `p.i`), connected, both in
+    # the collection: the shape every shipped rover's `Electrical` scope has. A rule
+    # that cannot stay silent here fires on the whole fleet, so the scenario asserts
+    # that NO finding names any of these three prims.
+    def Scope "HealthyBattery" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+
+    def Scope "HealthyMotor" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        custom token connectors:p.connect = </LintSelftest/HealthyBattery.connectors:p>
+    }
+
+    def Scope "HealthyElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </LintSelftest/HealthyBattery>,
+            </LintSelftest/HealthyMotor>,
+        ]
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "lint-selftest"
