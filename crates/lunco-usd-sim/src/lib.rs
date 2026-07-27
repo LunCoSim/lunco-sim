@@ -2003,19 +2003,21 @@ fn setup_physical_wheel(
         // `physics:dynamicFriction` on the tyre (`UsdPhysicsMaterialAPI`, core
         // UsdPhysics), alongside the tyre's own `lunco:tire:frictionCoefficient`.
         //
-        // TWO friction numbers on one tyre is not a duplication. 0.8 is the tyre's
-        // Coulomb μ and the raycast model applies it exactly — it saturates its
-        // patch force at μ·N. The physical wheel's cone is negotiated by avian's
-        // XPBD contact solver instead, which under sustained sliding delivers well
-        // under nominal: authoring the honest 0.8 here costs the physical rover 30%
-        // of its terminal speed against its raycast twin. So the solver gets its own
-        // authored coefficient, and the gap between the two is a property of the
-        // engine rather than of the rubber. The sweep is recorded in
+        // TWO friction numbers on one tyre is not a duplication.
+        // `lunco:tire:frictionCoefficient` is the tyre's Coulomb μ and the raycast
+        // model applies it exactly — it saturates its patch force at μ·N. The
+        // physical wheel's cone is negotiated by avian's XPBD contact solver
+        // instead, which under sustained sliding delivers well under nominal:
+        // authoring the honest μ here costs the physical rover ~30% of its terminal
+        // speed against its raycast twin. So the solver gets its own authored
+        // coefficient, related to μ by `2·(μ / 0.55) − ground_μ`, and the gap
+        // between the two is a property of the engine rather than of the rubber.
+        // The sweep it was measured with is recorded in
         // `components/mobility/tires/regolith.usda`.
         //
         // Default combine rule (Average, against the ground material): that is what
-        // the 0.9 was measured against, and `Min` would let the tyre's number be
-        // overridden by any ground softer than it.
+        // the relation above is written against, and `Min` would let the tyre's
+        // number be overridden by any ground softer than it.
         Friction::new(params.contact_friction),
         // BEARING DRAG IS AUTHORED, in the wheel's own units. Was
         // `AngularDamping(0.3)` — again a Rust constant, and again one the raycast

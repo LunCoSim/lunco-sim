@@ -30,9 +30,11 @@ over "Tire" (
     float physxVehicleTire:longitudinalStiffness = 14000.0
     double lunco:tire:frictionCoefficient = 1.1
     # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
-    # tyre carries two friction numbers and where the 0.619/0.55 ratio comes from.
-    float physics:dynamicFriction = 1.238
-    float physics:staticFriction = 1.238
+    # tyre carries two friction numbers and for the relation that sets this one:
+    # `solver = 2·(μ / 0.55) − 1`. The flat 1.125·μ this replaces delivered an
+    # effective ~0.62 against an authored 1.1 on a physical drivetrain.
+    float physics:dynamicFriction = 3.0
+    float physics:staticFriction = 3.0
     # A rigid compound corners as stiffly as it drives — no soil shear to soften
     # it, so the side force is up against the (lower) friction cone almost at
     # once. Stiff and slippery is a real combination: it holds a line precisely

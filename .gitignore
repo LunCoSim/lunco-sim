@@ -44,3 +44,4 @@ graphify-out/
 # report bugs against someone else's recorded mouse clicks. The same predicate
 # lives in code as `lunco_usd::is_runtime_state` — keep the two in step.
 .lunco/
+.tmpdir/

@@ -156,6 +156,10 @@ pub(crate) fn apply_translates_live(
     };
     for (path, v) in translates {
         let Some(entity) = find_live_entity(world, id, &path) else {
+            // Named, because the silent version of this is "the edit journalled and
+            // saved but nothing moved": an authored translate for a prim this stage
+            // projects no entity for.
+            debug!("[usd] translate {path} → {v:?}: no live entity on this stage");
             continue;
         };
         seat_authored_translate(world, entity, v);
@@ -189,6 +193,14 @@ fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
                 tf.translation = local;
             }
             e.insert(cell);
+            // NOTE: a prim that carries a rigid body owns its pose in avian's
+            // `Position`, and avian syncs `Position` → `Transform`, not the reverse —
+            // so for those prims this seat is overwritten on the next physics tick.
+            // The fix does NOT belong here: this crate is deliberately physics-free
+            // (avian is a dev-dependency only), so re-seating a body is
+            // `lunco-usd-sim`'s to own, next to the rest of its avian mapping. A
+            // waypoint marker is not a body, so the path this was found on is
+            // covered; a scripted move of a bodied prim is not, yet.
         }
         None => {
             if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
@@ -573,6 +585,38 @@ pub(crate) fn reconcile_structural_live(
                 };
                 lunco_usd_sim::cosim::spawn_usd_child_with_translate(world, id, path, tf);
             }
+            // ALREADY LIVE, AND RESYNCED — not "nothing to do".
+            //
+            // `CanonicalStage::author_translate` writes `xformOp:translate` AND
+            // appends to `xformOpOrder`, which is a UNIFORM token array: openusd
+            // reports that as a RESYNC of the prim rather than an info-only
+            // attribute change, so the move can arrive here with its `info_only`
+            // list empty and [`apply_translates_live`] never runs for it. The
+            // entity then sits where it was: `UsdOp::SetTranslate` journalled,
+            // saved and replicated, with nothing moving on screen — which is what
+            // the waypoint context menu's `Move` did, and what any scripted or
+            // API-driven move of an already-spawned prim does.
+            //
+            // Re-seating the composed translate is idempotent (re-applying the
+            // value a prim is already at is a no-op — pinned by
+            // `re_seating_the_current_position_does_not_move_the_prim`), so this
+            // costs one attribute read on the rare structural resync and cannot
+            // fight the gizmo, whose drag has ended by the time it authors.
+            (true, Some(entity)) => {
+                let v = {
+                    let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+                        return;
+                    };
+                    stages
+                        .get(id)
+                        .and_then(|cs| {
+                            lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
+                        })
+                };
+                if let Some(v) = v {
+                    seat_authored_translate(world, entity, v);
+                }
+            }
             _ => {}
         }
     }
@@ -583,6 +627,94 @@ mod tests {
     use super::*;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    /// **Moving an ALREADY-LIVE prim must move its entity.** Authoring
+    /// `xformOp:translate` onto the live stage — the exact call
+    /// `twin_projection::apply_incremental_op_to_stage` makes when it replays a
+    /// `UsdOp::SetTranslate` — has to reach the projected `Transform`.
+    ///
+    /// Pinned because the failure is silent and looks like nothing happened: the
+    /// op journals, saves and replicates while the object stays put. It is what
+    /// the waypoint menu's `Move` hit, and it is invisible to the gizmo (whose
+    /// drag moves the ECS first and authors afterwards, so its visual never came
+    /// from this path at all).
+    ///
+    /// Whichever half of the sink reports the edit — `info_only` (attribute
+    /// value) or `resynced` (the uniform `xformOpOrder` the same call appends
+    /// to) — [`project_stage_changes`] must land the new value.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn authoring_a_translate_moves_an_already_live_entity() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>();
+
+        let recipe = StageRecipe::from_source("scene.usda", TINY);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset {
+                recipe: Some(recipe.clone()),
+            });
+        let id = handle.id();
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_or_build(id, &recipe)
+            .expect("stage builds");
+
+        // A prim that is already on the stage AND already projected — the state a
+        // second `SetTranslate` finds (the first one placed it at spawn).
+        {
+            let stages = app.world().non_send::<CanonicalStages>();
+            let cs = stages.get(id).unwrap();
+            cs.stage()
+                .define_prim("/World/Pin")
+                .unwrap()
+                .set_type_name("Xform")
+                .unwrap();
+            cs.projector()
+                .author_translate(&SdfPath::new("/World/Pin").unwrap(), [1.0, 0.0, 2.0])
+                .expect("initial translate authors");
+        }
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
+
+        let pin = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle.clone(),
+                    path: "/World/Pin".into(),
+                },
+                Transform::from_translation(Vec3::new(1.0, 0.0, 2.0)),
+            ))
+            .id();
+
+        // THE MOVE.
+        {
+            let stages = app.world().non_send::<CanonicalStages>();
+            stages
+                .get(id)
+                .unwrap()
+                .projector()
+                .author_translate(&SdfPath::new("/World/Pin").unwrap(), [5.0, 0.0, 7.0])
+                .expect("move authors");
+        }
+        project_stage_changes(app.world_mut());
+
+        let landed = app.world().get::<Transform>(pin).unwrap().translation;
+        assert!(
+            (landed - Vec3::new(5.0, 0.0, 7.0)).length() < 1e-4,
+            "authored move must reach the live entity: Transform is {landed:?}, \
+             authored (5, 0, 7)"
+        );
+    }
 
     /// Step-1 projection bridge, end to end: authoring a prim **onto the live
     /// `CanonicalStage`** fires its openusd change sink, and

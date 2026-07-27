@@ -19,9 +19,14 @@ over "Tire" (
 {
     double lunco:tire:frictionCoefficient = 0.8
     # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
-    # tyre carries two friction numbers and where the 0.45/0.4 ratio comes from.
-    float physics:dynamicFriction = 0.9
-    float physics:staticFriction = 0.9
+    # tyre carries two friction numbers and for the relation that sets this one:
+    # `solver = 2·(μ / 0.55) − 1`. It was 0.9 (a flat 1.125·μ), which is not that
+    # relation: through avian's Average-with-ground and its ~55% delivery under
+    # sliding, 0.9 lands an effective ~0.52 against an authored 0.8 — a physical
+    # drivetrain on this tyre had a third less grip than the analytic model it is
+    # supposed to match, so it span its wheels where its raycast twin drove.
+    float physics:dynamicFriction = 1.91
+    float physics:staticFriction = 1.91
 
     # The look states the grip: tread gone — a smooth, dusty drum.
     over "TireLook"
