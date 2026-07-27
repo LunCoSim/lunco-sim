@@ -87,7 +87,10 @@ pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBody
 pub use plugin::TerrainSurfacePlugin;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use surface_query::{
-    assert_dem_frame, fit_footprint, height_in_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit,
+    fit_footprint, height_in_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit,
+};
+pub use surface_query::{
+    report_unreachable_dem_frame,
 };
 pub use stream_viz::{
     DemHeightField, LodFrozen, LodTiles, SetTerrainLod, TerrainLodConfig, TerrainLodViz,

@@ -262,44 +262,61 @@ pub fn fit_footprint(
     }
 }
 
-/// The invariant everything above rests on, checked instead of merely asserted
-/// in prose: a DEM terrain is a grid-direct child at the origin cell with an
-/// identity transform, so **oracle coordinates are world-grid coordinates**.
+/// Report a terrain whose own transform can never reach its streamed surface.
 ///
-/// Authoring a translate on a terrain prim used to be silently half-honoured —
-/// the streamed tiles ignore it (they place themselves from the oracle), the
-/// static mesh follows it, and every analytic query disagreed with both. Rather
-/// than teach four subsystems to compose a transform nobody can honour
-/// consistently, the frame is fixed and a violation is reported at the moment it
-/// is introduced.
-pub fn assert_dem_frame(
+/// The frame contract is narrower than "the terrain entity is at the origin",
+/// which is what an earlier version of this check asserted — and which is FALSE
+/// for any site-anchored scene: the celestial site anchor legitimately places a
+/// terrain at a real lunar pose (the Apollo 15 twin lands at cell
+/// `(779, 381, -49)` with a surface-aligned rotation).
+///
+/// What is actually true is narrower and stranger: [`crate::stream_viz::spawn_tile`]
+/// spawns every LOD tile as `ChildOf(grid)` with its own `CellCoord`, derived
+/// from `oracle.height_at(...)`. The streamed surface therefore lives in the GRID
+/// frame and does NOT inherit the terrain entity's transform. So for a
+/// tile-streamed terrain the oracle frame is right by construction, whatever pose
+/// the entity has.
+///
+/// A terrain WITHOUT tile streaming is different: its static mesh is a child of
+/// the entity and does follow that transform, so a non-identity pose puts the
+/// drawn surface somewhere the oracle cannot describe — and every analytic query
+/// (placement, waypoints, sensors) then disagrees with what the user sees. That
+/// case, and only that case, is worth a word.
+///
+/// Reports; never panics. A wrong frame is a visible bug, not a reason to take
+/// the process down — the previous `debug_assert` here killed the app on a
+/// perfectly ordinary site-anchored twin.
+pub fn report_unreachable_dem_frame(
     added: Query<
-        (Entity, &Transform, Option<&big_space::prelude::CellCoord>),
+        (
+            Entity,
+            &Transform,
+            bevy::ecs::query::Has<crate::stream_viz::TerrainLodViz>,
+        ),
         Added<DemHeightField>,
     >,
     names: Query<&Name>,
 ) {
-    for (entity, transform, cell) in added.iter() {
-        let offset = transform.translation.length();
-        let cell_ok = cell.is_none_or(|c| *c == big_space::prelude::CellCoord::default());
-        if offset > 1e-3 || !cell_ok || transform.rotation != Quat::IDENTITY {
-            let name = names
-                .get(entity)
-                .map(|n| n.as_str().to_string())
-                .unwrap_or_else(|_| format!("{entity}"));
-            error!(
-                "[terrain-frame] DEM terrain '{name}' is not grid-identity \
-                 (translation {:?}, rotation {:?}, cell {:?}) — the surface oracle is \
-                 GRID-ABSOLUTE by contract (see `surface_query`), so a transformed \
-                 terrain makes the analytic surface disagree with its own streamed \
-                 tiles and colliders. Author the elevation in the DEM, not on the prim.",
-                transform.translation, transform.rotation, cell,
-            );
-            debug_assert!(
-                false,
-                "DEM terrain must be grid-direct with an identity transform"
-            );
+    for (entity, transform, streams_tiles) in added.iter() {
+        if streams_tiles {
+            continue;
         }
+        let moved = transform.translation.length() > 1e-3 || transform.rotation != Quat::IDENTITY;
+        if !moved {
+            continue;
+        }
+        let name = names
+            .get(entity)
+            .map(|n| n.as_str().to_string())
+            .unwrap_or_else(|_| format!("{entity}"));
+        warn!(
+            "[terrain-frame] static-mesh DEM terrain '{name}' carries a transform \
+             (translation {:?}, rotation {:?}) that its surface oracle does not: the \
+             oracle is GRID-ABSOLUTE (see `surface_query`), so placement, waypoints \
+             and sensors will disagree with the drawn mesh by exactly that offset. \
+             Enable tile streaming (`lunco:layer:lodViz`) or author the pose into the DEM.",
+            transform.translation, transform.rotation,
+        );
     }
 }
 

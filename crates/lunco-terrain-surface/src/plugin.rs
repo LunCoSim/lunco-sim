@@ -103,7 +103,7 @@ impl Plugin for TerrainSurfacePlugin {
         // coordinates (`crate::surface_query`). Checked when a terrain appears,
         // not assumed in a comment — an authored transform on a terrain prim is
         // honoured by no two subsystems the same way.
-        app.add_systems(Update, crate::surface_query::assert_dem_frame);
+        app.add_systems(Update, crate::surface_query::report_unreachable_dem_frame);
         // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
         // Inert unless a DEM is built with `collider_ring`; then it replaces the
         // static collider with deterministic per-tile colliders streamed around the

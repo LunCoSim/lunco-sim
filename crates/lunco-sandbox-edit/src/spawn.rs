@@ -729,24 +729,46 @@ mod tests {
 
     #[test]
     fn physics_surface_is_valid_when_no_dem_is_loaded() {
-        let origin = DVec3::new(10.0, 20.0, 30.0);
-        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, None, Some(7.5))
+        let origin = GridPos(DVec3::new(10.0, 20.0, 30.0));
+        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, None, Some(7.5), None)
             .expect("a collider hit must place without terrain");
 
-        assert_eq!(hit.point, DVec3::new(10.0, 12.5, 30.0));
+        assert_eq!(hit.point.0, DVec3::new(10.0, 12.5, 30.0));
         assert!(!hit.terrain_primary);
         assert_eq!(hit.physics_distance, Some(7.5));
     }
 
     #[test]
     fn nearer_physics_surface_beats_terrain() {
-        let origin = DVec3::ZERO;
-        let terrain_point = DVec3::new(0.0, -12.0, 0.0);
-        let hit =
-            resolve_cursor_surface(origin, DVec3::NEG_Y, Some((12.0, terrain_point)), Some(3.0))
-                .expect("one of the surfaces must win");
+        let origin = GridPos(DVec3::ZERO);
+        let terrain = lunco_terrain_surface::SurfaceHit {
+            point: GridPos(DVec3::new(0.0, -12.0, 0.0)),
+            distance: 12.0,
+            terrain: Entity::PLACEHOLDER,
+        };
+        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, Some(terrain), Some(3.0), None)
+            .expect("one of the surfaces must win");
 
-        assert_eq!(hit.point, DVec3::new(0.0, -3.0, 0.0));
+        assert_eq!(hit.point.0, DVec3::new(0.0, -3.0, 0.0));
         assert!(!hit.terrain_primary);
+    }
+
+    /// Placement at a REAL site elevation: the surface is ~1.9 km below the body
+    /// datum, and the resolved point must be the terrain's own grid-absolute
+    /// point — not a value derived by pushing it through any entity transform.
+    #[test]
+    fn terrain_surface_at_site_elevation_is_grid_absolute() {
+        const SITE: f64 = -1931.0;
+        let origin = GridPos(DVec3::new(-380.0, SITE + 60.0, -380.0));
+        let terrain = lunco_terrain_surface::SurfaceHit {
+            point: GridPos(DVec3::new(-380.0, SITE, -380.0)),
+            distance: 60.0,
+            terrain: Entity::PLACEHOLDER,
+        };
+        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, Some(terrain), None, None)
+            .expect("the analytic surface must place with no collider present");
+
+        assert!(hit.terrain_primary);
+        assert_eq!(hit.point.0.y, SITE);
     }
 }
