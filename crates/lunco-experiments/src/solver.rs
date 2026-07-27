@@ -192,11 +192,24 @@ fn satisfies(spec: &SolverSpec, req: &SolverRequest) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `spec` serves a predicted model ONLY through the A4 concession —
+/// i.e. it is not fixed-step deterministic and is eligible purely because it
+/// declares [`SolverCaps::realtime_tolerated`].
+///
+/// A FACT about the selection, computed where the selection is made. Client
+/// prediction on a backend whose substep is error-adapted is peers disagreeing
+/// by construction, so a caller that puts a model on one is entitled to know;
+/// declaring the gap in the registry only documents it, it does not report it.
+/// Returns false for any non-predicted profile, where the bar does not apply.
+pub fn served_by_concession(spec: &SolverSpec, profile: &RuntimeProfile) -> bool {
+    profile.predicted && !(spec.caps.fixed_step && spec.caps.deterministic)
+}
+
 /// Preference score among capable candidates. A genuinely realtime-qualified
 /// backend must beat a merely tolerated one for a predicted model, so that the
 /// concession retires by itself the day a real fixed-step tableau registers.
 fn score(spec: &SolverSpec, req: &SolverRequest) -> u16 {
-    let qualified = req.profile.predicted && spec.caps.fixed_step && spec.caps.deterministic;
+    let qualified = req.profile.predicted && !served_by_concession(spec, &req.profile);
     u16::from(qualified) * 256 + u16::from(spec.rank)
 }
 
@@ -437,6 +450,34 @@ mod tests {
             SolverId::from("testfixed"),
             "the tolerated concession won over a qualified backend"
         );
+    }
+
+    /// The concession is REPORTABLE, not merely declared: selecting a
+    /// tolerated-but-unqualified backend for a predicted model must be
+    /// distinguishable from selecting one that genuinely meets the bar, or a
+    /// caller cannot tell peers-may-diverge from peers-agree.
+    #[test]
+    fn a_tolerated_backend_is_reported_as_a_concession_and_a_qualified_one_is_not() {
+        let tolerated = spec("testrk", LIVE_EXPLICIT, 200);
+        let qualified = spec(
+            "testfixed",
+            SolverCaps {
+                usable_live: true,
+                fixed_step: true,
+                deterministic: true,
+                realtime_tolerated: false,
+            },
+            1,
+        );
+        let predicted = RuntimeProfile { live: true, predicted: true };
+
+        assert!(served_by_concession(&tolerated, &predicted));
+        assert!(!served_by_concession(&qualified, &predicted));
+
+        // A batch or non-predicted live model is not held to the realtime bar,
+        // so nothing it resolves to is a concession.
+        let replicated = RuntimeProfile { live: true, predicted: false };
+        assert!(!served_by_concession(&tolerated, &replicated));
     }
 
     #[test]

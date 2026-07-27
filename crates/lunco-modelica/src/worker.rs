@@ -51,6 +51,28 @@ fn live_stepper_options(profile: solver::RuntimeProfile) -> Result<rumoca_sim::S
         authored: None,
     })?;
 
+    // A4: a predicted model just landed on a backend that is not fixed-step
+    // deterministic. It is eligible only because it declares
+    // `realtime_tolerated`, so two peers integrating the same inputs can take
+    // different substeps and diverge. Declaring the gap in the registry
+    // documents it; this is the one place that REPORTS it, because this is where
+    // a model is actually put on such a stepper. Once per process, keyed on
+    // nothing else: the condition is a property of what is registered, not of
+    // the model, so repeating it per compile would only teach the reader to
+    // scroll past it.
+    if solver::served_by_concession(&spec, &profile) {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            bevy::log::warn!(
+                "[solver] client-predicted models are running on `{}`, which is not \
+                 fixed-step deterministic — it serves them only through the declared \
+                 A4 concession (`realtime_tolerated`), so peers can diverge. Registering \
+                 a genuinely fixed-step backend retires this with no call-site edit.",
+                spec.id
+            );
+        }
+    }
+
     crate::solver_backends::rumoca_options(
         &spec,
         &solver::SolverParams {
