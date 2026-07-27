@@ -51,6 +51,67 @@ fn celestial_test_app() -> App {
     app
 }
 
+/// **The `SolarSystemRoot` invariant: exactly one bearer, and it is the Grid.**
+///
+/// `placement::anchor_solar_frame_to_site` takes this marker with `single_mut()`.
+/// A second bearer makes that call `Err`, so the solar frame is never anchored,
+/// `SiteAligned` is never inserted, and `update_sun_light_system` falls back to an
+/// identity alignment that aims the sun along raw ecliptic axes — below the local
+/// horizon. The scene renders black.
+///
+/// That is what the hierarchy actually shipped: the Sun body carried the marker as
+/// well as the Solar Grid. It stayed invisible because three of the four readers ask
+/// only *"does a sky exist"*, which answers the same for one bearer or five, and the
+/// fourth — the one that needed the identity — defended itself with a local
+/// `With<Grid>` filter. The invariant was never true; it was worked around at the
+/// single call site that would otherwise have noticed.
+///
+/// Asserted here rather than left to that runtime `warn!`, which can only fire once
+/// the scene is already unlit, and only in a session someone is watching.
+#[test]
+fn solar_system_root_is_singular() {
+    let mut app = celestial_test_app();
+    app.update();
+
+    let bearers: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<lunco_celestial::SolarSystemRoot>>()
+        .iter(app.world())
+        .collect();
+
+    assert_eq!(
+        bearers.len(),
+        1,
+        "`SolarSystemRoot` must name exactly one entity — found {}. \
+         `anchor_solar_frame_to_site` reads it with `single_mut()`, so a second \
+         bearer leaves the site frame unanchored and the scene unlit.",
+        bearers.len()
+    );
+
+    // …and that one is the Solar Grid. The `single_mut()` query also demands
+    // `With<Grid>`, so a lone bearer that is NOT a grid matches nothing and fails
+    // in exactly the same silent way as two bearers do.
+    assert!(
+        app.world().get::<Grid>(bearers[0]).is_some(),
+        "the `SolarSystemRoot` bearer must be the Solar Grid itself"
+    );
+
+    // The specific regression. The Sun is a BODY, reached through `CelestialBody`
+    // like Earth and Moon; it must never also be the answer to "where is the solar
+    // frame?". Checked by name rather than by count so a re-add is named, not just
+    // counted.
+    let sun_is_root = bearers.iter().any(|&e| {
+        app.world()
+            .get::<lunco_celestial::CelestialBody>(e)
+            .is_some_and(|b| b.name == "Sun")
+    });
+    assert!(
+        !sun_is_root,
+        "the Sun body must not carry `SolarSystemRoot` — it is found through \
+         `CelestialBody`/ephemeris 10, not through the frame marker"
+    );
+}
+
 /// **P4 regression — the orbit view must be STAR-FIXED.**
 ///
 /// `big_space_setup`'s doc block claimed "Grid Anchor (inertial) — does NOT

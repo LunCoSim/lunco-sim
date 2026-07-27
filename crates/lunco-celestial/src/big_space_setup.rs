@@ -186,6 +186,23 @@ fn blueprint_tile_look_untextured(
 pub struct CelestialDerived;
 
 /// Marker for the solar system root grid (inertial, no rotation).
+///
+/// **EXACTLY ONE entity carries this, and it is a `Grid`.** The marker is read in
+/// two different ways, and both depend on that:
+///
+/// - as an IDENTITY — `placement::anchor_solar_frame_to_site` takes it with
+///   `single_mut()` to pose the solar frame. A second bearer makes that `Err`, so
+///   the site frame is never anchored, `SiteAligned` is never inserted, and the
+///   sun is aimed along raw ecliptic axes: the scene renders black.
+/// - as an EXISTENCE latch — "does this scene have a sky?" — for the idempotent
+///   spawn gate, the cadence revision bump, and the sandbox's exposure mode.
+///
+/// The existence reading is why a violation hides: it answers the same whether one
+/// entity carries the marker or five. The Sun body carried it for exactly that
+/// reason, undetected, because the identity reading defended itself locally with a
+/// `With<Grid>` filter instead of the invariant being true. Do not re-add it to a
+/// body; a body is found through `CelestialBody`. `solar_system_root_is_singular`
+/// in `tests/celestial_integration.rs` is what now holds this.
 #[derive(Component)]
 pub struct SolarSystemRoot;
 
@@ -419,9 +436,14 @@ pub fn setup_big_space_hierarchy(
         .id();
 
     // ── Sun (simple entity on Solar Grid, no grid of its own) ─────────────
+    //
+    // Deliberately NOT tagged `SolarSystemRoot`: that marker names the one Solar
+    // Grid entity, and the Sun is reached as a body (`CelestialBody`/ephemeris 10)
+    // like any other. It used to carry the marker too, which made
+    // `anchor_solar_frame_to_site`'s `single_mut()` ambiguous — masked only by a
+    // `With<Grid>` filter at that one call site out of seven.
     let _sun_body = commands
         .spawn((
-            SolarSystemRoot,
             CelestialBody {
                 name: "Sun".to_string(),
                 ephemeris_id: 10,

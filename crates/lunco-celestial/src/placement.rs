@@ -76,8 +76,11 @@ pub fn anchor_solar_frame_to_site(
     registry: Res<CelestialBodyRegistry>,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     q_site_changed: Query<(), Or<(Added<SiteAnchor>, Changed<GeodeticAnchor>)>>,
-    // `SolarSystemRoot` also tags the Sun body — the grid filter picks the
-    // one Solar Grid entity.
+    // `With<Grid>` states a PRECONDITION of the code below (it does cell
+    // arithmetic against this entity's own `Grid`), not a disambiguation.
+    // It used to be the latter: the Sun body also carried `SolarSystemRoot`, and
+    // this filter was the only reason `single_mut()` saw one entity. The marker is
+    // singular at the spawn site now, held by `solar_system_root_is_singular`.
     mut q_solar: Query<
         (Entity, &mut CellCoord, &mut Transform),
         (With<SolarSystemRoot>, With<Grid>),

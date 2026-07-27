@@ -12,7 +12,8 @@
 #   ./scripts/run_scene_tests.sh drivetrain   # only scenes matching a substring
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
 #
-# Exits non-zero if ANY scene fails or produces no verdict IN THE GATE PASS.
+# Exits non-zero if ANY scene fails, produces no verdict, or hangs past
+# SCENE_TIMEOUT (default 420s) IN THE GATE PASS.
 #
 # ── The gate pass vs the --stress pass ──────────────────────────────────────
 #
@@ -45,6 +46,14 @@ STRESS=0
 STRESS_THREADS=0     # 0 = leave bevy's default multi-threaded pool alone
 STRESS_JITTER=0.4    # +/- 40% dt, i.e. frame times from 10 ms to 23 ms at 60 Hz
 STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
+
+# ── Per-scene wall-clock bound ──────────────────────────────────────────────
+#
+# Deliberately GENEROUS: this is a liveness backstop, not a performance budget.
+# Its job is only to stop one wedged scene from taking the whole gate down with
+# it; a scene slow enough to trip it is a finding either way. Override for a
+# slower machine with `SCENE_TIMEOUT=900 ./scripts/run_scene_tests.sh`.
+SCENE_TIMEOUT="${SCENE_TIMEOUT:-420}"
 
 # ── The scene list ──────────────────────────────────────────────────────────
 #
@@ -139,13 +148,20 @@ for scene in "${SCENES[@]}"; do
     log="$LOG_DIR/$name.log"
     echo "==> $name"
 
-    # The runner self-terminates on its own `--max-ticks` bound, so there is no
-    # external `timeout` here: a hang inside the sim is already an exit-2, and
-    # wrapping it would only mask which of the two happened.
+    # WALL-CLOCK bounded, because `--max-ticks` is not a bound on hanging.
+    # `--max-ticks` can only fire between ticks; `scenes/tests/rover_comparison`
+    # spins forever INSIDE a single physics step (a diverged body, one core at
+    # 100%, no tick ever completes), so the runner never reaches its own check and
+    # the gate wedges instead of reporting. A gate that can hang reports nothing at
+    # all, which is strictly worse than reporting the wrong thing.
+    #
+    # The two outcomes stay DISTINGUISHABLE rather than collapsing into exit-2:
+    # `timeout` returns 124, which maps to its own HUNG status below.
     #
     # The flags are PASSED EXPLICITLY even though they are the binary's defaults:
     # the gate's determinism must not silently change if a default ever moves.
-    "$BIN" --scene "$scene" --threads 1 --jitter 0 >"$log" 2>&1
+    timeout --kill-after=10 "$SCENE_TIMEOUT" \
+        "$BIN" --scene "$scene" --threads 1 --jitter 0 >"$log" 2>&1
     code=$?
 
     # The one-line summary `scene_test` prints last; falls back to the exit code.
@@ -155,6 +171,9 @@ for scene in "${SCENES[@]}"; do
         0) status="PASS" ;;
         1) status="FAIL" ; overall=1 ;;
         2) status="NO-VERDICT" ; overall=1 ;;
+        # 124 is `timeout`'s own exit: the scene never finished. Named, not folded
+        # into ERROR — a hang and a crash need different investigations.
+        124) status="HUNG(${SCENE_TIMEOUT}s)" ; overall=1 ;;
         *) status="ERROR($code)" ; overall=1 ;;
     esac
 
@@ -195,7 +214,8 @@ if [[ $STRESS -eq 1 ]]; then
         log="$LOG_DIR/$name.stress.log"
         echo "==> $name (stress)"
 
-        "$BIN" --scene "$scene" \
+        timeout --kill-after=10 "$SCENE_TIMEOUT" \
+            "$BIN" --scene "$scene" \
             --threads "$STRESS_THREADS" \
             --jitter "$STRESS_JITTER" \
             --seed "$STRESS_SEED" >"$log" 2>&1
@@ -206,6 +226,7 @@ if [[ $STRESS -eq 1 ]]; then
             0) status="PASS" ;;
             1) status="FAIL" ;;
             2) status="NO-VERDICT" ;;
+            124) status="HUNG(${SCENE_TIMEOUT}s)" ;;
             *) status="ERROR($code)" ;;
         esac
 
