@@ -708,6 +708,17 @@ pub struct WorkbenchLayout {
     /// own toolbar.
     pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
+    /// Undo/redo availability probes. Domain plugins push a closure via
+    /// [`WorkbenchLayout::register_undo_probe`] at Startup; each probe
+    /// inspects the active document and returns
+    /// `Some((can_undo, can_redo))` when its domain owns that document,
+    /// `None` otherwise. The Edit menu asks probes in registration order
+    /// and the first `Some` wins — the same first-owner-wins contract as
+    /// the `EditorIntent` resolvers. With no probe answering, the menu
+    /// falls back to "a document is active" so a domain without a probe
+    /// keeps working Undo/Redo entries.
+    pub(crate) undo_probes: Vec<Box<dyn Fn(&World) -> Option<(bool, bool)> + Send + Sync>>,
+
     /// App-wide Help menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
     /// closure via [`WorkbenchLayout::register_help_menu`] at Startup
@@ -821,6 +832,7 @@ impl Default for WorkbenchLayout {
             settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
             edit_menu: Vec::new(),
+            undo_probes: Vec::new(),
             help_menu: Vec::new(),
             file_menu: Vec::new(),
             time_menu: Vec::new(),
@@ -1249,6 +1261,20 @@ impl WorkbenchLayout {
         F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
     {
         self.edit_menu.push(Box::new(callback));
+    }
+
+    /// Register an undo/redo availability probe for the global Edit menu.
+    ///
+    /// The probe returns `Some((can_undo, can_redo))` for documents its
+    /// domain owns (read the domain registry off `&World`), `None` for
+    /// anything else. First registered probe to answer wins — mirror of
+    /// the `EditorIntent` resolver contract, so register exactly one per
+    /// domain, next to [`register_edit_menu`](Self::register_edit_menu).
+    pub fn register_undo_probe<F>(&mut self, probe: F)
+    where
+        F: Fn(&World) -> Option<(bool, bool)> + Send + Sync + 'static,
+    {
+        self.undo_probes.push(Box::new(probe));
     }
 
     /// Register a closure that contributes entries to the global Help
@@ -2699,6 +2725,32 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 }
 
+/// One menu row in the top-bar drop-downs: label + optional shortcut,
+/// greys out when `enabled` is false and then explains itself via
+/// `disabled_hint` ("No document open", "Nothing to undo", …).
+///
+/// Extracted because the `add_enabled(…, Button::new("Label\tShortcut"))`
+/// pattern was copy-pasted across Save / Copy Share Link / Close /
+/// Undo / Redo and every copy forgot the disabled hint — with the hint a
+/// required parameter it can't be forgotten on the next menu item.
+/// Returns the [`egui::Response`] so callers can still chain
+/// `.on_hover_text(…)` and `.clicked()`.
+fn menu_item(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    shortcut: &str,
+    disabled_hint: &str,
+) -> egui::Response {
+    let text = if shortcut.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label}\t{shortcut}")
+    };
+    ui.add_enabled(enabled, egui::Button::new(text))
+        .on_disabled_hover_text(disabled_hint)
+}
+
 fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
@@ -3032,7 +3084,9 @@ fn render_layout(
                                 }
                             }
                         });
-                    });
+                    })
+                    .response
+                    .on_disabled_hover_text("No Twin folders opened yet");
                     ui.add_enabled_ui(!recent_files.is_empty(), |ui| {
                         ui.menu_button("Open Recent File", |ui| {
                             for path in &recent_files {
@@ -3052,7 +3106,9 @@ fn render_layout(
                                 }
                             }
                         });
-                    });
+                    })
+                    .response
+                    .on_disabled_hover_text("No files opened yet");
                 }
                 ui.separator();
 
@@ -3060,19 +3116,20 @@ fn render_layout(
                 // Save / Save As route through `EditorIntent` so the
                 // menu, Ctrl+S, and HTTP API funnel through the same
                 // domain resolver.
-                if ui
-                    .add_enabled(has_active, egui::Button::new("Save\tCtrl+S"))
+                if menu_item(ui, has_active, "Save", "Ctrl+S", "No document open")
                     .clicked()
                 {
                     world.trigger(lunco_doc_bevy::EditorIntent::Save);
                     ui.close();
                 }
-                if ui
-                    .add_enabled(
-                        has_active,
-                        egui::Button::new("Save As…\tCtrl+Shift+S"),
-                    )
-                    .clicked()
+                if menu_item(
+                    ui,
+                    has_active,
+                    "Save As…",
+                    "Ctrl+Shift+S",
+                    "No document open",
+                )
+                .clicked()
                 {
                     world.trigger(lunco_doc_bevy::EditorIntent::SaveAs);
                     ui.close();
@@ -3094,13 +3151,11 @@ fn render_layout(
                 // the URL fragment — opening it elsewhere recreates the
                 // model. Behaviour lives in the domain crate
                 // (lunco-modelica observes `CopyShareLink`).
-                if ui
-                    .add_enabled(has_active, egui::Button::new("Copy Share Link"))
+                if menu_item(ui, has_active, "Copy Share Link", "", "No document open")
                     .on_hover_text(
                         "Copy a URL that encodes this model's source — \
                          anyone who opens it gets the model (nothing is uploaded)",
                     )
-                    .on_disabled_hover_text("Copy Share Link — no active document")
                     .clicked()
                 {
                     world.trigger(file_ops::CopyShareLink {});
@@ -3118,8 +3173,7 @@ fn render_layout(
                 layout.file_menu = callbacks;
 
                 // -- Close --------------------------------------------
-                if ui
-                    .add_enabled(has_active, egui::Button::new("Close\tCtrl+W"))
+                if menu_item(ui, has_active, "Close", "Ctrl+W", "No document open")
                     .clicked()
                 {
                     world.trigger(lunco_doc_bevy::EditorIntent::Close);
@@ -3132,18 +3186,32 @@ fn render_layout(
                     .resource::<WorkspaceResource>()
                     .active_document
                     .is_some();
-                if ui
-                    .add_enabled(has_active, egui::Button::new("Undo\tCtrl+Z"))
-                    .clicked()
-                {
+                // Ask the domain probes whether the active document's
+                // undo/redo stacks are actually non-empty; first probe to
+                // recognise the document wins (same contract as the
+                // `EditorIntent` resolvers). No probe answering falls
+                // back to plain "a document is active" so a domain that
+                // registered no probe keeps working entries.
+                let (can_undo, can_redo) = layout
+                    .undo_probes
+                    .iter()
+                    .find_map(|probe| probe(world))
+                    .unwrap_or((has_active, has_active));
+                let undo_hint = if has_active {
+                    "Nothing to undo"
+                } else {
+                    "No document open"
+                };
+                let redo_hint = if has_active {
+                    "Nothing to redo"
+                } else {
+                    "No document open"
+                };
+                if menu_item(ui, can_undo, "Undo", "Ctrl+Z", undo_hint).clicked() {
                     world.trigger(lunco_doc_bevy::EditorIntent::Undo);
                     ui.close();
                 }
-                if ui
-                    .add_enabled(
-                        has_active,
-                        egui::Button::new("Redo\tCtrl+Shift+Z"),
-                    )
+                if menu_item(ui, can_redo, "Redo", "Ctrl+Shift+Z", redo_hint)
                     .clicked()
                 {
                     world.trigger(lunco_doc_bevy::EditorIntent::Redo);
@@ -3483,6 +3551,9 @@ fn render_layout(
                             if ui
                                 .add_enabled(enabled, egui::Button::new("Copy web link"))
                                 .on_hover_text("https://lunica.lunco.space/?connect=… — opens in a browser")
+                                .on_disabled_hover_text(
+                                    "Enter the address guests should dial first",
+                                )
                                 .clicked()
                             {
                                 let link = format!(
@@ -3498,6 +3569,9 @@ fn render_layout(
                             if ui
                                 .add_enabled(enabled, egui::Button::new("Copy app link"))
                                 .on_hover_text("luncosim://connect?… — opens the desktop app")
+                                .on_disabled_hover_text(
+                                    "Enter the address guests should dial first",
+                                )
                                 .clicked()
                             {
                                 let link =
@@ -3562,6 +3636,7 @@ fn render_layout(
                         let enabled = !address.trim().is_empty();
                         if ui
                             .add_enabled(enabled, egui::Button::new("Connect"))
+                            .on_disabled_hover_text("Enter a server address first")
                             .clicked()
                         {
                             world.trigger(NetConnectRequest {

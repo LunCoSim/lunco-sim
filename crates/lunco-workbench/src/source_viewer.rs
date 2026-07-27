@@ -64,6 +64,9 @@ impl InstancePanel for SourceEditorPanel {
                         for (label, update) in [("Save", false), ("Save & Update", true)] {
                             if ui
                                 .add_enabled(!source.saving, egui::Button::new(label))
+                                .on_disabled_hover_text(
+                                    "Saving — wait for the current save to finish",
+                                )
                                 .clicked()
                             {
                                 source.saving = true;

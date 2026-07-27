@@ -7446,6 +7446,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-hardware",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",

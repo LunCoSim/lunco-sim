@@ -480,7 +480,7 @@ fn client_drive_cadence(
 /// minus the avian `Position` write the stand-in rover doesn't have).
 fn test_apply_snapshots(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut snaps: ResMut<lunco_core::IncomingSnapshots>,
+    mut snaps: ResMut<lunco_networking::session::IncomingSnapshots>,
     mut q: Query<&mut Transform>,
 ) {
     if snaps.0.is_empty() {

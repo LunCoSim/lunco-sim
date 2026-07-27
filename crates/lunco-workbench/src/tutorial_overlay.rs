@@ -671,6 +671,7 @@ fn draw_tour(
                                         egui::Button::new("◀  Back")
                                             .min_size(egui::vec2(80.0, 28.0)),
                                     )
+                                    .on_disabled_hover_text("Already at the first step")
                                     .clicked()
                                 {
                                     back = true;

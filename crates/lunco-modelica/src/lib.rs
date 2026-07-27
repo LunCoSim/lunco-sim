@@ -100,6 +100,10 @@ pub mod pretty;
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
+/// Unified diagram data model — the canonical graph types built by
+/// [`diagram`]'s AST-to-graph logic. Pure Rust, no Bevy dependency.
+pub mod diagram_model;
+
 /// Typed extractors for graphical annotations (Placement, Icon, Diagram,
 /// and the common `graphics={...}` primitives). Walks the raw
 /// `Vec<Expression>` that rumoca preserves on each class/component and

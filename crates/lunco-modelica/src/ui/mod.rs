@@ -1461,6 +1461,19 @@ fn register_edit_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
+    // Undo/redo availability for the workbench's global Edit menu —
+    // answers only for documents this registry owns (same ownership
+    // check as `resolve_editor_intent`), so Undo greys out with a
+    // "Nothing to undo" hint instead of firing a no-op intent.
+    layout.register_undo_probe(|world| {
+        let doc = world
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .active_document?;
+        let host = world
+            .get_resource::<crate::state::ModelicaDocumentRegistry>()?
+            .host(doc)?;
+        Some((host.can_undo(), host.can_redo()))
+    });
     layout.register_edit_menu(|ui, world| {
         // TODO: promote Cut / Copy / Paste / Select All to typed
         // `#[Command]` events so the HTTP API can drive them too

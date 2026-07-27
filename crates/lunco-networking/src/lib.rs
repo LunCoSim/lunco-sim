@@ -31,6 +31,14 @@ pub mod connect_link;
 /// without the `networking` feature (every system self-guards on `NetworkRole`).
 pub mod prediction;
 
+/// Wire-fed session state that used to sit in `lunco-core/src/session.rs`
+/// (review C7): the deep-link confirm gate, the wire snapshot sample, the
+/// prediction contact gate, the desync gauge and the reconcile residual.
+/// Every producer AND consumer is in this crate, so core's always-on boundary
+/// rule (a type stays in core only if a non-networking crate consumes it) put
+/// them here. Always compiled — plain data, no lightyear type named.
+pub mod session;
+
 /// The **bytes plane**: fetch a scenario's CID-addressed assets over HTTP rather
 /// than streaming them through the reliable QUIC channel (which queues without
 /// bound and stalls on multi-MB twins). Used whenever the host advertises an

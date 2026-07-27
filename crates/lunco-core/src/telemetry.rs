@@ -14,6 +14,29 @@
 //! 3. **Timekeeping**: All telemetry is timestamped using the `WorldTime`
 //!    epoch (Julian Date, TDB; from the `lunco-time` spine) to allow for precise
 //!    post-mission analysis and correlation with ephemeris data.
+//!
+//! ## Why this lives in `lunco-core` (substrate justification, review C8)
+//!
+//! `lunco-telemetry` is the telemetry *engine* (sampling cadence, channel
+//! clocks, the wired plan); this module is only the **currency types** every
+//! domain meets on — and the boundary rule is the same as `session.rs`'s: a
+//! type stays here only if a crate that does not depend on `lunco-telemetry`
+//! consumes it. Every type below passes that test:
+//! - [`TelemetryEvent`]/[`TelemetryValue`]/[`Severity`]: the push channel,
+//!   emitted and observed by 14+ crates (workbench status bus, terrain
+//!   `DEM_BUILD_FAILED`, usd-bevy `SCENE_LOAD_FAILED`, tutorial, autopilot,
+//!   scripting, the API envelope…) — none of which link `lunco-telemetry`.
+//! - [`SampledParameter`]: the pull-channel packet, observed by
+//!   `lunco_api::subscription` and logged by this crate's own `log.rs` —
+//!   `lunco-core` cannot depend on `lunco-telemetry` (cycle).
+//! - [`Parameter`]/[`ChannelSource`]: the authored channel *declaration*
+//!   (a reflect-authored component scripts and `lunco-usd-sim` stamp), not
+//!   engine state; registered by `LunCoCorePlugin` and authored by crates
+//!   that never link the sampler.
+//!
+//! Telemetry-domain *machinery* (settings, channel clocks, the sampling plan,
+//! the export/history API) lives in `lunco-telemetry` — new engine state
+//! belongs there, not here.
 
 use bevy::prelude::*;
 

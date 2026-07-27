@@ -2,8 +2,10 @@
 (
     "Generated schema for luncoSchema"
     """
-    GENERATED — do not edit. Regenerate with `python3 scripts/gen_schema.py`
-    after editing `schema.usda`, which is the authoritative source.
+    GENERATED — do not edit. Regenerate with
+        LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation
+    after editing `schema.usda`, which is the authoritative source
+    (`lunco_usd::schema_gen::generate_schema` is the generator).
 
     This is the file a USD runtime actually registers (via `plugInfo.json`), and
     the file `lunco_usd::schema` parses to answer "what does this property's
@@ -113,6 +115,11 @@ class "LunCoTerrainAPI" (
     )
     int lunco:terrain:horizonMapResolution = 0 (
         doc = "Terrain self-shadow heightfield bake resolution (side length; 0 = default)."
+    )
+    bool lunco:terrain:lodFrozen = false (
+        doc = """Freeze CDLOD selection after first load — the cinematic-LOD hold:
+        the terrain keeps the tile set it first built instead of re-selecting per
+        camera move."""
     )
 }
 
@@ -635,6 +642,14 @@ class "LunCoAvatarAPI" (
     double3 lunco:cameraLookAt = (0, 0, 0) (
         doc = "The point the avatar's camera faces on spawn."
     )
+    float lunco:cameraYaw = 2.5132742 (
+        doc = """Initial camera yaw, radians. Overridden by a derived aim when
+        `lunco:cameraLookAt` is authored."""
+    )
+    float lunco:cameraPitch = -0.3 (
+        doc = """Initial camera pitch, radians. Overridden by a derived aim when
+        `lunco:cameraLookAt` is authored."""
+    )
 }
 
 # --- LunCo vehicle extensions ------------------------------------------------
@@ -1052,5 +1067,637 @@ class "LunCoTutorialAPI" (
         detectable by composition rather than discovered by a student who
         finishes a lesson and goes nowhere. The chain IS the curriculum order —
         display walks it — so lessons carry no separate index."""
+    )
+}
+
+class "LunCoControlBindingAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """ONE intent→port binding — a child prim of a vessel's `Controls`
+    scope, named for the [`UserIntent`] it binds (`forward`, `steer`, …). While
+    that intent is active it contributes `scale` per unit intent to the named
+    input port. Read by the control-binding loader (lunco-usd-bevy); shared
+    profiles live in `assets/components/control_profiles.usda` and arrive on
+    vessels by `subLayers` + `inherits`."""
+)
+{
+    uniform string lunco:port = "" (
+        doc = """The vessel input port this intent drives (`"throttle"`,
+        `"pitch"`). Uniform: a binding does not retarget over time."""
+    )
+    uniform double lunco:scale = 1 (
+        doc = """Port contribution per unit intent — sign flips an axis, magnitude
+        is sensitivity."""
+    )
+    uniform token lunco:cameraFollow = "" (
+        doc = """Follow mode the camera adopts when this vessel is possessed —
+        authored on the `Controls` scope itself, not a binding child. Canonical
+        spellings `heading` | `orbit` | `chase` (synonyms accepted by
+        `lunco_core::parse_camera_follow`); empty = the engine default."""
+    )
+}
+
+class "LunCoSceneFlowAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Tutorial/mission chaining: which scene follows this one."""
+)
+{
+    string lunco:nextScene = "" (
+        doc = """Scene to load when this scene's mission completes
+        (`"scenes/foo.usda"`). Stamped as a `NextScene` marker and loaded by
+        lunco-tutorial on MISSION_COMPLETE. Empty = the chain ends here."""
+    )
+}
+
+class "LunCoTriggerZoneAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim's geometry an overlap-only static sensor volume — the
+    physics loader (lunco-usd-avian) gives it a static collider and a `Sensor`,
+    so it detects overlaps and blocks nothing."""
+)
+{
+    string lunco:triggerZone = "" (
+        doc = """The zone's name, reported with its overlap events. Non-empty IS
+        the opt-in; empty means no trigger zone."""
+    )
+}
+
+class "LunCoAssetAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """How a prim backed by an external binary asset (glTF/OBJ/STL payload)
+    or a built terrain projects into the engine.
+
+    `lunco:resolvedAsset` is a SIDE-CHANNEL, declared so it stops serializing as
+    untyped `custom`, not endorsed: openusd-rs has no `SdfFileFormat` plugin
+    system, so binary arcs are stubbed out of composition and the resolved URI is
+    surfaced here for Bevy's loaders. The in-code migration plan (a glTF dynamic
+    file format) deletes it — see `lunco-usd-bevy/src/resolver.rs`."""
+)
+{
+    string lunco:assetMode = "scene" (
+        doc = """How the asset/prim realizes: `scene` (whole glTF scene) | `mesh`
+        (one named mesh primitive) — or, on a terrain root, `dem` | `layered`
+        (build a heightfield from the child layer prims instead)."""
+    )
+    string lunco:assetLabel = "" (
+        doc = """Sub-asset label inside the binary asset (`"Mesh0/Primitive0"`),
+        for `lunco:assetMode = "mesh"`. Empty = the loader's default label."""
+    )
+    string lunco:resolvedAsset = "" (
+        doc = """Resolved URI of the binary asset this prim's payload named —
+        normally SYNTHESIZED from the stubbed arc at compose time; an authored
+        value wins. Deleted when the glTF file-format plugin lands."""
+    )
+    bool lunco:placeholder = false (
+        doc = """This prim's primitive mesh is a stand-in that hides once the real
+        (glTF) visual finishes loading."""
+    )
+}
+
+class "LunCoBillboardAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A floating text label over the prim. Opt-in: only a prim that
+    authors `lunco:billboard = true` gets one, so adding this schema can never
+    make an existing scene sprout labels."""
+)
+{
+    bool lunco:billboard = false (
+        doc = "Whether this prim shows a billboard label."
+    )
+    string lunco:billboard:text = "{label}" (
+        doc = """Label template; `{label}` expands to the prim's display name."""
+    )
+    float lunco:billboard:offsetY = 3 (
+        doc = "Label height above the prim origin, metres."
+    )
+    float lunco:billboard:fadeEnd = 1200 (
+        doc = "Camera distance at which the label has fully faded out, metres."
+    )
+}
+
+class "LunCoNetAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Per-prim multiplayer replication overrides. Absent means the engine's
+    defaults — replicated, server-authoritative."""
+)
+{
+    bool lunco:net:replicate = true (
+        doc = "`false` excludes this prim from network replication entirely."
+    )
+    string lunco:net:authority = "" (
+        doc = """Authority override. The engine reads it for opacity markers
+        (a prim another peer owns is not client-predictable); empty = server."""
+    )
+}
+
+class "LunCoSensorAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Sensor mounts on a body — the prim declares WHICH sensors it carries
+    and where; the sensor systems fill the values each tick and publish them as
+    `outputs:` ports for programs to wire."""
+)
+{
+    bool lunco:sensor:imu = false (
+        doc = "Mount an IMU (specific force + angular rate) at the shared offset."
+    )
+    bool lunco:sensor:range = false (
+        doc = "Mount a raycast range finder (altimeter) at the shared offset."
+    )
+    bool lunco:sensor:contact = false (
+        doc = "Mount a contact sensor (touchdown detection)."
+    )
+    double3 lunco:sensor:offset = (0, 0, 0) (
+        doc = """Shared body-local mount point — the lever arm from the centre of
+        mass, metres."""
+    )
+    float lunco:sensor:rangeMax = 100 (
+        doc = "Range finder maximum distance, metres."
+    )
+    token lunco:sensor:rangeAxis = "-Y" (
+        doc = "Body-local ray direction. `-Y` is a downward altimeter."
+        allowedTokens = ["X", "-X", "Y", "-Y", "Z", "-Z"]
+    )
+    token lunco:sensor:rangeOutOfRangeMode = "MaxDistance" (
+        doc = """What the range output reports past `rangeMax`: clamp to the max,
+        `-1`, NaN, or the ideal altitude above the reference surface."""
+        allowedTokens = ["MaxDistance", "NegativeOne", "NaN", "IdealAltitude"]
+    )
+}
+
+class "LunCoTelemetryAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """ONE authored telemetry channel — a prim opting a port (or a reflected
+    component field) into the telemetry ring buffer. See
+    docs/architecture/telemetry-subsystem.md."""
+)
+{
+    bool lunco:telemetry = false (
+        doc = "Whether this prim authors a telemetry channel."
+    )
+    string lunco:telemetry:name = "" (
+        doc = "Channel display name. Empty = the source's own name."
+    )
+    string lunco:telemetry:port = "" (
+        doc = "Source: a runtime port on this prim. Wins over `reflect`."
+    )
+    string lunco:telemetry:reflect = "" (
+        doc = "Source: a reflected component field path, when no port is named."
+    )
+    string lunco:telemetry:unit = "" (
+        doc = "Display unit string; empty = unitless."
+    )
+    double lunco:telemetry:rateHz = 0 (
+        doc = "Sampling rate, Hz. 0/unauthored = the engine's default cadence."
+    )
+    bool lunco:telemetry:enabled = true (
+        doc = """Whether the channel records. An authored channel is a live one:
+        you turn it off by saying so, not by forgetting to say anything."""
+    )
+    double lunco:telemetry:deadband = 0 (
+        doc = "Change threshold below which a sample is not recorded. 0 = record all."
+    )
+    int64 lunco:telemetry:retention = 0 (
+        doc = "Ring-buffer sample count to retain. 0/unauthored = engine default."
+    )
+}
+
+class "LunCoAnchorAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A geodetic anchor — pins the prim to a latitude/longitude/height on a
+    celestial body. On a scene's ROOT prim it is the scene's site frame
+    (`SiteAnchor`); on any other prim it is a ground station or surface asset.
+    A relay in space authors `lunco:orbit:*` instead; a rover-mounted antenna
+    authors neither. Also read by the terrain pipeline as the DEM georeference
+    (the body's radius folds into the surface oracle as curvature)."""
+)
+{
+    int lunco:anchor:body = 301 (
+        doc = """NAIF id of the anchoring body — the same join key as `lunco:body`
+        and `lunco:orbit:body`. The default is the Moon."""
+    )
+    double lunco:anchor:lat = 0 (
+        doc = "Planetodetic latitude, degrees."
+    )
+    double lunco:anchor:lon = 0 (
+        doc = "Planetodetic longitude, degrees east."
+    )
+    double lunco:anchor:height = 0 (
+        doc = "Height above the reference surface, metres."
+    )
+}
+
+class "LunCoEpochAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The scene's mission epoch, authored on the site-anchor root prim.
+    Explicit because the real sun crosses a lunar horizon on a ~monthly cycle: an
+    unlucky "now" default renders the whole scene pitch-black."""
+)
+{
+    double lunco:time:epochJd = 0 (
+        doc = "Mission start epoch, Julian date. 0/unauthored = the engine default."
+    )
+}
+
+class "LunCoOrbitAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A Keplerian orbit — the prim's pose comes from these elements
+    propagated at the current epoch, not from an authored transform. Keyed on
+    `semiMajorAxisM`: a prim authoring no semi-major axis has no orbit."""
+)
+{
+    int lunco:orbit:body = 301 (
+        doc = "NAIF id of the central body. The default is the Moon."
+    )
+    double lunco:orbit:semiMajorAxisM = 0 (
+        doc = "Semi-major axis, metres. Unauthored/0 = no orbit."
+    )
+    double lunco:orbit:eccentricity = 0 (
+        doc = "Eccentricity, 0..1."
+    )
+    double lunco:orbit:inclinationDeg = 0 (
+        doc = "Inclination, degrees."
+    )
+    double lunco:orbit:raanDeg = 0 (
+        doc = "Right ascension of the ascending node, degrees."
+    )
+    double lunco:orbit:argPeriapsisDeg = 0 (
+        doc = "Argument of periapsis, degrees."
+    )
+    double lunco:orbit:meanAnomalyDeg = 0 (
+        doc = "Mean anomaly at epoch, degrees."
+    )
+    double lunco:orbit:epochJd = 2451545.0 (
+        doc = "Epoch of the elements, Julian date. The default is J2000."
+    )
+}
+
+class "LunCoLibrationAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Places the prim at a libration (Lagrange) point of a body PAIR.
+    Keyed on `primary`: an L-point is a property of the pair, so a prim naming
+    only one body is not half-placed, it is unplaced."""
+)
+{
+    int lunco:libration:primary = 0 (
+        doc = "NAIF id of the primary body. 0 = unset — no placement."
+    )
+    int lunco:libration:secondary = 0 (
+        doc = "NAIF id of the secondary body."
+    )
+    token lunco:libration:point = "L1" (
+        doc = "Which libration point of the pair."
+        allowedTokens = ["L1", "L2", "L3", "L4", "L5"]
+    )
+}
+
+class "LunCoMissionAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Declares the prim a MISSION — presentation metadata for the mission
+    browser. Keyed on `id`: a prim without one is not a half-declared mission, it
+    is simply not a mission."""
+)
+{
+    string lunco:mission:id = "" (
+        doc = "Stable mission identifier (`\"apollo15\"`)."
+    )
+    string lunco:mission:name = "" (
+        doc = "Display name. Empty = the id."
+    )
+    string lunco:mission:description = "" (
+        doc = "One-paragraph mission blurb."
+    )
+    double lunco:mission:start = 0 (
+        doc = "Mission start epoch, Julian date."
+    )
+    double lunco:mission:duration = 0 (
+        doc = "Mission duration, days."
+    )
+}
+
+class "LunCoMissionTrajectoryAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """VISUALISATION parameters for a mission trajectory plot. The state
+    vectors are NOT here and never were: the ephemeris provider owns where the
+    spacecraft is. Keyed on `trackedId` — without a target there is nothing to
+    plot."""
+)
+{
+    int lunco:trajectory:trackedId = 0 (
+        doc = "Ephemeris id of the body/spacecraft whose path is plotted."
+    )
+    int lunco:trajectory:referenceId = 301 (
+        doc = "Ephemeris id of the frame's reference body. The default is the Moon."
+    )
+    string lunco:trajectory:name = "" (
+        doc = "Display name. Empty = the prim path."
+    )
+    color4f lunco:trajectory:color = (1, 1, 1, 1) (
+        doc = "Plot colour, linear RGBA."
+    )
+    double lunco:trajectory:samplingDays = 1 (
+        doc = "Span of trajectory sampled around the current epoch, days."
+    )
+    double lunco:trajectory:samplingStep = 0.01 (
+        doc = "Sampling step, days."
+    )
+    token lunco:trajectory:frame = "Inertial" (
+        doc = "Frame the samples are expressed in."
+    )
+    bool lunco:trajectory:userVisible = true (
+        doc = "Whether the plot is offered in the UI's trajectory toggles."
+    )
+    double lunco:trajectory:startEpochJd = 0 (
+        doc = "Clamp: earliest plotted epoch, Julian date. 0 = unclamped."
+    )
+    double lunco:trajectory:endEpochJd = 0 (
+        doc = "Clamp: latest plotted epoch, Julian date. 0 = unclamped."
+    )
+}
+
+class "LunCoMissionSpacecraftAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A mission spacecraft MARKER — sits where the ephemeris says that body
+    is. Keyed on `ephemerisId`: a prim naming no body is unplaceable, not
+    defaulted."""
+)
+{
+    int lunco:spacecraft:ephemerisId = 0 (
+        doc = "Ephemeris id of the spacecraft this marker follows."
+    )
+    int lunco:spacecraft:referenceId = 301 (
+        doc = "Ephemeris id of the reference body. The default is the Moon."
+    )
+    string lunco:spacecraft:name = "" (
+        doc = "Display name. Empty = the prim path."
+    )
+    float lunco:spacecraft:scale = 1 (
+        doc = "Visual scale multiplier for the marker model."
+    )
+    double lunco:spacecraft:startEpochJd = 0 (
+        doc = "Epoch before which the marker is hidden, Julian date. 0 = always."
+    )
+    double lunco:spacecraft:endEpochJd = 0 (
+        doc = "Epoch after which the marker is hidden, Julian date. 0 = always."
+    )
+    float lunco:spacecraft:markerRadiusKm = 0 (
+        doc = "Marker billboard radius, kilometres. 0 = engine default."
+    )
+    float lunco:spacecraft:hitRadiusKm = 0 (
+        doc = "Click/pick radius, kilometres. 0 = engine default."
+    )
+    color4f lunco:spacecraft:markerColor = (1, 1, 1, 1) (
+        doc = "Marker colour, linear RGBA."
+    )
+}
+
+# --- Mount sockets and plugs -------------------------------------------------
+#
+# The Object Builder's attach flow: a HOST advertises SOCKETS (child prims of its
+# `Mounts` group), a PART advertises the PLUG frame it hangs by. Snapping
+# re-derives the part's placement so its plug coincides with the socket — move
+# the socket and the part follows. Two prim roles, two APIs, per the rule above.
+
+class "LunCoMountSocketAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """ONE socket — a child prim of a host's mount group where a part can
+    attach. The socket prim's own transform IS the socket frame, composed
+    relative to the host's body root."""
+)
+{
+    uniform token lunco:mount:socket = "" (
+        doc = """What plug kind this socket accepts (`"wheel"`, `"arm"`).
+        Non-empty IS what makes the child a socket."""
+    )
+    uniform token lunco:mount:joint = "fixed" (
+        doc = """Joint kind created on attach. `fixed` carries no axis; other
+        kinds read `lunco:mount:axis`."""
+    )
+    token lunco:mount:axis = "" (
+        doc = "Joint axis for non-fixed joints, socket-local (`\"X\"`, `\"Y\"`, `\"Z\"`)."
+    )
+    rel lunco:mount:part (
+        doc = """The part currently seated in this socket. A relationship, so
+        composition rebases it and a dangling target is visible to any tool that
+        walks the stage. Unauthored = an empty socket."""
+    )
+    uniform asset lunco:mount:asset = @@ (
+        doc = """The component asset an empty socket offers to reference in and
+        snap. `asset`, not `string` — it names a USD file, and only an `asset`
+        travels in the reference closure."""
+    )
+}
+
+class "LunCoMountPlugAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The PART half of the socket/plug pair — applied to the part's root
+    prim (the asset's `defaultPrim`)."""
+)
+{
+    uniform token lunco:mount:plug = "" (
+        doc = """What plug kind this part is (`"wheel"`, `"arm"`) — matched
+        against `lunco:mount:socket`."""
+    )
+    rel lunco:mount:frame (
+        doc = """The prim whose frame is the part's plug — the frame snapped onto
+        the socket, composed relative to the part's root. Unauthored = the part
+        advertises no plug and cannot snap."""
+    )
+}
+
+# --- Drive mixing ------------------------------------------------------------
+
+class "LunCoDriveKernelAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A SCRIPTED drive kernel on a vehicle root: the named rhai hook
+    computes the per-port drive outputs, taking precedence over the built-in
+    skid/linear `DriveMix` term schema below."""
+)
+{
+    string lunco:driveKernel = "" (
+        doc = "The `lunco_hooks` hook id that computes the mix. Empty = built-in."
+    )
+}
+
+class "LunCoDriveMixTermAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """ONE term of a built-in drive mix — a child prim of a vehicle's
+    `DriveMix` scope, named for the port it drives. Each factor is that control's
+    contribution to the port; a term declaring no factor at all is skipped (the
+    port would never be driven).
+
+    Only these THREE named factors are schema: the co-simulation wire transforms
+    (`lunco:factor:<connection>` / `lunco:offset:<connection>`) are per-wire
+    parameters, named per connection like a model's `inputs:`, so no fixed schema
+    can declare them — they are correctly `custom`."""
+)
+{
+    double lunco:factor:throttle = 0 (
+        doc = "Throttle intent contribution to this term's port."
+    )
+    double lunco:factor:steer = 0 (
+        doc = "Steer intent contribution to this term's port."
+    )
+    double lunco:factor:brake = 0 (
+        doc = "Brake intent contribution to this term's port."
+    )
+}
+
+class "LunCoLatheAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A procedural lathe (surface of revolution) — engine bells and dish
+    reflectors. `profile` picks the generator; each profile reads its own subset
+    of the dimensions. All dimensions in metres."""
+)
+{
+    uniform token lunco:lathe:profile = "" (
+        doc = """Which profile of revolution. `bell` reads
+        throatRadius/exitRadius/length/contour; `paraboloid` reads
+        apexRadius/rimRadius/focalLength. Empty/unknown = no surface generated."""
+        allowedTokens = ["", "bell", "paraboloid"]
+    )
+    float lunco:lathe:throatRadius = 0.35 (
+        doc = "Bell: throat radius, metres."
+    )
+    float lunco:lathe:exitRadius = 1.35 (
+        doc = "Bell: exit-plane radius, metres."
+    )
+    float lunco:lathe:length = 1.9 (
+        doc = "Bell: throat-to-exit length, metres."
+    )
+    float lunco:lathe:contour = 0.55 (
+        doc = "Bell: contour shape factor, 0..1."
+    )
+    float lunco:lathe:apexRadius = 0.02 (
+        doc = "Paraboloid: apex hole radius, metres."
+    )
+    float lunco:lathe:rimRadius = 0.58 (
+        doc = "Paraboloid: rim radius, metres."
+    )
+    float lunco:lathe:focalLength = 0.35 (
+        doc = "Paraboloid: focal length, metres."
+    )
+}
+
+# --- Cinematics --------------------------------------------------------------
+
+class "LunCoCameraPathAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A camera SHOT — applied to the `BasisCurves` prim the camera rides.
+    The curve is the track (core USD vocabulary, nothing of ours); these
+    properties bind a camera to it, pace it, and aim it."""
+)
+{
+    rel lunco:path:camera (
+        doc = """The camera prim this path drives. Unauthored = a plain curve,
+        not a camera path."""
+    )
+    rel lunco:path:lookAt (
+        doc = """Whole-shot aim target — the simple form. For per-key aims author
+        the `lunco:path:aim:*` triple instead."""
+    )
+    double lunco:path:duration = 60 (
+        doc = "Shot duration, seconds."
+    )
+    token lunco:path:clock = "sim" (
+        doc = """Where the shot's clock hangs: `sim` freezes with the sim on
+        pause (authored motion is scene content), `real` keeps running on the
+        wall clock."""
+        allowedTokens = ["sim", "real"]
+    )
+    double[] lunco:path:aim:times = [] (
+        doc = "Aim key times, seconds along the shot. Parallel to `aim:modes`."
+    )
+    token[] lunco:path:aim:modes = [] (
+        doc = """Aim mode per key — `tangent` (look along the track) or `target`
+        (consume the next `aim:targets` entry)."""
+    )
+    rel lunco:path:aim:targets (
+        doc = """Aim-target prims, in order, one per `target` entry in
+        `aim:modes`."""
+    )
+}
+
+class "LunCoCameraTrackAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A camera CUT LIST: which camera is live over time. The value is a
+    held-interpolated token channel — at each key time the shot cuts to the named
+    camera; authoring `timeSamples` on it IS what makes the prim a track."""
+)
+{
+    token lunco:activeCamera = "" (
+        doc = """Path/name of the live camera. Deliberately VARYING — the whole
+        point is its `timeSamples`."""
+    )
+}
+
+class "LunCoSolarAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Opts the prim into the solar-pose query — its sun-relative geometry
+    (incidence, shadowing) is computed and published each tick. Generic celestial
+    fact, no power vocabulary: a solar-power model composes over it."""
+)
+{
+    bool lunco:solarTracked = false (
+        doc = "Whether this prim's solar pose is tracked."
+    )
+}
+
+class "LunCoSurfaceAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Engine-side surface blend override for a gprim's material — what
+    core USD's opacity primvars cannot say."""
+)
+{
+    bool lunco:surface:additive = false (
+        doc = """Render this surface with ADDITIVE blending — a glow (engine
+        plume, sky dome) that brightens without occluding. Distinct from
+        `primvars:displayOpacity` blending, which still occludes."""
     )
 }

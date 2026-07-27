@@ -62,6 +62,12 @@ pub struct Track {
 pub struct Curriculum {
     pub tracks: Vec<Track>,
     pub lessons: Vec<Lesson>,
+    /// User-actionable failures met while composing — an unopenable layer, a
+    /// composition error, a lesson with no script. Each cost content the author
+    /// expected to see, so the CALLER surfaces them (as `TUTORIAL_FAILED`
+    /// telemetry) instead of leaving them in the log alone. The `warn!` at each
+    /// site keeps the detail; this list is what reaches the status bar.
+    pub failures: Vec<String>,
 }
 
 /// A `string`/`token`/`asset` attribute as text.
@@ -107,14 +113,17 @@ pub fn read(layer: &str) -> Curriculum {
         Ok(s) => s,
         Err(e) => {
             warn!("[tutorial] curriculum layer '{layer}' did not open: {e}");
-            return Curriculum::default();
+            return Curriculum {
+                failures: vec![format!("curriculum layer '{layer}' did not open: {e}")],
+                ..Default::default()
+            };
         }
     };
+    let mut out = Curriculum::default();
     for err in stage.composition_errors() {
         warn!("[tutorial] curriculum '{layer}': {err:?}");
+        out.failures.push(format!("curriculum '{layer}': {err:?}"));
     }
-
-    let mut out = Curriculum::default();
     let root = stage.prim(sdf::Path::abs_root());
     let Ok(top) = root.children() else {
         return out;
@@ -145,6 +154,8 @@ pub fn read(layer: &str) -> Curriculum {
             // rather than offered and then failing when a student picks it.
             let Some(script) = text(&prim, "info:sourceAsset") else {
                 warn!("[tutorial] lesson '{path}' declares no info:sourceAsset — skipped");
+                out.failures
+                    .push(format!("lesson '{path}' declares no info:sourceAsset — skipped"));
                 continue;
             };
             out.lessons.push(Lesson {

@@ -271,8 +271,11 @@ pub struct SetPorts {
     #[authz_target]
     pub target: Entity,
     /// `(port_name, value)` writes to apply this tick. Undeclared names are
-    /// silently ignored by `PortRegistry` (strict per-backend), so a binding may
-    /// name ports a given vessel doesn't have without error.
+    /// dropped by `PortRegistry` (strict per-backend) — the write stays a no-op,
+    /// but when the target exposes a port surface WITHOUT that name the drop is
+    /// recorded once per `(entity, port)` in [`CosimDiagnostics::faults`] (M12),
+    /// so a typo'd port from the API/script/autopilot surfaces instead of
+    /// vanishing. A binding may still name ports a given vessel doesn't have.
     pub writes: Vec<(String, f64)>,
     #[serde(default)]
     #[reflect(default)]
@@ -289,18 +292,16 @@ pub struct SetPorts {
 /// `write_port` needs `&mut World`, so we clone the (cheap, `fn`-pointer)
 /// registry and defer the writes through a `Commands` world closure.
 ///
-/// TODO(P9): the control-path latency "input at tick N → wheels at tick N" is
-/// currently an ACCIDENT OF SCHEDULING, not a declared edge. Two halves:
+/// On control-path latency ("input at tick N → wheels at tick N"), two halves:
 ///
-/// 1. **Producer ordering (not in this crate).** `drive_from_bindings`
-///    (`lunco-controller`) and `drive_autopilots` (`lunco-autopilot`) are added
-///    to `FixedUpdate` with NO ordering relative to
-///    [`lunco_core::ControlDacSet`]. They must be
-///    `.before(lunco_core::ControlDacSet)` explicitly, so the `SetPorts`
-///    they emit is flushed — and the source `Port` written — before propagation
-///    carries it across the `Wire` and the wheel systems read it. Without
-///    that edge, adding any unrelated `.after()` anywhere in the fixed graph can
-///    silently move the actuation a whole tick.
+/// 1. **Producer ordering (not in this crate) — DECLARED.** `drive_from_bindings`
+///    (`lunco-controller`) and `drive_autopilots` (`lunco-autopilot`) register
+///    with an explicit `.before(lunco_core::ControlDacSet)` edge, so the
+///    `SetPorts` they emit is flushed — and the source `Port` written — before
+///    propagation carries it across the `Wire` and the wheel systems read it.
+///    Any NEW input-producer system must carry the same edge, or an unrelated
+///    `.after()` anywhere in the fixed graph can silently move its actuation a
+///    whole tick.
 /// 2. **This write-through.** The observer cannot apply the writes itself:
 ///    `PortRegistry::write_port` takes `&mut World`, and an EXCLUSIVE system
 ///    cannot be an observer in Bevy (`bevy_ecs`'s own
@@ -321,7 +322,51 @@ fn on_set_ports(
     let writes = cmd.writes.clone();
     commands.queue(move |world: &mut World| {
         for (port, value) in &writes {
-            reg.write_port(world, target, port, *value);
+            if reg.write_port(world, target, port, *value) {
+                // A landing write retracts any earlier fault for this port —
+                // the backend may have come up late (model load order), which
+                // is not an authoring error. Cheap guard: the ledger is empty
+                // on the steady path, so the hot control loop allocates nothing.
+                let diag = world.resource::<diagnostics::CosimDiagnostics>();
+                if !diag.faults.is_empty() {
+                    world
+                        .resource_mut::<diagnostics::CosimDiagnostics>()
+                        .faults
+                        .remove(&(target, port.clone()));
+                }
+                continue;
+            }
+            // M12: the write dropped. Same triage as the wire master's
+            // (`propagate_connections`): an entity exposing NO ports at all is a
+            // structural or still-loading endpoint — load order, not a fault —
+            // while an entity that has ports but not THIS name is the genuine
+            // case (a typo'd port from the API/script/autopilot). Ledger entry
+            // deduped per `(entity, port)`, exactly like the wiring faults, and
+            // never re-asserted over a port proven to have landed.
+            let has_port_surface = !reg.entity_ports(world, target).is_empty();
+            if !has_port_surface {
+                continue;
+            }
+            let global_id = world.get::<lunco_core::GlobalEntityId>(target).copied();
+            let mut diag = world.resource_mut::<diagnostics::CosimDiagnostics>();
+            let key = (target, port.clone());
+            if diag.landed.contains(&key) {
+                continue;
+            }
+            if let std::collections::hash_map::Entry::Vacant(e) = diag.faults.entry(key) {
+                warn!(
+                    "[cosim] SetPorts targets unknown input port '{}' on {:?} — value \
+                     dropped (declare the port or fix the caller)",
+                    port, target
+                );
+                e.insert(diagnostics::BrokenConnection {
+                    entity: target,
+                    global_id,
+                    port: port.clone(),
+                    has_port_surface: true,
+                    dropped_value: *value,
+                });
+            }
         }
     });
 }

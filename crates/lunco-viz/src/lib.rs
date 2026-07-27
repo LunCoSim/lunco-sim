@@ -27,6 +27,8 @@ pub mod plot_fmt;
 pub mod registry;
 pub mod signal;
 #[cfg(feature = "ui")]
+pub mod telemetry_browser;
+#[cfg(feature = "ui")]
 pub mod view;
 #[cfg(feature = "ui")]
 pub mod viz;
@@ -38,6 +40,11 @@ pub use panel::{VizPanel, VIZ_PANEL_KIND};
 #[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
 pub use signal::{ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType};
+#[cfg(feature = "ui")]
+pub use telemetry_browser::{
+    drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest, TelemetryBrowserPanel,
+    TELEMETRY_BROWSER_PANEL_ID,
+};
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};
 #[cfg(feature = "ui")]
@@ -64,6 +71,7 @@ pub const DEFAULT_SIGNAL_HISTORY: usize = 20_000;
 /// * `VisualizationRegistry` + `VizKindCatalog` resources.
 /// * Built-in `LinePlot` viz kind.
 /// * `VizPanel` as a multi-instance workbench panel.
+/// * [`TelemetryBrowserPanel`] as a singleton side-browser panel.
 ///
 /// Domain plugins (`ModelicaPlugin`, future Avian bridge, …) are
 /// expected to be added *after* this plugin so they see the registry
@@ -81,6 +89,7 @@ impl Plugin for LuncoVizPlugin {
         .init_resource::<VizKindCatalog>()
         .init_resource::<VizFitRequests>()
         .register_visualization::<LinePlot>()
-        .register_instance_panel(VizPanel::default());
+        .register_instance_panel(VizPanel::default())
+        .register_panel(TelemetryBrowserPanel::default());
     }
 }
