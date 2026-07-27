@@ -18,21 +18,25 @@
 //!
 //! ## What this module ships
 //!
-//! - The verbs ([`OpenFile`], [`OpenFolder`], [`OpenTwin`],
-//!   [`SaveAll`], [`SaveAsTwin`]) as typed commands.
-//! - The picker-resolution router ([`on_pick_resolved`]) that turns
-//!   a [`crate::picker::PickResolved`] event into the matching typed verb
-//!   with the chosen path filled in.
+//! - The verbs it still OWNS ([`OpenFile`], [`SaveAll`], [`SaveAsTwin`]) as
+//!   typed commands.
+//! - The picker-resolution router ([`on_pick_resolved`]) that turns a
+//!   [`crate::picker::PickResolved`] event into the matching typed verb with the
+//!   chosen path filled in.
+//! - **Picker seams** for the verbs that MOVED. `OpenTwin`, `OpenFolder`,
+//!   `AddTwin` and `AddFolderToWorkspace` — and the whole folder-scan pipeline
+//!   behind them — now live in [`lunco_workspace::open`], because opening a
+//!   folder needs no window and keeping them here made them unreachable on a
+//!   headless host. What remains here is the one part that genuinely needs a
+//!   window: an empty `path` means "ask the human", so these observers show the
+//!   picker and ignore everything else. One implementation, one seam.
 //! - [`FileOpsPlugin`] which registers the above.
 //!
 //! ## What's deferred
 //!
-//! - **Observers for [`OpenFolder`] / [`OpenTwin`]** are stubs —
-//!   classification (Folder vs Twin via `twin.toml` presence) and Twin
-//!   spawning move here in a follow-up.
-//! - **[`OpenFile`] observer** lives in `lunco-modelica` today; will
-//!   become a generic classifier-and-dispatch when a second domain
-//!   contributes.
+//! - **[`OpenFile`] observer** handles scene files here (via
+//!   `spawn_twin_from_scene`) and otherwise defers to domain crates; it will
+//!   become a generic classifier-and-dispatch when a second domain contributes.
 //! - **[`SaveAll`] / [`SaveAsTwin`]** observers are stubs.
 
 use bevy::prelude::*;
