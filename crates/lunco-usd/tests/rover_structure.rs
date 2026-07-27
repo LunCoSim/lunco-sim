@@ -199,15 +199,20 @@ fn test_all_rover_files_match_procedural() {
             .next()
             .unwrap_or_else(|| panic!("{label}: No ActuatorPorts (rover root) entity"));
 
-        // Physics
+        // Physics. Born Kinematic + `ShouldBeDynamic` until joints resolve and
+        // readiness promotes — with no terrain in this world the hold is the
+        // correct terminal state, so destined-dynamic is the invariant.
         let rb = app
             .world()
             .get::<RigidBody>(rover)
             .expect(&format!("{label}: missing RigidBody"));
-        assert_eq!(
-            *rb,
-            RigidBody::Dynamic,
-            "{label}: RigidBody must be Dynamic"
+        assert!(
+            *rb == RigidBody::Dynamic
+                || app
+                    .world()
+                    .get::<lunco_usd_avian::ShouldBeDynamic>(rover)
+                    .is_some(),
+            "{label}: RigidBody must be Dynamic (or Kinematic-held via ShouldBeDynamic)"
         );
 
         let mass = app
@@ -342,10 +347,10 @@ fn test_all_rover_files_match_procedural() {
         // the live log shows `Quat(0,0,-0.707,0.707)`).
         let expected_rot = Quat::from_rotation_arc(Vec3::Y, Vec3::X);
         let expected_positions = [
-            ("Wheel_FL", Vec3::new(-1.0, -0.15, -1.225)),
-            ("Wheel_FR", Vec3::new(1.0, -0.15, -1.225)),
-            ("Wheel_RL", Vec3::new(-1.0, -0.15, 1.225)),
-            ("Wheel_RR", Vec3::new(1.0, -0.15, 1.225)),
+            ("Wheel_FL", Vec3::new(-1.0, -0.65, -1.225)),
+            ("Wheel_FR", Vec3::new(1.0, -0.65, -1.225)),
+            ("Wheel_RL", Vec3::new(-1.0, -0.65, 1.225)),
+            ("Wheel_RR", Vec3::new(1.0, -0.65, 1.225)),
         ];
 
         for (w_name, exp_pos) in &expected_positions {

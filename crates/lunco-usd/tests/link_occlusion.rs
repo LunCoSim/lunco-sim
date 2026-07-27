@@ -137,28 +137,45 @@ fn wall_prop_authors_an_occluder() {
     );
 }
 
-/// The mast's whole purpose is to lift an antenna clear of the ground, so its link
-/// node must be the `Antenna` child at dish height — not the root at y = 0, which
-/// would take the terrain's line of sight rather than the dish's.
+/// The mast's whole purpose is to lift an antenna clear of the ground, so its
+/// link node must sit at the dish feed's phase centre — the `LinkAperture` prim
+/// inside the articulated dish (`components/comms/antenna.usda` authors
+/// `lunco:linkNode` there so link geometry, RF state and the visible beam share
+/// one physical origin) — not the root at y = 0, which would take the terrain's
+/// line of sight rather than the dish's.
 #[test]
 fn comms_mast_is_a_link_node_at_dish_height() {
     let mut app = load_through_bevy("structures/comms_mast.usda", "/CommsMast");
-    let antenna = expect_path(&mut app, "/CommsMast/Antenna");
+    let aperture = expect_path(
+        &mut app,
+        "/CommsMast/Antenna/YawHead/DishGimbal/DishHead/LinkAperture",
+    );
 
     let node = app
         .world()
-        .get::<LinkNode>(antenna)
+        .get::<LinkNode>(aperture)
         .expect("comms_mast.usda must have a link node — it is 'the base's link home'");
     assert_eq!(node.class.as_deref(), Some("base"));
 
-    let tf = app
-        .world()
-        .get::<Transform>(antenna)
-        .expect("Antenna Transform");
+    // MinimalPlugins runs no transform propagation, so compose the aperture's
+    // mast-relative pose by hand up the ChildOf chain.
+    let mut composed = Transform::default();
+    let mut cur = aperture;
+    loop {
+        let local = *app
+            .world()
+            .get::<Transform>(cur)
+            .expect("every mast prim has a Transform");
+        composed = local * composed;
+        match app.world().get::<bevy::prelude::ChildOf>(cur) {
+            Some(parent) => cur = parent.parent(),
+            None => break,
+        }
+    }
     assert!(
-        tf.translation.y > 10.0,
+        composed.translation.y > 10.0,
         "the node must sit at the dish (y > 10), not at the mast's base: y = {}",
-        tf.translation.y
+        composed.translation.y
     );
 }
 
@@ -267,13 +284,17 @@ fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
 }
 
 /// The rover's antenna component is a link node wherever it is mounted — the fact the
-/// `comms_wall_test` and SS3 scenes both lean on.
+/// `comms_wall_test` and SS3 scenes both lean on. The endpoint is the dish feed's
+/// `LinkAperture` (see `components/comms/antenna.usda`), not the `Comms` mount root.
 #[test]
 fn rover_antenna_is_a_link_node() {
     let mut app = load_through_bevy("vessels/rovers/skid_rover.usda", "/SkidRover");
-    let comms = expect_path(&mut app, "/SkidRover/Comms");
+    let aperture = expect_path(
+        &mut app,
+        "/SkidRover/Comms/YawHead/DishGimbal/DishHead/LinkAperture",
+    );
     assert!(
-        app.world().get::<LinkNode>(comms).is_some(),
-        "the rover's Comms prim must be a link endpoint"
+        app.world().get::<LinkNode>(aperture).is_some(),
+        "the rover's antenna aperture must be a link endpoint"
     );
 }

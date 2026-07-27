@@ -54,7 +54,9 @@ const COLLIDER_DEPTH: u8 = 9;
 /// everything below ~12 m, so rovers drove flat across visually deep bowls.
 const COLLIDER_RES: usize = 33;
 /// Determinism lattice (metres) collider heights snap to — peers build
-/// byte-identical heightfields from the same oracle.
+/// byte-identical heightfields from the same oracle. Anchored in the WORLD
+/// frame (heights are quantized before the tile-local `origin_y` rebase), so
+/// abutting tiles with different datums still agree exactly on shared edges.
 const COLLIDER_QUANT_STEP: f64 = 1e-3;
 
 /// Marker + params: this terrain streams a per-rover collider ring instead of one
@@ -189,10 +191,13 @@ fn sample_heights_xz(
         let mut col = Vec::with_capacity(res);
         for iz in 0..res {
             let wz = z0 + iz as f64 * step;
-            col.push(quantize(
-                limited.height_at(wx, wz) - origin_y,
-                COLLIDER_QUANT_STEP,
-            ));
+            // Quantize the ABSOLUTE height, then rebase. The lattice must be
+            // anchored in the shared world frame: quantizing the rebased value
+            // snaps each tile to a lattice offset by its OWN `origin_y`, so two
+            // tiles sampling the same world point on a shared edge disagreed by
+            // up to a lattice step (~1e-4 m measured at 1937 m) — the seam
+            // "invisible wall" the adjacency test guards against.
+            col.push(quantize(limited.height_at(wx, wz), COLLIDER_QUANT_STEP) - origin_y);
         }
         cols.push(col);
     }
@@ -1064,7 +1069,10 @@ mod tests {
     /// survives the collider conditioning.
     #[test]
     fn collider_tile_reproduces_offcenter_crater_in_local_frame() {
-        // Root region matching a ±4 km DEM; depth-7 tiles are 62.5 m.
+        // Root region matching a ±4 km DEM; the canonical-depth tile side follows
+        // COLLIDER_DEPTH (15.6 m at depth 9), so all probe geometry below is
+        // derived from `region.half` — hardcoded depth-7 metres put the probes
+        // outside the tile when the ring was retuned deeper.
         let h = 4000.0_f64;
         let depth = COLLIDER_DEPTH;
         let mut grid = HeightGrid::new_flat(129, h as f32);
@@ -1082,12 +1090,14 @@ mod tests {
         let side = region.side();
 
         // One crater, off-centre in the tile at an AXIS-ASYMMETRIC local offset
-        // (+10 in x, −18 in z) so a transposed [z][x] layout puts the bowl at a
-        // measurably different spot.
-        let (dx, dz) = (10.0, -18.0);
+        // (+0.32·half in x, −0.58·half in z) so a transposed [z][x] layout puts
+        // the bowl at a measurably different spot. Sized so the crater's full
+        // 1.6·radius reach stays inside the tile and clear of the corner/far
+        // probes, at any COLLIDER_DEPTH.
+        let (dx, dz) = (0.32 * region.half, -0.58 * region.half);
         let crater = Crater {
             center: [region.center[0] + dx, region.center[1] + dz],
-            radius: 8.0,
+            radius: 0.38 * region.half,
             depth: 2.0,
             rim_height: 0.4,
             softness: 0.0,
@@ -1122,7 +1132,10 @@ mod tests {
         let collider = heightfield_collider(heights, side);
 
         // (c) …and adding `origin_y` back recovers the absolute datum exactly.
-        let far = surface_y(&collider, 25.0, 25.0, origin_y);
+        // A flat interior probe far from the crater's reach (crater sits in the
+        // −z half; 0.8·half in +x/+z is well outside 1.6·radius).
+        let far_l = 0.8 * region.half;
+        let far = surface_y(&collider, far_l, far_l, origin_y);
         assert!(
             (far - BASE_H).abs() < 0.05,
             "flat field should recover absolute {BASE_H}, got {far} (Y scaled, or origin_y lost?)"

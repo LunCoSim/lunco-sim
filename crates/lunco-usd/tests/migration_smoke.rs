@@ -194,11 +194,13 @@ fn drivetrain_physical_variant_brings_joints() {
     }
 }
 
-/// `physical` variant drops the wheels below the chassis (y = -0.65), while a
-/// `raycast` instance keeps them at ride height (y = -0.15). Proves the variant
-/// `over` opinions compose (or don't) per selection.
+/// Both drivetrain realizations share ONE authored wheel pose — the axle mount
+/// at y = -0.65. The variant no longer moves the wheel: the raycast strut top
+/// is derived from the authored suspension geometry (`restLength − radius`
+/// above the axle), not from a baked-in ride-height translate, so selecting a
+/// realization must leave the composed wheel where the asset authored it.
 #[test]
-fn drivetrain_variant_sets_wheel_height() {
+fn drivetrain_variants_share_the_axle_mount() {
     let cs = compose("scenes/sandbox/sandbox_scene.usda");
     let view = cs.view();
     let y = |path: &str| -> f64 {
@@ -207,11 +209,11 @@ fn drivetrain_variant_sets_wheel_height() {
     };
     assert!(
         (y("/SandboxScene/Skid_Physical_1/Wheel_FL") - (-0.65)).abs() < 1e-6,
-        "physical variant must drop the wheel to y=-0.65"
+        "physical wheel sits at the authored axle mount y=-0.65"
     );
     assert!(
-        (y("/SandboxScene/Skid_Raycast_1/Wheel_FL") - (-0.15)).abs() < 1e-6,
-        "raycast (fallback) variant keeps the wheel at y=-0.15"
+        (y("/SandboxScene/Skid_Raycast_1/Wheel_FL") - (-0.65)).abs() < 1e-6,
+        "raycast wheel shares the same axle mount — no baked ride-height translate"
     );
 }
 
