@@ -227,6 +227,38 @@ impl AssetManifest {
     }
 }
 
+/// How long to wait for the TCP/TLS connection to come up.
+///
+/// Short on purpose: a host that has not accepted a connection in half a minute
+/// is down, firewalled, or misrouted — waiting longer never turns into bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long to wait for the request headers to go out on an established
+/// connection.
+#[cfg(not(target_arch = "wasm32"))]
+pub const SEND_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long to wait for the RESPONSE HEADERS after the request is sent.
+///
+/// Generous (2 min) because some sources compute before they answer — a JPL
+/// Horizons vectors query is a server-side job, not a static file — but still
+/// bounded: this phase transfers nothing, so a long wait here is always a
+/// stalled peer, never a big file.
+#[cfg(not(target_arch = "wasm32"))]
+pub const RECV_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How long a body may go with ZERO new bytes before the download is treated as
+/// stalled. Enforced by the caller (see `datasets::spawn_download`) against the
+/// [`DownloadControl::progress`] callback, not by ureq — see the comment at the
+/// HTTP call for why the body must not carry a total-duration cap.
+///
+/// 2 minutes: long enough to ride out a TCP retransmit storm or a mirror
+/// hiccup on a bad link, short enough that a user staring at a frozen progress
+/// bar gets an answer rather than an indefinite wait.
+#[cfg(not(target_arch = "wasm32"))]
+pub const BODY_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Downloads an asset from the manifest entry. Equivalent to
 /// [`download_asset_with_control`] with no progress callback and no
 /// cancellation flag — keeps existing CLI/test call sites unchanged.
@@ -363,7 +395,26 @@ pub fn download_asset_with_control(
 
     // Download in chunks so progress can tick and cancellation is
     // responsive (within one chunk's read latency).
-    let response = ureq::get(&entry.url)
+    //
+    // Timeouts bound the HANDSHAKE phases only — connect, request send, and
+    // response headers. Deliberately NO `timeout_recv_body`: ureq's body
+    // timeout is a total-duration cap measured from the first body byte, and a
+    // legitimate multi-hundred-megabyte LROC/NAC GeoTIFF over a slow link can
+    // run for an hour without anything being wrong. A total cap would kill the
+    // honest download and leave the pathological one (a host that accepts the
+    // connection, answers the headers, then dribbles nothing) alive just as
+    // long. The right shape for the body is an INACTIVITY watchdog — "no bytes
+    // for N seconds" — which is enforced by the caller against the progress
+    // callback and the `cancel` flag (see `datasets::spawn_download`), because
+    // ureq exposes no per-read deadline.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_send_request(Some(SEND_REQUEST_TIMEOUT))
+        .timeout_recv_response(Some(RECV_RESPONSE_TIMEOUT))
+        .build()
+        .into();
+    let response = agent
+        .get(&entry.url)
         .call()
         .map_err(|e| DownloadError::DownloadFailed(entry.url.clone(), e.to_string()))?;
     let total: u64 = response
@@ -376,7 +427,18 @@ pub fn download_asset_with_control(
     // Stream to a temp file, hashing incrementally — never the whole payload
     // in RAM. Content-Length is server-supplied, so it must not dictate an
     // allocation; a multi-GB archive passes through the 64 KiB chunk buffer.
-    let download_path = std::env::temp_dir().join(format!("lunco_{key}.download"));
+    // Scratch names are unique per ATTEMPT, not per key. A download the caller
+    // gave up on (stall watchdog, user cancel) is detached and may still be
+    // parked in a blocking read; a retry that reused `lunco_<key>.download`
+    // would truncate the file underneath it and take a stray 64 KiB chunk from
+    // the zombie when it finally wakes. The pid also keeps two lunco processes
+    // fetching the same key out of each other's way.
+    let attempt = {
+        static ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+    let scratch = format!("lunco_{key}_{}_{attempt}", std::process::id());
+    let download_path = std::env::temp_dir().join(format!("{scratch}.download"));
     let mut out = std::fs::File::create(&download_path)
         .map_err(|e| DownloadError::WriteFailed(download_path.clone(), e.to_string()))?;
     use sha2::{Digest, Sha256};
@@ -429,7 +491,7 @@ pub fn download_asset_with_control(
     let is_tar = is_tar_gz || is_tar_bz2;
 
     if is_tar {
-        let temp_dir = std::env::temp_dir().join(format!("lunco_{}", key));
+        let temp_dir = std::env::temp_dir().join(&scratch);
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| DownloadError::WriteFailed(temp_dir.clone(), e.to_string()))?;
@@ -463,6 +525,9 @@ pub fn download_asset_with_control(
         let mut extracted: u64 = 0;
         for entry in entries_iter {
             if cancelled() {
+                // Scratch names are now attempt-unique, so an abandoned
+                // extraction would accumulate on disk unless it cleans up.
+                let _ = std::fs::remove_dir_all(&temp_dir);
                 return Err(DownloadError::Cancelled);
             }
             let mut entry = entry.map_err(|e| DownloadError::ExtractFailed(e.to_string()))?;

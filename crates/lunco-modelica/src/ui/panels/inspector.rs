@@ -499,11 +499,16 @@ fn apply_plot_binding(
         let Some(node) = scene.node(node_id) else {
             return;
         };
-        let prev_data = node.data.downcast_ref::<PlotNodeData>();
-        let prev_sig = prev_data.map(|d| d.signal_path.clone()).unwrap_or_default();
-        let prev_bind = prev_data
-            .map(|d| d.binding.clone())
-            .unwrap_or_else(lunco_viz::kinds::canvas_plot_node::PlotBinding::default);
+        // No fallback binding. There used to be an `unwrap_or_else(PlotBinding::default)`
+        // here, which silently demoted a `Doc`-bound tile to a pinned one whenever the
+        // downcast failed — a wrong binding renders a plausible plot of the WRONG signal,
+        // which is worse than rendering nothing. If the node is not a plot payload there
+        // is nothing to edit, and the `!kind_is_plot` guard below would bail anyway.
+        let Some(prev_data) = node.data.downcast_ref::<PlotNodeData>() else {
+            return;
+        };
+        let prev_sig = prev_data.signal_path.clone();
+        let prev_bind = prev_data.binding.clone();
         let is_plot = node.kind == lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND;
         (prev_sig, prev_bind, node.rect, is_plot)
     };

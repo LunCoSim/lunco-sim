@@ -98,16 +98,25 @@ pub fn spacecraft_billboard_system(
     q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
     q_global: Query<&GlobalTransform>,
 ) {
-    if let Some(cam_gtf) = q_camera.iter().next() {
-        let cam_rot = cam_gtf.compute_transform().rotation;
-        for (mut tf, child_of) in q_billboards.iter_mut() {
-            // To make a child face the camera in global space, we need to cancel out parent rotation
-            if let Ok(p_gtf) = q_global.get(child_of.parent()) {
-                let p_rot = p_gtf.compute_transform().rotation;
-                tf.rotation = p_rot.inverse() * cam_rot;
-            } else {
-                tf.rotation = cam_rot;
-            }
+    let Some(cam_gtf) = q_camera.iter().next() else {
+        return;
+    };
+    // `rotation()`, not `compute_transform()`: nothing here reads the decomposed
+    // scale or translation, and the whole `Transform` was being built per call.
+    let cam_rot = cam_gtf.rotation();
+    for (mut tf, child_of) in q_billboards.iter_mut() {
+        // To make a child face the camera in global space, cancel out the parent rotation.
+        let target = match q_global.get(child_of.parent()) {
+            Ok(p_gtf) => p_gtf.rotation().inverse() * cam_rot,
+            Err(_) => cam_rot,
+        };
+        // GUARDED WRITE. `Mut` only marks the component changed on `DerefMut`, so
+        // comparing first means a parked camera dirties no billboard `Transform`
+        // and triggers no transform propagation for the label subtree. Same
+        // discipline as `spacecraft_visibility_system` below and the tile-look
+        // write in `celestial_visuals_system` (systems.rs).
+        if tf.rotation != target {
+            tf.rotation = target;
         }
     }
 }
@@ -130,14 +139,65 @@ impl Plugin for MissionPlugin {
         app.add_systems(
             Update,
             (
-                update_spacecraft_position_system,
+                // On the SAME angular error budget as every other ephemeris
+                // consumer (`ephemeris_update_system`, `update_solar_poses`,
+                // `trajectory_alignment_system` — see `cadence`). A spacecraft
+                // is placed FROM the same ephemeris as the bodies it flies
+                // between, so solving it every frame while the bodies advance
+                // on the budget puts the craft and its reference frame at
+                // different instants — the cluster must advance together or not
+                // at all. This was the only ephemeris consumer left ungated.
+                //
+                // `.or_else(spacecraft_reparented)` is load-bearing:
+                // `spacecraft_alignment_system` below reparents with
+                // `set_parent_in_place`, which OVERWRITES the craft's
+                // `Transform` from its (default) `GlobalTransform`. That clobber
+                // is documented as self-healing "next frame" — which is only
+                // true if this system runs next frame. `Changed<ChildOf>` is
+                // observed on the frame after the reparent command applies, and
+                // this system runs before the alignment system in the chain, so
+                // the repair still lands in that frame.
+                update_spacecraft_position_system.run_if(
+                    crate::cadence::tracked_needs_solve().or_else(spacecraft_reparented),
+                ),
                 spacecraft_alignment_system,
                 spacecraft_visibility_system,
+                // NOT gated: the billboard tracks the CAMERA, not the epoch, and
+                // a camera-facing label that only re-aims every ~71 s of sim
+                // time would visibly swing. Its per-frame cost is now a guarded
+                // write instead of an unconditional one.
                 spacecraft_billboard_system,
             )
                 .chain(),
         );
     }
+}
+
+/// Fetch-or-mint a `Mesh` asset for a shape key, so byte-identical geometry is
+/// ONE asset (one vertex buffer, one `AssetId`, one batch) instead of one per
+/// spawn site. Keyed on the raw `f32` bit patterns of the shape's dimensions —
+/// exact equality is what "identical mesh" means here, and the dimensions are
+/// derived from the same `marker_radius_km` by the same arithmetic, so they
+/// compare bit-exact.
+fn shared_mesh(
+    cache: &mut std::collections::HashMap<(u8, u32, u32, u32), Handle<Mesh>>,
+    meshes: &mut Assets<Mesh>,
+    key: (u8, u32, u32, u32),
+    build: impl FnOnce() -> Mesh,
+) -> Handle<Mesh> {
+    cache
+        .entry(key)
+        .or_insert_with(|| meshes.add(build()))
+        .clone()
+}
+
+/// Did a spacecraft change parent since last frame?
+///
+/// The second half of `update_spacecraft_position_system`'s gate — see the note
+/// at its registration. Kept as a named condition rather than an inline closure
+/// so the reason it exists stays attached to it.
+fn spacecraft_reparented(q: Query<(), (With<Spacecraft>, Changed<ChildOf>)>) -> bool {
+    !q.is_empty()
 }
 
 /// Spawn the trajectories and spacecraft the loaded scene DECLARED.
@@ -216,11 +276,50 @@ pub fn spawn_declared_missions(
         commands.entity(decl_entity).try_insert(MissionSpawned);
     }
 
+    // One `Mesh` asset per DISTINCT shape, shared by handle across every
+    // spacecraft this pass spawns. The bus geometry is a pure function of the
+    // marker radius, so the two solar panels were minting two byte-identical
+    // `Cuboid` meshes per craft, and two craft of the same radius minted four
+    // more — each one its own vertex buffer and its own GPU upload, and each one
+    // a separate `AssetId` so the renderer could not batch them. The appearance
+    // side of this was already solved (identical `PbrLook`s collapse to one
+    // material); this is the geometry half.
+    let mut mesh_cache: std::collections::HashMap<(u8, u32, u32, u32), Handle<Mesh>> =
+        std::collections::HashMap::new();
+
     for (decl_entity, sc) in q_spacecraft.iter() {
         commands.entity(decl_entity).try_insert(MissionSpawned);
 
         let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
         let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
+
+        let panel_width = radius_m * 4.0;
+        let panel_height = radius_m * 0.8;
+        let panel_thickness = radius_m * 0.1;
+
+        let bus_mesh = shared_mesh(
+            &mut mesh_cache,
+            &mut meshes,
+            (0, radius_m.to_bits(), 0, 0),
+            || Cylinder::new(radius_m, radius_m * 1.5).mesh().into(),
+        );
+        let capsule_mesh = shared_mesh(
+            &mut mesh_cache,
+            &mut meshes,
+            (1, radius_m.to_bits(), 0, 0),
+            || Cylinder::new(radius_m * 0.1, radius_m).mesh().into(),
+        );
+        let panel_mesh = shared_mesh(
+            &mut mesh_cache,
+            &mut meshes,
+            (
+                2,
+                panel_width.to_bits(),
+                panel_height.to_bits(),
+                panel_thickness.to_bits(),
+            ),
+            || Cuboid::new(panel_width, panel_height, panel_thickness).mesh().into(),
+        );
 
         let mut sc_ent = commands.spawn((
             Name::new(sc.name.clone()),
@@ -247,7 +346,7 @@ pub fn spawn_declared_missions(
             // so the two solar panels below cost one, not two.
             // Main Body (Service Module) - Darker metallic grey
             parent.spawn((
-                Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
+                Mesh3d(bus_mesh),
                 PbrLook {
                     base_color: LinearRgba::from(Color::srgb(0.2, 0.2, 0.2)),
                     metallic: 0.8,
@@ -259,7 +358,7 @@ pub fn spawn_declared_missions(
 
             // Capsule (Command Module) - Silver metallic
             parent.spawn((
-                Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
+                Mesh3d(capsule_mesh),
                 PbrLook {
                     base_color: LinearRgba::from(Color::srgb(0.8, 0.8, 0.8)),
                     metallic: 1.0,
@@ -270,16 +369,12 @@ pub fn spawn_declared_missions(
                 Name::new("Command Module"),
             ));
 
-            // Solar Panels (Left and Right) - Blue solar look
-            let panel_width = radius_m * 4.0;
-            let panel_height = radius_m * 0.8;
-            let panel_thickness = radius_m * 0.1;
-
+            // Solar Panels (Left and Right) - Blue solar look. ONE mesh handle,
+            // cloned: the two panels are the same box mirrored by their
+            // `Transform`, so a second asset buys nothing and costs a batch.
             for side in [-1.0, 1.0] {
                 parent.spawn((
-                    Mesh3d(
-                        meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh()),
-                    ),
+                    Mesh3d(panel_mesh.clone()),
                     PbrLook {
                         base_color: LinearRgba::from(Color::srgb(0.0, 0.1, 0.4)), // Dark blue solar cells
                         emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
@@ -324,6 +419,12 @@ pub fn update_spacecraft_position_system(
     )>,
 ) {
     let jd = world.epoch_jd;
+    // ONE ephemeris evaluation for the Sun (NAIF 10), not one PER SPACECRAFT: the
+    // sun's position at `jd` does not depend on which craft is asking, and the
+    // provider call is a full VSOP2013 series evaluation. `None` here means the
+    // sun's own ephemeris is unavailable, in which case no craft can aim its
+    // panels — the per-craft `continue` below became this early-out.
+    let p_sun = ephemeris.provider.global_position(10, jd);
     for (sc, mut tf, cell, child_of) in q_spacecraft.iter_mut() {
         // P8(d): a spacecraft whose ephemeris CSV failed to fetch used to be placed at its
         // reference body's centre — inside the Earth, looking exactly like a real position.
@@ -362,9 +463,8 @@ pub fn update_spacecraft_position_system(
             }
         }
 
-        // Point solar panels towards the Sun
-        // Sun ID is 10
-        let Some(p_sun) = ephemeris.provider.global_position(10, jd) else {
+        // Point solar panels towards the Sun (hoisted out of the loop above).
+        let Some(p_sun) = p_sun else {
             continue;
         };
         let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target)

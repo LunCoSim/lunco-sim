@@ -536,6 +536,28 @@ pub fn celestial_visuals_system(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_site: Query<(), With<crate::geo::SiteAnchor>>,
+    // Tiles the globe LOD streamed in since last frame — they spawn carrying a
+    // clone of the body's look, which has no `transition` in it yet. The filter
+    // reads `TileCoord`/`TerrainTile` only, never `ShaderLook`, so it does not
+    // conflict with the `&mut ShaderLook` above.
+    q_new_tiles: Query<
+        (),
+        (
+            With<lunco_terrain_globe::TerrainTile>,
+            Added<lunco_terrain_globe::TileCoord>,
+        ),
+    >,
+    // A body whose look was REPLACED (imagery arrived, or the scene bound a
+    // Material). `imagery::apply_look_to_tiles` re-inserts the whole `ShaderLook`
+    // on every resident tile, wiping the `transition` this system wrote — and
+    // every caller of it changes `GlobeLod` in the same breath, which is why the
+    // body-side component is a sound proxy for "the tiles' looks are about to be
+    // overwritten". Watching `Changed<ShaderLook>` directly would need read
+    // access to the component this system writes.
+    q_relooked: Query<(), Changed<crate::globe_lod::GlobeLod>>,
+    // Last frame's per-body transitions, and a short "keep writing" countdown.
+    mut last_per_body: Local<std::collections::HashMap<Entity, f32>>,
+    mut force_frames: Local<u8>,
 ) {
     let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else {
         return;
@@ -591,6 +613,33 @@ pub fn celestial_visuals_system(
         };
         per_body.insert(body_ent, transition);
     }
+
+    // Whole-pass gate over the ~600 resident tiles. The per-body altitudes above
+    // are a handful of ancestor walks; the tile loop below is the part that
+    // scales with the LOD's resident set, and with the transitions unmoved it
+    // asks 600 times whether a value it already wrote is still what it wrote.
+    //
+    // NOT the cadence gate (`cadence::tracked_needs_solve`), and that is the
+    // point: the transition is a function of CAMERA ALTITUDE, so gating it on the
+    // epoch budget would leave a body on the wrong side of the texture↔blueprint
+    // ramp for ~71 s of sim time after a dive — the ramp would visibly lag the
+    // approach. It gates on its own inputs instead.
+    //
+    // Two frames rather than one after a dirty input: `apply_look_to_tiles`
+    // replaces the tiles' `ShaderLook` through `Commands`, which apply at a sync
+    // point that may fall AFTER this system. Writing the transition into a look
+    // that is about to be overwritten would silently lose it until the next time
+    // something else moved, so the write is repeated once the replacement has
+    // landed.
+    let dirty = *last_per_body != per_body || !q_new_tiles.is_empty() || !q_relooked.is_empty();
+    if dirty {
+        *force_frames = 2;
+    }
+    if *force_frames == 0 {
+        return;
+    }
+    *force_frames -= 1;
+    *last_per_body = per_body.clone();
 
     // Write the transition into each tile's appearance INTENT; `lunco-render-bevy`
     // rebinds the material. Every tile of a body gets the SAME value, so the binder's

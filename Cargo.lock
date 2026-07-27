@@ -6877,6 +6877,7 @@ dependencies = [
  "image",
  "include_dir",
  "js-sys",
+ "lunco-core",
  "lunco-geotiff",
  "lunco-storage",
  "lunco-twin",

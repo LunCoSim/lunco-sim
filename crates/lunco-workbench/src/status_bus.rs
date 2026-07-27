@@ -685,6 +685,65 @@ pub fn clear_outcomes_on_close_document(
     bus.clear_outcomes_for(BusyScope::Document(trigger.event().doc.0));
 }
 
+/// Source label for anything that arrives as a domain `TelemetryEvent`
+/// rather than through a workbench-native `push`. The event's own
+/// mnemonic leads the message, so the bar reads
+/// `Telemetry — DEM_BUILD_FAILED: Terrain 'apollo15' …`.
+pub const TELEMETRY_SOURCE: &str = "Telemetry";
+
+/// Fan Error/Critical domain telemetry onto the status bus.
+///
+/// **This is the bridge every emitting crate assumes exists.** Domain
+/// crates (`lunco-terrain-surface`, `lunco-assets`, `lunco-celestial`,
+/// `lunco-tutorial`, `lunco-workspace`, `lunco-usd-bevy`) deliberately do
+/// not depend on the workbench — they raise a `lunco_core::TelemetryEvent`
+/// and document that "the status bar surfaces it". Nothing did: before
+/// this observer the only `StatusLevel::Error` pushes in the workspace
+/// were Modelica-specific, so every one of those failures reached the log
+/// and stopped there. One observer here lights all of them up at once,
+/// and keeps the dependency arrow pointing the right way — UI consumes
+/// domain events, domains never learn about the UI.
+///
+/// Only `Error` and `Critical` are forwarded. `TelemetryEvent` is also the
+/// carrier for ordinary simulation events (zone entries, script `emit`,
+/// sensor faults) at `Debug`/`Info`, and those would swamp the history and
+/// the bar — they remain available to the Console and API subscribers via
+/// the telemetry stream itself. `Warning` is forwarded too, since
+/// Diagnostics is meant to show warnings tied to a document.
+pub fn surface_error_telemetry(
+    trigger: On<lunco_core::TelemetryEvent>,
+    mut bus: ResMut<StatusBus>,
+) {
+    use lunco_core::{Severity, TelemetryValue};
+
+    let ev = trigger.event();
+    let level = match ev.severity {
+        Severity::Critical | Severity::Error => StatusLevel::Error,
+        Severity::Warning => StatusLevel::Warn,
+        // Debug/Info are the high-volume simulation path — not status-bar material.
+        Severity::Debug | Severity::Info => return,
+    };
+
+    // The payload is usually the human-readable reason (emitters build it
+    // with `TelemetryValue::String`). Numeric payloads still say something
+    // useful, so render them rather than dropping the event.
+    let detail = match &ev.data {
+        TelemetryValue::String(s) if !s.is_empty() => s.clone(),
+        TelemetryValue::String(_) => String::new(),
+        TelemetryValue::F64(v) => v.to_string(),
+        TelemetryValue::I64(v) => v.to_string(),
+        TelemetryValue::Bool(v) => v.to_string(),
+    };
+
+    let message = if detail.is_empty() {
+        ev.name.clone()
+    } else {
+        format!("{}: {}", ev.name, detail)
+    };
+
+    bus.push(TELEMETRY_SOURCE, level, message);
+}
+
 /// Adds the [`StatusBus`] resource and the per-frame `drain_busy_drops`
 /// system. Renderers and fan-out systems are added by their owning
 /// plugins (each can opt in independently).
@@ -700,13 +759,72 @@ impl Plugin for StatusBusPlugin {
         // state in lock-step with the underlying work.
         app.init_resource::<StatusBus>()
             .add_systems(PreUpdate, drain_busy_drops)
-            .add_observer(clear_outcomes_on_close_document);
+            .add_observer(clear_outcomes_on_close_document)
+            .add_observer(surface_error_telemetry);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bridge exists and fires. Five domain crates raise Error
+    /// telemetry and document that the status bar shows it; for a long
+    /// time nothing connected the two, and a silent failure is exactly
+    /// what those events were added to prevent. If this test ever goes
+    /// away, so does the guarantee.
+    #[test]
+    fn error_telemetry_reaches_the_status_bus() {
+        use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+
+        let mut app = App::new();
+        app.add_plugins(StatusBusPlugin);
+        app.world_mut().trigger(TelemetryEvent {
+            name: "DEM_BUILD_FAILED".to_string(),
+            source: 0,
+            severity: Severity::Error,
+            data: TelemetryValue::String("no ground was created".to_string()),
+            timestamp: 0.0,
+        });
+
+        let bus = app.world().resource::<StatusBus>();
+        let found = bus
+            .history()
+            .any(|e| e.level == StatusLevel::Error && e.message.contains("DEM_BUILD_FAILED"));
+        assert!(
+            found,
+            "Error telemetry must land on the bus: {:?}",
+            bus.history().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// `TelemetryEvent` also carries ordinary simulation traffic (zone
+    /// entries, script `emit`, sensor samples) at Debug/Info. Forwarding
+    /// those would bury real failures in the bar and the history.
+    #[test]
+    fn routine_telemetry_does_not_reach_the_status_bus() {
+        use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+
+        let mut app = App::new();
+        app.add_plugins(StatusBusPlugin);
+        for severity in [Severity::Debug, Severity::Info] {
+            app.world_mut().trigger(TelemetryEvent {
+                name: "ZONE_ENTER".to_string(),
+                source: 7,
+                severity,
+                data: TelemetryValue::I64(42),
+                timestamp: 0.0,
+            });
+        }
+
+        let bus = app.world().resource::<StatusBus>();
+        assert_eq!(
+            bus.history().count(),
+            0,
+            "routine telemetry must not spam the bus: {:?}",
+            bus.history().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn legacy_push_progress_targets_global_scope() {

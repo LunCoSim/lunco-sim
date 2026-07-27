@@ -1,6 +1,5 @@
 //! Avatar UI panels — camera mode display and surface coordinates.
 
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_workbench::{
@@ -321,18 +320,16 @@ fn compute_lat_lon_height(
     let grid = grids.get(parent).ok()?;
     let dummy_tf = Transform::from_translation(tf_pos.as_vec3());
     let body_local = grid.grid_position_double(cell, &dummy_tf);
-    let dist = body_local.length();
 
     let body_comp = bodies.get(body).ok()?;
-    let height = dist - body_comp.radius_m;
-    let body_local_norm = if dist > 1e-6 {
-        body_local / dist
-    } else {
-        DVec3::Y
-    };
-    let lat = body_local_norm.y.asin().to_degrees();
-    let lon = body_local_norm.x.atan2(body_local_norm.z).to_degrees();
-    Some((lat, lon, height))
+    // ONE geodetic convention for the whole engine: `lunco_celestial::geo` owns
+    // the body-fixed ⇄ geodetic pair (and its inverse `geodetic_to_body_fixed`).
+    // This HUD used to hand-roll `lon = atan2(x, z)`, which is 90° off the
+    // canonical `atan2(-z, x)` — so this panel and the rover HUD (which already
+    // calls the shared function) reported different longitudes for one rover.
+    // Degrees out, which is what the panel formats.
+    let geo = lunco_celestial::geo::body_fixed_to_geodetic(body_local, body_comp.radius_m);
+    Some((geo.lat_deg, geo.lon_deg, geo.height_m))
 }
 
 fn trigger_tutorial_next(commands: &mut Commands) {

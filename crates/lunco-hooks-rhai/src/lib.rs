@@ -33,11 +33,31 @@ impl RhaiHook {
     /// helper functions and top-level `const`s; `entry` is the function invoked
     /// per hook call, receiving the marshalled args positionally.
     pub fn compile(source: &str, entry: impl Into<String>) -> Result<Self, String> {
-        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
-        // for ease of debugging. All rhai resource limits (max operations, call
-        // depth, string/array/map sizes) are unset on this engine. Revisit before
-        // multiplayer hardening (REVIEW-2026-07-19.md finding #4 / FUZZ-8).
-        let engine = Engine::new();
+        let mut engine = Engine::new();
+
+        // Close the file-import hole BEFORE compiling anything. `Engine::new()`
+        // installs rhai's `FileModuleResolver`, which reads arbitrary files
+        // relative to the process CWD — so a hook source (a peer-supplied merge
+        // policy, an authored `assets/scripting/policy/*.rhai`) could
+        // `import "../../../etc/passwd"`. Hook sources are self-contained
+        // snippets: no shipped policy or lint script uses `import`, and this
+        // crate has no asset layer to resolve one against, so an EMPTY static
+        // resolver is the correct fail-closed choice. If hooks ever need
+        // libraries, they must resolve through `lunco-assets`' script registry —
+        // never off the filesystem.
+        engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
+
+        // TODO(shared-limits): the resource caps (max operations, call depth,
+        // string/array/map sizes) are still UNSET on this engine. The policy
+        // already exists as `lunco_scripting::rhai_limits::apply`, but this crate
+        // CANNOT call it: `lunco-scripting` depends on `lunco-hooks-rhai`, so the
+        // reverse dep is a cycle — and copying the numbers here would create the
+        // second policy this is meant to remove. Fix by moving `rhai_limits` into
+        // a leaf crate both can depend on (this crate is the natural home — it is
+        // already the rhai-only, bevy-free, wasm-clean binding — with
+        // `lunco-scripting::rhai_limits` becoming a re-export), then calling it
+        // here. See REVIEW-2026-07-19.md finding #4 / FUZZ-8.
+        // TODO(multiplayer): RBAC on hook registration is likewise deferred.
         let ast = engine.compile(source).map_err(|e| e.to_string())?;
         // Run top-level statements once to populate consts into the base scope.
         let mut scope = Scope::new();

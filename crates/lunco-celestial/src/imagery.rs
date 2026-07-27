@@ -64,7 +64,44 @@ pub(crate) struct BoundBodyImagery(bevy::platform::collections::HashSet<Entity>)
 /// for a ready raster avoids a throwaway tile/material pass and guarantees a
 /// cold cache cannot leave a body looking permanently untextured.
 #[derive(Resource, Default)]
-pub(crate) struct PendingBodyImagery(Vec<PendingBodyImage>);
+pub(crate) struct PendingBodyImagery {
+    inflight: Vec<PendingBodyImage>,
+    /// Datasets whose load has failed, and how many times. A dataset that has
+    /// reached [`MAX_IMAGERY_ATTEMPTS`] is never re-issued — the give-up path
+    /// this map exists for.
+    ///
+    /// Keyed by dataset key, not by globe entity: the bytes are what failed,
+    /// and they fail the same way for whichever globe asks next. A scene
+    /// reload therefore does NOT reset a give-up (it is a property of the
+    /// file), and the give-up stands for the rest of the session. The entry is
+    /// dropped only when the dataset stops being installed — uninstalling and
+    /// re-downloading it is the way back, which is the same place the user
+    /// fixes the underlying problem.
+    attempts: bevy::platform::collections::HashMap<String, u8>,
+}
+
+/// How many times one dataset's raster may be handed to the asset server before
+/// this module stops asking.
+///
+/// A COUNT, not a wall-clock deadline, because unlike a scene load there is no
+/// long-running operation to wait out: `load_state` is already terminal when it
+/// reads `Failed`, so each retry resolves within a frame or two and three of
+/// them cost microseconds. Not one, so a globe that is replaced mid-decode (a
+/// scene swap) still gets another go; not unbounded, because the pre-fix
+/// behaviour — re-issue plus a `warn!` every frame, forever — is exactly what
+/// this bounds.
+const MAX_IMAGERY_ATTEMPTS: u8 = 3;
+
+/// Telemetry event published when a body's imagery is given up on.
+///
+/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// error-telemetry observer surfaces it, the same arrangement
+/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
+/// use. Silent give-up is indistinguishable from "this body simply has no
+/// imagery declared", which is a legitimate state — the user has to be told
+/// which it is. The payload is a human-readable string naming the dataset and
+/// the body.
+pub const BODY_IMAGERY_FAILED: &str = "BODY_IMAGERY_FAILED";
 
 struct PendingBodyImage {
     naif_id: i32,
@@ -191,6 +228,18 @@ pub(crate) fn bind_dataset_body_imagery(
     // scenes does not accumulate dead ids. Before the empty check: the
     // torn-down world is exactly when there is most to forget.
     bound.0.retain(|globe| q_globes.contains(*globe));
+    // A dataset that is no longer installed cannot fail again until it is
+    // re-installed, and a re-install is a new set of bytes — so it earns a
+    // fresh budget. Done here (not on the `is_installed` continue below) so it
+    // also runs on the frame a dataset is uninstalled.
+    if !pending.attempts.is_empty() {
+        pending.attempts.retain(|key, _| {
+            registry
+                .entries()
+                .iter()
+                .any(|e| &e.key == key && e.state.is_installed())
+        });
+    }
     if q_globes.is_empty() {
         return;
     }
@@ -201,7 +250,17 @@ pub(crate) fn bind_dataset_body_imagery(
         let Some(naif_id) = declared_body(entry) else {
             continue;
         };
-        if pending.0.iter().any(|request| request.naif_id == naif_id) {
+        // Given up on: do not hand it to the asset server again. Without this
+        // the failure arm below dropped the request without recording anything,
+        // so the next frame re-issued the same doomed load forever.
+        if pending
+            .attempts
+            .get(&entry.key)
+            .is_some_and(|n| *n >= MAX_IMAGERY_ATTEMPTS)
+        {
+            continue;
+        }
+        if pending.inflight.iter().any(|r| r.naif_id == naif_id) {
             continue;
         }
         let Some((globe, _, _lod, _tiles)) = q_globes
@@ -217,7 +276,7 @@ pub(crate) fn bind_dataset_body_imagery(
         // The URI, not the path: `lunco://` searches the packed cache and the
         // shared pool in turn, so this one string resolves the same whether the
         // file shipped with the build or was downloaded a moment ago.
-        pending.0.push(PendingBodyImage {
+        pending.inflight.push(PendingBodyImage {
             naif_id,
             dataset_key: entry.key.clone(),
             image: asset_server.load(entry.artifact_uri()),
@@ -225,12 +284,44 @@ pub(crate) fn bind_dataset_body_imagery(
     }
 
     let mut still_loading = Vec::new();
-    for request in std::mem::take(&mut pending.0) {
+    for request in std::mem::take(&mut pending.inflight) {
         if asset_server.load_state(&request.image).is_failed() {
-            warn!(
-                "[celestial] imagery dataset '{}' for body {} failed to load",
+            let attempts = pending
+                .attempts
+                .entry(request.dataset_key.clone())
+                .or_insert(0);
+            *attempts += 1;
+            if *attempts < MAX_IMAGERY_ATTEMPTS {
+                // Budget left: drop the handle and let the issuing loop above
+                // ask again next frame.
+                warn!(
+                    "[celestial] imagery dataset '{}' for body {} failed to load \
+                     (attempt {attempts}/{MAX_IMAGERY_ATTEMPTS}) — retrying",
+                    request.dataset_key, request.naif_id
+                );
+                continue;
+            }
+            // Give up, once, loudly, and where the user can see it. The body
+            // keeps its untextured appearance, which is a complete look — but
+            // it is now an EXPLAINED one.
+            error!(
+                "[celestial] imagery dataset '{}' for body {} failed to load \
+                 {MAX_IMAGERY_ATTEMPTS} times — giving up; the body will render \
+                 its untextured colour. Check that the processed texture exists \
+                 in the asset cache and is a decodable image.",
                 request.dataset_key, request.naif_id
             );
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: BODY_IMAGERY_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(format!(
+                    "imagery dataset '{}' for body {} failed to load after \
+                     {MAX_IMAGERY_ATTEMPTS} attempts — body renders untextured",
+                    request.dataset_key, request.naif_id
+                )),
+                timestamp: 0.0,
+            });
             continue;
         }
         if !asset_server.load_state(&request.image).is_loaded() {
@@ -259,7 +350,7 @@ pub(crate) fn bind_dataset_body_imagery(
             request.dataset_key
         );
     }
-    pending.0 = still_loading;
+    pending.inflight = still_loading;
 }
 
 #[cfg(test)]

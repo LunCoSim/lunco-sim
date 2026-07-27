@@ -23,23 +23,6 @@ pub struct ApiResponseEnvelope {
     pub error_code: Option<u16>,
 }
 
-/// Legacy request format:
-/// {"command": "...", "params": {...}}
-#[derive(Debug, Deserialize)]
-pub struct LegacyCommandRequest {
-    pub command: String,
-    pub params: Option<serde_json::Value>,
-}
-
-impl From<LegacyCommandRequest> for ApiRequest {
-    fn from(req: LegacyCommandRequest) -> Self {
-        ApiRequest::ExecuteCommand {
-            command: req.command,
-            params: req.params.unwrap_or_default(),
-        }
-    }
-}
-
 /// Unified input that handles both tagged and legacy formats.
 ///
 /// `extra` captures any fields not consumed by the named slots. When

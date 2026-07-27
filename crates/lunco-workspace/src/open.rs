@@ -17,10 +17,45 @@
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
 use lunco_twin::{TwinError, TwinMode};
 
 use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
+
+/// Telemetry event name published when an Open (Twin / Folder / Add) that the
+/// user actually asked for produces no workspace root.
+///
+/// Published at [`Severity::Error`], the same shape and lane
+/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
+/// use, so it reaches every consumer of the shared telemetry bus: the black-box
+/// log, the API telemetry stream (any subscriber, incl. an automated client
+/// watching an Open it requested), and any host observer that cares. The scan
+/// runs off-thread, so by the time it fails the click is long gone — without
+/// this the user is left staring at an unchanged workspace with the reason only
+/// in a terminal they are not watching.
+///
+/// NOTE (workspace-wide gap, not this module's to close): several crates
+/// document `Severity::Error` telemetry as "the workbench status bar surfaces
+/// it", but no observer in the workspace actually bridges `TelemetryEvent` to
+/// `lunco_workbench::status_bus::StatusBus`. Publishing here is still the right
+/// and only correct move — it is the one bus every host can see — but the
+/// status-bar fan-out has to be built once, centrally, for all of them.
+///
+/// The payload is a human-readable string naming WHICH command, WHICH path, and
+/// WHY — that string is what a status bar / diagnostics row shows verbatim.
+pub const TWIN_OPEN_FAILED: &str = "TWIN_OPEN_FAILED";
+
+/// The one shape every [`TWIN_OPEN_FAILED`] publication takes, so the payload
+/// convention cannot drift between the failure arms.
+fn twin_open_failed(detail: impl Into<String>) -> TelemetryEvent {
+    TelemetryEvent {
+        name: TWIN_OPEN_FAILED.into(),
+        source: 0,
+        severity: Severity::Error,
+        data: TelemetryValue::String(detail.into()),
+        timestamp: 0.0,
+    }
+}
 
 /// Open a Twin folder — strict: the folder must contain a `twin.toml`.
 ///
@@ -286,6 +321,11 @@ pub fn drain_pending_twin_opens(
                     entry.log_tag,
                     entry.path.display()
                 );
+                commands.trigger(twin_open_failed(format!(
+                    "{} failed: cannot open {} — the folder scan produced no workspace root",
+                    entry.log_tag,
+                    entry.path.display()
+                )));
             }
             Some(Err(e)) => {
                 warn!(
@@ -293,6 +333,11 @@ pub fn drain_pending_twin_opens(
                     entry.log_tag,
                     entry.path.display()
                 );
+                commands.trigger(twin_open_failed(format!(
+                    "{} failed: cannot open {} — {e}",
+                    entry.log_tag,
+                    entry.path.display()
+                )));
             }
         }
     }

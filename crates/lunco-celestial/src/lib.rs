@@ -52,9 +52,6 @@ pub mod transform;
 /// Re-export terrain types from lunco-terrain for backward compatibility.
 pub use lunco_terrain_globe::*;
 
-// Re-export TerrainTileConfig explicitly since it's used by celestial code
-pub use lunco_terrain_globe::TerrainTileConfig;
-
 pub mod commands;
 /// UI panels for celestial time control and body browser.
 #[cfg(feature = "ui")]

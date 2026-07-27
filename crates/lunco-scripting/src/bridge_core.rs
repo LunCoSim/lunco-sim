@@ -5,8 +5,8 @@
 //!
 //! The verbs a script gets (`cmd` / `get` / `query` / `world_pos` / hierarchy /
 //! `emit` / clock) are identical regardless of language. This module owns that
-//! logic *once*, free of any interpreter type, so rhai, Python (and a future
-//! Lua) are thin bindings over it rather than parallel reimplementations.
+//! logic *once*, free of any interpreter type, so rhai and Python are thin
+//! bindings over it rather than parallel reimplementations.
 //!
 //! # Native, not JSON-everywhere
 //!

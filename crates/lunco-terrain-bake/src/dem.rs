@@ -47,10 +47,28 @@ pub fn read_geotiff_transform(bytes: &[u8]) -> Result<lunco_geotiff::GeoTransfor
 
 /// Decode a (single-band) GeoTIFF into row-major elevations.
 /// Returns `(width, height, heights[row*width + col])`.
+///
+/// ## Duplicate decode core — keep in step with `lunco-assets`
+///
+/// The same 7-arm `DecodingResult` match lives in
+/// `lunco-assets/src/process.rs::decode_gray_source`. The two crates share no
+/// dependency other than `lunco-geotiff`, which is where this core belongs
+/// (it is already the one leaf that stops the writer and the reader disagreeing
+/// about the frame). Until it moves there, **any change here must be mirrored**
+/// — the last time the two drifted, only the writer side carried the limits fix
+/// below and this reader failed on exactly the rasters the pipeline exists for.
 pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemError> {
     use tiff::decoder::DecodingResult as D;
 
-    let mut dec = tiff::decoder::Decoder::new(Cursor::new(bytes)).map_err(DemError::Tiff)?;
+    // LROC/NAC DTMs ship as a SINGLE giant strip (the 2 m/px Apollo 15 product is
+    // a 2555×14311 float32 raster ≈ 146 MB in one strip), which blows past the
+    // `tiff` crate's default 128 MB `intermediate_buffer_size` — the decode fails
+    // outright, so the ceiling buys no safety here, only an unreadable file. The
+    // encoder side (`lunco-assets`) already lifts it; this reader must match or
+    // the pair disagrees about which rasters exist.
+    let mut dec = tiff::decoder::Decoder::new(Cursor::new(bytes))
+        .map_err(DemError::Tiff)?
+        .with_limits(tiff::decoder::Limits::unlimited());
     let (w, h) = dec.dimensions().map_err(DemError::Tiff)?;
     let (w, h) = (w as usize, h as usize);
 

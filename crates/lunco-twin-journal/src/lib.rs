@@ -13,11 +13,9 @@
 //!   Lamport clocks give causal ordering without wall-clock dependence and
 //!   align with `yrs` CRDT IDs (`(client_id, clock)`) for future swap-in.
 //! - **Streams** are named sequences of entries with a composition policy
-//!   (Sequential / Layered / LastWriteWins). Branches and USD-style layers
-//!   are both Streams under different policies.
+//!   ([`Composition::Sequential`]). Branches are Streams.
 //! - **JournalState** is the projected state computed by replaying entries
-//!   from one-or-more streams under a Composition policy (lazy; foundation
-//!   only implements Sequential).
+//!   from one-or-more streams under a Composition policy (lazy).
 //! - **ChangeSets** are optional atomic groups (transaction-style undo unit).
 //! - **Markers** are user-named milestones in history (Onshape Versions, git
 //!   tags, SysML v2 named Versions).
@@ -32,8 +30,8 @@
 //! ## Today: in-memory, single Sequential stream
 //!
 //! The foundation supports one Twin, one `main` Sequential stream, single
-//! user. The schema is shaped so multi-stream / multi-author / `Layered`
-//! USD composition / yrs CRDT backend slot in without API changes.
+//! user. The schema is shaped so multi-stream / multi-author / a yrs CRDT
+//! backend slot in without API changes.
 //!
 //! ## What this crate is NOT
 //!
@@ -553,30 +551,12 @@ impl StreamId {
 }
 
 /// How multiple streams combine into a [`JournalState`].
-///
-/// Foundation only implements `Sequential`; `Layered` and `LastWriteWins`
-/// are typed so future work doesn't require schema migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Composition {
     /// Single-active stream (git, SysML v2 commits, Onshape workspaces).
     /// Switching streams = changing which one we read; merging requires an
     /// explicit op producing a multi-parent entry.
     Sequential,
-    /// Multiple-active streams compose by layer rules (USD layer stack,
-    /// Nucleus per-user layers). Same-attribute conflicts resolved by
-    /// layer-strength ordering.
-    Layered { rules: LayerRules },
-    /// All streams apply continuously, latest lamport wins. Real-time
-    /// collab on flat content (Modelica/Python without a layer model).
-    LastWriteWins,
-}
-
-/// Placeholder for future USD-style layer composition rules. Foundation
-/// leaves this empty; populated when `Composition::Layered` is implemented.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LayerRules {
-    /// Reserved. Stronger streams override weaker on same-entity conflicts.
-    pub strength_order: Vec<StreamId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -611,10 +591,6 @@ pub struct Branch {
 
 /// Computed state of a Twin at a point in time, derived by replaying
 /// entries from one-or-more streams under a [`Composition`] policy.
-///
-/// Foundation: only `Composition::Sequential` is computable. `Layered` and
-/// `LastWriteWins` are typed-but-`unimplemented!()` until USD live collab
-/// and real-time-collab features arrive.
 ///
 /// State is computed lazily — the type holds the recipe (which streams,
 /// which composition), not the materialized result. Domain consumers
@@ -1253,8 +1229,8 @@ impl Journal {
     // ── Projection ───────────────────────────────────────────────────────
 
     /// Build a [`JournalState`] over the `main` stream with `Sequential`
-    /// composition. This is the foundation default; richer projections
-    /// (multi-stream, Layered) come later.
+    /// composition. This is the foundation default; richer multi-stream
+    /// projections come later.
     pub fn project_main(&self) -> JournalState {
         let head = self
             .streams
@@ -1275,7 +1251,7 @@ impl Journal {
     // needing a central coordinator, we define ONE deterministic linear order
     // over the whole DAG that every peer computes identically from the same
     // entry set. Replaying ops in that order gives convergent state
-    // (`Composition::LastWriteWins`: latest-in-order wins per target).
+    // (latest-in-order wins per target).
 
     /// Deterministic convergent order of **all** entries: a topological sort
     /// (every entry after each of its parents that is present) with concurrent
@@ -1443,7 +1419,7 @@ impl Journal {
     }
 
     /// [`merged_order_ids`](Self::merged_order_ids) resolved to entries — the
-    /// convergent replay sequence for `Composition::LastWriteWins` consumers
+    /// convergent replay sequence for latest-write-wins consumers
     /// (networked / post-merge). Use this instead of [`entries`](Self::entries)
     /// (insertion order) when a peer may hold divergent history.
     pub fn merged_order(&self) -> Vec<&JournalEntry> {
@@ -2106,7 +2082,6 @@ mod tests {
             .unwrap();
         let state = j.project_main();
         assert_eq!(state.streams, vec![StreamId::main()]);
-        assert!(matches!(state.composition, Composition::Sequential));
         assert_eq!(state.head, Some(id));
     }
 

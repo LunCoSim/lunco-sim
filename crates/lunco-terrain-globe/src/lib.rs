@@ -23,17 +23,7 @@
 //! That was wrong and would have cost someone the orbital view: the plugin having
 //! no systems is not the same as the code having no callers.)
 //!
-//! ## Known-dead within this crate
-//!
-//! [`PendingTile`], [`TerrainTileConfig`] and [`registry`]'s `TerrainMapRegistry` /
-//! `CustomMap` are leftovers of the abandoned in-crate tiling attempt: they are
-//! constructed (`init_resource`) but **never read** by anything, and no system
-//! populates them. `update_globe_lod` carries its own params on [`GlobeLod`].
-//! They are still `pub` and named across crate boundaries, so removing them is an
-//! API change, not a cleanup — see the staleness sweep report.
-//!
 //! [`lunco_celestial::globe_lod`]: https://docs.rs/lunco-celestial
-//! [`GlobeLod`]: https://docs.rs/lunco-celestial
 
 use bevy::prelude::*;
 
@@ -44,37 +34,6 @@ pub mod tile;
 pub use quad_sphere::*;
 pub use registry::*;
 pub use tile::*;
-
-/// Terrain tile configuration resource.
-#[derive(Resource, Reflect)]
-#[reflect(Resource)]
-pub struct TerrainTileConfig {
-    pub tile_size_m: f64,
-    pub tile_resolution: u32,
-    pub grid_radius: i32,
-    pub spawn_threshold: f64,
-    pub max_lod: u32,
-    pub lod_distance_factor: f64,
-    pub physics_lod_threshold: u32,
-    pub max_tile_entities: usize,
-    pub spawn_cooldown_frames: u32,
-}
-
-impl Default for TerrainTileConfig {
-    fn default() -> Self {
-        Self {
-            tile_size_m: 500.0,
-            tile_resolution: 32,
-            grid_radius: 4,
-            spawn_threshold: 100_000.0,
-            max_lod: 12,
-            lod_distance_factor: 2.0,
-            physics_lod_threshold: 8,
-            max_tile_entities: 2000,
-            spawn_cooldown_frames: 10,
-        }
-    }
-}
 
 /// Marker component for a spawned terrain tile entity.
 #[derive(Component)]
@@ -91,17 +50,11 @@ pub struct TileCoord {
     pub j: i32,
 }
 
-/// Pending tile that is being generated asynchronously.
-#[derive(Component)]
-pub struct PendingTile;
-
 /// Plugin that registers terrain systems.
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TerrainTileConfig>()
-            .register_type::<TerrainTileConfig>()
-            .register_type::<TileCoord>();
+        app.register_type::<TileCoord>();
     }
 }

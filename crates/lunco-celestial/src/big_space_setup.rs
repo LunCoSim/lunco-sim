@@ -82,7 +82,9 @@
 //! and broke Moon positioning. The two-layer design is correct.
 
 use crate::gravity::PointMassGravity;
-use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
+use crate::registry::{
+    CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame, MOON_MEAN_RADIUS_M,
+};
 use crate::soi::SOI;
 use avian3d::prelude::{Collider, CollisionLayers, LayerMask};
 use bevy::camera::visibility::NoFrustumCulling;
@@ -699,7 +701,7 @@ pub fn setup_big_space_hierarchy(
             CelestialBody {
                 name: "Moon".to_string(),
                 ephemeris_id: 301,
-                radius_m: 1737.0e3,
+                radius_m: MOON_MEAN_RADIUS_M,
             },
             CellCoord::default(),
             Transform::default(),
@@ -717,7 +719,7 @@ pub fn setup_big_space_hierarchy(
             // sphere sits on the origin in any scene that anchors no site), so it must be
             // masked out of suspension/sensor rays or every raycast wheel reports a
             // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
-            Collider::sphere(1737.0e3),
+            Collider::sphere(MOON_MEAN_RADIUS_M as f32),
             CollisionLayers::new(
                 LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
                 LayerMask::ALL,
@@ -747,7 +749,7 @@ pub fn setup_big_space_hierarchy(
         blueprint_tile_look_untextured(MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9);
     commands.entity(moon_body).insert((
         crate::globe_lod::GlobeLod {
-            radius_m: 1737.0e3,
+            radius_m: MOON_MEAN_RADIUS_M,
             surface_grid: moon_surface_grid,
             look: moon_blueprint,
             res: 32,

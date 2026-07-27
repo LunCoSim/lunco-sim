@@ -118,6 +118,16 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         // Prelude helpers — compiled and introspected under the runtime policy.
         let prelude: Vec<serde_json::Value> = {
             let mut engine = rhai::Engine::new();
+            // Replace rhai's default `FileModuleResolver` before compiling
+            // anything: it reads arbitrary files relative to the process CWD,
+            // so a prelude `import` would escape the sandbox. The limits do
+            // NOT close this hole — the third engine in this crate to need the
+            // same pairing (see `backend.rs` and `world_bridge.rs`).
+            //
+            // Empty resolver rather than `AssetModuleResolver`: this engine only
+            // introspects the prelude for the catalog, never runs authored
+            // script, so "no import resolves" is the correct fail-closed answer.
+            engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
             crate::rhai_limits::apply(&mut engine);
             crate::world_bridge::compile_prelude(&engine)
                 .map(|ast| {

@@ -11,8 +11,10 @@
 //!
 //! Panels and commands fire [`PickHandle`]; a backend observer (native
 //! `rfd` today, web File-System-Access tomorrow) resolves the dialog
-//! asynchronously and emits [`PickResolved`] (success) or
-//! [`PickCancelled`]. A workbench-side dispatcher reads the resolved
+//! asynchronously and emits [`PickResolved`] (success),
+//! [`PickCancelled`] (the user dismissed the dialog) or
+//! [`PickUnsupported`] (the backend cannot show this dialog at all —
+//! never folded into a cancellation). A workbench-side dispatcher reads the resolved
 //! event and triggers the matching typed file-workflow command
 //! (`OpenFile { path }`, `SaveAsDocument { doc, path }`, ...).
 //!
@@ -204,6 +206,25 @@ pub struct PickCancelled {
     pub follow_up: PickFollowUp,
 }
 
+/// Fired when the active backend **cannot show the requested dialog at
+/// all** — the request was never put in front of the user.
+///
+/// Distinct from [`PickCancelled`] on purpose. A cancellation is a user
+/// decision and is silent by design; an unsupported mode is a hole in
+/// the backend, and folding it into a cancellation made the two
+/// indistinguishable — the app looked like the user had dismissed a
+/// dialog that never opened. [`PickerPlugin`] always installs an
+/// observer that logs this at `error!`, so it can never be a silent
+/// no-op; callers that need to react (offer an alternative, show a
+/// banner) observe it as well.
+#[derive(Event, Clone, Debug)]
+pub struct PickUnsupported {
+    /// What would have been dispatched on success.
+    pub follow_up: PickFollowUp,
+    /// Why the backend refused, in user-facing terms.
+    pub reason: String,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Native backend — desktop OS dialogs via `rfd`
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,7 +329,9 @@ mod native {
 // read browser-side and stashed in a per-name cache; domain `OpenFile`
 // observers pull it back via [`take_picked_content`] instead of
 // `std::fs`, which has no real filesystem to read on wasm. Save and
-// folder pickers are not wired yet and resolve as a cancellation.
+// folder pickers have no browser equivalent here yet, so they resolve
+// as [`PickUnsupported`] — NOT as a cancellation, which would be
+// indistinguishable from the user dismissing a dialog.
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -321,7 +344,8 @@ mod web {
     use wasm_bindgen_futures::{spawn_local, JsFuture};
 
     use super::{
-        OpenFilter, PickCancelled, PickFollowUp, PickHandle, PickMode, PickResolved, StorageHandle,
+        OpenFilter, PickCancelled, PickFollowUp, PickHandle, PickMode, PickResolved,
+        PickUnsupported, StorageHandle,
     };
 
     thread_local! {
@@ -341,6 +365,10 @@ mod web {
         },
         Cancelled {
             follow_up: PickFollowUp,
+        },
+        Unsupported {
+            follow_up: PickFollowUp,
+            reason: String,
         },
     }
 
@@ -403,15 +431,18 @@ mod web {
                     });
                 }
             }
-            PickMode::SaveFile(_) | PickMode::OpenFolder => {
-                warn!(
-                    "[picker] save / folder dialogs are not yet supported on \
-                     wasm — request resolves as cancelled"
-                );
-                push(Outcome::Cancelled {
-                    follow_up: event.on_resolved,
-                });
-            }
+            PickMode::SaveFile(_) => push(Outcome::Unsupported {
+                follow_up: event.on_resolved,
+                reason: "the browser build has no Save-As dialog; use the \
+                         download action instead"
+                    .to_string(),
+            }),
+            PickMode::OpenFolder => push(Outcome::Unsupported {
+                follow_up: event.on_resolved,
+                reason: "the browser build cannot open a folder; open the \
+                         individual files instead"
+                    .to_string(),
+            }),
         }
     }
 
@@ -425,6 +456,9 @@ mod web {
                 }
                 Outcome::Cancelled { follow_up } => {
                     commands.trigger(PickCancelled { follow_up });
+                }
+                Outcome::Unsupported { follow_up, reason } => {
+                    commands.trigger(PickUnsupported { follow_up, reason });
                 }
             }
         }
@@ -541,8 +575,21 @@ pub fn download_file(file_name: &str, content: &str) {
 /// it directly.
 pub struct PickerPlugin;
 
+/// Backstop observer for [`PickUnsupported`], installed on every
+/// target. Guarantees a refused dialog leaves a trace even when no
+/// domain observer is listening — the failure mode this replaced was a
+/// request that produced literally nothing.
+fn log_unsupported_pick(trigger: On<PickUnsupported>) {
+    let e = trigger.event();
+    error!(
+        "[picker] {:?} could not be shown by this backend: {}",
+        e.follow_up, e.reason
+    );
+}
+
 impl Plugin for PickerPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(log_unsupported_pick);
         #[cfg(not(target_arch = "wasm32"))]
         {
             app.add_observer(native::spawn_picker)

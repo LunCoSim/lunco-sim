@@ -573,18 +573,19 @@ fn process_dem(
         // Body radius, for the GeoTIFF citation only — it does not enter the
         // pixel→metre mapping, which is a local metric frame.
         //
-        // ⚠ THE ENGINE HAS NO CANONICAL MOON RADIUS. Three values are in the tree
-        // and they disagree: `1737.0e3` (`lunco-celestial/src/registry.rs:178`,
-        // the one the sim actually places bodies with), `1.7374e6`
-        // (`lunco-sandbox/src/ui/mod.rs:363`) and `1_737_400.0`
-        // (`lunco-celestial/tests/terrain_curvature_determinism.rs:19`). The 400 m
-        // spread is a real altitude bias the moment anything prints a height —
-        // flagged as an open decision in the school twin's driver-UI doc.
+        // The canonical lunar radius: IAU/WGCCRE mean radius, 1737.4 km
+        // (Archinal et al., WGCCRE report) — the datum the LOLA/LRO products this
+        // pipeline ingests are themselves referenced to. It replaced a `1737.0e3`
+        // here: the tree used to carry three values 400 m apart, which is a real
+        // georeferencing bias the moment anything reports a height.
         //
-        // We follow the registry, because a raster should describe the body the
-        // simulation puts it on, not a more defensible number. Reconcile the three
-        // and this follows.
-        const BODY_RADIUS_M: f64 = 1737.0e3;
+        // ⚠ DO NOT re-type this number elsewhere. It is declared once, as
+        // `lunco_celestial::registry::MOON_MEAN_RADIUS_M`, and this crate mirrors
+        // the VALUE only because `lunco-assets` (an offline build tool) does not —
+        // and should not — depend on the Bevy-heavy `lunco-celestial`. The proper
+        // home is `lunco-core`, which both already depend on; move it there and
+        // both sites should import it.
+        const BODY_RADIUS_M: f64 = 1_737_400.0;
         let mut geo = lunco_geotiff::GeoTransform::centred_square(
             win as f64 * scale,
             out_n,

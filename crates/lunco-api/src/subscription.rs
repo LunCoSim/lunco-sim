@@ -5,6 +5,7 @@ use crate::{
     schema::{ApiResponse, TelemetryFilter, TelemetryResponse},
 };
 use bevy::prelude::*;
+use lunco_core::SessionId;
 
 /// Telemetry events ride the same `ApiResponseEvent` channel as HTTP
 /// request/response, but they are server-pushed packets, not replies to a
@@ -16,15 +17,41 @@ use bevy::prelude::*;
 const TELEMETRY_CORRELATION_FLAG: u64 = 1 << 63;
 
 /// Active telemetry subscription.
-// TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-// ease of debugging. No session/peer field, so a remote client's subscriptions
-// cannot be attributed to (or reaped with) its session on disconnect — see the
-// matching note in `lunco-networking/src/server.rs::on_server_disconnected`.
-// Revisit before multiplayer hardening (report_glm52.md CONC-1 / Tier B7).
+///
+/// # Who owns a subscription, and who can reap it
+///
+/// Every subscription is attributed to the [`SessionId`] that asked for it, so
+/// "drop everything this session held" is expressible ([`
+/// TelemetrySubscriptions::release_session`]) instead of impossible. Before this
+/// field existed a subscription was an anonymous row: `unsubscribe(id)` was the
+/// ONLY way to remove one, so a subscriber that went away without calling it
+/// leaked its row for the life of the process.
+///
+/// **The single-player leak is closed by construction, not by a reaper.** Local
+/// callers subscribe as [`SessionId::LOCAL`], whose lifetime IS the process
+/// lifetime — there is no moment at which a `LOCAL` subscription is garbage, so
+/// nothing needs to collect it, and the explicit `UnsubscribeTelemetry` path
+/// already covers a client that leaves politely.
+///
+/// **The remote leak is still open**, and honestly so. Nothing in the API layer
+/// observes a peer disconnecting; the only site that learns of one is
+/// `lunco-networking/src/server.rs::on_server_disconnected`, which must call
+/// [`TelemetrySubscriptions::release_session`] with the departing session. Until
+/// it does, a remote client that drops without unsubscribing still leaks — the
+/// field and the reaper exist so that wiring is a one-line change, not a
+/// refactor. See the matching TODO in that observer.
+/// (report_glm52.md CONC-1 / Tier B7.)
+///
+/// The ingress side is the other half of that work: `ApiRequestEvent` carries no
+/// session, so [`TelemetrySubscriptions::subscribe`] can only stamp `LOCAL`. A
+/// transport that knows its peer calls [`TelemetrySubscriptions::subscribe_as`].
 #[derive(Debug)]
 pub struct TelemetrySubscription {
     pub id: u64,
     pub filter: TelemetryFilter,
+    /// Session that created this subscription — the reaping key.
+    /// [`SessionId::LOCAL`] for anything the local process asked for.
+    pub owner: SessionId,
 }
 
 impl TelemetrySubscription {
@@ -47,19 +74,59 @@ pub struct TelemetrySubscriptions {
 }
 
 impl TelemetrySubscriptions {
+    /// Subscribe on behalf of the LOCAL session.
+    ///
+    /// This is what the executor calls: `ApiRequestEvent` carries no session, so
+    /// the API layer cannot honestly claim a request came from anyone else. A
+    /// transport that DOES know its peer must call [`Self::subscribe_as`] —
+    /// otherwise the row is attributed to `LOCAL` and
+    /// [`Self::release_session`] can never reap it.
     pub fn subscribe(&mut self, filter: Option<TelemetryFilter>) -> u64 {
+        self.subscribe_as(SessionId::LOCAL, filter)
+    }
+
+    /// Subscribe on behalf of `owner`, so the row can be reaped with that
+    /// session by [`Self::release_session`].
+    pub fn subscribe_as(&mut self, owner: SessionId, filter: Option<TelemetryFilter>) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.subscriptions.push(TelemetrySubscription {
             id,
             filter: filter.unwrap_or_default(),
+            owner,
         });
         id
     }
     pub fn unsubscribe(&mut self, id: u64) {
         self.subscriptions.retain(|s| s.id != id);
-        // Drop the decimation bookkeeping too when the last subscriber leaves, so a
-        // later subscriber isn't silently throttled by a dead one's watermark.
+        self.forget_watermarks_if_idle();
+    }
+
+    /// Drop every subscription owned by `session` and report how many went.
+    ///
+    /// The reaper the leak needs. It is deliberately a plain method rather than
+    /// an observer: the API layer never learns that a session ended, so wiring
+    /// it to a disconnect signal here would be a reaper that never runs. The one
+    /// site that does learn is
+    /// `lunco-networking/src/server.rs::on_server_disconnected` — it calls this.
+    ///
+    /// Refuses `SessionId::LOCAL`: the local session outlives the registry, so
+    /// "release LOCAL" is never a real disconnect, and honouring it would let a
+    /// stray call silently mute all local telemetry.
+    pub fn release_session(&mut self, session: SessionId) -> usize {
+        if session == SessionId::LOCAL {
+            return 0;
+        }
+        let before = self.subscriptions.len();
+        self.subscriptions.retain(|s| s.owner != session);
+        let dropped = before - self.subscriptions.len();
+        self.forget_watermarks_if_idle();
+        dropped
+    }
+
+    /// Drop the decimation bookkeeping when the last subscriber leaves, so a
+    /// later subscriber isn't silently throttled by a dead one's watermark.
+    fn forget_watermarks_if_idle(&mut self) {
         if self.subscriptions.is_empty() {
             self.last_sent.clear();
         }
@@ -203,6 +270,38 @@ mod tests {
         let id = subs.subscribe(None);
         subs.unsubscribe(id);
         assert!(subs.subscriptions.is_empty());
+    }
+
+    /// A subscription is attributed to its session, and releasing that session
+    /// takes exactly its rows — a second session's stream must survive the
+    /// first one's disconnect.
+    #[test]
+    fn releasing_a_session_reaps_only_its_own_subscriptions() {
+        let mut subs = TelemetrySubscriptions::default();
+        let a = SessionId(1);
+        let b = SessionId(2);
+        subs.subscribe_as(a, None);
+        subs.subscribe_as(a, None);
+        subs.subscribe_as(b, None);
+
+        assert_eq!(subs.release_session(a), 2);
+        assert_eq!(subs.subscriptions.len(), 1);
+        assert_eq!(subs.subscriptions[0].owner, b);
+        assert!(
+            subs.should_broadcast("any_name", None),
+            "the surviving session must still receive telemetry"
+        );
+    }
+
+    /// `LOCAL` is the process itself: it never disconnects, so releasing it is
+    /// always a mistake and must not mute local telemetry.
+    #[test]
+    fn releasing_the_local_session_is_refused() {
+        let mut subs = TelemetrySubscriptions::default();
+        subs.subscribe(None); // stamped LOCAL — the executor's path
+        assert_eq!(subs.release_session(SessionId::LOCAL), 0);
+        assert_eq!(subs.subscriptions.len(), 1);
+        assert_eq!(subs.subscriptions[0].owner, SessionId::LOCAL);
     }
 
     #[test]

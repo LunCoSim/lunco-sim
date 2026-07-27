@@ -614,14 +614,31 @@ pub fn trajectory_mesh_update_system(
             path.points.iter().map(|p| p.as_vec3().to_array()).collect()
         };
 
-        let colors: Vec<[f32; 4]> =
-            vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()];
+        // `ATTRIBUTE_COLOR` is NOT written here when the alpha pass will write it.
+        //
+        // Its RGB is one constant — `view.color`, which the material already
+        // carries as `base_color` — so a per-vertex copy of it says nothing. What
+        // is genuinely per-vertex is the ALPHA (the past half of the orbit fades
+        // out), and `trajectory_alpha_update_system` runs immediately after this
+        // system in the same `.chain()`, in the same frame, and overwrites the
+        // whole attribute from the vertex count it finds. Building a full
+        // `Vec<[f32; 4]>` of the constant colour here only to throw it away one
+        // system later is an allocation and a GPU upload per rebuild, and a
+        // trajectory rebuild is thousands of vertices.
+        //
+        // The one case the alpha pass declines is a path with fewer than two
+        // points, where there is no time axis to fade along. Seed those here, so
+        // the attribute's vertex count can never disagree with `POSITION`.
+        let colors: Option<Vec<[f32; 4]>> = (path.points.len() < 2)
+            .then(|| vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()]);
 
         let mesh_handle = children.iter().find_map(|child| q_marker.get(child).ok());
         if let Some(mesh_handle) = mesh_handle {
             if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts);
-                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                if let Some(colors) = colors {
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                }
             }
             continue;
         }
@@ -634,7 +651,9 @@ pub fn trajectory_mesh_update_system(
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        if let Some(colors) = colors {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        }
         let mesh_handle = meshes.add(mesh);
         let emissive_color = view.color * 15.0;
         let look = PbrLook {

@@ -34,6 +34,25 @@ pub struct CelestialBodyRegistry {
 
 pub use lunco_core::CelestialBody;
 
+/// **The** lunar radius, in metres. Every place that needs "how big is the
+/// Moon" — body placement, colliders, ground-relative altitude, the body-radius
+/// citation stamped into a baked GeoTIFF — refers to this.
+///
+/// Source: IAU/WGCCRE mean radius of the Moon, 1737.4 km
+/// (Archinal et al., *Report of the IAU Working Group on Cartographic
+/// Coordinates and Rotational Elements*). The same value the LOLA/LRO products
+/// the terrain pipeline ingests are referenced to.
+///
+/// It exists because the tree carried three disagreeing values (`1737.0e3`
+/// here, `1.7374e6` in the sandbox UI, `1_737_400.0` in tests) — a 400 m spread,
+/// i.e. a real altitude/georeferencing bias the moment anything reports a height.
+/// Do not re-type the number; a fourth copy is the bug coming back.
+///
+/// (Home of record: this belongs in `lunco-core`, the one leaf every consumer
+/// already sees. `lunco-assets` cannot reach `lunco-celestial` and so still
+/// carries its own copy of the *value* — see `lunco-assets/src/process.rs`.)
+pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
+
 /// Component that identifies an entity as a center of a celestial reference frame.
 ///
 /// **Why**: Essential for the ephemeris system to resolve absolute
@@ -172,7 +191,7 @@ impl CelestialBodyRegistry {
                 BodyDescriptor {
                     name: "Moon".to_string(),
                     ephemeris_id: 301,
-                    radius_m: 1737.0e3,
+                    radius_m: MOON_MEAN_RADIUS_M,
                     gm: 4.9048695e12,
                     soi_radius_m: Some(66.0e6),
                     parent_id: Some(3), // EMB
