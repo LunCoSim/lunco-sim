@@ -30,8 +30,7 @@ use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
-    extract_input_names_from_ast, extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
-    extract_parameters_from_ast, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
 };
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
@@ -72,9 +71,24 @@ pub struct UsdSourcedCosim;
 /// authority: after a successful compile, this contract is checked against the
 /// DAE-reported inputs and observed outputs before the model may step.
 #[derive(Component, Clone, Debug)]
-struct UsdModelicaPortContract {
+pub(crate) struct UsdModelicaPortContract {
     inputs: BTreeSet<String>,
     outputs: BTreeSet<String>,
+}
+
+impl UsdModelicaPortContract {
+    /// The contract a USD-declared boundary makes, whatever declared it — a
+    /// program prim's `inputs:`/`outputs:` attributes, or a projected network's
+    /// wrapper boundary.
+    pub(crate) fn new(
+        inputs: impl IntoIterator<Item = String>,
+        outputs: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            inputs: inputs.into_iter().collect(),
+            outputs: outputs.into_iter().collect(),
+        }
+    }
 }
 
 /// A prim's USD-declared co-sim interface — its `inputs:`/`outputs:` scalar
@@ -329,6 +343,12 @@ pub fn process_usd_cosim_prims(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
 ) {
+    // Which prims a component collection already owns, per stage. Computed once
+    // per run rather than per prim (it is a full stage walk), and NOT cached
+    // across runs: this system only runs while unprocessed prims remain, and
+    // each prim is decided exactly once.
+    let mut members_by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, BTreeSet<String>> =
+        HashMap::new();
     for (entity, prim_path) in query.iter() {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             continue;
@@ -371,11 +391,18 @@ pub fn process_usd_cosim_prims(
         // queued by this pipeline uses the same despawn-safe form for the same
         // reason. See `lunco_usd_bevy::sync_usd_visuals` for the policy.
         commands.entity(entity).try_insert(UsdSourcedCosim);
+        let view = cs.view();
+        let members = members_by_stage.entry(id).or_insert_with(|| {
+            lunco_usd_bevy::program::network_member_paths(&view)
+                .into_iter()
+                .collect()
+        });
         process_usd_cosim_prim_read(
-            &cs.view(),
+            &view,
             entity,
             prim_path,
             &sdf_path,
+            members,
             &mut commands,
             &asset_server,
         );
@@ -390,6 +417,8 @@ fn process_usd_cosim_prim_read(
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
+    // Every prim some `CollectionAPI:components` scope on this stage owns.
+    network_members: &BTreeSet<String>,
     commands: &mut Commands,
     asset_server: &AssetServer,
 ) {
@@ -436,14 +465,37 @@ fn process_usd_cosim_prim_read(
         return;
     }
 
-    // Connector-bearing Modelica components are compiled together by the
-    // network projector. Compiling the same class here would create a second,
-    // physically independent solver for one authored component.
+    // A member of a component collection is compiled INTO its network's
+    // generated model by `domain_projection`. Compiling it here as well would
+    // create a second, physically independent solver for one authored
+    // component, whose outputs then feed the wire fabric.
+    //
+    // MEMBERSHIP is the test, not "declares an acausal connector". The two look
+    // alike only because every shipped member happens to have a pin: a
+    // causal-only member (a controller, a PDU — which `read_network` accepts and
+    // documents) has no `connectors:` at all, so the old gate handed it exactly
+    // that second solver.
+    if network_members.contains(&prim_path.path) {
+        commands.entity(entity).try_insert(UsdSimProcessed);
+        return;
+    }
+    // …and the converse. A part with acausal pins that NO network owns cannot be
+    // solved at all: its `.mo` is a component class whose pins only mean
+    // something inside a `connect()` set, so there is nothing to run standalone.
+    // Silence here is how a battery dropped into a rover with no `Electrical`
+    // scope simply fails to exist — the pin reads as connected in USD while the
+    // circuit it belongs to was never generated.
     if reader
         .attr_names(sdf_path)
         .iter()
         .any(|name| name.starts_with("connectors:"))
     {
+        warn!(
+            "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
+             CollectionAPI:components network, so no Modelica model is generated for it and it \
+             does not simulate. Add it to a network scope's `collection:components:includes`.",
+            prim_path.path
+        );
         commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
@@ -539,10 +591,12 @@ fn process_usd_cosim_prim_read(
     let (inputs, outputs) = declared_interface(reader, sdf_path);
     let model_name = match (&modelica_path, &python_path) {
         (Some(path), _) => {
-            commands.entity(entity).try_insert(UsdModelicaPortContract {
-                inputs: inputs.keys().cloned().collect(),
-                outputs: outputs.keys().cloned().collect(),
-            });
+            commands
+                .entity(entity)
+                .try_insert(UsdModelicaPortContract::new(
+                    inputs.keys().cloned(),
+                    outputs.keys().cloned(),
+                ));
             path.clone()
         }
         (_, Some(path)) => format!("Python:{path}"),
@@ -749,30 +803,15 @@ pub fn dispatch_loaded_modelica_sources(
             continue;
         };
 
-        // Single best-effort parse, three AST-driven extracts. Lenient
-        // parsing means a model with a semantic error still produces
-        // usable name/parameter/input snapshots — same recovery
-        // semantics `Session::recovered_file_query` uses on the engine
-        // side.
-        let ast = rumoca_phase_parse::parse_to_syntax(&src.text, "cosim-dispatch.mo")
-            .best_effort()
-            .clone();
-        let model_name = extract_model_name_from_ast(&ast).unwrap_or_else(|| "Model".into());
-        let parameters = extract_parameters_from_ast(&ast);
-        // The INTERFACE is every declared input; the defaults map only covers the
-        // subset that authored a numeric binding. `ModelicaModel::inputs` is a
-        // write buffer seeded from the authored interface (see its doc), and
-        // `wrap_modelica_into_simcomponent` copies it into `SimComponent::inputs`
-        // — the port surface a wire writes to. Seeding it from defaults alone gave
-        // an unbound `input Real drive_left` no port at all.
-        let defaults = extract_inputs_with_defaults_from_ast(&ast);
-        let inputs = extract_input_names_from_ast(&ast)
-            .into_iter()
-            .map(|name| {
-                let seed = defaults.get(&name).copied().unwrap_or(0.0);
-                (name, seed)
-            })
-            .collect();
+        // ONE parse-and-extract, shared with the network projector
+        // (`lunco_modelica::parse_model_interface`): `ModelicaModel::inputs` is a
+        // write buffer seeded from the authored interface, which
+        // `wrap_modelica_into_simcomponent` copies into `SimComponent::inputs` —
+        // the port surface a wire writes to.
+        let interface = parse_model_interface(&src.text, "cosim-dispatch.mo");
+        let model_name = interface.model_name.unwrap_or_else(|| "Model".into());
+        let parameters = interface.parameters;
+        let inputs = interface.inputs;
 
         // DISPATCH FIRST, then stub. NOT `let _ = send(..)`: a closed worker
         // channel means the compile is never attempted, and a `ModelicaModel`
@@ -1300,6 +1339,13 @@ pub fn rewire_usd_connections(
     // exactly what makes an input a parameter.
     let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
 
+    // Network membership, per stage — see the skip below. One stage walk per
+    // rebuild, not per prim.
+    let mut members_by_stage: HashMap<
+        bevy::asset::AssetId<UsdStageAsset>,
+        std::collections::HashSet<String>,
+    > = HashMap::new();
+
     // Rebuild: drop every derived edge, then re-derive from the composed stage.
     for e in q_edges.iter() {
         commands.entity(e).try_despawn();
@@ -1328,14 +1374,22 @@ pub fn rewire_usd_connections(
         if view.type_name(&sink_sdf).as_deref() == Some("LunCoEvent") {
             continue;
         }
-        if view
-            .attr_names(&sink_sdf)
-            .iter()
-            .any(|name| name.starts_with("connectors:"))
-        {
-            // This is a component inside a synthesized Modelica network.
-            // Its causal and acausal edges are compiled into the wrapper; only
-            // the containing Scope participates in scalar runtime propagation.
+        // A component inside a synthesized Modelica network: its causal AND
+        // acausal edges are compiled into the wrapper, so only the containing
+        // Scope participates in scalar runtime propagation. A wire built here
+        // would target a member that has no `SimComponent` of its own —
+        // a phantom edge that can never land.
+        //
+        // MEMBERSHIP decides it, the same test `process_usd_cosim_prims` uses
+        // for who owns a member's solver. It used to be "declares
+        // `connectors:*`", which reads the same only because every shipped
+        // member has a pin: a causal-only member kept its `inputs:` wired at
+        // runtime as well as compiled into the wrapper, so the equation and the
+        // wire both drove it.
+        let members = members_by_stage
+            .entry(id)
+            .or_insert_with(|| lunco_usd_bevy::program::network_member_paths(&view));
+        if members.contains(&prim_path.path) {
             continue;
         }
 
@@ -2539,6 +2593,9 @@ pub(crate) fn install(app: &mut App) {
                 reg.register(SetPortProvider);
                 // Richer per-entity cosim introspection (not an alias of the above).
                 reg.register(CosimStatusProvider);
+                // The read path for `generated://…` models — the text a
+                // projected USD network was actually compiled from.
+                reg.register(crate::domain_projection::GeneratedSourceProvider);
             }
         },
     );

@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    defaultPrim = "Rig"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A minimal composed network for the projection READER: one wired battery/motor
+# island, plus a part that is installed but electrically unconnected and a
+# boundary output published through it.
+def Xform "Rig"
+{
+    def Scope "Electrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        float inputs:drive_left = 0.0
+        float outputs:soc.connect = </Rig/Battery.outputs:soc_out>
+        float outputs:solar_power.connect = </Rig/SolarPanel.outputs:power_out>
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </Rig/Battery>,
+            </Rig/Motor>,
+            </Rig/SolarPanel>,
+        ]
+    }
+
+    def Xform "Battery" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        float inputs:voltage_nom = 24.0
+        float outputs:soc_out
+        custom token connectors:p.connect = </Rig/Motor.connectors:p>
+    }
+
+    def Xform "Motor" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        float inputs:demand.connect = </Rig/Electrical.inputs:drive_left>
+        float outputs:torque_out
+        custom token connectors:p
+    }
+
+    # Installed, never wired: no `connectors:p.connect` anywhere names it.
+    def Xform "SolarPanel" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+        float inputs:area = 18.0
+        float outputs:power_out
+        custom token connectors:p
+    }
+}

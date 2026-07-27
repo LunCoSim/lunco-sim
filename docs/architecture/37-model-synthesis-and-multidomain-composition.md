@@ -204,6 +204,16 @@ two-level rule in action.
 
 ## 8. Pluggable synthesizers: rhai policy + Rust backend + hooks
 
+> Status: **NOT IMPLEMENTED** (2026-07-27). What ships is ONE hardcoded synthesizer —
+> `lunco_usd_sim::domain_projection`, which compiles a `Scope` carrying
+> `CollectionAPI:components` into one generated model. There is no
+> `SynthesizerRegistry`, no rhai synthesizer body, and no hook: adding a `thermal`
+> or `harness` synthesizer today means editing `project_domain_islands`. The
+> section below is the intended design, not a description of the code. What IS
+> shared is the READER — `lunco_usd_bevy::program` answers "is this prim a Modelica
+> program facet, and what class does it instantiate" for the projector and the lint
+> facts alike.
+
 A synthesizer must **not** be one hardcoded Rust function. The netlist-mapping rules ("this component →
 that MSL class", "insert a fuse here", "lowfi omits parasitic R") are *policy*, and the house directive is
 **policy → rhai, primitives → Rust, dispatch → open registry**. Everything needed already ships — this

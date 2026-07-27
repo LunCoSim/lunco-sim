@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "Rig"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Two authoring faults the reader must REJECT rather than emit: a member whose
+# asset names no Modelica class (no `models/` package root, no subIdentifier),
+# and a non-finite constant that would be spelled `NaN` in generated source.
+def Xform "Rig"
+{
+    def Scope "Electrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </Rig/Battery>,
+            </Rig/Motor>,
+        ]
+    }
+
+    def Xform "Battery" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @twin://parts/Battery.mo@
+        float outputs:soc_out
+        custom token connectors:p.connect = </Rig/Motor.connectors:p>
+    }
+
+    def Xform "Motor" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        float inputs:demand = nan
+        custom token connectors:p
+    }
+}

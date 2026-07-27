@@ -539,11 +539,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let mut collections: Vec<H> = Vec::new();
     let mut network_scopes: Vec<H> = Vec::new();
     for p in &paths {
-        if reader
-            .attr_names(p)
-            .iter()
-            .any(|name| name.starts_with("collection:components:"))
-        {
+        if lunco_usd_bevy::program::is_domain_network_root(reader, p) {
             let (members, collection_error) = match reader.collection_members(p, "components") {
                 Ok(members) => (members, String::new()),
                 Err(error) => (Vec::new(), error),
@@ -585,15 +581,12 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     continue;
                 }
                 let member_name = member.to_string();
-                let implementation = reader
-                    .value_str(member, "info:implementationSource")
-                    .unwrap_or_default();
-                let source = reader.asset(member, "info:sourceAsset");
-                if implementation != "sourceAsset"
-                    || !source
-                        .as_deref()
-                        .is_some_and(|asset| asset.ends_with(".mo"))
-                {
+                // ONE definition of "usable Modelica program facet", shared with
+                // the runtime projector (`lunco_usd_bevy::program`). This used to
+                // be its own check — any `.mo` passed — while the projector also
+                // needed a resolvable class name, so an asset could lint clean
+                // and be rejected at load with a different message.
+                if lunco_usd_bevy::program::modelica_member_class(reader, member).is_err() {
                     invalid_program_sources.push(member_name.clone());
                     continue;
                 }
