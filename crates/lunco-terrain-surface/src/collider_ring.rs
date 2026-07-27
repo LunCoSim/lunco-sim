@@ -26,6 +26,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
+use lunco_core::coords::GridPos;
 use lunco_core::WorldGrid;
 use lunco_terrain_core::{quantize, HeightSource};
 
@@ -287,7 +288,7 @@ pub fn update_collider_ring(
     // HashSet/Vec per frame (per terrain, for `wanted`) was pure allocator
     // traffic for zero work. Each is cleared at the point it was previously
     // constructed, so the logic is unchanged.
-    mut foci: Local<Vec<DVec3>>,
+    mut foci: Local<Vec<GridPos>>,
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
 ) {
@@ -318,7 +319,7 @@ pub fn update_collider_ring(
         bodies
             .iter()
             .filter(|(rb, _)| matches!(rb, RigidBody::Dynamic))
-            .map(|(_, pos)| pos.0),
+            .map(|(_, pos)| GridPos(pos.0)),
     );
 
     for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
@@ -369,8 +370,8 @@ pub fn update_collider_ring(
             // tile-placement half below writes tile origins with
             // `grid.translation_to_grid(<DEM coords>)` on that same assumption.
             // So a grid-absolute body position is already DEM-local, and no
-            // transform belongs in between.
-            let (lx, lz) = (f.x, f.z);
+            // transform belongs in between (`.0` here IS that identity).
+            let (lx, lz) = (f.0.x, f.0.z);
             if lx.abs() > h || lz.abs() > h {
                 continue; // body is off the DEM region
             }
@@ -585,7 +586,10 @@ pub fn hold_physics_until_dem_ready(
                 if !matches!(rb, RigidBody::Dynamic) {
                     continue;
                 }
-                let Some(coord) = ring_node(half, ring.depth, pos.0.x, pos.0.z) else {
+                // Typed at the read: avian `Position` IS the grid-absolute point
+                // the DEM/ring lattice is addressed in.
+                let p = GridPos(pos.0);
+                let Some(coord) = ring_node(half, ring.depth, p.0.x, p.0.z) else {
                     continue; // off this terrain — its ring doesn't apply
                 };
                 // Gate on avian broad-phase LIVENESS, not `tiles.map` membership.
@@ -713,9 +717,9 @@ pub fn settle_grounded_assemblies(
     let half = hf.0.half_extent() as f64;
 
     // Pass 1 (read-only): snapshot every body's grid-absolute Position.
-    let mut pos_of: HashMap<Entity, DVec3> = HashMap::default();
+    let mut pos_of: HashMap<Entity, GridPos> = HashMap::default();
     for (e, pos, _, _) in bodies.iter() {
-        pos_of.insert(e, pos.0);
+        pos_of.insert(e, GridPos(pos.0));
     }
     let adj = joints.adjacency(|e| {
         dynamics
@@ -736,12 +740,12 @@ pub fn settle_grounded_assemblies(
         let mut over_terrain = false;
         for &m in &members {
             let Some(p) = pos_of.get(&m) else { continue };
-            if p.x.abs() > half || p.z.abs() > half {
+            if p.0.x.abs() > half || p.0.z.abs() > half {
                 continue; // this member is off the terrain footprint
             }
             over_terrain = true;
-            let surface = hf.0.height_at(p.x, p.z);
-            lift = lift.max(surface + SETTLE_CLEARANCE - p.y);
+            let surface = hf.0.height_at(p.0.x, p.0.z);
+            lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
         }
         // One-shot: consume the marker on the whole assembly regardless.
         for &m in &members {
@@ -849,7 +853,7 @@ pub fn rescue_overturned_vessels(
         let up = rot.0 * DVec3::Y;
         let resting = lin.is_none_or(|v| v.0.length() < OVERTURN_REST_SPEED)
             && ang.is_none_or(|w| w.0.length() < OVERTURN_REST_SPEED);
-        let pivot = pos.0;
+        let pivot = GridPos(pos.0);
         if up.y > OVERTURN_UP_DOT || !resting {
             // Upright or moving: healthy. Clear both the settle timer and any
             // prior give-up marker so a legitimate one-shot rescue resets to a
@@ -892,15 +896,17 @@ pub fn rescue_overturned_vessels(
         });
         let members = joint_component(root, &adj);
         // Rotate every member's authoritative pose about the pivot, collecting
-        // the post-rotation positions for the reseat pass.
-        let mut post: Vec<DVec3> = Vec::with_capacity(members.len());
+        // the post-rotation positions for the reseat pass. `grid − grid` is a
+        // frame-free lever arm; rotating it and re-adding the pivot stays grid.
+        let mut post: Vec<GridPos> = Vec::with_capacity(members.len());
         for &m in &members {
             let Ok((_, mut pos, mut rot, _, _)) = bodies.get_mut(m) else {
                 continue;
             };
-            pos.0 = pivot + q_fix * (pos.0 - pivot);
+            let rotated = pivot + q_fix * (GridPos(pos.0) - pivot);
+            pos.0 = rotated.0;
             rot.0 = (q_fix * rot.0).normalize();
-            post.push(pos.0);
+            post.push(rotated);
         }
         // Reseat: the deepest post-rotation member ends RESCUE_CLEARANCE above
         // its local surface (only ever lifting — gravity handles settling down).
@@ -913,11 +919,11 @@ pub fn rescue_overturned_vessels(
             // here — it desynced the surface by the FloatingOrigin cell offset
             // (~2 km) at the elevated moonbase.
             for world in &post {
-                let (x, z) = (world.x, world.z);
+                let (x, z) = (world.0.x, world.0.z);
                 if x.abs() > half || z.abs() > half {
                     continue;
                 }
-                lift = lift.max(hf.0.height_at(x, z) - world.y + RESCUE_CLEARANCE);
+                lift = lift.max(hf.0.height_at(x, z) - world.0.y + RESCUE_CLEARANCE);
             }
         }
         for &m in &members {

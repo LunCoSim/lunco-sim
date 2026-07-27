@@ -373,7 +373,7 @@ pub fn update_sun_light_system(
                 let p = lunco_core::coords::world_position_seeded(
                     e, cell, tf, &q_parents, &q_grids, &q_spatial,
                 );
-                (p.normalize_or_zero().y as f32).asin().to_degrees()
+                (p.0.normalize_or_zero().y as f32).asin().to_degrees()
             });
         debug!(
             "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \

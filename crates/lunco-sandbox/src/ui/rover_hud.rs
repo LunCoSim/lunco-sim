@@ -422,7 +422,8 @@ fn resolve_driven(
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
     let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
-    let rot = rot.as_quat();
+    let pos = pos.0;
+    let rot = rot.0.as_quat();
 
     // Local up = world up. Over a 1 km site the body's curvature contributes
     // d²/2R ≈ 0.3 m of sag, i.e. ~0.03° of tilt — far below the gauge's

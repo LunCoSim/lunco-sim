@@ -240,7 +240,7 @@ fn pick_ground_world(
     let dir = ray.direction.as_dvec3();
     let phys = raycaster
         .cast_ray_render(
-            origin,
+            lunco_core::coords::RenderPos(origin),
             ray.direction,
             1.0e6,
             false,
@@ -260,7 +260,9 @@ fn pick_ground_world(
         (None, Some((_, tp))) => tp,
         (None, None) => return None,
     };
-    raycaster.to_physics(hit_render)
+    raycaster
+        .to_physics(lunco_core::coords::RenderPos(hit_render))
+        .map(|p| p.0)
 }
 
 /// Global `Pointer<Click>` observer: Alt+LMB drops a waypoint prim for the selected
@@ -772,7 +774,7 @@ fn get_waypoint_positions(
             if let Some(pos) =
                 lunco_core::coords::world_position(entity, q_parents, q_grids, q_spatial)
             {
-                positions.push(pos);
+                positions.push(pos.0);
             }
         }
     }
@@ -897,6 +899,7 @@ pub fn sync_waypoint_visuals(
                         &q_grids_only,
                         &q_spatial,
                     )
+                    .map(|p| p.0)
                 })
             });
             let Some(pos) = pos else { continue };
@@ -923,11 +926,15 @@ pub fn sync_waypoint_visuals(
     };
     let grid_world =
         lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
-            .unwrap_or(DVec3::ZERO);
+            .unwrap_or(lunco_core::coords::GridPos(DVec3::ZERO));
 
     // 3. Spawn or update desired visuals.
     for ((vessel, coord_key), (index, pos, passed, livery)) in desired {
-        let (cell, local_pos) = lunco_core::coords::world_to_grid_local(pos, grid_world, grid);
+        let (cell, local_pos) = lunco_core::coords::world_to_grid_local(
+            lunco_core::coords::GridPos(pos),
+            grid_world,
+            grid,
+        );
 
         let mut base_color = livery;
         base_color.alpha = if passed { 0.12 } else { 0.28 };
@@ -1023,6 +1030,7 @@ pub fn draw_waypoint_overlay(
     // Camera world position for distance-based sizing.
     let cam_world =
         lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
+            .map(|p| p.0)
             .unwrap_or(bevy::math::DVec3::ZERO);
 
     // Under the chrome, over the 3D — see `billboard_overlay::world_overlay_layer`.
@@ -1267,7 +1275,7 @@ pub fn delete_reached_waypoints(
         for target in &targets {
             // 1. Coordinate waypoint → runtime-only reached set.
             if let Some(wp_pos) = parse_coord_target(target) {
-                if (wp_pos - vessel_pos).length() < WAYPOINT_ARRIVAL {
+                if (lunco_core::coords::GridPos(wp_pos) - vessel_pos).length() < WAYPOINT_ARRIVAL {
                     let known = reached
                         .as_ref()
                         .map(|r| r.0.contains(target))
@@ -1629,7 +1637,7 @@ pub fn sync_waypoint_path_mesh(
     };
     let grid_world =
         lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
-            .unwrap_or(DVec3::ZERO);
+            .unwrap_or(lunco_core::coords::GridPos(DVec3::ZERO));
 
     // Existing ribbons, keyed by (vessel, part).
     let mut existing: std::collections::HashMap<(Entity, PathPart), (Entity, u64)> =
@@ -1670,6 +1678,7 @@ pub fn sync_waypoint_path_mesh(
                             &q_grids_only,
                             &q_spatial,
                         )
+                        .map(|p| p.0)
                     })
                 });
                 pos.map(|p| (p, reached.map(|r| r.0.contains(t)).unwrap_or(false)))
@@ -1744,7 +1753,11 @@ pub fn sync_waypoint_path_mesh(
                     LinearRgba::new(0.10, 0.70, 0.35, 1.0),
                 ),
             };
-            let (cell, local) = lunco_core::coords::world_to_grid_local(anchor, grid_world, grid);
+            let (cell, local) = lunco_core::coords::world_to_grid_local(
+                lunco_core::coords::GridPos(anchor),
+                grid_world,
+                grid,
+            );
             commands.spawn((
                 Mesh3d(meshes.add(mesh)),
                 PbrLook {

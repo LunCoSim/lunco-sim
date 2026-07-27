@@ -264,7 +264,13 @@ pub fn update_range_sensors(
         if let Ok(parent) = q_parents.get(e) {
             filter.excluded_entities.insert(parent.0);
         }
-        s.hit = match grid.cast_ray_render(render_origin, dir, s.max_distance, true, &filter) {
+        s.hit = match grid.cast_ray_render(
+            lunco_core::coords::RenderPos(render_origin),
+            dir,
+            s.max_distance,
+            true,
+            &filter,
+        ) {
             Some(hit) => {
                 s.distance = hit.distance;
                 true

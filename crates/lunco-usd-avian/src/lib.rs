@@ -48,6 +48,7 @@ use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
+use lunco_core::coords::GridPos;
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_shape_dims, read_transform_from_usd,
     read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
@@ -2059,8 +2060,10 @@ fn build_usd_physics_joints(
         );
         let rigid = pending.joint_type == "PhysicsFixedJoint";
 
-        let pose0 = q_pose.get(b0).ok().map(|(p, r)| (p.0, r.0));
-        let pose1 = q_pose.get(b1).ok().map(|(p, r)| (p.0, r.0));
+        // avian `Position` is a grid-absolute point — wrap at the read so the
+        // anchor math below type-checks as grid + body-local offset.
+        let pose0 = q_pose.get(b0).ok().map(|(p, r)| (GridPos(p.0), r.0));
+        let pose1 = q_pose.get(b1).ok().map(|(p, r)| (GridPos(p.0), r.0));
 
         if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
             // The orientation the constraint demands of body1:
@@ -2112,8 +2115,8 @@ fn build_usd_physics_joints(
                     pending.local_rot0,
                     pending.local_pos1,
                     pending.local_rot1,
-                    p0,
-                    p1,
+                    p0.0,
+                    p1.0,
                 );
                 // A metre-scale seat is a scene bug every time; do not let it hide
                 // among ordinary warnings.

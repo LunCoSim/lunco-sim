@@ -394,7 +394,7 @@ pub(crate) fn update_links(
         .iter()
         .filter_map(|(e, hf)| {
             let (p, r) = world_pose(e, &q_parents, &q_grids, &q_spatial)?;
-            Some((p, r, hf.0.clone()))
+            Some((p.0, r.0, hf.0.clone()))
         })
         .collect();
 
@@ -408,7 +408,7 @@ pub(crate) fn update_links(
             let (center_local, half) = occ.box_for(tf.scale);
             // `world_pose` composes translation+rotation only, so the extent's own
             // (scaled) centre offset is placed by the prim's rotation here.
-            Some((p + r * center_local, r, half))
+            Some((p.0 + r.0 * center_local, r.0, half))
         })
         .collect();
 

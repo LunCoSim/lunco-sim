@@ -8,6 +8,7 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::InputPorts;
 
 use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
@@ -199,23 +200,21 @@ pub(crate) fn update_wheel_spin(
             } else {
                 (lin.0, ang.0)
             };
-            // Reconstruct the hub in the AVIAN cell-local frame from the chassis
-            // body pose + the wheel's chassis-local transform (the wheel is a
-            // `ChildOf` the chassis, so `local_tf` *is* that transform). Reading
-            // `global_tf.translation()` here mixed the big_space render frame into
-            // the lever arm `hub − pos.0` and drifted the slip term once the rover
-            // drove away from the floating origin (CQ-201). Rotation is frame-safe
-            // (big_space only translates), so `forward` can keep using `global_tf`.
+            // Reconstruct the hub in the grid-absolute physics frame from the
+            // chassis body pose + the wheel's chassis-local transform (the wheel
+            // is a `ChildOf` the chassis, so `local_tf` *is* that transform) —
+            // never from `global_tf.translation()`, whose render frame drifted
+            // the slip lever once the rover drove off origin (CQ-201).
             let (hub_pos, _) = wheel_hub_pose(
-                pos.0,
-                rot.0,
+                GridPos(pos.0),
+                GridRot(rot.0),
                 local_tf.translation.as_dvec3(),
                 local_tf.rotation.as_dquat(),
             );
-            let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, pos.0);
-            let wheel_rot = global_tf.rotation();
-            let wheel_forward = wheel_rot.mul_vec3(Vec3::NEG_Z).as_dvec3();
-            let wheel_right = wheel_rot.mul_vec3(Vec3::X).as_dvec3();
+            let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, GridPos(pos.0));
+            let wheel_rot = GridRot::from_render_rotation(global_tf.rotation());
+            let wheel_forward = wheel_rot.0 * DVec3::NEG_Z;
+            let wheel_right = wheel_rot.0 * DVec3::X;
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.

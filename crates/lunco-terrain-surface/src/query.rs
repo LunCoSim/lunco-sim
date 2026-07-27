@@ -29,6 +29,7 @@ use std::sync::Arc;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_core::coords::GridPos;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_terrain_core::{
@@ -83,6 +84,8 @@ impl ApiQueryProvider for TerrainHeightProvider {
             );
         };
         let eps_override = params.get("eps").and_then(serde_json::Value::as_f64);
+        // Wire params are raw scalars; typed the instant they become a point.
+        let p = GridPos(DVec3::new(x, 0.0, z));
 
         // Snapshot the DEM terrains, releasing the world borrow before the
         // registry read. The oracle is shared via `Arc`.
@@ -94,10 +97,11 @@ impl ApiQueryProvider for TerrainHeightProvider {
 
         // First terrain whose footprint covers the point wins. The DEM frame IS
         // the grid frame: the terrain entity is a grid-direct child at
-        // `CellCoord::default()` (`terrain.rs`), so the query `(x, z)` — grid-
-        // absolute, the same currency as avian `Position` and every other port —
-        // samples the oracle DIRECTLY, in f64. No `GlobalTransform` belongs in
-        // between: a render GT is origin-relative, its cell offset is fully 3-D,
+        // `CellCoord::default()` (`terrain.rs`), so the query point — a
+        // [`GridPos`], the same currency as avian `Position` and every other
+        // port — samples the oracle DIRECTLY, in f64 (`.0` taken only at the
+        // oracle boundary; the oracle itself is DEM-frame math). No
+        // `GlobalTransform` belongs in between: a render GT is origin-relative,
         // and pushing grid-absolute coordinates through its f32 inverse silently
         // shifted the footprint test after a floating-origin XZ move (the same
         // frame bug the collider ring had — see the frame rule in
@@ -107,16 +111,16 @@ impl ApiQueryProvider for TerrainHeightProvider {
         // `position_y`/`height` ports, and the sibling `GroundHeight` raycast.
         for (entity, oracle) in terrains {
             let half = oracle.half_extent() as f64;
-            if x.abs() > half || z.abs() > half {
+            if p.0.x.abs() > half || p.0.z.abs() > half {
                 continue;
             }
 
             let eps = eps_override
                 .unwrap_or_else(|| oracle.spacing() as f64)
                 .max(1e-6);
-            let h = HeightSource::height_at(oracle.as_ref(), x, z);
-            let n = HeightSource::normal_at(oracle.as_ref(), x, z, eps);
-            let slope = HeightSource::slope_at(oracle.as_ref(), x, z, eps);
+            let h = HeightSource::height_at(oracle.as_ref(), p.0.x, p.0.z);
+            let n = HeightSource::normal_at(oracle.as_ref(), p.0.x, p.0.z, eps);
+            let slope = HeightSource::slope_at(oracle.as_ref(), p.0.x, p.0.z, eps);
 
             let entity = world
                 .get_resource::<ApiEntityRegistry>()
@@ -194,6 +198,8 @@ impl ApiQueryProvider for TerrainFieldProvider {
             .and_then(serde_json::Value::as_u64)
             .map(|r| (r as usize).clamp(1, FIELD_MAX_RES))
             .unwrap_or(64);
+        // Wire params are raw scalars; typed the instant they become a point.
+        let center = GridPos(DVec3::new(x, 0.0, z));
 
         // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
         let mut q = world.query::<(Entity, &DemHeightField)>();
@@ -202,14 +208,15 @@ impl ApiQueryProvider for TerrainFieldProvider {
 
         // First terrain whose footprint covers the region centre wins. The DEM
         // frame IS the grid frame (see `TerrainHeight`), so the grid-absolute
-        // `(x, z)` addresses the oracle directly, in f64.
+        // centre addresses the oracle directly, in f64 (`.0` at the oracle
+        // boundary — `Square` is DEM-frame math).
         for oracle in terrains {
             let hx = oracle.half_extent() as f64;
-            if x.abs() > hx || z.abs() > hx {
+            if center.0.x.abs() > hx || center.0.z.abs() > hx {
                 continue;
             }
             let region = Square {
-                center: [x, z],
+                center: [center.0.x, center.0.z],
                 half,
             };
             let data = field_map(field.as_ref(), oracle.as_ref(), &region, res);
@@ -234,8 +241,9 @@ impl ApiQueryProvider for TerrainFieldProvider {
     }
 }
 
-/// Read a `[x,y,z]` array or `{x,y,z}` map into a [`DVec3`]. `None` if malformed.
-fn parse_point(v: Option<&serde_json::Value>) -> Option<DVec3> {
+/// Read a `[x,y,z]` array or `{x,y,z}` map into a bare [`DVec3`] — for wire
+/// values that are frame-free vectors (`dir`). `None` if malformed.
+fn parse_vec3(v: Option<&serde_json::Value>) -> Option<DVec3> {
     let v = v?;
     if let Some(arr) = v.as_array() {
         if arr.len() < 3 {
@@ -248,6 +256,12 @@ fn parse_point(v: Option<&serde_json::Value>) -> Option<DVec3> {
         v.get("y")?.as_f64()?,
         v.get("z")?.as_f64()?,
     ))
+}
+
+/// Read a wire value as a GRID-ABSOLUTE point (`origin`/`target`). The JSON is
+/// raw `[x,y,z]`; it is typed the instant it leaves the wire.
+fn parse_point(v: Option<&serde_json::Value>) -> Option<GridPos> {
+    parse_vec3(v).map(GridPos)
 }
 
 /// `TerrainRaycast` — does terrain relief block a ray? Marches the DEM height
@@ -285,7 +299,7 @@ impl ApiQueryProvider for TerrainRaycastProvider {
                 return ApiResponse::ok(serde_json::json!({ "hit": false }));
             }
             (d / len, len)
-        } else if let Some(dir) = parse_point(params.get("dir")) {
+        } else if let Some(dir) = parse_vec3(params.get("dir")) {
             let d = dir.normalize_or_zero();
             if d.length_squared() < 0.5 {
                 return ApiResponse::error(
@@ -316,12 +330,13 @@ impl ApiQueryProvider for TerrainRaycastProvider {
         // `ao_map`); this provider only parses/reports — exactly how
         // `TerrainHeightProvider` wraps `HeightSource::height_at`. The DEM frame
         // IS the grid frame (see `TerrainHeight`), so the grid-absolute ray
-        // marches the oracle directly, in f64, and `distance` is honest metres.
-        let mut best: Option<(f64, DVec3, Entity)> = None;
+        // marches the oracle directly, in f64 (`.0` at the `los_hit` boundary —
+        // the kernel is DEM-frame math), and `distance` is honest metres.
+        let mut best: Option<(f64, GridPos, Entity)> = None;
         for (entity, oracle) in terrains {
             let hit = lunco_terrain_core::los_hit(
                 oracle.as_ref(),
-                [origin.x, origin.y, origin.z],
+                [origin.0.x, origin.0.y, origin.0.z],
                 [dir.x, dir.y, dir.z],
                 max,
                 oracle.half_extent() as f64,
@@ -344,7 +359,7 @@ impl ApiQueryProvider for TerrainRaycastProvider {
                 ApiResponse::ok(serde_json::json!({
                     "hit": true,
                     "distance": dist,
-                    "point": [p.x, p.y, p.z],
+                    "point": [p.0.x, p.0.y, p.0.z],
                     "entity": api_entity,
                 }))
             }

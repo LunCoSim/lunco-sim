@@ -37,7 +37,8 @@
 
 use avian3d::prelude::*;
 use bevy::ecs::system::SystemParam;
-use bevy::math::{DVec3, Dir3};
+use bevy::math::Dir3;
+use lunco_core::coords::{GridPos, RenderPos};
 
 /// A [`SpatialQuery`] that accepts ray/shape origins in **render space** and casts
 /// them against avian colliders in the canonical **world-grid physics frame**,
@@ -55,7 +56,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
     /// Returns `None` until the world shell exists; guessing a frame would make
     /// a valid nested scene silently raycast in the wrong place.
     #[inline]
-    pub fn to_physics(&self, render_point: DVec3) -> Option<DVec3> {
+    pub fn to_physics(&self, render_point: RenderPos) -> Option<GridPos> {
         self.world_frame.render_to_world(render_point)
     }
 
@@ -66,14 +67,14 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
     #[inline]
     pub fn cast_ray_render(
         &self,
-        render_origin: DVec3,
+        render_origin: RenderPos,
         direction: Dir3,
         max_distance: f64,
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
         self.spatial.cast_ray(
-            self.to_physics(render_origin)?,
+            self.to_physics(render_origin)?.0,
             direction,
             max_distance,
             solid,
@@ -81,9 +82,27 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         )
     }
 
-    /// The wrapped [`SpatialQuery`], for origins ALREADY in the grid-absolute
-    /// physics frame (an avian `Position`). Casting a physics-frame origin through
-    /// [`Self::cast_ray_render`] would double-shift it.
+    /// Cast a ray whose origin is ALREADY grid-absolute (an avian `Position`,
+    /// a composed [`lunco_core::coords::world_position`]). The typed
+    /// counterpart of [`Self::cast_ray_render`]; together they retire most
+    /// [`Self::raw`] call sites, each of which was an untyped assertion
+    /// "trust me, this is already the physics frame".
+    #[inline]
+    pub fn cast_ray_grid(
+        &self,
+        origin: GridPos,
+        direction: Dir3,
+        max_distance: f64,
+        solid: bool,
+        filter: &SpatialQueryFilter,
+    ) -> Option<RayHitData> {
+        self.spatial
+            .cast_ray(origin.0, direction, max_distance, solid, filter)
+    }
+
+    /// The wrapped [`SpatialQuery`], for shapecasts and query shapes the typed
+    /// wrappers don't cover. For plain rays use [`Self::cast_ray_grid`] /
+    /// [`Self::cast_ray_render`], which carry the frame in the type.
     #[inline]
     pub fn raw(&self) -> &SpatialQuery<'w, 's> {
         &self.spatial

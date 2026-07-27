@@ -687,7 +687,7 @@ pub fn on_move_entity_command(
     );
     let (new_cell, new_local) = lunco_core::coords::grid_local_from_absolute(
         target,
-        cmd.translation.as_dvec3(),
+        lunco_core::coords::GridPos(cmd.translation.as_dvec3()),
         &q_parents,
         &q_grids,
     );
@@ -746,7 +746,7 @@ pub fn on_move_entity_command(
     // Grid-absolute delta: a displacement is frame-invariant across the cell
     // split, so this is the same vector whether or not the move crossed a cell
     // boundary — which `cmd.translation - tf.translation` was not.
-    let delta = cmd.translation.as_dvec3() - prev_abs;
+    let delta = lunco_core::coords::GridPos(cmd.translation.as_dvec3()) - prev_abs;
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }

@@ -1116,7 +1116,7 @@ fn migrate_avatar_to_target_grid(
     commands: &mut Commands,
     avatar_ent: Entity,
     target_grid: Option<Entity>,
-    final_abs_pos: DVec3,
+    final_abs_pos: lunco_core::coords::GridPos,
     final_rot: Quat,
     q_grids: &Query<&Grid>,
     q_parents: &Query<&ChildOf>,
@@ -1127,7 +1127,7 @@ fn migrate_avatar_to_target_grid(
             if let Ok(target_grid_ref) = q_grids.get(tg) {
                 let Some((new_cell, local_tf)) = lunco_core::coords::world_pose_to_live_grid_local(
                     final_abs_pos,
-                    final_rot.as_dquat(),
+                    lunco_core::coords::GridRot(final_rot.as_dquat()),
                     tg,
                     target_grid_ref,
                     q_parents,

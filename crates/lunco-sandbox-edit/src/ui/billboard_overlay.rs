@@ -81,6 +81,7 @@ pub fn draw_billboard_overlay(
 
     let cam_world =
         lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
+            .map(|p| p.0)
             .unwrap_or(DVec3::ZERO);
 
     // Site anchor + body radius, resolved ONCE — every label on screen shares
@@ -122,7 +123,7 @@ pub fn draw_billboard_overlay(
         else {
             continue;
         };
-        let anchor_world = pos + DVec3::Y * bb.offset_y as f64;
+        let anchor_world = pos.0 + DVec3::Y * bb.offset_y as f64;
         let distance = (anchor_world - cam_world).length();
         if distance > bb.fade_end as f64 {
             continue;
@@ -139,7 +140,7 @@ pub fn draw_billboard_overlay(
         let leaf = name.as_str().rsplit('/').next().unwrap_or(name.as_str());
         let geo = match (site, radius_m) {
             (Some(a), Some(r)) => {
-                Some(lunco_celestial::geo::local_to_geodetic(&a.geodetic, r, pos))
+                Some(lunco_celestial::geo::local_to_geodetic(&a.geodetic, r, pos.0))
             }
             _ => None,
         };

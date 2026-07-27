@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_core::coords::RenderPos;
 use lunco_core::{Severity, TelemetryEvent, TelemetryValue, TriggerZone};
 
 /// Parse a `[x, y, z]` JSON array under `key`.
@@ -49,7 +50,7 @@ impl ApiQueryProvider for RaycastProvider {
                 "Raycast: `dir` must be non-zero".to_string(),
             );
         };
-        cast_ray_response(world, origin, dir, max)
+        cast_ray_response(world, RenderPos(origin), dir, max)
     }
 }
 
@@ -79,7 +80,7 @@ impl ApiQueryProvider for GroundHeightProvider {
             .get("max")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(2.0e5);
-        let origin = DVec3::new(x, from, z);
+        let origin = RenderPos(DVec3::new(x, from, z));
         match cast_ray_response(world, origin, Dir3::NEG_Y, max) {
             ApiResponse::Ok { data: Some(d), .. } => {
                 let hit = d
@@ -105,10 +106,11 @@ impl ApiQueryProvider for GroundHeightProvider {
 /// Shared cast → JSON. Maps the hit collider back to its `GlobalEntityId` (null
 /// when the collider has no registered id, e.g. unregistered terrain).
 ///
-/// `origin` is in **render space** (the frame API callers see — entity positions,
-/// nav targets); `GridSpatialQuery` shifts it into avian's grid-absolute physics
-/// frame, and the returned `point` is mapped back so callers stay in one frame.
-fn cast_ray_response(world: &mut World, origin: DVec3, dir: Dir3, max: f64) -> ApiResponse {
+/// `origin` is a [`RenderPos`] — **render space**, the frame API callers see
+/// (entity positions, nav targets); `cast_ray_render` shifts it into avian's
+/// grid-absolute physics frame, and the returned `point` is mapped back so
+/// callers stay in one frame.
+fn cast_ray_response(world: &mut World, origin: RenderPos, dir: Dir3, max: f64) -> ApiResponse {
     let mut state: SystemState<(lunco_physics::GridSpatialQuery, Res<ApiEntityRegistry>)> =
         SystemState::new(world);
     let (spatial, registry) = state
@@ -116,7 +118,7 @@ fn cast_ray_response(world: &mut World, origin: DVec3, dir: Dir3, max: f64) -> A
         .expect("SpatialQuery + registry always validate");
     match spatial.cast_ray_render(origin, dir, max, true, &SpatialQueryFilter::default()) {
         Some(hit) => {
-            let point = origin + (*dir).as_dvec3() * hit.distance;
+            let point = origin.0 + (*dir).as_dvec3() * hit.distance;
             let entity = registry.api_id_for(hit.entity).map(|g| g.get());
             ApiResponse::ok(serde_json::json!({
                 "hit": true,

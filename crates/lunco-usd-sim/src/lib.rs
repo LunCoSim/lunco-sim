@@ -2397,9 +2397,14 @@ fn animate_proxy_physical_wheels(
         // same CQ-201 frame-mix as the raycast spin integrator, which drifted the
         // rolling rate once the proxy drove ~km from the floating origin. Rotation is
         // frame-safe, so `forward` keeps using `gtf` (it already carries the steer).
-        let (hub_pos, _) =
-            wheel_hub_pose(pos.0, rot.0, wheel.mount_local.as_dvec3(), DQuat::IDENTITY);
-        let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, pos.0);
+        let chassis_pos = lunco_core::coords::GridPos(pos.0);
+        let (hub_pos, _) = wheel_hub_pose(
+            chassis_pos,
+            lunco_core::coords::GridRot(rot.0),
+            wheel.mount_local.as_dvec3(),
+            DQuat::IDENTITY,
+        );
+        let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, chassis_pos);
         let forward = gtf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
         let r = (wheel.wheel_radius as f64).max(1e-3);
         let w = wheel_roll_rate(hub_vel, forward, r);

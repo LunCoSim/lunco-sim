@@ -4,14 +4,15 @@
 //! it (so a patrol loop re-photos each lap). A regression to "fires every tick"
 //! would spam `ToolFired` events.
 
-use bevy::math::Vec3;
+use bevy::math::{DVec3, Vec3};
 use lunco_autopilot::{AutopilotBehavior, BehaviorSpec, DriveCtx, RunToolNode, ToolInvocation};
 use lunco_behavior::{Node, Status};
+use lunco_core::coords::GridPos;
 
 fn ctx() -> DriveCtx {
     DriveCtx {
         self_gid: 0,
-        pos: Vec3::ZERO,
+        pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
@@ -108,7 +109,7 @@ fn patrol_on_arrival_action_fires_when_vessel_reaches_waypoint() {
     // Vessel is AT the waypoint (within radius 2.0), so the drive_to leaf
     // succeeds on the first tick → the on_arrival run_tool fires.
     let mut c = ctx();
-    c.pos = Vec3::ZERO;
+    c.pos = GridPos(DVec3::ZERO);
     tree.0.tick(&mut c);
     assert_eq!(
         c.fired.len(),
@@ -149,7 +150,7 @@ fn parked_patrol_fires_once_not_every_tick() {
     let mut total = 0usize;
     for _ in 0..100 {
         let mut c = ctx();
-        c.pos = Vec3::ZERO;
+        c.pos = GridPos(DVec3::ZERO);
         tree.0.tick(&mut c);
         total += c.fired.len();
     }
@@ -192,19 +193,19 @@ fn patrol_refires_on_the_next_lap_after_leaving_the_waypoint() {
 
     // Lap 1: arrive at wp0 (we're on it) → fires once.
     let mut c = ctx();
-    c.pos = Vec3::ZERO;
+    c.pos = GridPos(DVec3::ZERO);
     tree.0.tick(&mut c);
     assert_eq!(c.fired.len(), 1, "first arrival fires");
 
     // Drive to wp1: outside wp0's radius → the arrival latch re-arms.
     let mut c = ctx();
-    c.pos = Vec3::new(50.0, 0.0, 0.0);
+    c.pos = GridPos(DVec3::new(50.0, 0.0, 0.0));
     tree.0.tick(&mut c);
     assert!(c.fired.is_empty(), "no fire while en route");
 
     // Reach wp1, completing the lap; the sequence restarts at wp0.
     let mut c = ctx();
-    c.pos = Vec3::new(100.0, 0.0, 0.0);
+    c.pos = GridPos(DVec3::new(100.0, 0.0, 0.0));
     tree.0.tick(&mut c);
 
     // Lap 2, driving BACK toward wp0. The rover moves continuously, so wp0's
@@ -212,13 +213,13 @@ fn patrol_refires_on_the_next_lap_after_leaving_the_waypoint() {
     // the arrival latch. (Skipping this tick would teleport the rover onto the
     // waypoint, which no fixed-update schedule ever does.)
     let mut c = ctx();
-    c.pos = Vec3::new(50.0, 0.0, 0.0);
+    c.pos = GridPos(DVec3::new(50.0, 0.0, 0.0));
     tree.0.tick(&mut c);
     assert!(c.fired.is_empty(), "no fire while driving back");
 
     // Arrive at wp0 again → fires (we genuinely left and returned).
     let mut c = ctx();
-    c.pos = Vec3::ZERO;
+    c.pos = GridPos(DVec3::ZERO);
     tree.0.tick(&mut c);
     assert_eq!(c.fired.len(), 1, "a real lap must re-fire the arrival tool");
 }
@@ -243,7 +244,7 @@ fn patrol_on_arrival_does_not_fire_before_arrival() {
     };
     let mut tree = AutopilotBehavior::new(&spec);
     let mut c = ctx();
-    c.pos = Vec3::ZERO; // vessel at origin, waypoint at x=100 → not arrived
+    c.pos = GridPos(DVec3::ZERO); // vessel at origin, waypoint at x=100 → not arrived
     tree.0.tick(&mut c);
     assert!(
         c.fired.is_empty(),

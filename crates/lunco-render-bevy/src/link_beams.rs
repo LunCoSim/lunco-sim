@@ -146,7 +146,7 @@ fn aim_link_beams(
         if dist < 1.0 {
             continue;
         }
-        let dir_local = (nrot.inverse() * (world_dir / dist)).as_vec3();
+        let dir_local = (nrot.0.inverse() * (world_dir / dist)).as_vec3();
         let len = if dist <= inst.near_m {
             dist as f32
         } else {
@@ -266,7 +266,7 @@ fn reconcile_link_beams(
         let Some((npos, nrot)) = world_pose(node, &q_parents, &q_grids, &q_spatial) else {
             continue;
         };
-        let nrot_inv = nrot.inverse();
+        let nrot_inv = nrot.0.inverse();
 
         // Beams already spawned for this node, by peer.
         let existing: HashMap<u64, (Entity, bool)> = q_beams

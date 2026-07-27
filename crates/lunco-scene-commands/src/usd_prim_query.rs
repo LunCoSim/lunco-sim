@@ -243,6 +243,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             if let Ok((q_parents, q_grids, q_spatial)) = state.get(world) {
                 let pos =
                     lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+                        .map(|p| p.0)
                         .unwrap_or(bevy::math::DVec3::ZERO);
                 out["world_position"] = serde_json::json!([pos.x, pos.y, pos.z]);
                 out["position_frame"] = serde_json::json!("grid_absolute");

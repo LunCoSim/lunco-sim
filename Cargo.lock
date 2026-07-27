@@ -6914,6 +6914,7 @@ dependencies = [
  "lunco-behavior",
  "lunco-core",
  "lunco-cosim",
+ "lunco-physics",
  "lunco-time",
  "lunco-tools-bevy",
  "quick-xml 0.41.0",

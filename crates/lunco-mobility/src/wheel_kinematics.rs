@@ -1,59 +1,51 @@
 //! # Wheel kinematics — frame-safe hub pose / velocity / roll-rate
 //!
-//! luncosim runs avian3d physics under `big_space` floating-origin, so **two
-//! position frames coexist and must never be mixed in one arithmetic
-//! expression**:
+//! luncosim runs avian3d physics under `big_space` floating-origin, so two
+//! position frames coexist: the origin-rebased **render frame**
+//! (`GlobalTransform::translation()`) and the **grid-absolute** frame avian
+//! `Position.0` / `Rotation.0` carry. Near the origin they coincide, so a
+//! frame-mix bug is invisible in local testing and only appears once a rover
+//! drives ~km away (the CQ-201 bug class). The [`GridPos`] parameter types
+//! below make that mix a compile error: a render-frame `GlobalTransform`
+//! translation has no `GridPos` and cannot be fed in.
 //!
-//! - **Render frame** (`GlobalTransform::translation()`): origin-rebased — the
-//!   world is periodically re-centred on the camera's grid cell.
-//! - **Avian cell-local frame** (`Position.0` / `Rotation.0`, ==
-//!   `Forces::position()/rotation()`): the physics solver's own coordinates,
-//!   relative to the body's grid cell, *not* the render origin.
-//!
-//! Near the origin the two coincide, so a frame-mix bug is invisible in local
-//! testing and only appears once a rover drives ~km away (the CQ-201 bug class).
 //! `AngularVelocity` is frame-**orientation** independent (big_space only
 //! *translates* the origin, never rotates), so angular velocity is safe in
-//! either frame — **only positions / lever-arms carry the frame.**
-//!
-//! **The invariant:** a lever arm `hub − chassis_centre` must have **both**
-//! terms in the **same** frame. These helpers operate entirely in the avian
-//! cell-local frame by reconstructing the hub from the chassis body pose plus
-//! the wheel's chassis-local transform — never from `GlobalTransform`.
+//! either frame — only positions / lever-arms carry the frame, and
+//! `GridPos − GridPos` is the one legal way to build a lever arm.
 
 use bevy::math::{DQuat, DVec3};
+use lunco_core::coords::{GridPos, GridRot};
 
-/// World pose of a wheel hub in the **avian cell-local frame**, reconstructed
+/// World pose of a wheel hub in the grid-absolute physics frame, reconstructed
 /// from the chassis body pose and the wheel's chassis-local transform.
 ///
-/// `chassis_pos` / `chassis_rot` are avian `Position.0` / `Rotation.0`
+/// `chassis_pos` / `chassis_rot` wrap avian `Position.0` / `Rotation.0`
 /// (== `Forces::position()/rotation()`); `wheel_local_*` is the wheel entity's
-/// `Transform` relative to the chassis. **Never feed this `GlobalTransform`** —
-/// that mixes the render frame in and reintroduces CQ-201.
+/// `Transform` relative to the chassis (body-local, so bare).
 #[inline]
 pub fn wheel_hub_pose(
-    chassis_pos: DVec3,
-    chassis_rot: DQuat,
+    chassis_pos: GridPos,
+    chassis_rot: GridRot,
     wheel_local_pos: DVec3,
     wheel_local_rot: DQuat,
-) -> (DVec3, DQuat) {
+) -> (GridPos, GridRot) {
     (
-        chassis_pos + chassis_rot * wheel_local_pos,
-        chassis_rot * wheel_local_rot,
+        chassis_pos + chassis_rot.0 * wheel_local_pos,
+        GridRot(chassis_rot.0 * wheel_local_rot),
     )
 }
 
 /// Linear velocity of the hub: `v + ω × r`, where `r = hub_pos − chassis_pos`
-/// is the lever arm.
-///
-/// **Both `hub_pos` and `chassis_pos` MUST be in the same (avian) frame** — this
-/// is the CQ-201 invariant. `chassis_ang` is frame-safe (see module docs).
+/// is the lever arm — both ends typed grid-absolute, so the CQ-201 invariant
+/// (same frame on both terms) holds by construction. `chassis_ang` is
+/// frame-safe (see module docs).
 #[inline]
 pub fn wheel_hub_velocity(
     chassis_lin: DVec3,
     chassis_ang: DVec3,
-    hub_pos: DVec3,
-    chassis_pos: DVec3,
+    hub_pos: GridPos,
+    chassis_pos: GridPos,
 ) -> DVec3 {
     chassis_lin + chassis_ang.cross(hub_pos - chassis_pos)
 }
@@ -86,12 +78,12 @@ mod tests {
     fn hub_pose_is_translation_invariant_lever() {
         // The lever arm (hub − chassis) must be identical near origin and far
         // from it — this is the property the CQ-201 bug violated.
-        let rot = DQuat::from_rotation_z(FRAC_PI_2);
+        let rot = GridRot(DQuat::from_rotation_z(FRAC_PI_2));
         let local = DVec3::new(1.0, 0.0, 0.0);
-        let (near, _) = wheel_hub_pose(DVec3::ZERO, rot, local, DQuat::IDENTITY);
-        let far_centre = DVec3::new(1_000_000.0, 0.0, 0.0);
+        let (near, _) = wheel_hub_pose(GridPos(DVec3::ZERO), rot, local, DQuat::IDENTITY);
+        let far_centre = GridPos(DVec3::new(1_000_000.0, 0.0, 0.0));
         let (far, _) = wheel_hub_pose(far_centre, rot, local, DQuat::IDENTITY);
-        approx(near - DVec3::ZERO, far - far_centre);
+        approx(near - GridPos(DVec3::ZERO), far - far_centre);
     }
 
     #[test]
@@ -100,8 +92,8 @@ mod tests {
         // moves at 1 m/s along +Y (ω × r), plus any chassis linear velocity.
         let lin = DVec3::new(2.0, 0.0, 0.0);
         let ang = DVec3::Z;
-        let hub = DVec3::new(1.0, 0.0, 0.0);
-        let v = wheel_hub_velocity(lin, ang, hub, DVec3::ZERO);
+        let hub = GridPos(DVec3::new(1.0, 0.0, 0.0));
+        let v = wheel_hub_velocity(lin, ang, hub, GridPos(DVec3::ZERO));
         approx(v, DVec3::new(2.0, 1.0, 0.0));
     }
 

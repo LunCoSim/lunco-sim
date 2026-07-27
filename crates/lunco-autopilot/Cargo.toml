@@ -38,8 +38,10 @@ lunco-cosim = { path = "../lunco-cosim" }
 # `Time`. AutopilotPlugin guard-adds `TimePlugin` so the clock is always present.
 lunco-time = { path = "../lunco-time" }
 # Physics-backed spatial queries for HEADLESS obstacle sensing: the `sense_clearance`
-# system casts a forward ray-fan via avian `SpatialQuery` (runs fine with no render).
-# Same workspace avian as the rest of the sim, so no extra feature surface.
+# system casts a forward ray-fan via `GridSpatialQuery::cast_ray_grid` — the typed
+# frame-carrying raycast wrapper (runs fine with no render).
+lunco-physics = { path = "../lunco-physics" }
+# Same workspace avian as the rest of the sim (avian `Position`/filters/layers).
 avian3d = { workspace = true }
 big_space = { workspace = true }
 
