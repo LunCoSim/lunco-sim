@@ -616,7 +616,7 @@ impl Panel for TelemetryPanel {
 
 /// Empty-state for the runtime-telemetry section: a muted explanation
 /// + an inline 🚀 Compile button that triggers the same
-/// `CompileActiveModel` the toolbar fires. Used both pre-compile (no
+/// `CompileModel` the toolbar fires. Used both pre-compile (no
 /// stepper exists yet) and after a stepper loses its component
 /// (post-Reset / mid-rebuild). Keeping the action in-panel means users
 /// don't have to hunt the toolbar to escape the empty state.
@@ -639,9 +639,11 @@ fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelC
     });
     if let Some(doc) = compile_doc {
         ctx.defer(move |world| {
-            world.trigger(crate::ui::commands::CompileActiveModel {
+            world.trigger(crate::ui::commands::CompileModel {
                 doc,
-                class: String::new(),
+                class: None,
+                force: false,
+                resume_after_compile: false,
             });
         });
     }

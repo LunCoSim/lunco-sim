@@ -265,9 +265,12 @@ pub enum WaypointAction {
     },
 }
 
-// Backward-compat: a bare `[x, y, z]` array deserializes to a no-action
-// `PatrolWaypoint`. Lets legacy `waypoints: [[x,y,z], ...]` JSON / rhai keep
-// working after the `Vec<[f32;3]>` → `Vec<PatrolWaypoint>` type change.
+// A bare `[x, y, z]` array deserializes to a no-action `PatrolWaypoint`. This is
+// NOT a compat shim to be swept away: it is the shorthand `patrol.rhai` documents
+// and every scenario that just wants positions uses (`engage_patrol(rover,
+// [[10,0,0], [10,0,10]])`). The object shape is what you reach for only when a
+// waypoint carries `dwell` or `on_arrival`. Deleting this arm breaks authored
+// scenarios, not old files.
 //
 // NOTE: this dual-shape (array vs object) handling is JSON-only — it peeks at
 // `serde_json::Value` to pick the branch, so it won't work with bincode or other
@@ -287,7 +290,7 @@ impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
             on_arrival: Vec<WaypointAction>,
         }
         // Two accepted shapes:
-        //  1. `[x, y, z]`            — legacy bare array (no actions, no dwell).
+        //  1. `[x, y, z]`                        — position only, no dwell/actions.
         //  2. `{pos: [...], dwell?, on_arrival?}` — full struct.
         let v = serde_json::Value::deserialize(d)?;
         if v.is_array() {

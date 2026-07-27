@@ -265,13 +265,6 @@ pub struct WorkspaceState {
     /// a dock. The inverse of `WorkbenchLayout::capture_perspective_docks`.
     #[serde(default)]
     pub docks: HashMap<String, PerspectiveDockSnapshot>,
-    /// **Legacy** single dock (pre-per-perspective files). Write-side is
-    /// skipped — the on-disk form is always [`docks`](Self::docks) (one
-    /// form, no parallel surface). Read-side migrates: if `docks` is empty
-    /// and this is set, [`load`](Self::load) seeds it under the saved
-    /// [`perspective`](Self::perspective). Never serialized.
-    #[serde(default, skip_serializing)]
-    pub dock: Option<serde_json::Value>,
 }
 
 impl WorkspaceState {
@@ -285,7 +278,7 @@ impl WorkspaceState {
             .read_sync(&lunco_storage::StorageHandle::File(path.clone()))
             .ok()?;
         let text = String::from_utf8(bytes).ok()?;
-        let mut state: WorkspaceState = match serde_json::from_str(&text) {
+        let state: WorkspaceState = match serde_json::from_str(&text) {
             Ok(state) => state,
             Err(e) => {
                 // Falling back to defaults means the next save overwrites this
@@ -315,35 +308,7 @@ impl WorkspaceState {
             );
             return None;
         }
-        state.migrate_legacy_dock();
         Some(state)
-    }
-
-    /// One-time migration from the pre-per-perspective single [`dock`](Self::dock)
-    /// field: if no per-perspective [`docks`](Self::docks) were deserialized
-    /// but a legacy `dock` is present, seed it under the saved
-    /// [`perspective`](Self::perspective) (fallback `"default"`, which won't
-    /// match any registered perspective and so is dropped on restore —
-    /// acceptable for files older than perspective support). Idempotent and
-    /// a no-op for files already in the new per-perspective form.
-    fn migrate_legacy_dock(&mut self) {
-        if !self.docks.is_empty() {
-            return;
-        }
-        let Some(legacy) = self.dock.take() else {
-            return;
-        };
-        let key = self
-            .perspective
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        self.docks.insert(
-            key,
-            PerspectiveDockSnapshot {
-                dock: legacy,
-                ..Default::default()
-            },
-        );
     }
 
     /// Atomically write this state for its `twin_root` (tmp + rename so a
@@ -597,7 +562,6 @@ fn build_state(world: &mut World) -> WorkspaceState {
         documents,
         active_document,
         docks,
-        dock: None,
     }
 }
 
@@ -894,7 +858,6 @@ mod tests {
             ],
             active_document: Some(0),
             docks: HashMap::new(),
-            dock: None,
         };
         state.save().unwrap();
 
@@ -943,17 +906,9 @@ mod tests {
                     },
                 ),
             ]),
-            dock: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         let back: WorkspaceState = serde_json::from_str(&json).unwrap();
-        // Written form is the ONE new form: the top-level legacy `dock`
-        // field is `skip_serializing`, so it must NOT come back (each
-        // snapshot's nested `dock` tree key is unrelated and expected).
-        assert!(
-            back.dock.is_none(),
-            "top-level legacy dock field leaked into the new form: {json}"
-        );
         assert_eq!(back, state, "per-perspective docks must round-trip");
         // Each perspective's slot intent survives verbatim.
         let design = &back.docks["design"];
@@ -962,27 +917,4 @@ mod tests {
         assert_eq!(design.active_center_tab, 2);
     }
 
-    /// A pre-per-perspective file (single `dock`, no `docks`) migrates on
-    /// load into `docks` keyed by the saved `perspective`. In-memory.
-    #[test]
-    fn legacy_single_dock_migrates() {
-        let legacy = serde_json::json!({
-            "twin_root": "/proj",
-            "perspective": "design",
-            "documents": [],
-            "active_document": null,
-            "dock": {"surfaces": []}
-        });
-        let mut state: WorkspaceState = serde_json::from_value(legacy).unwrap();
-        assert!(state.docks.is_empty(), "legacy file has no docks yet");
-        assert_eq!(state.dock, Some(serde_json::json!({"surfaces": []})));
-        state.migrate_legacy_dock();
-        assert_eq!(state.dock, None, "legacy field cleared after migration");
-        assert_eq!(state.docks.len(), 1);
-        assert_eq!(
-            state.docks["design"].dock,
-            serde_json::json!({"surfaces": []}),
-            "legacy dock seeded under the saved perspective"
-        );
-    }
 }

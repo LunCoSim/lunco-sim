@@ -18,7 +18,7 @@ pub mod util;
 
 // Re-export Command structs for easy access
 pub use compile::{
-    CompileActiveModel, CompileClassPickerEntry, CompileClassPickerState, CompileModel,
+    CompileClassPickerEntry, CompileClassPickerState, CompileModel,
     FastRunActiveModel, FastRunInput, FastRunSetupEntry, FastRunSetupState, PauseActiveModel,
     PickerPurpose, ResetActiveModel, RestartActiveModel, ResumeActiveModel, RunActiveModel,
 };
@@ -27,7 +27,7 @@ pub use doc::{FormatDocument, Redo, SaveActiveDocument, SaveActiveDocumentAs, Un
 pub use inspect::InspectActiveDoc;
 pub use lifecycle::drain_open_file_results;
 pub use lifecycle::{
-    ClassAction, CloseDialogState, CreateNewScratchModel, DuplicateActiveDoc,
+    ClassAction, CloseDialogState, CreateNewScratchModel,
     DuplicateModelFromReadOnly, GetFile, Open, OpenClass, OpenInNewView, PendingCloseAfterSave,
     PendingTabCloseScopes, TabCloseScope,
 };
@@ -93,7 +93,6 @@ register_commands!(
     crate::ui::panels::canvas_diagram::on_auto_arrange_diagram,
     lifecycle::on_close_document,
     lifecycle::on_create_new_scratch_model,
-    lifecycle::on_duplicate_active_doc,
     lifecycle::on_duplicate_model_from_read_only,
     nav::on_fit_canvas,
     nav::on_focus_component,

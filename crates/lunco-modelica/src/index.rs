@@ -260,9 +260,8 @@ pub enum ClassKind {
     Connector,
     Package,
     Function,
-    /// Bare `class` keyword. Also the serde default so legacy
-    /// `msl_index.json` entries with missing / unknown `class_kind`
-    /// values don't fail to deserialise.
+    /// Bare `class` keyword, and the serde default: an entry that names no
+    /// `class_kind` is a plain class, which is what Modelica itself says.
     #[default]
     Class,
     Type,
@@ -270,10 +269,10 @@ pub enum ClassKind {
     /// `expandable connector` (MLS §9.1.3) — two-word keyword
     /// flattened to one identifier in serde to keep the on-disk
     /// JSON readable.
-    #[serde(rename = "expandable_connector", alias = "expandableconnector")]
+    #[serde(rename = "expandable_connector")]
     ExpandableConnector,
     Operator,
-    #[serde(rename = "operator_record", alias = "operatorrecord")]
+    #[serde(rename = "operator_record")]
     OperatorRecord,
 }
 

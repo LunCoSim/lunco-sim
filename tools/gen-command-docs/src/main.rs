@@ -1,8 +1,11 @@
 //! Generates `docs/commands-reference.md` from the **runtime** command schema.
 //!
 //! ```sh
-//! # 1. dump the schema from a running app (headless is fine):
-//! cargo run -p lunco-sandbox-server -- --api --no-ui &
+//! # 1. dump the schema from a running app — and let it SETTLE first, or the
+//! #    dump is a partial command list (see `--help`):
+//! cargo run -p lunco-sandbox --bin sandbox -- --api 4101 &
+//! until curl -sf -m 2 http://127.0.0.1:4101/api/commands/schema -o /dev/null; do sleep 2; done
+//! sleep 10
 //! curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema.json
 //! # 2. generate:
 //! cargo run -p gen-command-docs -- --schema /tmp/schema.json
@@ -279,20 +282,28 @@ usage: cargo run -p gen-command-docs -- --schema <a.json> [--schema <b.json> ...
   Each <schema.json> is a `DiscoverSchema` response from a RUNNING app — the
   authoritative, visibility-filtered command list (the same one MCP reads).
 
-  PASS BOTH DUMPS. No single app registers every command:
-    - the headless server has no workbench, so no `CaptureScreenshot`;
-    - a GUI build has none of the server-only verbs.
-  Generating from one dump alone silently DELETES the other's commands from the
-  reference.
+  WHICH commands a dump contains is decided by WHICH PLUGINS THE HOST ADDS, so
+  dump from the widest host and union anything it misses. Today the GUI sandbox
+  is a strict superset (it registers the Modelica/workbench verbs too); a
+  `--no-ui` host drops every UI command, and `lunco-sandbox-server` serves no
+  HTTP API at all, so neither can be the source on its own. Generating from a
+  narrow dump silently DELETES the rest from the reference.
 
-      # headless
-      cargo run -p lunco-sandbox-server -- --api --no-ui &
-      curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-server.json
+  WAIT FOR THE APP TO SETTLE before dumping. The API answers before plugin
+  registration finishes, so the first successful response can be a PARTIAL list
+  — dumping too eagerly is how this doc once lost 81 commands to what looked
+  like a regression. Poll until it answers, then sleep ~10s and dump again.
+
       # GUI (needs a display)
-      cargo run -p lunco-sandbox -- --api &
+      cargo run -p lunco-sandbox --bin sandbox -- --api 4101 &
+      until curl -sf -m 2 http://127.0.0.1:4101/api/commands/schema -o /dev/null; do sleep 2; done
+      sleep 10
       curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-gui.json
 
-      cargo run -p gen-command-docs -- --schema /tmp/schema-server.json --schema /tmp/schema-gui.json
+      # Any host with plugins the sandbox lacks — union it in:
+      #   cargo run -p lunco-modelica --bin lunica -- --api 3001 &   (same wait)
+
+      cargo run -p gen-command-docs -- --schema /tmp/schema-gui.json [--schema ...]
 
   There is deliberately no source-scrape fallback: a grep of `#[Command]` both
   misses commands and invents them (it used to publish the `TestEcho` unit-test

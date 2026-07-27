@@ -3,8 +3,9 @@
 //! Extracted from `ui/commands.rs` to keep that file focused on
 //! lifecycle (open/save/close/undo) and navigation. This module owns:
 //!
-//! * `CompileModel` and `CompileActiveModel` — kick off a rumoca
-//!   compile + DAE + simulator setup.
+//! * `CompileModel` — kick off a rumoca compile + DAE + simulator
+//!   setup. One verb for the toolbar and the API alike: an unassigned
+//!   `doc` means the active document.
 //! * Run-control trio `PauseActiveModel` / `ResumeActiveModel` /
 //!   `ResetActiveModel` — pause/resume/reset the per-doc Modelica
 //!   simulation worker without recompiling.
@@ -36,7 +37,9 @@ use super::{entity_for_doc, resolve_doc_or_active};
 
 #[Command(default)]
 pub struct CompileModel {
-    /// The document to compile.
+    /// The document to compile. Unassigned (`0` over the API) means the
+    /// **active** document, which is what a toolbar click and a headless
+    /// `cmd("CompileModel", #{})` both want.
     pub doc: DocumentId,
     /// Optional explicit target class. When `Some`, bypass both the
     /// drilled-in pin and the picker — compile this exact class.
@@ -662,8 +665,21 @@ pub fn on_compile_model(
     mut q_models: Query<&mut ModelicaModel>,
     model_tabs: Res<crate::model_tabs::ModelTabs>,
     mut world_source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
-    let doc = trigger.event().doc;
+    // Unassigned ⇒ the active document. Resolving here is what lets ONE compile
+    // verb serve the toolbar and the API; the wrapper command that used to do
+    // this is gone.
+    let doc = match trigger.event().doc {
+        raw if raw.is_unassigned() => {
+            let Some(active) = workspace.and_then(|ws| ws.active_document) else {
+                bevy::log::warn!("[CompileModel] no active document");
+                return;
+            };
+            active
+        }
+        raw => raw,
+    };
     let explicit_class = trigger.event().class.clone();
     let force = trigger.event().force;
     let resume_after_compile = trigger.event().resume_after_compile;
@@ -2212,47 +2228,6 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
     });
 }
 
-// ─── CompileActiveModel API shim ─────────────────────────────────────────
-
-/// API shim for `CompileModel`: same effect (rumoca compile + DAE
-/// + simulator setup) but takes `doc: u64` (0 = active) so it can
-/// be triggered from the reflect-registered API. Inner `CompileModel`
-/// stays as a typed Bevy event for in-process callers; this exposes
-/// it to curl / scripts. Type-check / parse / DAE errors land in
-/// `WorkbenchState.compilation_error` which the Diagnostics panel
-/// already surfaces.
-#[Command(default)]
-pub struct CompileActiveModel {
-    /// 0 ⇒ active document.
-    pub doc: DocumentId,
-    /// Optional target class. Empty = inherit picker / drilled-in /
-    /// detected-name behaviour. When non-empty, the compile bypasses
-    /// the GUI class-picker for documents with multiple non-package
-    /// classes — required for headless / agent-driven workflows where
-    /// no human is available to click the modal (cf. spec 033 P0).
-    /// Lookup is by short name (e.g. `"RocketStage"`) matched against
-    /// the document's `collect_non_package_classes_qualified`.
-    pub class: String,
-}
-
-#[on_command(CompileActiveModel)]
-pub fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
-    let class = trigger.event().class.clone();
-    commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            bevy::log::warn!("[CompileActiveModel] no active document");
-            return;
-        };
-        let target_class = if class.is_empty() { None } else { Some(class) };
-        world.commands().trigger(CompileModel {
-            doc,
-            class: target_class,
-            force: false,
-            resume_after_compile: false,
-        });
-    });
-}
 
 // ─── Plugin shim ─────────────────────────────────────────────────────────────
 
@@ -2276,7 +2251,6 @@ impl Plugin for CompilePlugin {
 // commands (all defined in this file, so bare idents).
 register_commands!(
     on_compile_model,
-    on_compile_active_model,
     on_pause_active_model,
     on_resume_active_model,
     on_reset_active_model,

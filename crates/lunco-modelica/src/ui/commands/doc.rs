@@ -28,13 +28,14 @@ pub struct FormatDocument {
     pub doc: DocumentId,
 }
 
-/// API shim for Save.
+/// Save the document — the one save verb, in-process and over the API alike.
+/// Unassigned `doc` (`0` over the API) means the active document.
 #[Command(default)]
 pub struct SaveActiveDocument {
     pub doc: DocumentId,
 }
 
-/// API shim for SaveAs.
+/// Save the document to `path`. Unassigned `doc` means the active document.
 #[Command(default)]
 pub struct SaveActiveDocumentAs {
     pub doc: DocumentId,

@@ -35,18 +35,12 @@ pub struct CreateNewScratchModel {
     pub name: Option<String>,
 }
 
-/// Request to duplicate a read-only (library) model into a new
-/// editable Untitled document.
+/// Duplicate a read-only (library) model into a new editable Untitled
+/// document. Unassigned `source_doc` (`0` over the API) means the active
+/// document.
 #[Command(default)]
 pub struct DuplicateModelFromReadOnly {
     pub source_doc: DocumentId,
-}
-
-/// API shim: duplicate the active read-only document into a fresh
-/// editable workspace tab.
-#[Command(default)]
-pub struct DuplicateActiveDoc {
-    pub doc: DocumentId,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default, bevy::reflect::Reflect)]
@@ -490,8 +484,20 @@ pub fn on_duplicate_model_from_read_only(
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
     mut egui_q: Query<&mut bevy_egui::EguiContext>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
-    let source_doc = trigger.event().source_doc;
+    // Unassigned ⇒ the active document, so one verb serves the tab context
+    // menu and the API.
+    let source_doc = match trigger.event().source_doc {
+        raw if raw.is_unassigned() => {
+            let Some(active) = workspace.and_then(|ws| ws.active_document) else {
+                console.error("Duplicate failed: no active document");
+                return;
+            };
+            active
+        }
+        raw => raw,
+    };
 
     let (source_full, origin_class_short, origin_fqn) = {
         let Some(host) = registry.host(source_doc) else {
@@ -604,20 +610,6 @@ pub fn on_duplicate_model_from_read_only(
     for mut ctx in egui_q.iter_mut() {
         ctx.get_mut().request_repaint();
     }
-}
-
-#[on_command(DuplicateActiveDoc)]
-pub fn on_duplicate_active_doc(trigger: On<DuplicateActiveDoc>, mut commands: Commands) {
-    let raw = trigger.event().doc;
-    commands.queue(move |world: &mut World| {
-        let Some(doc) = super::resolve_doc_or_active(world, raw) else {
-            bevy::log::warn!("[DuplicateActiveDoc] no active document");
-            return;
-        };
-        world
-            .commands()
-            .trigger(DuplicateModelFromReadOnly { source_doc: doc });
-    });
 }
 
 #[on_command(OpenClass)]

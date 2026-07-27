@@ -47,9 +47,11 @@ pub fn resolve_editor_intent(
             let _ = &mut pending_closes;
         }
         EditorIntent::Compile => {
-            commands.trigger(super::compile::CompileActiveModel {
+            commands.trigger(super::compile::CompileModel {
                 doc,
-                class: String::new(),
+                class: None,
+                force: false,
+                resume_after_compile: false,
             });
         }
         EditorIntent::NewDocument => {}

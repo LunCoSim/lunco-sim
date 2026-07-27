@@ -639,9 +639,11 @@ fn render_unified_toolbar(
         });
     }
     if compile_clicked {
-        ctx.trigger(crate::ui::commands::CompileActiveModel {
+        ctx.trigger(crate::ui::commands::CompileModel {
             doc,
-            class: String::new(),
+            class: None,
+            force: false,
+            resume_after_compile: false,
         });
     }
     new_view_mode

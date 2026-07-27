@@ -184,11 +184,10 @@ pub struct ParamDef {
     pub unit: Option<String>,
 }
 
-/// On-disk shape of `msl_index.json`. Wraps the legacy
-/// `Vec<crate::index::ClassEntry>` payload alongside the pre-baked
-/// bundled `PackageNode` tree so the indexer can ship both in
-/// a single artifact. The reader accepts both this struct *and*
-/// the bare-array legacy form for backward compatibility.
+/// On-disk shape of `msl_index.json` — the one form the indexer writes and
+/// [`parse_msl_index`] reads. Carries the component payload alongside the
+/// pre-baked bundled `PackageNode` tree so the indexer ships both in a single
+/// artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MslIndex {
     /// Palette / component metadata — what `crate::index::ClassEntry` has
@@ -477,39 +476,25 @@ fn try_load_msl_index() -> Option<MslIndex> {
     None
 }
 
-/// Deserialise `msl_index.json` accepting both the new
-/// [`MslIndex`] object form and the legacy bare-array form. Older
-/// caches already on user disks parse cleanly via the array branch
-/// (with `bundled` left empty); freshly indexed caches use the
-/// object form.
+/// Deserialise `msl_index.json`. There is ONE accepted form — the [`MslIndex`]
+/// object `msl_indexer` emits.
+///
+/// A cache in any other shape is stale, and `msl_index.json` is a generated
+/// artifact, so the fix is to rerun the indexer, not to teach this reader a
+/// second vocabulary. Reporting that is the whole point: a reader that quietly
+/// salvaged what it could turned "your cache is from an older indexer" into
+/// "the palette is mysteriously half-empty".
 fn parse_msl_index(text: &str) -> Option<MslIndex> {
-    // Tolerant load: parse components strictly, but treat the
-    // bundled tree as opaque — if it's the legacy `BundledFileTree`
-    // shape (pre-PR7) or any other unknown form, drop it silently
-    // and let the runtime fall back to flat leaves. The user reruns
-    // `msl_indexer` to repopulate it.
-    #[derive(Deserialize)]
-    struct Relaxed {
-        components: Vec<crate::index::ClassEntry>,
-        #[serde(default)]
-        bundled: serde_json::Value,
+    match serde_json::from_str::<MslIndex>(text) {
+        Ok(idx) => Some(idx),
+        Err(e) => {
+            warn!(
+                "[msl] msl_index.json is not in the current index format ({e}); \
+                 the component palette stays empty until `msl_indexer` is rerun",
+            );
+            None
+        }
     }
-    if let Ok(relaxed) = serde_json::from_str::<Relaxed>(text) {
-        let bundled =
-            serde_json::from_value::<Vec<crate::package_tree::types::PackageNode>>(relaxed.bundled)
-                .unwrap_or_default();
-        return Some(MslIndex {
-            components: relaxed.components,
-            bundled,
-        });
-    }
-    if let Ok(components) = serde_json::from_str::<Vec<crate::index::ClassEntry>>(text) {
-        return Some(MslIndex {
-            components,
-            bundled: Vec::new(),
-        });
-    }
-    None
 }
 
 /// Get unique categories from the MSL library.
