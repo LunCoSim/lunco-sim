@@ -351,36 +351,27 @@ pub fn drain_deferred_spawns(
 /// casting from `position` itself would miss upward and silently keep an embedded
 /// spawn.
 fn ground_height_under(
-    dem: &Query<(
-        &GlobalTransform,
-        &lunco_terrain_surface::stream_viz::DemHeightField,
-    )>,
+    surface: &lunco_terrain_surface::GridSurfaceQuery,
     raycaster: &lunco_physics::GridSpatialQuery,
     position: Vec3,
 ) -> Option<f64> {
-    if let Some(y) = lunco_terrain_surface::stream_viz::dem_ground_height(
-        dem.iter(),
-        position.x as f64,
-        position.z as f64,
-    ) {
+    let position = lunco_core::coords::GridPos(position.as_dvec3());
+    if let Some(y) = surface.height_at(position) {
         return Some(y);
     }
     const PROBE_ABOVE: f64 = 1_000.0;
     const PROBE_RANGE: f64 = 5_000.0;
-    let origin = DVec3::new(
-        position.x as f64,
-        position.y as f64 + PROBE_ABOVE,
-        position.z as f64,
-    );
-    // `raw()`, NOT `cast_ray_render`: a spawn position is grid-local, and a fresh
-    // spawn sits at cell 0, so it is ALREADY grid-absolute — the frame avian's
-    // colliders live in. Casting it through `cast_ray_render` would add the
-    // render→physics shift a second time, which tracks the floating origin and made
-    // the "ground" wander with the avatar (6.08 → 6.59) instead of sitting at 0.
+    let origin = position.0 + DVec3::Y * PROBE_ABOVE;
+    // `cast_ray_grid`, NOT `cast_ray_render`: a spawn position is already
+    // grid-absolute — the frame avian's colliders live in. Casting it through
+    // `cast_ray_render` would add the render→physics shift a second time, which
+    // tracks the floating origin and made the "ground" wander with the avatar
+    // (6.08 → 6.59) instead of sitting at 0. The typed wrapper states that in the
+    // signature; `raw()` used to state it in a comment.
     // `solid: true` so a probe starting inside a collider still reports a hit.
     // The spawned entity does not exist yet, so it cannot hit itself.
-    let hit = raycaster.raw().cast_ray(
-        origin,
+    let hit = raycaster.cast_ray_grid(
+        lunco_core::coords::GridPos(origin),
         Dir3::NEG_Y,
         PROBE_RANGE,
         true,
@@ -403,10 +394,10 @@ pub fn on_spawn_entity_command(
     // arrives mid-load that the anchor is COMING rather than absent.
     scene_loading: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
     role: Res<lunco_core::NetworkRole>,
-    dem: Query<(
-        &GlobalTransform,
-        &lunco_terrain_surface::stream_viz::DemHeightField,
-    )>,
+    // The analytic surface, in the grid frame. NOT a hand-rolled DEM query: the
+    // oracle is grid-absolute by contract and this param is the only thing that
+    // knows it (`lunco_terrain_surface::surface_query`).
+    surface: lunco_terrain_surface::GridSurfaceQuery,
     // Ground fallback for scenes with no streamed DEM (the sandbox's flat slab).
     // Render-space origins → grid-absolute colliders, so this must be the grid-aware
     // wrapper, never a raw `SpatialQuery`.
@@ -481,7 +472,7 @@ pub fn on_spawn_entity_command(
             return;
         }
     };
-    let ground_probe = ground_height_under(&dem, &raycaster, position);
+    let ground_probe = ground_height_under(&surface, &raycaster, position);
     debug!(
         "SPAWN_FIT: '{}' requested_y={} ground_y={:?} rest_depth={}",
         cmd.entry_id, position.y, ground_probe, rest_depth

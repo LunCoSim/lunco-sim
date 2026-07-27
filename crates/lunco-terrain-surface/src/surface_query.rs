@@ -104,14 +104,9 @@ impl GridSurfaceQuery<'_, '_> {
     /// [`Self::height_at`] plus which terrain answered.
     pub fn sample(&self, p: GridPos) -> Option<(Entity, f64)> {
         for (entity, hf) in self.terrains.iter() {
-            let oracle = hf.0.as_ref();
-            let half = oracle.half_extent() as f64;
-            // Footprint test in the GRID frame — the oracle's own frame. No
-            // transform in between (module docs).
-            if p.0.x.abs() > half || p.0.z.abs() > half {
-                continue;
+            if let Some(y) = height_in_footprint(&hf.0, p) {
+                return Some((entity, y));
             }
-            return Some((entity, HeightSource::height_at(oracle, p.0.x, p.0.z)));
         }
         None
     }
@@ -166,6 +161,23 @@ impl GridSurfaceQuery<'_, '_> {
         let (cell, local) = grid.translation_to_grid(p.0);
         Some((entity, cell, local))
     }
+}
+
+/// Sample one oracle at a grid-absolute point, or `None` if the point lies
+/// outside that DEM's square footprint.
+///
+/// The ONE place the footprint test and the sample live together. It is a free
+/// function so the `&mut World` query providers ([`crate::query`]), which cannot
+/// take a `SystemParam`, share this exact code instead of re-deriving the
+/// footprint test — the re-derivation is what let two of them drift apart.
+pub fn height_in_footprint(oracle: &crate::oracle::SurfaceOracle, p: GridPos) -> Option<f64> {
+    let half = oracle.half_extent() as f64;
+    // Footprint test in the GRID frame — the oracle's own frame. No transform in
+    // between (module docs).
+    if p.0.x.abs() > half || p.0.z.abs() > half {
+        return None;
+    }
+    Some(HeightSource::height_at(oracle, p.0.x, p.0.z))
 }
 
 /// Fit a rectangular footprint to a surface: probe four corners, average them

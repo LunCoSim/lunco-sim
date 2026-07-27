@@ -44,7 +44,6 @@ use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 use serde_json::Value;
 
-use crate::spawn::{terrain_ray_hit, TerrainOracles};
 use crate::SelectedEntities;
 
 /// Scope the authored waypoints are parented under, beneath the stage's default prim.
@@ -227,7 +226,7 @@ pub struct WaypointClickFrame<'w, 's> {
 /// render-frame hit to grid-absolute world coordinates.
 fn pick_ground_world(
     frame: &WaypointClickFrame,
-    terrains: &TerrainOracles,
+    surface: &lunco_terrain_surface::GridSurfaceQuery,
     raycaster: &lunco_physics::GridSpatialQuery,
     egui_focus: &EguiFocus,
     pointer: Vec2,
@@ -236,33 +235,33 @@ fn pick_ground_world(
         camera.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
     })?;
     let ray = lunco_core::scene_click_ray(egui_focus, camera, cam_gtf, pointer)?;
-    let origin = ray.origin.as_dvec3();
+    // ONE frame crossing, at the ray. Everything after this is grid-absolute —
+    // the frame a waypoint prim is authored in. Converting the HIT instead of the
+    // ORIGIN (as this used to) means the analytic surface was marched in the
+    // render frame, so at an elevated site the oracle never answered and only
+    // physics colliders — the ring around the rover — could place a waypoint.
+    let origin = surface.to_grid(lunco_core::coords::RenderPos(ray.origin.as_dvec3()))?;
     let dir = ray.direction.as_dvec3();
     let phys = raycaster
-        .cast_ray_render(
-            lunco_core::coords::RenderPos(origin),
+        .cast_ray_grid(
+            origin,
             ray.direction,
             1.0e6,
             false,
             &avian3d::prelude::SpatialQueryFilter::default(),
         )
         .map(|h| h.distance);
-    let terr = terrain_ray_hit(terrains, origin, dir, 1.0e6);
-    let hit_render = match (phys, terr) {
-        (Some(pd), Some((td, tp))) => {
-            if td <= pd {
-                tp
-            } else {
-                origin + dir * pd
-            }
-        }
-        (Some(pd), None) => origin + dir * pd,
-        (None, Some((_, tp))) => tp,
-        (None, None) => return None,
-    };
-    raycaster
-        .to_physics(lunco_core::coords::RenderPos(hit_render))
-        .map(|p| p.0)
+    let terr = surface.raycast(origin, ray.direction, 1.0e6);
+    match (phys, terr) {
+        (Some(pd), Some(hit)) => Some(if hit.distance <= pd {
+            hit.point.0
+        } else {
+            origin.0 + dir * pd
+        }),
+        (Some(pd), None) => Some(origin.0 + dir * pd),
+        (None, Some(hit)) => Some(hit.point.0),
+        (None, None) => None,
+    }
 }
 
 /// Global `Pointer<Click>` observer: Alt+LMB drops a waypoint prim for the selected
@@ -281,7 +280,7 @@ pub fn on_scene_click_checkpoint(
     avatars: Query<Entity, With<Avatar>>,
     q_link: Query<&ControllerLink>,
     frame: WaypointClickFrame,
-    terrains: TerrainOracles,
+    surface: lunco_terrain_surface::GridSurfaceQuery,
     raycaster: lunco_physics::GridSpatialQuery,
     q_prim: Query<&UsdPrimPath>,
     q_xml: Query<(Entity, &BehaviorXml)>,
@@ -358,7 +357,7 @@ pub fn on_scene_click_checkpoint(
 
     let Some(hit) = pick_ground_world(
         &frame,
-        &terrains,
+        &surface,
         &raycaster,
         &egui_focus,
         click.pointer_location.position,
@@ -486,7 +485,7 @@ pub fn on_scene_click_place_waypoint(
     egui_focus: Res<EguiFocus>,
     mut placement: ResMut<WaypointPlacement>,
     frame: WaypointClickFrame,
-    terrains: TerrainOracles,
+    surface: lunco_terrain_surface::GridSurfaceQuery,
     raycaster: lunco_physics::GridSpatialQuery,
     q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
     doc_ctx: WaypointDocContext,
@@ -510,7 +509,7 @@ pub fn on_scene_click_place_waypoint(
 
     let Some(world) = pick_ground_world(
         &frame,
-        &terrains,
+        &surface,
         &raycaster,
         &egui_focus,
         click.pointer_location.position,

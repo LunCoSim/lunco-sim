@@ -110,15 +110,17 @@ impl ApiQueryProvider for TerrainHeightProvider {
         // `lunco-terrain-bake::dem`) — matching `world_pos`, the entity's own
         // `position_y`/`height` ports, and the sibling `GroundHeight` raycast.
         for (entity, oracle) in terrains {
-            let half = oracle.half_extent() as f64;
-            if p.0.x.abs() > half || p.0.z.abs() > half {
+            // The footprint test + sample are `surface_query::height_in_footprint`
+            // — one implementation shared with `GridSurfaceQuery`, so this
+            // provider and the in-process placement path can never disagree about
+            // which terrain covers a point.
+            let Some(h) = crate::surface_query::height_in_footprint(oracle.as_ref(), p) else {
                 continue;
-            }
+            };
 
             let eps = eps_override
                 .unwrap_or_else(|| oracle.spacing() as f64)
                 .max(1e-6);
-            let h = HeightSource::height_at(oracle.as_ref(), p.0.x, p.0.z);
             let n = HeightSource::normal_at(oracle.as_ref(), p.0.x, p.0.z, eps);
             let slope = HeightSource::slope_at(oracle.as_ref(), p.0.x, p.0.z, eps);
 
