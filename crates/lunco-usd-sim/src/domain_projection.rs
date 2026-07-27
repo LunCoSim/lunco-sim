@@ -455,9 +455,7 @@ pub fn is_domain_network_root(view: &lunco_usd_bevy::StageView<'_>, prim: &SdfPa
     // Codeless multiple-apply schemas are not consistently surfaced by every
     // OpenUSD binding through `HasAPI`; their standard authored properties are
     // authoritative and round-trip in all runtimes.
-    view.attr_names(prim)
-        .iter()
-        .any(|name| name.starts_with("collection:components:"))
+    view.any_attr_with_prefix(prim, "collection:components:")
 }
 
 fn read_network(

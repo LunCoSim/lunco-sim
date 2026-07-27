@@ -53,6 +53,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         app.init_resource::<ApiQueryRegistry>();
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListBundledProvider);
+        registry.register(ListSolversProvider);
         registry.register(ListOpenDocumentsProvider);
         registry.register(ListRecentFilesProvider);
         registry.register(ListTwinProvider);
@@ -98,6 +99,52 @@ impl ApiQueryProvider for ListBundledProvider {
             .collect();
         ApiResponse::ok(serde_json::json!({
             "bundled": items,
+            "count": items.len(),
+        }))
+    }
+}
+
+// ─── ListSolvers ───────────────────────────────────────────────────────
+
+/// The solver registry, verbatim: ids, capabilities and rank.
+///
+/// This is the vocabulary `RunExperiment`/`FastRunActiveModel` accept in their
+/// `solver` field, and it is the ONLY place that vocabulary is defined — the
+/// registry replaced a closed `SolverChoice` enum, so pre-registry spellings
+/// (`"rk_like"`, `"RkLike"`) name nothing and are refused rather than aliased.
+/// A caller that hardcoded one needs this list, not a guess.
+///
+/// Capabilities are reported because they explain the refusals: a run that asks
+/// for a backend without `usable_live` inside the frame loop is rejected by
+/// `solver::resolve`, and the field says why before the run is attempted.
+struct ListSolversProvider;
+
+impl ApiQueryProvider for ListSolversProvider {
+    fn name(&self) -> &'static str {
+        "ListSolvers"
+    }
+
+    fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        // The builtin backends register on first use rather than at plugin
+        // build, so a query that arrives before any run would otherwise see an
+        // empty registry and report "no solvers exist".
+        crate::solver_backends::ensure_builtin_solvers();
+        let items: Vec<serde_json::Value> = lunco_experiments::solver::registered()
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id.to_string(),
+                    "label": s.label,
+                    "rank": s.rank,
+                    "usable_live": s.caps.usable_live,
+                    "fixed_step": s.caps.fixed_step,
+                    "deterministic": s.caps.deterministic,
+                    "realtime_tolerated": s.caps.realtime_tolerated,
+                })
+            })
+            .collect();
+        ApiResponse::ok(serde_json::json!({
+            "solvers": items,
             "count": items.len(),
         }))
     }

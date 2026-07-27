@@ -45,19 +45,27 @@
 #                          so instead of reporting a green nesting result on a
 #                          rig that could not have shown one.
 #
-# WHAT IT ACTUALLY FOUND, first run, 2026-07-27: BOTH DEAD. The arc count is
-# innocent. `scenes/sandbox/solar_rover_demo.usda` — shipped, one arc, membership
-# authored in the scene itself, no profile anywhere — is rejected with the same
-# error, so no solar electrical island in this repo has ever assembled. A
-# `prepend` on `collection:components:includes` from a stronger layer does not
-# reach the composed collection, which puts the defect in relationship list-op
-# composition (the `explicitOnly` branch of `StageView::collection_members` reads
-# `rel_targets` directly), not in any asset. That is why the workshop build's two
-# attempts to re-author the collection both failed: neither could have worked.
+# WHAT IT ACTUALLY FOUND, 2026-07-27: BOTH DEAD, and the arc count is innocent.
+# `scenes/sandbox/solar_rover_demo.usda` — shipped, one arc, membership authored
+# in the scene itself, no profile anywhere — was rejected with the same error, so
+# no solar electrical island in this repo had ever assembled. Four faults, none of
+# them nesting:
 #
-# This rig is RED ON PURPOSE until that is fixed. It keeps both rovers because
-# once composition is correct, the arc count is still worth holding down: every
-# purchasable rover configuration is a profile asset.
+#   1. A sibling `over "SolarPanel"` in the same layer ERASED the `def` that
+#      referenced the component, so the panel composed as an empty husk with no
+#      `LunCoProgramAPI` and was skipped. Five assets fixed.
+#   2. The panel and the motors were constant-power devices, which closes a
+#      nonlinear algebraic loop the live backend cannot solve. Rewritten as
+#      current sources.
+#   3. Live islands resolved to an adaptive implicit backend that stalled the
+#      worker. Solver capability is data now (`usable_live`), not a constant.
+#   4. One authored connection was read twice — as a domain wire and again as a
+#      cosim wire — leaving a permanent phantom fault.
+#
+# The rig is GREEN and stays, because the arc count is still worth holding down:
+# every purchasable rover configuration is a profile asset. The scenario now also
+# DRIVES all three rovers, because a parked rover leaves `demand = 0` and never
+# enters the loop that fault (2) was about.
 #
 #     scene_test --scene scenes/tests/solar_domain_nested_ref.usda
 
@@ -70,9 +78,10 @@ def Xform "SolarDomainNestedRef" (
 {
     uniform bool lunco:spawnable = false
 
-    # Flat and level. Nothing here is a mobility test — the rovers sit still and
-    # are read through their ports — but they must rest on something or they fall
-    # out of the world before the island is ever queried.
+    # Flat, level, and large enough for three rovers to run straight for a few
+    # seconds without leaving it. Nothing here is a mobility test — the driving
+    # exists only to put current through the bus — but a rover that drops off the
+    # pad stops drawing, and a zero reading would be blamed on the island.
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )

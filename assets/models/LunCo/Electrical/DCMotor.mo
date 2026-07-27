@@ -15,7 +15,12 @@ model DCMotor
   input Real demand "Normalized motor demand, -1..1";
 
   Pin p;
-  Real electrical_power "Electrical power drawn, W";
+  // OUTPUT, not a plain `Real`, and that is what makes it observable: the domain
+  // projection publishes a member's `output` variables as ports on the island and
+  // nothing else, so a bare `Real` is computed every step and readable by no one.
+  // A reported quantity is not a causal claim — `p.i` and `p.v` are still solved
+  // acausally by the connection set; this only says the number leaves the model.
+  output Real electrical_power "Electrical power drawn, W";
 equation
   // A MOTOR DRIVE IS CURRENT-CONTROLLED. The inner loop of every real controller
   // regulates current (torque ∝ current); the bus voltage sets how much SPEED

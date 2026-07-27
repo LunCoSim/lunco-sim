@@ -1366,27 +1366,38 @@ struct BoundsOverride {
 /// `None`/empty/`"auto"` → `None`, meaning "let `solver::resolve` pick from what
 /// the model needs" — which is the normal case, not a fallback.
 ///
-/// An id that is not registered is REPORTED and dropped rather than silently
-/// becoming some other solver. Names come from the registry, so this validates
-/// against what is actually available instead of a hand-maintained alias table.
-fn parse_solver_arg(s: Option<&str>) -> Option<lunco_experiments::SolverId> {
-    let raw = s?;
+/// An id that is not registered is an ERROR, and the run does not start. Falling
+/// back to the resolver's pick would produce numbers under a solver the caller
+/// did not ask for and has no way to notice — the same silent-substitution
+/// failure [`solver::resolve`](lunco_experiments::solver::resolve) refuses at the
+/// other end. Names come from the registry, so this validates against what is
+/// actually available instead of a hand-maintained alias table.
+///
+/// The vocabulary is the registry's, and it is not the old `SolverChoice` enum's:
+/// pre-registry spellings such as `"rk_like"` no longer name anything and are
+/// rejected here rather than aliased. `ListSolvers` enumerates what is valid.
+fn parse_solver_arg(s: Option<&str>) -> Result<Option<lunco_experiments::SolverId>, String> {
+    let Some(raw) = s else {
+        return Ok(None);
+    };
     let t = raw.trim();
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {
-        return None;
+        return Ok(None);
     }
     crate::solver_backends::ensure_builtin_solvers();
     let id = lunco_experiments::SolverId::from(t);
     if lunco_experiments::solver::get(&id).is_some() {
-        return Some(id);
+        return Ok(Some(id));
     }
     let known = lunco_experiments::solver::registered()
         .into_iter()
         .map(|s| s.id.to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    warn!("[FastRun] unknown solver `{t}`; registered: {known}. Letting the resolver pick.");
-    None
+    Err(format!(
+        "unknown solver `{t}`; registered: {known} (or omit / `auto` to let the \
+         resolver pick)"
+    ))
 }
 
 /// Parse a textual override/input value into a typed `ParamValue`.
@@ -1784,17 +1795,40 @@ fn dispatch_experiment(
     }
 }
 
+/// Report a run that was refused before dispatch, to the log AND the console.
+///
+/// The console line is the point: a run that never started is otherwise
+/// indistinguishable from one still compiling, and the caller is looking at the
+/// UI rather than at stderr.
+fn refuse_run(who: &str, why: String, commands: &mut Commands) {
+    error!("[{who}] run refused: {why}");
+    commands.queue(move |world: &mut World| {
+        if let Some(mut console) =
+            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+        {
+            console.error(format!("✗ Run refused: {why}"));
+        }
+    });
+}
+
 #[on_command(FastRunActiveModel)]
 pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
     let explicit_class = trigger.event().class.clone();
+    let solver = match parse_solver_arg(trigger.event().solver.as_deref()) {
+        Ok(s) => s,
+        Err(why) => {
+            refuse_run("FastRun", why, &mut commands);
+            return;
+        }
+    };
     let cmd_bounds = BoundsOverride {
         t_start: None,
         t_end: trigger.event().t_end,
         dt: trigger.event().dt,
         n_intervals: trigger.event().n_intervals,
         tolerance: trigger.event().tolerance,
-        solver: parse_solver_arg(trigger.event().solver.as_deref()),
+        solver,
         h0: trigger.event().h0,
     };
     commands.queue(move |world: &mut World| {
@@ -1940,13 +1974,20 @@ pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
     let overrides = param_map_from_mods(&ev.overrides);
     let inputs = param_map_from_mods(&ev.inputs);
     let label = ev.label.clone();
+    let solver = match parse_solver_arg(ev.solver.as_deref()) {
+        Ok(s) => s,
+        Err(why) => {
+            refuse_run("RunExperiment", why, &mut commands);
+            return;
+        }
+    };
     let cmd_bounds = BoundsOverride {
         t_start: ev.t_start,
         t_end: ev.t_end,
         dt: ev.dt,
         n_intervals: ev.n_intervals,
         tolerance: ev.tolerance,
-        solver: parse_solver_arg(ev.solver.as_deref()),
+        solver,
         h0: ev.h0,
     };
     commands.queue(move |world: &mut World| {

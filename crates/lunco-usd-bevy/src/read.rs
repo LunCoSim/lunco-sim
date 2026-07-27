@@ -311,6 +311,21 @@ pub trait UsdRead {
     /// specs directly under `<prim>.`.
     fn attr_names(&self, prim: &SdfPath) -> Vec<String>;
 
+    /// Whether `prim` authors ANY property whose name begins with `prefix` —
+    /// the namespace-membership question, without materialising the names.
+    ///
+    /// Asked per candidate prim on hot paths (the cosim wiring pass tests every
+    /// `outputs:` sink for `collection:components:` before treating it as a
+    /// domain-network root), where [`attr_names`](Self::attr_names) would build
+    /// a `Vec<String>` per call only to drop it. The default is that same read,
+    /// so an implementation only overrides it to go faster, never to answer
+    /// differently.
+    fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool {
+        self.attr_names(prim)
+            .iter()
+            .any(|name| name.starts_with(prefix))
+    }
+
     /// The composed value of attribute `name` on `prim` at time code `time` —
     /// authored `timeSamples` (interpolated) win, else the `default` opinion.
     /// The transform decoders read at `time = 0.0` for static geometry.
@@ -481,6 +496,17 @@ impl UsdRead for StageView<'_> {
             .property_names()
             .map(|ns| ns.iter().map(|t| t.to_string()).collect())
             .unwrap_or_default()
+    }
+
+    fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool {
+        // Short-circuits on the first match and borrows each token's `&str`, so
+        // the common answer (no match on a plain geometry prim) costs one
+        // property-name walk and no allocation at all.
+        self.stage()
+            .prim(prim.clone())
+            .property_names()
+            .map(|ns| ns.iter().any(|t| t.as_str().starts_with(prefix)))
+            .unwrap_or(false)
     }
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {

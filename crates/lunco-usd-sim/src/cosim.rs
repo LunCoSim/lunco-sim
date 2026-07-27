@@ -1358,6 +1358,32 @@ pub fn rewire_usd_connections(
                     .or_else(|| src_leaf.strip_prefix("inputs:"))
                     .unwrap_or(src_leaf);
 
+                // ── The SOURCE side of the actuator-port indirection ─────────
+                // A vessel's `outputs:drive_left` is not stored on the vessel
+                // prim: `ActuatorPorts` realises it as a child `Port` entity, and
+                // that is where `apply_drive_mix` writes. The sink side above has
+                // always redirected onto that child; reading one had no such hop,
+                // so a wire whose SOURCE is a vessel actuator port resolved to the
+                // vessel entity, found no port of that name, and delivered its
+                // default forever.
+                //
+                // MEASURED on `scenes/tests/solar_domain_nested_ref.usda`: the
+                // rover's `throttle` reached 1.0 and the skid kernel wrote both
+                // bank ports, while `Electrical.inputs:drive_left` — wired from
+                // `</RockerBogie.outputs:drive_left>` — stayed at 0.0 for the whole
+                // run. Every motor drew no current, so a driving rover's battery
+                // never discharged and its bus was solved as if parked. Silent:
+                // the island compiled, published, and stepped.
+                let (start_element, src_conn) = match q_actuators
+                    .get(start_element)
+                    .ok()
+                    .filter(|_| !start_is_input)
+                    .and_then(|a| a.get(src_conn))
+                {
+                    Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME),
+                    None => (start_element, src_conn),
+                };
+
                 // ── The realtime gate ───────────────────────────────────────
                 // A program may only push a client-predicted `Dynamic` body around
                 // if it PROMISED it steps fast enough
