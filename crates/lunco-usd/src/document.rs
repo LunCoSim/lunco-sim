@@ -991,8 +991,28 @@ fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
 }
 
 /// True when `data` holds a prim spec at `sdf`.
+///
+/// **A flat spec lookup is not the whole answer**, because a prim authored
+/// inside a variant set is stored under its SELECTION path
+/// (`/Traverse/Route{route=default}W1`) while the editor — and every op it
+/// emits — addresses the COMPOSED path (`/Traverse/Route/W1`). Validating with
+/// `data.spec()` alone therefore rejected "move this waypoint" for every prim
+/// that happens to live in a variant, which is most authored route/config
+/// content: the op was correct, the addressing was correct, and the document
+/// said "path not found".
+///
+/// So: exact hit first (the common case, one hash lookup), then a scan for a
+/// variant-embedded spec that strips to the same path. The scan only runs on the
+/// miss path, and a miss is an op that was about to be rejected anyway.
 fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
-    matches!(data.spec(sdf), Some(s) if s.ty == SpecType::Prim)
+    if matches!(data.spec(sdf), Some(s) if s.ty == SpecType::Prim) {
+        return true;
+    }
+    data.iter().any(|(path, spec)| {
+        spec.ty == SpecType::Prim
+            && path.contains_prim_variant_selection()
+            && path.strip_all_variant_selections() == *sdf
+    })
 }
 
 /// The `xformOpOrder` tokens `data` holds for `prim`, flattening any list-op
