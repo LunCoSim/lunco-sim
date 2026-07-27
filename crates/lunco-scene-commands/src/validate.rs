@@ -240,6 +240,16 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
 
     report.errors.extend(branch_lint(text));
 
+    // The domain's own facts, for the authored rules. Merged at TOP LEVEL by
+    // `apply_lint_policy` — see the warning there about nesting.
+    // `model` is "" when extraction failed — a fact a rule can test, not an
+    // absence it has to infer.
+    report.lint_facts = Some(lunco_modelica::lint::modelica_facts(
+        model_name.as_deref().unwrap_or(""),
+        &parameters,
+        &inputs,
+    ));
+
     report.info = json!({
         "model": model_name,
         "params": parameters,

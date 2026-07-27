@@ -156,6 +156,7 @@ pub mod package_tree;
 /// The rumoca backends, registered into `lunco_experiments::solver`. Solver
 /// selection itself lives there; this module is only where rumoca's two-axis
 /// option shape is expressed, once.
+pub mod lint;
 pub mod solver_backends;
 
 pub mod sim_default;
