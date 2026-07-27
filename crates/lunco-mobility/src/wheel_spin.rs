@@ -309,8 +309,47 @@ pub(crate) fn update_wheel_spin(
         //     goes where it physically goes: into ω, as visible spin.
         // Nothing is calibrated against anything else, so μ means μ and a tire
         // swapped at runtime behaves like the tire it is.
+        // ── LATERAL: A SLIP ANGLE, NOT A LATERAL VELOCITY ──────────────────────
+        //
+        // The attribute is `physxVehicleTire:lateralStiffness` and every text —
+        // and PhysX — means CORNERING STIFFNESS by that: side force per RADIAN of
+        // slip angle. This computed `-k · v_lat`: force per metre-per-second of
+        // lateral velocity. Those are not the same model and they do not differ by
+        // a constant, because `v_lat = |v| · sin(α)`.
+        //
+        // The consequence is that grip vanished with speed. At the same slip angle
+        // — the same wheel scrubbing equally badly sideways — a wheel at 0.5 m/s
+        // got a tenth the side force of one at 5 m/s, so a slow rover slid
+        // sideways almost freely. That is why `drivetrain_parity` measured the
+        // raycast rover sweeping 53.3° against the jointed rover's 12.2°, and why
+        // the fit never converged: the parity handover proved by sweep that NO
+        // value of `k` satisfies all five scenes, and `tires/regolith.usda` carries
+        // the record of that search. A constant cannot fix a model that has the
+        // wrong independent variable.
+        //
+        // A slip angle is speed-free by construction, so one authored number now
+        // means the same grip at every speed.
+        //
+        // `V_REF` floors the denominator: at rest the slip angle is undefined
+        // (atan of 0/0) and any nonzero `v_lat` would read as a full 90°. Below
+        // this speed the expression degrades smoothly back to a velocity damper,
+        // which is the correct low-speed limit — a stationary wheel resists being
+        // pushed sideways in proportion to how fast it is being pushed.
+        // The stiffness is NORMALISED BY LOAD — side force per radian PER NEWTON of
+        // normal force — so one authored number describes the tyre rather than the
+        // tyre-on-this-particular-rover. That is the same reason PhysX states its
+        // `lateralStiffness` per unit gravity, and it is what the old absolute
+        // value could not do: `tires/regolith.usda` records a fit that worked on
+        // one vehicle and had to be re-fitted for the next.
+        //
+        // It also puts the saturation point where a tyre spec actually states it.
+        // The linear region ends when `C·N·α` reaches the cone `μ·N`, i.e. at
+        // `α_peak = μ / C`, independent of load: at C = 10 a μ = 0.8 regolith tyre
+        // develops full side force at 4.6° of slip, which is where a real one does.
+        const V_REF: f64 = 0.5;
         let f_lat = if on_ground {
-            -wheel.lateral_grip_stiffness * v_lat
+            let slip_angle = (-v_lat / v_long.abs().max(V_REF)).atan();
+            wheel.cornering_stiffness * wheel.last_normal_force * slip_angle
         } else {
             0.0
         };
@@ -410,7 +449,7 @@ mod tests {
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
-                lateral_grip_stiffness: 1000.0,
+                cornering_stiffness: 10.0,
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
             },
@@ -500,7 +539,7 @@ mod tests {
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
-                    lateral_grip_stiffness: 800.0,
+                    cornering_stiffness: 10.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
                 },

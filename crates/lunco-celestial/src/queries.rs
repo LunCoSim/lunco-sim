@@ -178,16 +178,22 @@ impl ApiQueryProvider for SolarPoseProvider {
         // rover antenna) that this read-only path can't resolve. Falls through to
         // the inline anchor/orbit compute for entities not yet posed.
         if let Some(p) = world.get::<crate::pose::SolarFramePose>(target).copied() {
-            let is_orbit = p.up == bevy::math::DVec3::ZERO;
+            // `kind` and `up` are one decision, taken once: a free-flyer has no
+            // vertical, and says so with a null rather than a zero vector a caller
+            // could mistake for a direction.
+            let (kind, up) = match p.horizon {
+                crate::pose::Horizon::Surface { up, .. } => {
+                    ("surface", serde_json::json!([up.x, up.y, up.z]))
+                }
+                crate::pose::Horizon::Free { .. } => ("orbit", serde_json::Value::Null),
+            };
             return ApiResponse::ok(serde_json::json!({
                 "found": true,
-                "kind": if is_orbit { "orbit" } else { "surface" },
-                "body": p.body,
+                "kind": kind,
+                "body": p.body(),
                 "pos": [p.pos.x, p.pos.y, p.pos.z],
                 "local": [p.local.x, p.local.y, p.local.z],
-                "up": if is_orbit { serde_json::Value::Null } else {
-                    serde_json::json!([p.up.x, p.up.y, p.up.z])
-                },
+                "up": up,
             }));
         }
         let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {

@@ -25,7 +25,7 @@
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
-//! | cornering stiffness (lateral) | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
+//! | cornering stiffness, N/rad | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
 //! | Coulomb μ (analytic) | `lunco:tire:frictionCoefficient` | yes |
 //! | contact μ (solver) | `physics:dynamicFriction` | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
@@ -113,14 +113,20 @@ pub struct WheelParams {
     /// Tire longitudinal stiffness (`physxVehicleTire:longitudinalStiffness`).
     pub slip_stiffness: f64,
     /// Tire CORNERING stiffness (`physxVehicleTire:lateralStiffness`) — side
-    /// force per m/s of lateral slip, before the Coulomb cone.
+    /// force per RADIAN of slip angle, before the Coulomb cone.
+    ///
+    /// Read on the schema's own terms: "cornering stiffness" means N/rad in PhysX
+    /// and in every vehicle-dynamics text. This used to be consumed as N per m/s
+    /// of lateral velocity, which made grip vanish at low speed and is what
+    /// `drivetrain_parity` was measuring when it swept 53° raycast against 12°
+    /// jointed.
     ///
     /// The PhysX schema's own companion to `longitudinalStiffness`, and read on
     /// the schema's terms: it declares a `0.0` fallback, so an unauthored tire
     /// resolves to zero here rather than raising a missing-attribute error. Zero
     /// is a legal (if unhelpful) tire — no cornering grip at all — and the place
     /// to state a real value is the tire asset, which every shipped tire does.
-    pub lateral_stiffness: f64,
+    pub cornering_stiffness: f64,
     /// Coulomb μ from the wheel's TIRE (`lunco:tire:frictionCoefficient`,
     /// composed through the `tire` variant). The ANALYTIC cone: the raycast
     /// tyre model saturates its patch force at exactly `friction_mu · N`.
@@ -188,7 +194,7 @@ impl WheelParams {
         // it always composes to a value and there is nothing to report missing.
         // Reading it any other way would invent a required-ness the schema does
         // not state — see the field doc.
-        let lateral_stiffness = reader
+        let cornering_stiffness = reader
             .real(wheel, "physxVehicleTire:lateralStiffness")
             .unwrap_or(0.0);
         let friction_mu = req("lunco:tire:frictionCoefficient");
@@ -228,7 +234,7 @@ impl WheelParams {
             bearing_damping,
             brake_torque_max,
             slip_stiffness,
-            lateral_stiffness,
+            cornering_stiffness,
             friction_mu,
             contact_friction,
             steer_axis,
@@ -267,7 +273,7 @@ impl WheelParams {
         wheel.bearing_damping = self.bearing_damping;
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
-        wheel.lateral_grip_stiffness = self.lateral_stiffness;
+        wheel.cornering_stiffness = self.cornering_stiffness;
         wheel.brake_torque_max = self.brake_torque_max;
         wheel.steer_axis = self.steer_axis;
     }
