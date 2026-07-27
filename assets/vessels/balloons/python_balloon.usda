@@ -40,6 +40,18 @@ def Xform "PythonBalloon" (
     float inputs:height.connect = </PythonBalloon.outputs:height>
     float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
 
+    # Local gravity, published onto every body that has one by
+    # `lunco_environment::inject_local_gravity_into_cosim`. Declared so the
+    # connection resolves to a real property; the runtime writes the value.
+    # Buoyancy is the weight of displaced medium, so it must use the SAME g
+    # Avian applies to the body — a script must not carry its own constant.
+    float outputs:gravity_accel = 0.0
+    float inputs:gravity.connect = </PythonBalloon.outputs:gravity_accel>
+    # `rho0` stays at the script's default of 0 — VACUUM, the lunar default.
+    # A scene with an atmosphere states it:
+    #
+    #     over "GreenBalloon" { float inputs:rho0 = 1.225 }   # Earth, sea level
+
     # ── Looks: the envelope's skin ───────────────────────────────────────────
     # Spin-revealing checker (see assets/shaders/balloon.wgsl), bound the way USD binds
     # every shader: a `Material` whose surface comes from a `Shader`.
