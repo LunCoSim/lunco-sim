@@ -374,6 +374,14 @@ pub fn project_domain_islands(
             doc_uri,
             extra_sources: Vec::new(),
             stream: None,
+            // A projected domain island is a NETWORK of components — a battery
+            // bus, a thermal loop — not a program driving a client-predicted
+            // body. It is `NotPredictable` by construction, so it takes the
+            // replicated class's adaptive implicit solver. Handing it the
+            // realtime class's explicit stepper is what silently killed every
+            // solar rover: the island compiled, then failed every step with
+            // `algebraic refresh row 2 cannot be solved` and published nothing.
+            realtime_safe: false,
         });
         info!(
             "[domain-projection] compiling `{}` from {} component(s) as generated://{}.mo",

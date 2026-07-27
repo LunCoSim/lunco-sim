@@ -1198,40 +1198,46 @@ impl ExperimentsPanel {
                         }
                     }
 
-                    // Solver picker. Vocabulary + labels are the single source of
-                    // truth `lunco_experiments::SolverChoice`; `None` = "Auto" (backend
-                    // default, TR-BDF2). The enum maps to rumoca's (family, tableau)
-                    // pair in `experiments_runner::solver_choice_to_rumoca`.
+                    // Solver picker. The list IS the registry, so a backend
+                    // registered by any crate appears here without a UI edit.
+                    // `None` = "Auto": `solver::resolve` picks the highest-ranked
+                    // solver that can actually serve the model.
+                    crate::solver_backends::ensure_builtin_solvers();
                     ui.separator();
                     ui.label("solver:").on_hover_text(
-                        "Integration method. Auto picks the stack's default \
-                     (TR-BDF2 — event-robust, recommended). The explicit \
-                     options override it.",
+                        "Integration method. Auto resolves from what the model \
+                     requires; an explicit choice is refused if it cannot \
+                     serve the model rather than silently replaced.",
                     );
-                    let current = bounds.solver;
-                    let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
+                    let current = bounds.solver.clone();
+                    let sel_label = current
+                        .as_ref()
+                        .and_then(lunco_experiments::solver::get)
+                        .map_or_else(|| "Auto".to_string(), |spec| spec.label.clone());
                     egui::ComboBox::from_id_salt("setup_solver")
                         .selected_text(sel_label)
                         .width(220.0)
                         .show_ui(ui, |ui| {
                             if ui
-                                .selectable_label(current.is_none(), "Auto (TR-BDF2)")
+                                .selectable_label(current.is_none(), "Auto")
                                 .on_hover_text(
-                                    "Let the backend pick. Currently TR-BDF2 — \
-                             event-robust default for stiff multi-day horizons.",
+                                    "Let the resolver pick from the model's own \
+                             requirements.",
                                 )
                                 .clicked()
                             {
                                 bounds.solver = None;
                                 bounds_changed = true;
                             }
-                            for c in lunco_experiments::SolverChoice::ALL {
+                            for spec in lunco_experiments::solver::registered() {
                                 if ui
-                                    .selectable_label(current == Some(c), c.label())
-                                    .on_hover_text(c.hover())
+                                    .selectable_label(
+                                        current.as_ref() == Some(&spec.id),
+                                        &spec.label,
+                                    )
                                     .clicked()
                                 {
-                                    bounds.solver = Some(c);
+                                    bounds.solver = Some(spec.id.clone());
                                     bounds_changed = true;
                                 }
                             }
