@@ -3928,4 +3928,85 @@ mod tests {
             host.document().source()
         );
     }
+
+    /// **A prim authored inside a `variantSet` must be editable at its COMPOSED
+    /// path.** This is the summer-space-school waypoint "Move does nothing" bug.
+    ///
+    /// `traverse.usda` authors its route markers inside
+    /// `variantSet "terrain" { "apollo15" { def Scope "Route" { def Xform "W1" ... } } }`,
+    /// so on the composed stage they are at `/Traverse/Route/W1` — which is the path
+    /// the editor holds and the path `UsdOp::SetTranslate` is given. But
+    /// `require_prim_anywhere` resolves through `prim_in` → `sdf::Data::spec`, a FLAT
+    /// layer lookup, and inside a layer the variant's contents live under a
+    /// variant-selection path, not under `/Traverse/Route/W1`. The lookup misses, the
+    /// op is rejected as "path not found", and the waypoint does not move — silently,
+    /// because `on_apply_usd_op` only logs the rejection at `warn`.
+    ///
+    /// Delete kept working precisely because it edits a DIFFERENT prim: the mission's
+    /// `info:sourceCode`, on a `/Traverse/Rover/Mission` authored outside every
+    /// variant block. That asymmetry is the whole signature of this bug.
+    #[test]
+    fn set_translate_reaches_a_prim_authored_inside_a_variant_set() {
+        let scene = concat!(
+            "#usda 1.0
+",
+            "(
+    defaultPrim = \"Traverse\"
+)
+",
+            "def Xform \"Traverse\" (
+",
+            "    variants = { string terrain = \"apollo15\" }
+",
+            "    prepend variantSets = \"terrain\"
+",
+            ")
+",
+            "{
+",
+            "    variantSet \"terrain\" = {
+",
+            "        \"apollo15\" {
+",
+            "            def Scope \"Route\"
+",
+            "            {
+",
+            "                def Xform \"W1\"
+",
+            "                {
+",
+            "                    double3 xformOp:translate = (1, 2, 3)
+",
+            "                    uniform token[] xformOpOrder = [\"xformOp:translate\"]
+",
+            "                }
+",
+            "            }
+",
+            "        }
+",
+            "    }
+",
+            "}
+",
+        );
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(4242),
+            scene,
+            DocumentOrigin::writable_file("/tmp/variant_move.usda"),
+        );
+
+        let moved = doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: "/Traverse/Route/W1".into(),
+            value: [10.0, 20.0, 30.0],
+        });
+
+        assert!(
+            moved.is_ok(),
+            "moving a variant-authored waypoint must be accepted, got {moved:?} —              the editor addresses prims by COMPOSED path, so document validation              cannot be a flat per-layer spec lookup"
+        );
+    }
+
 }
