@@ -99,7 +99,9 @@ pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, LiveHelpSection, LiveHelpSections,
     PerspectiveHelp, PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
-pub use render_robustness::preferred_wgpu_settings;
+pub use render_robustness::{
+    preferred_wgpu_settings, RenderGaveUp, RenderHealth, RenderHealthHandle,
+};
 pub use window_command::{
     merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
 };
