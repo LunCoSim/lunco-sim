@@ -60,7 +60,7 @@ const DRIVELINE: &str = r#"
 model DrivelineSmoke
   LunCo.Mechanics.Torque src;
   LunCo.Mechanics.Inertia rotor(J = 0.00012);
-  LunCo.Mechanics.GearRatio gear(ratio = 1200.0, eta = 0.85);
+  LunCo.Mechanics.GearRatio gear(ratio = 200.0, eta = 0.85);
   LunCo.Mechanics.Inertia wheel(J = 8.0);
   input Real tau_in;
   output Real w_wheel;

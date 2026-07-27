@@ -127,6 +127,76 @@ fn lint_usd(facts) {
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
+    for f in electrical_island_reference_device(facts) { out.push(f); }
+    out
+}
+
+/// Classes that SET the node potential on an electrical island — one, and only
+/// one, per island.
+///
+/// DOMAIN KNOWLEDGE, AUTHORED. LunCo's electrical devices carry a single `Pin` and
+/// there is no `Ground`: the vehicle bus IS the reference, so whichever device
+/// states `p.v` pins it and every other device must state its CURRENT against that.
+/// Rust cannot know which those are and must not learn — it reads the stage; this
+/// list is the rule. Add a class here when it states `p.v`.
+///
+/// Matched on the `.mo` FILE NAME, which is what `source_asset` carries.
+fn potential_setting_classes() {
+    ["Battery.mo"]
+}
+
+/// An electrical island needs EXACTLY ONE potential-setting device.
+///
+/// Zero leaves the node voltage free and the DAE structurally singular; two
+/// over-determine it. Neither is reported as such by the solver — the first shows
+/// up as an unrelated-looking failure to solve some other member's current, the
+/// second as an island that compiles and then never publishes a port. Both are
+/// decidable from the authored stage, which is the whole reason this is a rule.
+///
+/// Scopes with no electrical member at all are not this rule's business: a purely
+/// thermal or mechanical network has its own reference and must not be told to
+/// add a battery.
+fn electrical_island_reference_device(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        let electrical = 0;
+        let sources = 0;
+        for member in scope.members {
+            for program in facts.connector_programs {
+                if program.path != member { continue; }
+                // An electrical member is one whose acausal interface is the `p`
+                // pin. Asking the CONNECTOR rather than the file path keeps a
+                // twin's own device in scope alongside the shipped library.
+                let is_electrical = false;
+                for c in program.connectors {
+                    if c == "p" { is_electrical = true; }
+                }
+                if !is_electrical { continue; }
+                electrical += 1;
+                for cls in potential_setting_classes() {
+                    if program.source_asset.ends_with(cls) { sources += 1; }
+                }
+            }
+        }
+        if electrical == 0 { continue; }
+        if sources == 1 { continue; }
+
+        if sources == 0 {
+            let m = "electrical island of " + electrical + " device(s) has no device that ";
+            m += "sets the node voltage — every member states a current, so `p.v` is ";
+            m += "unconstrained and the generated DAE is structurally singular. The island ";
+            m += "will compile and then never publish a port. Add a battery (or another ";
+            m += "device that states `p.v`) to this collection.";
+            out.push(finding("electrical-island-has-no-reference", "error", scope.path, m));
+        } else {
+            let m = "electrical island has " + sources + " devices that each set the node ";
+            m += "voltage — LunCo devices carry ONE pin and no Ground, so the bus node is ";
+            m += "over-determined and the solve fails on an unrelated member's current. ";
+            m += "Keep one voltage source per island and let the others state current, or ";
+            m += "split them into separate CollectionAPI:components scopes.";
+            out.push(finding("electrical-island-over-determined", "error", scope.path, m));
+        }
+    }
     out
 }
 
