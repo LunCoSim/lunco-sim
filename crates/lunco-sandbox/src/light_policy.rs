@@ -10,15 +10,13 @@
 //! possession generically and applies the engine policy to whichever vessel is
 //! under local control.
 //!
-//! ## The default policy (`PossessedOnly`)
+//! ## The default policy (`All`)
 //!
 //! Every shadow-casting spot/point light re-renders the whole scene into its own
 //! shadow map each frame, so a field of parked rovers (two headlights each) stacks
-//! up a dozen wasted shadow passes — profiled as the dominant render cost on the
-//! moonbase twin. Local lights therefore spawn with shadows **off** (see
-//! `lunco-usd-bevy/light.rs`), and the engine turns the projection back **on** only
-//! for the vessel you are actually driving. Perf win (idle rovers stay cheap) + UX
-//! win (your rover looks right).
+//! up a dozen shadow passes — a user may select `Off` or `PossessedOnly` when
+//! GPU budget matters, but authored rover-light shadows remain enabled by
+//! default so the scene's presentation is preserved.
 //!
 //! ## Reactive, and orchestration-only
 //!
@@ -43,12 +41,12 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum LocalLightShadows {
     /// No local light casts a shadow. Cheapest; lights still illuminate.
     Off,
-    /// Only the locally-possessed vessel's lights cast shadows — the rover you
-    /// drive projects, the parked ones stay cheap. The default.
-    #[default]
-    PossessedOnly,
     /// Every local light casts a shadow. Most expensive.
+    #[default]
     All,
+    /// Only the locally-possessed vessel's lights cast shadows — the rover you
+    /// drive projects, the parked ones stay cheap.
+    PossessedOnly,
 }
 
 /// Simulation setting: local-light shadow handling. Persisted through
@@ -63,7 +61,7 @@ pub(crate) struct ShadowCastingSettings {
 impl Default for ShadowCastingSettings {
     fn default() -> Self {
         Self {
-            local_lights: LocalLightShadows::PossessedOnly,
+            local_lights: LocalLightShadows::All,
         }
     }
 }
