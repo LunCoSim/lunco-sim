@@ -2362,6 +2362,7 @@ impl Plugin for SandboxCorePlugin {
         {
             let mode = lunco_networking::NetworkMode::resolve(self.headless);
             info!("[net] networking mode: {mode:?}");
+            app.insert_resource(lunco_modelica::msl_remote::MslNetworkAccess(mode.is_some()));
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
             // Client-side netcode over avian bodies: snapshot interpolation,
             // prediction, rollback, reconciliation, correction smoothing. Used to

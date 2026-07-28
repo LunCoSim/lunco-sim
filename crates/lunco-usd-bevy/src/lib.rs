@@ -4528,7 +4528,7 @@ pub fn build_usd_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> {
     // `primvars:st0` / bare `st` spellings are gone. A UV set is a primvar, so it
     // is namespaced; a bare `st` is not one, and accepting it let a mesh carry UVs
     // in a form no other DCC binds.
-    let normals = read_mesh_normals(reader, path);
+    let normals = read_mesh_normals(reader, path).map(|(values, _source)| values);
     // `points2`, NOT `scalar::<Vec<[f32; 2]>>`: Maya and Houdini export
     // `texCoord2d[]`, Blender exports `texCoord2f[]`. A strict `2f` read of a `2d` UV
     // set yields "no UVs", and the documented response to that is a ZEROED UV set —
@@ -5604,6 +5604,10 @@ def Xform "Spinner"
 
     const ROTATION_OPS_SCENE: &str = r#"#usda 1.0
 
+(
+    metersPerUnit = 1
+)
+
 def Xform "HingeZ"
 {
     float xformOp:rotateZ.timeSamples = {
@@ -5667,6 +5671,9 @@ def Xform "HalfSpin"
     }
 
     const ORDER_SCENE: &str = r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
 
 def Xform "ScaleFirst"
 {
@@ -5829,6 +5836,7 @@ def Xform "World"
     const YUP_M: &str = r#"#usda 1.0
 (
     defaultPrim = "World"
+    metersPerUnit = 1
 )
 
 def Xform "World"

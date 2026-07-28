@@ -49,10 +49,9 @@
 //!   edge of a loaded terrain tile is a paging problem, not an escape, and the
 //!   floor keeps a small scene (a test rig with a 2 m ground plane) from
 //!   flagging a body that hopped a metre sideways.
-//! - **Upward: not at all — the ceiling is removed entirely.** A lander under
-//!   thrust, a suborbital hop and a spacecraft on approach are all legitimately
-//!   unbounded above the terrain, and there is no altitude at which "too high"
-//!   is a defensible verdict for this engine. Escapes fall; they do not rise.
+//! - **Upward: bounded for local worlds.** The ceiling is derived from the
+//!   static extent, with [`ESCAPE_VERTICAL_FACTOR`] scene-scale slack. Orbital
+//!   scenes have no static colliders and therefore remain `None`.
 //!
 //! Non-finite positions and velocities (NaN/±inf) are flagged unconditionally,
 //! bounds or no bounds. A NaN in the solver is never legitimate in any regime,
@@ -86,21 +85,23 @@ use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
-/// Fraction of the static world's largest extent added as slack on every side
-/// except up. Ten percent is comfortably more than terrain-tile paging jitter
-/// and far less than the scale of a genuine escape.
+/// Fraction of the static world's largest extent added as lateral/downward
+/// slack. Ten percent is comfortably more than terrain-tile paging jitter and
+/// far less than the scale of a genuine escape.
 pub const ESCAPE_MARGIN_FRACTION: Scalar = 0.1;
 
 /// Floor for the computed margin, in metres. Keeps a small scene (a unit-test
 /// rig with a 2 m ground plane) from flagging a body that hopped a metre.
 pub const ESCAPE_MARGIN_MIN: Scalar = 100.0;
 
+/// Additional local-world height, in multiples of the static world's largest
+/// extent. This catches runaway integration without rewriting physics state.
+pub const ESCAPE_VERTICAL_FACTOR: Scalar = 10.0;
+
 /// The volume the simulation has static geometry in, expanded by the margins
 /// described in the module docs — or [`WorldBounds::None`] when the scene has no
 /// static colliders at all, in which case the diagnostic is inert.
 ///
-/// `max.y` is deliberately `INFINITY`: see the module docs on why there is no
-/// defensible ceiling for an engine that also does orbital work.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub enum WorldBounds {
     /// No static geometry ⇒ no opinion ⇒ no reports.
@@ -187,8 +188,13 @@ fn update_world_bounds(
         let margin = (extent * ESCAPE_MARGIN_FRACTION).max(ESCAPE_MARGIN_MIN);
         WorldBounds::Some {
             min: min - Vector::splat(margin),
-            // No ceiling: thrust and orbit are legitimately unbounded upward.
-            max: Vector::new(max.x + margin, Scalar::INFINITY, max.z + margin),
+            // Local static geometry defines the scale. Orbital scenes have no
+            // static union and remain unbounded through `WorldBounds::None`.
+            max: Vector::new(
+                max.x + margin,
+                max.y + extent * ESCAPE_VERTICAL_FACTOR + margin,
+                max.z + margin,
+            ),
         }
     } else {
         WorldBounds::None
@@ -346,7 +352,7 @@ mod tests {
     fn catches_the_measured_failure_below_a_site_terrain() {
         let b = WorldBounds::Some {
             min: Vector::new(-600.0, -100.0, -600.0),
-            max: Vector::new(600.0, Scalar::INFINITY, 600.0),
+            max: Vector::new(600.0, 10_100.0, 600.0),
         };
         assert!(
             b.escaped(Vector::new(0.0, -1510.0, 0.0)),
@@ -362,15 +368,14 @@ mod tests {
         assert!(!b.escaped(Vector::new(10.0, -1.0, -20.0)));
     }
 
-    /// There is no ceiling: a lander under thrust and a spacecraft on approach
-    /// are legitimately unbounded above the terrain.
+    /// A local-world ceiling is finite and derived from scene scale.
     #[test]
-    fn altitude_is_never_an_escape() {
+    fn a_local_world_has_a_finite_vertical_escape_bound() {
         let b = WorldBounds::Some {
             min: Vector::new(-600.0, -100.0, -600.0),
-            max: Vector::new(600.0, Scalar::INFINITY, 600.0),
+            max: Vector::new(600.0, 10_100.0, 600.0),
         };
-        assert!(!b.escaped(Vector::new(0.0, 1.0e9, 0.0)));
+        assert!(b.escaped(Vector::new(0.0, 1.0e9, 0.0)));
     }
 
     /// End-to-end wiring: a static ground collider must actually produce bounds,
@@ -426,6 +431,9 @@ mod tests {
              the diagnostic is inert and reports nothing, which is indistinguishable \
              from a healthy scene"
         );
+        if let WorldBounds::Some { max, .. } = bounds {
+            assert!(max.y.is_finite(), "local static worlds need a finite ceiling");
+        }
         assert!(
             bounds.escaped(Vector::new(0.0, -1510.0, 0.0)),
             "a body 1.5 km below a 1 km ground plane must read as escaped: {bounds:?}"

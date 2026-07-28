@@ -691,6 +691,10 @@ fn kick_web_msl_fetcher(slot: Res<MslLoadSlot>, mut kicked: Local<bool>) {
 /// Plugin that owns MSL asset loading. Add once during app build.
 pub struct MslRemotePlugin;
 
+/// Whether the native MSL installer may contact the network at startup.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MslNetworkAccess(pub bool);
+
 impl Plugin for MslRemotePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MslLoadState>();
@@ -713,6 +717,11 @@ impl Plugin for MslRemotePlugin {
         // its result back into ECS state.
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let network_allowed = app
+                .world()
+                .get_resource::<MslNetworkAccess>()
+                .map(|p| p.0)
+                .unwrap_or(true);
             let settings = app
                 .world()
                 .resource::<crate::msl_settings::MslSettings>()
@@ -750,6 +759,13 @@ impl Plugin for MslRemotePlugin {
                     uncompressed_bytes: 0,
                 });
             } else {
+                if !network_allowed {
+                    info!("[MSL] no on-disk root and network access is disabled; skipping the MSL download");
+                    app.insert_resource(MslLoadState::Failed(
+                        "MSL unavailable offline: no local Modelica/ source root".into(),
+                    ));
+                    return;
+                }
                 // No tree on disk → kick off the existing
                 // downloader+indexer pipeline in the background. The
                 // `[msl]` entry in Assets.toml has the URL, version,

@@ -217,6 +217,7 @@ mod mount_reader_tests {
     const SCENE: &str = r#"#usda 1.0
 (
     defaultPrim = "World"
+    metersPerUnit = 1
 )
 def Xform "World"
 {

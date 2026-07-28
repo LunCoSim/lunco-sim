@@ -28,7 +28,7 @@ required-features = ["api"]
 # via their own feature list). Without it `cargo check -p lunco-workbench`
 # fails to resolve `bevy::render` even though full binaries enable it
 # transitively.
-bevy = { workspace = true, features = ["bevy_render"] }
+bevy = { workspace = true, features = ["bevy_render", "bevy_light"] }
 bevy_egui = { workspace = true }
 # The screenshot backend (`screenshot.rs`). OPTIONAL: only a binary that actually serves the
 # API needs `CaptureScreenshot`, and `lunco-api` itself is now render-free BY CONSTRUCTION —

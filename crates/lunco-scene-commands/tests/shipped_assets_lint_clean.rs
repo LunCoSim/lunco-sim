@@ -213,6 +213,10 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("ambiguous_boundary_sources", empty()),
     ]);
     let facts = H::map([
+        (
+            "stage",
+            H::map([("meters_per_unit_authored", H::Bool(true))]),
+        ),
         ("bodies", empty()),
         ("joints", empty()),
         ("prims", empty()),
@@ -241,6 +245,37 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
             .iter()
             .all(|finding| finding.rule != "empty-component-network"),
         "a failed membership query is not evidence of an empty collection: {findings:?}"
+    );
+}
+
+#[test]
+fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
+    use lunco_hooks::HookValue as H;
+
+    register_usd_lint_policy();
+    let empty = || H::Array(Vec::new());
+    let facts = H::map([
+        ("stage", H::map([("meters_per_unit_authored", H::Bool(false))])),
+        ("bodies", empty()),
+        ("joints", empty()),
+        ("prims", empty()),
+        ("collections", empty()),
+        ("filtered_pairs", empty()),
+        ("collision_groups", empty()),
+        ("network_scopes", empty()),
+        ("legacy_program_prims", empty()),
+        ("connector_programs", empty()),
+    ]);
+
+    let findings = lunco_lint::run_lint("usd", facts);
+    let finding = findings
+        .iter()
+        .find(|finding| finding.rule == "stage-meters-per-unit-missing")
+        .expect("an omitted metersPerUnit must be highlighted");
+    assert_eq!(finding.severity, lunco_lint::LintSeverity::Warn);
+    assert!(
+        finding.message.contains("0.01 m/unit"),
+        "the warning must explain the OpenUSD fallback: {finding:?}"
     );
 }
 

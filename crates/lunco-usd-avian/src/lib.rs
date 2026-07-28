@@ -2714,7 +2714,9 @@ fn apply_rigid_body_mass_props(
     {
         commands
             .entity(entity)
-            .try_insert(ColliderDensity(density as f64 / (mpu * mpu * mpu)));
+            .try_insert(ColliderDensity(
+                (density as f64 / (mpu * mpu * mpu)) as f32,
+            ));
     }
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
@@ -3094,6 +3096,10 @@ mod joint_typed_tests {
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
 def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
 def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
 def PhysicsRevoluteJoint "Hinge" (
@@ -3142,7 +3148,7 @@ def PhysicsRevoluteJoint "Hinge" (
         assert_eq!(j.local_pos1, DVec3::ZERO);
         // UsdPhysicsDriveAPI:angular → JointDrive.
         let drive = j.drive.expect("angular drive read via DriveAPI");
-        assert_eq!(drive.target_velocity, Some(2.5));
+        assert_eq!(drive.target_velocity, Some(2.5f64.to_radians()));
         assert_eq!(drive.max_force, Some(100.0));
         assert_eq!(drive.target_position, None);
     }
@@ -3331,7 +3337,10 @@ def PhysicsRevoluteJoint "Hinge"
         compose_file_to_stage(&f).expect("compose stage")
     }
 
-    const DERIVE_FIXTURE: &str = "#usda 1.0\n\
+    const DERIVE_FIXTURE: &str = "#usda 1.0\n(\n\
+    upAxis = \"Y\"\n\
+    metersPerUnit = 1\n\
+)\n\
 def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
     def Xform \"Wheel\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n    {\n\
         double3 xformOp:translate = (0.9, -0.65, 1.225)\n\
@@ -3387,7 +3396,10 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
     /// sits at (0, 1, 0) on the host and its head 0.5 m above that, so lp0 is the
     /// head's origin in host coordinates, (0, 1.5, 0) — not (0, 0.5, 0), which is
     /// what resolving after the anchor derivation would produce.
-    const MOUNT_FIXTURE: &str = "#usda 1.0\n\
+    const MOUNT_FIXTURE: &str = "#usda 1.0\n(\n\
+    upAxis = \"Y\"\n\
+    metersPerUnit = 1\n\
+)\n\
 def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
     def Xform \"Mount\"\n    {\n\
         double3 xformOp:translate = (0, 1, 0)\n\
@@ -3509,7 +3521,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         // the derivation the shape it actually serves: mounts on the wheels, hinges
         // with no anchors, four of them, on one body.
         let mut body = String::from(
-            "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n)\n\
+            "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n    upAxis = \"Y\"\n    metersPerUnit = 1\n)\n\
              def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n",
         );
         let mounts = [

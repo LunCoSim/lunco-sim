@@ -796,6 +796,20 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     }
 
     H::map([
+        (
+            "stage",
+            H::map([(
+                "meters_per_unit_authored",
+                H::Bool(
+                    reader
+                        .stage()
+                        .stage_metadata("metersPerUnit")
+                        .ok()
+                        .flatten()
+                        .is_some(),
+                ),
+            )]),
+        ),
         ("bodies", H::Array(body_facts)),
         ("joints", H::Array(joints)),
         ("filtered_pairs", H::Array(filtered_pairs)),

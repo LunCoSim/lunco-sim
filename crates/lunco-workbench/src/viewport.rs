@@ -116,6 +116,11 @@ pub const VIEWPORT_PANEL_ID: PanelId = PanelId("workbench::viewport");
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct WorkbenchViewportCamera;
 
+/// Opt-in for applications whose window-targeting scene cameras belong inside
+/// the workbench viewport.
+#[derive(Resource, Debug, Default)]
+pub struct AutoTagWorkbenchCameras;
+
 /// Required-component bundle: the primary 3D scene camera for a
 /// workbench-using binary.
 ///
@@ -1162,6 +1167,9 @@ impl Plugin for WorkbenchViewportPlugin {
             .add_systems(
                 Update,
                 (
+                    auto_tag_workbench_3d_cameras
+                        .run_if(resource_exists::<AutoTagWorkbenchCameras>)
+                        .before(check_camera_invariants),
                     check_camera_invariants,
                     check_host_invariant_once,
                     // Load-bearing for the no-ghost-chrome invariant — see

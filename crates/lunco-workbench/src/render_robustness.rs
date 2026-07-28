@@ -133,6 +133,7 @@ pub struct RenderHealthHandle(pub Arc<RenderHealth>);
 /// say it.
 #[derive(Resource, Clone, Debug)]
 pub struct RenderGaveUp {
+    /// Human-readable reason presentation was abandoned.
     pub reason: String,
 }
 
@@ -511,7 +512,7 @@ mod tests {
         // Still failing, but inside the grace period: hold.
         let mut total = 1;
         let mut t = 0.0;
-        while t < GIVE_UP_AFTER_SECS - 0.1 {
+        while t + 0.5 < GIVE_UP_AFTER_SECS - 0.1 {
             t += 0.5;
             total += 1;
             assert_eq!(l.step(total, false, t), None, "gave up too early at t={t}");

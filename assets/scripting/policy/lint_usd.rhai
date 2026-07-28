@@ -109,6 +109,7 @@ fn schemas_of(facts, path) {
 
 fn lint_usd(facts) {
     let out = [];
+    for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in retired_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }
     for f in connector_requires_network_scope(facts) { out.push(f); }
@@ -128,6 +129,23 @@ fn lint_usd(facts) {
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
     for f in electrical_island_reference_device(facts) { out.push(f); }
+    out
+}
+
+/// OpenUSD permits an omitted `metersPerUnit` and defines its fallback as
+/// centimetres (0.01 m/unit). LunCo assets are authored in explicit metres, so
+/// omission is a warning: it is valid USD but an easy way to import a scene at
+/// 1/100 scale when the author meant metres.
+fn stage_meters_per_unit_missing(facts) {
+    let out = [];
+    if !facts.stage.meters_per_unit_authored {
+        out.push(finding(
+            "stage-meters-per-unit-missing",
+            "warn",
+            "<stage>",
+            "Stage omits metersPerUnit; OpenUSD defaults to 0.01 m/unit (centimetres). Author metersPerUnit = 1 for a LunCo metre-stage asset.",
+        ));
+    }
     out
 }
 

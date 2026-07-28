@@ -21,7 +21,6 @@ use lunco_avatar::{
 };
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
-use lunco_workbench::auto_tag_workbench_3d_cameras;
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
@@ -59,6 +58,7 @@ pub(crate) struct SandboxUiPlugin;
 
 impl Plugin for SandboxUiPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_workbench::AutoTagWorkbenchCameras>();
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
         // requestAnimationFrame on web) act as the frame timer; ReactiveLowPower
         // keeps fans quiet when backgrounded. Networked windows stay Continuous
@@ -205,7 +205,6 @@ impl Plugin for SandboxUiPlugin {
             )
             // Confine window-targeting cameras to the ViewportPanel rect (prevents
             // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
-            .add_systems(Update, auto_tag_workbench_3d_cameras)
             // Sharpest shadow filter (hard airless-Moon terminator) on each camera.
             .add_systems(Update, force_hard_shadow_filtering)
             // Fallback free-flight camera when the scene authors none — interactive
