@@ -160,9 +160,9 @@ impl CanonicalStage {
     /// Author `xformOp:translate = value` onto the composed prim at `path` (root
     /// edit target) — this fires the change sink, so the projection bridge
     /// ([`project_stage_changes`](crate::project_stage_changes) via
-    /// `lunco-usd`) reconciles the move in place. Appends `xformOp:translate`
-    /// to `xformOpOrder` when not already listed, so an existing xform stack is
-    /// extended, never clobbered.
+    /// `lunco-usd`) reconciles the move in place. Inserts `xformOp:translate`
+    /// into `xformOpOrder` at its canonical slot when not already listed, so an
+    /// existing xform stack is extended, never clobbered.
     ///
     /// The `CanonicalStage` is the live **projection** (rebuilt from the recipe on
     /// a structural reload), so authoring here updates the live view + drives the
@@ -175,19 +175,15 @@ impl CanonicalStage {
             .map_err(|e| anyhow!("author translate at {path}: {e}"))?
             .set(value)
             .map_err(|e| anyhow!("set translate at {path}: {e}"))?;
-        self.stage
-            .prim(path.clone())
-            .append_to_uniform_token_array("xformOpOrder", "xformOp:translate")
-            .map_err(|e| anyhow!("append xformOpOrder at {path}: {e}"))?;
-        Ok(())
+        self.insert_xform_op(path, "xformOp:translate")
     }
 
     /// Author `xformOp:rotateXYZ = value` (Euler XYZ, **degrees**) onto the
     /// composed prim at `path` — the rotation counterpart of
     /// [`author_translate`](Self::author_translate). Fires the change sink so the
-    /// projection bridge reconciles the new orientation in place, and appends
-    /// `xformOp:rotateXYZ` to `xformOpOrder` when not already listed (extends a
-    /// stack, never clobbers it).
+    /// projection bridge reconciles the new orientation in place, and inserts
+    /// `xformOp:rotateXYZ` into `xformOpOrder` at its canonical slot when not
+    /// already listed (extends a stack, never clobbers it).
     pub(crate) fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
         self.stage
@@ -195,10 +191,61 @@ impl CanonicalStage {
             .map_err(|e| anyhow!("author rotate at {path}: {e}"))?
             .set(value)
             .map_err(|e| anyhow!("set rotate at {path}: {e}"))?;
-        self.stage
-            .prim(path.clone())
-            .append_to_uniform_token_array("xformOpOrder", "xformOp:rotateXYZ")
-            .map_err(|e| anyhow!("append xformOpOrder at {path}: {e}"))?;
+        self.insert_xform_op(path, "xformOp:rotateXYZ")
+    }
+
+    /// Rank of `op` in XformCommonAPI's canonical stack: `!resetXformStack!`
+    /// first, then translate → rotate/orient → scale, with unknown/extra ops
+    /// after the canonical trio.
+    fn canonical_xform_rank(op: &str) -> usize {
+        let base = op.strip_prefix("!invert!").unwrap_or(op);
+        match base {
+            "!resetXformStack!" => 0,
+            t if t.starts_with("xformOp:translate") => 1,
+            t if t.starts_with("xformOp:rotate") || t.starts_with("xformOp:orient") => 2,
+            t if t.starts_with("xformOp:scale") => 3,
+            _ => 4,
+        }
+    }
+
+    /// Insert `op` into `xformOpOrder` at its XformCommonAPI canonical slot —
+    /// a blind append would place a translate authored after a rotate *inside*
+    /// it (innermost), flipping the composed transform. No-op when `op` is
+    /// already listed; existing ops keep their relative order.
+    fn insert_xform_op(&self, path: &SdfPath, op: &str) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let prim = self.stage.prim(path.clone());
+        let existing: Vec<String> = match prim
+            .attribute("xformOpOrder")
+            .get::<openusd::sdf::Value>()
+            .map_err(|e| anyhow!("read xformOpOrder at {path}: {e}"))?
+        {
+            Some(openusd::sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+            Some(openusd::sdf::Value::StringVec(v)) => v,
+            Some(openusd::sdf::Value::TokenListOp(l)) => {
+                l.flatten().into_iter().map(Into::into).collect()
+            }
+            Some(openusd::sdf::Value::StringListOp(l)) => l.flatten(),
+            _ => Vec::new(),
+        };
+        if existing.iter().any(|t| t == op) {
+            return Ok(());
+        }
+        let rank = Self::canonical_xform_rank(op);
+        let at = existing
+            .iter()
+            .position(|t| Self::canonical_xform_rank(t) > rank)
+            .unwrap_or(existing.len());
+        let mut updated = existing;
+        updated.insert(at, op.to_string());
+        prim.create_attribute("xformOpOrder", "token[]")
+            .map_err(|e| anyhow!("author xformOpOrder at {path}: {e}"))?
+            .set_variability(openusd::sdf::Variability::Uniform)
+            .map_err(|e| anyhow!("set xformOpOrder variability at {path}: {e}"))?
+            .set_custom(false)
+            .map_err(|e| anyhow!("set xformOpOrder custom at {path}: {e}"))?
+            .set(openusd::sdf::Value::token_vec(updated))
+            .map_err(|e| anyhow!("set xformOpOrder at {path}: {e}"))?;
         Ok(())
     }
 
@@ -293,14 +340,24 @@ impl CanonicalStage {
             asset_path: asset_path.to_string(),
             ..Default::default()
         };
+        // Merge into any existing `references` list-op (`UsdReferences::AddReference`
+        // semantics) — an unconditional set would erase prior arcs on the prim.
         self.stage
             .prim(path.clone())
-            .set_metadata(
-                openusd::sdf::FieldKey::References.as_str(),
-                openusd::sdf::Value::ReferenceListOp(openusd::sdf::ReferenceListOp::prepended([
-                    reference,
-                ])),
-            )
+            .update_metadata(openusd::sdf::FieldKey::References.as_str(), |current| {
+                let mut op = match current {
+                    Some(openusd::sdf::Value::ReferenceListOp(op)) => op,
+                    _ => openusd::sdf::ReferenceListOp::default(),
+                };
+                if !op.iter().any(|r| *r == reference) {
+                    if op.explicit {
+                        op.explicit_items.push(reference);
+                    } else {
+                        op.prepended_items.push(reference);
+                    }
+                }
+                openusd::sdf::Value::ReferenceListOp(op)
+            })
             .map_err(|e| anyhow!("author reference @{asset_path}@ at {path}: {e}"))?;
         Ok(())
     }
@@ -966,6 +1023,71 @@ mod authoring_tests {
         assert!(
             cs.view().has_prim(&body),
             "the referenced rover's Body child must compose under the runtime spawn"
+        );
+    }
+
+    /// H8: a second `author_reference` on the same prim must merge into the
+    /// existing `references` list-op (`UsdReferences::AddReference` semantics),
+    /// not replace it — both referenced subtrees compose.
+    #[test]
+    fn second_author_reference_preserves_the_first() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build scene stage");
+        let _ = cs.drain_changes();
+
+        const A: &str = "#usda 1.0\n(\n    defaultPrim = \"A\"\n)\ndef Xform \"A\"\n{\n    def Cube \"FromA\"\n    {\n    }\n}\n";
+        const B: &str = "#usda 1.0\n(\n    defaultPrim = \"B\"\n)\ndef Xform \"B\"\n{\n    def Cube \"FromB\"\n    {\n    }\n}\n";
+        for (path, src) in [("a.usda", A), ("b.usda", B)] {
+            let id = cs.canonical_reference_id(path);
+            assert!(cs.add_layer_bytes(HashMap::from([(id, src.as_bytes().to_vec())])));
+        }
+
+        let spawn = SdfPath::new("/World/combo").unwrap();
+        cs.author_prim(&spawn, Some("Xform")).expect("define prim");
+        cs.author_reference(&spawn, "a.usda").expect("first arc");
+        cs.author_reference(&spawn, "b.usda").expect("second arc");
+
+        let view = cs.view();
+        assert!(
+            view.has_prim(&SdfPath::new("/World/combo/FromA").unwrap()),
+            "the first reference arc must survive the second author_reference"
+        );
+        assert!(
+            view.has_prim(&SdfPath::new("/World/combo/FromB").unwrap()),
+            "the second reference arc must compose too"
+        );
+    }
+
+    /// xformOp ordering: a translate authored after a rotate must land BEFORE
+    /// it in `xformOpOrder` (XformCommonAPI canonical translate→rotate→scale),
+    /// not innermost via a blind append.
+    #[test]
+    fn translate_authored_after_rotate_lands_before_it_in_xform_op_order() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+
+        let rover = SdfPath::new("/World/Rover").unwrap();
+        cs.author_rotate(&rover, [0.0, 90.0, 0.0]).expect("rotate");
+        cs.author_translate(&rover, [1.0, 2.0, 3.0])
+            .expect("translate");
+
+        let order: Vec<String> = match cs
+            .stage()
+            .prim(rover)
+            .attribute("xformOpOrder")
+            .get::<openusd::sdf::Value>()
+            .expect("read xformOpOrder")
+        {
+            Some(openusd::sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+            other => panic!("xformOpOrder must be a token array, got {other:?}"),
+        };
+        assert_eq!(
+            order,
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
+            "translate must sit at its canonical slot before the rotate"
         );
     }
 

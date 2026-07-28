@@ -645,15 +645,8 @@ pub struct AnimationPlan {
 pub enum XformDrive {
     /// Authored `xformOpOrder` — recompose the whole stack honoring op order.
     OpOrder,
-    /// A single `xformOp:transform` matrix drives the full pose.
-    Matrix,
-    /// Piecewise TRS: only the flagged channels carry `timeSamples`.
-    Trs {
-        translate: bool,
-        rotate: bool,
-        scale: bool,
-    },
-    /// No animated transform channels (material/visibility-only prim).
+    /// No authored `xformOpOrder` (orderless ops contribute nothing, matching
+    /// the static decode) — or no animated transform channels at all.
     None,
 }
 
@@ -2528,7 +2521,21 @@ pub fn read_vec3_f64(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Opti
 /// either would let `color3f primvars:displayColor` (the wrong type, which every
 /// asset here used to author) keep working, and that is the bug we are removing.
 pub fn read_primvar_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
-    primvar_vec3_from(reader.attr_value(path, attr)?)
+    let out = primvar_vec3_from(reader.attr_value(path, attr)?);
+    if out.is_none() {
+        // Authored, but not as the schema's array type (the classic mistake is a
+        // scalar `color3f primvars:displayColor`). Say so ONCE instead of
+        // silently rendering white forever.
+        static NON_ARRAY_PRIMVAR: std::sync::Once = std::sync::Once::new();
+        NON_ARRAY_PRIMVAR.call_once(|| {
+            warn!(
+                "[usd-bevy] {} authors `{attr}` with a non-array value — the schema type \
+                 is `color3f[]`; the value is ignored (further cases not logged)",
+                path.as_str()
+            );
+        });
+    }
+    out
 }
 
 /// Time-sampled twin of [`read_primvar_vec3`].
@@ -2765,7 +2772,7 @@ fn read_f32_at(reader: &StageView<'_>, path: &SdfPath, attr: &str, time: f64) ->
 /// Sample one xform-op channel **only if it is animated** (has `timeSamples`),
 /// evaluated at `time`. Returns `None` for static channels so the caller leaves
 /// the instantiated value untouched.
-fn sample_animated_vec3(
+pub fn sample_animated_vec3(
     reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
@@ -2819,27 +2826,16 @@ pub fn plan_usd_animation(
             continue;
         };
 
-        // Transform: an authored `xformOpOrder` drives the whole stack; else a
-        // single `xformOp:transform` matrix; else piecewise TRS with a per-channel
-        // gate (a channel without `timeSamples` keeps its code-set spawn value).
+        // Transform: an authored `xformOpOrder` drives the whole stack. Without
+        // one there is NO transform to drive — UsdGeomXformable gives orderless
+        // `xformOp:*` attributes no meaning, and the static decode
+        // (`local_transform_at_raw`) already treats them as inert data, so the
+        // sampler must too or an animated prim would move where a static one
+        // holds still.
         let xform = if has_xform_op_order(reader, &sdf_path) {
             XformDrive::OpOrder
-        } else if attr_has_time_samples(reader, &sdf_path, "xformOp:transform") {
-            XformDrive::Matrix
         } else {
-            let drive = XformDrive::Trs {
-                translate: attr_has_time_samples(reader, &sdf_path, "xformOp:translate"),
-                rotate: prim_rotation_animated(reader, &sdf_path),
-                scale: attr_has_time_samples(reader, &sdf_path, "xformOp:scale"),
-            };
-            match drive {
-                XformDrive::Trs {
-                    translate: false,
-                    rotate: false,
-                    scale: false,
-                } => XformDrive::None,
-                other => other,
-            }
+            XformDrive::None
         };
 
         // Material: resolve the bound shader once and record which channels move.
@@ -2923,13 +2919,11 @@ pub fn sample_usd_animation(
         let secs = lunco_time::domain_time(&resolved, binding, &world);
         let t = secs * plan.time_codes_per_second;
 
-        // Drive the local transform per the plan's cached channel topology.
-        // Every channel is converted to the canonical frame by the stage's
-        // `ConventionTransform` — the sampler drives raw sub-decoders (not
-        // `local_transform_at`), so it must convert explicitly or an animated prim
-        // on a Z-up/cm stage would snap back to stage units every frame.
-        // Conjugation is separable across translate/rotate/scale, so the
-        // per-channel conversion agrees with the whole-transform one.
+        // Drive the local transform per the plan's cached topology. The result is
+        // converted to the canonical frame by the stage's `ConventionTransform` —
+        // the sampler drives the raw composer (not `local_transform_at`), so it
+        // must convert explicitly or an animated prim on a Z-up/cm stage would
+        // snap back to stage units every frame.
         let conv = stage_convention(reader);
         match &plan.xform {
             XformDrive::OpOrder => {
@@ -2938,39 +2932,6 @@ pub fn sample_usd_animation(
                     tf.translation = m.translation;
                     tf.rotation = m.rotation;
                     tf.scale = m.scale;
-                }
-            }
-            XformDrive::Matrix => {
-                if let Some(m) = read_matrix_transform_at(reader, &sdf_path, t) {
-                    let m = conv.local_transform(m);
-                    tf.translation = m.translation;
-                    tf.rotation = m.rotation;
-                    tf.scale = m.scale;
-                }
-            }
-            XformDrive::Trs {
-                translate,
-                rotate,
-                scale,
-            } => {
-                if *translate {
-                    if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", t)
-                    {
-                        tf.translation =
-                            conv.point(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
-                    }
-                }
-                // Any animated rotation channel → recompose the full local rotation
-                // (Euler order / `orient` slerp / single-axis) at `t`.
-                if *rotate {
-                    if let Some(q) = local_rotation_at(reader, &sdf_path, t) {
-                        tf.rotation = conv.rotation(q);
-                    }
-                }
-                if *scale {
-                    if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", t) {
-                        tf.scale = conv.scale_vec(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
-                    }
                 }
             }
             XformDrive::None => {}
@@ -3299,7 +3260,7 @@ fn attach_programs(
 /// place across both consumers.
 pub fn euler_xyz_deg_to_quat(deg: Vec3) -> Quat {
     Quat::from_euler(
-        EulerRot::XYZ,
+        EulerRot::XYZEx,
         deg.x.to_radians(),
         deg.y.to_radians(),
         deg.z.to_radians(),
@@ -3325,16 +3286,18 @@ pub const ROTATION_OPS: [&str; 10] = [
 
 /// Map a USD Euler-order op name + authored **degrees** (`float3`, each
 /// component the angle about that axis) to a Bevy `Quat`. The op-name letter
-/// order is the application sequence. `None` for a non-Euler-order op name.
+/// order is the application sequence, about the FIXED (extrinsic) axes — USD's
+/// row-vector `rx*ry*rz` composition, so glam's `*Ex` orders. `None` for a
+/// non-Euler-order op name.
 fn euler_op_to_quat(op: &str, deg: Vec3) -> Option<Quat> {
     let (x, y, z) = (deg.x.to_radians(), deg.y.to_radians(), deg.z.to_radians());
     let q = match op {
-        "xformOp:rotateXYZ" => Quat::from_euler(EulerRot::XYZ, x, y, z),
-        "xformOp:rotateXZY" => Quat::from_euler(EulerRot::XZY, x, z, y),
-        "xformOp:rotateYXZ" => Quat::from_euler(EulerRot::YXZ, y, x, z),
-        "xformOp:rotateYZX" => Quat::from_euler(EulerRot::YZX, y, z, x),
-        "xformOp:rotateZXY" => Quat::from_euler(EulerRot::ZXY, z, x, y),
-        "xformOp:rotateZYX" => Quat::from_euler(EulerRot::ZYX, z, y, x),
+        "xformOp:rotateXYZ" => Quat::from_euler(EulerRot::XYZEx, x, y, z),
+        "xformOp:rotateXZY" => Quat::from_euler(EulerRot::XZYEx, x, z, y),
+        "xformOp:rotateYXZ" => Quat::from_euler(EulerRot::YXZEx, y, x, z),
+        "xformOp:rotateYZX" => Quat::from_euler(EulerRot::YZXEx, y, z, x),
+        "xformOp:rotateZXY" => Quat::from_euler(EulerRot::ZXYEx, z, x, y),
+        "xformOp:rotateZYX" => Quat::from_euler(EulerRot::ZYXEx, z, y, x),
         _ => return None,
     };
     Some(q)
@@ -3449,6 +3412,8 @@ fn read_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<Str
     let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
         Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
         Value::StringVec(v) => v,
+        Value::TokenListOp(op) => op.flatten().into_iter().map(|t| t.to_string()).collect(),
+        Value::StringListOp(op) => op.flatten(),
         _ => return None,
     };
     (!order.is_empty()).then_some(order)
@@ -3940,27 +3905,37 @@ fn read_mesh_points(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<[f32; 
     )
 }
 
-/// A `Mesh` prim's `normals`, rotated into the canonical frame (`n' = Q·n`) — a
-/// direction, so never scaled. `None` when unauthored (the caller then computes
-/// flat normals).
-fn read_mesh_normals(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
+/// A `Mesh` prim's normals, rotated into the canonical frame (`n' = Q·n`) — a
+/// direction, so never scaled. `primvars:normals` wins over the typed `normals`
+/// attribute (UsdGeomPointBased gives the primvar precedence); the returned name
+/// says which was read so the caller can resolve its interpolation/indices.
+/// `None` when unauthored (the caller then computes flat normals).
+fn read_mesh_normals(reader: &StageView<'_>, path: &SdfPath) -> Option<(Vec<[f32; 3]>, &'static str)> {
     // `points3` for the same reason as `points` above — `normal3d[]` is legal, and a
     // strict read of it means "unauthored", which here silently swaps authored
     // shading normals for computed flat ones (a faceted look, not an error).
-    let normals = reader.points3(path, "normals");
+    let (normals, attr) = {
+        let pv = reader.points3(path, "primvars:normals");
+        if pv.is_empty() {
+            (reader.points3(path, "normals"), "normals")
+        } else {
+            (pv, "primvars:normals")
+        }
+    };
     if normals.is_empty() {
         return None;
     }
     let conv = stage_convention(reader);
     if conv.is_identity() {
-        return Some(normals);
+        return Some((normals, attr));
     }
-    Some(
+    Some((
         normals
             .into_iter()
             .map(|n| conv.dir(Vec3::from_array(n)).to_array())
             .collect(),
-    )
+        attr,
+    ))
 }
 
 /// Build a swept-tube mesh from a `UsdGeomBasisCurves` prim.

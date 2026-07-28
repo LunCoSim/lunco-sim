@@ -81,15 +81,18 @@ pub enum UpAxis {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StageMetrics {
     /// `metersPerUnit` — SI metres per authored linear unit. `1.0` = metres
-    /// (USD default and ours), `0.01` = centimetres (Omniverse / Isaac / Unreal).
+    /// (ours; every shipped asset authors it), `0.01` = centimetres — the USD
+    /// spec fallback for an unauthored stage (`UsdGeomLinearUnits::centimeters`),
+    /// and the Omniverse / Isaac / Unreal convention.
     pub meters_per_unit: f64,
     /// `upAxis` — `Y` (USD default, ours) or `Z`.
     pub up_axis: UpAxis,
 }
 
 impl Default for StageMetrics {
-    /// The USD defaults, which are also our canonical frame: `upAxis = "Y"`,
-    /// `metersPerUnit = 1.0`. An unauthored stage needs no conversion.
+    /// Our canonical frame: `upAxis = "Y"`, `metersPerUnit = 1.0`. NOT the
+    /// unauthored-stage fallback — USD's is `0.01` (centimetres); an unauthored
+    /// stage goes through [`from_reader`](Self::from_reader) and gets converted.
     fn default() -> Self {
         Self {
             meters_per_unit: 1.0,
@@ -102,6 +105,8 @@ impl StageMetrics {
     /// Read the composed stage metrics from any [`UsdRead`] source.
     ///
     /// **Warns loudly** rather than importing wrong silently:
+    /// - an unauthored `metersPerUnit` takes the USD spec fallback `0.01`
+    ///   (centimetres, `UsdGeomLinearUnits::centimeters`) — NOT `1.0`;
     /// - an `upAxis` token that is neither `Y` nor `Z` is an **error** (USD only
     ///   defines those two) → treated as `Y`;
     /// - a non-finite or non-positive `metersPerUnit` is an **error** → `1.0`;
@@ -121,7 +126,8 @@ impl StageMetrics {
             }
         };
         let meters_per_unit = match reader.stage_meters_per_unit() {
-            None => 1.0,
+            // Unauthored ⇒ the USD spec fallback: centimetres.
+            None => 0.01,
             Some(m) if m.is_finite() && m > 0.0 => m,
             Some(bad) => {
                 error_once!(
@@ -182,8 +188,10 @@ impl StageMetrics {
                     .get::<f64>()
                     .or_else(|| v.get::<f32>().map(f64::from))
             })
-            .filter(|m| m.is_finite() && *m > 0.0)
-            .unwrap_or(1.0);
+            // Invalid ⇒ 1.0, unauthored ⇒ the USD spec fallback (centimetres) —
+            // mirroring `from_reader`, so read and write agree on the frame.
+            .map(|m| if m.is_finite() && m > 0.0 { m } else { 1.0 })
+            .unwrap_or(0.01);
         Self {
             meters_per_unit,
             up_axis,

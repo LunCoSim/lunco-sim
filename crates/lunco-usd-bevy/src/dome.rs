@@ -106,7 +106,8 @@ pub struct UsdDomeEnvironment {
     pub format: DomeFormat,
     /// `inputs:intensity` × 2^`inputs:exposure`.
     pub intensity: f32,
-    /// `inputs:color`, multiplied into the image.
+    /// `inputs:color` (× the blackbody colour when
+    /// `inputs:enableColorTemperature` is on), multiplied into the image.
     pub tint: LinearRgba,
     /// `lunco:dome:faceSize`.
     pub face_size: u32,
@@ -206,9 +207,10 @@ pub fn read_dome_environment(
             sdf_path,
             DEFAULT_DOME_INTENSITY,
         ),
-        tint: crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
-            .map(|c| LinearRgba::rgb(c.x, c.y, c.z))
-            .unwrap_or(LinearRgba::WHITE),
+        tint: {
+            let c = crate::light::read_light_color(reader, sdf_path);
+            LinearRgba::rgb(c.x, c.y, c.z)
+        },
         face_size: reader
             .real_f32(sdf_path, "lunco:dome:faceSize")
             .map(|f| f as u32)
@@ -319,7 +321,7 @@ fn project_dome_textures(
 /// that knows an attribute moved. `next` is the re-read intent (`None` = the
 /// author removed `inputs:texture:file`, so the dome reverts to the scalar
 /// ambient it means without one), and `ambient` is that fallback's
-/// `inputs:intensity`.
+/// `inputs:intensity` × 2^`inputs:exposure`.
 pub fn refresh_dome_entity(
     world: &mut World,
     entity: Entity,

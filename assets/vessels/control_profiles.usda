@@ -5,6 +5,7 @@
     # with no `defaultPrim` resolves to nothing the moment someone omits the path.
     # `RoverControls` is the profile the overwhelming majority of vessels target.
     defaultPrim = "RoverControls"
+    metersPerUnit = 1
     doc = """Shared vessel control profiles (stage 2 of control: intent -> port).
 
     A vessel adds a child `def "Controls" (references = @lunco://vessels/control_profiles.usda@</RoverControls>)`

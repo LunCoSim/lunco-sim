@@ -250,6 +250,19 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
     for (path, rspec) in runtime.iter() {
         match out.spec_mut(path) {
             Some(bspec) => {
+                // Value resolution picks the strongest layer with ANY value
+                // opinion: a runtime `default` must block a base `timeSamples`
+                // (and vice versa), so the two value fields replace as a UNIT.
+                // A per-field merge would let a weaker layer's samples outlive
+                // a stronger layer's default.
+                if rspec
+                    .fields
+                    .iter()
+                    .any(|(k, _)| k == "default" || k == "timeSamples")
+                {
+                    bspec.remove("default");
+                    bspec.remove("timeSamples");
+                }
                 for (key, value) in &rspec.fields {
                     if key == "primChildren" || key == "propertyChildren" {
                         // Both are ordering token-lists (the `TextWriter` emits a
@@ -260,15 +273,18 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
                         // append runtime-only names.
                         union_token_list(bspec, key, value);
                     } else if key == "specifier" {
-                        // Keep the strongest DEFINING specifier. A runtime sparse
-                        // edit authors `over` prims (an overlay opinion); blindly
-                        // copying that would DOWNGRADE the base's `def` → `over`.
-                        // When this merged layer is later serialized and re-parsed
-                        // standalone (the E1b twin overlay → `UsdLoader` path), an
-                        // `over` with no underlying `def` defines nothing, so the
-                        // whole subtree would silently vanish. Compose to the
-                        // strongest opinion instead (def > class > over).
+                        // Keep the strongest layer's DEFINING specifier. A runtime
+                        // sparse edit authors `over` prims (an overlay opinion);
+                        // blindly copying that would DOWNGRADE the base's `def` →
+                        // `over`. When this merged layer is later serialized and
+                        // re-parsed standalone (the E1b twin overlay → `UsdLoader`
+                        // path), an `over` with no underlying `def` defines
+                        // nothing, so the whole subtree would silently vanish.
                         merge_specifier(bspec, value);
+                    } else if let Some(merged) = merge_composite(bspec.get(key), value) {
+                        // Dictionaries merge key-wise, list-ops compose stronger-
+                        // over-weaker — never wholesale replacement.
+                        bspec.add(key, merged);
                     } else {
                         // Runtime opinion wins (stronger layer). `add` upserts
                         // in place, preserving field order.
@@ -285,17 +301,14 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
     out
 }
 
-/// Compose the runtime `specifier` opinion onto the base spec, keeping the
-/// strongest DEFINING opinion (`def` > `class` > `over`). A sparse runtime edit
-/// authors `over` prims; that must never downgrade a base `def`, or the merged
-/// layer — once serialized and re-parsed standalone — would lose the prim (an
-/// `over` with no `def` defines nothing).
+/// Compose the runtime `specifier` opinion onto the base spec: the composed
+/// specifier is the strongest layer's DEFINING opinion. `over` is NOT a
+/// defining opinion — it contributes nothing, so a sparse runtime `over` keeps
+/// the base's specifier (a downgrade would lose the prim once the merged layer
+/// is serialized and re-parsed standalone: an `over` with no `def` defines
+/// nothing). `def` and `class` are both defining, so a runtime `def` OR `class`
+/// wins over whatever the base authored — base `def` ⊕ runtime `class` = `class`.
 fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
-    let rank = |s: sdf::Specifier| match s {
-        sdf::Specifier::Def => 2,
-        sdf::Specifier::Class => 1,
-        sdf::Specifier::Over => 0,
-    };
     let runtime = match rval {
         Value::Specifier(s) => *s,
         // Non-specifier value under the `specifier` key — shouldn't happen; just
@@ -305,20 +318,49 @@ fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
             return;
         }
     };
-    let base = match bspec.get_mut("specifier") {
-        Some(Value::Specifier(s)) => *s,
-        // Base has no specifier yet — take the runtime one.
-        _ => {
-            bspec.add("specifier", Value::Specifier(runtime));
-            return;
+    match runtime {
+        // No defining opinion from the stronger layer: keep the base's, unless
+        // the base authored none at all.
+        sdf::Specifier::Over => {
+            if !matches!(bspec.get("specifier"), Some(Value::Specifier(_))) {
+                bspec.add("specifier", Value::Specifier(runtime));
+            }
         }
-    };
-    let strongest = if rank(runtime) > rank(base) {
-        runtime
-    } else {
-        base
-    };
-    bspec.add("specifier", Value::Specifier(strongest));
+        // A defining opinion from the stronger layer wins outright.
+        sdf::Specifier::Def | sdf::Specifier::Class => {
+            bspec.add("specifier", Value::Specifier(runtime));
+        }
+    }
+}
+
+/// Compose a runtime field value onto the base's same-keyed value for the two
+/// composite kinds USD does NOT replace wholesale: dictionaries (`customData`,
+/// `assetInfo`) merge KEY-WISE — the stronger layer wins per key, weaker-only
+/// keys survive — and list-ops (`references`, `apiSchemas`, relationship /
+/// connection targets) compose per the spec's list-op application, the stronger
+/// op applied over the weaker (the fork's `ListOp::combined_with`, its
+/// `SdfListOp::ComposeAndReduce`). An explicit stronger op still replaces the
+/// weaker entirely, exactly as the spec requires. Returns `None` for every
+/// other pairing — the caller then replaces plainly.
+fn merge_composite(base: Option<&Value>, runtime: &Value) -> Option<Value> {
+    use Value as V;
+    Some(match (runtime, base?) {
+        (V::Dictionary(r), V::Dictionary(b)) => {
+            let mut merged = b.clone();
+            merged.extend(r.iter().map(|(k, v)| (k.clone(), v.clone())));
+            V::Dictionary(merged)
+        }
+        (V::TokenListOp(r), V::TokenListOp(b)) => V::TokenListOp(r.combined_with(b)),
+        (V::StringListOp(r), V::StringListOp(b)) => V::StringListOp(r.combined_with(b)),
+        (V::PathListOp(r), V::PathListOp(b)) => V::PathListOp(r.combined_with(b)),
+        (V::ReferenceListOp(r), V::ReferenceListOp(b)) => V::ReferenceListOp(r.combined_with(b)),
+        (V::PayloadListOp(r), V::PayloadListOp(b)) => V::PayloadListOp(r.combined_with(b)),
+        (V::IntListOp(r), V::IntListOp(b)) => V::IntListOp(r.combined_with(b)),
+        (V::Int64ListOp(r), V::Int64ListOp(b)) => V::Int64ListOp(r.combined_with(b)),
+        (V::UIntListOp(r), V::UIntListOp(b)) => V::UIntListOp(r.combined_with(b)),
+        (V::UInt64ListOp(r), V::UInt64ListOp(b)) => V::UInt64ListOp(r.combined_with(b)),
+        _ => return None,
+    })
 }
 
 /// Union a runtime token-list ordering field (`primChildren` or `properties`)
@@ -638,6 +680,79 @@ mod tests {
                 .as_deref(),
             Some("keep"),
             "sibling `tag` dropped:\n{text}"
+        );
+    }
+
+    /// A stronger layer's `default` blocks a weaker layer's `timeSamples`
+    /// entirely: value resolution picks the strongest layer with ANY value
+    /// opinion, so the merged attribute must carry the runtime default and NO
+    /// base samples (which a per-field merge would have let survive and win).
+    #[test]
+    fn compose_layers_stronger_default_blocks_weaker_time_samples() {
+        let base = usda_to_data(
+            "#usda 1.0\ndef Xform \"P\"\n{\n    double r = 1\n    double r.timeSamples = {\n        0: 1,\n        10: 5,\n    }\n}\n",
+        )
+        .unwrap();
+        let runtime = usda_to_data("#usda 1.0\nover \"P\"\n{\n    double r = 7\n}\n").unwrap();
+        let composed = compose_layers(&base, &runtime);
+        let attr = SdfPath::new("/P.r").unwrap();
+        let spec = composed.spec(&attr).unwrap();
+        assert_eq!(
+            spec.get("default"),
+            Some(&Value::Double(7.0)),
+            "runtime default must win"
+        );
+        assert!(
+            spec.get("timeSamples").is_none(),
+            "weaker-layer timeSamples must be blocked by the stronger default"
+        );
+    }
+
+    /// `customData` (dictionary-valued metadata) merges KEY-WISE: the runtime
+    /// layer wins per key, base-only keys survive.
+    #[test]
+    fn compose_layers_merges_custom_data_key_wise() {
+        let base = usda_to_data(
+            "#usda 1.0\ndef Xform \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double min = 0\n            double max = 10\n        }\n    )\n}\n",
+        )
+        .unwrap();
+        let runtime = usda_to_data(
+            "#usda 1.0\nover \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double max = 99\n        }\n    )\n}\n",
+        )
+        .unwrap();
+        let composed = compose_layers(&base, &runtime);
+        let attr = SdfPath::new("/P.a").unwrap();
+        let dict = match composed.spec(&attr).and_then(|s| s.get("customData")) {
+            Some(Value::Dictionary(d)) => d.clone(),
+            other => panic!("expected a customData dictionary, got {other:?}"),
+        };
+        assert_eq!(
+            dict.get("max").cloned().and_then(|v| v.get::<f64>()),
+            Some(99.0),
+            "runtime key wins"
+        );
+        assert_eq!(
+            dict.get("min").cloned().and_then(|v| v.get::<f64>()),
+            Some(0.0),
+            "base-only key survives"
+        );
+    }
+
+    /// The composed specifier is the strongest layer's DEFINING opinion: `over`
+    /// is no opinion (base `def` survives it — pinned above), while `def` and
+    /// `class` are both defining, so base `def` ⊕ runtime `class` = `class`.
+    #[test]
+    fn compose_layers_runtime_class_wins_over_base_def() {
+        let base = usda_to_data("#usda 1.0\ndef Xform \"P\"\n{\n}\n").unwrap();
+        let runtime = usda_to_data("#usda 1.0\nclass Xform \"P\"\n{\n}\n").unwrap();
+        let composed = compose_layers(&base, &runtime);
+        let spec = composed.spec(&SdfPath::new("/P").unwrap()).unwrap();
+        assert!(
+            matches!(
+                spec.get("specifier"),
+                Some(Value::Specifier(sdf::Specifier::Class))
+            ),
+            "runtime `class` (a defining opinion) must win over base `def`"
         );
     }
 

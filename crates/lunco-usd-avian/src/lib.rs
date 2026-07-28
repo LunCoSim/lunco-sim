@@ -494,7 +494,7 @@ const JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
 const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 
 /// Checks if a USD prim has a specific API schema applied.
-/// Collects collider shapes from all child prims of a compound body root,
+/// Collects collider shapes from all descendant prims of a compound body root,
 /// reading directly from the USD stage.
 ///
 /// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
@@ -504,18 +504,25 @@ fn collect_child_colliders_from_usd(
 ) -> Vec<(Position, Rotation, Collider)> {
     let mut shapes = Vec::new();
 
-    // `UsdGeomImageable.purpose` decides which of a body's children are its
+    // Per the spec a rigid body aggregates ALL descendant colliders, not only
+    // direct children — a collider under an intermediate grouping `Xform`
+    // (`/Rover/Shapes/Hull`) is still this body's geometry. Descendant walk with
+    // each prim's transform composed in the root's frame; recursion stops at a
+    // nested-body boundary (see `gather_compound_candidates`).
+    let mut candidates = Vec::new();
+    gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates);
+
+    // `UsdGeomImageable.purpose` decides which of a body's descendants are its
     // COLLISION geometry, when the body carries more than one description of its
     // own shape. That is the standard way to say "this cheap box is what you
     // collide, that mesh is what you look at", and it is why a proxy exists at
     // all: `proxy` wins over `render` for physics, exactly as `render` wins over
     // `proxy` for drawing.
-    let children: Vec<SdfPath> = reader.children(parent_path).into_iter().collect();
-    let has_proxy = children
+    let has_proxy = candidates
         .iter()
-        .any(|c| effective_purpose(reader, c) == Purpose::Proxy);
+        .any(|(c, _)| effective_purpose(reader, c) == Purpose::Proxy);
 
-    for child_path in children {
+    for (child_path, mut child_tf) in candidates {
         // `guide` is annotation — a debug axis, a sensor cone, a planned path. It
         // is never physical, whatever geometry it happens to be made of.
         let purpose = effective_purpose(reader, &child_path);
@@ -528,29 +535,11 @@ fn collect_child_colliders_from_usd(
         if has_proxy && purpose == Purpose::Render {
             continue;
         }
-        // Skip wheel children — they're independent dynamics handled
-        // by `lunco-usd-sim` (raycast probe or physical wheel rigid
-        // body), NOT collider pieces of the chassis compound. The
-        // `physxVehicleWheel:radius` attribute is the canonical marker
-        // (matches the same skip in `process_usd_avian_prims`).
-        if reader
-            .real_f32(&child_path, "physxVehicleWheel:radius")
-            .is_some()
-        {
-            continue;
-        }
 
-        // A child that is its OWN rigid body is not a piece of this body's
-        // compound shape. It is a separate body, and if it is attached at all a
-        // joint says so — which is how a foot mounts on a leg and a wheel on a
-        // chassis. Folding its collider in as well gives one piece of geometry two
-        // owners: the compound holds it rigidly in the parent's frame while the
-        // joint tries to move it, and the two fight until a body leaves the world.
-        //
-        // This is the same rule the loader already applies in the other direction
-        // (a collider with no rigid-body ancestor is static geometry, never a
-        // body): ownership stops at a body boundary, in both directions.
-        if reader.has_api_schema(&child_path, ptok::API_RIGID_BODY) {
+        // Only descendants that APPLY `PhysicsCollisionAPI` are colliders — same
+        // rule the standalone arm uses. Bare geometry (a light housing, a decal
+        // plane) contributes nothing to the compound shape.
+        if !reader.has_api_schema(&child_path, ptok::API_COLLISION) {
             continue;
         }
 
@@ -561,9 +550,6 @@ fn collect_child_colliders_from_usd(
         if !child_collision {
             continue;
         }
-
-        // Read child's local transform (canonical decoder, shared with usd-bevy).
-        let mut child_tf = read_transform_from_usd(reader, &child_path);
 
         // For Cylinder children, fold UsdGeomCylinder.axis into the
         // child's compound-local rotation so the Y-axis collider lines
@@ -599,6 +585,44 @@ fn collect_child_colliders_from_usd(
     }
 
     shapes
+}
+
+/// Walks every descendant of a compound body root, composing each prim's local
+/// transform into the root's frame.
+///
+/// Recursion stops at two boundaries:
+/// - A descendant that is its OWN rigid body is not a piece of this body's
+///   compound shape. It is a separate body, and if it is attached at all a
+///   joint says so — which is how a foot mounts on a leg and a wheel on a
+///   chassis. Folding its collider in as well gives one piece of geometry two
+///   owners: the compound holds it rigidly in the parent's frame while the
+///   joint tries to move it, and the two fight until a body leaves the world.
+///   This is the same rule the loader already applies in the other direction
+///   (a collider with no rigid-body ancestor is static geometry, never a
+///   body): ownership stops at a body boundary, in both directions.
+/// - A wheel (`physxVehicleWheel:radius`) is independent dynamics handled by
+///   `lunco-usd-sim` (raycast probe or physical wheel rigid body), NOT a
+///   collider piece of the chassis compound — matches the same skip in
+///   `process_usd_avian_prims`.
+fn gather_compound_candidates(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    acc: Transform,
+    out: &mut Vec<(SdfPath, Transform)>,
+) {
+    for child in reader.children(path) {
+        if reader.has_api_schema(&child, ptok::API_RIGID_BODY) {
+            continue;
+        }
+        if reader.real_f32(&child, "physxVehicleWheel:radius").is_some() {
+            continue;
+        }
+        // Local transform in the canonical decoder shared with usd-bevy, folded
+        // into the accumulated root-relative frame.
+        let tf = acc.mul_transform(read_transform_from_usd(reader, &child));
+        out.push((child.clone(), tf));
+        gather_compound_candidates(reader, &child, tf, out);
+    }
 }
 
 /// Builds a Collider from a USD prim's geometry type and dimensions.
@@ -652,7 +676,13 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
         // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
         // the standard token so it works off either the live stage or the flatten.
-        let collider = match reader.text(sdf_path, ptok::A_APPROXIMATION).as_deref() {
+        // `physics:approximation` is a property OF `PhysicsMeshCollisionAPI`, so
+        // it only means anything when that schema is applied.
+        let approximation = reader
+            .has_api_schema(sdf_path, ptok::API_MESH_COLLISION)
+            .then(|| reader.text(sdf_path, ptok::A_APPROXIMATION))
+            .flatten();
+        let collider = match approximation.as_deref() {
             Some("convexHull") => Collider::convex_hull(verts.clone())
                 .unwrap_or_else(|| Collider::trimesh(verts, tris)),
             Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
@@ -1430,8 +1460,10 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             })
             .unwrap_or(DQuat::IDENTITY)
     }
-    // Shared JointBase reads (both bodies + local anchors). `None` unless BOTH
-    // bodies are authored — world-anchored joints aren't mapped to avian here.
+    // Shared JointBase reads (both bodies + local anchors). A rel left EMPTY is
+    // the spec's way to anchor that side to the WORLD frame — carried through as
+    // an empty body path, which the build arm realises as a static anchor body.
+    // `None` when neither body is authored, or a NAMED target fails to resolve.
     // A missing anchor is DERIVED from the transform hierarchy (see
     // [`derive_joint_anchor`]) so an asset need not type the wheel's position twice
     // — once as its `xformOp:translate` and again as the joint's `localPos0`. An
@@ -1453,8 +1485,14 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             let p = SdfPath::new(&target.to_string()).ok()?;
             Some(nearest_body_path(reader, &p)?.to_string())
         };
-        let b0 = resolve(&j.body0_rel().targets().ok()?.into_iter().next()?)?;
-        let b1 = resolve(&j.body1_rel().targets().ok()?.into_iter().next()?)?;
+        let target0 = j.body0_rel().targets().ok().and_then(|t| t.into_iter().next());
+        let target1 = j.body1_rel().targets().ok().and_then(|t| t.into_iter().next());
+        let (b0, b1) = match (target0, target1) {
+            (Some(t0), Some(t1)) => (resolve(&t0)?, resolve(&t1)?),
+            (Some(t0), None) => (resolve(&t0)?, String::new()),
+            (None, Some(t1)) => (String::new(), resolve(&t1)?),
+            (None, None) => return None,
+        };
         let lp0_auth = j
             .local_pos0_attr()
             .get::<[f32; 3]>()
@@ -1468,7 +1506,11 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             .flatten()
             .map(to_dvec);
         let (lp0, lp1) = if lp0_auth.is_none() || lp1_auth.is_none() {
-            let derived = derive_joint_anchor(reader, &b0, &b1);
+            // A world side has no prim to derive from; its unauthored anchor is
+            // the world origin.
+            let derived = (!b0.is_empty() && !b1.is_empty())
+                .then(|| derive_joint_anchor(reader, &b0, &b1))
+                .flatten();
             (
                 lp0_auth.or(derived.map(|d| d.0)).unwrap_or(DVec3::ZERO),
                 lp1_auth.or(derived.map(|d| d.1)).unwrap_or(DVec3::ZERO),
@@ -1489,36 +1531,59 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let d = physics::DriveAPI::get(stage, path.clone(), ns)
             .ok()
             .flatten()?;
+        // Drive quantities convert by their SPEC units, per instance. An angular
+        // drive authors DEGREES (`targetPosition` deg, `targetVelocity` deg/s,
+        // stiffness/damping per degree) and its torques carry distance² — so
+        // targets go deg→rad, gains ×(180/π), and every torque ×metersPerUnit².
+        // A linear drive authors stage units: targets and `maxForce` (mass ·
+        // distance / s²) scale by metersPerUnit; its stiffness (mass/s²) and
+        // damping (mass/s) are distance-free and pass through.
+        let angular = ns == "angular";
+        let target = |v: f64| if angular { v.to_radians() } else { conv.length(v) };
+        let gain = |v: f64| {
+            if angular {
+                conv.length(conv.length(v.to_degrees()))
+            } else {
+                v
+            }
+        };
+        let force = |v: f64| {
+            if angular {
+                conv.length(conv.length(v))
+            } else {
+                conv.length(v)
+            }
+        };
         let tp = d
             .target_position_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64);
+            .map(|v| target(v as f64));
         let tv = d
             .target_velocity_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64);
+            .map(|v| target(v as f64));
         let mf = d
             .max_force_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64);
+            .map(|v| force(v as f64));
         let k = d
             .stiffness_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64);
+            .map(|v| gain(v as f64));
         let c = d
             .damping_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64);
+            .map(|v| gain(v as f64));
         let ty = d.type_attr().get::<DriveType>().ok().flatten();
         // The driven body's authored mass, for the force-spring → SpringDamper
         // conversion. Read from USD (not avian's computed `Mass`, which does not
@@ -1608,19 +1673,20 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     {
         let b = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        // Linear limits are authored in scene units, like the anchors.
         let lo = j
             .lower_limit_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64)
+            .map(|v| conv.length(v as f64))
             .unwrap_or(f64::NEG_INFINITY);
         let hi = j
             .upper_limit_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64)
+            .map(|v| conv.length(v as f64))
             .unwrap_or(f64::INFINITY);
         let drive = read_drive("linear", &b.body1);
         pending_from(b, axis, lo, hi, "PhysicsPrismaticJoint", None, drive)
@@ -1665,19 +1731,22 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         .flatten()
     {
         let b = base(&j, &view)?;
+        // Distances are scene units; a NEGATIVE authored value is the schema's
+        // "limit disabled" sentinel and survives the (positive) unit scale for
+        // the build arm to honour.
         let lo = j
             .min_distance_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64)
+            .map(|v| conv.length(v as f64))
             .unwrap_or(f64::NEG_INFINITY);
         let hi = j
             .max_distance_attr()
             .get::<f32>()
             .ok()
             .flatten()
-            .map(|v| v as f64)
+            .map(|v| conv.length(v as f64))
             .unwrap_or(f64::INFINITY);
         pending_from(b, DVec3::Y, lo, hi, "PhysicsDistanceJoint", None, None)
     } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
@@ -1685,13 +1754,14 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let b = base(&j, &view)?;
         let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint_typed(stage, path)?;
         // Same two conversions every typed arm applies: the cardinal axis is named
-        // in the STAGE's frame, and an angular limit is authored in degrees.
-        // `to_radians` leaves an infinite (unauthored) bound infinite.
+        // in the STAGE's frame, and an angular limit is authored in degrees while a
+        // linear one is in scene units. `to_radians`/`length` leave an infinite
+        // (unauthored) bound infinite.
         let axis = conv.dir_d(cardinal);
         let (lo, hi) = if is_rot {
             (lo.to_radians(), hi.to_radians())
         } else {
-            (lo, hi)
+            (conv.length(lo), conv.length(hi))
         };
         pending_from(b, axis, lo, hi, reduced, None, None)
     } else {
@@ -1942,7 +2012,11 @@ fn build_usd_physics_joints(
         let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
         // Find body0 and body1 entities by matching USD paths and instance roots.
         // The paths were already resolved to real bodies at parse time (see
-        // [`nearest_body_path`]), so this is an exact match by construction.
+        // [`nearest_body_path`]), so this is an exact match by construction. An
+        // EMPTY path is a world-anchored side (spec: an unauthored body rel) and
+        // resolves to a fresh static anchor body below instead of a lookup.
+        let world0 = pending.body0_path.is_empty();
+        let world1 = pending.body1_path.is_empty();
         let body0_ent = q_bodies
             .iter()
             .find(|(e, path)| {
@@ -1960,15 +2034,17 @@ fn build_usd_physics_joints(
             })
             .map(|(e, _)| e);
 
-        let (Some(b0), Some(b1)) = (body0_ent, body1_ent) else {
+        let missing0 = !world0 && body0_ent.is_none();
+        let missing1 = !world1 && body1_ent.is_none();
+        if missing0 || missing1 {
             let ticks = ticks.saturating_add(1);
             if ticks == JOINT_RESOLVE_WARN_TICKS {
-                let missing = match (body0_ent, body1_ent) {
-                    (None, None) => format!(
+                let missing = match (missing0, missing1) {
+                    (true, true) => format!(
                         "bodies '{}' and '{}'",
                         pending.body0_path, pending.body1_path
                     ),
-                    (None, _) => format!("body '{}'", pending.body0_path),
+                    (true, _) => format!("body '{}'", pending.body0_path),
                     _ => format!("body '{}'", pending.body1_path),
                 };
                 warn!(
@@ -1979,7 +2055,7 @@ fn build_usd_physics_joints(
             }
             resolve_ticks.insert(joint_entity, ticks);
             continue;
-        };
+        }
         resolve_ticks.remove(&joint_entity);
 
         // Is `Position` the authored pose yet, or still `RigidBody`'s required-
@@ -2003,7 +2079,7 @@ fn build_usd_physics_joints(
         // directions: it cannot see two bodies genuinely stacked at one origin, and
         // it calls uninitialised poses "ready" as soon as anything perturbs one.
         let seeded = |e: Entity| q_shadow.get(e).map(|s| s.is_seeded()).unwrap_or(true);
-        if !seeded(b0) || !seeded(b1) {
+        if body0_ent.is_some_and(|e| !seeded(e)) || body1_ent.is_some_and(|e| !seeded(e)) {
             debug!(
                 "[usd-avian] joint {} — body poses not seeded by the physics-transform \
                  bridge yet; deferring the joint rather than seating it against \
@@ -2012,6 +2088,13 @@ fn build_usd_physics_joints(
             );
             continue;
         }
+
+        // A world-anchored side becomes a static body at the canonical origin, so
+        // the authored `localPos`/`localRot` — expressed in the world frame when
+        // the rel is empty — apply as that anchor's local frame unchanged. A
+        // static body is admitted by construction (see [`admit_pending_joints`]).
+        let b0 = body0_ent.unwrap_or_else(|| commands.spawn(RigidBody::Static).id());
+        let b1 = body1_ent.unwrap_or_else(|| commands.spawn(RigidBody::Static).id());
 
         debug!(
             "Built USD joint {} -> {} <-> {}",
@@ -2242,24 +2325,19 @@ fn build_usd_physics_joints(
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
-                // Cables, fixed-length links. Unauthored → a rigid rod at the
-                // current separation's min (0) which is degenerate, so warn.
+                // Cables, fixed-length links. A NEGATIVE (or unauthored) distance
+                // is the schema's "this bound is disabled" sentinel — a disabled
+                // max leaves the tether free beyond min, never a rigid rod.
                 let min = if pending.limit_lower.is_finite() {
                     pending.limit_lower.max(0.0)
                 } else {
                     0.0
                 };
-                let max = if pending.limit_upper.is_finite() {
+                let max = if pending.limit_upper.is_finite() && pending.limit_upper >= 0.0 {
                     pending.limit_upper.max(min)
                 } else {
-                    min
+                    f64::INFINITY
                 };
-                if !pending.limit_upper.is_finite() {
-                    warn!(
-                        "DistanceJoint {} has no physics:maxDistance — defaulting to rigid {min} m",
-                        pending.body1_path
-                    );
-                }
                 attach_joint(
                     &mut commands,
                     joint_entity,
@@ -2600,12 +2678,19 @@ fn apply_rigid_body_mass_props(
     // `physics:mass` still gets a consistent tensor, which is the UsdPhysics
     // expectation.
     // `NoAutoMass` goes on ONLY when the mass was actually authored. The 1000 kg
-    // fallback is a "keep gravity alive" default, not a statement about the body,
+    // fallback is a "keep gravity alive" SEED, not a statement about the body:
+    // avian recomputes it from collider geometry and density at its first pass,
     // and marking it authoritative would pin that number onto every rigid body that
     // never asked for one — wheels included — overriding the mass Avian derives from
     // their colliders and collapsing raycast-wheel suspensions. Authored mass wins;
     // unauthored mass stays automatic, exactly as before.
-    match reader.real_f32(sdf_path, ptok::A_MASS) {
+    //
+    // MassAPI's ZERO is a sentinel, not a value: `mass = 0`, `density = 0` and
+    // `diagonalInertia = (0,0,0)` all mean "unauthored — compute me". Treating
+    // them as overrides hands the solver a degenerate body.
+    let conv = lunco_usd_bevy::stage_convention(reader);
+    let mpu = conv.length(1.0);
+    match reader.real_f32(sdf_path, ptok::A_MASS).filter(|m| *m > 0.0) {
         Some(mass) => {
             commands.entity(entity).try_insert((Mass(mass), NoAutoMass));
         }
@@ -2614,27 +2699,56 @@ fn apply_rigid_body_mass_props(
         }
     }
 
+    // `physics:density` — on the body's MassAPI, else on the bound physics
+    // material — feeds avian's collider-mass derivation. Precedence is the
+    // spec's: authored mass > body density > material density (an authored mass
+    // still wins via `NoAutoMass` above). Stage units are mass per unit³.
+    if let Some(density) = reader
+        .real_f32(sdf_path, ptok::A_DENSITY)
+        .filter(|d| *d > 0.0)
+        .or_else(|| {
+            read_physics_material(reader, sdf_path)
+                .and_then(|pm| pm.density)
+                .filter(|d| *d > 0.0)
+        })
+    {
+        commands
+            .entity(entity)
+            .try_insert(ColliderDensity(density as f64 / (mpu * mpu * mpu)));
+    }
+
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
-    // of the inertia tensor in the principal frame. `physics:principalAxes` (a
-    // quat) would rotate that frame; it's almost always identity for
-    // landers/rovers and is left to default. Off-diagonal inertia is not
-    // representable here (Avian stores principal + frame), matching the
-    // UsdPhysics schema.
-    if let Some(diag) = read_vec3_attribute(reader, sdf_path, ptok::A_DIAGONAL_INERTIA) {
+    // of the inertia tensor in the principal frame, `physics:principalAxes` (a
+    // quat, identity when unauthored) rotates that frame. Off-diagonal inertia is
+    // not representable here (Avian stores principal + frame), matching the
+    // UsdPhysics schema. Units are mass · distance², and the diagonal permutes
+    // with the stage's axes exactly as a direction does.
+    if let Some(diag) = read_vec3_attribute(reader, sdf_path, ptok::A_DIAGONAL_INERTIA)
+        .filter(|d| *d != DVec3::ZERO)
+    {
+        let local_frame = reader
+            .scalar::<openusd::gf::Quatf>(sdf_path, ptok::A_PRINCIPAL_AXES)
+            .map(|q| {
+                conv.rotation_d(
+                    DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize(),
+                )
+                .as_quat()
+            })
+            .unwrap_or(Quat::IDENTITY);
         commands.entity(entity).try_insert((
             AngularInertia {
-                principal: diag.as_vec3(),
-                local_frame: Quat::IDENTITY,
+                principal: (conv.dir_d(diag).abs() * (mpu * mpu)).as_vec3(),
+                local_frame,
             },
             NoAutoAngularInertia,
         ));
     }
 
-    // G2 — authored centre of mass (body-frame offset).
+    // G2 — authored centre of mass (body-frame offset, a POINT in stage units).
     if let Some(com) = read_vec3_attribute(reader, sdf_path, ptok::A_CENTER_OF_MASS) {
         commands
             .entity(entity)
-            .try_insert((CenterOfMass(com.as_vec3()), NoAutoCenterOfMass));
+            .try_insert((CenterOfMass(conv.point_d(com).as_vec3()), NoAutoCenterOfMass));
     }
 
     if let Some(d) = reader.real_f32(sdf_path, PHYSX_LINEAR_DAMPING) {
@@ -2683,11 +2797,25 @@ fn apply_rigid_body_mass_props(
             });
         }
     }
-    if let Some(vel) = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY) {
-        commands.entity(entity).try_insert(LinearVelocity(vel));
-    }
-    if let Some(ang) = read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY) {
-        commands.entity(entity).try_insert(AngularVelocity(ang));
+    // The spec frames both velocities in the BODY's local space: convert the
+    // components by the stage convention (`physics:velocity` is units/s so it
+    // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
+    // then carry them into the world frame through the body's composed rotation
+    // — avian's velocity components are world-frame.
+    if read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY).is_some()
+        || read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY).is_some()
+    {
+        let world_rot = world_transform(reader, sdf_path).rotation.as_dquat();
+        if let Some(vel) = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY) {
+            commands
+                .entity(entity)
+                .try_insert(LinearVelocity(world_rot * conv.point_d(vel)));
+        }
+        if let Some(ang) = read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY) {
+            commands.entity(entity).try_insert(AngularVelocity(
+                world_rot * (conv.dir_d(ang) * std::f64::consts::PI / 180.0),
+            ));
+        }
     }
 }
 
@@ -2741,6 +2869,9 @@ pub struct PhysicsMaterial {
     pub static_friction: Option<f32>,
     /// `physics:restitution` — bounciness.
     pub restitution: Option<f32>,
+    /// `physics:density` — for bodies that author no mass of their own (stage
+    /// units: mass per unit³).
+    pub density: Option<f32>,
     /// `physxMaterial:frictionCombineMode` — how THIS surface's friction combines
     /// with whatever it touches.
     pub friction_combine: Option<CoefficientCombine>,
@@ -2790,6 +2921,7 @@ pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<P
     let dynamic_friction = reader.real_f32(&mat, ptok::A_DYNAMIC_FRICTION);
     let static_friction = reader.real_f32(&mat, ptok::A_STATIC_FRICTION);
     let restitution = reader.real_f32(&mat, ptok::A_RESTITUTION);
+    let density = reader.real_f32(&mat, ptok::A_DENSITY);
     let friction_combine = combine_mode(reader.text(&mat, PHYSX_FRICTION_COMBINE_MODE).as_deref());
     let restitution_combine =
         combine_mode(reader.text(&mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref());
@@ -2797,15 +2929,18 @@ pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<P
     // A Material bound only for LOOKS resolves here via the purpose→all-purpose
     // fallback but carries no `PhysicsMaterialAPI` properties. That is not a
     // physics material — don't fabricate a zero-friction one out of it.
-    (dynamic_friction.is_some() || static_friction.is_some() || restitution.is_some()).then_some(
-        PhysicsMaterial {
-            dynamic_friction,
-            static_friction,
-            restitution,
-            friction_combine,
-            restitution_combine,
-        },
-    )
+    (dynamic_friction.is_some()
+        || static_friction.is_some()
+        || restitution.is_some()
+        || density.is_some())
+    .then_some(PhysicsMaterial {
+        dynamic_friction,
+        static_friction,
+        restitution,
+        density,
+        friction_combine,
+        restitution_combine,
+    })
 }
 
 /// Marker component to hold a rigid body as Kinematic until all joints

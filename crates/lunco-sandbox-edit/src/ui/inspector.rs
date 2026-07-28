@@ -26,7 +26,7 @@ use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, P
 use crate::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
-use crate::doc_resolve::{bound_shader_prim, resolve_doc_for_entity};
+use crate::doc_resolve::{bound_shader_prim, geom_api_schemas, resolve_doc_for_entity};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
@@ -2133,8 +2133,9 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
                         let Some(prim) = world.get::<UsdPrimPath>(part).cloned() else {
                             return;
                         };
+                        let schemas = geom_api_schemas(world, &prim);
                         let Some((ops, shader)) =
-                            lunco_usd::material::ensure_preview_surface_ops(&prim.path)
+                            lunco_usd::material::ensure_preview_surface_ops(&prim.path, &schemas)
                         else {
                             return;
                         };

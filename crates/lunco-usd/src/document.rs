@@ -282,8 +282,13 @@ pub enum UsdOp {
     ///   close, so backslashes/quotes/newlines round-trip — pass arbitrary text (a
     ///   whole rhai scenario source) directly. The one unserializable value, both
     ///   `"""` and `'''` present, is rejected at apply.
-    /// - any other type → `value` is a USD **literal** (e.g. `"(0.2, 0.2, 0.8)"`,
-    ///   `"0.5"`), parsed into a typed [`sdf::Value`] by openusd's parser.
+    /// - any other type → `value` is a USD **literal exactly as it would appear
+    ///   in a `.usda` file** (e.g. `"(0.2, 0.2, 0.8)"`, `"0.5"`), parsed into a
+    ///   typed [`sdf::Value`] by openusd's parser. The literal INCLUDES the
+    ///   type's own delimiters: a `token` value carries its quotes (`"\"rigid\""`)
+    ///   and an `asset` value its `@…@` wrapper (`"@hull.usdc@"` — which cannot
+    ///   express a path containing `@`). Only `string` gets the raw-content
+    ///   treatment above.
     SetAttribute {
         /// Layer to write to.
         edit_target: LayerId,
@@ -400,11 +405,14 @@ pub enum UsdOp {
     /// Without this op a prim built at runtime can never be made physical, so
     /// "assemble a vehicle from parts" was authorable in USD text and nowhere else.
     ///
-    /// `schemas` is the exact desired list (set-semantics, an *explicit* list op —
-    /// not an append), mirroring [`UsdOp::SetRelationship`]. Since an explicit
-    /// opinion on a stronger layer replaces weaker `prepend apiSchemas` opinions
-    /// wholesale, callers must pass the full set they want composed, not just the
-    /// delta. An empty list authors an explicitly-empty schema list.
+    /// `schemas` is the exact desired list for THIS layer, authored as a
+    /// **`prepend` list op** — the form `usdGenSchema`-era files author and the
+    /// one that composes: prepend UNIONS with weaker-layer `apiSchemas` opinions
+    /// instead of erasing them, so applying a schema on a session/runtime layer
+    /// leaves a referenced asset's own applied schemas intact. Within one layer
+    /// it is still set-like: re-applying replaces this layer's prior list. An
+    /// empty list clears this layer's opinion — it cannot un-apply weaker-layer
+    /// schemas (that would need a delete/explicit op this op does not express).
     SetApiSchemas {
         /// Layer to write to.
         edit_target: LayerId,
@@ -948,16 +956,28 @@ impl UsdDocument {
     }
 
     /// Validate that `path` names a prim authored in **this specific layer** —
-    /// you can only remove from a layer what that layer holds.
-    fn require_prim_in(&self, t: TargetLayer, path: &str) -> Result<SdfPath, DocumentError> {
+    /// you can only remove/move from a layer what that layer holds — and not one
+    /// whose ONLY spec in the layer lives inside a variant selection. A namespace
+    /// edit executes at the COMPOSED path, where no spec exists — it would
+    /// "succeed" while removing nothing. Editing inside a variant needs a variant
+    /// edit target, which the op model cannot express, so the op fails loudly
+    /// here instead.
+    fn require_movable_prim_in(&self, t: TargetLayer, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
-        if prim_in(self.layer(t), &sdf) {
-            Ok(sdf)
-        } else {
-            Err(DocumentError::ValidationFailed(format!(
-                "path `{path}` not found in target layer"
-            )))
+        let layer = self.layer(t);
+        if matches!(layer.spec(&sdf), Some(s) if s.ty == SpecType::Prim) {
+            return Ok(sdf);
         }
+        if prim_in(layer, &sdf) {
+            return Err(DocumentError::ValidationFailed(format!(
+                "path `{path}` is authored only inside a variant selection; \
+                 removing or moving it requires a variant edit target, which \
+                 document ops cannot express"
+            )));
+        }
+        Err(DocumentError::ValidationFailed(format!(
+            "path `{path}` not found in target layer"
+        )))
     }
 }
 
@@ -1192,6 +1212,15 @@ impl Document for UsdDocument {
                 if parent_path != "/" && !parent_path.is_empty() {
                     self.require_prim_anywhere(&parent_path)?;
                 }
+                // `name` is ONE prim identifier, not a path fragment: a stray
+                // `a/b` would silently define an extra hierarchy level (and a
+                // leading digit an unloadable file) once concatenated below.
+                if !SdfPath::is_valid_identifier(&name) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "AddPrim: `{name}` is not a valid prim name (a single \
+                         identifier: letter or `_` first, then letters, digits, `_`)"
+                    )));
+                }
                 let prim_path = if parent_path == "/" || parent_path.is_empty() {
                     format!("/{name}")
                 } else {
@@ -1230,8 +1259,9 @@ impl Document for UsdDocument {
             }
 
             UsdOp::RemovePrim { path, .. } => {
-                // Can only remove what the target layer itself authored.
-                self.require_prim_in(target, &path)?;
+                // Can only remove what the target layer itself authored — and not
+                // a prim that layer authors only inside a variant selection.
+                self.require_movable_prim_in(target, &path)?;
                 let inverse = self.coarse_inverse(target, &id);
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage.remove_prim(path.as_str()).map_err(author_err)?;
@@ -1541,28 +1571,38 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
-                // TODO(backlog): this arm does NOT apply the canonical→stage
-                // conversion that `SetAttribute` does, so an animated value
-                // authored onto a Z-up/centimetre stage is written in canonical
-                // units while its static counterpart is written correctly — the two
-                // forms of one attribute disagree in the same file. The helpers
-                // exist and are tested (`ConventionTransform::stage_value`, plus
-                // `linear_unit_of` for scalars); this needs the same two call sites
-                // (author + inverse). See "Time-sampled values are not
-                // unit-converted" in docs/architecture/engineering-backlog-and-standards.md.
                 let val = parse_attribute_value(&type_name, &value).map_err(|e| {
                     DocumentError::ValidationFailed(format!(
                         "SetTimeSample `{name}` ({type_name}) @ {time}: {e}"
                     ))
                 })?;
+                // Canonical in, stage on disk — the exact conversion `SetAttribute`
+                // applies (type-role remap, then the schema-declared scalar-length
+                // rule), on the keyframe path. Without it an attribute's `default`
+                // and its `timeSamples` land in different unit frames inside one
+                // serialized file on any non-canonical stage.
+                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv =
+                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let val = conv.stage_value(&type_name, val);
+                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let val = match linear {
+                    crate::schema::LinearUnit::Length {
+                        stage_units_per_unit,
+                    } if !conv.is_identity() => {
+                        scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
+                    }
+                    _ => val,
+                };
                 // Authoring a brand-new sample (no prior opinion at this exact
                 // time, in this layer) is exactly undone by removing it — a typed,
                 // cheap inverse. Overwriting an existing sample restores the prior
                 // value as a typed `SetTimeSample`: the value read from the layer
-                // is in the STAGE frame, and so is the op literal (this arm does
-                // no unit conversion in either direction — see the TODO above), so
-                // it reserializes verbatim. Only a value `value_to_literal` cannot
-                // format on one line falls back to the full-source snapshot.
+                // is in the STAGE frame, so it converts back to canonical — the
+                // frame every op carries — before it becomes an op literal
+                // (mirroring `SetAttribute`'s inverse). Only a value
+                // `value_to_literal` cannot format on one line falls back to the
+                // full-source snapshot.
                 let prior_sample = prim_sdf
                     .append_property(name.as_str())
                     .ok()
@@ -1573,6 +1613,17 @@ impl Document for UsdDocument {
                             .find(|(t, _)| t.total_cmp(&time).is_eq())
                             .map(|(_, old)| old),
                         _ => None,
+                    })
+                    .map(|old| {
+                        let old = conv.canonical_value(&type_name, old);
+                        match linear {
+                            crate::schema::LinearUnit::Length {
+                                stage_units_per_unit,
+                            } if !conv.is_identity() => scale_scalar_value(old, |v| {
+                                conv.length(v * stage_units_per_unit)
+                            }),
+                            _ => old,
+                        }
                     });
                 let inverse = match prior_sample {
                     Some(old) => match author::value_to_literal(&type_name, old) {
@@ -1614,10 +1665,12 @@ impl Document for UsdDocument {
                     ))
                 })?;
                 // Typed inverse: re-author the removed sample. Value and declared
-                // type are both read from the layer BEFORE mutating; the literal
-                // stays in the stage frame, matching `SetTimeSample`'s forward
-                // path (neither converts units). Missing type or a value with no
-                // single-line literal → the always-correct full-source snapshot.
+                // type are both read from the layer BEFORE mutating; the value is
+                // in the STAGE frame, so it converts back to canonical — the frame
+                // a `SetTimeSample` carries — before it becomes an op literal,
+                // matching `SetTimeSample`'s own inverse. Missing type or a value
+                // with no single-line literal → the always-correct full-source
+                // snapshot.
                 let prior_type = match self.layer(target).field(&attr_sdf, "typeName") {
                     Some(sdf::Value::Token(t)) => Some(t.as_str().to_string()),
                     _ => None,
@@ -1633,7 +1686,20 @@ impl Document for UsdDocument {
                             .map(|(_, old)| old),
                         _ => None,
                     });
+                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv =
+                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let linear = self.linear_unit_of(&prim_sdf, &name);
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
+                    let old = conv.canonical_value(&ty, old);
+                    let old = match linear {
+                        crate::schema::LinearUnit::Length {
+                            stage_units_per_unit,
+                        } if !conv.is_identity() => {
+                            scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
+                        }
+                        _ => old,
+                    };
                     author::value_to_literal(&ty, old).map(|lit| (ty, lit))
                 });
                 let inverse = match recovered {
@@ -1756,8 +1822,9 @@ impl Document for UsdDocument {
             UsdOp::MovePrim {
                 from_path, to_path, ..
             } => {
-                // Only move what the target layer itself authored.
-                self.require_prim_in(target, &from_path)?;
+                // Only move what the target layer itself authored — and not a
+                // prim that layer authors only inside a variant selection.
+                self.require_movable_prim_in(target, &from_path)?;
                 let from_sdf = parse_prim_path(&from_path)?;
                 let to_sdf = parse_prim_path(&to_path)?;
                 // Exact reverse move — a typed, cheap inverse.
@@ -1779,24 +1846,33 @@ impl Document for UsdDocument {
 
             UsdOp::SetApiSchemas { path, schemas, .. } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
-                // Typed inverse: a prior *explicit* schema list restores as a
-                // typed `SetApiSchemas` (same set-semantics as the forward op).
-                // Unauthored, or a `prepend apiSchemas` opinion an explicit set
+                // Typed inverse: a prior *prepend-only* schema list — the form the
+                // forward op authors — restores as a typed `SetApiSchemas`.
+                // Unauthored, or an explicit/append/delete opinion a prepend op
                 // can't reproduce, falls back to the snapshot.
                 let prior = self
                     .layer(target)
                     .field(&prim_sdf, openusd::sdf::FieldKey::ApiSchemas.as_str())
                     .cloned();
                 let inverse = match prior {
-                    Some(sdf::Value::TokenListOp(op)) if op.explicit => UsdOp::SetApiSchemas {
-                        edit_target: id.clone(),
-                        path: path.clone(),
-                        schemas: op
-                            .explicit_items
-                            .iter()
-                            .map(|t| t.as_str().to_string())
-                            .collect(),
-                    },
+                    Some(sdf::Value::TokenListOp(op))
+                        if !op.explicit
+                            && op.explicit_items.is_empty()
+                            && op.added_items.is_empty()
+                            && op.appended_items.is_empty()
+                            && op.deleted_items.is_empty()
+                            && op.ordered_items.is_empty() =>
+                    {
+                        UsdOp::SetApiSchemas {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            schemas: op
+                                .prepended_items
+                                .iter()
+                                .map(|t| t.as_str().to_string())
+                                .collect(),
+                        }
+                    }
                     _ => self.coarse_inverse(target, &id),
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
@@ -1806,7 +1882,7 @@ impl Document for UsdDocument {
                     .prim(path.as_str())
                     .set_metadata(
                         openusd::sdf::FieldKey::ApiSchemas.as_str(),
-                        openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::explicit(
+                        openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(
                             tokens,
                         )),
                     )
@@ -2156,6 +2232,58 @@ mod tests {
         assert!(
             (n[2] - 1.0).abs() < 1e-4,
             "a normal must rotate but NOT scale; got {n:?}"
+        );
+    }
+
+    /// A TIME SAMPLE must land in the same frame as a `default` — the exact
+    /// `SetAttribute` conversion, on the keyframe path. Without it the sample is
+    /// written canonically while the static opinion converts, and one attribute's
+    /// two forms disagree inside one serialized file.
+    #[test]
+    fn a_time_sample_on_a_non_canonical_stage_is_authored_in_its_own_frame() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(84),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_sample.usda"),
+        );
+
+        let sample = |value: &str| UsdOp::SetTimeSample {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "customPoint".into(),
+            type_name: "point3f".into(),
+            time: 5.0,
+            value: value.into(),
+        };
+        // Canonical +Y, one metre out, keyframed at t=5.
+        doc.apply(sample("(0, 1, 0)")).expect("sample applies");
+
+        let p = doc
+            .data()
+            .prim_attribute_value_at::<[f32; 3]>(&SdfPath::new("/World").unwrap(), "customPoint", 5.0)
+            .expect("sample authored");
+        assert!(
+            p[1].abs() < 1e-4 && (p[2] - 100.0).abs() < 1e-2,
+            "canonical [0,1,0] m keyframed on a cm/Z-up stage must land as (0,0,100); got {p:?}"
+        );
+
+        // The inverse of an overwrite converts BACK to canonical; replaying it
+        // must land the layer where it started (stage frame, to the tolerance of
+        // the f32 rotation round-trip).
+        let inverse = doc.apply(sample("(0, 2, 0)")).expect("overwrite applies");
+        assert!(
+            matches!(&inverse, UsdOp::SetTimeSample { .. }),
+            "overwriting an existing sample must invert to a typed SetTimeSample, got {inverse:?}"
+        );
+        doc.apply(inverse).expect("undo applies");
+        let p = doc
+            .data()
+            .prim_attribute_value_at::<[f32; 3]>(&SdfPath::new("/World").unwrap(), "customPoint", 5.0)
+            .expect("sample restored");
+        assert!(
+            p[1].abs() < 1e-3 && (p[2] - 100.0).abs() < 1e-1,
+            "undo must restore the stage-frame sample; got {p:?}"
         );
     }
 
@@ -2845,7 +2973,7 @@ mod tests {
         assert!(
             matches!(&inverse, UsdOp::SetApiSchemas { schemas, .. }
                 if schemas == &["PhysicsRigidBodyAPI".to_string()]),
-            "overwriting an explicit apiSchemas list must invert to a typed SetApiSchemas, got {inverse:?}"
+            "overwriting a prior apiSchemas list must invert to a typed SetApiSchemas, got {inverse:?}"
         );
         doc.apply(inverse).unwrap();
         assert_eq!(doc.source(), before, "undo restores the prior schema list");

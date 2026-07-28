@@ -31,6 +31,7 @@
     a track is composition, not scene description.
     """
     defaultPrim = "Sandbox"
+    metersPerUnit = 1
 )
 
 def Scope "Sandbox" (

@@ -13,6 +13,7 @@
     rather than something it calls.
     """
     defaultPrim = "Lunica"
+    metersPerUnit = 1
 )
 
 def Scope "Lunica" (

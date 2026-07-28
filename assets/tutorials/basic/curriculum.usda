@@ -16,6 +16,7 @@
     motivated declaring the environment.
     """
     defaultPrim = "Basic"
+    metersPerUnit = 1
 )
 
 def Scope "Basic" (
