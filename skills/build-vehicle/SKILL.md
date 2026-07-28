@@ -259,6 +259,11 @@ mounted scene, or `ApplyUsdOp` for an in-place authored opinion. Re-run a Rhai
 telemetry observer with `RunScenario` and inspect live rover status/ports before
 restarting anything.
 
+Object-level USD/reference reload is a planned TODO. Use `RestartScene` while
+testing asset edits: it is the supported boundary that reconstructs the prim
+tree, Modelica models, and USD connections together. Do not emulate a partial
+reload by manually respawning only a visual subtree.
+
 **1. Pre-flight, before launching anything** — composes the whole reference
 closure and runs the same strict wheel reader the spawner uses, so a missing
 attribute is named in seconds rather than at spawn time
@@ -276,8 +281,8 @@ matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 12 s → throttle + steer 6 s.
 
 ```bash
-cargo run -j4 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
-grep -E 'DRIVETRAIN PARITY|PARITY FAIL' /tmp/parity.log
+RUSTC_WRAPPER=sccache cargo run -j4 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
+grep -E 'DRIVETRAIN PARITY|PARITY FAIL' target/parity.log
 ```
 
 It asserts terminal speed ±15 %, peak speed ±15 %, distance ±20 %, yaw magnitude

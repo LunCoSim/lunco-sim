@@ -266,7 +266,7 @@ use lunco_assets::discovery::AssetFile;
 /// for one fact. These used to be two: [`SpawnCatalog`] scanned the files for
 /// `lunco:spawnable`/`lunco:spawnLift`, and the sandbox UI kept its own
 /// `SceneDescCache` that re-parsed the *same default prim of the same files*
-/// for `lunco:description`.
+/// for the standard USD `doc` metadata.
 ///
 /// **Eventually complete.** Filled by the async scan below — on the web each
 /// entry costs an HTTP fetch, so it lands over some frames rather than all at
@@ -283,7 +283,7 @@ impl AssetMetaStore {
         self.by_path.get(asset_path)
     }
 
-    /// This asset's `lunco:description` — the "what is this" blurb. `None` when
+    /// This asset's standard USD `doc` metadata — the "what is this" blurb. `None` when
     /// the asset authors none *or* has not been read yet; both mean "no tooltip".
     pub fn description(&self, asset_path: &str) -> Option<&str> {
         self.by_path.get(asset_path)?.description.as_deref()
@@ -657,8 +657,8 @@ mod tests {
         assert_eq!(c.by_category("Rovers").count(), 2);
     }
 
-    /// Data guard: every shipped sandbox scene must carry a non-empty
-    /// `lunco:description` so the Scenarios menu can show a tooltip for it.
+    /// Data guard: every shipped sandbox scene must carry a non-empty standard
+    /// USD `doc` metadata field so the Scenarios menu can show a tooltip for it.
     /// A scene missing the attribute would silently show no tooltip — this
     /// test fails loud instead, the moment a scene is added without one.
     ///
@@ -680,7 +680,7 @@ mod tests {
             count += 1;
             let src = std::fs::read_to_string(&p).expect("scene readable");
             let desc = parse_spawn_meta(&src).description.unwrap_or_else(|| {
-                panic!("scene {} has no `lunco:description` attribute", p.display())
+                panic!("scene {} has no USD `doc` metadata", p.display())
             });
             assert!(
                 !desc.trim().is_empty(),
@@ -689,6 +689,45 @@ mod tests {
             );
         }
         assert!(count >= 4, "expected the sandbox scene set, found {count}");
+    }
+
+    /// Every asset offered by the spawn catalog must explain itself through the
+    /// standard USD `doc` metadata on its default prim. Internal component files
+    /// may omit it; they are not user-facing spawn options.
+    #[test]
+    fn every_spawnable_asset_has_description() {
+        fn visit(dir: &std::path::Path, missing: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("asset directory exists") {
+                let path = entry.expect("asset entry readable").path();
+                if path.is_dir() {
+                    visit(&path, missing);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("usda") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("USD asset readable");
+                let meta = parse_spawn_meta(&source);
+                if meta.spawnable
+                    && meta
+                        .description
+                        .as_deref()
+                        .is_none_or(|description| description.trim().is_empty())
+                {
+                    missing.push(path);
+                }
+            }
+        }
+
+        let mut missing = Vec::new();
+        visit(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"),
+            &mut missing,
+        );
+        assert!(
+            missing.is_empty(),
+            "spawnable USD assets need default-prim `doc` metadata: {missing:?}"
+        );
     }
 
     /// The bake this replaced keyed its tables on the engine-relative path and

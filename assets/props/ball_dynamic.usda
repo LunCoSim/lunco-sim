@@ -9,6 +9,7 @@
 # factory) so it's discovered + constructed by the same path as everything
 # else. `lunco:spawnLift` lifts the spawn point so it drops onto the terrain.
 def Xform "BallDynamic" (
+    doc = "Dynamic test ball that drops and rolls under the scene's physics."
     kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )

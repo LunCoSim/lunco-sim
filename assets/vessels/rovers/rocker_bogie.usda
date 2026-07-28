@@ -17,6 +17,7 @@
 # FOR PARAMETER EDITING GUIDE: See the accompanying README.md in this directory.
 
 def Xform "RockerBogie" (
+    doc = "Six-wheel rocker-bogie lunar rover with articulated suspension and differential body leveling."
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
     # that arrive by reference, and USD forbids a `component` from containing them.
     kind = "assembly"

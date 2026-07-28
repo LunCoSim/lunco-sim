@@ -111,6 +111,13 @@ to a full rebuild (`rebuild_scene_from_composed`) rather than a silent projectio
 Coarse ops (`ReplaceSource`, `MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild;
 the common interactive ops replay incrementally (`apply_incremental_op_to_stage`).
 
+For modeling and scene tests, `RestartScene` is the supported full-reload boundary.
+It clears the old USD-derived entities and worker state, reloads the stage, then
+lets USD prim projection recreate cosim Modelica models and rewire connections
+from the composed stage. Object/reference-level reload is intentionally still a
+TODO: do not approximate it by respawning only a visual subtree, because that
+would leave physics, connections, or Modelica worker state stale.
+
 The **read** surface is the `UsdRead` trait (`lunco-usd-bevy/src/read.rs`): `children`,
 `scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`

@@ -14,6 +14,7 @@
 # child gprim that renders and collides, and the rigid body is the root.
 
 def Xform "PythonBalloon" (
+    doc = "Rigid scientific balloon driven by a Python flight model and buoyancy force."
     kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
 )

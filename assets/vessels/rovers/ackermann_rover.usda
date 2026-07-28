@@ -18,6 +18,7 @@
 #     rel-targets are asset-local and translate through the reference arc.
 
 def Xform "AckermannRover" (
+    doc = "Four-wheel Ackermann-steer lunar rover with selectable raycast or physical drivetrain."
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
     # that arrive by reference, and USD forbids a `component` from containing them.
     kind = "assembly"

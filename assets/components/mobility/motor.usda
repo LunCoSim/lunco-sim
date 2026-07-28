@@ -53,6 +53,7 @@
 # Scope includes the actual motor path in `CollectionAPI:components`; runtime projection
 # compiles all included facets into one circuit DAE, never one solver per part.
 def Xform "Motor" (
+    doc = "Reusable driven-wheel motor with mass, torque, efficiency, power, and thermal telemetry."
     kind = "component"
     prepend apiSchemas = [
         "LunCoCatalogAPI",

@@ -22,6 +22,7 @@
 # it and is derived from the authored suspension, never from the mount.
 
 def Xform "SixWheelRover" (
+    doc = "Six-wheel skid-steer lunar rover with USD-authored actuator wiring and raycast suspension."
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
     # that arrive by reference, and USD forbids a `component` from containing them.
     kind = "assembly"

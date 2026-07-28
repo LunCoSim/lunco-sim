@@ -16,8 +16,7 @@
 //! - [`catalog`] — the spawn catalog (what can be spawned) and the shader catalog,
 //!   scanned from the engine's `*.usda` library.
 //! - [`spawn_meta`] — the ONE parser for `lunco:spawnable` / `lunco:spawnLift` /
-//!   `lunco:description`, shared verbatim with `build.rs`, which bakes the same table
-//!   for the filesystem-less web build.
+//!   standard USD `doc` metadata, shared by the catalog and its UI consumers.
 //! - [`shader_doc`] — shaders as a journaled, live-editable document domain.
 //! - [`doc_resolve`] — which document backs this entity, and where its look lives.
 //!

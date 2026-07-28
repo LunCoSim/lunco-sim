@@ -10,6 +10,7 @@
 # Power flows: SolarPanel -> Battery -> Wheels via EPS bus
 
 def Xform "Rucheyok" (
+    doc = "Solar-powered six-wheel lunar rover assembled from referenced wheels, battery, panel, and flight computer."
     # An ASSEMBLY: a model built out of other models. Its wheels, solar panel and
     # battery are component models that arrive by reference, and USD forbids a
     # `component` from containing them.

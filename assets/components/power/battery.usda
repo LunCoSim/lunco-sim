@@ -12,6 +12,7 @@
 # together with every load and source, then emits the `connect()` equations so
 # Kirchhoff balance is solved inside one DAE.
 def Xform "Battery" (
+    doc = "Reusable battery pack with mass, collision, electrical state, capacity, and state-of-charge telemetry."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
 )

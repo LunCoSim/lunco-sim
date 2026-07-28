@@ -3289,7 +3289,7 @@ impl Plugin for SpawnCommandPlugin {
         // `CatalogScan` — the async read pipeline `maintain_catalogs` dispatches
         // into. `AssetMetaStore` — what the scanned files said about themselves;
         // the catalogue is derived from it, and the Scenarios menu reads its
-        // `lunco:description` straight out (no second cache, no second parse).
+        // standard USD `doc` metadata straight out (no second cache, no second parse).
         app.init_resource::<crate::catalog::CatalogScan>();
         app.init_resource::<crate::catalog::AssetMetaStore>();
         app.init_resource::<crate::SelectedEntities>();

@@ -23,6 +23,7 @@
 # `PhysxVehicleContextAPI` still provides the actuator-port control surface.
 
 def Xform "SixWheelIndependent" (
+    doc = "Six-wheel lunar rover whose individual motor channels and drive mix are authored as USD connections."
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
     # that arrive by reference, and USD forbids a `component` from containing them.
     kind = "assembly"

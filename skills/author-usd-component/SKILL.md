@@ -66,7 +66,8 @@ def Xform "Widget" (
 
 `kind` is **authored but read by nothing** — standard-USD hygiene for DCC
 interop, not an engine signal. Use `doc = "..."` prim metadata for descriptions;
-`lunco:description` was deleted (`crates/lunco-scene-commands/src/spawn_meta.rs:44`).
+`doc` is the standard USD description metadata; do not add a `lunco:description`
+attribute (`crates/lunco-scene-commands/src/spawn_meta.rs:44`).
 
 ## Transforms — the mandatory bit
 

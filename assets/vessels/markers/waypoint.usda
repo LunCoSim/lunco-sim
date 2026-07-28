@@ -14,6 +14,7 @@
 # uses the standard `primvars:displayOpacity` (folded into base-color alpha +
 # AlphaMode::Blend by lunco-usd-bevy).
 def Xform "WaypointMarker" (
+    doc = "Reusable mission waypoint marker with a non-solid arrival trigger for rover routes."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )

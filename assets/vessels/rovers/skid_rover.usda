@@ -38,6 +38,7 @@
 #     (the hull shader consumes displayColor — one authored colour, one place)
 
 def Xform "SkidRover" (
+    doc = "Four-wheel skid-steer lunar rover with selectable raycast or joint-based drivetrain."
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
     # that arrive by reference, and USD's rule is that a `component` may not contain
     # them — the kind is what tells a browser (and the UI) whether a prim is a thing you

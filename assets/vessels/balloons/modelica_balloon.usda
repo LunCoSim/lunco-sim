@@ -23,6 +23,7 @@
 #   }
 
 def Xform "ModelicaBalloon" (
+    doc = "Rigid scientific balloon driven by a Modelica buoyancy and vertical-force model."
     kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )

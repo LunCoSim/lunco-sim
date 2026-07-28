@@ -18,6 +18,7 @@
 # The root is an `Xform` — a part, not a cube — so the visible body is an ordinary child
 # gprim that both renders and collides, and the rigid body is the root.
 def Xform "Probe" (
+    doc = "Minimal mountable probe part used to demonstrate authored plug-and-socket attachment."
     kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
 )

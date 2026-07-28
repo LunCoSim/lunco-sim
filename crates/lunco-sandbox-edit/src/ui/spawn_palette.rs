@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::catalog::SpawnCatalog;
+use crate::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
 use crate::SpawnState;
 
 /// Spawn palette panel — lists spawnable objects by category.
@@ -121,6 +121,21 @@ fn spawn_palette_content(
                     };
 
                     let response = ui.add(btn);
+                    // The catalog and tooltip share the same async USD metadata
+                    // store. Show a hint only when the authored default prim has
+                    // a non-empty standard USD `doc` field; absent metadata stays
+                    // quiet instead of inventing a description or placeholder.
+                    let response = if let Some(description) = ctx
+                        .resource::<AssetMetaStore>()
+                        .and_then(|store| match &entry.source {
+                            SpawnSource::UsdFile(path) => store.description(path),
+                        })
+                        .filter(|description| !description.trim().is_empty())
+                    {
+                        response.on_hover_text(description)
+                    } else {
+                        response
+                    };
 
                     if response.clicked() {
                         let entry_id = entry.id.clone();

@@ -35,6 +35,7 @@
 # BACKLASH IS A COMPLIANCE, NOT A RATIO. It is lost motion at the output on reversal;
 # it does not change what steady-state torque or speed the reduction delivers.
 def Xform "Gearbox" (
+    doc = "Reusable wheel reduction gearbox with authored ratio, efficiency, backlash, and inertia parameters."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoGearboxAPI"]
 )

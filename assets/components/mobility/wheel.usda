@@ -44,6 +44,7 @@
 # `lunco_mobility::update_wheel_spin` reads exactly them.
 
 def Cylinder "Wheel" (
+    doc = "Reusable motorized rover wheel hub with authored radius, traction, braking, and spin parameters."
     kind = "component"
     # Applied HERE, once: every wheel on every rover composes this prim, so the
     # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.

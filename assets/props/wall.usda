@@ -12,6 +12,7 @@
 # Half-extents are derived from the scale below (unit cube ⇒ scale/2 = 4×2×0.5 m),
 # so re-scaling an instance moves the shadow with the geometry.
 def Xform "Wall" (
+    doc = "Static collision and communications-occlusion wall for rover line-of-sight tests."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )

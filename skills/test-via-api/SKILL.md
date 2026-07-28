@@ -223,6 +223,12 @@ compare two values at rest. Use `sandbox test` for deterministic CI verdicts,
 but keep the live API check because it exercises the production reload and
 command paths. Do not add a second reload command or a standalone rover test
 binary.
+
+Partial USD object/reference reload is intentionally not exposed yet. Until its
+composition, connection, and Modelica-worker lifecycle are implemented as one
+operation, use the full `RestartScene` reload for rover tests. A successful full
+reload must re-run USD prim projection, cosim model creation/compilation, and
+connection rewiring before the test verdict is trusted.
 ```
 
 ## Diagnosing common failures

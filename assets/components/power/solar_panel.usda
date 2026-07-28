@@ -25,6 +25,7 @@
 # USD owns membership and connections; `LunCo.Electrical.SolarPanel` owns the
 # photovoltaic equation once a connected island is assembled at runtime.
 def Xform "SolarPanel" (
+    doc = "Reusable photovoltaic panel component with mass, collision, electrical source, and telemetry facets."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
 )

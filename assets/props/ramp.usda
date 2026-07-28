@@ -7,6 +7,7 @@
 
 # Angled ramp — static cuboid tilted ~17°.
 def Xform "Ramp" (
+    doc = "Static lunar practice ramp for rover traction, clearance, and grade tests."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )

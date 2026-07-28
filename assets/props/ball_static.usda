@@ -7,6 +7,7 @@
 
 # Static ball — collider + mesh, no rigid body (stays put).
 def Xform "BallStatic" (
+    doc = "Static spherical collider and visual marker for placement and contact tests."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )

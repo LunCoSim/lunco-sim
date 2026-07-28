@@ -6,6 +6,7 @@
 )
 
 def Xform "Orion" (
+    doc = "Orion crew capsule marker used for spacecraft placement and mission references."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI"]
     displayName = "Orion Capsule"

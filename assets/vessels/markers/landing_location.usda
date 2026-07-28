@@ -11,6 +11,7 @@
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`.
 def Xform "LandingLocationMarker" (
+    doc = "Reusable landing-site marker with a non-solid trigger volume for touchdown guidance."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
