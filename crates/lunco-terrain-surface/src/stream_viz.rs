@@ -143,6 +143,24 @@ pub struct TerrainDetailDemands {
     visual: Vec<VisualDemand>,
 }
 
+impl TerrainDetailDemands {
+    /// Snapshot the fully composed, grid-absolute camera demands that drive the
+    /// visual terrain cover. This is deliberately a read-only diagnostic seam:
+    /// it lets API/UI tooling inspect the same inputs the selector consumes,
+    /// without manufacturing a second camera-coordinate calculation.
+    pub(crate) fn visual_focus_snapshot(&self) -> Vec<([f64; 3], [f64; 3])> {
+        self.visual
+            .iter()
+            .map(|demand| {
+                (
+                    [demand.position.x, demand.position.y, demand.position.z],
+                    [demand.forward.x, demand.forward.y, demand.forward.z],
+                )
+            })
+            .collect()
+    }
+}
+
 /// Give every perspective scene camera the standard visual-detail policy.
 ///
 /// Filtered on PRESENCE, not `Added<Camera>`. A camera's `Projection` does not
@@ -203,12 +221,17 @@ pub(crate) fn collect_terrain_detail_demands(
                     && matches!(projection, Projection::Perspective(_))
             })
             .filter_map(|(entity, _, _, focus, _)| {
-                let position =
-                    lunco_core::coords::grid_absolute(entity, &parents, &grids, &spatial)?.0;
-                let (_, transform) = spatial.get(entity).ok()?;
+                // A scene camera is often below a rover/avatar/mount hierarchy.
+                // Its local Transform is then only an offset in that rig, not a
+                // terrain-space pose. CDLOD's focus and bake-priority heading
+                // both need the same fully composed BigSpace pose the renderer
+                // sees; `grid_absolute` is deliberately only for grid-direct
+                // authoring values and would pin detail at the local offset.
+                let (position, rotation) =
+                    lunco_core::coords::world_pose(entity, &parents, &grids, &spatial)?;
                 Some(VisualDemand {
-                    position,
-                    forward: (transform.rotation * Vec3::NEG_Z).as_dvec3(),
+                    position: position.0,
+                    forward: rotation.0 * DVec3::NEG_Z,
                     near_detail_radius_m: focus
                         .near_detail_radius_m
                         .unwrap_or(defaults.visual_detail_radius_m)
@@ -3524,6 +3547,69 @@ mod draw_partition_tests {
         assert_eq!(
             app.world().resource::<TerrainDetailDemands>().visual.len(),
             1
+        );
+    }
+
+    /// A scene camera may be nested below a moving rover or avatar rig. Its
+    /// `Transform` is then a mount-local offset, not a terrain-space position.
+    /// The terrain focus must use the fully composed BigSpace pose or CDLOD
+    /// keeps refining wherever that local offset happens to lie (commonly the
+    /// terrain origin) while the player stands on coarse ground elsewhere.
+    #[test]
+    fn nested_camera_detail_demand_uses_its_composed_world_pose() {
+        let mut app = App::new();
+        app.init_resource::<TerrainDetailDemands>().add_systems(
+            Update,
+            (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
+        );
+        let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
+        let rover_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let rover = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(400.0, 0.0, -400.0).with_rotation(rover_rotation),
+                ChildOf(grid),
+            ))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                Camera3d::default(),
+                Projection::Perspective(default()),
+                Transform::from_xyz(0.0, 2.0, 5.0),
+                ChildOf(rover),
+            ))
+            .id();
+
+        app.update();
+
+        let demand = app
+            .world()
+            .resource::<TerrainDetailDemands>()
+            .visual
+            .first()
+            .copied()
+            .expect("active nested camera contributes a terrain-detail demand");
+        let expected_position = DVec3::new(400.0, 0.0, -400.0)
+            + rover_rotation.as_dquat() * DVec3::new(0.0, 2.0, 5.0);
+        let expected_forward = rover_rotation.as_dquat() * DVec3::NEG_Z;
+        assert!(
+            (demand.position - expected_position).length() < 1e-9,
+            "terrain focus used mount-local position {:?}, expected world position {expected_position:?}",
+            demand.position
+        );
+        assert!(
+            (demand.forward - expected_forward).length() < 1e-9,
+            "terrain focus used mount-local forward {:?}, expected world forward {expected_forward:?}",
+            demand.forward
+        );
+        assert!(
+            app.world().get::<TerrainVisualFocus>(camera).is_some(),
+            "the camera remains explicitly marked as the visual-detail authority"
         );
     }
 

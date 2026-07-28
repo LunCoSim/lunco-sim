@@ -174,6 +174,17 @@ jobs:
       - name: Build sandbox (desktop)
         run: ./scripts/build_native.sh sandbox --release --package
 
+      # The package builder emits these Git-Bash launchers only for the Windows
+      # sandbox. Keep all compatibility paths under CI: they are useful only if
+      # they reach the downloadable bundle.
+      - name: Verify Windows GPU compatibility launchers
+        if: matrix.platform == 'windows'
+        run: |
+          for launcher in sandbox_dx12.sh sandbox_fast.sh sandbox_dx12_fast.sh; do
+            test -x "dist/sandbox-windows-x86_64/$launcher"
+            unzip -l dist/sandbox-windows-x86_64-*.zip | grep -F "$launcher"
+          done
+
       # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
       # Only runs when the matrix entry sets `cross_target`. Adds the
       # rustup target, then runs build_native.sh again with --target so the

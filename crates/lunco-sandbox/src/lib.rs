@@ -121,6 +121,73 @@ pub fn run_headless() -> AppExit {
     run_with_mode(true)
 }
 
+/// The sandbox's process-start render choice. This stays in the binary shell:
+/// `lunco-render-bevy` owns how the policy is rendered, while the CLI owns how a
+/// user selects it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SandboxRenderProfile {
+    #[default]
+    Standard,
+    Fast,
+}
+
+fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String> {
+    let mut profile = SandboxRenderProfile::Standard;
+    let mut index = 0;
+    while index < args.len() {
+        let value = if args[index] == "--render-profile" {
+            index += 1;
+            args.get(index)
+                .map(String::as_str)
+                .ok_or_else(|| "`--render-profile` needs one of: standard, fast".to_string())?
+        } else if let Some(value) = args[index].strip_prefix("--render-profile=") {
+            value
+        } else {
+            index += 1;
+            continue;
+        };
+        profile = match value {
+            "standard" => SandboxRenderProfile::Standard,
+            "fast" => SandboxRenderProfile::Fast,
+            _ => {
+                return Err(format!(
+                    "invalid render profile `{value}`; expected `standard` or `fast`"
+                ));
+            }
+        };
+        index += 1;
+    }
+    Ok(profile)
+}
+
+#[cfg(test)]
+mod render_profile_tests {
+    use super::*;
+
+    #[test]
+    fn parses_fast_profile_in_both_cli_forms() {
+        for args in [
+            vec![
+                "sandbox".to_string(),
+                "--render-profile".to_string(),
+                "fast".to_string(),
+            ],
+            vec!["sandbox".to_string(), "--render-profile=fast".to_string()],
+        ] {
+            assert_eq!(parse_render_profile(&args), Ok(SandboxRenderProfile::Fast));
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_render_profile() {
+        assert!(parse_render_profile(&[
+            "sandbox".to_string(),
+            "--render-profile=turbo".to_string()
+        ])
+        .is_err());
+    }
+}
+
 /// Usage text for `--help`. Every flag here is one the binary ACTUALLY parses,
 /// and they are spread across crates — this crate (`--no-ui`, `--api`, `--scene`,
 /// `--no-vsync`, `--log-diag`), `ui::mod` (`--no-throttle`),
@@ -181,6 +248,10 @@ NETWORKING:
         --key PATH       TLS private key, when --cert names a file.
 
 PERFORMANCE:
+        --render-profile MODE
+                         `standard` (default) preserves authored PBR rendering;
+                         `fast` uses unlit, texture-free materials and disables
+                         HDR, bloom and MSAA. Startup-only; restart to change it.
         --no-vsync       Uncap the frame rate (present without vsync).
         --no-throttle    Keep running at full rate while unfocused.
         --log-diag       Log FPS / frame-time / physics diagnostics.
@@ -255,6 +326,14 @@ fn run_with_mode(headless: bool) -> AppExit {
     let offscreen = cfg!(all(feature = "ui", feature = "lunco-api"))
         && !headless
         && std::env::args().any(|a| a == "--offscreen");
+    let args: Vec<String> = std::env::args().collect();
+    let render_profile = match parse_render_profile(&args) {
+        Ok(profile) => profile,
+        Err(error) => {
+            eprintln!("sandbox: {error}");
+            return AppExit::error();
+        }
+    };
     log_build_identity(headless, offscreen);
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
@@ -284,7 +363,7 @@ fn run_with_mode(headless: bool) -> AppExit {
         None
     };
 
-    let mut app = build_sim_app(headless, offscreen);
+    let mut app = build_sim_app_with_profile(headless, offscreen, None, render_profile);
 
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     if let Some(inbox) = deeplink_inbox {
@@ -358,7 +437,7 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 );
 
 pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
-    build_sim_app_with_threads(headless, offscreen, None)
+    build_sim_app_with_profile(headless, offscreen, None, SandboxRenderProfile::Standard)
 }
 
 /// Build the production simulation app with an optional fixed compute-pool size.
@@ -369,13 +448,27 @@ pub fn build_sim_app_with_threads(
     offscreen: bool,
     compute_threads: Option<usize>,
 ) -> App {
+    build_sim_app_with_profile(
+        headless,
+        offscreen,
+        compute_threads,
+        SandboxRenderProfile::Standard,
+    )
+}
+
+fn build_sim_app_with_profile(
+    headless: bool,
+    offscreen: bool,
+    compute_threads: Option<usize>,
+    render_profile: SandboxRenderProfile,
+) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets`), so all
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
-    let mut plugins = default_plugins(headless, offscreen);
+    let mut plugins = default_plugins_with_profile(headless, offscreen, render_profile);
     if let Some(threads) = compute_threads {
         assert!(threads > 0, "compute_threads must be positive");
         plugins = plugins.set(bevy::app::TaskPoolPlugin {
@@ -394,7 +487,10 @@ pub fn build_sim_app_with_threads(
     app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(log_dedup::LogDedupPlugin);
-    app.add_plugins(SandboxCorePlugin { headless });
+    app.add_plugins(SandboxCorePlugin {
+        headless,
+        render_profile,
+    });
     app
 }
 
@@ -408,6 +504,7 @@ fn sandbox_window(
     title: String,
     present_mode: bevy::window::PresentMode,
     vertical: bool,
+    render_profile: SandboxRenderProfile,
 ) -> Window {
     let mut window = Window {
         // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
@@ -419,7 +516,12 @@ fn sandbox_window(
         // Centralized merged-titlebar chrome + persisted geometry.
         ..lunco_workbench::restored_window(title)
     };
-    if vertical {
+    if render_profile == SandboxRenderProfile::Fast {
+        // A smaller default framebuffer is the largest predictable saving on
+        // legacy GPUs. The user can still resize the window; the profile does
+        // not alter authored scene units or simulation precision.
+        window.resolution = bevy::window::WindowResolution::new(960, 540);
+    } else if vertical {
         window.resolution = bevy::window::WindowResolution::new(540, 960);
     } else {
         window.resolution = bevy::window::WindowResolution::new(1280, 720);
@@ -443,6 +545,7 @@ mod window_tests {
             "sandbox test".to_string(),
             bevy::window::PresentMode::Fifo,
             false,
+            super::SandboxRenderProfile::Standard,
         );
 
         assert!(
@@ -458,6 +561,14 @@ mod window_tests {
 /// needs a different plugin set — but prefer `build_sim_app`, which also does the
 /// asset-source prelude this function cannot do (it returns a group, not an `App`).
 pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
+    default_plugins_with_profile(headless, offscreen, SandboxRenderProfile::Standard)
+}
+
+fn default_plugins_with_profile(
+    headless: bool,
+    offscreen: bool,
+    render_profile: SandboxRenderProfile,
+) -> bevy::app::PluginGroupBuilder {
     // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
     // bevy_render at all (that is the point of the render decoupling), so every
     // `bevy::render::*` path below must be gated — an ungated one does not merely link a
@@ -469,7 +580,7 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
     // `headless`/`offscreen` only select render/window config in `ui` builds; a
     // no-`ui` build is always windowless, so the params are unused there.
     #[cfg(not(feature = "ui"))]
-    let _ = (headless, offscreen);
+    let _ = (headless, offscreen, render_profile);
 
     // Window title (advertises the `--api` port so side-by-side instances are
     // distinguishable) + present mode are windowed-only and must be known at
@@ -583,7 +694,12 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
             .disable::<bevy::winit::WinitPlugin>()
     } else {
         group.set(WindowPlugin {
-            primary_window: Some(sandbox_window(window_title, present_mode, vertical)),
+            primary_window: Some(sandbox_window(
+                window_title,
+                present_mode,
+                vertical,
+                render_profile,
+            )),
             ..default()
         })
     };
@@ -2015,6 +2131,44 @@ mod policy_projection_tests {
 /// `backends: None`.
 pub struct SandboxCorePlugin {
     pub headless: bool,
+    render_profile: SandboxRenderProfile,
+}
+
+/// The sandbox's one physics configuration.
+///
+/// A rigid body's `Position` is the collision pose and the bridge writes that
+/// same pose to its USD `Transform`.  Do not enable Avian's global transform
+/// interpolation here: it deliberately renders every visual between fixed
+/// poses while its collider remains at the solved pose.  That is a useful
+/// presentation technique only for an explicitly separate, non-physical
+/// visual branch; applying it to every body made a moving rover visibly leave
+/// its collision shape behind.
+fn sandbox_physics_plugins() -> impl PluginGroup {
+    PhysicsPlugins::default().with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
+}
+
+#[cfg(test)]
+mod physics_configuration_tests {
+    use super::*;
+    use avian3d::prelude::{RigidBody, RotationInterpolation, TranslationInterpolation};
+
+    #[test]
+    fn physical_bodies_do_not_receive_global_render_easing() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(sandbox_physics_plugins());
+
+        let body = app.world_mut().spawn(RigidBody::Dynamic).id();
+
+        assert!(
+            app.world().get::<TranslationInterpolation>(body).is_none(),
+            "a physical body's visual must use its solved collider pose, not a lagged interpolation"
+        );
+        assert!(
+            app.world().get::<RotationInterpolation>(body).is_none(),
+            "a physical body's visual must use its solved collider pose, not a lagged interpolation"
+        );
+    }
 }
 
 impl Plugin for SandboxCorePlugin {
@@ -2051,6 +2205,16 @@ impl Plugin for SandboxCorePlugin {
 
         #[cfg(feature = "ui")]
         if !self.headless {
+            if self.render_profile == SandboxRenderProfile::Fast {
+                // This resource must exist before the binding plugin registers
+                // its observers: scene projection can begin on the first app
+                // update, so changing it later would produce a mixed-material
+                // scene until every entity were rebuilt.
+                app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
+                info!(
+                    "[render] fast profile: unlit texture-free PBR, HDR/bloom/MSAA disabled, window 960x540"
+                );
+            }
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
         }
 
@@ -2202,11 +2366,7 @@ impl Plugin for SandboxCorePlugin {
             // app: authored `PhysicsFilteredPairsAPI` pairs (`lunco-usd-avian`'s
             // `UsdCollisionFilter`). Anything else that must veto a contact belongs
             // in that hook rather than in a second one — there is no second slot.
-            .add_plugins(
-                PhysicsPlugins::default()
-                    .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
-                    .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()),
-            )
+            .add_plugins(sandbox_physics_plugins())
             // Whoever installs physics installs its readiness gate: terrain/obstacle
             // subsystems suspend *integration* (avian's `Time<Physics>`) while their
             // colliders bake, instead of pausing the world clock. See `lunco-physics`.

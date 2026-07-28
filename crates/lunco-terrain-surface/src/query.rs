@@ -37,7 +37,9 @@ use lunco_terrain_core::{
 };
 
 use crate::oracle::SurfaceOracle;
-use crate::stream_viz::DemHeightField;
+use crate::stream_viz::{
+    DemHeightField, TerrainDetailDemands, TerrainLodConfig, TerrainStreamStatus,
+};
 
 /// Largest raster a single `TerrainField` query may materialise per side (256×256 =
 /// 65 k texels). A deliberate readback for a tool/analyst, not a streaming path — the
@@ -369,6 +371,68 @@ impl ApiQueryProvider for TerrainRaycastProvider {
     }
 }
 
+/// `TerrainLodStatus` — the live inputs and fulfilment state of the visual
+/// terrain streamer. It reports the already-composed camera demands and the
+/// selected-cover progress; it does not calculate coordinates or change LOD.
+///
+/// This makes a visual LOD report testable through the same API session that
+/// renders it. In particular, a mounted avatar camera must appear here at its
+/// full grid-absolute pose, never at its rig-local transform offset.
+pub struct TerrainLodStatusProvider;
+
+impl ApiQueryProvider for TerrainLodStatusProvider {
+    fn name(&self) -> &'static str {
+        "TerrainLodStatus"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        let Some(status) = world.get_resource::<TerrainStreamStatus>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "TerrainLodStatus: terrain streaming is unavailable".to_string(),
+            );
+        };
+        let Some(config) = world.get_resource::<TerrainLodConfig>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "TerrainLodStatus: terrain LOD configuration is unavailable".to_string(),
+            );
+        };
+        let Some(demands) = world.get_resource::<TerrainDetailDemands>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "TerrainLodStatus: terrain detail demands are unavailable".to_string(),
+            );
+        };
+        let visual_foci = demands
+            .visual_focus_snapshot()
+            .into_iter()
+            .map(|(position, forward)| serde_json::json!({
+                "position": position,
+                "forward": forward,
+            }))
+            .collect::<Vec<_>>();
+        ApiResponse::ok(serde_json::json!({
+            "config": {
+                "pixel_error": config.pixel_error,
+                "max_depth": config.max_depth,
+                "bakes_per_frame": config.bakes_per_frame,
+                "tile_budget": config.tile_budget,
+            },
+            "stream": {
+                "wanted": status.wanted,
+                "resident": status.resident,
+                "pending": status.pending,
+                "stale_cancelled": status.stale_cancelled,
+                "budget_refused": status.budget_refused,
+                "focus_wanted": status.focus_wanted,
+                "focus_resident": status.focus_resident,
+            },
+            "visual_foci": visual_foci,
+        }))
+    }
+}
+
 /// Register the terrain query providers into the [`ApiQueryRegistry`]. Init-if-
 /// absent so plugin ordering vs. `LunCoApiPlugin` doesn't matter (mirrors
 /// `lunco_mobility::sensing::register_physics_queries`).
@@ -378,6 +442,7 @@ pub fn register_terrain_queries(app: &mut App) {
     reg.register(TerrainHeightProvider);
     reg.register(TerrainFieldProvider);
     reg.register(TerrainRaycastProvider);
+    reg.register(TerrainLodStatusProvider);
 }
 
 #[cfg(test)]

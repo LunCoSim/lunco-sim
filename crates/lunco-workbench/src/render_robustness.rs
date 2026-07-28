@@ -60,6 +60,8 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use bevy::render::{
+    batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
+    init_gpu_resource,
     renderer::{RenderAdapterInfo, RenderDevice},
     settings::WgpuSettings,
     RenderApp, RenderStartup,
@@ -75,6 +77,11 @@ use bevy::render::{
 /// for a wedge; short enough that nobody cooks a laptop waiting for it.
 const GIVE_UP_AFTER_SECS: f64 = 5.0;
 
+/// NVIDIA's PCI vendor ID.
+const NVIDIA_VENDOR_ID: u32 = 0x10DE;
+/// The Quadro K2100M (Kepler GK107) device ID reported by the failing laptop.
+const QUADRO_K2100M_DEVICE_ID: u32 = 0x11FC;
+
 /// Base [`WgpuSettings`] with a platform-tuned backend preference.
 ///
 /// Windows: default to Vulkan (sidesteps DX12 swapchain resize failures) unless the
@@ -87,9 +94,42 @@ pub fn preferred_wgpu_settings() -> WgpuSettings {
     {
         if std::env::var_os("WGPU_BACKEND").is_none() {
             settings.backends = Some(bevy::render::settings::Backends::VULKAN);
+            // `WgpuSettings::default()` chose its release validation flags while
+            // every native backend (including DX12) was still enabled. DX12
+            // needs indirect-call validation, but Vulkan does not; leaving it
+            // on makes wgpu create an internal compute pipeline during device
+            // creation. Some legacy Vulkan drivers lose the device at exactly
+            // that pipeline, before our render-health recovery can start.
+            //
+            // Keep an explicit diagnostic override intact. This mirrors Bevy's
+            // release default for a Vulkan-only backend while retaining debug
+            // builds' full validation surface.
+            #[cfg(not(debug_assertions))]
+            if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
+                settings
+                    .instance_flags
+                    .remove(bevy::render::settings::InstanceFlags::VALIDATION_INDIRECT_CALL);
+            }
         }
     }
     settings
+}
+
+/// Whether this adapter needs Bevy's CPU preprocessing path.
+///
+/// The K2100M's Vulkan driver accepts the feature probes for GPU preprocessing,
+/// then loses the device while the first scene's materials are prepared. This is
+/// intentionally a PCI-ID match rather than a broad NVIDIA rule: newer NVIDIA
+/// adapters are known to use the faster path successfully.
+fn requires_cpu_preprocessing(info: &wgpu::AdapterInfo) -> bool {
+    requires_cpu_preprocessing_for(info.backend, info.vendor, info.device)
+}
+
+fn requires_cpu_preprocessing_for(backend: wgpu::Backend, vendor: u32, device: u32) -> bool {
+    cfg!(target_os = "windows")
+        && backend == wgpu::Backend::Vulkan
+        && vendor == NVIDIA_VENDOR_ID
+        && device == QUADRO_K2100M_DEVICE_ID
 }
 
 /// Error tallies shared between the wgpu callback (render thread, no `World`)
@@ -230,6 +270,32 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
     render_app.add_systems(RenderStartup, set_error_handler);
+    // This runs after Bevy has probed the adapter and initialized the resource.
+    // It affects only the known-bad Quadro/Vulkan combination above.
+    render_app.add_systems(
+        RenderStartup,
+        force_cpu_preprocessing.after(init_gpu_resource::<GpuPreprocessingSupport>),
+    );
+}
+
+/// Override an optimistic feature probe for the one legacy adapter on which the
+/// first GPU-preprocessing/material frame loses the device.
+fn force_cpu_preprocessing(
+    adapter: Res<RenderAdapterInfo>,
+    mut support: ResMut<GpuPreprocessingSupport>,
+) {
+    let info = &adapter.0;
+    if !requires_cpu_preprocessing(info) || support.max_supported_mode == GpuPreprocessingMode::None
+    {
+        return;
+    }
+
+    support.max_supported_mode = GpuPreprocessingMode::None;
+    warn!(
+        "{} (Vulkan, PCI {:04X}:{:04X}) reports GPU preprocessing support but is a known \
+         device-loss path; using CPU preprocessing for this session",
+        info.name, info.vendor, info.device
+    );
 }
 
 /// Render the full `source` chain of a wgpu error.
@@ -452,16 +518,61 @@ fn escalate_render_recovery(
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests {
-    use super::preferred_wgpu_settings;
-    use bevy::render::settings::Backends;
+    use super::{
+        preferred_wgpu_settings, requires_cpu_preprocessing_for, NVIDIA_VENDOR_ID,
+        QUADRO_K2100M_DEVICE_ID,
+    };
+    use bevy::render::settings::{Backends, InstanceFlags};
 
     #[test]
-    fn windows_defaults_to_vulkan_when_not_overridden() {
+    fn quadro_k2100m_vulkan_uses_cpu_preprocessing_only() {
+        assert!(requires_cpu_preprocessing_for(
+            wgpu::Backend::Vulkan,
+            NVIDIA_VENDOR_ID,
+            QUADRO_K2100M_DEVICE_ID,
+        ));
+        assert!(!requires_cpu_preprocessing_for(
+            wgpu::Backend::Dx12,
+            NVIDIA_VENDOR_ID,
+            QUADRO_K2100M_DEVICE_ID,
+        ));
+        assert!(!requires_cpu_preprocessing_for(
+            wgpu::Backend::Vulkan,
+            NVIDIA_VENDOR_ID,
+            0x0001,
+        ));
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn release_windows_defaults_to_vulkan_without_indirect_call_validation() {
         // Cargo test inherits the environment, so this test only describes the
-        // default path. An explicit `WGPU_BACKEND` is intentionally allowed to
-        // select another backend for driver diagnostics.
-        if std::env::var_os("WGPU_BACKEND").is_none() {
-            assert_eq!(preferred_wgpu_settings().backends, Some(Backends::VULKAN));
+        // package default. Explicit backend/validation overrides remain
+        // available for driver diagnostics.
+        if std::env::var_os("WGPU_BACKEND").is_none()
+            && std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none()
+        {
+            let settings = preferred_wgpu_settings();
+            assert_eq!(settings.backends, Some(Backends::VULKAN));
+            assert!(!settings
+                .instance_flags
+                .contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_windows_keeps_indirect_call_validation() {
+        // Debug builds deliberately retain wgpu's complete validation surface.
+        // This is diagnostic instrumentation, not a different renderer path.
+        if std::env::var_os("WGPU_BACKEND").is_none()
+            && std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none()
+        {
+            let settings = preferred_wgpu_settings();
+            assert_eq!(settings.backends, Some(Backends::VULKAN));
+            assert!(settings
+                .instance_flags
+                .contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
         }
     }
 }
