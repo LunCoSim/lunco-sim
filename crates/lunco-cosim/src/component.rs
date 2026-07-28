@@ -50,6 +50,11 @@ pub struct SimComponent {
     /// Current simulation status.
     pub status: SimStatus,
     /// Prevents duplicate step commands while waiting for results.
+    ///
+    /// "A step is in flight" is a FLAG, not a status: it is orthogonal to whether
+    /// the model is running, paused or errored, and the two spellings drifted —
+    /// a `SimStatus::Stepping` variant existed alongside it that no engine ever
+    /// produced, so `can_step()` guarded a state nothing could be in.
     pub is_stepping: bool,
 }
 
@@ -76,8 +81,6 @@ pub enum SimStatus {
     Compiling,
     /// Model is running normally.
     Running,
-    /// Waiting for async step result (e.g., GMAT external process).
-    Stepping,
     /// Model is paused — outputs hold last values.
     Paused,
     /// Model encountered an error.

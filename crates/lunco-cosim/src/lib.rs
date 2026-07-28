@@ -98,6 +98,9 @@ impl Plugin for CoSimPlugin {
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
         app.init_resource::<diagnostics::CosimDiagnostics>();
+        // Manual setpoints that outrank the wiring fabric until they expire —
+        // without it, a `SetPort` on a WIRED input lives less than one tick.
+        app.init_resource::<connection::PortHolds>();
         {
             let mut registry = app
                 .world_mut()
@@ -336,18 +339,40 @@ fn on_set_ports(
     let target = cmd.target;
     let writes = cmd.writes.clone();
     commands.queue(move |world: &mut World| {
+        // A setpoint on a WIRED input has to outrank the wire, or the next
+        // propagation tick overwrites it and the caller sees a write that
+        // "succeeded" and did nothing. The hold expires on its own
+        // (`DEFAULT_HOLD_SECS`), so a stream of setpoints keeps control while an
+        // abandoned one hands the port back to its wiring.
+        let now_real = world
+            .get_resource::<Time<bevy::time::Real>>()
+            .map(|time| time.elapsed_secs_f64())
+            .unwrap_or(0.0);
         for (port, value) in &writes {
             if reg.write_port(world, target, port, *value) {
+                if let Some(mut holds) = world.get_resource_mut::<connection::PortHolds>() {
+                    holds.hold(
+                        target,
+                        port.clone(),
+                        *value,
+                        now_real + connection::DEFAULT_HOLD_SECS,
+                    );
+                }
                 // A landing write retracts any earlier fault for this port —
                 // the backend may have come up late (model load order), which
-                // is not an authoring error. Cheap guard: the ledger is empty
-                // on the steady path, so the hot control loop allocates nothing.
+                // is not an authoring error — and RECORDS the proof, exactly as
+                // the wire master does. Recording is what makes the retraction
+                // stick: the `landed` check below is the only thing that stops a
+                // port from being re-reported the next time a write happens to
+                // drop (a backend momentarily absent mid-reload), and a port
+                // proven by `SetPorts` was not in that set at all, so its fault
+                // could come back after being cleared.
                 let diag = world.resource::<diagnostics::CosimDiagnostics>();
-                if !diag.faults.is_empty() {
-                    world
-                        .resource_mut::<diagnostics::CosimDiagnostics>()
-                        .faults
-                        .remove(&(target, port.clone()));
+                let key = (target, port.clone());
+                if !diag.faults.is_empty() || !diag.landed.contains(&key) {
+                    let mut diag = world.resource_mut::<diagnostics::CosimDiagnostics>();
+                    diag.faults.remove(&key);
+                    diag.landed.insert(key);
                 }
                 continue;
             }

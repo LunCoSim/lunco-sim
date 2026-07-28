@@ -166,6 +166,26 @@ pub fn publish_cosim_variables(
             let sig = SignalRef::new(entity, format!("{VARIABLE_NAMESPACE}{name}"));
             let known = signals.scalar_history(&sig).is_some();
             if !known {
+                // `admitted` is a RATCHET, and the buffers it counts are not:
+                // `drop_signals_of_removed_source` frees a despawned vessel's
+                // signals without telling this counter, so every scene reload
+                // leaves it overstating the truth. Left alone it reaches the cap
+                // after enough reloads and the publisher refuses every new
+                // variable FOREVER, in a session whose registry is nearly empty —
+                // one log line, then no cosim history at all.
+                //
+                // Recount from the registry, but only at the boundary: the O(1)
+                // counter still carries the steady path, and the scan happens at
+                // most once per sample tick while genuinely at the cap.
+                if clock.admitted >= settings.max_channels {
+                    clock.admitted = signals
+                        .iter_scalar()
+                        .filter(|(sig, _)| sig.path.starts_with(VARIABLE_NAMESPACE))
+                        .count();
+                    if clock.admitted < settings.max_channels {
+                        clock.capped = false;
+                    }
+                }
                 if clock.admitted >= settings.max_channels {
                     if !clock.capped {
                         clock.capped = true;

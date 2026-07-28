@@ -47,7 +47,6 @@ fn test_sim_status_can_step() {
     assert!(SimStatus::Idle.can_step());
     assert!(SimStatus::Running.can_step());
     assert!(!SimStatus::Compiling.can_step());
-    assert!(!SimStatus::Stepping.can_step());
     assert!(!SimStatus::Paused.can_step());
     assert!(!SimStatus::Error("oops".into()).can_step());
 }

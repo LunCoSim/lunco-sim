@@ -70,13 +70,30 @@ fn compile_balloon_model(
         let source = balloon_mo().to_string();
         let model_name = extract_model_name(&source).unwrap_or_else(|| "Balloon".into());
         let params = extract_parameters(&source);
-        let inputs = extract_inputs_with_defaults(&source);
+        let mut inputs = extract_inputs_with_defaults(&source);
+        // THE SCENE STATES THE ATMOSPHERE. `Balloon.mo`'s `rho0` defaults to 0 —
+        // vacuum, the correct reading of the Moon — and in vacuum there is no
+        // buoyancy to fly up on. An Earth-like scene authors 1.225; a production
+        // scene wires it from the environment prim. This test is the scene.
+        inputs.insert("rho0".to_string(), 1.225);
+        // …AND THE SAME g THE WEIGHT USES. Buoyancy is a weight difference, so a
+        // scene cannot let the two disagree (`Balloon.mo`'s own words). Both
+        // scenes in this file are Earth-g: the flat-gravity one pulls the body
+        // down at 9.81 through `CelestialGravity::flat`, and its docstring sizes
+        // the lift at ~48 N — which is `rho0 × V × 9.81`, not the model's Moon
+        // default. Production wires this from the environment's `gravity_accel`
+        // output; a test rig states it.
+        inputs.insert("gravity".to_string(), 9.81);
 
         commands.entity(entity).try_insert(ModelicaModel {
             model_path: std::path::PathBuf::from("balloon.mo"),
             model_name: model_name.clone(),
             parameters: params,
             inputs: inputs.into_iter().collect(),
+            // Compiling a model does not start it (`paused = !resume_after_compile`),
+            // so a test that wants a stepping model has to say so — the same opt-in
+            // the USD cosim binder makes.
+            resume_after_compile: true,
             ..default()
         });
 

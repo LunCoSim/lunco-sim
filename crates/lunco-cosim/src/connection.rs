@@ -1,8 +1,11 @@
 //! Simulation connections and ports.
 //!
-//! Follows the FMI/SSP ontology:
-//! - [`SimPort`] — a named interface point on a [`crate::SimComponent`] (SSP: Connector)
-//! - [`crate::SimConnection`] — a link between two ports (SSP: Connection)
+//! Follows the FMI/SSP ontology: [`crate::SimConnection`] is a link between two
+//! ports (SSP: Connection). The PORTS themselves are not declared by a component
+//! here — every participant's port surface is answered by
+//! [`lunco_core::ports::PortRegistry`], live, from whatever backend owns the
+//! value. (A `SimPort`/`SimPorts` metadata pair used to declare them alongside;
+//! nothing attached it and nothing read it once the registry landed.)
 //!
 //! `startElement.startConnector → endElement.endConnector`
 
@@ -12,34 +15,6 @@ use bevy::prelude::*;
 // (engine, API, scripting) shares one definition; re-exported here because this
 // crate's `SimPort` and the avian backends address them as `connection::Port*`.
 pub use lunco_core::ports::PortDirection;
-
-/// A named interface point on a simulation entity.
-///
-/// Ports declare what an entity can connect to. The UI uses them to show
-/// available connection points; the USD loader uses them to validate
-/// connections defined in scene files.
-///
-/// Ports are metadata — the actual values flow through [`crate::SimComponent`]
-/// inputs/outputs hash maps. A port just declares that a named slot exists
-/// and what kind of value it carries.
-#[derive(Debug, Clone, Reflect)]
-pub struct SimPort {
-    /// Port name (must match a key in `SimComponent.inputs` or `.outputs`).
-    pub name: String,
-    /// Whether this port receives or provides values.
-    pub direction: PortDirection,
-}
-
-/// Collection of ports on a simulation entity.
-///
-/// Attach this alongside a [`crate::SimComponent`] to declare the entity's
-/// connectable interface. Systems like `setup_balloon_wires` can build
-/// this from the Modelica model's input/output declarations.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component)]
-pub struct SimPorts {
-    pub ports: Vec<SimPort>,
-}
 
 /// A connection between two simulation ports.
 ///
@@ -115,6 +90,74 @@ impl Default for SimConnection {
             scale: 1.0,
             offset: 0.0,
         }
+    }
+}
+
+/// Manual setpoints that OUTRANK the wiring fabric, until they expire.
+///
+/// # Why a hold, and not just a write
+///
+/// Writing an input port directly works only while nothing else drives it. The
+/// moment that port is a wire's target, [`crate::systems::propagate::propagate_connections`]
+/// overwrites it on the next tick: the `SetPort` reported success, the value
+/// lasted under 16 ms, and from the caller's side that is indistinguishable from
+/// a port that does not exist. Every "I set the throttle and nothing happened"
+/// report has this shape.
+///
+/// So a manual write is a HOLD: latest-wins, addressed by `(entity, port)`, and
+/// applied by the propagation master in place of the accumulated value while it
+/// is live. The accumulator itself is untouched — a hold suppresses a wire, it
+/// does not corrupt the sum feeding other targets.
+///
+/// # Why it expires
+///
+/// An indefinite hold is a scene that silently stops responding to its own
+/// wiring, and the only way back is a caller that remembers to release. A
+/// deadline makes the default outcome *recovery*: a script that crashes, an API
+/// client that disconnects, a test that forgets to clean up all end with the
+/// vehicle back under its own control. [`DEFAULT_HOLD_SECS`] is the timeout when
+/// a caller does not state one; `release` ends it early, and re-setting the same
+/// port extends it (latest-wins, so a 10 Hz stream of setpoints simply keeps its
+/// hold alive).
+#[derive(Resource, Debug, Default)]
+pub struct PortHolds {
+    /// `(entity, port) → (value, expiry on the REAL clock)`.
+    holds: std::collections::HashMap<(Entity, String), (f64, f64)>,
+}
+
+/// How long a hold lasts when the caller does not say.
+///
+/// Long enough to drive interactively at human rates (a slider, a keypress
+/// repeat, a 1 Hz script) and short enough that an abandoned hold is a hiccup
+/// rather than a stuck vehicle.
+pub const DEFAULT_HOLD_SECS: f64 = 2.0;
+
+impl PortHolds {
+    /// Hold `port` on `entity` at `value` until `now + secs`.
+    pub fn hold(&mut self, entity: Entity, port: impl Into<String>, value: f64, until: f64) {
+        self.holds.insert((entity, port.into()), (value, until));
+    }
+
+    /// End a hold early. `true` if one was live.
+    pub fn release(&mut self, entity: Entity, port: &str) -> bool {
+        self.holds.remove(&(entity, port.to_string())).is_some()
+    }
+
+    /// Drop everything that has expired. Called once per propagation tick.
+    pub fn expire(&mut self, now: f64) {
+        self.holds.retain(|_, (_, until)| *until > now);
+    }
+
+    /// The live holds, for the propagation master's per-target lookup.
+    pub fn snapshot(&self) -> std::collections::HashMap<(Entity, String), f64> {
+        self.holds
+            .iter()
+            .map(|(key, (value, _))| (key.clone(), *value))
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.holds.is_empty()
     }
 }
 
