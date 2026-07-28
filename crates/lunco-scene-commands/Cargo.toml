@@ -25,6 +25,10 @@ avian3d = { workspace = true }
 
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+# The render-free signal core — for `TelemetryFocus` only, so selection scoping
+# reaches every telemetry surface without this crate learning about any of them.
+# A ring buffer of f64s: no GPU stack rides in on this edge.
+lunco-signal = { path = "../lunco-signal" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-doc = { path = "../lunco-doc" }
 # Shader source is a journaled DOMAIN (ShaderDocument): edits record to the Twin

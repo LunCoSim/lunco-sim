@@ -446,31 +446,6 @@ pub fn handle_deselect_keys(
     // gizmo's active state; removing the `GizmoTarget`s above clears it next tick.
 }
 
-/// Mirror the editor selection into [`lunco_signal::TelemetryFocus`] — the
-/// render-free "what is the user looking at" resource every telemetry surface reads
-/// to narrow itself ("the selected rover's channels", not the whole sim's).
-///
-/// The mirror runs HERE, in the crate that owns selection, and not in the panel that
-/// consumes it: `lunco-viz` must not learn about `SelectedEntities` (an editor
-/// concept from an app crate) to scope a list, and a `--no-ui` build has no selection
-/// to mirror at all — it simply never registers this system and the focus stays
-/// empty, which every consumer reads as "show everything".
-///
-/// Change-driven: writes only when `SelectedEntities` actually moved, and only when
-/// the mirror would differ, so the resource's own change tick stays meaningful to
-/// downstream `is_changed` gates.
-pub fn mirror_selection_to_telemetry_focus(
-    selected: Res<SelectedEntities>,
-    mut focus: ResMut<lunco_signal::TelemetryFocus>,
-) {
-    if !selected.is_changed() {
-        return;
-    }
-    if focus.roots != selected.entities {
-        focus.roots.clone_from(&selected.entities);
-    }
-}
-
 /// Draws an AABB highlight for selected objects using Bevy Gizmos.
 ///
 /// **Subtree Filtering**:

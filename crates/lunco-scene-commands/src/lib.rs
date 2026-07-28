@@ -85,3 +85,28 @@ impl SelectedEntities {
         self.entities.last().copied()
     }
 }
+
+/// Mirror the selection into [`lunco_signal::TelemetryFocus`] — the render-free
+/// "what is the user looking at" resource every telemetry surface reads to narrow
+/// itself ("the selected vessel's channels", not the whole sim's).
+///
+/// It lives HERE, beside [`SelectedEntities`] itself, rather than in the editor:
+/// selection is command-layer state, and any host that links the command layer —
+/// the sandbox, the Modelica workbench, a headless server driven by
+/// `SelectEntity` over HTTP — should get the same scoping without re-implementing
+/// this. It was in `lunco-sandbox-edit` first, which meant every other host's
+/// telemetry panel silently had its "Selected only" toggle disabled forever.
+///
+/// Change-driven: writes only when the selection actually moved AND the mirror
+/// would differ, so the resource's own change tick stays meaningful downstream.
+pub fn mirror_selection_to_telemetry_focus(
+    selected: Res<SelectedEntities>,
+    mut focus: ResMut<lunco_signal::TelemetryFocus>,
+) {
+    if !selected.is_changed() {
+        return;
+    }
+    if focus.roots != selected.entities {
+        focus.roots.clone_from(&selected.entities);
+    }
+}
