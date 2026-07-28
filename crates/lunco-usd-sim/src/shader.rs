@@ -228,6 +228,13 @@ fn apply_usd_shader_material_read(
     let no_shadow_cast =
         lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "primvars:doNotCastShadows")
             .unwrap_or(false);
+    // `doubleSided` — the standard `UsdGeomGprim` attribute, read on the GPRIM like
+    // the two above and carried for the same reason: the PBR path maps it to
+    // `cull_mode: None`, and removing the `PbrLook` dropped it on the floor. The sky
+    // dome is the case that cannot work without it — viewed from INSIDE, a culled
+    // dome shows nothing (or, from outside, its far hemisphere: a disc of sky).
+    let double_sided =
+        lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "doubleSided").unwrap_or(false);
     // Read on the gprim for the same reason as `no_shadow_cast` above: a driven value
     // is per-instance — four landing legs bound to one strut material each report
     // their own load — so the material must be private, or the cache paints every
@@ -265,14 +272,24 @@ fn apply_usd_shader_material_read(
             _ => SurfaceAlpha::Opaque,
         }
     };
+    // Optional per-material VERTEX stage, named exactly as the fragment source is:
+    // `info:wgsl:vertexAsset` on the same `Shader` prim. The starfield's skybox
+    // anchor is the worked example — its `@vertex` re-centres the dome on the
+    // camera at far depth, so the authored sphere's radius/origin stop mattering.
+    // Same normalisation as `sourceAsset` so `@lunco://…@` and bare paths agree.
+    let vertex_shader = reader
+        .asset(&shader_prim, "info:wgsl:vertexAsset")
+        .map(|raw| lunco_assets::engine_asset_uri(lunco_assets::engine_asset_rel(&raw)));
     let look = ShaderLook {
         shader,
+        vertex_shader,
         values,
         textures,
         no_shadow_cast,
         driven,
         unshared,
         alpha,
+        double_sided,
         ..Default::default()
     };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents

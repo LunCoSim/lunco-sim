@@ -83,6 +83,9 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
             SurfaceAlpha::Blend => AlphaMode::Blend,
             SurfaceAlpha::Add => AlphaMode::Add,
         },
+        // Same rule as `alpha_mode`: authored `doubleSided` means the same thing
+        // on either material path.
+        double_sided: look.double_sided,
         ..Default::default()
     };
     for (layer, image) in &look.textures {

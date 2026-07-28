@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_mobility::kernels::DriveMix;
 use std::io::{BufWriter, Write};
 
-pub struct JitterProbePlugin;
+pub(crate) struct JitterProbePlugin;
 
 impl Plugin for JitterProbePlugin {
     fn build(&self, app: &mut App) {

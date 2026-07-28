@@ -186,6 +186,19 @@ pub struct ShaderLook {
     /// the render pipeline the material binds, so two looks that differ here cannot
     /// share one material.
     pub alpha: SurfaceAlpha,
+    /// Render both faces (authored `doubleSided` on the gprim — the standard
+    /// `UsdGeomGprim` attribute, the same one the PBR path maps to
+    /// `cull_mode: None`).
+    ///
+    /// Here for the reason `no_shadow_cast` and `alpha` are: taking the shader
+    /// path REMOVES the `PbrLook` that carried it, so a `doubleSided` prim
+    /// silently became backface-culled the moment it was given a `.wgsl`. The
+    /// sky dome is the worked example: viewed from INSIDE, only its back faces
+    /// are visible, so dropping the flag culls the entire sky.
+    ///
+    /// **Part of [`key`](Self::key), like `alpha`.** Cull mode is pipeline
+    /// state, so two looks that differ here cannot share one material.
+    pub double_sided: bool,
 }
 
 impl ShaderLook {
@@ -278,6 +291,7 @@ impl ShaderLook {
             SurfaceAlpha::Add => (3, 0),
         }
         .hash(&mut h);
+        self.double_sided.hash(&mut h);
         ShaderLookKey(h.finish())
     }
 }

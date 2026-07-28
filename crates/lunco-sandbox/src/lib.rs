@@ -69,11 +69,14 @@ use lunco_terrain_surface::TerrainSurfacePlugin;
 // added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
 use lunco_modelica::ModelicaSet;
 
+/// Chassis smoothness census (`LUNCO_JITTER_CSV`) — compares solver `Position`
+/// against the rendered `Transform`, so it only means anything in a `ui` build.
+#[cfg(feature = "ui")]
+mod jitter_probe;
 /// Engine light-handling policy (`ShadowCastingSettings` + reactive
 /// possession-driven headlight shadow projection). Client render concern, so
 /// `ui`-gated. See [`light_policy`].
 #[cfg(feature = "ui")]
-mod jitter_probe;
 mod light_policy;
 /// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
 mod log_dedup;
@@ -2005,6 +2008,7 @@ impl Plugin for SandboxCorePlugin {
         // costs the same on a server as it does in the GUI.
         app.add_plugins(lunco_core::gate::GatePlugin);
         // TEMPORARY: chassis smoothness census, off unless `LUNCO_JITTER_CSV` is set.
+        #[cfg(feature = "ui")]
         app.add_plugins(jitter_probe::JitterProbePlugin);
 
         #[cfg(feature = "ui")]

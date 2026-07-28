@@ -319,9 +319,11 @@ impl Plugin for SandboxUiPlugin {
     }
 }
 
-/// Inserts the sharpest shadow filter (`Hardware2x2`) on every 3D camera as it
-/// appears. USD- and Avatar-spawned cameras land async over many frames; the
-/// `Without<ShadowFilteringMethod>` filter catches each exactly once.
+/// Inserts the Castano 13-tap filter (`Gaussian`) on every 3D camera as it
+/// appears — `Hardware2x2` reads as visibly blocky stair-steps on terrain
+/// shadow edges under grazing lunar light. USD- and Avatar-spawned cameras
+/// land async over many frames; the `Without<ShadowFilteringMethod>` filter
+/// catches each exactly once.
 /// True while an offline take is capturing frames — the signal that "this
 /// viewport is the film, not the editor". Chrome that exists for an operator
 /// (view switcher, sky-clock scrubber) hides behind it; instrumentation that
@@ -352,7 +354,7 @@ fn force_hard_shadow_filtering(
     for e in &q {
         commands
             .entity(e)
-            .try_insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+            .try_insert(bevy::light::ShadowFilteringMethod::Gaussian);
     }
 }
 

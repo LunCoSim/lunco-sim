@@ -116,8 +116,52 @@
 #import bevy_pbr::{
     forward_io::VertexOutput,
     mesh_view_bindings::view,
+    view_transformations::position_world_to_clip,
 }
 #import lunco::noise::vnoise_quintic
+
+/// Skybox anchor (`info:wgsl:vertexAsset` points the material's VERTEX stage
+/// here). The fragment below shades purely by view ray, so the dome's geometry
+/// carries no meaning beyond "cover every pixel of sky" — and a world-pinned
+/// sphere cannot do that from everywhere: walk further from the scene origin
+/// than its radius and the sky collapses to the sphere's silhouette (a circle
+/// of stars); author it bigger and it falls outside a chase camera's far plane
+/// and the sky renders EMPTY. This stage removes the coupling instead of tuning
+/// it: each vertex is re-aimed along its own model-space direction 1 m from the
+/// CAMERA, and its clip z is then pinned just inside the far plane (reverse-z:
+/// depth ≈ 0), so the dome rides with every camera and depth-tests behind
+/// everything that actually wrote depth — terrain still hides it, and the
+/// ephemeris bodies now correctly OCCLUDE the stars instead of having them
+/// added on top. The authored sphere's radius and placement become irrelevant
+/// to what is rendered (they still feed the CPU-side culling AABB — see the
+/// scene authoring).
+struct SkyVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+}
+
+@vertex
+fn vertex(in: SkyVertex) -> VertexOutput {
+    var out: VertexOutput;
+    // Model-space position → sky direction. The dome is authored unrotated, so
+    // model space IS world orientation; skipping the model matrix keeps the sky
+    // fixed to the world even if something translates the prim.
+    let dir = normalize(in.position);
+    let world = view.world_position + dir;
+    out.world_position = vec4(world, 1.0);
+    out.world_normal = -dir;
+    out.position = position_world_to_clip(world);
+    // Reverse-z far plane, minus an epsilon so a strict `Greater` depth test
+    // still passes against the cleared depth buffer.
+    out.position.z = out.position.w * 1.0e-6;
+#ifdef VERTEX_UVS_A
+    out.uv = vec2(0.0);
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = in.instance_index;
+#endif
+    return out;
+}
 
 const PI: f32 = 3.14159265359;
 /// One arcminute in radians — the natural unit for a star's rendered size.

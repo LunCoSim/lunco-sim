@@ -76,14 +76,17 @@ def Xform "SandboxScene" (
     # the way the Sun's disc once did.
     def Sphere "SkyDome"
     {
-        # 800 m, not the 20 km the physical horizon would suggest: a chase camera
-        # built from Bevy's default `PerspectiveProjection` clips at 1000 m, so a
-        # 20 km shell falls entirely beyond the far plane and the sky renders
-        # black from every follow view (the scene's own authored cameras, at
-        # `clippingRange = (0.1, 100000)`, see it fine — which is exactly the
-        # confusing part). Additive + no depth write means the radius carries no
-        # occlusion meaning; it only has to sit inside the nearest far plane.
-        double radius = 800
+        # THE RADIUS IS ONLY THE CULLING VOLUME. The material's vertex stage
+        # (`info:wgsl:vertexAsset` on `Looks/Starfield/Shader`) re-anchors every
+        # vertex on the CAMERA at far depth, so neither radius nor placement
+        # affects what is drawn — the old 800 m far-plane compromise (and the
+        # circle of stars it collapsed to once a camera walked outside it) is
+        # gone. The sphere still feeds the CPU-side frustum-culling AABB, which
+        # knows nothing of the vertex stage: it must contain every camera
+        # position the scene can reach, or the sky vanishes the moment the
+        # origin-pinned box leaves the frustum. 1000 km covers the arena and any
+        # orbit view that focuses it.
+        double radius = 1000000
         uniform bool doubleSided = true
         bool primvars:doNotCastShadows = true
         bool lunco:surface:additive = true
@@ -131,6 +134,10 @@ def Xform "SandboxScene" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
+                # The VERTEX stage is the same file: its `@vertex` re-anchors the
+                # dome on the camera at far depth, which is what frees the
+                # `SkyDome` radius/origin from mattering (see that prim).
+                uniform asset info:wgsl:vertexAsset = @lunco://shaders/starfield.wgsl@
                 # Lifted above the shader's own defaults (0.05 / 0.10 / 0.9) so the
                 # sky still reads at the exposure a LUNAR SURFACE scene runs at.
                 # Nothing here is a rendering bug: the dome is `AlphaMode::Add`,

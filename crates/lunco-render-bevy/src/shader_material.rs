@@ -155,6 +155,11 @@ pub struct ShaderMaterial {
     /// (terrain, panels, struts). An emissive VOLUME needs `Blend`: an exhaust
     /// plume that cannot be seen through is a solid cone.
     pub alpha_mode: AlphaMode,
+    /// Render both faces (authored `doubleSided` on the gprim). Not a bind-group
+    /// resource — it drives pipeline specialization (`cull_mode: None`) through
+    /// [`ShaderKey`]. The sky dome is the case that needs it: viewed from
+    /// INSIDE, a backface-culled dome shows no sky at all.
+    pub double_sided: bool,
 }
 
 /// The shared empty schema (created once). A fresh material carries this until
@@ -186,6 +191,7 @@ impl Default for ShaderMaterial {
             schema: empty_schema_arc(),
             values: BTreeMap::new(),
             alpha_mode: AlphaMode::Opaque,
+            double_sided: false,
         }
     }
 }
@@ -283,6 +289,8 @@ pub struct ShaderKey {
     shader: Handle<Shader>,
     /// `Some` → swap the vertex stage too + bind the morph-target attribute.
     vertex_shader: Option<Handle<Shader>>,
+    /// `true` → `cull_mode: None` (authored `doubleSided`).
+    double_sided: bool,
 }
 
 impl From<&ShaderMaterial> for ShaderKey {
@@ -290,6 +298,7 @@ impl From<&ShaderMaterial> for ShaderKey {
         Self {
             shader: m.shader.clone(),
             vertex_shader: m.vertex_shader.clone(),
+            double_sided: m.double_sided,
         }
     }
 }
@@ -332,6 +341,11 @@ impl Material for ShaderMaterial {
             .label
             .as_ref()
             .is_some_and(|l| l.contains("prepass"));
+        // Authored `doubleSided` — every pass, including the shadow/prepass ones:
+        // a single-sided shadow of a double-sided surface peels away from it.
+        if key.bind_group_data.double_sided {
+            descriptor.primitive.cull_mode = None;
+        }
         debug_assert!(
             descriptor.label.is_some(),
             "pipeline descriptor carries no debug label; ShaderMaterial::specialize \
@@ -367,14 +381,20 @@ impl Material for ShaderMaterial {
             // above and never reach here (`vertex_shader` is `None`).
             if let Some(vertex) = &key.bind_group_data.vertex_shader {
                 descriptor.vertex.shader = vertex.clone();
-                let vertex_layout = layout.0.get_layout(&[
-                    Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-                    Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
-                    Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
-                    ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
-                    ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
-                ])?;
-                descriptor.vertex.buffers = vec![vertex_layout];
+                // Only the CDLOD tiles carry the morph attributes; a plain mesh
+                // with a custom vertex stage (the starfield's skybox anchor) keeps
+                // the default P/N/UV layout — asking `get_layout` for attributes
+                // the mesh doesn't have is an error, not a fallback.
+                if layout.0.contains(ATTRIBUTE_MORPH_TARGET) {
+                    let vertex_layout = layout.0.get_layout(&[
+                        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                        Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+                        Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+                        ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
+                        ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
+                    ])?;
+                    descriptor.vertex.buffers = vec![vertex_layout];
+                }
             }
         }
         Ok(())
