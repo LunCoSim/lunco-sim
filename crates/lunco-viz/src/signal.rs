@@ -11,8 +11,8 @@
 //! *colour* — and that now comes from the **theme**.
 
 pub use lunco_signal::{
-    ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
-    TelemetryFocus, DEFAULT_CAPACITY,
+    ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
+    DEFAULT_CAPACITY,
 };
 
 #[cfg(feature = "ui")]

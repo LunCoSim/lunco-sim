@@ -1824,8 +1824,7 @@ mod tests {
             h0: None,
             runtime: lunco_experiments::RuntimeMode::Batch,
         };
-        let opts =
-            stepper_options_from_bounds(&bounds).expect("solver resolves for this model");
+        let opts = stepper_options_from_bounds(&bounds).expect("solver resolves for this model");
         let mut stepper =
             crate::simulation_session::interactive(&compiled.dae, opts).expect("build stepper");
         let step_dt =

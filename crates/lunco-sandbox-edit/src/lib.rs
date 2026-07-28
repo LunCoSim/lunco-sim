@@ -53,11 +53,11 @@ pub mod physics_gizmo;
 #[cfg(feature = "ui")]
 pub mod physics_viz;
 #[cfg(feature = "ui")]
+pub mod script_tools;
+#[cfg(feature = "ui")]
 pub mod selection;
 #[cfg(feature = "ui")]
 pub mod spawn;
-#[cfg(feature = "ui")]
-pub mod script_tools;
 #[cfg(feature = "ui")]
 pub mod terrain_tools;
 

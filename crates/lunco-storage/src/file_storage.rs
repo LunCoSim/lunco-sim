@@ -85,7 +85,10 @@ impl Storage for FileStorage {
                 Err(e) => Err(StorageError::Io(e)),
             },
             StorageHandle::Memory(key) => {
-                let map = self.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 map.get(key).cloned().ok_or(StorageError::NotFound)
             }
             _ => Err(StorageError::Unsupported(
@@ -106,7 +109,10 @@ impl Storage for FileStorage {
                 Ok(())
             }
             StorageHandle::Memory(key) => {
-                let mut map = self.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 map.insert(key.clone(), bytes.to_vec());
                 Ok(())
             }
@@ -125,7 +131,10 @@ impl Storage for FileStorage {
                 Err(e) => Err(StorageError::Io(e)),
             },
             StorageHandle::Memory(key) => {
-                let mut map = self.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 map.remove(key).map(|_| ()).ok_or(StorageError::NotFound)
             }
             _ => Err(StorageError::Unsupported(

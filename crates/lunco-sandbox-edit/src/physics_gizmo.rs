@@ -75,8 +75,8 @@
 
 use avian3d::dynamics::integrator::VelocityIntegrationData;
 use avian3d::prelude::{
-    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Gravity, JointAnchor,
-    JointFrame, RevoluteJoint, RigidBody,
+    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Gravity, JointAnchor, JointFrame,
+    RevoluteJoint, RigidBody,
 };
 use bevy::color::palettes::tailwind;
 use bevy::prelude::*;
@@ -250,9 +250,7 @@ pub fn draw_physics_gizmo(
     if !settings.show_mass && !settings.show_forces {
         return;
     }
-    let Some(subtree) =
-        selected_subtree(&selected, &q_parents, &q_anchors, &q_children)
-    else {
+    let Some(subtree) = selected_subtree(&selected, &q_parents, &q_anchors, &q_children) else {
         return;
     };
     // Root up axis — fallback direction for the scalar normal load.
@@ -292,11 +290,7 @@ pub fn draw_physics_gizmo(
                 if m > 0.0 {
                     let (principal, local_frame) =
                         inertia.principal_angular_inertia_with_local_frame();
-                    let (i1, i2, i3) = (
-                        principal.x as f32,
-                        principal.y as f32,
-                        principal.z as f32,
-                    );
+                    let (i1, i2, i3) = (principal.x as f32, principal.y as f32, principal.z as f32);
                     // a_i = sqrt(2.5 (I_j + I_k − I_i) / m), radicand ≥ 0.
                     let semi = Vec3::new(
                         (2.5 * (i2 + i3 - i1) / m).max(0.0).sqrt(),
@@ -331,9 +325,7 @@ pub fn draw_physics_gizmo(
                         }
                     }
                     // Principal-axis ticks, length = the semi-axis.
-                    for (axis, len) in
-                        [(Vec3::X, semi.x), (Vec3::Y, semi.y), (Vec3::Z, semi.z)]
-                    {
+                    for (axis, len) in [(Vec3::X, semi.x), (Vec3::Y, semi.y), (Vec3::Z, semi.z)] {
                         if len > 1e-4 {
                             let dir = world_q * axis * len;
                             gizmos.line(com_world - dir, com_world + dir, INERTIA_COLOR);
@@ -408,9 +400,7 @@ pub fn draw_frame_gizmo(
     if !settings.show_frames {
         return;
     }
-    let Some(subtree) =
-        selected_subtree(&selected, &q_parents, &q_anchors, &q_children)
-    else {
+    let Some(subtree) = selected_subtree(&selected, &q_parents, &q_anchors, &q_children) else {
         return;
     };
 

@@ -86,16 +86,14 @@ pub use lunco_terrain_core::{
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
 pub use plugin::TerrainSurfacePlugin;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
-pub use surface_query::{
-    fit_footprint, height_in_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit,
-};
-pub use surface_query::{
-    report_unreachable_dem_frame,
-};
 pub use stream_viz::{
     DemHeightField, LodFrozen, LodTiles, SetTerrainLod, TerrainLodConfig, TerrainLodViz,
     TerrainNodeErrors, TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus,
     TerrainVisualFocus, TileShadowCache,
+};
+pub use surface_query::report_unreachable_dem_frame;
+pub use surface_query::{
+    fit_footprint, height_in_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit,
 };
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,

@@ -83,13 +83,11 @@ impl Plugin for LunCoMobilityPlugin {
         // gets from `lunco_hardware`'s own observer — same component, same names,
         // so an authored telemetry channel on the wheel works for either
         // realization. Stamped on Add so the hot integrator only ever mutates.
-        app.add_observer(
-            |trigger: On<Add, WheelRaycast>, mut commands: Commands| {
-                commands
-                    .entity(trigger.entity)
-                    .try_insert(lunco_hardware::MotorReadback::default());
-            },
-        );
+        app.add_observer(|trigger: On<Add, WheelRaycast>, mut commands: Commands| {
+            commands
+                .entity(trigger.entity)
+                .try_insert(lunco_hardware::MotorReadback::default());
+        });
         app.register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             // `DriveMix` — the kernel-selected allocation spec that replaced the
@@ -919,7 +917,8 @@ fn apply_wheel_steering(
         } else {
             Vec3::Y
         };
-        transform.rotation = base_rotation * Quat::from_axis_angle(axis, -steer.output_angle as f32);
+        transform.rotation =
+            base_rotation * Quat::from_axis_angle(axis, -steer.output_angle as f32);
     }
 }
 
@@ -1013,7 +1012,11 @@ fn gear_delta_lagrange(c: f64, ratio: f64, axis_inv_inertias: [f64; 3]) -> f64 {
         .zip(axis_inv_inertias.iter())
         .map(|(j, wi)| j * j * wi)
         .sum();
-    if w <= f64::EPSILON { 0.0 } else { -c / w }
+    if w <= f64::EPSILON {
+        0.0
+    } else {
+        -c / w
+    }
 }
 
 /// `∂c/∂θ` for `(rocker_a, rocker_b, chassis)`.
@@ -1070,11 +1073,9 @@ fn solve_differential_gear(
         if coupling.stiffness <= 0.0 {
             continue; // disengaged — the authored control case
         }
-        let Ok([(mut sa, ia, ra), (mut sb, ib, rb), (mut sc, ic, rc)]) = q_solver.get_many_mut([
-            coupling.rocker_a,
-            coupling.rocker_b,
-            coupling.chassis,
-        ]) else {
+        let Ok([(mut sa, ia, ra), (mut sb, ib, rb), (mut sc, ic, rc)]) =
+            q_solver.get_many_mut([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
+        else {
             continue;
         };
 
@@ -1893,7 +1894,10 @@ mod differential_tests {
     fn rest_offset_moves_the_target() {
         // θ_a + θ_b = 0.5, and the gear is authored to want exactly that.
         let c = gear_error(0.3, 0.2, -1.0, 0.5);
-        assert!(c.abs() < 1e-12, "offset target should be satisfied, got {c}");
+        assert!(
+            c.abs() < 1e-12,
+            "offset target should be satisfied, got {c}"
+        );
     }
 
     /// MASS-INDEPENDENCE, now exact rather than approached. Scaling every inertia

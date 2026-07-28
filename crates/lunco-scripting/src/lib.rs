@@ -480,9 +480,7 @@ fn run_scripted_models(
                 let outcome = py
                     .import("builtins")
                     .and_then(|b| b.getattr("compile"))
-                    .and_then(|c| {
-                        c.call1((doc.source.as_str(), "<scripted_model>", "exec"))
-                    });
+                    .and_then(|c| c.call1((doc.source.as_str(), "<scripted_model>", "exec")));
                 let code = match outcome {
                     Ok(code) => {
                         // Clean (re)compile clears any prior error state.
@@ -532,9 +530,11 @@ fn run_scripted_models(
                 .import("__main__")
                 .and_then(|m| {
                     let globals = m.dict();
-                    py.import("builtins")?
-                        .getattr("exec")?
-                        .call1((code.bind(py), &globals, &locals))
+                    py.import("builtins")?.getattr("exec")?.call1((
+                        code.bind(py),
+                        &globals,
+                        &locals,
+                    ))
                 })
                 .map(|_| ());
             if let Err(e) = ran {

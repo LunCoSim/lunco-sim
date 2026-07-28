@@ -301,7 +301,9 @@ def Xform "SandboxScene" (
     # script. `lunco:cameraLookAt` aims the camera at a point (parent-local).
     # WideShot is a top-level (grid-direct) camera, so activating it relocates
     # the big_space FloatingOrigin to it.
-    def Camera "WideShot"
+    def Camera "WideShot" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         custom double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-45.0, 25.0, -35.0)
@@ -360,8 +362,11 @@ def Xform "SandboxScene" (
         # along the rover's travel direction (−Z: the headlights sit at z=−1.75),
         # so it reads as an installed driver's-eye view — not an external cam
         # pointing back at the rover. `set_camera("ChaseCam")` cuts to it.
-        def Camera "ChaseCam"
+        def Camera "ChaseCam" (
+            prepend apiSchemas = ["LunCoCameraAPI"]
+        )
         {
+            uniform token lunco:cameraPose = "mounted"
             custom double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
             double3 xformOp:translate = (0.0, 0.9, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -481,8 +486,11 @@ def Xform "SandboxScene" (
             color3f[] primvars:displayColor = [(0.75, 0.25, 0.75)]   # magenta
         }
 
-        def Camera "ChaseCam"
+        def Camera "ChaseCam" (
+            prepend apiSchemas = ["LunCoCameraAPI"]
+        )
         {
+            uniform token lunco:cameraPose = "mounted"
             custom double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
             double3 xformOp:translate = (0.0, 0.9, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]

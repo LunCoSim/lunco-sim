@@ -98,7 +98,9 @@ fn a_driveline_composes_through_flanges() {
         .map(|(name, _)| name.to_string())
         .collect();
     assert!(
-        names.iter().any(|n| n == "w_wheel" || n.ends_with("w_wheel")),
+        names
+            .iter()
+            .any(|n| n == "w_wheel" || n.ends_with("w_wheel")),
         "the wheel speed must be a solved variable; solved = {names:?}"
     );
 }

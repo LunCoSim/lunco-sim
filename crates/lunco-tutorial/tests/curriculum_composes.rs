@@ -9,7 +9,9 @@
 use lunco_tutorial::curriculum;
 
 fn repo(rel: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 /// Resolve an authored asset path to a file on disk. Mirrors what the launcher
@@ -27,7 +29,11 @@ fn resolve(asset: &str) -> Option<std::path::PathBuf> {
 fn the_app_layer_composes_the_tracks_it_offers() {
     let c = curriculum::read(repo("assets/tutorials/sandbox.usda").to_str().unwrap());
     let labels: Vec<&str> = c.tracks.iter().map(|t| t.label.as_str()).collect();
-    assert_eq!(c.tracks.len(), 2, "expected sandbox + basic, got {labels:?}");
+    assert_eq!(
+        c.tracks.len(),
+        2,
+        "expected sandbox + basic, got {labels:?}"
+    );
     assert!(!c.lessons.is_empty(), "no lessons composed");
     for t in &c.tracks {
         assert!(!t.label.is_empty(), "track {} has no label", t.path);
@@ -39,11 +45,21 @@ fn the_app_layer_composes_the_tracks_it_offers() {
 #[test]
 fn every_lesson_resolves_its_script() {
     for app in ["sandbox", "lunica", "luncosim"] {
-        let c = curriculum::read(repo(&format!("assets/tutorials/{app}.usda")).to_str().unwrap());
+        let c = curriculum::read(
+            repo(&format!("assets/tutorials/{app}.usda"))
+                .to_str()
+                .unwrap(),
+        );
         for lesson in &c.lessons {
-            let path = resolve(&lesson.script)
-                .unwrap_or_else(|| panic!("{}: unresolvable script '{}'", lesson.path, lesson.script));
-            assert!(path.is_file(), "{}: script '{}' does not exist", lesson.path, lesson.script);
+            let path = resolve(&lesson.script).unwrap_or_else(|| {
+                panic!("{}: unresolvable script '{}'", lesson.path, lesson.script)
+            });
+            assert!(
+                path.is_file(),
+                "{}: script '{}' does not exist",
+                lesson.path,
+                lesson.script
+            );
         }
     }
 }
@@ -58,27 +74,42 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
     let mut with = 0;
     let mut without = 0;
     for app in ["sandbox", "lunica", "luncosim"] {
-        let c = curriculum::read(repo(&format!("assets/tutorials/{app}.usda")).to_str().unwrap());
+        let c = curriculum::read(
+            repo(&format!("assets/tutorials/{app}.usda"))
+                .to_str()
+                .unwrap(),
+        );
         for lesson in &c.lessons {
             match &lesson.world {
                 Some(w) => {
                     let path = resolve(w)
                         .unwrap_or_else(|| panic!("{}: unresolvable world '{w}'", lesson.path));
-                    assert!(path.is_file(), "{}: world '{w}' does not exist", lesson.path);
+                    assert!(
+                        path.is_file(),
+                        "{}: world '{w}' does not exist",
+                        lesson.path
+                    );
                     with += 1;
                 }
                 None => without += 1,
             }
         }
     }
-    assert!(with > 0 && without > 0, "expected both kinds, got {with} with / {without} without");
+    assert!(
+        with > 0 && without > 0,
+        "expected both kinds, got {with} with / {without} without"
+    );
 }
 
 /// A chain must not strand a student: every `next` targets a composed lesson.
 #[test]
 fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
     for app in ["sandbox", "lunica", "luncosim"] {
-        let c = curriculum::read(repo(&format!("assets/tutorials/{app}.usda")).to_str().unwrap());
+        let c = curriculum::read(
+            repo(&format!("assets/tutorials/{app}.usda"))
+                .to_str()
+                .unwrap(),
+        );
         let known: std::collections::HashSet<&str> =
             c.lessons.iter().map(|l| l.path.as_str()).collect();
         for lesson in &c.lessons {

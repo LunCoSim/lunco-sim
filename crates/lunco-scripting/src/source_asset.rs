@@ -5,7 +5,7 @@
 //! than `std::fs::read_to_string` — that path doesn't exist on wasm32.
 //! See `docs/architecture/40-asset-io.md`.
 
-use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::prelude::*;
 
 /// Raw text of a `.py` file.
@@ -195,15 +195,15 @@ impl Plugin for RhaiSourceAssetPlugin {
                 (
                     // Discovery is change-driven: the manifest arrives late on the
                     // web, and Twins open at runtime.
-                        preload_importable_scripts.run_if(
-                            resource_exists_and_changed::<lunco_assets::discovery::AssetManifest>
-                                // `exists_and_changed`, NOT `resource_changed`: a bare
-                                // `resource_changed` PANICS the schedule when the
-                                // resource is absent, and `TwinRoots` only exists once
-                                // a twin-capable app inserts it (lunica crashed at
-                                // startup on exactly this).
-                                .or_else(resource_exists_and_changed::<lunco_assets::TwinRoots>),
-                        ),
+                    preload_importable_scripts.run_if(
+                        resource_exists_and_changed::<lunco_assets::discovery::AssetManifest>
+                            // `exists_and_changed`, NOT `resource_changed`: a bare
+                            // `resource_changed` PANICS the schedule when the
+                            // resource is absent, and `TwinRoots` only exists once
+                            // a twin-capable app inserts it (lunica crashed at
+                            // startup on exactly this).
+                            .or_else(resource_exists_and_changed::<lunco_assets::TwinRoots>),
+                    ),
                     publish_rhai_sources,
                 )
                     .chain()

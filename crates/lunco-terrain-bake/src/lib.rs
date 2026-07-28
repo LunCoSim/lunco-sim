@@ -335,7 +335,10 @@ mod tests {
         let baked = finish_bake(&raw, "site", &job, BakeStage::Full);
         let blob = encode_grid_blob(&baked.grid, baked.native_res);
         let (back, _) = decode_grid_blob(&blob).expect("decodes");
-        assert_eq!(back.heights, baked.grid.heights, "cache round trip must be exact");
+        assert_eq!(
+            back.heights, baked.grid.heights,
+            "cache round trip must be exact"
+        );
     }
 
     #[test]

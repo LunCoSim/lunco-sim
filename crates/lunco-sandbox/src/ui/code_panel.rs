@@ -15,8 +15,8 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_sandbox_edit::SelectedEntities;
-use lunco_scripting::doc::ScriptedModel;
 use lunco_scripting::ScriptRegistry;
+use lunco_scripting::doc::ScriptedModel;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub(crate) struct CodePanel;

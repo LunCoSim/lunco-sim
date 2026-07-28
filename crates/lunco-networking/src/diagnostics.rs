@@ -35,9 +35,9 @@
 //! Method lesson encoded here: when the sim is right but it still *looks* wrong,
 //! measure the **render layer** (`GlobalTransform`), not just the simulation.
 
+use crate::session::PendingCorrection;
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::prelude::*;
-use crate::session::PendingCorrection;
 use std::collections::HashMap;
 
 /// Speed (m/s) above which a replicated body is almost certainly mis-driven — no

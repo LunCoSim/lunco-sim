@@ -49,8 +49,8 @@ pub mod discovery;
 pub mod executor;
 pub mod queries;
 pub mod registry;
-pub mod session;
 pub mod schema;
+pub mod session;
 pub mod subscription;
 pub mod transports;
 

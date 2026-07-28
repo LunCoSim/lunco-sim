@@ -41,7 +41,9 @@ over "LanderTest" (
     # `xformOpOrder` stack against the animation clock — so it craning-dollies
     # across the scene while the lander descends. `play_animation()` in the
     # cutscene starts the transport.
-    def Camera "OrbitView"
+    def Camera "OrbitView" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         # A slow crane-down + push-in: the camera starts high and far ("from
         # orbit"), descends and orbits toward the pad while the lander comes down,
@@ -86,7 +88,9 @@ over "LanderTest" (
     # A plain `def Camera` (no timeSamples) → its `lunco:cameraLookAt` aim is
     # baked once at spawn and preserved. Sits beside the pad looking up so the
     # lander settles into frame.
-    def Camera "PadCam"
+    def Camera "PadCam" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         custom double3 lunco:cameraLookAt = (0, 9, 0)
         double3 xformOp:translate = (13, 2.5, 15)
@@ -111,8 +115,11 @@ over "LanderTest" (
         # descent while always auto-framing the lander (camera_mount re-aims every
         # frame). This replaces the hand-keyframed free camera whose aim couldn't
         # track the mover: a mounted cam is always correctly framed by construction.
-        def Camera "WideTrack"
+        def Camera "WideTrack" (
+            prepend apiSchemas = ["LunCoCameraAPI"]
+        )
         {
+            uniform token lunco:cameraPose = "mounted"
             custom double3 lunco:cameraLookAt = (0, -2, 0)
             double3 xformOp:translate = (44, 30, 46)
             uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -121,8 +128,11 @@ over "LanderTest" (
         }
 
         # External tracking shot: 32 m back / 10 m up, always framing the lander.
-        def Camera "TrackCam"
+        def Camera "TrackCam" (
+            prepend apiSchemas = ["LunCoCameraAPI"]
+        )
         {
+            uniform token lunco:cameraPose = "mounted"
             custom double3 lunco:cameraLookAt = (0, 0, 0)
             double3 xformOp:translate = (16, 9, 30)
             uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -132,8 +142,11 @@ over "LanderTest" (
 
         # Onboard descent POV: mounted on the deck, looking straight down at the
         # ground rushing up during final approach.
-        def Camera "DescentCam"
+        def Camera "DescentCam" (
+            prepend apiSchemas = ["LunCoCameraAPI"]
+        )
         {
+            uniform token lunco:cameraPose = "mounted"
             custom double3 lunco:cameraLookAt = (0, -30, 0)
             double3 xformOp:translate = (0, 2.4, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -150,8 +163,11 @@ over "LanderTest" (
         # Match the lander so the pair descends straight (no drift → clean landing).
         double3 physics:velocity = (0, 0, 0)
 
-        def Camera "RoverCam"
+        def Camera "RoverCam" (
+            prepend apiSchemas = ["LunCoCameraAPI"]
+        )
         {
+            uniform token lunco:cameraPose = "mounted"
             custom double3 lunco:cameraLookAt = (0, 0.6, -9)
             double3 xformOp:translate = (0, 3, 7)
             uniform token[] xformOpOrder = ["xformOp:translate"]

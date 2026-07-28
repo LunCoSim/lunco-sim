@@ -208,8 +208,7 @@ fn every_imported_lunco_module_has_a_keepalive_in_the_plugin() {
     }
 
     let plugin = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../lunco-render-bevy/src/shader_material.rs"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lunco-render-bevy/src/shader_material.rs"),
     )
     .expect("shader_material.rs readable");
 
@@ -242,7 +241,10 @@ fn every_imported_lunco_module_has_a_keepalive_in_the_plugin() {
             checked += 1;
         }
     }
-    assert!(checked > 0, "found no lunco:: imports to check — parser broken?");
+    assert!(
+        checked > 0,
+        "found no lunco:: imports to check — parser broken?"
+    );
 }
 
 /// The streamed (`terrain_geomorph`) and static-mesh (`terrain_layered`,

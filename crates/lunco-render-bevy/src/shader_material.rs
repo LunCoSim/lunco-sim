@@ -360,10 +360,7 @@ impl Material for ShaderMaterial {
         // geomorph vertex shader imports the same module.
         #[cfg(target_arch = "wasm32")]
         {
-            descriptor
-                .vertex
-                .shader_defs
-                .push("LUNCO_NOISE_2D".into());
+            descriptor.vertex.shader_defs.push("LUNCO_NOISE_2D".into());
             if let Some(fragment) = descriptor.fragment.as_mut() {
                 fragment.shader_defs.push("LUNCO_NOISE_2D".into());
             }

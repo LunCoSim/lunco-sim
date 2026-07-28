@@ -83,7 +83,9 @@ def Xform "DrivetrainParity" (
 
     # Broadside view: both rovers in frame for the whole run, so a human can SEE
     # the divergence the numbers report.
-    def Camera "ParityCam"
+    def Camera "ParityCam" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         custom double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
         double3 xformOp:translate = (0.0, 45.0, 190.0)

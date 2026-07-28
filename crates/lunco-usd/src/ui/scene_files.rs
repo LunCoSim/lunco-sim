@@ -440,7 +440,11 @@ mod tests {
             "an unmounted twin is unreachable, not silently mis-rooted"
         );
         assert_eq!(
-            resolve_scheme("/absolute/from/source/root.usda", Some(&assets), Some(&twins)),
+            resolve_scheme(
+                "/absolute/from/source/root.usda",
+                Some(&assets),
+                Some(&twins)
+            ),
             None
         );
     }

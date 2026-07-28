@@ -66,11 +66,7 @@ pub struct ViewModelSet(());
 /// See `docs/architecture/42-ui-frame-discipline.md` §6.
 pub trait ViewModelAppExt {
     /// Add `producer` to [`ViewModelSet`] in `Update`, gated on `gate`.
-    fn add_view_model<P, M, C, CM>(
-        &mut self,
-        producer: P,
-        gate: C,
-    ) -> &mut Self
+    fn add_view_model<P, M, C, CM>(&mut self, producer: P, gate: C) -> &mut Self
     where
         P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         C: SystemCondition<CM> + Send + 'static;
@@ -91,11 +87,7 @@ pub trait ViewModelAppExt {
 }
 
 impl ViewModelAppExt for App {
-    fn add_view_model<P, M, C, CM>(
-        &mut self,
-        producer: P,
-        gate: C,
-    ) -> &mut Self
+    fn add_view_model<P, M, C, CM>(&mut self, producer: P, gate: C) -> &mut Self
     where
         P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         C: SystemCondition<CM> + Send + 'static,
@@ -117,10 +109,7 @@ impl ViewModelAppExt for App {
             Update,
             producer
                 .in_set(ViewModelSet(()))
-                .run_if(lunco_core::gate::tracked(
-                    std::any::type_name::<P>(),
-                    gate,
-                )),
+                .run_if(lunco_core::gate::tracked(std::any::type_name::<P>(), gate)),
         )
     }
 
@@ -447,7 +436,10 @@ impl Plugin for SandboxEditUiPlugin {
         // the composed stage on every run, so it is gated on its three inputs
         // (`usd_selection_view_changed`) rather than run every frame.
         app.init_resource::<usd_params::UsdParamView>();
-        app.add_view_model(usd_params::produce_usd_param_view, usd_selection_view_changed);
+        app.add_view_model(
+            usd_params::produce_usd_param_view,
+            usd_selection_view_changed,
+        );
 
         // Variant sets: which configurations the selected prim ships (a rover's
         // `drivetrain`, a scenario scene's `terrain` site) and which composes
@@ -462,7 +454,10 @@ impl Plugin for SandboxEditUiPlugin {
         // placement that lands its part's plug on the socket (Inspector 🔩 Mount).
         // Same stage walk, same gate.
         app.init_resource::<usd_mount::UsdMountView>();
-        app.add_view_model(usd_mount::produce_usd_mount_view, usd_selection_view_changed);
+        app.add_view_model(
+            usd_mount::produce_usd_mount_view,
+            usd_selection_view_changed,
+        );
 
         // Command Deck view-model: selection + possession + behaviour-spec
         // readout for the currently-selected vessel. Cheap O(1) single-entity

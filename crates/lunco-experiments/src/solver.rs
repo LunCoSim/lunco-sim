@@ -138,7 +138,10 @@ pub struct SolverRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SolverError {
     /// The authored id is not registered.
-    Unknown { asked: SolverId, known: Vec<SolverId> },
+    Unknown {
+        asked: SolverId,
+        known: Vec<SolverId>,
+    },
     /// The authored id exists but cannot serve this model or context.
     Incapable { asked: SolverId, why: String },
     /// Nothing registered satisfies the requirement.
@@ -157,8 +160,12 @@ impl std::fmt::Display for SolverError {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Self::Incapable { asked, why } => write!(f, "solver `{asked}` cannot serve this model: {why}"),
-            Self::NoCapableSolver { why } => write!(f, "no registered solver can serve this model: {why}"),
+            Self::Incapable { asked, why } => {
+                write!(f, "solver `{asked}` cannot serve this model: {why}")
+            }
+            Self::NoCapableSolver { why } => {
+                write!(f, "no registered solver can serve this model: {why}")
+            }
         }
     }
 }
@@ -356,7 +363,10 @@ mod tests {
         let chosen = resolve_in(
             &candidates(),
             &SolverRequest {
-                profile: RuntimeProfile { live: false, predicted: false },
+                profile: RuntimeProfile {
+                    live: false,
+                    predicted: false,
+                },
                 ..Default::default()
             },
         )
@@ -377,7 +387,10 @@ mod tests {
         let err = resolve_in(
             &candidates(),
             &SolverRequest {
-                profile: RuntimeProfile { live: true, predicted: false },
+                profile: RuntimeProfile {
+                    live: true,
+                    predicted: false,
+                },
                 authored: Some(SolverId::from("testbdf")),
             },
         )
@@ -406,7 +419,10 @@ mod tests {
         let err = resolve_in(
             &[spec("testbdf", BATCH_IMPLICIT, 10)],
             &SolverRequest {
-                profile: RuntimeProfile { live: true, predicted: false },
+                profile: RuntimeProfile {
+                    live: true,
+                    predicted: false,
+                },
                 ..Default::default()
             },
         )
@@ -439,7 +455,10 @@ mod tests {
         let chosen = resolve_in(
             &specs,
             &SolverRequest {
-                profile: RuntimeProfile { live: true, predicted: true },
+                profile: RuntimeProfile {
+                    live: true,
+                    predicted: true,
+                },
                 ..Default::default()
             },
         )
@@ -469,14 +488,20 @@ mod tests {
             },
             1,
         );
-        let predicted = RuntimeProfile { live: true, predicted: true };
+        let predicted = RuntimeProfile {
+            live: true,
+            predicted: true,
+        };
 
         assert!(served_by_concession(&tolerated, &predicted));
         assert!(!served_by_concession(&qualified, &predicted));
 
         // A batch or non-predicted live model is not held to the realtime bar,
         // so nothing it resolves to is a concession.
-        let replicated = RuntimeProfile { live: true, predicted: false };
+        let replicated = RuntimeProfile {
+            live: true,
+            predicted: false,
+        };
         assert!(!served_by_concession(&tolerated, &replicated));
     }
 

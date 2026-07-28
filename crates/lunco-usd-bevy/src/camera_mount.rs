@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 
-use crate::camera::UsdAvatarCamera;
+use crate::camera::UsdCameraPose;
 
 /// Walk this far up a `ChildOf` chain looking for the enclosing `Grid`.
 const MAX_MOUNT_GRID_WALK: usize = 16;
@@ -43,8 +43,8 @@ pub struct MountedCamera {
 #[derive(Component)]
 pub struct CameraMountResolved;
 
-/// Realise nested `def Camera`s as grid-direct mount followers; leave
-/// grid-direct cameras (top-level scene cameras, the avatar eye) untouched.
+/// Realise only cameras whose explicit [`UsdCameraPose`] is `Mounted` as
+/// grid-direct mount followers.
 /// Runs once per camera. Retries next frame if the mount's grid isn't spawned
 /// yet (async scene load).
 ///
@@ -75,28 +75,24 @@ pub struct CameraMountResolved;
 /// See `docs/architecture/51-cinematic-camera.md` §8b.
 pub fn resolve_camera_mounts(
     q_new: Query<
-        (Entity, &ChildOf, &Transform),
+        (Entity, &ChildOf, &Transform, &UsdCameraPose),
         (
             With<SceneCamera>,
-            // An authored avatar eye is controlled by the avatar projection,
-            // not rigidly attached to the scene root it starts under. Letting
-            // it enter this follower path gives two systems ownership of its
-            // Transform after reload and makes one camera appear to jump.
-            Without<UsdAvatarCamera>,
             Without<CameraMountResolved>,
-            Without<crate::UsdAnimated>,
             // A `BasisCurves` path owns its camera's pose (`camera_path.rs`). Such
             // a camera authors no `timeSamples`, so it is NOT `UsdAnimated` and the
             // filter above would miss it — letting the freeze bug back in through a
             // different door. Whoever owns the pose, the mount is not it.
-            Without<crate::camera_path::CameraPathDriven>,
         ),
     >,
     q_is_grid: Query<(), With<Grid>>,
     q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    for (cam, child_of, tf) in q_new.iter() {
+    for (cam, child_of, tf, pose) in q_new.iter() {
+        if *pose != UsdCameraPose::Mounted {
+            continue;
+        }
         let parent = child_of.parent();
         if q_is_grid.contains(parent) {
             // Already grid-direct — nothing to rig, just mark it done.
@@ -153,11 +149,7 @@ pub fn resolve_camera_mounts(
 pub fn follow_mounted_cameras(
     mut q_cam: Query<
         (&MountedCamera, &mut CellCoord, &mut Transform, &ChildOf),
-        (
-            With<SceneCamera>,
-            Without<crate::UsdAnimated>,
-            Without<crate::camera_path::CameraPathDriven>,
-        ),
+        (With<SceneCamera>,),
     >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<MountedCamera>>,
     q_grids: Query<&Grid>,
@@ -202,7 +194,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SceneCamera::default(),
-                UsdAvatarCamera,
+                UsdCameraPose::Avatar,
                 Transform::default(),
                 ChildOf(scene_root),
             ))
@@ -212,5 +204,56 @@ mod tests {
 
         assert!(app.world().get::<MountedCamera>(avatar).is_none());
         assert!(app.world().get::<CameraMountResolved>(avatar).is_none());
+    }
+
+    #[test]
+    fn authored_nested_camera_never_enters_mounted_follower_path() {
+        let mut app = App::new();
+        app.add_systems(Update, resolve_camera_mounts);
+        let grid = app.world_mut().spawn(Grid::new(2000.0, 0.0)).id();
+        let scene_root = app.world_mut().spawn(ChildOf(grid)).id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                UsdCameraPose::Authored,
+                Transform::default(),
+                ChildOf(scene_root),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get::<MountedCamera>(camera).is_none());
+        assert!(app.world().get::<CameraMountResolved>(camera).is_none());
+    }
+
+    #[test]
+    fn mounted_camera_is_the_only_nested_camera_that_gets_a_follower() {
+        let mut app = App::new();
+        app.add_systems(Update, resolve_camera_mounts);
+        let grid = app.world_mut().spawn(Grid::new(2000.0, 0.0)).id();
+        let rover = app.world_mut().spawn(ChildOf(grid)).id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                UsdCameraPose::Mounted,
+                Transform::from_xyz(0.0, 1.0, 2.0),
+                ChildOf(rover),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<MountedCamera>(camera).unwrap().mount,
+            rover
+        );
+        assert_eq!(
+            app.world().get::<ChildOf>(camera).unwrap().parent(),
+            grid,
+            "the follower is grid-direct"
+        );
     }
 }

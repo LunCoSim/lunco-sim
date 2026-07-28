@@ -34,12 +34,12 @@ pub mod session_codec;
 pub mod viewport;
 
 pub use browser_section::UsdSceneSection;
+pub use loaded_stages::{
+    produce_usd_browser_view, LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage,
+};
 pub use scene_files::{
     produce_scene_file_view, SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView,
     SceneFilesSection,
-};
-pub use loaded_stages::{
-    produce_usd_browser_view, LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage,
 };
 pub use viewport::{
     SetActiveUsdViewport, UsdViewportPanel, UsdViewportPlugin, UsdViewportState,

@@ -8,8 +8,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    ModelicaNotice, NoticeLevel};
+use lunco_modelica::{
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, NoticeLevel,
+    parse_model_interface,
+};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 
@@ -192,8 +194,10 @@ impl Default for SynthesizerRegistry {
 
 impl SynthesizerRegistry {
     pub fn register(&mut self, synthesizer: impl DomainSynthesizer) {
-        self.0
-            .insert(synthesizer.name().to_string(), std::sync::Arc::new(synthesizer));
+        self.0.insert(
+            synthesizer.name().to_string(),
+            std::sync::Arc::new(synthesizer),
+        );
     }
     pub fn get(&self, name: &str) -> Option<&std::sync::Arc<dyn DomainSynthesizer>> {
         self.0.get(name)
@@ -263,19 +267,20 @@ impl DomainSynthesizer for HookSynthesizer {
         })?;
         let source = match &value {
             lunco_hooks::HookValue::Str(source) => source.clone(),
-            map @ lunco_hooks::HookValue::Map(_) => match map.get("source").and_then(|v| v.as_str())
-            {
-                Some(source) => source.to_string(),
-                None => {
-                    return Err(vec![DomainProjectionError {
-                        path: network.root.clone(),
-                        message: format!(
-                            "synthesizer `{}` returned a map with no `source` key",
-                            self.name
-                        ),
-                    }])
+            map @ lunco_hooks::HookValue::Map(_) => {
+                match map.get("source").and_then(|v| v.as_str()) {
+                    Some(source) => source.to_string(),
+                    None => {
+                        return Err(vec![DomainProjectionError {
+                            path: network.root.clone(),
+                            message: format!(
+                                "synthesizer `{}` returned a map with no `source` key",
+                                self.name
+                            ),
+                        }]);
+                    }
                 }
-            },
+            }
             _ => {
                 return Err(vec![DomainProjectionError {
                     path: network.root.clone(),
@@ -284,7 +289,7 @@ impl DomainSynthesizer for HookSynthesizer {
                          with a `source` key)",
                         self.name
                     ),
-                }])
+                }]);
             }
         };
         Ok(SynthOutcome::Ready(Synthesized {
@@ -341,7 +346,10 @@ pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::
         .map(|component| {
             H::map([
                 ("path", H::str(component.path.clone())),
-                ("instance", H::str(instance_identifier(&network.root, &component.path))),
+                (
+                    "instance",
+                    H::str(instance_identifier(&network.root, &component.path)),
+                ),
                 ("class", H::str(component.model_class.clone())),
                 ("source_asset", H::str(component.source_asset.clone())),
                 (
@@ -705,9 +713,7 @@ pub fn project_domain_islands(
                 retire_sim_interface(&mut commands, entity);
                 // A rejected projection has no interface to hold anyone to; the
                 // rejection itself is the error the user must act on.
-                commands
-                    .entity(entity)
-                    .remove::<UsdModelicaPortContract>();
+                commands.entity(entity).remove::<UsdModelicaPortContract>();
                 commands.entity(entity).try_insert((
                     ModelicaModel {
                         model_path: PathBuf::from(format!("generated://{model_name}.mo")),
@@ -797,9 +803,7 @@ pub fn project_domain_islands(
         info!(
             "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
              generated://{}.mo",
-            prim.path,
-            component_count,
-            model_name
+            prim.path, component_count, model_name
         );
         if let Err(error) = dispatch {
             let message = format!("could not dispatch generated model compile: {error}");
@@ -1668,27 +1672,33 @@ mod tests {
             pending_sources: false,
         };
         let errors = validate_network(&network);
-        assert!(errors
-            .iter()
-            .any(|error| error.message.contains("outside collection")));
-        assert!(errors
-            .iter()
-            .all(|error| !error.message.contains("multiple disconnected")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("outside collection"))
+        );
+        assert!(
+            errors
+                .iter()
+                .all(|error| !error.message.contains("multiple disconnected"))
+        );
     }
 
     #[test]
     fn unconnected_acausal_component_is_omitted_from_generated_network() {
         let panel = component("/Electrical/SolarPanel", None);
         let mut battery = component("/Electrical/Battery", None);
-        battery.connectors.insert(
-            "p".into(),
-            vec!["/Electrical/Motor.connectors:p".into()],
-        );
+        battery
+            .connectors
+            .insert("p".into(), vec!["/Electrical/Motor.connectors:p".into()]);
         let motor = component("/Electrical/Motor", None);
         let mut components = vec![panel, battery, motor];
         let omitted = retain_connected_acausal_components(&mut components);
         assert_eq!(
-            components.iter().map(|component| component.path.as_str()).collect::<Vec<_>>(),
+            components
+                .iter()
+                .map(|component| component.path.as_str())
+                .collect::<Vec<_>>(),
             ["/Electrical/Battery", "/Electrical/Motor"],
             "only explicitly wired program facets enter a generated acausal island"
         );
@@ -1738,9 +1748,11 @@ mod tests {
             outputs: BTreeMap::new(),
             pending_sources: false,
         };
-        assert!(validate_network(&network)
-            .iter()
-            .any(|error| error.message.contains("boundary identity is ambiguous")));
+        assert!(
+            validate_network(&network)
+                .iter()
+                .any(|error| error.message.contains("boundary identity is ambiguous"))
+        );
     }
 
     #[test]
@@ -1756,9 +1768,11 @@ mod tests {
             outputs: BTreeMap::new(),
             pending_sources: false,
         };
-        assert!(validate_network(&network)
-            .iter()
-            .any(|error| error.message.contains("not a valid Modelica identifier")));
+        assert!(
+            validate_network(&network)
+                .iter()
+                .any(|error| error.message.contains("not a valid Modelica identifier"))
+        );
     }
 
     #[test]
@@ -1790,7 +1804,9 @@ mod tests {
         app.update();
 
         assert!(
-            app.world().get::<lunco_cosim::SimComponent>(entity).is_none(),
+            app.world()
+                .get::<lunco_cosim::SimComponent>(entity)
+                .is_none(),
             "a changed or rejected projection must not retain solved values from its previous topology"
         );
     }

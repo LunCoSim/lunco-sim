@@ -922,7 +922,10 @@ mod tests {
             field(&programs[0], "source_asset"),
             &H::str("models/Battery.mo")
         );
-        assert_eq!(field(&programs[0], "connectors"), &H::Array(vec![H::str("p")]));
+        assert_eq!(
+            field(&programs[0], "connectors"),
+            &H::Array(vec![H::str("p")])
+        );
         assert_eq!(
             field(&programs[0], "connected"),
             &H::Array(Vec::new()),

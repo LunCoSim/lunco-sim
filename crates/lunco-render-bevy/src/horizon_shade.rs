@@ -23,8 +23,8 @@ use crate::shader_material::ShaderMaterial;
 use bevy::asset::AssetId;
 use bevy::camera::visibility::RenderLayers;
 use bevy::math::Affine3A;
-use bevy::platform::collections::HashSet;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use lunco_environment::horizon::{
     finish_shadow_cache_bake, pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig,

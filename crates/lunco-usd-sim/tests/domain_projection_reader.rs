@@ -143,7 +143,8 @@ fn rejects_members_whose_opinions_cannot_be_generated() {
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let errors = read_network(&view, &root, &MemberClasses::path_derived_only()).expect_err("unusable authoring is an error");
+    let errors = read_network(&view, &root, &MemberClasses::path_derived_only())
+        .expect_err("unusable authoring is an error");
     assert!(
         errors
             .iter()

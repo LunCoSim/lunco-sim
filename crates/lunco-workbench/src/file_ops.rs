@@ -343,10 +343,7 @@ pub(crate) fn spawn_twin_from_scene(
 
 /// Picker seam for [`AddFolderToWorkspace`] — see [`on_open_twin_pick`].
 #[on_command(AddFolderToWorkspace)]
-fn on_add_folder_to_workspace_pick(
-    trigger: On<AddFolderToWorkspace>,
-    mut commands: Commands,
-) {
+fn on_add_folder_to_workspace_pick(trigger: On<AddFolderToWorkspace>, mut commands: Commands) {
     use crate::picker::{PickHandle, PickMode};
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open`

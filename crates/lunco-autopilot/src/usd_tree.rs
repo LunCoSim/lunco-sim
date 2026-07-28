@@ -64,11 +64,11 @@
 //! the XML/JSON intermediate, and is gone by the time a tree is built.
 
 use crate::{Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, BehaviorSpec};
-use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
-use lunco_core::coords::GridPos;
 use bevy::prelude::*;
+use lunco_core::coords::GridPos;
 use serde_json::Value;
 
 /// The XML text of a vessel's behaviour tree — inline `info:sourceCode` on the

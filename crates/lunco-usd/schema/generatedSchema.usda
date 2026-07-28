@@ -2,10 +2,8 @@
 (
     "Generated schema for luncoSchema"
     """
-    GENERATED — do not edit. Regenerate with
-        LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation
-    after editing `schema.usda`, which is the authoritative source
-    (`lunco_usd::schema_gen::generate_schema` is the generator).
+    GENERATED — do not edit. Regenerate with `python3 scripts/gen_schema.py`
+    after editing `schema.usda`, which is the authoritative source.
 
     This is the file a USD runtime actually registers (via `plugInfo.json`), and
     the file `lunco_usd::schema` parses to answer "what does this property's
@@ -649,6 +647,23 @@ class "LunCoAvatarAPI" (
     float lunco:cameraPitch = -0.3 (
         doc = """Initial camera pitch, radians. Overridden by a derived aim when
         `lunco:cameraLookAt` is authored."""
+    )
+}
+
+class "LunCoCameraAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Declares a standard UsdGeomCamera's LunCo runtime role and sole pose authority. Apply to every non-avatar camera that participates in a LunCo scene."
+)
+{
+    uniform token lunco:cameraRole = "viewport" (
+        allowedTokens = ["viewport", "sensor"]
+        doc = "viewport participates in the main workbench view; sensor is an instrument camera and never becomes a window-view candidate."
+    )
+    uniform token lunco:cameraPose = "authored" (
+        allowedTokens = ["authored", "mounted"]
+        doc = "The sole pose authority. authored keeps USD hierarchy/animation; mounted is a rigid grid-direct follower of this camera's authored parent."
     )
 }
 
@@ -1714,14 +1729,26 @@ class "LunCoMarkerAPI" (
         token apiSchemaType = "singleApply"
     }
     doc = """A screen-constant marker — geometry held at a fixed APPARENT size so
-    a thing that is physically correct but sub-pixel still reads on screen."""
+    a thing that is physically correct but sub-pixel still reads on screen. The
+    canonical case is a ground station: a 70 m dish is 1/91,000 of Earth and
+    invisible from any camera that can see the globe, and inflating the model
+    would corrupt the aperture the link budget reads.
+
+    The geometry it applies to must be UNIT-sized — the engine owns
+    `Transform.scale` on this prim outright ("unit prim + scale")."""
 )
 {
     float lunco:marker:angularSizeDeg = 0.15 (
-        doc = "Apparent DIAMETER in degrees, held constant with range."
+        doc = """Apparent DIAMETER in degrees, held constant with range. The
+        identifying property: a prim without one is not a marker.
+
+        SIZE IT AGAINST WHAT IT MARKS, not against the screen: Earth seen from
+        the Moon is 1.9° wide, so half a degree is a quarter of the planet."""
     )
     float lunco:marker:showBeyondM = 200000 (
-        doc = "Hide the marker closer than this (metres)."
+        doc = """Hide the marker closer than this (metres). Angular-constant
+        scaling never stops on its own, and a marker parked inside a facility
+        that is already fully modelled is clutter, not information."""
     )
 }
 

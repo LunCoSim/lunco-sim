@@ -144,8 +144,8 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use crate::SandboxHeadlessPlugin;
+use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
 /// at 60 Hz — an order of magnitude more than any current parity scenario needs
@@ -481,11 +481,8 @@ pub fn run() -> u8 {
     // group. Every part still comes from the shipped public helpers
     // (`register_lunco_asset_sources`, `default_plugins`), so nothing is guessed —
     // the ONLY divergence from `build_sim_app` is the compute-pool override below.
-    let mut app = crate::build_sim_app_with_threads(
-        true,
-        false,
-        (cli.threads > 0).then_some(cli.threads),
-    );
+    let mut app =
+        crate::build_sim_app_with_threads(true, false, (cli.threads > 0).then_some(cli.threads));
     app.add_plugins(SandboxHeadlessPlugin);
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────

@@ -2944,7 +2944,10 @@ mod pose_write_tests {
         // The gauge saw the (tiny) divergence — a healthy body is measured, not just
         // an unhealthy one, so the baseline is visible in the field (review N3).
         let stats = world.resource::<crate::session::DivergenceStats>();
-        assert_eq!(stats.bodies[&gid].kind, crate::session::PredictionKind::Free);
+        assert_eq!(
+            stats.bodies[&gid].kind,
+            crate::session::PredictionKind::Free
+        );
         assert!(stats.bodies[&gid].last_m < 0.1);
         assert_eq!(stats.bodies[&gid].rebaselines, 0);
     }

@@ -8,7 +8,9 @@
 //! Adding a backend is a registration, not an edit to an enum, a parser and a UI
 //! list — see `lunco_experiments::solver` for why selection is data.
 
-use lunco_experiments::solver::{self, SolverCaps, SolverError, SolverId, SolverParams, SolverSpec};
+use lunco_experiments::solver::{
+    self, SolverCaps, SolverError, SolverId, SolverParams, SolverSpec,
+};
 
 /// Register the built-in backends. Idempotent, and called from both option
 /// builders so neither the ECS app, the worker thread, the wasm worker nor a CLI
@@ -156,7 +158,10 @@ mod tests {
     fn a_live_model_resolves_to_a_frame_loop_safe_backend() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
-            profile: RuntimeProfile { live: true, predicted: false },
+            profile: RuntimeProfile {
+                live: true,
+                predicted: false,
+            },
             authored: None,
         })
         .expect("a frame-loop-safe backend is registered");
@@ -175,7 +180,10 @@ mod tests {
     fn a_batch_model_resolves_to_the_adaptive_family() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
-            profile: RuntimeProfile { live: false, predicted: false },
+            profile: RuntimeProfile {
+                live: false,
+                predicted: false,
+            },
             authored: None,
         })
         .expect("the adaptive backends are registered");
@@ -194,7 +202,10 @@ mod tests {
     fn a_predicted_model_still_gets_the_realtime_tolerated_backend() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
-            profile: RuntimeProfile { live: true, predicted: true },
+            profile: RuntimeProfile {
+                live: true,
+                predicted: true,
+            },
             authored: None,
         })
         .expect("the realtime-tolerated backend is registered");

@@ -157,9 +157,8 @@ impl Plugin for MissionPlugin {
                 // observed on the frame after the reparent command applies, and
                 // this system runs before the alignment system in the chain, so
                 // the repair still lands in that frame.
-                update_spacecraft_position_system.run_if(
-                    crate::cadence::tracked_needs_solve().or_else(spacecraft_reparented),
-                ),
+                update_spacecraft_position_system
+                    .run_if(crate::cadence::tracked_needs_solve().or_else(spacecraft_reparented)),
                 spacecraft_alignment_system,
                 spacecraft_visibility_system,
                 // NOT gated: the billboard tracks the CAMERA, not the epoch, and
@@ -318,7 +317,11 @@ pub fn spawn_declared_missions(
                 panel_height.to_bits(),
                 panel_thickness.to_bits(),
             ),
-            || Cuboid::new(panel_width, panel_height, panel_thickness).mesh().into(),
+            || {
+                Cuboid::new(panel_width, panel_height, panel_thickness)
+                    .mesh()
+                    .into()
+            },
         );
 
         let mut sc_ent = commands.spawn((

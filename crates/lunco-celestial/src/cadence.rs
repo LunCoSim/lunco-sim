@@ -69,7 +69,9 @@ impl CelestialCadenceSettings {
 impl Default for CelestialCadenceSettings {
     fn default() -> Self {
         // ~5 m of shadow travel at a 30 km caster distance. See module docs.
-        Self { tolerance_deg: 0.01 }
+        Self {
+            tolerance_deg: 0.01,
+        }
     }
 }
 

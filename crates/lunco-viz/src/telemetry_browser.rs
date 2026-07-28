@@ -608,13 +608,9 @@ impl Panel for TelemetryBrowserPanel {
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
                                             ui.label(
-                                                egui::RichText::new(value_text)
-                                                    .monospace()
-                                                    .color(if stale {
-                                                        subdued
-                                                    } else {
-                                                        theme.tokens.text
-                                                    }),
+                                                egui::RichText::new(value_text).monospace().color(
+                                                    if stale { subdued } else { theme.tokens.text },
+                                                ),
                                             )
                                             .on_hover_text(match latest {
                                                 // Full precision on demand: the cell
@@ -656,9 +652,7 @@ impl Panel for TelemetryBrowserPanel {
                                     }
                                     resp.on_hover_ui(|ui| {
                                         ui.label(
-                                            egui::RichText::new(&row.sig.path)
-                                                .strong()
-                                                .monospace(),
+                                            egui::RichText::new(&row.sig.path).strong().monospace(),
                                         );
                                         ui.label(
                                             egui::RichText::new(
@@ -722,8 +716,8 @@ impl Panel for TelemetryBrowserPanel {
             let stale = !matches!(&self.preview, Some(p) if p.sig == sel && p.fp == fp);
             if stale {
                 let raw: Vec<[f64; 2]> = h.iter().map(|s| [s.time, s.value]).collect();
-                let points = crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH)
-                    .unwrap_or(raw);
+                let points =
+                    crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH).unwrap_or(raw);
                 self.preview = Some(PreviewCache {
                     sig: sel.clone(),
                     fp,
@@ -965,11 +959,18 @@ mod tests {
         assert_eq!(pretty_unit(Some("1")), "");
         assert_eq!(pretty_unit(Some("")), "");
         assert_eq!(pretty_unit(None), "");
-        assert!(!unit_tooltip(Some("1")).is_empty(), "blank cell must explain itself");
+        assert!(
+            !unit_tooltip(Some("1")).is_empty(),
+            "blank cell must explain itself"
+        );
 
         assert_eq!(pretty_unit(Some("N*m")), "N·m");
         assert_eq!(pretty_unit(Some("m/s")), "m/s");
-        assert_eq!(pretty_unit(Some("1/s")), "1/s", "a rate is not dimensionless");
+        assert_eq!(
+            pretty_unit(Some("1/s")),
+            "1/s",
+            "a rate is not dimensionless"
+        );
         assert!(unit_tooltip(Some("m/s")).is_empty());
     }
 }

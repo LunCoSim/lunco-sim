@@ -48,13 +48,26 @@ const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
 const DEFAULT_NEAR: f32 = 0.1;
 const DEFAULT_FAR: f32 = 1.0e6;
 
-/// Marks a USD camera that is authored as the local avatar eye.
-///
-/// The avatar projection takes ownership of its grid-local pose and controls it
-/// interactively. It is therefore not a rigid follower, even during the brief
-/// load interval where it is still parented under the USD scene root.
+/// A USD camera has exactly one writer for its pose. This is projected from
+/// `LunCoAvatarAPI` or `LunCoCameraAPI`; systems dispatch from this explicit
+/// role rather than inferring intent from the prim hierarchy.
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsdCameraPose {
+    /// USD transform composition and animation own the pose.
+    #[default]
+    Authored,
+    /// The avatar rig owns the grid-local pose interactively.
+    Avatar,
+    /// A rigid follower owns the grid-local pose from the authored parent.
+    Mounted,
+    /// A cinematic path owns the grid-local pose.
+    Path,
+}
+
+/// A camera whose rendered output belongs to an instrument rather than the
+/// main window. It deliberately does not carry [`SceneCamera`].
 #[derive(Component, Default, Debug, Clone, Copy)]
-pub struct UsdAvatarCamera;
+pub struct UsdSensorCamera;
 
 /// Convert standard `UsdGeomCamera` photographic exposure into Bevy EV100.
 ///
@@ -143,23 +156,89 @@ pub(crate) fn instantiate_camera_prim(
     // source of the validator's spawn-frame reports. Until the resolver runs
     // (next Update at the latest), the camera is a plain Transform child of a
     // cell-entity: valid, propagated, and inactive anyway.
-    let is_avatar = reader
-        .scalar::<bool>(sdf_path, "lunco:avatar")
-        .unwrap_or_else(|| reader.text(sdf_path, "lunco:avatar").as_deref() == Some("true"));
-    commands.entity(entity).try_insert((
+    // Camera purpose and pose are authored semantics, never hierarchy guesses.
+    // An avatar is a viewport camera with an interactive pose. Every other
+    // participating camera must apply LunCoCameraAPI and state both roles.
+    let is_avatar = reader.has_api_schema(sdf_path, "LunCoAvatarAPI")
+        && reader
+            .scalar::<bool>(sdf_path, "lunco:avatar")
+            .unwrap_or(false);
+    let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
+    let (is_viewport, is_sensor, pose) = if is_avatar {
+        (true, false, UsdCameraPose::Avatar)
+    } else if !has_camera_api {
+        warn!(
+            "[usd-bevy] {} Camera has no LunCoCameraAPI; it is not a viewport or sensor camera",
+            sdf_path.as_str()
+        );
+        (false, false, UsdCameraPose::Authored)
+    } else {
+        let pose = match reader
+            .text(sdf_path, "lunco:cameraPose")
+            .as_deref()
+            .unwrap_or("authored")
+        {
+            "authored" => UsdCameraPose::Authored,
+            "mounted" => UsdCameraPose::Mounted,
+            other => {
+                warn!(
+                    "[usd-bevy] {} has invalid lunco:cameraPose '{other}'",
+                    sdf_path.as_str()
+                );
+                UsdCameraPose::Authored
+            }
+        };
+        // A mounted follower has a fixed camera-local offset. Time samples on
+        // that same prim would create two pose authors, so reject the invalid
+        // combination at projection rather than silently letting a later system
+        // overwrite animation every frame.
+        let pose = if pose == UsdCameraPose::Mounted
+            && reader
+                .attr_names(sdf_path)
+                .iter()
+                .any(|name| name.starts_with("xformOp:") && name.ends_with(".timeSamples"))
+        {
+            error!(
+                "[usd-bevy] {} declares lunco:cameraPose=mounted and camera xform timeSamples; mounted cameras require a static local offset",
+                sdf_path.as_str()
+            );
+            UsdCameraPose::Authored
+        } else {
+            pose
+        };
+        match reader
+            .text(sdf_path, "lunco:cameraRole")
+            .as_deref()
+            .unwrap_or("viewport")
+        {
+            "viewport" => (true, false, pose),
+            "sensor" => (false, true, pose),
+            other => {
+                warn!(
+                    "[usd-bevy] {} has invalid lunco:cameraRole '{other}'",
+                    sdf_path.as_str()
+                );
+                (false, false, pose)
+            }
+        }
+    };
+
+    let mut camera = commands.entity(entity);
+    camera.try_insert((
         Camera {
             is_active: false,
             ..default()
         },
-        // The render-free scene-camera marker. `lunco-render-bevy` turns this
-        // into `Camera3d` + `Tonemapping::AgX` + MSAA in render builds; headless
-        // it stays pure scene data. Every "which entity is the scene camera?"
-        // query filters `With<SceneCamera>`.
-        lunco_render::scene_camera_look(read_camera_exposure_ev100(reader, sdf_path)),
         projection,
+        pose,
     ));
-    if is_avatar {
-        commands.entity(entity).try_insert(UsdAvatarCamera);
+    if is_viewport {
+        camera.try_insert(lunco_render::scene_camera_look(read_camera_exposure_ev100(
+            reader, sdf_path,
+        )));
+    }
+    if is_sensor {
+        camera.try_insert(UsdSensorCamera);
     }
 
     // Conform the authored horizontal aperture against the real window aspect
@@ -186,10 +265,14 @@ pub(crate) fn instantiate_camera_prim(
         });
     }
 
-    info!(
-        "[usd-bevy] {} Camera → inactive SceneCamera ({kind})",
-        sdf_path.as_str()
-    );
+    let role = if is_viewport {
+        "viewport"
+    } else if is_sensor {
+        "sensor"
+    } else {
+        "unassigned"
+    };
+    info!("[usd-bevy] {} Camera → {role} ({kind})", sdf_path.as_str());
     true
 }
 

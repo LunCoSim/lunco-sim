@@ -527,8 +527,8 @@ pub fn decode_gray_f64<R: Read + Seek>(
 ) -> Result<(usize, usize, Vec<f64>), GrayDecodeError> {
     use tiff::decoder::DecodingResult as D;
 
-    let mut dec = tiff::decoder::Decoder::new(reader)?
-        .with_limits(tiff::decoder::Limits::unlimited());
+    let mut dec =
+        tiff::decoder::Decoder::new(reader)?.with_limits(tiff::decoder::Limits::unlimited());
     let (w, h) = dec.dimensions()?;
     let (w, h) = (w as usize, h as usize);
 

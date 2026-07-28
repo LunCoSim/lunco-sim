@@ -144,9 +144,7 @@ fn bind_albedo(
 /// the same rule `adopt_authored_body_look` follows for full Materials, which
 /// in turn outranks this, since a Material says strictly more.
 pub(crate) fn adopt_authored_body_albedo(
-    q_decl: Query<
-        (&crate::CelestialBodyDecl, &crate::AuthoredBodyAlbedo),
-    >,
+    q_decl: Query<(&crate::CelestialBodyDecl, &crate::AuthoredBodyAlbedo)>,
     asset_server: Res<AssetServer>,
     images: Res<Assets<Image>>,
     mut image_events: MessageReader<AssetEvent<Image>>,

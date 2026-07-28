@@ -117,9 +117,8 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         }
     }
     // Lattice lookup in VERTEX indices (ghost ring at -1 and `res`).
-    let h_at = |ix: isize, iz: isize| -> f64 {
-        lattice[(iz + 1) as usize * pad + (ix + 1) as usize]
-    };
+    let h_at =
+        |ix: isize, iz: isize| -> f64 { lattice[(iz + 1) as usize * pad + (ix + 1) as usize] };
     let fine_normal = |ix: isize, iz: isize| -> [f32; 3] {
         let hx = h_at(ix + 1, iz) - h_at(ix - 1, iz);
         let hz = h_at(ix, iz + 1) - h_at(ix, iz - 1);
@@ -154,7 +153,8 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
             plattice[iz * ppad + ix] = morph_src.height_at(wx, wz);
         }
     }
-    let ph_at = |ix: isize, iz: isize| -> f64 { plattice[(iz + 1) as usize * ppad + (ix + 1) as usize] };
+    let ph_at =
+        |ix: isize, iz: isize| -> f64 { plattice[(iz + 1) as usize * ppad + (ix + 1) as usize] };
     let mut parent_y = vec![0.0f32; even * even];
     let mut parent_n = vec![[0.0f32, 1.0, 0.0]; even * even];
     for ez in 0..even {

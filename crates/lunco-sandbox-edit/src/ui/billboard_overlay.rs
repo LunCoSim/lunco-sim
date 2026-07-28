@@ -150,9 +150,11 @@ pub fn draw_billboard_overlay(
         // The prim's leaf name — `Name` holds the full USD path.
         let leaf = name.as_str().rsplit('/').next().unwrap_or(name.as_str());
         let geo = match (site, radius_m) {
-            (Some(a), Some(r)) => {
-                Some(lunco_celestial::geo::local_to_geodetic(&a.geodetic, r, pos.0))
-            }
+            (Some(a), Some(r)) => Some(lunco_celestial::geo::local_to_geodetic(
+                &a.geodetic,
+                r,
+                pos.0,
+            )),
             _ => None,
         };
         let text = render_billboard(

@@ -27,9 +27,9 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
-    append_waypoint_leaf, catmull_rom_path, insert_waypoint_after,
-    remove_waypoint_leaf, route_is_smooth, set_route_smooth, set_waypoint_dwell,
-    BehaviorXml, ReachedWaypoints, TargetBindings,
+    append_waypoint_leaf, catmull_rom_path, insert_waypoint_after, remove_waypoint_leaf,
+    route_is_smooth, set_route_smooth, set_waypoint_dwell, BehaviorXml, ReachedWaypoints,
+    TargetBindings,
 };
 use lunco_controller::ControllerLink;
 use lunco_core::commands::SessionId;
@@ -899,7 +899,6 @@ fn collect_targets(v: &Value, out: &mut Vec<String>) {
     }
 }
 
-
 /// Single egui overlay that draws both waypoint labels (numbers) and route
 /// lines in screen space.
 ///
@@ -1315,9 +1314,9 @@ pub fn mark_reached_waypoints_on_zone_enter(
                 r.0.insert(marker_path.clone());
             }
             None => {
-                commands
-                    .entity(vessel)
-                    .insert(ReachedWaypoints(std::iter::once(marker_path.clone()).collect()));
+                commands.entity(vessel).insert(ReachedWaypoints(
+                    std::iter::once(marker_path.clone()).collect(),
+                ));
             }
         }
         // Author the same fact onto the marker, in the runtime layer only.

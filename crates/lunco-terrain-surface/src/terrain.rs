@@ -28,9 +28,9 @@ use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 // mesh derive stay here (on the main thread on web — they're cheap).
 use lunco_terrain_bake::bake::{crop_centered, resample};
 use lunco_terrain_bake::dem::height_grid_from_geotiff;
-use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, MAX_CRATERS_PER_HA};
 #[cfg(target_arch = "wasm32")]
 use lunco_terrain_bake::{BakedGrid, DemBakeJob};
+use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, MAX_CRATERS_PER_HA};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
@@ -1019,8 +1019,8 @@ fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<WasmBakeFailu
 }
 
 #[cfg(target_arch = "wasm32")]
-fn get_wasm_bake_failures_rx() -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>>
-{
+fn get_wasm_bake_failures_rx(
+) -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>> {
     let _ = get_wasm_bake_failures_tx(); // ensures initialized
     WASM_BAKE_FAILURES_RX.get().unwrap()
 }

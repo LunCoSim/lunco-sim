@@ -154,8 +154,9 @@ pub fn read(layer: &str) -> Curriculum {
             // rather than offered and then failing when a student picks it.
             let Some(script) = text(&prim, "info:sourceAsset") else {
                 warn!("[tutorial] lesson '{path}' declares no info:sourceAsset — skipped");
-                out.failures
-                    .push(format!("lesson '{path}' declares no info:sourceAsset — skipped"));
+                out.failures.push(format!(
+                    "lesson '{path}' declares no info:sourceAsset — skipped"
+                ));
                 continue;
             };
             out.lessons.push(Lesson {

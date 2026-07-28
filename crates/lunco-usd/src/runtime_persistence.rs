@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentOpened};
-use lunco_storage::{Storage, StorageHandle};
 use lunco_settings::SettingsSection;
+use lunco_storage::{Storage, StorageHandle};
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
 

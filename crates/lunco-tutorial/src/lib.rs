@@ -229,9 +229,13 @@ impl CurriculumRoot {
             // in `app`, and the only name a track has, so a heading always lands
             // on its own group.
             let order = registry.tracks.len();
-            registry
-                .tracks
-                .insert(track.path, TrackMeta { label: track.label, order });
+            registry.tracks.insert(
+                track.path,
+                TrackMeta {
+                    label: track.label,
+                    order,
+                },
+            );
         }
         for lesson in composed.lessons {
             registry.register_tutorial(TutorialMeta {
@@ -1347,17 +1351,15 @@ mod tests {
                 app: "sandbox".into(),
             });
         app.init_resource::<Seen>();
-        app.add_observer(
-            |trigger: On<TelemetryEvent>, mut seen: ResMut<Seen>| {
-                let ev = trigger.event();
-                if ev.name == TUTORIAL_FAILED {
-                    assert_eq!(ev.severity, Severity::Error);
-                    if let TelemetryValue::String(s) = &ev.data {
-                        seen.0.push(s.clone());
-                    }
+        app.add_observer(|trigger: On<TelemetryEvent>, mut seen: ResMut<Seen>| {
+            let ev = trigger.event();
+            if ev.name == TUTORIAL_FAILED {
+                assert_eq!(ev.severity, Severity::Error);
+                if let TelemetryValue::String(s) = &ev.data {
+                    seen.0.push(s.clone());
                 }
-            },
-        );
+            }
+        });
 
         app.world_mut().trigger(StartTutorial {
             id: "/No/Such/Lesson".into(),

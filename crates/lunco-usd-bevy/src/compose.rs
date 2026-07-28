@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
 use openusd::sdf::{Data, Path as SdfPath, Value};
@@ -35,7 +35,7 @@ use openusd::usda;
 use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
-use crate::resolver::{canonicalize_at, is_binary_asset, LuncoUsdResolver, SharedLayerBytes};
+use crate::resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.

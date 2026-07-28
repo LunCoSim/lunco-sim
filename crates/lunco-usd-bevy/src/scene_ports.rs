@@ -382,20 +382,22 @@ mod tests {
         app.world_mut().clear_trackers();
 
         assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5));
-        assert!(!app
-            .world()
-            .entity(e)
-            .get_ref::<Transform>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            !app.world()
+                .entity(e)
+                .get_ref::<Transform>()
+                .unwrap()
+                .is_changed()
+        );
 
         assert!(reg.write_port(app.world_mut(), e, "scale_y", 3.0));
-        assert!(app
-            .world()
-            .entity(e)
-            .get_ref::<Transform>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            app.world()
+                .entity(e)
+                .get_ref::<Transform>()
+                .unwrap()
+                .is_changed()
+        );
     }
 
     /// `list` reports exactly what the entity has, so `ListPorts` and `write_input`

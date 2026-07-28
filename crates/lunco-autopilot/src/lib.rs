@@ -29,12 +29,12 @@
 //! Rust; rhai stays glue-only. With no behaviour attached, the autopilot falls back
 //! to constant `throttle`/`steer` setpoints.
 
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_behavior::{
     Action, BoxNode, Force, Invert, Node, Parallel, ParallelPolicy, ReactiveSelector,
     ReactiveSequence, Repeat, Retry, Selector, Sequence, Status,
 };
-use bevy::math::DVec3;
 use lunco_core::coords::GridPos;
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
@@ -746,9 +746,7 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
             lead,
         } => leaf_intercept(*target, *speed, *radius, *lead),
         BehaviorSpec::ObstacleAhead { distance, cone } => leaf_obstacle_ahead(*distance, *cone),
-        BehaviorSpec::Facing { target, tolerance } => {
-            leaf_facing(grid_target(*target), *tolerance)
-        }
+        BehaviorSpec::Facing { target, tolerance } => leaf_facing(grid_target(*target), *tolerance),
         BehaviorSpec::Hold => Box::new(Action::new(|ctx: &mut DriveCtx| {
             ctx.out = (0.0, 0.0, 1.0);
             Status::Running

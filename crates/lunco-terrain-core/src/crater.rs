@@ -402,8 +402,7 @@ impl OctaveGrid {
         let mut cell_size = max_reach;
         let mut inv_cell = 1.0 / cell_size;
         // Cells this grid may spend: O(members), never past the hard ceiling.
-        let budget = ((members.len() as u128) * CELLS_PER_CRATER)
-            .clamp(1024, MAX_BUCKET_CELLS);
+        let budget = ((members.len() as u128) * CELLS_PER_CRATER).clamp(1024, MAX_BUCKET_CELLS);
         let (min, nx, nz) = loop {
             let (mut min_cx, mut min_cz) = (i64::MAX, i64::MAX);
             let (mut max_cx, mut max_cz) = (i64::MIN, i64::MIN);
@@ -431,9 +430,8 @@ impl OctaveGrid {
         // CSR fill: count per cell, prefix-sum into starts, then place entries in
         // ascending crater order per cell.
         let cells = nx * nz;
-        let slot = |cx: i64, cz: i64| -> usize {
-            (cz - min.1) as usize * nx + (cx - min.0) as usize
-        };
+        let slot =
+            |cx: i64, cz: i64| -> usize { (cz - min.1) as usize * nx + (cx - min.0) as usize };
         let mut counts = vec![0u32; cells];
         for &i in members {
             let Some((x0, z0, x1, z1)) = cell_box(&craters[i as usize], inv_cell) else {
@@ -502,8 +500,12 @@ impl OctaveGrid {
         let (x1, z1) = cell_of(max[0], max[1], self.inv_cell_size);
         let lo_x = x0.max(self.min.0).wrapping_sub(self.min.0);
         let lo_z = z0.max(self.min.1).wrapping_sub(self.min.1);
-        let hi_x = x1.min(self.min.0 + self.nx as i64 - 1).wrapping_sub(self.min.0);
-        let hi_z = z1.min(self.min.1 + self.nz as i64 - 1).wrapping_sub(self.min.1);
+        let hi_x = x1
+            .min(self.min.0 + self.nx as i64 - 1)
+            .wrapping_sub(self.min.0);
+        let hi_z = z1
+            .min(self.min.1 + self.nz as i64 - 1)
+            .wrapping_sub(self.min.1);
         if lo_x > hi_x || lo_z > hi_z || hi_x < 0 || hi_z < 0 {
             return None;
         }
@@ -571,7 +573,13 @@ impl Prepared {
             rim_k: c.rim_height * rim_amp,
             apron_sigma,
             apron_k: c.rim_height * APRON_FRAC * apron_amp,
-            tail: crater_profile_limited(CRATER_REACH, c.depth, c.rim_height, c.bowl_power, sigma_n),
+            tail: crater_profile_limited(
+                CRATER_REACH,
+                c.depth,
+                c.rim_height,
+                c.bowl_power,
+                sigma_n,
+            ),
             fade,
         }
     }
@@ -1323,7 +1331,10 @@ mod tests {
         let b = full.band_limited(8.0);
         assert!(Arc::ptr_eq(&a.index, &b.index), "same band → same index");
         let c = full.band_limited(16.0);
-        assert!(!Arc::ptr_eq(&a.index, &c.index), "different band → own index");
+        assert!(
+            !Arc::ptr_eq(&a.index, &c.index),
+            "different band → own index"
+        );
     }
 
     /// Not an assertion — a report. `cargo test -p lunco-terrain-core --
@@ -1491,8 +1502,18 @@ mod tests {
 
         println!(
             "{:>6} {:>7} {:>7} {:>6} {:>6} | {:>7} {:>7} {:>7} {:>7} | {:>8} {:>5} {:>7}",
-            "tile", "craters", "idx KiB", "cand", "hits", "lookup", "walk", "profile", "total",
-            "unprep", "×", "-powf"
+            "tile",
+            "craters",
+            "idx KiB",
+            "cand",
+            "hits",
+            "lookup",
+            "walk",
+            "profile",
+            "total",
+            "unprep",
+            "×",
+            "-powf"
         );
         for &(label, step) in &[("leaf", 0.5), ("mid", 4.0), ("coarse", 32.0)] {
             let wl = 2.0 * step;
@@ -1597,7 +1618,11 @@ mod tests {
                             }
                             let p = &scoped.index.prepared[g.idx[e] as usize];
                             let d = d2.sqrt() / p.radius;
-                            let bowl = if d < 1.0 { -p.depth * (1.0 - d * d) } else { 0.0 };
+                            let bowl = if d < 1.0 {
+                                -p.depth * (1.0 - d * d)
+                            } else {
+                                0.0
+                            };
                             let v = p.fade
                                 * (bowl
                                     + p.rim_k * gauss(d, RIM_CENTER, p.rim_sigma)

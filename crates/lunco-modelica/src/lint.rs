@@ -352,10 +352,8 @@ mod tests {
     use super::*;
 
     fn facts_of(params: &[(&str, f64)], inputs: &[(&str, f64)]) -> H {
-        let p: BTreeMap<String, f64> =
-            params.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-        let i: BTreeMap<String, f64> =
-            inputs.iter().map(|(n, v)| (n.to_string(), *v)).collect();
+        let p: BTreeMap<String, f64> = params.iter().map(|(n, v)| (n.to_string(), *v)).collect();
+        let i: BTreeMap<String, f64> = inputs.iter().map(|(n, v)| (n.to_string(), *v)).collect();
         modelica_facts("M", &p, &i, &StoredDefinition::default())
     }
 

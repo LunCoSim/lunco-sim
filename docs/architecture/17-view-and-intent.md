@@ -101,9 +101,10 @@ and USD standards rather than inventing bespoke types, and follows a strict
   `lunco:cameraLookAt` (double3, parent-local) aims the camera at a point.
 - "Which camera renders" is Bevy's own **`Camera::is_active`** — there is no
   bespoke "active camera" marker.
-- A *switchable* camera is any `Camera3d` with a window `RenderTarget`: every USD
-  `def Camera`, plus whatever free/avatar camera a host adds. RTT
-  (`Image`-target) cameras and the egui `Camera2d` are excluded.
+- A *switchable* camera is a `def Camera` with `LunCoCameraAPI` and
+  `lunco:cameraRole = "viewport"`, plus the local avatar camera. Instrument
+  cameras use `lunco:cameraRole = "sensor"` and are never main-window
+  candidates. RTT (`Image`-target) cameras and the egui `Camera2d` are excluded.
 
 ### 6.2 The Viewport is the single source of truth
 
@@ -112,11 +113,13 @@ Omniverse Viewport, which owns an active `camera`):
 
 | Field | Meaning | Written by |
 | :--- | :--- | :--- |
-| `active_camera: Option<Entity>` | which camera renders | the camera switch |
+| `active_camera: Option<Entity>` | resolved camera entity that renders | reconciler |
 | `visible: bool` | whether 3D renders at all | the workbench (layout perspective) |
 | `rect: Option<(UVec2, UVec2)>` | window sub-rect, or full-window | the workbench |
 
-Exactly **one** system writes window-camera `is_active` / `viewport`:
+An authored selection is retained as `(stage, USD prim path)` and re-resolved
+after re-projection; the ECS entity is only the current realization. Exactly
+**one** system writes window-camera `is_active` / `viewport`:
 `lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the viewport
 (`is_active = bound-camera && visible`), relocates the big_space
 `FloatingOrigin` onto the active camera, and self-heals (revalidates the

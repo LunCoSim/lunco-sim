@@ -614,7 +614,10 @@ fn gather_compound_candidates(
         if reader.has_api_schema(&child, ptok::API_RIGID_BODY) {
             continue;
         }
-        if reader.real_f32(&child, "physxVehicleWheel:radius").is_some() {
+        if reader
+            .real_f32(&child, "physxVehicleWheel:radius")
+            .is_some()
+        {
             continue;
         }
         // Local transform in the canonical decoder shared with usd-bevy, folded
@@ -1485,8 +1488,16 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             let p = SdfPath::new(&target.to_string()).ok()?;
             Some(nearest_body_path(reader, &p)?.to_string())
         };
-        let target0 = j.body0_rel().targets().ok().and_then(|t| t.into_iter().next());
-        let target1 = j.body1_rel().targets().ok().and_then(|t| t.into_iter().next());
+        let target0 = j
+            .body0_rel()
+            .targets()
+            .ok()
+            .and_then(|t| t.into_iter().next());
+        let target1 = j
+            .body1_rel()
+            .targets()
+            .ok()
+            .and_then(|t| t.into_iter().next());
         let (b0, b1) = match (target0, target1) {
             (Some(t0), Some(t1)) => (resolve(&t0)?, resolve(&t1)?),
             (Some(t0), None) => (resolve(&t0)?, String::new()),
@@ -1539,7 +1550,13 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         // distance / s²) scale by metersPerUnit; its stiffness (mass/s²) and
         // damping (mass/s) are distance-free and pass through.
         let angular = ns == "angular";
-        let target = |v: f64| if angular { v.to_radians() } else { conv.length(v) };
+        let target = |v: f64| {
+            if angular {
+                v.to_radians()
+            } else {
+                conv.length(v)
+            }
+        };
         let gain = |v: f64| {
             if angular {
                 conv.length(conv.length(v.to_degrees()))
@@ -2294,10 +2311,10 @@ fn build_usd_physics_joints(
                     b1,
                     JointSpec::new(
                         FixedJoint::new(b0, b1)
-                        .with_local_anchor1(pending.local_pos0)
-                        .with_local_anchor2(pending.local_pos1)
-                        .with_local_basis1(pending.local_rot0)
-                        .with_local_basis2(pending.local_rot1),
+                            .with_local_anchor1(pending.local_pos0)
+                            .with_local_anchor2(pending.local_pos1)
+                            .with_local_basis1(pending.local_rot0)
+                            .with_local_basis2(pending.local_rot1),
                     ),
                 );
             }
@@ -2345,9 +2362,9 @@ fn build_usd_physics_joints(
                     b1,
                     JointSpec::new(
                         DistanceJoint::new(b0, b1)
-                        .with_local_anchor1(pending.local_pos0)
-                        .with_local_anchor2(pending.local_pos1)
-                        .with_limits(min, max),
+                            .with_local_anchor1(pending.local_pos0)
+                            .with_local_anchor2(pending.local_pos1)
+                            .with_limits(min, max),
                     ),
                 );
             }
@@ -2714,9 +2731,7 @@ fn apply_rigid_body_mass_props(
     {
         commands
             .entity(entity)
-            .try_insert(ColliderDensity(
-                (density as f64 / (mpu * mpu * mpu)) as f32,
-            ));
+            .try_insert(ColliderDensity((density as f64 / (mpu * mpu * mpu)) as f32));
     }
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
@@ -2748,9 +2763,10 @@ fn apply_rigid_body_mass_props(
 
     // G2 — authored centre of mass (body-frame offset, a POINT in stage units).
     if let Some(com) = read_vec3_attribute(reader, sdf_path, ptok::A_CENTER_OF_MASS) {
-        commands
-            .entity(entity)
-            .try_insert((CenterOfMass(conv.point_d(com).as_vec3()), NoAutoCenterOfMass));
+        commands.entity(entity).try_insert((
+            CenterOfMass(conv.point_d(com).as_vec3()),
+            NoAutoCenterOfMass,
+        ));
     }
 
     if let Some(d) = reader.real_f32(sdf_path, PHYSX_LINEAR_DAMPING) {

@@ -27,10 +27,7 @@ fn main() {
     };
     // Horizontal unit vector TOWARD the sun. Azimuth is from north, clockwise
     // through east; north = -Z, east = +X.
-    let (sx, sz) = (
-        sun_az.to_radians().sin(),
-        -sun_az.to_radians().cos(),
-    );
+    let (sx, sz) = (sun_az.to_radians().sin(), -sun_az.to_radians().cos());
     // Horizon angle toward the sun: the max elevation angle of terrain along
     // the solar azimuth. Lit iff it stays below the sun's own elevation.
     let horizon = |x: f64, z: f64| -> f64 {

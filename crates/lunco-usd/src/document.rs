@@ -962,7 +962,11 @@ impl UsdDocument {
     /// "succeed" while removing nothing. Editing inside a variant needs a variant
     /// edit target, which the op model cannot express, so the op fails loudly
     /// here instead.
-    fn require_movable_prim_in(&self, t: TargetLayer, path: &str) -> Result<SdfPath, DocumentError> {
+    fn require_movable_prim_in(
+        &self,
+        t: TargetLayer,
+        path: &str,
+    ) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
         let layer = self.layer(t);
         if matches!(layer.spec(&sdf), Some(s) if s.ty == SpecType::Prim) {
@@ -1619,9 +1623,9 @@ impl Document for UsdDocument {
                         match linear {
                             crate::schema::LinearUnit::Length {
                                 stage_units_per_unit,
-                            } if !conv.is_identity() => scale_scalar_value(old, |v| {
-                                conv.length(v * stage_units_per_unit)
-                            }),
+                            } if !conv.is_identity() => {
+                                scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
+                            }
                             _ => old,
                         }
                     });
@@ -2261,7 +2265,11 @@ mod tests {
 
         let p = doc
             .data()
-            .prim_attribute_value_at::<[f32; 3]>(&SdfPath::new("/World").unwrap(), "customPoint", 5.0)
+            .prim_attribute_value_at::<[f32; 3]>(
+                &SdfPath::new("/World").unwrap(),
+                "customPoint",
+                5.0,
+            )
             .expect("sample authored");
         assert!(
             p[1].abs() < 1e-4 && (p[2] - 100.0).abs() < 1e-2,
@@ -2279,7 +2287,11 @@ mod tests {
         doc.apply(inverse).expect("undo applies");
         let p = doc
             .data()
-            .prim_attribute_value_at::<[f32; 3]>(&SdfPath::new("/World").unwrap(), "customPoint", 5.0)
+            .prim_attribute_value_at::<[f32; 3]>(
+                &SdfPath::new("/World").unwrap(),
+                "customPoint",
+                5.0,
+            )
             .expect("sample restored");
         assert!(
             p[1].abs() < 1e-3 && (p[2] - 100.0).abs() < 1e-1,
@@ -2917,7 +2929,11 @@ mod tests {
         doc.apply(inverse).unwrap();
         assert_eq!(doc.source(), before, "undo restores the prior targets");
         doc.apply(create_inverse).unwrap();
-        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
     }
 
     /// The `SetRelationship` invariants, for the attribute-connection twin.
@@ -2948,7 +2964,11 @@ mod tests {
         doc.apply(inverse).unwrap();
         assert_eq!(doc.source(), before, "undo restores the prior sources");
         doc.apply(create_inverse).unwrap();
-        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
     }
 
     /// Overwriting an existing (explicit) `apiSchemas` list inverts to a typed
@@ -2978,7 +2998,11 @@ mod tests {
         doc.apply(inverse).unwrap();
         assert_eq!(doc.source(), before, "undo restores the prior schema list");
         doc.apply(create_inverse).unwrap();
-        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
     }
 
     /// Re-selecting a variant inverts to a typed `SetVariantSelection` carrying
@@ -3009,7 +3033,11 @@ mod tests {
         doc.apply(inverse).unwrap();
         assert_eq!(doc.source(), before, "undo restores the prior selection");
         doc.apply(create_inverse).unwrap();
-        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
     }
 
     /// Overwriting an existing payload list inverts to a typed `SetPayload`
@@ -3039,7 +3067,11 @@ mod tests {
         doc.apply(inverse).unwrap();
         assert_eq!(doc.source(), before, "undo restores the prior payload list");
         doc.apply(create_inverse).unwrap();
-        assert_eq!(doc.source(), original, "coarse undo removes the created opinion");
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
     }
 
     #[test]
@@ -4156,5 +4188,4 @@ mod tests {
             "moving a variant-authored waypoint must be accepted, got {moved:?} —              the editor addresses prims by COMPOSED path, so document validation              cannot be a flat per-layer spec lookup"
         );
     }
-
 }

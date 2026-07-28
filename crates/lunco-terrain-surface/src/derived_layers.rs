@@ -437,8 +437,11 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // The AO march walks horizon rays out to `half·AO_RADIUS_FRAC` from each
     // texel, so the scope must grow by that reach — a ray leaving the box would
     // otherwise sample a view the region prune never promised.
-    let ao_limited = SurfaceBand::visual(ao_texel)
-        .limited_region(oracle, region, half * AO_RADIUS_FRAC + 2.0 * ao_texel);
+    let ao_limited = SurfaceBand::visual(ao_texel).limited_region(
+        oracle,
+        region,
+        half * AO_RADIUS_FRAC + 2.0 * ao_texel,
+    );
     let ao_small = ao_map(
         &ao_limited,
         &region,
@@ -468,12 +471,7 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // whole bake. The stencil is halved IN TEXELS so its width IN METRES is
     // unchanged: same tone, a quarter of the samples.
     let tone_res = (res / 2).max(1);
-    let albedo_small = albedo_map(
-        &tone_limited,
-        &region,
-        tone_res,
-        TONE_STENCIL_TEXELS * 0.5,
-    );
+    let albedo_small = albedo_map(&tone_limited, &region, tone_res, TONE_STENCIL_TEXELS * 0.5);
     let albedo = lunco_terrain_core::upsample_bilinear(&albedo_small, tone_res, res);
 
     let roughness: Vec<f32> = slope

@@ -647,8 +647,10 @@ mod tests {
             "output must not depend on input order"
         );
         // …and it is the total (depth, x, z) order.
-        assert!(a2.windows(2).all(|w| (w[0].coord.depth, w[0].coord.x, w[0].coord.z)
-            < (w[1].coord.depth, w[1].coord.x, w[1].coord.z)));
+        assert!(a2
+            .windows(2)
+            .all(|w| (w[0].coord.depth, w[0].coord.x, w[0].coord.z)
+                < (w[1].coord.depth, w[1].coord.x, w[1].coord.z)));
     }
 
     /// `refine_selection_at_with(.., pin_morph: true)` emits the max-depth

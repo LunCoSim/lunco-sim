@@ -559,15 +559,14 @@ pub fn propagate_connections(
         .get_resource::<Time<bevy::time::Real>>()
         .map(|time| time.elapsed_secs_f64())
         .unwrap_or(0.0);
-    let held: std::collections::HashMap<(Entity, String), f64> = match world
-        .get_resource_mut::<crate::PortHolds>()
-    {
-        Some(mut holds) if !holds.is_empty() => {
-            holds.expire(now_real);
-            holds.snapshot()
-        }
-        _ => Default::default(),
-    };
+    let held: std::collections::HashMap<(Entity, String), f64> =
+        match world.get_resource_mut::<crate::PortHolds>() {
+            Some(mut holds) if !holds.is_empty() => {
+                holds.expire(now_real);
+                holds.snapshot()
+            }
+            _ => Default::default(),
+        };
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity, is_client) {
             continue;
@@ -849,7 +848,11 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
-        assert_eq!(diag.broken.len(), 1, "the one unresolved target is reported");
+        assert_eq!(
+            diag.broken.len(),
+            1,
+            "the one unresolved target is reported"
+        );
         let b = &diag.broken[0];
         assert_eq!(b.port, "nonexistent_port");
         assert_eq!(b.global_id, Some(GlobalEntityId::from_raw(20)));

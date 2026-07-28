@@ -74,9 +74,9 @@ pub use invariants::BigSpaceInvariantsPlugin;
 pub use log::*;
 pub use markers::{
     ActuatorDrivenJoint, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
-    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
-    ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
-    CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
+    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, ScenarioProgramPrim,
+    ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, CELESTIAL_COLLISION_LAYER,
+    NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
@@ -270,7 +270,10 @@ pub struct TheLocalAvatar(pub Option<Entity>);
 
 /// `LocalAvatar` was inserted: this entity becomes THE avatar, and any previous
 /// holder stops being one.
-fn local_avatar_claimed(mut world: bevy::ecs::world::DeferredWorld, ctx: bevy::ecs::lifecycle::HookContext) {
+fn local_avatar_claimed(
+    mut world: bevy::ecs::world::DeferredWorld,
+    ctx: bevy::ecs::lifecycle::HookContext,
+) {
     let entity = ctx.entity;
     // A remote avatar cannot also be the local one. Whichever order they arrive
     // in, the entity ends up with exactly one role — see `remote_avatar_claimed`.

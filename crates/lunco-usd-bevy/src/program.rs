@@ -276,7 +276,10 @@ mod tests {
 
     #[test]
     fn a_source_outside_a_models_root_needs_a_sub_identifier() {
-        assert_eq!(model_class_from_asset("twin://parts/Battery.mo", None), None);
+        assert_eq!(
+            model_class_from_asset("twin://parts/Battery.mo", None),
+            None
+        );
         assert_eq!(
             model_class_from_asset("twin://parts/Battery.mo", Some("Twin.Parts.Battery")),
             Some("Twin.Parts.Battery".into())

@@ -196,6 +196,9 @@ mod tests {
     #[test]
     fn close_range_is_the_models_job() {
         let m = ScreenConstantMarker::default();
-        assert!(m.show_beyond_m > 1000.0, "a surface view must show no marker");
+        assert!(
+            m.show_beyond_m > 1000.0,
+            "a surface view must show no marker"
+        );
     }
 }

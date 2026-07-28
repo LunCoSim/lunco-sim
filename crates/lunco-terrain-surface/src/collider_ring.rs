@@ -874,7 +874,16 @@ fn on_recover_vessel(
         // from the current up to world up (an exact 180° flip picks an arbitrary
         // axis — any righting is fine there).
         let q_fix = DQuat::from_rotation_arc(up.normalize(), DVec3::Y);
-        recover_assembly(root, pivot, q_fix, up.y, &terrains, &mut bodies, &dynamics, &joints);
+        recover_assembly(
+            root,
+            pivot,
+            q_fix,
+            up.y,
+            &terrains,
+            &mut bodies,
+            &dynamics,
+            &joints,
+        );
     }
 }
 

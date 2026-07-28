@@ -9,7 +9,7 @@
 //! orbital branch restores the camera pose parked on mode entry.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_avatar::{FocusTarget, ReleaseVessel};
 use lunco_celestial::OrbitalViewPin;
 use lunco_core::{Avatar, CelestialBody};

@@ -100,7 +100,9 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
         .synthesize(&view, &root, "Rig_Electrical_System", &ctx)
         .expect_err("a policy that returns a number has emitted no model");
     assert!(
-        errors[0].message.contains("must return the Modelica source"),
+        errors[0]
+            .message
+            .contains("must return the Modelica source"),
         "the report has to name what the policy did wrong, not blame the scene: {errors:?}"
     );
 }
@@ -130,10 +132,7 @@ fn facts_describe_the_whole_graph() {
         Some("LunCo.Electrical.Battery")
     );
     assert!(
-        battery
-            .get("connectors")
-            .and_then(|v| v.get("p"))
-            .is_some(),
+        battery.get("connectors").and_then(|v| v.get("p")).is_some(),
         "acausal edges reach the policy: {battery:?}"
     );
     assert_eq!(

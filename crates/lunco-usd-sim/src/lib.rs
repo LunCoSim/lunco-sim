@@ -55,7 +55,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use lunco_usd_avian::ShouldBeDynamic;
-use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
+use lunco_usd_bevy::{CanonicalStages, UsdRead, instance_key};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -69,7 +69,7 @@ use lunco_controller::get_avatar_input_map;
 use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_cosim::{ports::PORT_NAME, SimConnection};
+use lunco_cosim::{SimConnection, ports::PORT_NAME};
 use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
@@ -133,10 +133,7 @@ pub struct UsdSimPlugin;
 /// camera left active until the subtree is flushed can render alongside the
 /// replacement avatar during RestartScene.
 fn retire_scene_cameras(
-    mut cameras: Query<
-        (&mut bevy::camera::Camera, Entity),
-        (With<SceneCamera>, With<UsdPrimPath>),
-    >,
+    mut cameras: Query<(&mut bevy::camera::Camera, Entity), (With<SceneCamera>, With<UsdPrimPath>)>,
     mut commands: Commands,
 ) {
     for (mut camera, entity) in &mut cameras {
@@ -232,12 +229,12 @@ impl Plugin for UsdSimPlugin {
 /// declares its own label content, including live geolocation.
 pub mod billboard;
 pub mod celestial;
-/// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
-/// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
-pub mod marker;
 pub mod cosim;
 pub mod cosim_diagnostics;
 pub mod domain_projection;
+/// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
+/// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
+pub mod marker;
 pub mod powertrain;
 pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
@@ -1172,6 +1169,12 @@ fn process_usd_sim_prim_read(
                 ));
             }
         }
+        // This applies to both `def Camera` and `def Xform` avatar prims. The
+        // avatar controller is the sole pose writer; a hierarchy-derived mount
+        // follower must never claim it during an async reload.
+        commands
+            .entity(entity)
+            .try_insert(lunco_usd_bevy::UsdCameraPose::Avatar);
         // Parent to Grid (preferring SiteAlignGrid when present) so FloatingOrigin works
         let target_grid = q_grids
             .iter()
@@ -1233,7 +1236,9 @@ fn process_usd_sim_prim_read(
             port_map.insert(name.clone(), port_ent);
         }
 
-        commands.entity(entity).try_insert(lunco_core::SelectableRoot);
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::SelectableRoot);
 
         // The input surface is AUTHORED, in the vessel's `Controls` scope: the
         // intents it binds name exactly the ports this vessel accepts.

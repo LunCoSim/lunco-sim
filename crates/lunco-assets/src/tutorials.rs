@@ -89,7 +89,6 @@ pub fn tutorial_files() -> Vec<(String, String)> {
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

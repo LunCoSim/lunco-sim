@@ -461,9 +461,9 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TimePlugin);
         app.insert_resource(Time::<Fixed>::from_duration(Duration::from_secs_f64(dt)));
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(
-            Duration::from_secs_f64(dt),
-        ));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            dt,
+        )));
         app
     }
 

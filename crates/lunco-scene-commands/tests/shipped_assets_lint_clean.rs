@@ -255,7 +255,10 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
     register_usd_lint_policy();
     let empty = || H::Array(Vec::new());
     let facts = H::map([
-        ("stage", H::map([("meters_per_unit_authored", H::Bool(false))])),
+        (
+            "stage",
+            H::map([("meters_per_unit_authored", H::Bool(false))]),
+        ),
         ("bodies", empty()),
         ("joints", empty()),
         ("prims", empty()),

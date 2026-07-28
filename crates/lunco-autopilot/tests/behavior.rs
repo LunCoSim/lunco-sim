@@ -4,10 +4,10 @@
 //! `SetAutopilotBehavior` command hot-swaps at runtime.
 
 use bevy::math::{DVec3, Vec3};
-use lunco_core::coords::GridPos;
 use lunco_autopilot::{
     nav_setpoint, AutopilotBehavior, Clearance, DriveCtx, TargetState, TargetStates,
 };
+use lunco_core::coords::GridPos;
 use std::sync::Arc;
 
 #[test]
@@ -57,12 +57,22 @@ fn json_tree_drives_and_sequences_waypoints() {
 
 #[test]
 fn nav_setpoint_brakes_within_radius_drives_when_far() {
-    let (_t, _s, brake, arrived) =
-        nav_setpoint(GridPos(DVec3::ZERO), Vec3::X, GridPos(DVec3::new(0.5, 0.0, 0.0)), 0.6, 2.0);
+    let (_t, _s, brake, arrived) = nav_setpoint(
+        GridPos(DVec3::ZERO),
+        Vec3::X,
+        GridPos(DVec3::new(0.5, 0.0, 0.0)),
+        0.6,
+        2.0,
+    );
     assert!(arrived && brake > 0.5, "within radius → arrived + brake");
 
-    let (throttle, _s, _b, arrived) =
-        nav_setpoint(GridPos(DVec3::ZERO), Vec3::X, GridPos(DVec3::new(50.0, 0.0, 0.0)), 0.6, 2.0);
+    let (throttle, _s, _b, arrived) = nav_setpoint(
+        GridPos(DVec3::ZERO),
+        Vec3::X,
+        GridPos(DVec3::new(50.0, 0.0, 0.0)),
+        0.6,
+        2.0,
+    );
     assert!(
         !arrived && throttle > 0.0,
         "far + aligned → driving forward"

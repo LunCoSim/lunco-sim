@@ -1462,7 +1462,11 @@ pub(crate) fn apply_maps_to_look(
     // tile and therefore STEPPED at every LOD boundary — a hard brightness seam
     // along the quadtree, on a mesh that morphs through that same boundary
     // smoothly. A ratio is the only form of this number that can be interpolated.
-    set_param(look, "map_ratio", ParamValue::F32(tile_map_ratio(depth, maps.res, tile_res)));
+    set_param(
+        look,
+        "map_ratio",
+        ParamValue::F32(tile_map_ratio(depth, maps.res, tile_res)),
+    );
 }
 
 /// Bind a terrain's AUTHORED layer maps (from its UsdShade Material network)
@@ -3628,7 +3632,10 @@ mod draw_partition_tests {
                 &mut CoverScratch::default(),
             );
             assert_eq!(a, b, "step {step}: scratch reuse changed the cover");
-            assert_eq!(ra, rb, "step {step}: scratch reuse changed the returned counts");
+            assert_eq!(
+                ra, rb,
+                "step {step}: scratch reuse changed the returned counts"
+            );
         }
     }
 
@@ -3664,7 +3671,10 @@ mod draw_partition_tests {
         );
         let settled = cover.clone();
         step(&mut cover);
-        assert_eq!(cover, settled, "zero edits must mean the cover did not change");
+        assert_eq!(
+            cover, settled,
+            "zero edits must mean the cover did not change"
+        );
     }
 
     // ── mesh cache (LRU + resident-derived cap) ──────────────────────────────

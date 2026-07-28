@@ -618,11 +618,9 @@ pub(crate) fn reconcile_structural_live(
                     let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                         return;
                     };
-                    stages
-                        .get(id)
-                        .and_then(|cs| {
-                            lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
-                        })
+                    stages.get(id).and_then(|cs| {
+                        lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
+                    })
                 };
                 if let Some(v) = v {
                     seat_authored_translate(world, entity, v);

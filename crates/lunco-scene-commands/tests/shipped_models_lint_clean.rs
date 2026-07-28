@@ -85,12 +85,7 @@ fn a_conditional_algebraic_observable_is_caught() {
 
     let findings = lunco_lint::run_lint(
         lunco_modelica::lint::MODELICA_LINT_DOMAIN,
-        lunco_modelica::lint::modelica_facts(
-            &model,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            ast,
-        ),
+        lunco_modelica::lint::modelica_facts(&model, &BTreeMap::new(), &BTreeMap::new(), ast),
     );
 
     assert!(
@@ -115,12 +110,7 @@ fn a_when_equation_is_not_flagged_as_a_conditional_observable() {
 
     let findings = lunco_lint::run_lint(
         lunco_modelica::lint::MODELICA_LINT_DOMAIN,
-        lunco_modelica::lint::modelica_facts(
-            &model,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            ast,
-        ),
+        lunco_modelica::lint::modelica_facts(&model, &BTreeMap::new(), &BTreeMap::new(), ast),
     );
 
     assert!(

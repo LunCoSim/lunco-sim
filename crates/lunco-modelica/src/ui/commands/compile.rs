@@ -2341,7 +2341,6 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
     });
 }
 
-
 // ─── Plugin shim ─────────────────────────────────────────────────────────────
 
 /// Bundles all compile/run/fast-run observers + modal renderers +

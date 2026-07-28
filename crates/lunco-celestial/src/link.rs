@@ -1018,7 +1018,10 @@ mod tests {
                 SolarFramePose {
                     pos,
                     local: pos,
-                    horizon: crate::pose::Horizon::Surface { body: 301, up: DVec3::Y },
+                    horizon: crate::pose::Horizon::Surface {
+                        body: 301,
+                        up: DVec3::Y,
+                    },
                 },
             ))
             .id()
@@ -1390,7 +1393,10 @@ mod tests {
                 SolarFramePose {
                     pos: DVec3::ZERO,
                     local: DVec3::ZERO,
-                    horizon: crate::pose::Horizon::Surface { body: 301, up: DVec3::Y },
+                    horizon: crate::pose::Horizon::Surface {
+                        body: 301,
+                        up: DVec3::Y,
+                    },
                 },
             ))
             .id();
@@ -1464,7 +1470,10 @@ mod tests {
             SolarFramePose {
                 pos: DVec3::new(10.0, 0.0, 0.0),
                 local: DVec3::new(10.0, 0.0, 0.0),
-                horizon: crate::pose::Horizon::Surface { body: 301, up: DVec3::Y },
+                horizon: crate::pose::Horizon::Surface {
+                    body: 301,
+                    up: DVec3::Y,
+                },
             },
         ));
 

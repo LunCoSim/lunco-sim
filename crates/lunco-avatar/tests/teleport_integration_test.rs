@@ -37,7 +37,6 @@ fn test_full_teleport_workflow() {
     // Headless app: no window, no renderer, no input
     app.add_plugins((MinimalPlugins, big_space::prelude::BigSpaceDefaultPlugins));
 
-
     // Track test state
     app.insert_resource(TestState::default());
 

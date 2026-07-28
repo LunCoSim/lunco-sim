@@ -321,7 +321,11 @@ impl Plugin for EscapeDiagnosticPlugin {
                 // `forget_dead_bodies` first: a body despawned this tick must leave
                 // the set before anything is judged, or a recycled id starts life
                 // already-reported and its first real escape is silent.
-                (forget_dead_bodies, update_world_bounds, report_escaped_bodies)
+                (
+                    forget_dead_bodies,
+                    update_world_bounds,
+                    report_escaped_bodies,
+                )
                     .chain()
                     .in_set(PhysicsSystems::Writeback)
                     .after(avian3d::schedule::PhysicsStepSystems::Last)
@@ -432,7 +436,10 @@ mod tests {
              from a healthy scene"
         );
         if let WorldBounds::Some { max, .. } = bounds {
-            assert!(max.y.is_finite(), "local static worlds need a finite ceiling");
+            assert!(
+                max.y.is_finite(),
+                "local static worlds need a finite ceiling"
+            );
         }
         assert!(
             bounds.escaped(Vector::new(0.0, -1510.0, 0.0)),

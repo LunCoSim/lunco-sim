@@ -276,19 +276,21 @@ mod tests {
         app.world_mut().clear_trackers();
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.25));
-        assert!(!app
-            .world()
-            .entity(e)
-            .get_ref::<ShaderLook>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            !app.world()
+                .entity(e)
+                .get_ref::<ShaderLook>()
+                .unwrap()
+                .is_changed()
+        );
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.75));
-        assert!(app
-            .world()
-            .entity(e)
-            .get_ref::<ShaderLook>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            app.world()
+                .entity(e)
+                .get_ref::<ShaderLook>()
+                .unwrap()
+                .is_changed()
+        );
     }
 }

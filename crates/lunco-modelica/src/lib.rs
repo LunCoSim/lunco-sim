@@ -148,6 +148,12 @@ pub mod doc_extract;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
+/// Default-simulation-class resolution + run-target overrides
+/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
+/// The rumoca backends, registered into `lunco_experiments::solver`. Solver
+/// selection itself lives there; this module is only where rumoca's two-axis
+/// option shape is expressed, once.
+pub mod lint;
 /// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
 pub mod model_tabs;
 /// Modelica tab registry data types (was `ui::panels::model_view::types`).
@@ -155,12 +161,6 @@ pub mod model_tabs_types;
 /// Package-tree backend: egui-free data + scanning logic for the library /
 /// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
 pub mod package_tree;
-/// Default-simulation-class resolution + run-target overrides
-/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
-/// The rumoca backends, registered into `lunco_experiments::solver`. Solver
-/// selection itself lives there; this module is only where rumoca's two-axis
-/// option shape is expressed, once.
-pub mod lint;
 pub mod solver_backends;
 
 pub mod sim_default;
@@ -1135,7 +1135,9 @@ impl ModelicaCompiler {
                          parse {uri} — it is seated UNSTRIPPED, so every `input x = <default>` in \
                          it is demoted to a constant and wires into it will be discarded"
                     ),
-                    crate::ast_extract::InputDefaultIssue::Unresolvable { name, binding, .. } => {
+                    crate::ast_extract::InputDefaultIssue::Unresolvable {
+                        name, binding, ..
+                    } => {
                         log::warn!(
                             "[ModelicaCompiler] source root `{id}`: {uri} declares `input {name} = \
                              {binding}` — an expression, not a literal, so the slot stays runtime \
@@ -2011,9 +2013,10 @@ pub struct FrameTimeProbe {
 // These functions live in `ast_extract` but are re-exported here so external
 // callers (workbench binaries, UI panels) can import from the crate root.
 pub use ast_extract::{
-    extract_input_names_from_ast, extract_inputs_with_defaults, extract_inputs_with_defaults_from_ast,
-    extract_model_name, extract_model_name_from_ast, extract_parameters, extract_parameters_from_ast,
-    hash_content, parse_model_interface, ModelInterface,
+    extract_input_names_from_ast, extract_inputs_with_defaults,
+    extract_inputs_with_defaults_from_ast, extract_model_name, extract_model_name_from_ast,
+    extract_parameters, extract_parameters_from_ast, hash_content, parse_model_interface,
+    ModelInterface,
 };
 // `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
 // above and is available publicly through the `pub mod ast_extract` declaration.

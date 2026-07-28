@@ -30,7 +30,6 @@ use openusd::usda;
 
 use lunco_assets::asset_path::normalize;
 
-
 /// True if `path` is a USD layer to parse-and-recurse into, as opposed to a leaf
 /// asset (a `.glb`) that is shipped or watched but never followed.
 pub fn is_usd_layer(path: &Path) -> bool {

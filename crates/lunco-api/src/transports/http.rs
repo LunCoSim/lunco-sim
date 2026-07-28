@@ -48,14 +48,16 @@ fn terminal_status(outcome: &serde_json::Value) -> Option<&'static str> {
 /// accepted; a handler that never reports (the one bounded ambiguity) shouldn't
 /// hang the request forever.
 async fn await_command_outcome(bridge: &HttpBridge, id: u64) -> ApiResponse {
-    let max_polls =
-        (SYNC_WAIT_TIMEOUT.as_millis() / SYNC_POLL_INTERVAL.as_millis().max(1)).max(1);
+    let max_polls = (SYNC_WAIT_TIMEOUT.as_millis() / SYNC_POLL_INTERVAL.as_millis().max(1)).max(1);
     for _ in 0..max_polls {
         if let Ok(ApiResponse::Ok {
             data: Some(data), ..
         }) = bridge.execute(ApiRequest::QueryCommandResult { id }).await
         {
-            let outcome = data.get("outcome").cloned().unwrap_or(serde_json::Value::Null);
+            let outcome = data
+                .get("outcome")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             if let Some(status) = terminal_status(&outcome) {
                 return ApiResponse::Ok {
                     command_id: Some(id),
@@ -190,7 +192,10 @@ mod tests {
     #[test]
     fn terminal_status_maps_outcome_variants() {
         // Externally-tagged `CommandOutcome`: terminal variants are objects.
-        assert_eq!(terminal_status(&json!({"Succeeded": {}})), Some("succeeded"));
+        assert_eq!(
+            terminal_status(&json!({"Succeeded": {}})),
+            Some("succeeded")
+        );
         assert_eq!(terminal_status(&json!({"Failed": "boom"})), Some("failed"));
         assert_eq!(terminal_status(&json!({"Rejected": {}})), Some("rejected"));
         // Not terminal — keep waiting.

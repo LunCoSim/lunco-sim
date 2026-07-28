@@ -335,8 +335,7 @@ fn mark_sampling_plan_dirty(
     mut removed_bindings: RemovedComponents<TimeBinding>,
     mut plan: ResMut<SamplingPlan>,
 ) {
-    let removed =
-        removed_params.read().next().is_some() | removed_bindings.read().next().is_some();
+    let removed = removed_params.read().next().is_some() | removed_bindings.read().next().is_some();
     if removed || !changed.is_empty() {
         plan.dirty = true;
     }
@@ -518,8 +517,11 @@ pub fn sample_parameters(world: &mut World) {
     });
     if plan.dirty {
         plan.channels.clear();
-        plan.channels
-            .extend(world.query_filtered::<Entity, With<Parameter>>().iter(world));
+        plan.channels.extend(
+            world
+                .query_filtered::<Entity, With<Parameter>>()
+                .iter(world),
+        );
         plan.dirty = false;
     }
 

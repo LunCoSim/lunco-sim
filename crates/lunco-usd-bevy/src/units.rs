@@ -632,9 +632,10 @@ mod tests {
             meters_per_unit: 0.01,
             up_axis: UpAxis::Y,
         });
-        assert!(ct
-            .point(Vec3::new(100.0, 0.0, 0.0))
-            .abs_diff_eq(Vec3::X, 1e-6));
+        assert!(
+            ct.point(Vec3::new(100.0, 0.0, 0.0))
+                .abs_diff_eq(Vec3::X, 1e-6)
+        );
         assert_eq!(ct.length(250.0), 2.5);
         assert!(
             ct.dir(Vec3::Y).abs_diff_eq(Vec3::Y, 1e-6),
@@ -747,8 +748,9 @@ mod tests {
             up_axis: UpAxis::Z,
         });
         assert!((ct.stage_length(2.5) - 250.0).abs() < 1e-9);
-        assert!(ct
-            .stage_point(Vec3::Y)
-            .abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3));
+        assert!(
+            ct.stage_point(Vec3::Y)
+                .abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3)
+        );
     }
 }

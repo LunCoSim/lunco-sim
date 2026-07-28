@@ -264,12 +264,11 @@ mod native {
             tolerance: Some(1e-1),
             ..Default::default()
         };
-        let stepper_opts = match lunco_modelica::experiments_runner::stepper_options_from_bounds(
-            &bounds,
-        ) {
-            Ok(o) => o,
-            Err(e) => die(&format!("solver selection failed: {e}")),
-        };
+        let stepper_opts =
+            match lunco_modelica::experiments_runner::stepper_options_from_bounds(&bounds) {
+                Ok(o) => o,
+                Err(e) => die(&format!("solver selection failed: {e}")),
+            };
 
         let mut stepper = match lunco_modelica::simulation_session::cli(&comp_res.dae, stepper_opts)
         {

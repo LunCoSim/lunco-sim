@@ -71,7 +71,10 @@ impl LinePlotStyle {
         }
         let parsed = Self::load(config);
         ctx.data_mut(|d| {
-            d.insert_temp(id, std::sync::Arc::new((config.style.clone(), parsed.clone())));
+            d.insert_temp(
+                id,
+                std::sync::Arc::new((config.style.clone(), parsed.clone())),
+            );
         });
         parsed
     }
@@ -239,8 +242,7 @@ impl Visualization for LinePlot {
                     log_y: style.log_y,
                     px_w: remaining.x.max(1.0) as u32,
                 };
-                let cache_id =
-                    egui::Id::new(("line_plot_series", config.id.raw())).with(&b.source);
+                let cache_id = egui::Id::new(("line_plot_series", config.id.raw())).with(&b.source);
                 let cached: Option<std::sync::Arc<(SeriesKey, Vec<[f64; 2]>)>> =
                     ctx.ui.ctx().data(|d| d.get_temp(cache_id));
                 let series = match cached {
@@ -271,8 +273,7 @@ impl Visualization for LinePlot {
                         // space trajectory revisits X, which breaks
                         // the column bucketing.
                         if time_on_x {
-                            if let Some(dec) =
-                                crate::plot_fmt::decimate_min_max(&pts, remaining.x)
+                            if let Some(dec) = crate::plot_fmt::decimate_min_max(&pts, remaining.x)
                             {
                                 pts = dec;
                             }

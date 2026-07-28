@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
-use crate::view::StageView;
 use crate::UsdRead;
+use crate::view::StageView;
 
 /// A `Send` in-memory recipe for building a canonical [`Stage`]: the resolved
 /// root layer identifier + the full transitive `.usda` layer-closure bytes
@@ -252,7 +252,11 @@ impl CanonicalStage {
     /// Define a prim of `type_name` at `path` (root edit target) — fires the sink
     /// so the projection bridge spawns it. For a referenced spawn, follow with
     /// [`author_reference`](Self::author_reference).
-    pub(crate) fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
+    pub(crate) fn author_prim(
+        &self,
+        path: &SdfPath,
+        type_name: Option<&str>,
+    ) -> anyhow::Result<()> {
         use anyhow::anyhow;
         let prim = self
             .stage
@@ -573,7 +577,8 @@ impl StageProjector<'_> {
         time: f64,
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
-        self.0.author_time_sample(prim, name, type_name, time, value)
+        self.0
+            .author_time_sample(prim, name, type_name, time, value)
     }
 }
 
@@ -823,8 +828,7 @@ mod sync_system_tests {
     use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::prelude::*;
 
-    const FIXTURE: &str =
-        "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
+    const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
 
     #[test]
     fn sync_canonical_stages_builds_stage_from_loaded_asset() {
@@ -887,8 +891,7 @@ mod authoring_tests {
     use super::*;
     use crate::UsdRead;
 
-    const SCENE: &str =
-        "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
 
     fn touches(changes: &[RawStageChange], path: &str) -> bool {
         changes.iter().any(|c| {

@@ -35,8 +35,8 @@
 //!   parent's 2×-spaced grid, so its gate is `4·step` (a fully-morphed tile IS
 //!   the parent surface).
 
-use bevy::reflect::Reflect;
 use crate::oracle::SurfaceOracle;
+use bevy::reflect::Reflect;
 
 /// A named, shared filter policy for a band-limited surface product.
 ///

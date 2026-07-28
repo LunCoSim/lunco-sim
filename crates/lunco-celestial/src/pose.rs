@@ -156,9 +156,11 @@ pub fn update_solar_poses(
     // Sun's centre that looks exactly like a real one.
     let provider = ephemeris.provider.as_ref();
     let body_center = |naif: i32, centers: &mut HashMap<i32, Option<DVec3>>| -> Option<DVec3> {
-        *centers
-            .entry(naif)
-            .or_insert_with(|| provider.global_position(naif, jd).map(|p| ecliptic_to_bevy(p).raw()))
+        *centers.entry(naif).or_insert_with(|| {
+            provider
+                .global_position(naif, jd)
+                .map(|p| ecliptic_to_bevy(p).raw())
+        })
     };
 
     // Loop-invariant like `centers`: `FrameTree` is a view over (jd, registry,
@@ -232,10 +234,9 @@ pub fn update_solar_poses(
             let pos = frame.to_frame(local.0);
             // The horizon, however, belongs to the nearest ANCHORED ancestor — the
             // scene's own site frame only when nothing above this node claims a body.
-            let ancestor_body = std::iter::successors(Some(entity), |e| {
-                q_parents.get(*e).ok().map(|c| c.parent())
-            })
-            .find_map(|e| q_anchor.get(e).ok().map(|a| a.body));
+            let ancestor_body =
+                std::iter::successors(Some(entity), |e| q_parents.get(*e).ok().map(|c| c.parent()))
+                    .find_map(|e| q_anchor.get(e).ok().map(|a| a.body));
             let horizon = match ancestor_body {
                 // Derived from THIS node's own position, not the ancestor's: a dish on
                 // a mast and its feed aperture stand on the same ground but not at the
@@ -264,7 +265,11 @@ pub fn update_solar_poses(
         };
         // Site-local position (terrain frame); = solar pos when unanchored.
         let local = site.as_ref().map(|(_, f)| f.from_frame(pos)).unwrap_or(pos);
-        let pose = SolarFramePose { pos, local, horizon };
+        let pose = SolarFramePose {
+            pos,
+            local,
+            horizon,
+        };
 
         // Update in place (avoid per-tick insert churn); insert on first sight.
         if let Ok(mut existing) = q_pose.get_mut(entity) {

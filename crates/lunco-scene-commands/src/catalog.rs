@@ -679,9 +679,9 @@ mod tests {
             }
             count += 1;
             let src = std::fs::read_to_string(&p).expect("scene readable");
-            let desc = parse_spawn_meta(&src).description.unwrap_or_else(|| {
-                panic!("scene {} has no USD `doc` metadata", p.display())
-            });
+            let desc = parse_spawn_meta(&src)
+                .description
+                .unwrap_or_else(|| panic!("scene {} has no USD `doc` metadata", p.display()));
             assert!(
                 !desc.trim().is_empty(),
                 "scene {} has an empty description",

@@ -21,6 +21,7 @@ use lunco_avatar::{
 };
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
+use lunco_render::SceneCamera;
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
@@ -433,7 +434,7 @@ const FALLBACK_AVATAR_GRACE_SECS: f32 = 2.0;
 /// scene teardown remove it safely before the next scene loads.
 fn spawn_fallback_avatar(
     time: Res<Time>,
-    q_cameras: Query<Entity, With<Camera3d>>,
+    q_cameras: Query<Entity, With<SceneCamera>>,
     q_grids: Query<Entity, With<Grid>>,
     q_origins: Query<Entity, With<FloatingOrigin>>,
     active_sun: Res<lunco_environment::LunarSun>,

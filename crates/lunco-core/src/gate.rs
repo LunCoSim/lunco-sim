@@ -94,7 +94,10 @@ impl GateActivity {
 /// The returned condition is the original one — same value, same system params,
 /// evaluated the same number of times. The only addition is a tally, so wrapping
 /// a gate can never change whether the gated system runs.
-pub fn tracked<M>(name: &'static str, condition: impl SystemCondition<M>) -> impl SystemCondition<()> {
+pub fn tracked<M>(
+    name: &'static str,
+    condition: impl SystemCondition<M>,
+) -> impl SystemCondition<()> {
     // `Res`, never `ResMut` — see [`GateActivity`]. `Option<Res<..>>` so a gate
     // used in an app that never added [`GatePlugin`] (a unit test spinning up a
     // bare `App`) still evaluates instead of panicking on a missing resource.

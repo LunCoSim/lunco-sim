@@ -834,9 +834,7 @@ fn refresh_docbacked_terrain_from_doc(
                     }
                     let hit = match change {
                         UsdChange::FullReload => true,
-                        UsdChange::Resync { path } => {
-                            resync_touches_terrain(path, &prim_path.path)
-                        }
+                        UsdChange::Resync { path } => resync_touches_terrain(path, &prim_path.path),
                         UsdChange::InfoOnly { path, .. } => {
                             in_terrain_subtree(path, &prim_path.path)
                         }

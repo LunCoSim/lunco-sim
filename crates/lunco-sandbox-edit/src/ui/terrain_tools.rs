@@ -129,11 +129,7 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
 /// (which the panel does not have — it paints), so the button falls back to the
 /// tool's own name, Title-cased. Reading those two is worth doing once the
 /// palette can hold a script result; the arming contract does not change.
-fn script_tools_section(
-    ui: &mut egui::Ui,
-    ctx: &mut PanelCtx,
-    tokens: &lunco_theme::DesignTokens,
-) {
+fn script_tools_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::DesignTokens) {
     let tools = lunco_tools::ui_click_tools();
     if tools.is_empty() {
         return;

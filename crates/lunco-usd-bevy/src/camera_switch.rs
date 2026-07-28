@@ -24,8 +24,23 @@
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{FloatingOrigin, Grid};
-use lunco_core::{on_command, Command, LocalAvatar, SceneViewport};
+use lunco_core::{Command, LocalAvatar, SceneViewport, on_command};
 use lunco_render::SceneCamera;
+
+use crate::UsdPrimPath;
+
+/// Stable camera selection across re-projection. ECS entities are disposable;
+/// an authored camera is identified by the composed stage plus its USD path.
+#[derive(Resource, Default)]
+pub struct ViewportCameraSelection {
+    requested: Option<UsdCameraKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UsdCameraKey {
+    stage: AssetId<crate::UsdStageAsset>,
+    path: String,
+}
 
 /// Switch the viewport's active camera to the `SceneCamera` whose `Name` matches.
 ///
@@ -117,13 +132,18 @@ pub fn cycle_active_camera(
 /// directly (single-writer discipline).
 pub fn on_activate_camera(
     trigger: On<ActivateCamera>,
-    q_cams: Query<&RenderTarget, With<SceneCamera>>,
+    q_cams: Query<(&RenderTarget, Option<&UsdPrimPath>), With<SceneCamera>>,
     mut vp: ResMut<SceneViewport>,
+    mut selection: ResMut<ViewportCameraSelection>,
 ) {
     let target = trigger.event().0;
     match q_cams.get(target) {
-        Ok(t) if matches!(t, RenderTarget::Window(_)) => {
+        Ok((t, path)) if matches!(t, RenderTarget::Window(_)) => {
             vp.active_camera = Some(target);
+            selection.requested = path.map(|path| UsdCameraKey {
+                stage: path.stage_handle.id(),
+                path: path.path.clone(),
+            });
             info!("[camera] viewport → {target:?}");
         }
         Ok(_) => warn!("[camera] activate: {target:?} does not render to a window"),
@@ -142,7 +162,11 @@ pub fn bind_avatar_camera_on_add(
     add: On<Add, LocalAvatar>,
     q: Query<&RenderTarget, With<SceneCamera>>,
     mut vp: ResMut<SceneViewport>,
+    selection: Res<ViewportCameraSelection>,
 ) {
+    if selection.requested.is_some() {
+        return;
+    }
     let e = add.entity;
     if let Ok(RenderTarget::Window(_)) = q.get(e) {
         vp.active_camera = Some(e);
@@ -163,6 +187,7 @@ pub fn bind_avatar_camera_on_add(
 /// leave zero or many active cameras.
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
+    selection: Res<ViewportCameraSelection>,
     mut q_cams: Query<
         (
             Entity,
@@ -170,6 +195,7 @@ pub fn reconcile_scene_viewport(
             &RenderTarget,
             Option<&ChildOf>,
             Has<bevy::camera::Projection>,
+            Option<&UsdPrimPath>,
         ),
         With<SceneCamera>,
     >,
@@ -198,29 +224,41 @@ pub fn reconcile_scene_viewport(
             &RenderTarget,
             Option<&ChildOf>,
             Has<bevy::camera::Projection>,
+            Option<&UsdPrimPath>,
         ),
         With<SceneCamera>,
     >,
                        e: Entity|
      -> bool {
         q.get(e)
-            .map_or(false, |(_, _, t, _, has_proj)| is_window(t) && has_proj)
+            .map_or(false, |(_, _, t, _, has_proj, _)| is_window(t) && has_proj)
     };
 
     // ── Resolve the bound camera (revalidate + default) ──────────────────
     // Keep the binding if it still points at a window camera; else fall back
     // to the local-avatar camera, else the lowest-entity window camera. This
     // is what makes takeover + async spawn robust.
+    let requested = selection.requested.as_ref().and_then(|wanted| {
+        q_cams
+            .iter()
+            .find(|(_, _, _, _, _, path)| {
+                path.is_some_and(|path| {
+                    path.stage_handle.id() == wanted.stage && path.path == wanted.path
+                })
+            })
+            .map(|(entity, _, _, _, _, _)| entity)
+            .filter(|entity| activatable(&q_cams, *entity))
+    });
     let bound_valid = vp.active_camera.filter(|e| activatable(&q_cams, *e));
-    let active = bound_valid.or_else(|| {
+    let active = requested.or(bound_valid).or_else(|| {
         q_avatar_cam
             .iter()
             .find(|e| activatable(&q_cams, *e))
             .or_else(|| {
                 let mut ws: Vec<Entity> = q_cams
                     .iter()
-                    .filter(|(_, _, t, _, has_proj)| is_window(t) && *has_proj)
-                    .map(|(e, _, _, _, _)| e)
+                    .filter(|(_, _, t, _, has_proj, _)| is_window(t) && *has_proj)
+                    .map(|(e, _, _, _, _, _)| e)
                     .collect();
                 ws.sort();
                 ws.into_iter().next()
@@ -233,7 +271,7 @@ pub fn reconcile_scene_viewport(
     // Can the active camera host the FloatingOrigin? (grid-direct only)
     let grid_direct = active
         .and_then(|e| q_cams.get(e).ok())
-        .and_then(|(_, _, _, parent, _)| parent)
+        .and_then(|(_, _, _, parent, _, _)| parent)
         .map(|c| q_grids.contains(c.parent()))
         .unwrap_or(false);
 
@@ -241,7 +279,7 @@ pub fn reconcile_scene_viewport(
     let rect = vp.rect;
 
     // ── Actuate: the ONE writer of window-camera is_active + viewport ────
-    for (e, mut cam, target, _, _) in q_cams.iter_mut() {
+    for (e, mut cam, target, _, _, _) in q_cams.iter_mut() {
         if !is_window(target) {
             continue; // RTT/offscreen cameras are self-managed
         }
@@ -355,6 +393,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
             .add_systems(Update, reconcile_scene_viewport);
         let _a = app.world_mut().spawn(window_cam(true, "A")).id();
         let b = app.world_mut().spawn(window_cam(false, "B")).id();
@@ -379,6 +418,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
             .add_systems(Update, reconcile_scene_viewport);
         let b = app.world_mut().spawn(window_cam(true, "B")).id();
         {
@@ -398,5 +438,53 @@ mod tests {
             Some(b),
             "binding preserved across a hide"
         );
+    }
+
+    #[test]
+    fn authored_camera_selection_survives_entity_reprojection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
+            .add_systems(Update, reconcile_scene_viewport);
+        let stage = Handle::<crate::UsdStageAsset>::default();
+        let path = "/Scene/Wide";
+        let old = app
+            .world_mut()
+            .spawn((
+                window_cam(false, "Wide"),
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: path.into(),
+                },
+            ))
+            .id();
+        {
+            let mut selection = app.world_mut().resource_mut::<ViewportCameraSelection>();
+            selection.requested = Some(UsdCameraKey {
+                stage: stage.id(),
+                path: path.into(),
+            });
+        }
+        app.world_mut().despawn(old);
+        let replacement = app
+            .world_mut()
+            .spawn((
+                window_cam(false, "Wide"),
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: path.into(),
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            Some(replacement),
+            "the persistent USD key resolves to the reprojected entity"
+        );
+        assert_eq!(active_set(&mut app), vec![replacement]);
     }
 }

@@ -17,7 +17,9 @@
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{
+    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
+};
 use lunco_twin::{TwinError, TwinMode};
 
 use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
@@ -98,7 +100,6 @@ fn on_open_twin(
     spawn_twin_from_path(folder, &mut pending, "OpenTwin");
 }
 
-
 /// Open a folder as the workspace root — a Twin if it has a `twin.toml`,
 /// otherwise a plain folder Twin (a first-class mode, no manifest required).
 ///
@@ -122,7 +123,9 @@ fn on_open_folder(
 ) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
-        warn!("[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)");
+        warn!(
+            "[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)"
+        );
         return;
     }
     let folder = std::path::Path::new(&path);

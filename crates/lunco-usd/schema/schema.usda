@@ -709,6 +709,24 @@ class "LunCoAvatarAPI" (
     )
 }
 
+class "LunCoCameraAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Declares a standard UsdGeomCamera's LunCo runtime role and sole pose authority. Apply to every non-avatar camera that participates in a LunCo scene."
+)
+{
+    uniform token lunco:cameraRole = "viewport" (
+        allowedTokens = ["viewport", "sensor"]
+        doc = "viewport participates in the main workbench view; sensor is an instrument camera and never becomes a window-view candidate."
+    )
+    uniform token lunco:cameraPose = "authored" (
+        allowedTokens = ["authored", "mounted"]
+        doc = "The sole pose authority. authored keeps USD hierarchy/animation; mounted is a rigid grid-direct follower of this camera's authored parent."
+    )
+}
+
 # --- LunCo vehicle extensions ------------------------------------------------
 #
 # The PhysX vehicle schema (see `core/physxSchema.usda`) covers wheel dimensions,

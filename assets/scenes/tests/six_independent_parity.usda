@@ -115,7 +115,9 @@ def Xform "SixIndependentParity" (
 
     # High and back, so the whole traverse — straight leg, both steer legs, and
     # the pivot — stays in frame without a follow cam.
-    def Camera "MotionCam"
+    def Camera "MotionCam" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         custom double3 lunco:cameraLookAt = (0.0, 1.0, 60.0)
         double3 xformOp:translate = (0.0, 60.0, 190.0)

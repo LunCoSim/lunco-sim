@@ -10,7 +10,9 @@
 # physical Sun stays calibrated and every composed consumer receives the same
 # display exposure. A deliberate campaign take can override these standard
 # camera attributes on its local Camera prim.
-def Camera "LunarSurfaceCamera"
+def Camera "LunarSurfaceCamera" (
+    prepend apiSchemas = ["LunCoCameraAPI"]
+)
 {
     # Match the sandbox free-flight camera's former ~45° vertical view. USD's
     # 50 mm default is a narrow photographic lens, not a navigation camera.

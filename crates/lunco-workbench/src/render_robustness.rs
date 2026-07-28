@@ -354,7 +354,10 @@ fn set_error_handler(
                              Identical errors are now rate-limited."
                         );
                     } else if n.is_multiple_of(600) {
-                        warn!("wgpu validation error persists ({} frames dropped): {desc}", n + 1);
+                        warn!(
+                            "wgpu validation error persists ({} frames dropped): {desc}",
+                            n + 1
+                        );
                     }
                 }
                 // OOM on a shared-memory adapter is the reported root cause, and
@@ -389,11 +392,7 @@ fn escalate_render_recovery(
     mut cameras: Query<&mut bevy::camera::Camera>,
 ) {
     let h = &health.0;
-    let Some(action) = ladder.step(
-        h.total(),
-        h.device_lost(),
-        time.elapsed_secs_f64(),
-    ) else {
+    let Some(action) = ladder.step(h.total(), h.device_lost(), time.elapsed_secs_f64()) else {
         return;
     };
 
@@ -534,7 +533,11 @@ mod tests {
             Some(Action::GiveUp)
         );
         total += 1;
-        assert_eq!(l.step(total, false, 99.0), None, "give up is not repeatable");
+        assert_eq!(
+            l.step(total, false, 99.0),
+            None,
+            "give up is not repeatable"
+        );
         assert_eq!(l.rung, Rung::GaveUp);
     }
 

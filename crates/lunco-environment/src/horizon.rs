@@ -930,16 +930,16 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
         );
     }
     Some(first).map(|(gt, light, ang, csm)| {
-            let csm_far = if light.shadow_maps_enabled {
-                csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            // A sun with no authored angular size must not yield tan(0)=0
-            // (→ div-by-zero in the march). Default to Sol's ~0.53° diameter.
-            let diameter_deg = ang.map(|a| a.0).filter(|d| *d > 0.0).unwrap_or(0.53);
-            (gt, tan_sun_radius(diameter_deg), csm_far)
-        })
+        let csm_far = if light.shadow_maps_enabled {
+            csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        // A sun with no authored angular size must not yield tan(0)=0
+        // (→ div-by-zero in the march). Default to Sol's ~0.53° diameter.
+        let diameter_deg = ang.map(|a| a.0).filter(|d| *d > 0.0).unwrap_or(0.53);
+        (gt, tan_sun_radius(diameter_deg), csm_far)
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────

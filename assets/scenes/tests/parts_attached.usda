@@ -86,7 +86,9 @@ def Xform "PartsAttached" (
     # Broadside on the whole line-up: a human watching this scene sees parts left
     # on the ground as the rovers pull away, which is the same event the numbers
     # report.
-    def Camera "PartsCam"
+    def Camera "PartsCam" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         custom double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
         double3 xformOp:translate = (0.0, 40.0, 200.0)

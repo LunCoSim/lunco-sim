@@ -83,7 +83,11 @@ pub fn insert_celestial_comms_components(
     if reader.prim_type_name(sdf_path).as_deref() == Some("DistantLight") {
         let parent_is_body = sdf_path
             .parent()
-            .map(|p| reader.scalar::<i32>(&p, "lunco:body").is_some_and(|n| n != 0))
+            .map(|p| {
+                reader
+                    .scalar::<i32>(&p, "lunco:body")
+                    .is_some_and(|n| n != 0)
+            })
             .unwrap_or(false);
         if parent_is_body {
             // WEB: WebGL2 supports ONE `DirectionalLight`, and a second culls

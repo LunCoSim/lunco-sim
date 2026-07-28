@@ -711,11 +711,7 @@ struct RoiCrop {
 ///
 /// Scans rows/columns rather than per-pixel so the cost stays linear in the
 /// raster and negligible against the decode that produced it.
-fn valid_data_bounds(
-    samples: &[f64],
-    w: usize,
-    h: usize,
-) -> Option<(usize, usize, usize, usize)> {
+fn valid_data_bounds(samples: &[f64], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
     // An RGB source carries its data in `planes` and leaves `samples` empty. It
     // also has no NaN sentinel — colour products encode absence as a colour, not
     // as a non-finite — so there is nothing to scan and the raster IS the bound.
@@ -1041,11 +1037,7 @@ fn resample_roi_bilinear(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiC
                     wsum += w;
                 }
             }
-            out[oy * out_n + ox] = if wsum > 1e-12 {
-                acc / wsum
-            } else {
-                f64::NAN
-            };
+            out[oy * out_n + ox] = if wsum > 1e-12 { acc / wsum } else { f64::NAN };
         }
     }
     out
@@ -1164,7 +1156,11 @@ fn process_map(
     // albedo-annihilating black.
     let is_measurement = |v: f64| v.is_finite() && v != 0.0;
 
-    let mut sorted: Vec<f64> = gray.iter().copied().filter(|v| is_measurement(*v)).collect();
+    let mut sorted: Vec<f64> = gray
+        .iter()
+        .copied()
+        .filter(|v| is_measurement(*v))
+        .collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let (lo, hi) = if sorted.is_empty() {
         (0.0, 1.0)
@@ -1227,7 +1223,10 @@ fn process_map(
         let mean = sum_measured / n_measured;
         let sidecar = output_path.with_extension("mean");
         std::fs::write(&sidecar, format!("{mean:.6}\n"))?;
-        println!("    map mean {mean:.4} → suggested ortho_gain {:.3}", 1.0 / mean.max(1e-6));
+        println!(
+            "    map mean {mean:.4} → suggested ortho_gain {:.3}",
+            1.0 / mean.max(1e-6)
+        );
     }
     Ok(())
 }
@@ -1248,7 +1247,11 @@ fn process_normalmap(
     let src = decode_gray_source(source)?;
     let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "normalmap")?;
     let out_n = roi.out_n;
-    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "normalmap", 0.05)?;
+    reject_if_mostly_nodata(
+        &roi_samples(&src.samples, src.w, src.h, &roi),
+        "normalmap",
+        0.05,
+    )?;
     let mut h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
 
     // Fill voids BEFORE differencing, for the same reason `process_dem` does — and
@@ -1338,7 +1341,11 @@ mod tests {
 
         // And the failure mode being guarded against: NaN clamps to NaN, casts to 0.
         assert!(f64::NAN.clamp(0.0, 255.0).is_nan(), "clamp propagates NaN");
-        assert_eq!(f64::NAN as u8, 0, "the cast then saturates to the worst value");
+        assert_eq!(
+            f64::NAN as u8,
+            0,
+            "the cast then saturates to the worst value"
+        );
     }
 
     /// A stereo DTM has voids where matching failed — shadowed crater floors

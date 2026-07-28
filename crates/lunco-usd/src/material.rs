@@ -418,7 +418,9 @@ mod tests {
 
         // Already applied → no schema op at all.
         let (ops, _) = paths_with_schemas("/World/Ball", &["MaterialBindingAPI".into()]);
-        assert!(!ops.iter().any(|o| o.starts_with("SetApiSchemas /World/Ball")));
+        assert!(!ops
+            .iter()
+            .any(|o| o.starts_with("SetApiSchemas /World/Ball")));
     }
 
     /// The `Looks` scope is anchored at the geom's ROOT prim, not at `/` — a

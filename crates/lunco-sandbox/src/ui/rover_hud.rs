@@ -49,7 +49,7 @@
 use avian3d::prelude::{ComputedCenterOfMass, LinearVelocity};
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
@@ -1095,8 +1095,10 @@ pub(crate) fn draw_rover_hud(
                                     ("range", range),
                                     (
                                         "elev",
-                                        link.elevation_deg
-                                            .map_or_else(|| "—".to_string(), |e| format!("{e:+.0}°")),
+                                        link.elevation_deg.map_or_else(
+                                            || "—".to_string(),
+                                            |e| format!("{e:+.0}°"),
+                                        ),
                                     ),
                                 ],
                                 &pal,

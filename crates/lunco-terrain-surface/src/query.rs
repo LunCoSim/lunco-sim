@@ -29,9 +29,9 @@ use std::sync::Arc;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_core::coords::GridPos;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_core::coords::GridPos;
 use lunco_terrain_core::{
     field_map, AspectField, ElevationField, HeightSource, SlopeField, Square, SurfaceField,
 };
@@ -90,10 +90,8 @@ impl ApiQueryProvider for TerrainHeightProvider {
         // Snapshot the DEM terrains, releasing the world borrow before the
         // registry read. The oracle is shared via `Arc`.
         let mut q = world.query::<(Entity, &DemHeightField)>();
-        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> = q
-            .iter(world)
-            .map(|(e, hf)| (e, hf.0.clone()))
-            .collect();
+        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
+            q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
 
         // First terrain whose footprint covers the point wins. The DEM frame IS
         // the grid frame: the terrain entity is a grid-direct child at
@@ -205,8 +203,7 @@ impl ApiQueryProvider for TerrainFieldProvider {
 
         // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
         let mut q = world.query::<(Entity, &DemHeightField)>();
-        let terrains: Vec<Arc<SurfaceOracle>> =
-            q.iter(world).map(|(_, hf)| hf.0.clone()).collect();
+        let terrains: Vec<Arc<SurfaceOracle>> = q.iter(world).map(|(_, hf)| hf.0.clone()).collect();
 
         // First terrain whose footprint covers the region centre wins. The DEM
         // frame IS the grid frame (see `TerrainHeight`), so the grid-absolute
@@ -251,7 +248,11 @@ fn parse_vec3(v: Option<&serde_json::Value>) -> Option<DVec3> {
         if arr.len() < 3 {
             return None;
         }
-        return Some(DVec3::new(arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?));
+        return Some(DVec3::new(
+            arr[0].as_f64()?,
+            arr[1].as_f64()?,
+            arr[2].as_f64()?,
+        ));
     }
     Some(DVec3::new(
         v.get("x")?.as_f64()?,
@@ -322,10 +323,8 @@ impl ApiQueryProvider for TerrainRaycastProvider {
         };
 
         let mut q = world.query::<(Entity, &DemHeightField)>();
-        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> = q
-            .iter(world)
-            .map(|(e, hf)| (e, hf.0.clone()))
-            .collect();
+        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
+            q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
 
         // Nearest intercept across all DEM footprints wins. The march is the pure
         // `lunco_terrain_core::los_hit` kernel (the single-ray sibling of

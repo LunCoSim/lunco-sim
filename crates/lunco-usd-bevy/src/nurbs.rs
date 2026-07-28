@@ -553,7 +553,7 @@ mod tests {
     /// Returns (points, weights) in USD's v-major order.
     fn hab1_dome_net(a: f32, b: f32) -> (Vec<[f32; 3]>, Vec<f64>) {
         const C: f64 = std::f64::consts::FRAC_1_SQRT_2; // cos 45
-                                                        // 4 quarter spans: on-circle points at 0/90/180/270, corners between.
+        // 4 quarter spans: on-circle points at 0/90/180/270, corners between.
         let ring = |r: f32, y: f32| -> Vec<[f32; 3]> {
             vec![
                 [r, y, 0.0],

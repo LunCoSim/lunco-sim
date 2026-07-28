@@ -24,18 +24,17 @@ pub mod util;
 
 // Re-export Command structs for easy access
 pub use compile::{
-    CompileClassPickerEntry, CompileClassPickerState, CompileModel,
-    FastRunActiveModel, FastRunInput, FastRunSetupEntry, FastRunSetupState, PauseActiveModel,
-    PickerPurpose, ResetActiveModel, RestartActiveModel, ResumeActiveModel, RunActiveModel,
+    CompileClassPickerEntry, CompileClassPickerState, CompileModel, FastRunActiveModel,
+    FastRunInput, FastRunSetupEntry, FastRunSetupState, PauseActiveModel, PickerPurpose,
+    ResetActiveModel, RestartActiveModel, ResumeActiveModel, RunActiveModel,
 };
 pub use diagram::{AddCanvasPlot, MoveComponent};
 pub use doc::{FormatDocument, Redo, SaveActiveDocument, SaveActiveDocumentAs, Undo};
 pub use inspect::InspectActiveDoc;
 pub use lifecycle::drain_open_file_results;
 pub use lifecycle::{
-    ClassAction, CloseDialogState, CreateNewScratchModel,
-    DuplicateModelFromReadOnly, GetFile, Open, OpenClass, OpenInNewView, PendingCloseAfterSave,
-    PendingTabCloseScopes, TabCloseScope,
+    ClassAction, CloseDialogState, CreateNewScratchModel, DuplicateModelFromReadOnly, GetFile,
+    Open, OpenClass, OpenInNewView, PendingCloseAfterSave, PendingTabCloseScopes, TabCloseScope,
 };
 pub use nav::{
     AutoArrangeDiagram, FitCanvas, FocusComponent, FocusDocumentByName, PanCanvas, SetViewMode,

@@ -403,6 +403,8 @@ projects each to an *inactive* Bevy `Camera3d` (see [`17-view-and-intent.md §6`
 | `float2 clippingRange` | near / far planes |
 | `token projection` | `perspective` (default) or `orthographic` |
 | `custom double3 lunco:cameraLookAt` | aim the camera at this point (parent-local); overrides authored rotation |
+| `LunCoCameraAPI` / `lunco:cameraRole` | explicit `viewport` or `sensor` runtime role for a non-avatar camera |
+| `LunCoCameraAPI` / `lunco:cameraPose` | explicit `authored` or `mounted` sole pose authority |
 
 - **Placement:** a **top-level** `def Camera` is a static scene camera (a wide
   shot); it can host the big_space `FloatingOrigin` directly. A `def Camera`

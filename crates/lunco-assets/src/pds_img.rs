@@ -452,7 +452,10 @@ mod tests {
 
         // 0xFF7FFFFB as an IEEE-754 f32 — the ISIS null the real product ships.
         let null = f32::from_bits(0xFF7F_FFFB);
-        assert!(null.is_finite(), "the whole problem: the sentinel is finite");
+        assert!(
+            null.is_finite(),
+            "the whole problem: the sentinel is finite"
+        );
         let vals: [f32; 4] = [-1900.0, null, -1895.5, -1892.25];
         let mut px = Vec::new();
         for v in vals {
@@ -500,7 +503,10 @@ mod tests {
             resolve_radix_missing(0xFF7F_FFFB, Some("PC_REAL"), Some(32)) as f32,
             f32::from_bits(0xFF7F_FFFB)
         );
-        assert_eq!(resolve_radix_missing(255, Some("LSB_INTEGER"), Some(16)), 255.0);
+        assert_eq!(
+            resolve_radix_missing(255, Some("LSB_INTEGER"), Some(16)),
+            255.0
+        );
     }
 
     #[test]

@@ -29,9 +29,9 @@ use bevy_egui::egui;
 use lunco_doc::{CompileState, Diagnostic, DiagnosticSeverity, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_sandbox_edit::SelectedEntities;
+use lunco_scripting::ScriptRegistry;
 use lunco_scripting::commands::RunScenario;
 use lunco_scripting::doc::ScriptedModel;
-use lunco_scripting::ScriptRegistry;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::SaveScenario;
@@ -271,11 +271,7 @@ fn empty_hint(ui: &mut egui::Ui, msg: &str) {
 /// Height to reserve for the diagnostics strip so the editor sizes to fill the
 /// rest.
 fn diagnostics_height(diags: &[Diagnostic]) -> f32 {
-    if diags.is_empty() {
-        0.0
-    } else {
-        130.0
-    }
+    if diags.is_empty() { 0.0 } else { 130.0 }
 }
 
 fn status_label(

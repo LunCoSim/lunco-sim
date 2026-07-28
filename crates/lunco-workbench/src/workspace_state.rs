@@ -916,5 +916,4 @@ mod tests {
         assert_eq!(design.bottom, vec![PanelId("plots")]);
         assert_eq!(design.active_center_tab, 2);
     }
-
 }

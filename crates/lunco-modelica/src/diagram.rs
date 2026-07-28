@@ -192,14 +192,15 @@ impl ModelicaComponentBuilder {
                         // so the wire actually gets built. Without
                         // this, every MSL connect from a model-level
                         // connector silently drops out of the diagram.
-                        let resolve_port =
-                            |n: &crate::diagram_model::ComponentNode, port: &str| -> Option<usize> {
-                                if port.is_empty() && !n.ports.is_empty() {
-                                    Some(0)
-                                } else {
-                                    n.port_index(port).map(|p| p as usize)
-                                }
-                            };
+                        let resolve_port = |n: &crate::diagram_model::ComponentNode,
+                                            port: &str|
+                         -> Option<usize> {
+                            if port.is_empty() && !n.ports.is_empty() {
+                                Some(0)
+                            } else {
+                                n.port_index(port).map(|p| p as usize)
+                            }
+                        };
                         if let (Some(sp), Some(tp)) = (
                             resolve_port(src_node_ref, &src_port),
                             resolve_port(tgt_node_ref, &tgt_port),

@@ -94,7 +94,9 @@ def Xform "AllocationSpec" (
 
     # Broadside: both rovers in frame for the whole run, so a human can SEE that
     # one of them drove off and the other sat still.
-    def Camera "SpecCam"
+    def Camera "SpecCam" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
     {
         custom double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
         double3 xformOp:translate = (0.0, 45.0, 190.0)

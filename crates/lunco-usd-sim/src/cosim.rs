@@ -26,17 +26,17 @@
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::{
-    on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid,
+    Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid, on_command, register_commands,
 };
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel};
+use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel, parse_model_interface};
 use lunco_render::SceneCamera;
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
-    doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
     ScriptRegistry,
+    doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
 };
 use lunco_usd_bevy::{
     CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,

@@ -64,8 +64,25 @@ fn sample(
             w,
             "{},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.4},\
              {:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.4}",
-            *frame, t, e, pos.x, pos.y, pos.z, g.x, g.y, g.z, speed,
-            r.x, r.y, r.z, r.w, gr.x, gr.y, gr.z, gr.w, angspeed
+            *frame,
+            t,
+            e,
+            pos.x,
+            pos.y,
+            pos.z,
+            g.x,
+            g.y,
+            g.z,
+            speed,
+            r.x,
+            r.y,
+            r.z,
+            r.w,
+            gr.x,
+            gr.y,
+            gr.z,
+            gr.w,
+            angspeed
         );
     }
     let _ = w.flush();

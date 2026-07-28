@@ -68,13 +68,13 @@
 //! by a resource the recorder happens to set.
 
 use crate::{UsdPrimPath, UsdRead};
+use bevy::math::DVec3;
 use bevy::math::cubic_splines::{
     CubicBezier, CubicCardinalSpline, CubicGenerator, CyclicCubicGenerator,
 };
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
 
 /// Which standard basis the curve interpolates with (`uniform token basis`).
@@ -654,6 +654,7 @@ pub fn resolve_camera_paths(
             .entity(camera)
             .remove::<crate::camera_mount::MountedCamera>()
             .insert((
+                crate::camera::UsdCameraPose::Path,
                 CellCoord::default(),
                 lunco_core::GridAnchor,
                 ChildOf(grid),
@@ -986,7 +987,9 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let sampled = if periodic {
         spline.to_curve_cyclic().map(|c| c.position(u * n as f32))
     } else {
-        spline.to_curve().map(|c| c.position(1.0 + u * (n - 3) as f32))
+        spline
+            .to_curve()
+            .map(|c| c.position(1.0 + u * (n - 3) as f32))
     };
     // `n ≥ 2` is guaranteed by the callers above, so this is unreachable — but
     // the polygon is a saner fallback than a panic in a render-path system.
@@ -1092,8 +1095,14 @@ mod tests {
         ];
         let start = eval_curve(&p, CurveBasis::CatmullRom, false, 0.0);
         let end = eval_curve(&p, CurveBasis::CatmullRom, false, 1.0);
-        assert!((start - p[1]).length() < 1e-5, "u=0 is p1, not the phantom p0");
-        assert!((end - p[3]).length() < 1e-5, "u=1 is pₙ₋₂, not the phantom pₙ₋₁");
+        assert!(
+            (start - p[1]).length() < 1e-5,
+            "u=0 is p1, not the phantom p0"
+        );
+        assert!(
+            (end - p[3]).length() < 1e-5,
+            "u=1 is pₙ₋₂, not the phantom pₙ₋₁"
+        );
         // Interior knot: n − 3 = 2 segments, so u = 0.5 sits exactly on p2.
         let mid = eval_curve(&p, CurveBasis::CatmullRom, false, 0.5);
         assert!((mid - p[2]).length() < 1e-5, "interior knot interpolated");
@@ -1103,7 +1112,11 @@ mod tests {
     /// degradation is the control polygon.
     #[test]
     fn open_catmull_rom_under_four_cvs_degrades_to_the_polygon() {
-        let p = vec![Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 0.0)];
+        let p = vec![
+            Vec3::ZERO,
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(2.0, 2.0, 0.0),
+        ];
         let got = eval_curve(&p, CurveBasis::CatmullRom, false, 0.25);
         assert!(
             (got - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5,

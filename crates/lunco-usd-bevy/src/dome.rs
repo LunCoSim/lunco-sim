@@ -54,7 +54,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };

@@ -588,8 +588,8 @@ impl NodeVisual for PlotNodeVisual {
         // pointer doubles as the revision key for the per-node
         // decimation cache below: the producer mints a new Arc only
         // when the signal's history actually changed.
-        let points_arc: Option<&Arc<Vec<SamplePoint>>> = resolved_entity
-            .and_then(|e| snapshot.samples.get(&(e, self.data.signal_path.clone())));
+        let points_arc: Option<&Arc<Vec<SamplePoint>>> =
+            resolved_entity.and_then(|e| snapshot.samples.get(&(e, self.data.signal_path.clone())));
         let points: &[SamplePoint] = points_arc.map(|a| a.as_slice()).unwrap_or(&[]);
 
         // Adaptive density: at extreme zoom-out we drop to a bare

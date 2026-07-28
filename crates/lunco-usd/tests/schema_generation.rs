@@ -23,11 +23,11 @@ fn schema_dir() -> PathBuf {
 fn generated_schema_is_in_sync() {
     // Read from disk, not `include_str!`: the regen arm rewrites the file, and
     // a compile-time embed would compare against the pre-rewrite bytes.
-    let authored = std::fs::read_to_string(schema_dir().join("schema.usda"))
-        .expect("read schema/schema.usda");
+    let authored =
+        std::fs::read_to_string(schema_dir().join("schema.usda")).expect("read schema/schema.usda");
     let checked_in_path = schema_dir().join("generatedSchema.usda");
-    let checked_in = std::fs::read_to_string(&checked_in_path)
-        .expect("read schema/generatedSchema.usda");
+    let checked_in =
+        std::fs::read_to_string(&checked_in_path).expect("read schema/generatedSchema.usda");
 
     let generated = lunco_usd::schema_gen::generate_schema(&authored)
         .expect("schema.usda must generate (it is the authored source of the registry)");
@@ -63,8 +63,8 @@ fn generated_schema_is_in_sync() {
 /// regenerates.)
 #[test]
 fn every_generated_class_is_in_pluginfo() {
-    let authored = std::fs::read_to_string(schema_dir().join("schema.usda"))
-        .expect("read schema/schema.usda");
+    let authored =
+        std::fs::read_to_string(schema_dir().join("schema.usda")).expect("read schema/schema.usda");
     let generated =
         lunco_usd::schema_gen::generate_schema(&authored).expect("schema.usda must generate");
     let plug_info = std::fs::read_to_string(schema_dir().join("plugInfo.json"))
@@ -75,7 +75,9 @@ fn every_generated_class_is_in_pluginfo() {
         let Some(rest) = line.strip_prefix("class ") else {
             continue;
         };
-        let Some(start) = rest.find('"') else { continue };
+        let Some(start) = rest.find('"') else {
+            continue;
+        };
         let Some(end) = rest[start + 1..].find('"') else {
             continue;
         };

@@ -104,10 +104,7 @@ pub struct JointStateView {
 /// (values are live physics, changing every tick) and once more after a
 /// deselect so the view empties. A quiescent, nothing-selected scene never
 /// pays for the joint scan.
-pub fn joint_state_active(
-    selection: Res<SelectedEntities>,
-    view: Res<JointStateView>,
-) -> bool {
+pub fn joint_state_active(selection: Res<SelectedEntities>, view: Res<JointStateView>) -> bool {
     selection.primary().is_some() || view.vessel.is_some() || !view.rows.is_empty()
 }
 
@@ -193,9 +190,7 @@ pub fn populate_joint_state_view(
     // ── Avian revolute joints (physical wheels, suspension pins, doors) ──
     for (joint_entity, joint, steer) in q_joints.iter() {
         // Membership: the jointed child body hangs under the selected vessel.
-        if root_of(joint.body2, &q_child_of) != root
-            && root_of(joint_entity, &q_child_of) != root
-        {
+        if root_of(joint.body2, &q_child_of) != root && root_of(joint_entity, &q_child_of) != root {
             continue;
         }
         let (Ok((rot1, av1)), Ok((rot2, av2))) =

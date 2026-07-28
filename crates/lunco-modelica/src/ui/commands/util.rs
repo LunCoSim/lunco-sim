@@ -14,11 +14,7 @@ use lunco_api::session::Exit;
 use lunco_core::{on_command, register_commands};
 
 #[on_command(Exit)]
-pub fn on_exit(
-    trigger: On<Exit>,
-    windows: Query<(), With<Window>>,
-    mut commands: Commands,
-) {
+pub fn on_exit(trigger: On<Exit>, windows: Query<(), With<Window>>, mut commands: Commands) {
     // Whether or not this process is about to exit, a compile that never yields
     // can block Bevy's TaskPool join and wedge the shutdown. Signal in-flight
     // runs to cancel and arm the hard-exit watchdog on every path that exits.

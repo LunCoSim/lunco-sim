@@ -92,7 +92,10 @@ impl ScenarioAudience {
 /// `LUNCO_SCENARIO_UNATTENDED=1|0` forces it either way, so a windowed session
 /// can watch an autopilot play (`1`), and a headless capture can hold a lesson
 /// still for a scripted driver (`0`), with no rebuild.
-pub fn resolve_scenario_audience(windows: Query<(), With<Window>>, mut audience: ResMut<ScenarioAudience>) {
+pub fn resolve_scenario_audience(
+    windows: Query<(), With<Window>>,
+    mut audience: ResMut<ScenarioAudience>,
+) {
     *audience = match std::env::var("LUNCO_SCENARIO_UNATTENDED").ok().as_deref() {
         Some("1") | Some("true") => ScenarioAudience::Unattended,
         Some("0") | Some("false") => ScenarioAudience::Attended,

@@ -12,7 +12,7 @@
 //! anything appearing at all.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_terrain_surface::TerrainGenStatus;
 
 /// Paint the centered generation card when a terrain build is active. Runs in

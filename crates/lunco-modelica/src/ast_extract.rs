@@ -1193,8 +1193,7 @@ mod tests {
         // (so `w` stays a runtime slot) but can't capture a default. That
         // MUST come back as an unresolved report — the slot starts at 0.0
         // and silence here is silent wrong numbers.
-        let source =
-            "model M\n  parameter Real T = 2.0;\n  input Real w = 2*3.14/T;\nend M;\n";
+        let source = "model M\n  parameter Real T = 2.0;\n  input Real w = 2*3.14/T;\nend M;\n";
         let (modified, defaults, issues) = strip_input_defaults_with_report(source);
         assert_eq!(modified.len(), source.len(), "strip must preserve length");
         assert!(!modified.contains("2*3.14/T"), "binding must be blanked");
