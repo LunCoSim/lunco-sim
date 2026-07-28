@@ -45,6 +45,39 @@ pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String
     resolve_bound_shader(&view, &mesh_sdf).map(|p| p.to_string())
 }
 
+/// The composed `apiSchemas` applied to `prim`, as owned strings — what
+/// `ensure_preview_surface_ops` needs so the `MaterialBindingAPI` it applies
+/// composes WITH the prim's existing applied schemas instead of erasing them.
+/// Empty when the prim applies none (or the stage is not built yet).
+pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
+    let id = prim.stage_handle.id();
+    let Ok(sdf) = SdfPath::new(&prim.path) else {
+        return Vec::new();
+    };
+    let recipe = world
+        .get_resource::<Assets<lunco_usd_bevy::UsdStageAsset>>()
+        .and_then(|stages| stages.get(&prim.stage_handle))
+        .and_then(|a| a.recipe.clone());
+    if let Some(mut canonical) = world.get_non_send_mut::<lunco_usd_bevy::CanonicalStages>() {
+        if canonical.get(id).is_none() {
+            if let Some(r) = recipe.as_ref() {
+                canonical.get_or_build(id, r);
+            }
+        }
+    }
+    let Some(canonical) = world.get_non_send::<lunco_usd_bevy::CanonicalStages>() else {
+        return Vec::new();
+    };
+    let Some(view) = canonical.get(id).map(|c| c.view()) else {
+        return Vec::new();
+    };
+    view.stage()
+        .prim(sdf)
+        .api_schemas()
+        .map(|v| v.iter().map(|s| s.as_str().to_string()).collect())
+        .unwrap_or_default()
+}
+
 /// Resolve the editable USD document backing `entity`'s stage — the same
 /// asset↔document match `apply_usd_path_attribute_change` needs, factored out so a
 /// caller authoring a *sequence* of ops (the mount snap) resolves the doc once and

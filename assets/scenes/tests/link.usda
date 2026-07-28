@@ -1,6 +1,7 @@
 #usda 1.0
 (
     defaultPrim = "LinkTest"
+    metersPerUnit = 1
     doc = "Connectivity-kernel smoke scene: every PLACEMENT kind the kernel can pose a link node from — geodetic (Earth + Moon surface), Kepler (lunar orbit), and libration (Earth-Moon L1/L2/L4). No terrain, globe or rovers, so it exercises pose -> pairwise -> verdict -> LinkState on its own."
 )
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.

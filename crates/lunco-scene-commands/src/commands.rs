@@ -1953,10 +1953,13 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
         let existing = crate::doc_resolve::bound_shader_prim(world, &prim);
         let (mut ops, shader, fresh) = match existing {
             Some(sp) => (Vec::new(), sp, false),
-            None => match lunco_usd::material::ensure_preview_surface_ops(&prim.path) {
-                Some((ops, shader)) => (ops, shader, true),
-                None => return,
-            },
+            None => {
+                let schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
+                match lunco_usd::material::ensure_preview_surface_ops(&prim.path, &schemas) {
+                    Some((ops, shader)) => (ops, shader, true),
+                    None => return,
+                }
+            }
         };
 
         let mut set = |attr: &str, ty: &str, value: String| {

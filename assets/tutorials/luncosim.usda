@@ -4,6 +4,7 @@
     The curriculum the LUNCOSIM flagship offers. See `./sandbox.usda` for why
     this layer exists rather than a `hosts` attribute on each track.
     """
+    metersPerUnit = 1
     subLayers = [
         @./luncosim/curriculum.usda@
     ]

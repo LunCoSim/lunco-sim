@@ -61,7 +61,16 @@ const PHYSICS_MATERIALS: &str = "PhysicsMaterials";
 /// `/SandboxScene/Looks/…`), which is inside the subtree the stage mounts. A
 /// `Material` authored outside the mounted `defaultPrim` subtree composes into
 /// the layer and is then never seen.
-pub fn ensure_preview_surface_ops(geom_path: &str) -> Option<(Vec<UsdOp>, String)> {
+///
+/// `geom_api_schemas` is the geom prim's currently applied API schemas: a
+/// `material:binding` is only valid on a prim with `MaterialBindingAPI` applied
+/// (usdchecker enforces this since 21.02 — strict consumers drop the binding
+/// otherwise), and [`UsdOp::SetApiSchemas`] authors the full explicit list, so
+/// the existing schemas must ride along with the one being added.
+pub fn ensure_preview_surface_ops(
+    geom_path: &str,
+    geom_api_schemas: &[String],
+) -> Option<(Vec<UsdOp>, String)> {
     let geom = geom_path.strip_prefix('/')?;
     if geom.is_empty() {
         return None;
@@ -85,7 +94,7 @@ pub fn ensure_preview_surface_ops(geom_path: &str) -> Option<(Vec<UsdOp>, String
     let shader = format!("{mat}/{SURFACE}");
 
     let root_layer = LayerId::root();
-    let ops = vec![
+    let mut ops = vec![
         UsdOp::AddPrim {
             edit_target: root_layer.clone(),
             parent_path: root.clone(),
@@ -126,13 +135,18 @@ pub fn ensure_preview_surface_ops(geom_path: &str) -> Option<(Vec<UsdOp>, String
             type_name: "token".into(),
             sources: vec![format!("{shader}.outputs:surface")],
         },
-        UsdOp::SetRelationship {
-            edit_target: root_layer,
-            path: geom_path.to_string(),
-            name: "material:binding".into(),
-            targets: vec![mat],
-        },
     ];
+    ops.extend(apply_material_binding_api(
+        &root_layer,
+        geom_path,
+        geom_api_schemas,
+    ));
+    ops.push(UsdOp::SetRelationship {
+        edit_target: root_layer,
+        path: geom_path.to_string(),
+        name: "material:binding".into(),
+        targets: vec![mat],
+    });
 
     Some((ops, shader))
 }
@@ -163,8 +177,13 @@ pub fn ensure_preview_surface_ops(geom_path: &str) -> Option<(Vec<UsdOp>, String
 /// [`lunco_usd_bevy::resolve_bound_material`] and serves both. A scene that DOES
 /// merge them still resolves correctly through that fallback, so we read the
 /// legal form even though we don't author it.
+///
+/// `geom_api_schemas` is the geom prim's currently applied API schemas — see
+/// [`ensure_preview_surface_ops`]: the binding requires `MaterialBindingAPI`
+/// applied to the bound prim, and the schema list is authored whole.
 pub fn ensure_physics_material_ops(
     geom_path: &str,
+    geom_api_schemas: &[String],
     name: &str,
     dynamic_friction: f32,
     static_friction: f32,
@@ -220,6 +239,11 @@ pub fn ensure_physics_material_ops(
         attr("physics:restitution", r.to_string());
     }
 
+    ops.extend(apply_material_binding_api(
+        &root_layer,
+        geom_path,
+        geom_api_schemas,
+    ));
     ops.push(UsdOp::SetRelationship {
         edit_target: root_layer,
         path: geom_path.to_string(),
@@ -227,6 +251,30 @@ pub fn ensure_physics_material_ops(
         targets: vec![mat],
     });
     Some(ops)
+}
+
+/// The op that makes a `material:binding[:…]` on `geom_path` legal: apply
+/// `MaterialBindingAPI` to the bound prim (required by usdchecker since 21.02 —
+/// strict consumers drop the binding without it). Composes the geom's full
+/// existing schema set plus `MaterialBindingAPI`, so the op is correct whether
+/// [`UsdOp::SetApiSchemas`] authors an explicit list (existing opinions must
+/// ride along) or a prepend. No op when the schema is already applied.
+fn apply_material_binding_api(
+    layer: &LayerId,
+    geom_path: &str,
+    geom_api_schemas: &[String],
+) -> Option<UsdOp> {
+    const BINDING_API: &str = "MaterialBindingAPI";
+    if geom_api_schemas.iter().any(|s| s == BINDING_API) {
+        return None;
+    }
+    let mut schemas = geom_api_schemas.to_vec();
+    schemas.push(BINDING_API.into());
+    Some(UsdOp::SetApiSchemas {
+        edit_target: layer.clone(),
+        path: geom_path.to_string(),
+        schemas,
+    })
 }
 
 /// The `UsdPreviewSurface` input a LunCoSim PBR look key maps to, as
@@ -287,8 +335,8 @@ fn sanitize(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn paths(geom: &str) -> (Vec<String>, String) {
-        let (ops, shader) = ensure_preview_surface_ops(geom).expect("ops");
+    fn paths_with_schemas(geom: &str, schemas: &[String]) -> (Vec<String>, String) {
+        let (ops, shader) = ensure_preview_surface_ops(geom, schemas).expect("ops");
         let described = ops
             .iter()
             .map(|op| match op {
@@ -320,10 +368,17 @@ mod tests {
                 } => {
                     format!("SetRelationship {path}.{name} -> {}", targets.join(","))
                 }
+                UsdOp::SetApiSchemas { path, schemas, .. } => {
+                    format!("SetApiSchemas {path} = {}", schemas.join(","))
+                }
                 _ => "?".into(),
             })
             .collect();
         (described, shader)
+    }
+
+    fn paths(geom: &str) -> (Vec<String>, String) {
+        paths_with_schemas(geom, &[])
     }
 
     /// The whole contract: a bound Material, a UsdPreviewSurface Shader wired to
@@ -340,9 +395,30 @@ mod tests {
                 "AddPrim /World/Looks/Ball_Mat/Surface : Shader",
                 "SetAttribute /World/Looks/Ball_Mat/Surface.info:id",
                 "SetConnection /World/Looks/Ball_Mat.outputs:surface -> /World/Looks/Ball_Mat/Surface.outputs:surface",
+                "SetApiSchemas /World/Ball = MaterialBindingAPI",
                 "SetRelationship /World/Ball.material:binding -> /World/Looks/Ball_Mat",
             ]
         );
+    }
+
+    /// `material:binding` is only valid on a prim with `MaterialBindingAPI`
+    /// applied, and `SetApiSchemas` authors the whole list — so the geom's
+    /// existing applied schemas must survive, and an already-applied
+    /// `MaterialBindingAPI` must not be re-authored.
+    #[test]
+    fn binding_applies_material_binding_api_preserving_existing_schemas() {
+        let (ops, _) = paths_with_schemas(
+            "/World/Ball",
+            &["PhysicsRigidBodyAPI".into(), "PhysicsCollisionAPI".into()],
+        );
+        assert!(ops.contains(
+            &"SetApiSchemas /World/Ball = PhysicsRigidBodyAPI,PhysicsCollisionAPI,MaterialBindingAPI"
+                .to_string()
+        ));
+
+        // Already applied → no schema op at all.
+        let (ops, _) = paths_with_schemas("/World/Ball", &["MaterialBindingAPI".into()]);
+        assert!(!ops.iter().any(|o| o.starts_with("SetApiSchemas /World/Ball")));
     }
 
     /// The `Looks` scope is anchored at the geom's ROOT prim, not at `/` — a
@@ -364,8 +440,8 @@ mod tests {
 
     #[test]
     fn rejects_non_absolute_paths() {
-        assert!(ensure_preview_surface_ops("World/Ball").is_none());
-        assert!(ensure_preview_surface_ops("/").is_none());
+        assert!(ensure_preview_surface_ops("World/Ball", &[]).is_none());
+        assert!(ensure_preview_surface_ops("/", &[]).is_none());
     }
 
     /// A physics material is its OWN `Material` prim, in its own scope, bound for
@@ -375,8 +451,9 @@ mod tests {
     /// it; we just don't author it. See `ensure_physics_material_ops`.)
     #[test]
     fn physics_material_is_separate_from_the_look() {
-        let ops = ensure_physics_material_ops("/World/Ground", "Regolith", 0.9, 1.0, Some(0.1))
-            .expect("ops");
+        let ops =
+            ensure_physics_material_ops("/World/Ground", &[], "Regolith", 0.9, 1.0, Some(0.1))
+                .expect("ops");
 
         assert!(
             ops.iter()
@@ -384,6 +461,14 @@ mod tests {
                 if path == "/World/PhysicsMaterials/Regolith"
                     && schemas == &["PhysicsMaterialAPI".to_string()])),
             "PhysicsMaterialAPI applies to a Material in the PhysicsMaterials scope"
+        );
+
+        assert!(
+            ops.iter()
+                .any(|o| matches!(o, UsdOp::SetApiSchemas { path, schemas, .. }
+                if path == "/World/Ground"
+                    && schemas == &["MaterialBindingAPI".to_string()])),
+            "MaterialBindingAPI applies to the bound geom prim"
         );
 
         let bindings: Vec<(&str, &str)> = ops

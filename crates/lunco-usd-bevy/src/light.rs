@@ -70,7 +70,8 @@ use crate::read::UsdRead;
 pub struct UsdAuthoredLight;
 
 /// Ambient contribution of an authored `DomeLight` prim (its
-/// `inputs:intensity`, in `GlobalAmbientLight::brightness` units).
+/// `inputs:intensity` × 2^`inputs:exposure`, in `GlobalAmbientLight::brightness`
+/// units).
 #[derive(Component)]
 pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 
@@ -80,16 +81,18 @@ pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 /// [`untextured_dome_intensity_sum`] (which must exclude the domes it claims).
 pub const DOME_TEXTURE_ATTR: &str = "inputs:texture:file";
 
-/// Sum of `inputs:intensity` over every **untextured** `DomeLight` prim in
-/// `data`, skipping `exclude` — i.e. the ambient brightness the scene would
-/// compose if `exclude` did not exist.
+/// Sum of `inputs:intensity` × 2^`inputs:exposure` over every **untextured**
+/// `DomeLight` prim in `data`, skipping `exclude` — i.e. the ambient brightness
+/// the scene would compose if `exclude` did not exist.
 ///
 /// This is the layer-data mirror of what [`on_usd_light_added`] computes from
 /// ECS: that observer sums the [`UsdDomeAmbient`] of every dome entity, and a
-/// dome contributes `inputs:intensity` **1:1** in `GlobalAmbientLight::brightness`
-/// units with no exposure scaling (see the `DomeLight` arm of
-/// [`instantiate_usd_light`]). A *textured* dome contributes nothing — its image
-/// becomes IBL instead — so it is excluded here too, or the two would disagree.
+/// dome contributes `intensity` × 2^`exposure` in `GlobalAmbientLight::brightness`
+/// units — the same [`read_intensity_with_exposure`] photometry the `DomeLight`
+/// arm of [`instantiate_light_prim`] applies, or the solve here would compose a
+/// different total than the instantiated light. A *textured* dome contributes
+/// nothing — its image becomes IBL instead — so it is excluded here too, or the
+/// two would disagree.
 ///
 /// Exists so a command that wants to *set the composed total* can solve for the
 /// one dome it owns instead of blindly authoring the total and double-counting
@@ -137,11 +140,21 @@ fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> bool {
     }
 }
 
-/// `inputs:intensity` on `prim`, tolerant of `float`/`double`/`int` authoring —
-/// the layer-data twin of [`get_attribute_as_f32`], which needs a `UsdRead`.
+/// `inputs:intensity` × 2^`inputs:exposure` on `prim` — the layer-data twin of
+/// [`read_intensity_with_exposure`], which needs a `UsdRead`. `None` when
+/// `inputs:intensity` is unauthored: the sum counts only authored opinions.
 fn dome_intensity(data: &openusd::sdf::Data, prim: &SdfPath) -> Option<f32> {
+    let intensity = field_f32(data, prim, "inputs:intensity")?;
+    let exposure = field_f32(data, prim, "inputs:exposure").unwrap_or(0.0);
+    Some(intensity * exposure.exp2())
+}
+
+/// Scalar `default` field on `prim`'s attribute `attr`, tolerant of
+/// `float`/`double`/`int` authoring — the layer-data twin of
+/// [`get_attribute_as_f32`].
+fn field_f32(data: &openusd::sdf::Data, prim: &SdfPath, attr: &str) -> Option<f32> {
     use crate::usd_data::UsdDataExt;
-    let attr = prim.append_property("inputs:intensity").ok()?;
+    let attr = prim.append_property(attr).ok()?;
     match data.field(&attr, "default")? {
         Value::Float(f) => Some(*f),
         Value::Double(d) => Some(*d as f32),
@@ -206,6 +219,63 @@ pub(crate) fn read_intensity_with_exposure(
         .unwrap_or(default_intensity);
     let exposure = reader.real_f32(path, "inputs:exposure").unwrap_or(0.0);
     intensity * exposure.exp2()
+}
+
+/// A UsdLux light's effective linear-RGB colour: `inputs:color` (schema
+/// fallback white), multiplied by the blackbody colour for
+/// `inputs:colorTemperature` (fallback 6500 K) when
+/// `inputs:enableColorTemperature` is authored `true` — the `UsdLuxLightAPI`
+/// rule, shared by every light arm here and the dome tint in `dome.rs`.
+pub(crate) fn read_light_color(reader: &crate::StageView<'_>, path: &SdfPath) -> Vec3 {
+    let color = crate::get_attribute_as_vec3(reader, path, "inputs:color").unwrap_or(Vec3::ONE);
+    if get_attribute_as_bool(reader, path, "inputs:enableColorTemperature").unwrap_or(false) {
+        let kelvin =
+            get_attribute_as_f32(reader, path, "inputs:colorTemperature").unwrap_or(6500.0);
+        color * blackbody_rgb(kelvin)
+    } else {
+        color
+    }
+}
+
+/// Linear-RGB colour of a Planckian (blackbody) radiator at `kelvin`, using the
+/// standard Kim et al. cubic-spline approximation of the Planckian locus in CIE
+/// xy, converted through XYZ to linear sRGB and normalized to a max component of
+/// 1 — so 6500 K comes out ≈ white, low temperatures warm orange, high ones
+/// blue. Input is clamped to the approximation's 1667–25000 K validity range.
+fn blackbody_rgb(kelvin: f32) -> Vec3 {
+    let t = f64::from(kelvin.clamp(1667.0, 25000.0));
+    let x = if t <= 4000.0 {
+        -0.2661239e9 / (t * t * t) - 0.2343589e6 / (t * t) + 0.8776956e3 / t + 0.179910
+    } else {
+        -3.0258469e9 / (t * t * t) + 2.1070379e6 / (t * t) + 0.2226347e3 / t + 0.240390
+    };
+    let y = if t <= 2222.0 {
+        ((-1.1063814 * x - 1.34811020) * x + 2.18555832) * x - 0.20219683
+    } else if t <= 4000.0 {
+        ((-0.9549476 * x - 1.37418593) * x + 2.09137015) * x - 0.16748867
+    } else {
+        ((3.0817580 * x - 5.87338670) * x + 3.75112997) * x - 0.37001483
+    };
+    // xyY (Y = 1) → XYZ → linear sRGB (D65).
+    let (big_x, big_z) = (x / y, (1.0 - x - y) / y);
+    let r = 3.2404542 * big_x - 1.5371385 - 0.4985314 * big_z;
+    let g = -0.9692660 * big_x + 1.8760108 + 0.0415560 * big_z;
+    let b = 0.0556434 * big_x - 0.2040259 + 1.0572252 * big_z;
+    let rgb = Vec3::new(r.max(0.0) as f32, g.max(0.0) as f32, b.max(0.0) as f32);
+    rgb / rgb.max_element()
+}
+
+/// UsdLux area scaling for a `RectLight`: with `inputs:normalize` off (the
+/// schema default) emitted power scales with the emitting area, and the ratio is
+/// taken against the 1×1 m schema-fallback rect so an unauthored size is exactly
+/// neutral — the rect analogue of the SphereLight arm's `(r/r₀)²`. `max(0)`
+/// because a negative dimension is meaningless, not a sign flip.
+fn rect_area_scale(normalize: bool, width: f32, height: f32) -> f32 {
+    if normalize {
+        1.0
+    } else {
+        width.max(0.0) * height.max(0.0)
+    }
 }
 
 /// Bool attribute reader (also accepts `int` 0/1 authoring).
@@ -307,9 +377,8 @@ pub(crate) fn instantiate_light_prim(
             // intensity almost certainly means "give me a sun", so default
             // to the calibrated 128 000 lx lunar sun and let authors override.
             let illuminance_lux = read_intensity_with_exposure(reader, sdf_path, 128_000.0);
-            let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
-                .map(|c| Color::linear_rgb(c.x, c.y, c.z))
-                .unwrap_or(Color::WHITE);
+            let c = read_light_color(reader, sdf_path);
+            let color = Color::linear_rgb(c.x, c.y, c.z);
 
             // Start from the canonical lunar sun (single source of truth) and
             // override only the attributes the prim authors. An unauthored
@@ -471,9 +540,8 @@ pub(crate) fn instantiate_light_prim(
             // exposure, and clamping here silently changes the USD scene.
             let intensity_lm = base_lm * area_scale;
 
-            let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
-                .map(|c| Color::linear_rgb(c.x, c.y, c.z))
-                .unwrap_or(Color::WHITE);
+            let c = read_light_color(reader, sdf_path);
+            let color = Color::linear_rgb(c.x, c.y, c.z);
             // COST WARNING for authors, not a reader deviation: each
             // shadow-casting spot/point renders the whole scene again into its
             // own map every frame, so several rovers (two SphereLights each)
@@ -565,15 +633,37 @@ pub(crate) fn instantiate_light_prim(
             // dimensionless scale, so it is read as lumens here; the larger
             // default simply reflects that an area light stands in for a panel
             // rather than a bulb.
-            let intensity_lm = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
-            let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
-                .map(|c| Color::linear_rgb(c.x, c.y, c.z))
-                .unwrap_or(Color::WHITE);
+            let base_lm = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
+            let c = read_light_color(reader, sdf_path);
+            let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
             let width = get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0);
             let height = get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0);
+            // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
+            // implements (see the long derivation there): with normalize OFF (the
+            // schema default) `intensity` fixes radiance, so emitted power scales
+            // with the emitting area. For a rect A = w·h, and the ratio against
+            // the 1×1 m schema fallback makes an unauthored size exactly neutral.
+            let normalize =
+                get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
+            let area_scale = rect_area_scale(normalize, width, height);
+            let intensity_lm = base_lm * area_scale;
             let range = read_light_range(reader, sdf_path);
+
+            // `UsdLuxRectLight.inputs:texture:file` (an image mapped across the
+            // rect) has no Bevy equivalent — say so rather than silently drop it.
+            if reader
+                .asset(sdf_path, "inputs:texture:file")
+                .filter(|p| !p.is_empty())
+                .is_some()
+            {
+                warn!(
+                    "[usd-bevy] {} RectLight inputs:texture:file is unsupported — \
+                     the light emits its flat color instead",
+                    sdf_path.as_str(),
+                );
+            }
 
             // No `UsdAuthoredLight`: like SphereLight, a rect is a LOCAL light (a
             // deck-ceiling panel, a softbox fill), not a scene-dominant sun/sky.
@@ -585,11 +675,14 @@ pub(crate) fn instantiate_light_prim(
                 height,
             });
             debug!(
-                "[usd-bevy] {} RectLight intensity={} lm, {}x{} m, range={} m",
+                "[usd-bevy] {} RectLight intensity={} lm (base {} x area {}), {}x{} m, normalize={}, range={} m",
                 sdf_path.as_str(),
                 intensity_lm,
+                base_lm,
+                area_scale,
                 width,
                 height,
+                normalize,
                 range
             );
             true
@@ -750,10 +843,11 @@ def Xform "World"
     }
 
     #[test]
-    fn intensity_is_read_1_to_1_with_no_exposure_scaling() {
-        // `inputs:exposure` is deliberately NOT applied to the ambient term —
-        // the DomeLight arm of `instantiate_light_prim` reads bare
-        // `inputs:intensity`. If that ever changes, this sum must change with it.
+    fn exposure_scales_the_ambient_sum() {
+        // The DomeLight arm of `instantiate_light_prim` reads
+        // `inputs:intensity` × 2^`inputs:exposure`, so the solve must compose
+        // the same total or the slider would read back wrong on any dome that
+        // authors an exposure.
         let d = data(
             r#"#usda 1.0
 
@@ -764,6 +858,37 @@ def DomeLight "Fill"
 }
 "#,
         );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), 8.0);
+        assert_eq!(untextured_dome_intensity_sum(&d, None), 64.0);
+    }
+}
+
+#[cfg(test)]
+mod photometry_tests {
+    use super::*;
+
+    #[test]
+    fn rect_power_scales_with_area_unless_normalized() {
+        // Schema-fallback 1×1 m is exactly neutral.
+        assert_eq!(rect_area_scale(false, 1.0, 1.0), 1.0);
+        // normalize OFF (the default): power scales with w·h.
+        assert_eq!(rect_area_scale(false, 2.0, 3.0), 6.0);
+        // normalize ON: authored intensity IS the power, whatever the size.
+        assert_eq!(rect_area_scale(true, 2.0, 3.0), 1.0);
+        // A negative dimension clamps to zero rather than flipping sign.
+        assert_eq!(rect_area_scale(false, -2.0, 3.0), 0.0);
+    }
+
+    #[test]
+    fn blackbody_is_white_at_6500k_warm_below_cool_above() {
+        let white = blackbody_rgb(6500.0);
+        for ch in white.to_array() {
+            assert!(ch > 0.9, "6500 K should be ≈ white, got {white:?}");
+        }
+        let warm = blackbody_rgb(2000.0);
+        assert_eq!(warm.x, 1.0);
+        assert!(warm.z < 0.1, "2000 K should be orange, got {warm:?}");
+        let cool = blackbody_rgb(10000.0);
+        assert_eq!(cool.z, 1.0);
+        assert!(cool.x < 0.9, "10000 K should be blue, got {cool:?}");
     }
 }

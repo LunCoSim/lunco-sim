@@ -18,6 +18,13 @@
 //! ## Attribute mapping (UsdGeomCamera)
 //! - `focalLength`, `verticalAperture` (mm) → perspective **vertical** FOV:
 //!   `2·atan(verticalAperture / (2·focalLength))` (Bevy's `fov` is vertical).
+//! - `horizontalAperture` (mm) → authored aspect, conformed per USD's default
+//!   `aspectRatioConformPolicy = "expandAperture"`: on a window narrower than
+//!   the authored aspect the vertical FOV expands so the authored horizontal
+//!   FOV stays visible (Bevy already expands horizontally on wider windows).
+//! - orthographic apertures are **tenths of scene units** →
+//!   `aperture / 10 × metersPerUnit` world units; mapped to
+//!   `ScalingMode::AutoMin` so neither authored aperture is ever cropped.
 //! - `clippingRange` (float2) → near / far.
 //! - `projection` token (`perspective` | `orthographic`) → `Projection` variant.
 //!
@@ -35,6 +42,7 @@ use crate::read::UsdRead;
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
 const DEFAULT_FOCAL_LENGTH_MM: f32 = 50.0;
 const DEFAULT_VERTICAL_APERTURE_MM: f32 = 15.2908;
+const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
 /// USD's spec default `clippingRange` is `(1, 1_000_000)`; we tighten the near
 /// plane a touch for close-up scene work (far stays huge for planet-scale views).
 const DEFAULT_NEAR: f32 = 0.1;
@@ -99,7 +107,7 @@ pub(crate) fn instantiate_camera_prim(
         return false;
     }
 
-    let projection = read_projection(reader, sdf_path);
+    let (projection, h_fov) = read_projection(reader, sdf_path);
     let kind = match &projection {
         Projection::Orthographic(_) => "orthographic",
         _ => "perspective",
@@ -140,6 +148,30 @@ pub(crate) fn instantiate_camera_prim(
         projection,
     ));
 
+    // Conform the authored horizontal aperture against the real window aspect
+    // (USD's default `aspectRatioConformPolicy = "expandAperture"`). Bevy takes
+    // aspect from the window and expands *horizontally* on wide windows for
+    // free; the missing half is a window NARROWER than the authored aspect,
+    // where the vertical FOV must expand so the authored horizontal FOV stays
+    // visible. Deferred to a queued command because the window isn't reachable
+    // from the projection path (and headless there is none — skip).
+    if let Some(h_fov) = h_fov {
+        commands.queue(move |world: &mut World| {
+            let mut windows =
+                world.query_filtered::<&bevy::window::Window, With<bevy::window::PrimaryWindow>>();
+            let aspect = windows
+                .single(world)
+                .ok()
+                .map(|w| w.resolution.width() / w.resolution.height());
+            let Some(aspect) = aspect else { return };
+            if let Some(mut projection) = world.get_mut::<Projection>(entity) {
+                if let Projection::Perspective(p) = &mut *projection {
+                    p.fov = conform_vertical_fov(h_fov, p.fov, aspect);
+                }
+            }
+        });
+    }
+
     info!(
         "[usd-bevy] {} Camera → inactive SceneCamera ({kind})",
         sdf_path.as_str()
@@ -148,7 +180,11 @@ pub(crate) fn instantiate_camera_prim(
 }
 
 /// Build a Bevy `Projection` from a `UsdGeomCamera`'s film-back + clip attrs.
-fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> Projection {
+///
+/// Returns the projection plus, for perspective, the **horizontal** FOV
+/// derived from `horizontalAperture` — the window aspect isn't known here, so
+/// the caller conforms the vertical FOV against it (expandAperture).
+fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> (Projection, Option<f32>) {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
     let [near, far] = reader
         .scalar::<[f32; 2]>(path, "clippingRange")
@@ -165,14 +201,29 @@ fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> Projection 
         .unwrap_or(false);
 
     if is_ortho {
-        // A full mapping of USD orthographic aperture → Bevy's `ScalingMode` is
-        // deferred (TODO): honour the clip range and use Bevy's default framing
-        // for now so an authored ortho camera at least renders.
-        Projection::Orthographic(OrthographicProjection {
-            near,
-            far,
-            ..OrthographicProjection::default_3d()
-        })
+        // Orthographic apertures are **tenths of scene units** (USD's aperture
+        // convention: aperture / 10 × metersPerUnit = world units). `AutoMin`
+        // keeps at least the authored width AND height visible and expands the
+        // other axis for the window aspect — Bevy's native expandAperture.
+        let h_aperture = reader
+            .real_f32(path, "horizontalAperture")
+            .unwrap_or(DEFAULT_HORIZONTAL_APERTURE_MM);
+        let v_aperture = reader
+            .real_f32(path, "verticalAperture")
+            .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
+        let meters_per_unit = reader
+            .stage_meters_per_unit()
+            .filter(|m| m.is_finite() && *m > 0.0)
+            .unwrap_or(1.0) as f32;
+        (
+            Projection::Orthographic(OrthographicProjection {
+                near,
+                far,
+                scaling_mode: ortho_scaling_mode(h_aperture, v_aperture, meters_per_unit),
+                ..OrthographicProjection::default_3d()
+            }),
+            None,
+        )
     } else {
         let focal = reader
             .real_f32(path, "focalLength")
@@ -180,17 +231,119 @@ fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> Projection 
         let v_aperture = reader
             .real_f32(path, "verticalAperture")
             .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
+        let h_aperture = reader
+            .real_f32(path, "horizontalAperture")
+            .unwrap_or(DEFAULT_HORIZONTAL_APERTURE_MM);
         // Bevy's `PerspectiveProjection::fov` is the **vertical** field of view.
-        let fov = if focal > 1e-3 {
-            2.0 * (v_aperture / (2.0 * focal)).atan()
+        let (fov, h_fov) = if focal > 1e-3 {
+            (
+                2.0 * (v_aperture / (2.0 * focal)).atan(),
+                Some(2.0 * (h_aperture / (2.0 * focal)).atan()),
+            )
         } else {
-            std::f32::consts::FRAC_PI_4
+            (std::f32::consts::FRAC_PI_4, None)
         };
-        Projection::Perspective(PerspectiveProjection {
-            fov,
-            near,
-            far,
-            ..default()
-        })
+        (
+            Projection::Perspective(PerspectiveProjection {
+                fov,
+                near,
+                far,
+                ..default()
+            }),
+            h_fov,
+        )
+    }
+}
+
+/// USD orthographic aperture (tenths of scene units) → Bevy `ScalingMode`.
+fn ortho_scaling_mode(
+    h_aperture: f32,
+    v_aperture: f32,
+    meters_per_unit: f32,
+) -> bevy::camera::ScalingMode {
+    bevy::camera::ScalingMode::AutoMin {
+        min_width: h_aperture / 10.0 * meters_per_unit,
+        min_height: v_aperture / 10.0 * meters_per_unit,
+    }
+}
+
+/// USD's default `aspectRatioConformPolicy = "expandAperture"` for a Bevy
+/// perspective camera: Bevy already expands **horizontally** when the window is
+/// wider than the authored aspect (fov is vertical, aspect from the window), so
+/// only the narrow case needs help — expand the vertical FOV until the authored
+/// horizontal FOV fits. Neither authored aperture is ever cropped.
+fn conform_vertical_fov(h_fov: f32, v_fov: f32, window_aspect: f32) -> f32 {
+    let half_h = (h_fov * 0.5).tan();
+    let half_v = (v_fov * 0.5).tan();
+    if !(window_aspect.is_finite() && window_aspect > 0.0 && half_h > 0.0 && half_v > 0.0) {
+        return v_fov;
+    }
+    let authored_aspect = half_h / half_v;
+    if window_aspect >= authored_aspect {
+        v_fov
+    } else {
+        2.0 * (half_h / window_aspect).atan()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ortho_aperture_is_tenths_of_scene_units_times_meters_per_unit() {
+        // Spec defaults: 20.955 / 15.2908 tenths → 2.0955 × 1.52908 world units.
+        let bevy::camera::ScalingMode::AutoMin {
+            min_width,
+            min_height,
+        } = ortho_scaling_mode(
+            DEFAULT_HORIZONTAL_APERTURE_MM,
+            DEFAULT_VERTICAL_APERTURE_MM,
+            1.0,
+        )
+        else {
+            panic!("ortho aperture must map to AutoMin");
+        };
+        assert!((min_width - 2.0955).abs() < 1e-4);
+        assert!((min_height - 1.52908).abs() < 1e-4);
+
+        // A centimetre stage (metersPerUnit = 0.01) scales the viewport too.
+        let bevy::camera::ScalingMode::AutoMin { min_height, .. } =
+            ortho_scaling_mode(200.0, 100.0, 0.01)
+        else {
+            panic!("ortho aperture must map to AutoMin");
+        };
+        assert!((min_height - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn conform_keeps_vertical_fov_on_wide_windows() {
+        let h_fov = 0.9_f32;
+        let v_fov = 0.7_f32;
+        // Wider than authored: Bevy expands horizontally by itself.
+        assert_eq!(conform_vertical_fov(h_fov, v_fov, 4.0), v_fov);
+        // Exactly the authored aspect: unchanged.
+        let authored = (h_fov * 0.5).tan() / (v_fov * 0.5).tan();
+        assert!((conform_vertical_fov(h_fov, v_fov, authored) - v_fov).abs() < 1e-6);
+    }
+
+    #[test]
+    fn conform_expands_vertical_fov_on_narrow_windows() {
+        let h_fov = 0.9_f32;
+        let v_fov = 0.7_f32;
+        let narrow = 0.5_f32;
+        let expanded = conform_vertical_fov(h_fov, v_fov, narrow);
+        assert!(expanded > v_fov);
+        // The authored horizontal FOV is exactly preserved at this aspect:
+        // 2·atan(tan(v'/2) · aspect) == h_fov.
+        let effective_h = 2.0 * ((expanded * 0.5).tan() * narrow).atan();
+        assert!((effective_h - h_fov).abs() < 1e-5);
+    }
+
+    #[test]
+    fn conform_ignores_degenerate_aspect() {
+        assert_eq!(conform_vertical_fov(0.9, 0.7, 0.0), 0.7);
+        assert_eq!(conform_vertical_fov(0.9, 0.7, f32::NAN), 0.7);
+        assert_eq!(conform_vertical_fov(0.9, 0.7, -1.0), 0.7);
     }
 }

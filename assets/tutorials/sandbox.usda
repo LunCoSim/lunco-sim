@@ -18,6 +18,7 @@
     the SESSION layer at runtime, so it composes over these without editing them
     and leaves when the twin closes.
     """
+    metersPerUnit = 1
     subLayers = [
         @./sandbox/curriculum.usda@,
         @./basic/curriculum.usda@

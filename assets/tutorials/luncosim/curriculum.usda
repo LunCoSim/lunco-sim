@@ -8,6 +8,7 @@
     and these lessons teach how to move around the world that is already there.
     """
     defaultPrim = "LunCoSim"
+    metersPerUnit = 1
 )
 
 def Scope "LunCoSim" (

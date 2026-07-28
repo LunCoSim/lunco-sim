@@ -327,8 +327,10 @@ pub trait UsdRead {
     }
 
     /// The composed value of attribute `name` on `prim` at time code `time` —
-    /// authored `timeSamples` (interpolated) win, else the `default` opinion.
-    /// The transform decoders read at `time = 0.0` for static geometry.
+    /// resolved from the strongest value source (local `timeSamples`, value
+    /// clips, arc `timeSamples`, then the `default` opinion), samples
+    /// interpolated. The transform decoders read at `time = 0.0` for static
+    /// geometry.
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value>;
 
     /// Typed timeSamples-or-default read — the `_at` sibling of [`scalar`](Self::scalar).
@@ -358,9 +360,13 @@ pub trait UsdRead {
     /// is a spec lookup.
     fn has_prim(&self, prim: &SdfPath) -> bool;
 
-    /// The stage's `defaultPrim` bare name (no leading slash), or `None` when the
-    /// stage declares none. The empty-path scene-root sentinel resolves through
-    /// this to the concrete subtree the reference/scene mounts.
+    /// The stage's `defaultPrim`, root-relative (no leading slash), or `None`
+    /// when the stage declares none. USD ≥ 23.11 allows a prim PATH as well as
+    /// the classic bare root-prim name (`defaultPrim = "/World/Sub"`); both
+    /// forms are accepted and normalized to the leading-slash-free spelling, so
+    /// a caller's `format!("/{name}")` yields the absolute prim path either
+    /// way. The empty-path scene-root sentinel resolves through this to the
+    /// concrete subtree the reference/scene mounts.
     fn default_prim(&self) -> Option<String>;
 
     /// The parsed `customData` UI hint on attribute `name` of `prim` — the
@@ -510,15 +516,17 @@ impl UsdRead for StageView<'_> {
     }
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
-        let attr = self.stage().prim(prim.clone()).attribute(name);
-        if let Ok(Some(samples)) = attr.time_samples() {
-            if let Some(v) =
-                openusd::usd::evaluate(&samples, time, openusd::usd::InterpolationType::Linear)
-            {
-                return Some(v);
-            }
-        }
-        attr.get::<Value>().ok().flatten()
+        // The fork's full value resolution (`Attribute::get_at` →
+        // `Stage::resolve_at`): strongest value source per spec — local
+        // timeSamples, value clips, arc timeSamples, then `default` — under the
+        // stage's interpolation type, instead of a local
+        // timeSamples-then-default reimplementation.
+        self.stage()
+            .prim(prim.clone())
+            .attribute(name)
+            .get_at::<Value>(openusd::usd::TimeCode::new(time))
+            .ok()
+            .flatten()
     }
 
     fn resolved_asset(&self, prim: &SdfPath) -> Option<String> {
@@ -540,9 +548,12 @@ impl UsdRead for StageView<'_> {
     }
 
     fn default_prim(&self) -> Option<String> {
+        // Accepts both the classic bare root-prim name and the USD ≥ 23.11
+        // prim-path form; strip the leading slash so both normalize to the
+        // root-relative spelling the trait promises.
         self.stage()
             .default_prim()
-            .map(|t| t.to_string())
+            .map(|t| t.as_str().trim_start_matches('/').to_string())
             .filter(|s| !s.is_empty())
     }
 
@@ -565,13 +576,15 @@ impl UsdRead for StageView<'_> {
     }
 
     fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
+        // `Attribute::time_sample_times` gathers from the strongest value
+        // source — local timeSamples, value clips, arc timeSamples — so a
+        // clip-animated channel registers as animated too.
         self.stage()
             .prim(prim.clone())
             .attribute(name)
-            .time_samples()
-            .ok()
-            .flatten()
-            .is_some_and(|s| !s.is_empty())
+            .time_sample_times()
+            .map(|ts| !ts.is_empty())
+            .unwrap_or(false)
     }
 
     fn time_codes_per_second(&self) -> f64 {
@@ -579,13 +592,12 @@ impl UsdRead for StageView<'_> {
     }
 
     fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
+        // Same strongest-value-source gather as `has_time_samples`, retimed to
+        // stage time (clip and layer offsets applied).
         self.stage()
             .prim(prim.clone())
             .attribute(name)
-            .time_samples()
-            .ok()
-            .flatten()
-            .map(|s| s.iter().map(|(t, _)| *t).collect())
+            .time_sample_times()
             .unwrap_or_default()
     }
 

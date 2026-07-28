@@ -1,6 +1,7 @@
 #usda 1.0
 (
     defaultPrim = "LunarSurfaceCamera"
+    metersPerUnit = 1
 )
 
 # Shared `UsdGeomCamera` grade for interactive lunar surface scenes.
