@@ -7851,6 +7851,8 @@ dependencies = [
  "lunco-environment",
  "lunco-hardware",
  "lunco-hash",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",

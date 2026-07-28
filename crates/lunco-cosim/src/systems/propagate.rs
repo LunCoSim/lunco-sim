@@ -742,6 +742,84 @@ mod wire_order_tests {
         );
     }
 
+    /// A HOLD outranks the wire into the same port, and hands it back when it
+    /// expires.
+    ///
+    /// This is the failure the hold exists for: writing a wired input directly
+    /// "succeeds" and is overwritten by the very next propagation tick, so a
+    /// setpoint on a driven port lasts under 16 ms and looks, from the caller's
+    /// side, exactly like a port that does not exist.
+    #[test]
+    fn a_hold_outranks_its_wire_until_it_expires() {
+        use bevy::ecs::system::RunSystemOnce;
+        use lunco_core::ports::PortDirection;
+
+        let mut world = World::new();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<crate::PortHolds>();
+        world.init_resource::<Time<bevy::time::Real>>();
+
+        // One backend over `SimComponent`, so the sink has a real writable port.
+        let mut registry = PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(registry);
+
+        let src = world
+            .spawn(crate::SimComponent {
+                outputs: std::collections::HashMap::from([("out".to_string(), 7.0)]),
+                ..Default::default()
+            })
+            .id();
+        let sink = world
+            .spawn(crate::SimComponent {
+                inputs: std::collections::HashMap::from([("demand".to_string(), 0.0)]),
+                ..Default::default()
+            })
+            .id();
+        world.spawn(SimConnection {
+            start_element: src,
+            start_connector: "out".into(),
+            start_is_input: false,
+            end_element: sink,
+            end_connector: "demand".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+
+        let demand = |world: &World| -> f64 {
+            world
+                .get::<crate::SimComponent>(sink)
+                .and_then(|c| c.inputs.get("demand").copied())
+                .unwrap_or(f64::NAN)
+        };
+
+        world.run_system_once(propagate_connections).unwrap();
+        assert_eq!(demand(&world), 7.0, "the wire drives the port");
+
+        // Hold it somewhere else. The wire keeps producing 7.0 every tick.
+        world
+            .resource_mut::<crate::PortHolds>()
+            .hold(sink, "demand", -1.0, 100.0);
+        world.run_system_once(propagate_connections).unwrap();
+        assert_eq!(
+            demand(&world),
+            -1.0,
+            "a live hold outranks the wire — this is what makes a setpoint on a driven port stick"
+        );
+
+        // Past its deadline the port goes back to its wiring, with no release
+        // call: an abandoned hold must not leave a vehicle stuck.
+        world
+            .resource_mut::<Time<bevy::time::Real>>()
+            .advance_by(std::time::Duration::from_secs(200));
+        world.run_system_once(propagate_connections).unwrap();
+        assert_eq!(demand(&world), 7.0, "an expired hold releases the port");
+        assert!(
+            world.resource::<crate::PortHolds>().is_empty(),
+            "the expired entry is dropped, not merely ignored"
+        );
+    }
+
     /// A wire whose target accepts no write must land in [`CosimDiagnostics`] —
     /// the machine-readable form behind `GET /api/diagnostics`. Empty registry ⇒
     /// the sink exposes no port surface, so it reports as a structural/loading
