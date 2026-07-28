@@ -80,9 +80,6 @@ pub struct GlobeTiles {
     pub last_solve_punch: Option<GlobePunch>,
 }
 
-/// Frames an outgoing tile stays alive after its replacement spawned.
-const TILE_RETIRE_FRAMES: u8 = 3;
-
 /// Max fresh tiles spawned per body per frame. A fast zoom crosses several
 /// LOD levels in a handful of frames; unbudgeted, one frame could demand
 /// hundreds of fresh meshes (build + `Assets<Mesh>` add + render-world
@@ -380,10 +377,11 @@ pub(crate) fn update_globe_lod(
 
         // Retire resident tiles that left the desired set — but ONLY once
         // every desired tile overlapping their footprint is itself resident.
-        // With budgeted spawning the replacements arrive over several frames;
-        // retiring on a fixed schedule would open holes in the sphere while
-        // the spawn queue catches up. The extra overlap is coplanar identical
-        // surface — invisible, same as the retire grace.
+        // With budgeted spawning the replacements arrive before retirement:
+        // this check requires every desired overlapping tile to be resident.
+        // Do not keep the old tile for an additional grace period: parent/child
+        // globe tiles occupy the same surface and depth-fight during close/far
+        // camera jumps, which presents as Earth blinking.
         let resident_now: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
         let mut newly_retired: Vec<(Entity, u8)> = Vec::new();
         tiles.resident.retain(|coord, ent| {
@@ -395,7 +393,7 @@ pub(crate) fn update_globe_lod(
                 .filter(|d| tiles_overlap(d, coord))
                 .all(|d| resident_now.contains(d));
             if covered {
-                newly_retired.push((*ent, TILE_RETIRE_FRAMES));
+                newly_retired.push((*ent, 0));
                 false
             } else {
                 true

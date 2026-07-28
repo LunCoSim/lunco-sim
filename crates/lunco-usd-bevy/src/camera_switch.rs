@@ -290,6 +290,34 @@ pub fn reconcile_scene_viewport(
     }
 }
 
+/// Final guard for the window render target. Scene-camera reconciliation owns
+/// the intended camera, but a stale render pipeline can outlive its
+/// `SceneCamera` marker for one deferred-command boundary during scene reload.
+/// Never allow that orphaned `Camera3d` to render alongside the selected view.
+pub(crate) fn enforce_one_window_camera(
+    vp: Res<SceneViewport>,
+    mut cameras: Query<(
+        Entity,
+        &mut Camera,
+        &RenderTarget,
+        Has<SceneCamera>,
+        Has<Camera3d>,
+    )>,
+) {
+    let Some(active) = vp.active_camera else {
+        return;
+    };
+    for (entity, mut camera, target, _scene_camera, has_pipeline) in &mut cameras {
+        if !matches!(target, RenderTarget::Window(_)) || !has_pipeline {
+            continue;
+        }
+        // The active entity is filtered by the reconciler to a window camera
+        // with a complete 3D pipeline. Every other window Camera3d is off,
+        // including an orphan whose SceneCamera marker was just removed.
+        camera.is_active = entity == active;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

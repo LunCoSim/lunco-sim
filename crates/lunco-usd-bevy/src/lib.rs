@@ -223,6 +223,8 @@ impl Plugin for UsdBevyPlugin {
                     camera_switch::cycle_active_camera,
                     camera_switch::reconcile_scene_viewport
                         .after(camera_switch::cycle_active_camera),
+                    camera_switch::enforce_one_window_camera
+                        .after(camera_switch::reconcile_scene_viewport),
                 ),
             )
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
