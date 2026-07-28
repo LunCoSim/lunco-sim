@@ -252,6 +252,7 @@ pub(crate) fn drain_pending_twin_docs(
     twin_roots: Res<TwinRoots>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     role: Option<Res<lunco_core::NetworkRole>>,
+    runtime_settings: Option<Res<crate::runtime_persistence::RuntimePersistenceSettings>>,
     mut commands: Commands,
 ) {
     if pending.items.is_empty() {
@@ -312,7 +313,12 @@ pub(crate) fn drain_pending_twin_docs(
         // after the stage load has already read its bytes. Guarded: whichever
         // runs second is a no-op.
         if let Some(ws) = workspace.as_deref() {
-            crate::runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
+            crate::runtime_persistence::restore_doc_runtime(
+                ws,
+                &mut registry,
+                doc,
+                runtime_settings.as_ref().is_some_and(|s| s.load),
+            );
         }
         // Publish the composed source as the twin overlay so the stage build
         // reads `base ⊕ runtime`, and mark the scene synced at this generation —

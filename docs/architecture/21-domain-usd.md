@@ -195,10 +195,11 @@ scene re-points that single active stage; it never stacks.
 On `TwinAdded` (`open_usd_docs_on_twin_added`, `lunco-usd/src/commands.rs`),
 exactly **one** stage resolves per the table above, and the mount is
 **doc-first**: the scene's document opens first (its base read through the
-`twin://` source, web-ready), the persisted `.lunco/runtime` overlay is
-restored into it, its composed (`base ⊕ runtime`) source is published as the
-twin byte-overlay — and only then does `LoadScene` fire, so the **single**
-projection already carries restored runtime spawns/moves (see the E1b flow in
+`twin://` source, web-ready). If the persisted `runtime_persistence.load`
+setting is on, the `.lunco/runtime` overlay is restored into it; otherwise
+`.lunco` is ignored. When enabled, its composed (`base ⊕ runtime`) source is
+published as the twin byte-overlay — and only then does `LoadScene` fire, so the
+**single** projection already carries restored runtime spawns/moves (see the E1b flow in
 [18-unified-journal-and-history](18-unified-journal-and-history.md)). The
 Twin's other `.usda` files are *indexed* and shown in the browser but **not**
 mounted — a referenceable asset library, composed into the active stage on

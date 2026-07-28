@@ -7778,6 +7778,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-render",
+ "lunco-settings",
  "lunco-storage",
  "lunco-theme",
  "lunco-twin",

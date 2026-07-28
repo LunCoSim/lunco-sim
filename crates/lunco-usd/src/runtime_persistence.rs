@@ -13,11 +13,13 @@
 //! the document opens — so runtime state survives across sessions without ever
 //! touching the authored scene file.
 //!
-//! - **Load** on [`DocumentOpened`]: read the overlay and
+//! - **Load** on [`DocumentOpened`]: only when the persisted setting
+//!   `runtime_persistence.load` is true, read the overlay and
 //!   [`restore_runtime`](crate::document::UsdDocument::restore_runtime) it into
 //!   the freshly-built document.
-//! - **Save** on [`DocumentChanged`]: serialize the current runtime layer and
-//!   write it, skipping docs with an empty runtime layer or no twin-rooted path.
+//! - **Save** on [`DocumentChanged`]: controlled independently by
+//!   `runtime_persistence.save`, enabled by default. A stale or corrupt `.lunco`
+//!   file cannot affect the normal authored-scene load path.
 //!
 //! UI-free + headless; I/O goes through [`lunco_storage`]. No-ops for untitled /
 //! non-twin docs (nowhere stable to persist) and when no `WorkspaceResource`
@@ -30,6 +32,7 @@ use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentOpened};
 use lunco_storage::{Storage, StorageHandle};
+use lunco_settings::SettingsSection;
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
 
@@ -45,6 +48,28 @@ use lunco_doc_bevy::DocumentRegistry;
 /// this directory out of scenario sync and out of release bundles. Writer and
 /// excluders must not be able to drift apart.
 use lunco_twin::RUNTIME_SUBDIR;
+
+/// Whether generated `.lunco/runtime` overlays are loaded and saved.
+#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
+pub struct RuntimePersistenceSettings {
+    /// Restore persisted runtime state into a newly opened scene.
+    pub load: bool,
+    /// Persist newly authored runtime state for a later opt-in restore.
+    pub save: bool,
+}
+
+impl Default for RuntimePersistenceSettings {
+    fn default() -> Self {
+        Self {
+            load: false,
+            save: true,
+        }
+    }
+}
+
+impl SettingsSection for RuntimePersistenceSettings {
+    const KEY: &'static str = "runtime_persistence";
+}
 
 /// `<twin-root>/.lunco/runtime/<scene-rel>` for a document whose file lives
 /// inside an open twin; `None` for untitled docs or files outside every open
@@ -122,7 +147,11 @@ pub(crate) fn restore_doc_runtime(
     workspace: &WorkspaceResource,
     registry: &mut DocumentRegistry<UsdDocument>,
     doc: DocumentId,
+    enabled: bool,
 ) {
+    if !enabled {
+        return;
+    }
     let Some(path) = doc_runtime_path(workspace, registry, doc) else {
         return;
     };
@@ -165,9 +194,15 @@ pub(crate) fn on_doc_opened_load_runtime(
     trigger: On<DocumentOpened>,
     workspace: Option<Res<WorkspaceResource>>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    settings: Option<Res<RuntimePersistenceSettings>>,
 ) {
     let Some(workspace) = workspace else { return };
-    restore_doc_runtime(&workspace, &mut registry, trigger.event().doc);
+    restore_doc_runtime(
+        &workspace,
+        &mut registry,
+        trigger.event().doc,
+        settings.is_some_and(|s| s.load),
+    );
 }
 
 // TODO(#7 journal replay-on-open): today a reopened document's *current state* is
@@ -191,7 +226,11 @@ pub(crate) fn on_doc_changed_save_runtime(
     trigger: On<DocumentChanged>,
     workspace: Option<Res<WorkspaceResource>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
+    settings: Option<Res<RuntimePersistenceSettings>>,
 ) {
+    if !settings.is_none_or(|s| s.save) {
+        return;
+    }
     let doc = trigger.event().doc;
     let Some(workspace) = workspace else { return };
     let Some(host) = registry.host(doc) else {
@@ -232,6 +271,31 @@ mod tests {
             lunco_twin::TwinMode::Twin(t) | lunco_twin::TwinMode::Folder(t) => t,
             lunco_twin::TwinMode::Orphan(_) => panic!("expected a folder twin"),
         }
+    }
+
+    #[test]
+    fn runtime_persistence_saves_by_default_but_does_not_load() {
+        let settings = RuntimePersistenceSettings::default();
+        assert!(!settings.load);
+        assert!(settings.save);
+    }
+
+    #[test]
+    fn corrupt_runtime_overlay_is_ignored_when_loading_is_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceResource::new();
+        ws.add_twin(open_twin(dir.path()));
+        let scene_abs = dir.path().join("scene.usda");
+        std::fs::write(&scene_abs, TINY).unwrap();
+        let path = dir.path().join(".lunco/runtime/scene.usda");
+        write_bytes(&path, b"not valid USDA").unwrap();
+
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
+        restore_doc_runtime(&ws, &mut registry, doc, true);
+        assert!(!runtime_has_content(
+            registry.host(doc).unwrap().document().runtime_data()
+        ));
     }
 
     #[test]
@@ -349,7 +413,7 @@ mod tests {
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
 
-        restore_doc_runtime(&ws, &mut registry, doc);
+        restore_doc_runtime(&ws, &mut registry, doc, true);
         let host = registry.host(doc).unwrap();
         assert!(
             runtime_has_content(host.document().runtime_data()),
@@ -357,7 +421,7 @@ mod tests {
         );
         let gen_after_first = host.document().generation();
 
-        restore_doc_runtime(&ws, &mut registry, doc);
+        restore_doc_runtime(&ws, &mut registry, doc, true);
         assert_eq!(
             registry.host(doc).unwrap().document().generation(),
             gen_after_first,

@@ -38,6 +38,7 @@ use lunco_doc_bevy::{
     SaveDocument, UndoDocument,
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
+use lunco_settings::AppSettingsExt;
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 // The empty-viewport placeholder is a workbench (egui shell) concept; the
 // document/file command surface below is headless-safe. Gate only this.
@@ -89,6 +90,7 @@ pub struct UsdCommandsPlugin;
 
 impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
+        app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
 
         // Self-register with the workbench's plugin-driven document
