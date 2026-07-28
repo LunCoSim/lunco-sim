@@ -56,7 +56,7 @@ Launch (workspace `default-members` make a bare `cargo run` ambiguous — **alwa
 
 ```bash
 cargo run -p luncosim
-cargo run --release -p lunco-sandbox --bin sandbox
+cargo run --release -p lunco-sandbox --bin sandbox -- --api 4101
 cargo run -p lunco-sandbox-server
 cargo run --bin lunica
 ```
@@ -74,7 +74,8 @@ Details:
 The windowed apps that embed the API bridge (`sandbox`, `lunica`, and anything with
 `LunCoApiPlugin`) honor:
 
-- `--api [PORT]` — enable the HTTP automation API. Default port **4101**
+- `--api [PORT]` — enable the HTTP automation API. Default port **4101**. This is
+  mandatory for sandbox visual/runtime validation; use an explicit free port.
   (`lunco_core::session::DEFAULT_API_PORT`); the MCP config points here via
   `LUNCO_API_PORT`. Without `--api`, no network surface.
 - `--no-ui` — headless (skip winit/egui, run the shared sim loop).

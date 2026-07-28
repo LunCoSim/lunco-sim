@@ -52,13 +52,17 @@ pub(crate) fn register_settings_menu(world: &mut World) {
     };
     layout.register_settings(|ui, world| {
         ui.label(egui::RichText::new("Entity list").weak().small());
-        let mut settings = world.resource_mut::<EntityListSettings>();
-        ui.checkbox(&mut settings.show_system, "Show system entities")
+        let current = world.resource::<EntityListSettings>().show_system;
+        let mut next = current;
+        ui.checkbox(&mut next, "Show system entities")
             .on_hover_text(
                 "Streamed terrain LOD tiles, globe tiles and scattered rocks — spawned \
                  and despawned continuously as the camera moves. Hidden by default so \
                  the list shows authored scene objects only.",
             );
+        if next != current {
+            world.resource_mut::<EntityListSettings>().show_system = next;
+        }
     });
 }
 

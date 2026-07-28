@@ -156,6 +156,7 @@ fn blueprint_tile_look_untextured(
 ) -> ShaderLook {
     ShaderLook::new("shaders/blueprint.wgsl")
         .with("surface_color", ParamValue::Vec3(surface))
+        .with("earth_mode", ParamValue::F32(0.0))
         .with("roughness", ParamValue::F32(roughness))
         .with("high_line_color", ParamValue::Vec3(line))
         .with("low_line_color", ParamValue::Vec3(line))
@@ -652,7 +653,8 @@ pub fn setup_big_space_hierarchy(
     // `UsdShade` Material bound to the body prim, adopted by
     // `adopt_authored_body_look`.
     let earth_blueprint =
-        blueprint_tile_look_untextured(EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5);
+        blueprint_tile_look_untextured(EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5)
+            .with("earth_mode", ParamValue::F32(1.0));
     commands.entity(earth_body).insert((
         crate::globe_lod::GlobeLod {
             radius_m: 6371.0e3,

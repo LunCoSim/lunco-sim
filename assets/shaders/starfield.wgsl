@@ -188,11 +188,11 @@ const EXTINCTION_RGB: vec3<f32> = vec3<f32>(0.72, 1.00, 1.35);
 //!@ui      color_spread    0 1     "Colour (B-V) spread"
 //!@default color_spread    0.55
 //!@ui      point_size      0.2 6   "Star size (arcmin)"
-//!@default point_size      0.9
+//!@default point_size      0.25
 //!@ui      glow            0 1     "Star halo strength"
-//!@default glow            0.35
+//!@default glow            0.0
 //!@ui      brightness      0 0.5   "Star brightness"
-//!@default brightness      0.05
+//!@default brightness      0.006
 //!@ui      seed            0 999   "Sky seed"
 //!@default seed            37
 //!@ui      band_intensity  0 0.5   "Milky Way intensity"

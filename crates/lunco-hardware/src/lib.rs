@@ -271,7 +271,7 @@ fn motor_actuator_system(
     // reports too — a released motor delivering 0 N·m is a MEASUREMENT, and
     // leaving the last non-zero value standing would read as a wheel still
     // pulling after the throttle came off.
-    let mut publish = |q: &mut Query<&mut MotorReadback>, wheel: Entity, torque: f64, omega: f64| {
+    let publish = |q: &mut Query<&mut MotorReadback>, wheel: Entity, torque: f64, omega: f64| {
         if let Ok(mut r) = q.get_mut(wheel) {
             r.torque = torque;
             r.axle_speed = omega;

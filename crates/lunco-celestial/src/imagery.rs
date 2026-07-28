@@ -101,7 +101,7 @@ const MAX_IMAGERY_ATTEMPTS: u8 = 3;
 /// imagery declared", which is a legitimate state — the user has to be told
 /// which it is. The payload is a human-readable string naming the dataset and
 /// the body.
-pub const BODY_IMAGERY_FAILED: &str = "BODY_IMAGERY_FAILED";
+pub(crate) const BODY_IMAGERY_FAILED: &str = "BODY_IMAGERY_FAILED";
 
 struct PendingBodyImage {
     naif_id: i32,

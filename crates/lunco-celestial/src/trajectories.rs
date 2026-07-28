@@ -597,7 +597,6 @@ pub fn trajectory_mesh_update_system(
             continue;
         }
 
-        let color = view.color;
 
         // Use Catmull-Rom spline for smooth curves (needs >= 4 points)
         let final_pts: Vec<[f32; 3]> = if path.points.len() >= 4 {

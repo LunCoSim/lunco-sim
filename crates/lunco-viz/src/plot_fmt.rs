@@ -72,7 +72,7 @@ pub fn decimate_min_max(points: &[[f64; 2]], px_width: f32) -> Option<Vec<[f64; 
     let mut bucket = 0usize;
     // Index of the current bucket's min/max sample (by Y).
     let (mut lo, mut hi): (usize, usize) = (0, 0);
-    let mut flush = |lo: usize, hi: usize, out: &mut Vec<[f64; 2]>| {
+    let flush = |lo: usize, hi: usize, out: &mut Vec<[f64; 2]>| {
         // Emit in sample order so X stays monotone within the column.
         let (a, b) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         out.push(points[a]);

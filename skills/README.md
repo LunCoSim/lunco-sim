@@ -64,7 +64,9 @@ one directly when doing that kind of task by hand.
 
 ## Cross-cutting conventions (baked into every skill)
 
-- **API port is 4101** (`--api`); the MCP bridge's old default (3000) is stale.
+- **Always launch sandbox with its HTTP API**: `target/debug/sandbox --api 4101` (use
+  another explicit free port when needed). The MCP bridge's old default (3000) is stale;
+  never omit `--api` from a controllable visual or runtime validation launch.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
 - **Policy → rhai, identity → USD, math → Modelica** — keep logic out of the Rust core.

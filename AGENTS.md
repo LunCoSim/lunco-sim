@@ -396,6 +396,12 @@ Transport-dispatched commands (HTTP API, MCP, networking relays) pass through `C
 
 One typed command is reachable from the UI, the HTTP API (`--api PORT`, `{"command":"<Name>","params":{…}}` → `/api/commands`), MCP tools, scripts, and networked peers. To verify a change end-to-end **without** asking the user to click, drive the running app over its HTTP API — see the **`test-via-api`** skill (runbook) and [`docs/architecture/12-api.md`](docs/architecture/12-api.md). Two more project skills exist: **`lunco-theme`** (theming rules) and **`lunco-ui`** (panel patterns) — consult them when touching UI/theme code.
 
+**Every sandbox launch that may need inspection or control MUST enable the API.** Run the
+single production binary with an explicit free port, for example
+`target/debug/sandbox --api 4101` (or `--api 4102` when 4101 is occupied). Keep that
+process alive while iterating and use its HTTP API for reloads, commands, and telemetry;
+do not launch a controllable window without `--api` and do not create a second test binary.
+
 ## 5. Implementation Patterns
 ### Dynamic Update Pattern
 When adding a new tunable parameter:
@@ -506,7 +512,7 @@ When a documented cause turns out to be wrong, rewrite it — do not append.
 <claude-mem-context>
 # Memory Context
 
-# [main] recent context, 2026-07-28 12:58pm GMT+7
+# [main] recent context, 2026-07-28 1:03pm GMT+7
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE

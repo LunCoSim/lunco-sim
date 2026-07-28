@@ -18,9 +18,18 @@ description: >
 # Test the workbench via API
 
 The lunica exposes a reflect-registered Event API on
-`--api PORT` (default 4101). UI verification — diagrams rendering,
+`--api PORT` (default 4101). Always pass this flag when launching the sandbox, including
+visual checks; use another explicit free port if 4101 is occupied. UI verification — diagrams rendering,
 drill-ins, simulations, file ops — should be driven from this API
 rather than asking the user to click.
+
+## Live shader iteration
+
+Shader source edits are a live-test path. Keep the production sandbox running, edit the
+WGSL under `assets/shaders/`, then dispatch `ReloadShader` through the same API (an empty
+path reloads the standard shader set; pass `shaders/starfield.wgsl` to limit the reload).
+Confirm the command result and inspect the unchanged window. Do not relaunch the app just
+to pick up a starfield or material edit.
 
 ## ⚠️ NEVER kill the user's running workbench
 

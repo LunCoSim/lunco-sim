@@ -141,9 +141,10 @@ def Xform "SandboxScene" (
                 # Keep the star field subordinate to the physical Sun.  The
                 # camera is HDR and blooms bright emitters; overdriving these
                 # additive values makes ordinary stars compete with the Sun.
-                float inputs:brightness = 0.05
+                float inputs:brightness = 0.006
                 float inputs:band_intensity = 0.05
-                float inputs:point_size = 0.9
+                float inputs:point_size = 0.25
+                float inputs:glow = 0.0
                 token outputs:surface
             }
         }
