@@ -53,7 +53,7 @@ pub(crate) fn view_switcher_visible(settings: Option<Res<OverlaySettings>>) -> b
 /// sky-clock controls themselves (`celestial_time::sky_clock_menu_ui`).
 ///
 /// Registered at `Startup`; a no-op when the workbench layout is absent (headless
-/// runs, `scene_test`), which is why it takes `&mut World` and bails rather than
+/// runs, `sandbox test`), which is why it takes `&mut World` and bails rather than
 /// requiring the resource.
 pub(crate) fn register_time_menu(world: &mut World) {
     use bevy_egui::egui;

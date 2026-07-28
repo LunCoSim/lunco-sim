@@ -4,7 +4,7 @@
 # scene test and report a summary table.
 #
 # Each scene is an authored USD file whose attached rhai scenario ends in
-# `emit("<CHANNEL>", "PASS"|"FAIL")`. `scene_test` runs it headless and
+# `emit("<CHANNEL>", "PASS"|"FAIL")`. `sandbox test` runs it headless and
 # deterministically (manual clock, no window, no GPU, no realtime pacing) and
 # exits 0 = PASS, 1 = FAIL, 2 = no verdict. This script aggregates those.
 #
@@ -118,13 +118,13 @@ fi
 
 # ── Build ONCE ──────────────────────────────────────────────────────────────
 #
-# `-j 2` is a machine constraint (see feedback_cargo_resource_use), and this is
+# Use the repository target/ and regular sccache; this is
 # the ONLY cargo invocation in the script — the runs below execute the built
 # binary directly. Two concurrent cargo processes would contend for the same
 # target-dir lock and serialise anyway, so the scene runs are sequential too.
-BIN="target/debug/scene_test"
-echo "==> building scene_test (one cargo invocation, -j 2)"
-if ! cargo build -q -p lunco-sandbox --bin scene_test -j 2; then
+BIN="target/debug/sandbox"
+echo "==> building sandbox test runner (one cargo invocation, -j 4)"
+if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-sandbox --bin sandbox -j 4; then
     echo "BUILD FAILED — no scenes run" >&2
     exit 2
 fi
@@ -134,7 +134,7 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 # ── Run each scene ──────────────────────────────────────────────────────────
-LOG_DIR="${TMPDIR:-/tmp}/lunco-scene-tests"
+LOG_DIR="target/scene-tests"
 mkdir -p "$LOG_DIR"
 
 names=()
@@ -161,11 +161,11 @@ for scene in "${SCENES[@]}"; do
     # The flags are PASSED EXPLICITLY even though they are the binary's defaults:
     # the gate's determinism must not silently change if a default ever moves.
     timeout --kill-after=10 "$SCENE_TIMEOUT" \
-        "$BIN" --scene "$scene" --threads 1 --jitter 0 >"$log" 2>&1
+        "$BIN" test --scene "$scene" --threads 1 --jitter 0 >"$log" 2>&1
     code=$?
 
-    # The one-line summary `scene_test` prints last; falls back to the exit code.
-    summary="$(grep -E '^scene_test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
+    # The one-line summary `sandbox test` prints last; falls back to the exit code.
+    summary="$(grep -E '^sandbox test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
 
     case $code in
         0) status="PASS" ;;
@@ -215,13 +215,13 @@ if [[ $STRESS -eq 1 ]]; then
         echo "==> $name (stress)"
 
         timeout --kill-after=10 "$SCENE_TIMEOUT" \
-            "$BIN" --scene "$scene" \
+            "$BIN" test --scene "$scene" \
             --threads "$STRESS_THREADS" \
             --jitter "$STRESS_JITTER" \
             --seed "$STRESS_SEED" >"$log" 2>&1
         code=$?
 
-        summary="$(grep -E '^scene_test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
+        summary="$(grep -E '^sandbox test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
         case $code in
             0) status="PASS" ;;
             1) status="FAIL" ;;

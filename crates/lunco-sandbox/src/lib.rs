@@ -94,6 +94,13 @@ mod url_scheme;
 #[cfg(not(target_family = "wasm"))]
 pub mod rhai_repl;
 
+/// Headless authored-scene regression runner, also exposed by
+/// `sandbox --debug-scene`. Keeping the implementation in the sandbox crate
+/// lets the standalone test binary and the production CLI use one runner.
+#[cfg(not(target_family = "wasm"))]
+#[path = "debug_scene.rs"]
+pub mod debug_scene;
+
 /// Run the sandbox, choosing GUI vs. headless from the build + flags: headless
 /// when the `ui` feature is absent, or `--no-ui` / `LUNCO_NO_UI` is set;
 /// otherwise the windowed GUI. This is the `sandbox` (GUI) bin's entry point.
@@ -181,6 +188,10 @@ PERFORMANCE:
 SUBCOMMAND:
     rhai                 REPL client against a RUNNING instance's --api port.
                          Reads stdin, or -e SNIPPET / -f FILE for one-shot.
+    test --scene PATH    Run an authored scene's Rhai regression test headless.
+                         Deterministic; exits 0=PASS, 1=FAIL, 2=no verdict.
+    --debug-scene         Explicit alias for `test`, useful while diagnosing a
+                         scene or its scenario.
 
 Measuring FPS? Use --no-vsync --no-throttle, else you are timing the
 compositor and the unfocused power-save throttle, not the renderer.",
@@ -347,13 +358,40 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 );
 
 pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
+    build_sim_app_with_threads(headless, offscreen, None)
+}
+
+/// Build the production simulation app with an optional fixed compute-pool size.
+/// Scene tests use this to pin physics deterministically while retaining the
+/// exact asset-source, logging, and plugin composition used by the sandbox.
+pub fn build_sim_app_with_threads(
+    headless: bool,
+    offscreen: bool,
+    compute_threads: Option<usize>,
+) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets`), so all
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
-    app.add_plugins(default_plugins(headless, offscreen));
+    let mut plugins = default_plugins(headless, offscreen);
+    if let Some(threads) = compute_threads {
+        assert!(threads > 0, "compute_threads must be positive");
+        plugins = plugins.set(bevy::app::TaskPoolPlugin {
+            task_pool_options: bevy::app::TaskPoolOptions {
+                compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                    min_threads: threads,
+                    max_threads: threads,
+                    percent: 1.0,
+                    on_thread_spawn: None,
+                    on_thread_destroy: None,
+                },
+                ..default()
+            },
+        });
+    }
+    app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(log_dedup::LogDedupPlugin);
     app.add_plugins(SandboxCorePlugin { headless });

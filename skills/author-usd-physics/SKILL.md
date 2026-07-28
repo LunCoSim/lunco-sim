@@ -568,12 +568,12 @@ from the assets rather than left looking meaningful.
 
 ## Verify it, headlessly
 
-`scene_test` runs one authored scene plus its scenario deterministically, and
+`sandbox test` runs one authored scene plus its scenario deterministically, and
 its exit code comes from a telemetry verdict:
 
 ```
-cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-    --scene scenes/tests/landing_legs.usda --max-ticks 500
+cargo run -q -p lunco-sandbox --bin sandbox -j 4 -- \
+    test --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
 A physics change is not done until a scene runs clean: **zero** `left the

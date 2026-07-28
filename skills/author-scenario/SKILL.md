@@ -151,7 +151,7 @@ fn verdict(s) {
 ```
 
 `report_verdict(fails, title, channel)` prints the greppable `<title>: PASS|FAIL`
-line, emits the verdict on `channel` — which is what sets `scene_test`'s exit
+line, emits the verdict on `channel` — which is what sets `sandbox test`'s exit
 code — and raises a toast. Call it once, last. Use `fail_fast` for setup
 failures (a `find` that returned -1, the wrong scene) so a broken run stops on
 tick one instead of ticking silently to the limit.
@@ -165,8 +165,8 @@ per-sample table — a run with no sample rows proves nothing.
 Run it headlessly:
 
 ```
-cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-    --scene scenes/tests/landing_legs.usda --max-ticks 500
+cargo run -q -p lunco-sandbox --bin sandbox -j 4 -- \
+    test --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
@@ -229,7 +229,7 @@ the very authoring the test exists to check.
   and count the assertions (`TESTS_OK 7`, not 5) when you expect a guard to fire.
 - **Never do arithmetic on a possibly-absent reading.** `()` divided by 1000
   THROWS, the scenario dies between its last print and `report_verdict`, and
-  `scene_test` reports NO-VERDICT — the failure looks like a hang, not like the
+  `sandbox test` reports NO-VERDICT — the failure looks like a hang, not like the
   assertion that was about to fail. Route every logged number through a formatter
   that answers `"(none)"`.
 - **A control must vary the thing that actually gates.** Chasing a missing link,
@@ -336,7 +336,7 @@ libraries → `<twin>/tools/*.rhai`.
 
 ## The gate set — what the shipped scene tests guard
 
-`./scripts/run_scene_tests.sh` builds `scene_test` once and runs every gate scene
+`./scripts/run_scene_tests.sh` builds `sandbox` once and runs every gate scene through `sandbox test`
 headless and deterministically (`--threads 1 --jitter 0`), exit 0=PASS / 1=FAIL /
 2=no verdict. The set, and what each one is FOR:
 

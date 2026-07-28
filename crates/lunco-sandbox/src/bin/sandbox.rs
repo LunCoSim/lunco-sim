@@ -3,6 +3,14 @@
 //! `sandbox-server` bin shares exactly the same app. Built with the default
 //! `ui` feature ⇒ GUI.
 fn main() -> lunco_sandbox::AppExit {
+    #[cfg(not(target_family = "wasm"))]
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--debug-scene" || a == "test")
+    {
+        std::process::exit(lunco_sandbox::debug_scene::run() as i32);
+    }
+
     // `sandbox rhai [...]` is a client mode: talk to an already-running instance
     // over its `--api` port instead of opening a window. Falls through to the GUI
     // for a normal launch. Native-only — `rhai_repl` uses raw `std::net`, so the

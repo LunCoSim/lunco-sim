@@ -6,6 +6,7 @@ license.workspace = true
 # `cargo run -p lunco-sandbox` runs the GUI sandbox (not the legacy `main.rs`
 # bin that carries the package name).
 default-run = "sandbox"
+autobins = false
 
 # The app itself lives in `src/lib.rs` (`pub fn run()` + the global allocator),
 # shared by the `sandbox` GUI bin here and the headless `sandbox-server` bin in

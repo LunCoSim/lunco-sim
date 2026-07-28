@@ -35,7 +35,7 @@ GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
 | Name | Purpose |
 |---|---|
 | `sandbox` | The windowed GUI app |
-| `scene_test` | The single headless runner for authored USD + Rhai scene tests (`scripts/run_scene_tests.sh`) |
+| `sandbox test` | The headless runner for authored USD + Rhai scene tests (`scripts/run_scene_tests.sh`) |
 
 ## Project Hierarchy
 

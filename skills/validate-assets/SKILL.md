@@ -149,7 +149,7 @@ Three stages, first failure short-circuits:
 > schema-shaped, so it cannot see that two colliders on the same vehicle overlap,
 > or that a strut hangs lower than the foot that is supposed to carry it — facts
 > about composed transforms and extents, not about attributes. Clearance is a
-> **runtime** check: run the scene under `scene_test` and assert the mechanism
+> **runtime** check: run the scene under `sandbox test` and assert the mechanism
 > moved (see [`author-usd-physics`](../author-usd-physics/SKILL.md#2-a-prismatic-joint-carries-moment)).
 > A vehicle can validate perfectly and still land on its shins.
 

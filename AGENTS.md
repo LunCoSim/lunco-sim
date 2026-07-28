@@ -42,7 +42,7 @@ Design doc without checking what actually exists first.
   other. The coordinator runs one workspace check after all agents land. See
   `skills/subagent-batches`. Repo skills live in `skills/`, never `.claude/`.
 - **Behaviour-changing refactors need a baseline.** Capture the parity verdicts *before*
-  editing (`cargo run -p lunco-sandbox --bin scene_test -- --scene scenes/sandbox/…`,
+  editing (`cargo run -p lunco-sandbox --bin sandbox -- test --scene scenes/sandbox/…`,
   exit 0=PASS/1=FAIL/2=no verdict) and re-run after. "It compiles" is not evidence that a
   drivetrain still behaves the same.
 - **Rules go in policy, not in Rust.** The lint layer is FACTS in Rust (the crate that
@@ -506,7 +506,7 @@ When a documented cause turns out to be wrong, rewrite it — do not append.
 <claude-mem-context>
 # Memory Context
 
-# [main] recent context, 2026-07-28 11:42am GMT+7
+# [main] recent context, 2026-07-28 12:07pm GMT+7
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE

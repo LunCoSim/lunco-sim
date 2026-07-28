@@ -61,8 +61,8 @@ def Xform "SolarTower" (
         bool physics:collisionEnabled = true
     }
 
-    # Mast — the fixed joint anchor (body0). Kinematic so it holds station
-    # under the array load and gravity (same role as CubeA in joint_test).
+    # Mast — the fixed joint anchor (body0). A disabled rigid body is a USD
+    # static body, so the revolute joint can only move the head (body1).
     def Cylinder "Mast" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -74,7 +74,7 @@ def Xform "SolarTower" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
         float physics:mass = 200.0
-        bool physics:kinematicEnabled = true
+        bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
     }
 

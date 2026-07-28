@@ -1,4 +1,4 @@
-//! `scene_test` — headless, physics-only, DETERMINISTIC scene+scenario runner.
+//! `sandbox test` — headless, physics-only, deterministic scene+scenario runner.
 //!
 //! ## Why this exists
 //!
@@ -17,15 +17,15 @@
 //! this crate grew a drawer of one-off probes: each one hand-built a headless world
 //! because there was no way to headlessly run a REAL authored scene.
 //!
-//! `scene_test` is that missing thing: it composes the **same app the `--no-ui`
+//! `sandbox test` composes the **same app the `--no-ui`
 //! server composes** (`SandboxCorePlugin { headless: true }` +
 //! `SandboxHeadlessPlugin` — literally the two plugins `run_with_mode(true)`
 //! uses), steps it by hand as fast as the CPU allows, watches the scenario's
 //! telemetry verdict, and exits with a status code.
 //!
 //! ```text
-//! cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-//!     --scene scenes/tests/drivetrain_parity.usda
+//! cargo run -q -p lunco-sandbox --bin sandbox -j 4 -- \
+//!     test --scene scenes/tests/drivetrain_parity.usda
 //! echo $?   # 0 = PASS, 1 = FAIL, 2 = no verdict (hang / load failure)
 //! ```
 //!
@@ -97,7 +97,7 @@
 //!
 //! The two knobs above are exactly the two ways this runner differs from the
 //! GUI sandbox, and a scene can pass here while failing there. That happened:
-//! `scenes/tests/drivetrain_parity.usda` passes 8/8 under `scene_test` and
+//! `scenes/tests/drivetrain_parity.usda` passes 8/8 under `sandbox test` and
 //! blows up under the GUI (measured speed 4.5 → 120 → 846 m/s during the steer
 //! phase, heading NaN). Two candidate causes, and "it passes headless" tells
 //! you nothing about WHICH:
@@ -141,12 +141,11 @@
 
 use std::time::Duration;
 
-use bevy::app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
-use lunco_sandbox::{SandboxCorePlugin, SandboxHeadlessPlugin};
+use crate::SandboxHeadlessPlugin;
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
 /// at 60 Hz — an order of magnitude more than any current parity scenario needs
@@ -334,10 +333,10 @@ fn parse_args() -> Result<Cli, String> {
 fn usage() -> String {
     format!(
         "\
-scene_test — run one authored USD scene + its scenario headless and deterministically.
+sandbox test — run one authored USD scene + its scenario headless and deterministically.
 
 USAGE:
-    scene_test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
+    sandbox test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
                [--threads N] [--jitter FRAC] [--seed U64]
 
     --scene PATH             REQUIRED. USD scene path relative to assets/, e.g.
@@ -389,21 +388,6 @@ EXIT CODES:
 ///
 /// `threads == 0` is handled by the CALLER, which skips this override entirely
 /// rather than asking for a zero-sized pool.
-fn pinned_compute_pool(threads: usize) -> TaskPoolPlugin {
-    TaskPoolPlugin {
-        task_pool_options: TaskPoolOptions {
-            compute: TaskPoolThreadAssignmentPolicy {
-                min_threads: threads,
-                max_threads: threads,
-                percent: 1.0,
-                on_thread_spawn: None,
-                on_thread_destroy: None,
-            },
-            ..default()
-        },
-    }
-}
-
 /// Catch the scenario's verdict off the shared telemetry bus.
 ///
 /// `emit(name, "PASS"|"FAIL")` in rhai lands here as a triggered
@@ -454,11 +438,11 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
         _ => return,
     };
     let name = evt.name.clone();
-    info!("[scene_test] verdict received on channel {name}: {payload}");
+    info!("[sandbox test] verdict received on channel {name}: {payload}");
     verdict.result = Some((name, passed));
 }
 
-fn main() -> std::process::ExitCode {
+pub fn run() -> u8 {
     // BEFORE the `App` exists, because building it registers settings sections and
     // that is what loads (and installs the flush for) `settings.json`.
     //
@@ -474,7 +458,7 @@ fn main() -> std::process::ExitCode {
         Ok(c) => c,
         Err(msg) => {
             eprintln!("{msg}");
-            return std::process::ExitCode::from(2);
+            return 2;
         }
     };
 
@@ -497,17 +481,11 @@ fn main() -> std::process::ExitCode {
     // group. Every part still comes from the shipped public helpers
     // (`register_lunco_asset_sources`, `default_plugins`), so nothing is guessed —
     // the ONLY divergence from `build_sim_app` is the compute-pool override below.
-    let mut app = App::new();
-    lunco_assets::register_lunco_asset_sources(&mut app);
-    let mut group = lunco_sandbox::default_plugins(true, false);
-    // `--threads 0` means "don't touch it": bevy sizes the pool itself and we get
-    // the same multi-threaded scheduling the GUI has. Any other value pins the
-    // compute pool; 1 (the default) is the reproducible gate.
-    if cli.threads > 0 {
-        group = group.set(pinned_compute_pool(cli.threads));
-    }
-    app.add_plugins(group);
-    app.add_plugins(SandboxCorePlugin { headless: true });
+    let mut app = crate::build_sim_app_with_threads(
+        true,
+        false,
+        (cli.threads > 0).then_some(cli.threads),
+    );
     app.add_plugins(SandboxHeadlessPlugin);
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
@@ -701,7 +679,7 @@ fn main() -> std::process::ExitCode {
         .collect();
     if !missing.is_empty() {
         println!(
-            "scene_test FAIL  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            "sandbox test FAIL  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
             cli.scene
         );
         println!(
@@ -709,13 +687,13 @@ fn main() -> std::process::ExitCode {
              dangled — the fixture is no longer reproducing what it asserts",
             missing.join(", ")
         );
-        return std::process::ExitCode::from(1);
+        return 1;
     }
 
     match app.world().resource::<Verdict>().result.clone() {
         Some((channel, true)) if !broken.is_empty() => {
             println!(
-                "scene_test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            "sandbox test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
             println!(
@@ -727,21 +705,21 @@ fn main() -> std::process::ExitCode {
                 "  a wire that targets a port the endpoint does not expose is an authoring \
                  error — the subsystem it feeds is dead, whatever the scenario measured"
             );
-            std::process::ExitCode::from(1)
+            1
         }
         Some((channel, true)) => {
             println!(
-                "scene_test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            "sandbox test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
-            std::process::ExitCode::SUCCESS
+            0
         }
         Some((channel, false)) => {
             println!(
-                "scene_test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            "sandbox test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
-            std::process::ExitCode::from(1)
+            1
         }
         None => {
             let why = if early_exit {
@@ -750,10 +728,10 @@ fn main() -> std::process::ExitCode {
                 "max-ticks exhausted with no verdict (scenario never finished — treated as a failure)"
             };
             println!(
-                "scene_test NO-VERDICT  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}  — {why}",
+            "sandbox test NO-VERDICT  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}  — {why}",
                 cli.scene
             );
-            std::process::ExitCode::from(2)
+            2
         }
     }
 }

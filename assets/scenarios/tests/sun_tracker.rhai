@@ -44,9 +44,13 @@ fn on_start(me) {
 
     this.ctrl = find("/SunTrackerTest/SolarTower/Controller");
     this.hinge = find("/SunTrackerTest/SolarTower/Hinge");
+    this.mast = find("/SunTrackerTest/SolarTower/Mast");
+    this.head = find("/SunTrackerTest/SolarTower/YawHead");
 
     this.az_before = ();
     this.yaw_before = ();
+    this.mast_forward_before = ();
+    this.head_forward_before = ();
 
     print("[sun] ── co-sim fabric tracks the sun ─────────────────────────");
     print("[sun] controller gid=" + this.ctrl + " hinge gid=" + this.hinge);
@@ -55,9 +59,11 @@ fn on_start(me) {
 fn on_tick(me) {
     if this.phase == "done" { return; }
 
-    if this.ctrl == () || this.ctrl < 0 || this.hinge == () || this.hinge < 0 {
-        fail_fast("controller/hinge prims not found (ctrl=" + this.ctrl + " hinge=" +
-                  this.hinge + ") — wrong scene?", "SUN TRACKER", "SUN_TRACKER");
+    if this.ctrl == () || this.ctrl < 0 || this.hinge == () || this.hinge < 0 ||
+       this.mast == () || this.mast < 0 || this.head == () || this.head < 0 {
+        fail_fast("sun tracker assembly prims not found (ctrl=" + this.ctrl +
+                  " hinge=" + this.hinge + " mast=" + this.mast + " head=" +
+                  this.head + ") — wrong scene?", "SUN TRACKER", "SUN_TRACKER");
         this.phase = "done";
         return;
     }
@@ -80,6 +86,8 @@ fn on_tick(me) {
         if leg >= this.settle_s {
             this.az_before = get(this.ctrl, "sun_mount_x");
             this.yaw_before = get(this.ctrl, "yaw");
+            this.mast_forward_before = world_forward(this.mast);
+            this.head_forward_before = world_forward(this.head);
             print("[sun] before the step: sun_mount_x=" + r4(this.az_before) +
                   " yaw=" + r4(this.yaw_before) + " angle=" + r4(get(this.hinge, "angle")));
             // MOVE THE SUN. Everything after this is the chain's response.
@@ -97,6 +105,10 @@ fn on_tick(me) {
                 az: get(this.ctrl, "sun_mount_x"),
                 yaw: get(this.ctrl, "yaw"),
                 angle: get(this.hinge, "angle"),
+                mast_forward: world_forward(this.mast),
+                head_forward: world_forward(this.head),
+                mast_forward_before: this.mast_forward_before,
+                head_forward_before: this.head_forward_before,
             });
         } else if leg % 4.0 < dt() {
             print("[sun] t=" + r2(this.t) + "s  sun_mount_x=" + r4(get(this.ctrl, "sun_mount_x")) +
@@ -123,6 +135,8 @@ fn verdict(s) {
     f.push(t_present(s.az, "Controller sun_mount_x port"));
     f.push(t_present(s.yaw, "Controller yaw port"));
     f.push(t_present(s.angle, "Hinge angle port"));
+    f.push(t_present(s.mast_forward, "Mast world orientation"));
+    f.push(t_present(s.head_forward, "YawHead world orientation"));
 
     // Two halves of one guard, and the SECOND is the load-bearing one. The
     // commanded `sun_yaw` is not a mount-frame vector component, so how far
@@ -150,6 +164,17 @@ fn verdict(s) {
             " against yaw=" + r4(s.yaw) + " rad. The cross-prim " +
             "`inputs:angle.connect` is not reaching the joint's motor — the " +
             "controller can be perfect and the panel still never move."));
+    }
+
+    if s.mast_forward != () && s.mast_forward_before != () {
+        f.push(t_true(vdot(vnorm(s.mast_forward), vnorm(s.mast_forward_before)) > 0.9999,
+            "the fixed mast rotated with the assembly; the pole must remain static while " +
+            "the panel head turns on the revolute joint"));
+    }
+    if s.head_forward != () && s.head_forward_before != () {
+        f.push(t_true(vdot(vnorm(s.head_forward), vnorm(s.head_forward_before)) < 0.995,
+            "the solar-panel head did not rotate; the panel must be parented to the " +
+            "revolute-joint body1"));
     }
 
     print("[sun] ── results ───────────────────────────────────────────");
