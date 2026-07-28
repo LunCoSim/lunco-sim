@@ -79,6 +79,17 @@ impl Plugin for LunCoMobilityPlugin {
         // so scripts can react via `on_event` instead of polling distance().
         sensing::register_collision_event_bridge(app);
 
+        // Every raycast wheel gets the drivetrain readback slot its jointed twin
+        // gets from `lunco_hardware`'s own observer — same component, same names,
+        // so an authored telemetry channel on the wheel works for either
+        // realization. Stamped on Add so the hot integrator only ever mutates.
+        app.add_observer(
+            |trigger: On<Add, WheelRaycast>, mut commands: Commands| {
+                commands
+                    .entity(trigger.entity)
+                    .try_insert(lunco_hardware::MotorReadback::default());
+            },
+        );
         app.register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             // `DriveMix` — the kernel-selected allocation spec that replaced the

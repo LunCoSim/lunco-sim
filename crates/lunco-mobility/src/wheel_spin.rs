@@ -72,6 +72,11 @@ pub(crate) fn update_wheel_spin(
         With<crate::kernels::DriveMix>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
+    // The drivetrain readback slot on this wheel — the SAME component the jointed
+    // realization publishes (`lunco_hardware::MotorReadback`), so one authored
+    // telemetry channel reads either kind. Disjoint from `q_wheels` by component,
+    // so both can be `&mut` over the same entity.
+    mut q_readback: Query<&mut lunco_hardware::MotorReadback>,
     q_child_of: Query<&ChildOf>,
     q_inputs: Query<&InputPorts>,
     // THE FIXED CLOCK BY TYPE, NOT BY PLACEMENT. This integrator is only correct
@@ -292,6 +297,22 @@ pub(crate) fn update_wheel_spin(
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
 
+        // ── THE SAME READBACK THE JOINTED WHEEL PUBLISHES ─────────────────────
+        // `lunco_hardware::MotorReadback` on the wheel entity: delivered axle
+        // torque (N·m) and axle speed (rad/s), as ports. Both realizations report
+        // it under the same names in the same sense, which is what makes a
+        // parity plot — or one authored `lunco:telemetry` channel on
+        // `components/mobility/wheel.usda` — work for either kind of rover
+        // without knowing which one it got.
+        //
+        // Drive plus brake, because both are the drivetrain acting on the axle;
+        // traction and bearing drag are the ground and the bearing, not the
+        // machine.
+        if let Ok(mut r) = q_readback.get_mut(entity) {
+            r.torque = tau_drive + tau_brake;
+            r.axle_speed = w;
+        }
+
         // ── THE TIRE FORCE — ONE number, for the axle AND the chassis ──────────
         //
         // The chassis force used to be computed independently, in
@@ -420,16 +441,22 @@ mod tests {
     use bevy::time::{Time, TimePlugin, TimeUpdateStrategy};
     use std::time::Duration;
 
-    /// Put a test app on the SAME clock the product runs on: one fixed tick of
-    /// exactly `dt` per `app.update()`.
+    /// Put a test app on the SAME clock the product runs on: fixed steps of
+    /// exactly `dt`.
+    ///
+    /// ⚠ It does NOT guarantee one tick per `app.update()` — the accumulator is
+    /// filled by the frame that just ran, so the first update runs `FixedUpdate`
+    /// zero times. A test that asserts on a specific NUMBER of ticks must drive
+    /// the schedule itself (see `run_raycast_spin`); a test that only wants a
+    /// steady state can loop updates and ignore the off-by-one.
     ///
     /// `update_wheel_spin` reads `Time<Fixed>` and is registered in `FixedUpdate`,
     /// so a test that pokes the generic clock and registers into `Update` exercises
     /// a path the vehicle never takes. `TimeUpdateStrategy::ManualDuration` pins the
-    /// real-clock advance and `Time::<Fixed>` is matched to it, so the accumulator
-    /// expends exactly one step per update — deterministic, and `dt` is explicit at
-    /// every call site. This is how every other physics test in the workspace drives
-    /// the fixed schedule (see `lunco_cosim::joint` tests).
+    /// real-clock advance and `Time::<Fixed>` is matched to it, so every step that
+    /// runs is exactly `dt` — deterministic, and `dt` is explicit at every call
+    /// site. This is how every other physics test in the workspace drives the
+    /// fixed schedule (see `lunco_cosim::joint` tests).
     fn app_on_fixed_clock(dt: f64) -> App {
         let mut app = App::new();
         app.add_plugins(TimePlugin);
@@ -513,7 +540,21 @@ mod tests {
         ));
 
         app.add_systems(FixedUpdate, update_wheel_spin);
-        app.update();
+        // EXACTLY ONE FIXED TICK, DRIVEN EXPLICITLY — `app.update()` will not do.
+        //
+        // The expected ω below is one step of the implicit grip solve, so this
+        // measurement is only meaningful for a known number of ticks. But the
+        // fixed accumulator starts empty and is filled by the frame that just
+        // ran, so the FIRST `app.update()` banks `dt` and runs `FixedUpdate`
+        // ZERO times — the wheel never integrated and the test read a pristine
+        // `spin_velocity: 0.0` as a physics answer. (The sibling
+        // no-load-speed test never noticed: it loops 600 updates, where one lost
+        // tick is invisible.) Advancing `Time<Fixed>` and running the schedule
+        // makes the tick count the thing the test actually controls.
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .advance_by(Duration::from_secs_f64(0.1));
+        app.world_mut().run_schedule(FixedUpdate);
 
         app.world_mut()
             .query::<&WheelRaycast>()

@@ -3212,6 +3212,13 @@ impl Plugin for SpawnCommandPlugin {
         // linter is a verb you call (from rhai, HTTP or MCP), and a scenario that
         // wants it live simply calls it on a cadence.
         crate::lint_command::register(app);
+        // Selection → telemetry focus, so every host that has the scene verbs has
+        // scoped telemetry (the sandbox, the workbench, a headless server driven
+        // by `SelectEntity`). Render-free: `lunco-signal` is a ring buffer of
+        // f64s, not a UI. See `crate::mirror_selection_to_telemetry_focus`.
+        app.init_resource::<crate::SelectedEntities>();
+        app.init_resource::<lunco_signal::TelemetryFocus>();
+        app.add_systems(Update, crate::mirror_selection_to_telemetry_focus);
         // A spawn whose USD stage hasn't composed yet is parked here, not placed
         // blind — see `RestDepth::StagePending`.
         app.init_resource::<DeferredSpawns>();

@@ -108,11 +108,11 @@ impl Plugin for SandboxEditPlugin {
         // rover without inventing a second inspector-target mechanism.
         app.add_systems(Update, selection::select_possessed_vessel);
         app.add_systems(Update, selection::handle_deselect_keys);
-        // Selection → telemetry focus. The resource is owned by `lunco-telemetry`
-        // (render-free), so `init_resource` here only matters for an editor built
-        // without the telemetry plugin; it is idempotent either way.
-        app.init_resource::<lunco_signal::TelemetryFocus>();
-        app.add_systems(Update, selection::mirror_selection_to_telemetry_focus);
+        // Selection → telemetry focus is NOT here: it moved down to the command
+        // layer beside `SelectedEntities` itself
+        // (`lunco_scene_commands::mirror_selection_to_telemetry_focus`, installed
+        // by `SpawnCommandPlugin` above), so every host with the scene verbs gets
+        // scoped telemetry instead of only this editor.
 
         // Terrain-sculpt tools — arm/disarm gate, brush sizing, cursor ghost.
         app.add_systems(
