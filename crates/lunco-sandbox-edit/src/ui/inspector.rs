@@ -213,40 +213,105 @@ pub fn populate_inspector_view(world: &mut World) {
 /// during a sim. The `Local` flag forces one initial build (a freshly-added
 /// system does not see pre-existing entities as `Changed`). On an idle scene
 /// with nothing selected this returns `false` and every scan is skipped.
+/// ⚠ **VALUE COMPARISON, NOT `Changed<…>`** — and that is forced, not stylistic.
+///
+/// This gate used to ask `Changed<Transform>` on the sun. It fired on 296 of 300
+/// frames, i.e. it gated nothing while the Inspector paid for a full world scan
+/// every frame. The reason is upstream and deliberate:
+/// `lunco_celestial::touch_celestial_transforms` calls `set_changed()` on the
+/// celestial subtree EVERY frame (measured load-bearing — without it the tree
+/// strobes to the origin), so a transform's change tick carries no information in
+/// this app. Anything gated on it is gated on nothing.
+///
+/// So the gate compares the handful of scalars the view actually holds against
+/// the world's current values: a few single-entity component reads, versus the
+/// producer's `&mut World` scans. When the sun's aim moves by a ULP and the
+/// rendered readout would print the same degrees, nothing runs.
 pub(crate) fn inspector_inputs_changed(
     mut first: Local<bool>,
     view: Res<InspectorView>,
     selection: Res<crate::SelectedEntities>,
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
+    // The SAME sun the producer reads (non-preview, non-fill), so the comparison
+    // is against the value that would land in the view.
     lights: Query<
-        (),
         (
-            Or<(
-                Changed<Transform>,
-                Changed<bevy::light::DirectionalLight>,
-                Changed<bevy::light::CascadeShadowConfig>,
-            )>,
-            With<bevy::light::DirectionalLight>,
+            &Transform,
+            &bevy::light::DirectionalLight,
+            Option<&bevy::light::CascadeShadowConfig>,
+        ),
+        (
+            Without<lunco_environment::Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
         ),
     >,
-    cameras: Query<
-        (),
-        Or<(
-            Changed<bevy::camera::Exposure>,
-            Changed<bevy::post_process::bloom::Bloom>,
-        )>,
-    >,
+    cameras: Query<(
+        Option<&bevy::camera::Exposure>,
+        Option<&bevy::post_process::bloom::Bloom>,
+    )>,
     mut removed_lights: RemovedComponents<bevy::light::DirectionalLight>,
 ) -> bool {
+    use bevy::math::EulerRot;
+
     // Drain the removal buffer every frame (so it doesn't accumulate) and note
     // whether a directional light despawned since last frame.
     let removed = removed_lights.read().count() > 0;
+
+    // The readout is printed to a tenth of a degree / whole lux, so compare at
+    // that resolution: a difference the panel cannot show is not a reason to
+    // rebuild the view.
+    let sun_moved = {
+        let live = lights.iter().next().map(|(tf, light, cascades)| {
+            let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            (
+                yaw.to_degrees(),
+                pitch.to_degrees(),
+                light.illuminance,
+                light.shadow_maps_enabled,
+                cascades.and_then(|c| c.bounds.first().copied()),
+            )
+        });
+        match (&view.sun, live) {
+            (None, None) => false,
+            (Some(cached), Some((yaw, pitch, lux, shadows, first_bound))) => {
+                (cached.yaw_deg - yaw).abs() > 0.05
+                    || (cached.pitch_deg - pitch).abs() > 0.05
+                    || (cached.illuminance - lux).abs() > 1.0
+                    || cached.shadow_maps_enabled != shadows
+                    || cached.shadow_first != first_bound
+            }
+            // Appeared or disappeared — the view is stale either way.
+            _ => true,
+        }
+    };
+
+    let camera_changed = {
+        let (live_ev, live_bloom) = cameras
+            .iter()
+            .next()
+            .map(|(e, b)| (e.map(|e| e.ev100), b.map(|b| b.intensity)))
+            .unwrap_or((None, None));
+        let ev_moved = match (view.exposure_ev100, live_ev) {
+            (Some(a), Some(b)) => (a - b).abs() > 1.0e-3,
+            (None, None) => false,
+            _ => true,
+        };
+        let bloom_moved = match (view.bloom_intensity, live_bloom) {
+            (Some(a), Some(b)) => (a - b).abs() > 1.0e-4,
+            (None, None) => false,
+            _ => true,
+        };
+        ev_moved || bloom_moved
+    };
+
     let run = !*first
         || selection.is_changed()
         || ambient.is_some_and(|a| a.is_changed())
-        || !lights.is_empty()
-        || !cameras.is_empty()
+        || sun_moved
+        || camera_changed
         || removed
+        // A selected joint IS live physics (θ moves every tick), so this one
+        // genuinely runs every frame — but only while a joint is selected.
         || view.joint.is_some();
     *first = true;
     run
