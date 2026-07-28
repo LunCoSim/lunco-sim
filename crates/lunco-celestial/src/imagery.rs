@@ -66,6 +66,9 @@ pub(crate) struct BoundBodyImagery(bevy::platform::collections::HashSet<Entity>)
 #[derive(Resource, Default)]
 pub(crate) struct PendingBodyImagery {
     inflight: Vec<PendingBodyImage>,
+    /// Authored maps are retained until the asset server publishes readiness.
+    authored: Vec<PendingBodyImage>,
+    ready: bevy::platform::collections::HashSet<AssetId<Image>>,
     /// Datasets whose load has failed, and how many times. A dataset that has
     /// reached [`MAX_IMAGERY_ATTEMPTS`] is never re-issued — the give-up path
     /// this map exists for.
@@ -143,27 +146,69 @@ fn bind_albedo(
 pub(crate) fn adopt_authored_body_albedo(
     q_decl: Query<
         (&crate::CelestialBodyDecl, &crate::AuthoredBodyAlbedo),
-        Changed<crate::AuthoredBodyAlbedo>,
     >,
     asset_server: Res<AssetServer>,
+    images: Res<Assets<Image>>,
+    mut image_events: MessageReader<AssetEvent<Image>>,
     mut bound: ResMut<BoundBodyImagery>,
+    mut pending: ResMut<PendingBodyImagery>,
     mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
+    for event in image_events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                pending.ready.insert(*id);
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                pending.ready.remove(id);
+            }
+        }
+    }
     for (decl, albedo) in &q_decl {
+        if !q_globes
+            .iter()
+            .any(|(_, body, _, _)| body.ephemeris_id == decl.naif)
+        {
+            continue; // globe not built yet; reconcile again on the next frame
+        }
+        if !pending.authored.iter().any(|r| r.naif_id == decl.naif) {
+            let image = asset_server.load(albedo.asset.clone());
+            // If the globe appeared after the asset event, capture the already
+            // resident asset once; steady state is driven by AssetEvent<Image].
+            if images.get(image.id()).is_some() {
+                pending.ready.insert(image.id());
+            }
+            pending.authored.push(PendingBodyImage {
+                naif_id: decl.naif,
+                dataset_key: albedo.asset.clone(),
+                image,
+            });
+        }
+    }
+    for request in std::mem::take(&mut pending.authored) {
+        if !pending.ready.contains(&request.image.id()) {
+            pending.authored.push(request);
+            continue;
+        }
         let Some((globe, _, mut lod, tiles)) = q_globes
             .iter_mut()
-            .find(|(_, body, _, _)| body.ephemeris_id == decl.naif)
+            .find(|(_, body, _, _)| body.ephemeris_id == request.naif_id)
         else {
-            continue; // globe not built yet — `Changed` still holds next frame
+            pending.authored.push(request);
+            continue;
         };
-        let image = asset_server.load(albedo.asset.clone());
-        lod.look = bind_albedo(&lod.look, image);
+        if bound.0.contains(&globe) {
+            continue;
+        }
+        lod.look = bind_albedo(&lod.look, request.image);
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
         bound.0.insert(globe);
         info!(
-            "[celestial] body {} took the imagery authored on its prim ({})",
-            decl.naif, albedo.asset
+            "[celestial] body {} took the ready imagery authored on its prim ({})",
+            request.naif_id, request.dataset_key
         );
     }
 }

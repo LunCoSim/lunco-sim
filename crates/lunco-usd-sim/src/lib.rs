@@ -128,9 +128,30 @@ pub struct NoRenderVisuals;
 
 pub struct UsdSimPlugin;
 
+/// Retire authored cameras at the shared scene-teardown boundary. The scene
+/// entity despawn and the render-world extraction are not the same instant; a
+/// camera left active until the subtree is flushed can render alongside the
+/// replacement avatar during RestartScene.
+fn retire_scene_cameras(
+    mut cameras: Query<
+        (&mut bevy::camera::Camera, Entity),
+        (With<SceneCamera>, With<UsdPrimPath>),
+    >,
+    mut commands: Commands,
+) {
+    for (mut camera, entity) in &mut cameras {
+        camera.is_active = false;
+        commands.entity(entity).try_remove::<SceneCamera>();
+    }
+}
+
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         crate::shader_ports::build(app);
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            retire_scene_cameras,
+        );
         app.register_type::<PhysicalWheel>()
             // Client-only: reconstruct a remote rover's wheels from its chassis
             // (kinematic followers — wheels are no longer replicated), then re-derive

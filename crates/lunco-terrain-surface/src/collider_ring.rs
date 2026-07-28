@@ -35,25 +35,13 @@ use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Square};
 use crate::stream_viz::DemHeightField;
 
-/// Canonical quadtree depth the collider tiles are realized at. Fixed → the ring
-/// is identical across peers. At a ±4 km DEM, depth 9 → 15.6 m tiles.
-///
-/// Depth, not resolution, is what makes the ring cheap. Contact FIDELITY is set by
-/// the sample SPACING (`tile_side / (COLLIDER_RES − 1)`); COST is set by the
-/// triangle count (`2·(COLLIDER_RES − 1)²` per tile) and by the tile's AABB, which
-/// pairs with every collider it overlaps. A 39 m tile spans the whole vehicle, so
-/// each resident tile paired with all ~116 rover colliders — 2786 contact pairs of
-/// which only 43 ever touched — and carried 32 768 triangles to feel a 3 m
-/// footprint. Going deeper shrinks both while holding the spacing fixed.
-const COLLIDER_DEPTH: u8 = 9;
-/// Heightfield samples per tile side (independent of visual LOD). 33 over a
-/// 15.6 m tile ≈ 0.49 m spacing — the SAME spacing 129-over-62.5 m gave, at a
-/// sixteenth of the triangles, because the tile shrank with it. Fine enough that
-/// the crater bowls and synthetic craterlets the rover SEES also exist in what it
-/// TOUCHES: the Nyquist gate passes features ≥ ~1.5 m at this spacing (anything
-/// smaller is ankle-deep). At the original 3.9 m spacing the gate faded out
-/// everything below ~12 m, so rovers drove flat across visually deep bowls.
-const COLLIDER_RES: usize = 33;
+/// Seed values for the collider ring. `for_viz` replaces these with the active
+/// visual tile lattice. Keeping the fallback here is useful for reflected/test
+/// construction, but production terrain must not have a second resolution
+/// contract: a collider sampled on another lattice can put a rover above a
+/// visible slope or below a visible crater rim.
+const COLLIDER_DEPTH: u8 = 8;
+const COLLIDER_RES: usize = 49;
 /// Determinism lattice (metres) collider heights snap to — peers build
 /// byte-identical heightfields from the same oracle. Anchored in the WORLD
 /// frame (heights are quantized before the tile-local `origin_y` rebase), so
@@ -94,14 +82,18 @@ impl TerrainColliderRing {
     /// picks the coarser visual gate — what the rover touches is what the eye
     /// sees, not a finer band the mesh flattens out.
     pub fn for_viz(viz: &crate::stream_viz::TerrainLodViz, half_extent: f64) -> Self {
-        let viz_leaf_side = (2.0 * half_extent) / (1u32 << viz.max_depth) as f64;
-        let viz_leaf_step = viz_leaf_side / (viz.tile_res.max(2) - 1) as f64;
-        let collider_side = (2.0 * half_extent) / (1u32 << COLLIDER_DEPTH) as f64;
-        let collider_step = collider_side / (COLLIDER_RES.max(2) - 1) as f64;
+        let depth = viz.max_depth;
+        let res = viz.tile_res.max(2);
+        let tile_side = (2.0 * half_extent) / (1u32 << depth) as f64;
+        let step = tile_side / (res - 1) as f64;
         TerrainColliderRing {
-            depth: COLLIDER_DEPTH,
-            res: COLLIDER_RES,
-            contact_band: SurfaceBand::contact(viz_leaf_step, collider_step),
+            depth,
+            res,
+            // The collider and visual tile now sample exactly the same lattice
+            // and therefore use the same band-limit. This is the important
+            // invariant; it also avoids a rover riding a finer physics surface
+            // than the mesh currently shown to the user.
+            contact_band: SurfaceBand::contact(step, step),
         }
     }
 }

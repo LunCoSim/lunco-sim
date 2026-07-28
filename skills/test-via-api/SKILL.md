@@ -31,35 +31,17 @@ path reloads the standard shader set; pass `shaders/starfield.wgsl` to limit the
 Confirm the command result and inspect the unchanged window. Do not relaunch the app just
 to pick up a starfield or material edit.
 
-## ⚠️ NEVER kill the user's running workbench
+## Session lifecycle
 
-**Default rule: if a workbench is already running on port 4101,
-DO NOT send `Exit` and DO NOT start a new one.** Take the screenshot
-/ run the API command against the existing instance.
-
-Why: the user's session holds their state — open tabs, the menu
-they have open right now, an in-progress drag, the canvas zoom they
-set up. Killing it destroys that state and renders the screenshot
-useless. Many things (open context menus, hover tooltips, drag
-previews) **cannot be reproduced via API** because they only exist
-during user interaction.
-
-When you need to restart:
-- The user explicitly says "restart" / "start fresh" / "kill it".
-- The running binary is verifiably stale (you just rebuilt and the
-  user wants to see the new behaviour). Even then: **ask first**.
-- The port is bound by a zombie that's not responding to API calls.
-  Try a quick `FitCanvas` ping; if it answers, that's the user's
-  session — leave it alone.
-
-If you need state inside the workbench that isn't there (a drilled-
-in tab, a loaded file, a plot), drive the API to add it. NEVER
-restart to "start clean."
+Before launching another sandbox, send `Exit` to the previous API session and verify that
+its process and port are gone. Never overlap GUI/API sessions or reuse a port while the old
+session is alive. Keep the current process for live shader/Rhai edits; restart only when a
+rebuilt binary or an explicit clean session is required.
 
 ## Lifecycle (start → drive → stop)
 
 ```bash
-# 1. Start. MUST use run_in_background:true of the Bash tool, otherwise
+# 1. After the previous session is confirmed stopped, start. MUST use run_in_background:true of the Bash tool, otherwise
 #    the bash wrapper exits and the workbench dies with it.
 cargo run --bin lunica -- --api 4101   # run_in_background:true
 

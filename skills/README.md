@@ -67,6 +67,9 @@ one directly when doing that kind of task by hand.
 - **Always launch sandbox with its HTTP API**: `target/debug/sandbox --api 4101` (use
   another explicit free port when needed). The MCP bridge's old default (3000) is stale;
   never omit `--api` from a controllable visual or runtime validation launch.
+- **Exit the previous session before launching the next**: send the API `Exit` command,
+  verify the process and port are gone, then start the replacement. Never overlap sandbox
+  GUI/API sessions or reuse a port while the old session is still alive.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
 - **Policy → rhai, identity → USD, math → Modelica** — keep logic out of the Rust core.

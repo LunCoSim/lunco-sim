@@ -20,12 +20,9 @@
 
 #import bevy_pbr::forward_io::VertexOutput
 #import lunco::pbr_lit::lit
-#import lunco::noise::vnoise_quintic
 
 //!@ui      surface_color    color "Surface colour"
 //!@default surface_color    0.2,0.2,0.2
-//!@ui      earth_mode       0 1 "Procedural Earth fallback"
-//!@default earth_mode       0
 //!@ui      roughness        0 1   "Roughness"
 //!@default roughness        0.9
 //!@ui      high_line_color  color "Line colour (high alt / sphere)"
@@ -51,7 +48,6 @@
 struct Material {
     surface_color:      vec3<f32>,
     roughness:          f32,
-    earth_mode:         f32,
     high_line_color:    vec3<f32>,
     transition:         f32,
     low_line_color:     vec3<f32>,
@@ -93,18 +89,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let img_pole = textureSample(albedo_tex, albedo_smp, vec2(0.5, in.uv.y)).rgb;
         let pole = smoothstep(0.95, 0.995, abs(in.uv.y * 2.0 - 1.0));
         base *= mix(img, img_pole, pole);
-        // Keep Earth recognisable when its optional downloaded raster is not
-        // installed. This is an appearance fallback, not a second asset path:
-        // authored imagery still wins through the normal albedo binding above.
-        // The broad, low-frequency land mask gives the globe continents and
-        // ocean variation instead of presenting a flat blue placeholder.
-        let n0 = vnoise_quintic(vec3(in.uv.x * 8.0, in.uv.y * 5.0, 17.0));
-        let n1 = vnoise_quintic(vec3(in.uv.x * 16.0, in.uv.y * 10.0, 41.0));
-        let land = smoothstep(0.47, 0.59, n0 * 0.72 + n1 * 0.28);
-        let ocean = vec3<f32>(0.025, 0.12, 0.34);
-        let ground = vec3<f32>(0.16, 0.30, 0.08);
-        let earth_fallback = mix(ocean, ground, land);
-        base = mix(base, earth_fallback, mat.earth_mode);
         let ll_coords = in.uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
         let ll_line = min(ll_f.x, ll_f.y);

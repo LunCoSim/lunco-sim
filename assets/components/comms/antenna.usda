@@ -259,6 +259,11 @@ def Xform "CommsAntenna" (
         rel physics:body0 = </CommsAntenna>
         rel physics:body1 = </CommsAntenna/YawHead>
         uniform token physics:axis = "Y"
+        # Explicit port declaration: the cosim joint adapter exposes the
+        # measured and commanded angle through this USD property. Without the
+        # sink, the authored tracker connection is silently dropped during
+        # composition.
+        float inputs:angle
         float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:az>
     }
 
@@ -271,6 +276,7 @@ def Xform "CommsAntenna" (
         uniform token physics:axis = "X"
         point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle
         float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
     }
 

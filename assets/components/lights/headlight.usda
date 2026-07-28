@@ -33,7 +33,11 @@ def Xform "Headlight"
         # as barely-there on regolith (albedo ~0.11) at the beam's working
         # distance; 20 klm lights the path ahead while still losing to the
         # 128 klx lunar Sun, so it stays a NIGHT/shadow tool, not a day light.
-        float inputs:intensity = 20000.0
+        # Lunar night scenes have no atmosphere or ambient sky contribution.
+        # 20 klm only made the emissive lens visible while leaving the ground
+        # black; use a useful close-range work light while retaining the
+        # authored range and standard UsdLux photometric inputs.
+        float inputs:intensity = 150000.0
         float inputs:exposure = 0.0
         # Match the 9 cm visible lens: the UsdLux schema default is 0.5 m, which
         # made this a one-metre emitter with an implausibly soft, wheel-filling
