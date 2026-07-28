@@ -516,12 +516,100 @@ impl OctaveGrid {
     }
 }
 
+/// Everything [`Crater::delta_at_limited`] recomputes per sample that depends
+/// only on `(crater, gate)`: the Nyquist fade, both blurred Gaussian widths and
+/// their amplitudes folded into the height factors, and the reach `tail` — which
+/// is a **whole second profile evaluation** (2 `exp` + a `powf`) the old hot path
+/// paid on every hit. The breakdown report put 78 % of a leaf-pitch sample in
+/// profile math at ≈39 ns per in-reach crater; this is what that pays for.
+///
+/// One record, not a side array: an earlier attempt hoisted the same constants
+/// into a `Vec` parallel to `craters` and measured *slower*, because a hit then
+/// took two random accesses instead of one. Here the prepared record REPLACES
+/// the `Crater` load in the hot path, so the stream count is unchanged.
+///
+/// Every field is grouped exactly as [`crater_profile_limited`] groups it, so
+/// the fast path is bit-for-bit the slow one (pinned by
+/// `band_limited_prune_is_bitwise_identical_to_the_unpruned_gate`, which now
+/// compares a prepared index against an un-prepared reference).
+#[derive(Debug, Clone, Copy)]
+struct Prepared {
+    radius: f64,
+    depth: f64,
+    bowl_power: f64,
+    rim_sigma: f64,
+    /// `rim_height * rim_amp`.
+    rim_k: f64,
+    apron_sigma: f64,
+    /// `(rim_height * APRON_FRAC) * apron_amp`.
+    apron_k: f64,
+    /// The profile's residual at [`CRATER_REACH`], subtracted for continuity.
+    tail: f64,
+    /// Whole-crater Nyquist fade at this gate (`0` = contributes nothing).
+    fade: f64,
+}
+
+impl Prepared {
+    fn new(c: &Crater, min_wavelength: f64) -> Prepared {
+        let r = c.radius;
+        let fade = if r > 0.0 {
+            nyquist_fade(2.0 * r, min_wavelength)
+        } else {
+            0.0
+        };
+        let sample_sigma = 0.5 * min_wavelength / r;
+        let sigma_n = (sample_sigma * sample_sigma + c.softness * c.softness).sqrt();
+        let rim_sigma = (RIM_SIGMA * RIM_SIGMA + sigma_n * sigma_n).sqrt();
+        let apron_sigma = (APRON_SIGMA * APRON_SIGMA + sigma_n * sigma_n).sqrt();
+        let rim_amp = (RIM_SIGMA / rim_sigma) * (RIM_SIGMA / rim_sigma);
+        let apron_amp = (APRON_SIGMA / apron_sigma) * (APRON_SIGMA / apron_sigma);
+        Prepared {
+            radius: r,
+            depth: c.depth,
+            bowl_power: c.bowl_power,
+            rim_sigma,
+            rim_k: c.rim_height * rim_amp,
+            apron_sigma,
+            apron_k: c.rim_height * APRON_FRAC * apron_amp,
+            tail: crater_profile_limited(CRATER_REACH, c.depth, c.rim_height, c.bowl_power, sigma_n),
+            fade,
+        }
+    }
+
+    /// Height delta at squared distance `d2` from the centre — the caller
+    /// already computed it for the reach reject, so it is never recomputed here.
+    /// In-reach only: the caller rejects outside.
+    #[inline]
+    fn delta_at(&self, d2: f64) -> f64 {
+        if !(self.fade > 0.0) {
+            return 0.0;
+        }
+        let d = d2.sqrt() / self.radius;
+        let bowl = if d < 1.0 {
+            -self.depth * (1.0 - d.powf(self.bowl_power))
+        } else {
+            0.0
+        };
+        let rim = self.rim_k * gauss(d, RIM_CENTER, self.rim_sigma);
+        let apron = self.apron_k * gauss(d, APRON_CENTER, self.apron_sigma);
+        self.fade * (bowl + rim + apron - self.tail)
+    }
+}
+
 /// The immutable placement set + per-octave spatial index behind [`Craters`].
 #[derive(Debug)]
 struct CraterIndex {
     /// The crater set (order only matters for bucket construction determinism —
     /// the per-point min/max combine is order-independent).
     craters: Vec<Crater>,
+    /// Per-crater constants baked for [`gate`](CraterIndex::gate), parallel to
+    /// `craters`. Sampling at any OTHER gate falls back to `craters`.
+    prepared: Vec<Prepared>,
+    /// The Nyquist gate `prepared` was baked for. An index is always built for
+    /// one band (see [`Craters::band_limited`]); this makes that structural
+    /// rather than assumed, so a hand-built `Craters` at a mismatched gate is
+    /// slow but never wrong.
+    gate: f64,
     /// One grid per OCCUPIED radius octave, in ascending octave order — the
     /// order the combine sums in.
     grids: Vec<OctaveGrid>,
@@ -537,8 +625,9 @@ struct CraterIndex {
 }
 
 impl CraterIndex {
-    /// Stratify by radius octave and build one grid per occupied stratum.
-    fn build(craters: Vec<Crater>) -> CraterIndex {
+    /// Stratify by radius octave, build one grid per occupied stratum, and bake
+    /// the per-crater constants for `gate`.
+    fn build(craters: Vec<Crater>, gate: f64) -> CraterIndex {
         let mut members: Vec<Vec<u32>> = vec![Vec::new(); OCTAVE_COUNT];
         for (i, c) in craters.iter().enumerate() {
             members[octave_of(c.radius)].push(i as u32);
@@ -548,8 +637,11 @@ impl CraterIndex {
             .filter(|m| !m.is_empty())
             .filter_map(|m| OctaveGrid::build(&craters, m))
             .collect();
+        let prepared = craters.iter().map(|c| Prepared::new(c, gate)).collect();
         CraterIndex {
             craters,
+            prepared,
+            gate,
             grids,
             gated: Mutex::new(Vec::new()),
         }
@@ -561,7 +653,7 @@ impl Craters {
     /// contributes nothing.
     pub fn new(craters: Vec<Crater>) -> Self {
         Self {
-            index: Arc::new(CraterIndex::build(craters)),
+            index: Arc::new(CraterIndex::build(craters, 0.0)),
             min_wavelength: 0.0,
         }
     }
@@ -615,7 +707,7 @@ impl Craters {
             .copied()
             .filter(|c| 2.0 * c.radius > min_wavelength)
             .collect();
-        let index = Arc::new(CraterIndex::build(kept));
+        let index = Arc::new(CraterIndex::build(kept, min_wavelength));
         let mut cache = self.index.gated.lock().unwrap_or_else(|e| e.into_inner());
         // Live slider-drag tuning mints a distinct band per value; cap so a
         // session of tweaking cannot grow this without bound.
@@ -681,7 +773,7 @@ impl Craters {
             }
         }
         Craters {
-            index: Arc::new(CraterIndex::build(kept)),
+            index: Arc::new(CraterIndex::build(kept, min_wavelength)),
             min_wavelength,
         }
     }
@@ -710,6 +802,10 @@ impl Craters {
     /// stratum with no candidate here would have contributed an exact
     /// `0.0 + 0.0`, so skipping it leaves every bit identical.
     pub fn delta_at(&self, x: f64, z: f64) -> f64 {
+        // The index bakes its per-crater constants for ONE gate; sampling at
+        // that gate (every path that goes through `band_limited`/`for_region`,
+        // i.e. every bake) takes the prepared record, anything else recomputes.
+        let prepared = self.min_wavelength.to_bits() == self.index.gate.to_bits();
         let mut sum = 0.0;
         for g in &self.index.grids {
             let entries = g.entries_at(x, z);
@@ -731,11 +827,16 @@ impl Craters {
                 if dz >= reach || dz <= -reach {
                     continue;
                 }
-                if dx * dx + dz * dz >= reach * reach {
+                let d2 = dx * dx + dz * dz;
+                if d2 >= reach * reach {
                     continue;
                 }
                 let i = g.idx[e] as usize;
-                let d = self.index.craters[i].delta_at_limited(x, z, self.min_wavelength);
+                let d = if prepared {
+                    self.index.prepared[i].delta_at(d2)
+                } else {
+                    self.index.craters[i].delta_at_limited(x, z, self.min_wavelength)
+                };
                 if d == 0.0 {
                     continue;
                 }
@@ -1230,16 +1331,12 @@ mod tests {
     /// actually pays per sample, so the next person tuning this argues with
     /// numbers instead of the cost model in
     /// `docs/architecture/terrain-crater-perf-plan.md`.
-    #[test]
-    #[ignore = "perf report, not a pass/fail test"]
-    fn crater_sampling_report() {
-        use std::time::Instant;
-        // A REPRESENTATIVE field: the layer's own size-frequency distribution
-        // (`N(>r) ∝ r^-1.8` over `[ANALYTIC_RADIUS_FLOOR_M, 60]`) at the shipped
-        // density — 8 craters/ha scaled by the SFD factor over a 1 km
-        // half-extent (400 ha). Uniform-ish radii would misreport the whole
-        // problem: the cost model is ABOUT the population being dominated by
-        // craters near the floor.
+    /// A REPRESENTATIVE field: the layer's own size-frequency distribution
+    /// (`N(>r) ∝ r^-1.8` over `[ANALYTIC_RADIUS_FLOOR_M, 60]`) at the shipped
+    /// density — 8 craters/ha scaled by the SFD factor over a 1 km half-extent
+    /// (400 ha). Uniform-ish radii would misreport the whole problem: the cost
+    /// model is ABOUT the population being dominated by craters near the floor.
+    fn sfd_population() -> Vec<Crater> {
         let mut state = 0xD1B5_4A32_D192_ED03_u64;
         let mut rng = move || {
             state = state
@@ -1250,7 +1347,7 @@ mod tests {
         let (rmin, rmax, a) = (ANALYTIC_RADIUS_FLOOR_M, 60.0_f64, 1.8_f64);
         let q = (rmin / rmax).powf(a);
         let count = (8.0 * (8.0_f64 / rmin).powf(a) * 400.0) as usize;
-        let craters: Vec<Crater> = (0..count)
+        (0..count)
             .map(|_| {
                 let radius = rmin * (1.0 - rng() * (1.0 - q)).powf(-1.0 / a);
                 let u = rng();
@@ -1263,7 +1360,29 @@ mod tests {
                     bowl_power: 2.0 + 4.0 * u,
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    /// One CDLOD tile's lattice, in bake order (row-major, the order
+    /// `bake_tile_mesh` walks it).
+    fn lattice(side: f64, res: usize) -> Vec<(f64, f64)> {
+        let mut pts = Vec::with_capacity(res * res);
+        for iz in 0..res {
+            for ix in 0..res {
+                pts.push((
+                    -side * 0.5 + side * ix as f64 / (res - 1) as f64,
+                    -side * 0.5 + side * iz as f64 / (res - 1) as f64,
+                ));
+            }
+        }
+        pts
+    }
+
+    #[test]
+    #[ignore = "perf report, not a pass/fail test"]
+    fn crater_sampling_report() {
+        use std::time::Instant;
+        let craters = sfd_population();
         let full = Craters::new(craters.clone());
 
         // Candidates a sample considers: per-octave grids vs. the ONE global
@@ -1329,6 +1448,201 @@ mod tests {
                  {:>5} after region scope | {t_gated:>6.1} ns/sample → {t_scoped:>6.1} ns/sample",
                 gated.crater_count(),
                 scoped.crater_count(),
+            );
+        }
+    }
+
+    /// Where the per-sample nanoseconds actually GO. The sampling report says
+    /// what a bake pays; this says which stage it pays it to, by running the
+    /// same query set through three nested prefixes of `delta_at`:
+    ///
+    /// - **lookup** — `entries_at` per octave grid and nothing else (the cell
+    ///   index: `cell_of` + two `starts[]` loads per grid);
+    /// - **walk** — lookup plus the SoA reject loop (`cx`/`cz`/`reach` loads and
+    ///   the bbox + radius compares), stopping before any profile call;
+    /// - **total** — the real `delta_at`.
+    ///
+    /// So `walk − lookup` is the candidate scan and `total − walk` is the
+    /// profile math. The same set is then run in a **shuffled** order: identical
+    /// work, destroyed locality, so the gap is the memory-hierarchy component.
+    /// A stage that is cache-bound moves a lot between the two columns; one that
+    /// is compute-bound barely moves.
+    #[test]
+    #[ignore = "perf report, not a pass/fail test"]
+    fn crater_sampling_breakdown() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let full = Craters::new(sfd_population());
+        let res = 129usize;
+        let n = (res * res) as f64;
+
+        // Min of several runs: we want the achievable cost, not the scheduler's
+        // opinion of this machine's afternoon.
+        let bench = |f: &dyn Fn(&[(f64, f64)]) -> f64, pts: &[(f64, f64)]| -> f64 {
+            let mut best = f64::INFINITY;
+            for _ in 0..15 {
+                let t = Instant::now();
+                black_box(f(pts));
+                best = best.min(t.elapsed().as_secs_f64() / n * 1e9);
+            }
+            best
+        };
+
+        println!(
+            "{:>6} {:>7} {:>7} {:>6} {:>6} | {:>7} {:>7} {:>7} {:>7} | {:>8} {:>5} {:>7}",
+            "tile", "craters", "idx KiB", "cand", "hits", "lookup", "walk", "profile", "total",
+            "unprep", "×", "-powf"
+        );
+        for &(label, step) in &[("leaf", 0.5), ("mid", 4.0), ("coarse", 32.0)] {
+            let wl = 2.0 * step;
+            let side = 64.0 * (step / 0.5);
+            let scoped = full.for_region(
+                [-side * 0.5 - side, -side * 0.5 - side],
+                [side * 0.5 + side, side * 0.5 + side],
+                wl,
+            );
+            let pts = lattice(side, res);
+            let mut shuffled = pts.clone();
+            let mut state = 0x243F_6A88_85A3_08D3_u64;
+            for i in (1..shuffled.len()).rev() {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                shuffled.swap(i, (state >> 33) as usize % (i + 1));
+            }
+
+            let lookup = |pts: &[(f64, f64)]| {
+                let mut acc = 0usize;
+                for &(x, z) in pts {
+                    for g in &scoped.index.grids {
+                        acc += g.entries_at(x, z).len();
+                    }
+                }
+                acc as f64
+            };
+            let walk = |pts: &[(f64, f64)]| {
+                let mut hits = 0usize;
+                for &(x, z) in pts {
+                    for g in &scoped.index.grids {
+                        for e in g.entries_at(x, z) {
+                            let reach = g.reach[e];
+                            let dx = x - g.cx[e];
+                            if dx >= reach || dx <= -reach {
+                                continue;
+                            }
+                            let dz = z - g.cz[e];
+                            if dz >= reach || dz <= -reach {
+                                continue;
+                            }
+                            if dx * dx + dz * dz >= reach * reach {
+                                continue;
+                            }
+                            hits += 1;
+                        }
+                    }
+                }
+                hits as f64
+            };
+            let total = |pts: &[(f64, f64)]| {
+                let mut acc = 0.0;
+                for &(x, z) in pts {
+                    acc += scoped.delta_at(x, z);
+                }
+                acc
+            };
+            // The SAME field sampled through the pre-`Prepared` path: identical
+            // craters and grids, but a gate the index was not baked for, so
+            // `delta_at` falls back to recomputing the constants per hit. An A/B
+            // inside one process — machine noise here is ±2× across runs, so a
+            // cross-run before/after would measure the afternoon, not the code.
+            let unprepared = Craters {
+                index: Arc::new(CraterIndex::build(scoped.index.craters.clone(), -1.0)),
+                min_wavelength: wl,
+            };
+            let before = |pts: &[(f64, f64)]| {
+                let mut acc = 0.0;
+                for &(x, z) in pts {
+                    acc += unprepared.delta_at(x, z);
+                }
+                acc
+            };
+            assert_eq!(
+                total(&pts).to_bits(),
+                before(&pts).to_bits(),
+                "the prepared path must be bit-identical to the recomputing one"
+            );
+            // `delta_at` with the bowl's `d.powf(bowl_power)` replaced by `d*d`
+            // — NOT a shippable variant (it changes every sampled height); a
+            // probe for how much of the residual profile cost is that one
+            // `powf`, which is the only transcendental left that depends on a
+            // per-crater exponent and so cannot be hoisted into `Prepared`.
+            let nopowf = |pts: &[(f64, f64)]| {
+                let mut acc = 0.0;
+                for &(x, z) in pts {
+                    for g in &scoped.index.grids {
+                        let (mut deepest, mut tallest) = (0.0_f64, 0.0_f64);
+                        for e in g.entries_at(x, z) {
+                            let reach = g.reach[e];
+                            let dx = x - g.cx[e];
+                            let dz = z - g.cz[e];
+                            let d2 = dx * dx + dz * dz;
+                            if dx >= reach
+                                || dx <= -reach
+                                || dz >= reach
+                                || dz <= -reach
+                                || d2 >= reach * reach
+                            {
+                                continue;
+                            }
+                            let p = &scoped.index.prepared[g.idx[e] as usize];
+                            let d = d2.sqrt() / p.radius;
+                            let bowl = if d < 1.0 { -p.depth * (1.0 - d * d) } else { 0.0 };
+                            let v = p.fade
+                                * (bowl
+                                    + p.rim_k * gauss(d, RIM_CENTER, p.rim_sigma)
+                                    + p.apron_k * gauss(d, APRON_CENTER, p.apron_sigma)
+                                    - p.tail);
+                            deepest = deepest.min(v);
+                            tallest = tallest.max(v);
+                        }
+                        acc += deepest + tallest;
+                    }
+                }
+                acc
+            };
+
+            let (t_lookup, t_walk, t_total) = (
+                bench(&lookup, &pts),
+                bench(&walk, &pts),
+                bench(&total, &pts),
+            );
+            let (t_nopowf, t_before) = (bench(&nopowf, &pts), bench(&before, &pts));
+            let t_shuf = bench(&total, &shuffled);
+            // Resident index bytes: the cell directory + the SoA candidate arrays
+            // + the placement records the profile call dereferences.
+            let bytes: usize = scoped
+                .index
+                .grids
+                .iter()
+                .map(|g| g.starts.len() * 4 + g.idx.len() * (8 * 3 + 4))
+                .sum::<usize>()
+                + scoped.index.prepared.len() * std::mem::size_of::<Prepared>();
+            println!(
+                "{label:>6} {:>7} {:>7.0} {:>6.1} {:>6.2} | {t_lookup:>7.1} {:>7.1} {:>7.1} \
+                 {t_total:>7.1} | {t_before:>8.1} {:>5.2} {:>7.1}",
+                scoped.crater_count(),
+                bytes as f64 / 1024.0,
+                lookup(&pts) / n,
+                walk(&pts) / n,
+                t_walk - t_lookup,
+                t_total - t_walk,
+                t_before / t_total,
+                t_total - t_nopowf,
+            );
+            println!(
+                "       shuffled order: {t_shuf:.1} ns/sample ({:.2}× the bake's row-major walk)",
+                t_shuf / t_total,
             );
         }
     }
