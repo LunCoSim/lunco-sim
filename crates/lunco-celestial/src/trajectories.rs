@@ -616,21 +616,31 @@ pub fn trajectory_mesh_update_system(
 
         // `ATTRIBUTE_COLOR` is NOT written here when the alpha pass will write it.
         //
-        // Its RGB is one constant — `view.color`, which the material already
-        // carries as `base_color` — so a per-vertex copy of it says nothing. What
-        // is genuinely per-vertex is the ALPHA (the past half of the orbit fades
-        // out), and `trajectory_alpha_update_system` runs immediately after this
-        // system in the same `.chain()`, in the same frame, and overwrites the
-        // whole attribute from the vertex count it finds. Building a full
-        // `Vec<[f32; 4]>` of the constant colour here only to throw it away one
-        // system later is an allocation and a GPU upload per rebuild, and a
-        // trajectory rebuild is thousands of vertices.
+        // ⚠ VERTEX COLOUR MULTIPLIES `base_color`, IT DOES NOT REPLACE IT. bevy's
+        // `pbr_fragment.wgsl` seeds `material.base_color` from the vertex colour and
+        // then does `base_color *= material.base_color` — so anything this attribute
+        // carries in RGB is applied ON TOP of the tint the material already holds.
+        // Writing `view.color` here therefore SQUARES the tint (the material carries
+        // `view.color * 15`, so the line renders `view.color² * 15`): every channel
+        // below 1.0 is pulled down against the strongest one, and the line comes out
+        // more saturated and darker than the colour anybody authored. It used to do
+        // exactly that, on the belief — stated in this comment — that a per-vertex
+        // copy of a constant "says nothing".
         //
-        // The one case the alpha pass declines is a path with fewer than two
-        // points, where there is no time axis to fade along. Seed those here, so
-        // the attribute's vertex count can never disagree with `POSITION`.
-        let colors: Option<Vec<[f32; 4]>> = (path.points.len() < 2)
-            .then(|| vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()]);
+        // So RGB is 1.0: the MATERIAL owns the tint outright, and this attribute
+        // carries only what is genuinely per-vertex — the ALPHA, which fades the past
+        // half of the orbit out. `trajectory_alpha_update_system` runs immediately
+        // after this system in the same `.chain()`, in the same frame, and overwrites
+        // the whole attribute from the vertex count it finds; building a full
+        // `Vec<[f32; 4]>` here only to throw it away one system later is an
+        // allocation and a GPU upload per rebuild, and a trajectory rebuild is
+        // thousands of vertices.
+        //
+        // The one case the alpha pass declines is a path with fewer than two points,
+        // where there is no time axis to fade along. Seed those here, so the
+        // attribute's vertex count can never disagree with `POSITION`.
+        let colors: Option<Vec<[f32; 4]>> =
+            (path.points.len() < 2).then(|| vec![[1.0, 1.0, 1.0, 1.0]; final_pts.len()]);
 
         let mesh_handle = children.iter().find_map(|child| q_marker.get(child).ok());
         if let Some(mesh_handle) = mesh_handle {
@@ -655,6 +665,15 @@ pub fn trajectory_mesh_update_system(
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         }
         let mesh_handle = meshes.add(mesh);
+        // ALPHA 1.0 IS CORRECT HERE, and it is correct for the opposite reason to
+        // `assets/shaders/starfield.wgsl`, which must output alpha 0 to be additive.
+        // Both take bevy's `BLEND_PREMULTIPLIED_ALPHA` pass (`src + dst * (1 - src.a)`),
+        // where a non-zero alpha eats the background — but a StandardMaterial goes
+        // through `premultiply_alpha()`, which under `ALPHA_MODE_ADD` returns
+        // `vec4(rgb * a, 0.0)` and does the premultiply itself. The starfield is a
+        // custom `ShaderMaterial` whose fragment never reaches that function, so it
+        // has to premultiply by hand. Zeroing the alpha here would not make this
+        // *more* additive, it would make every trajectory line INVISIBLE — `rgb * 0`.
         let emissive_color = view.color * 15.0;
         let look = PbrLook {
             base_color: LinearRgba::new(
@@ -702,7 +721,6 @@ pub fn trajectory_alpha_update_system(
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
                 if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-                    let color = view.color;
                     let start_epoch = if let Some(s) = view.start_epoch {
                         s
                     } else {
@@ -733,7 +751,13 @@ pub fn trajectory_alpha_update_system(
                                 1.0
                             };
 
-                            [color.red, color.green, color.blue, alpha]
+                            // RGB is 1.0 — the MATERIAL owns the tint, and a copy of
+                            // it here would multiply in a second time. Alpha is the
+                            // fade, and under `AlphaMode::Add` bevy premultiplies it
+                            // for us (`vec4(rgb * a, 0.0)` in `premultiply_alpha`),
+                            // so alpha DIMS the line rather than erasing what is
+                            // behind it. See the seed site in the rebuild system.
+                            [1.0, 1.0, 1.0, alpha]
                         })
                         .collect();
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
