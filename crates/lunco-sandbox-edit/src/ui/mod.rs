@@ -59,8 +59,9 @@ pub struct ViewModelSet(());
 /// did, for 12 ms a frame. Here the gate is an argument: you cannot register a
 /// producer without stating when it runs.
 ///
-/// A producer that genuinely must run every frame passes [`every_frame`], which
-/// puts the claim at the call site where review can see it, next to the reason.
+/// A producer that genuinely must run every frame registers through
+/// [`ViewModelAppExt::add_view_model_every_frame`], which puts the claim at the
+/// call site where review can see it, next to the reason.
 ///
 /// See `docs/architecture/42-ui-frame-discipline.md` §6.
 pub trait ViewModelAppExt {
@@ -73,6 +74,20 @@ pub trait ViewModelAppExt {
     where
         P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         C: SystemCondition<CM> + Send + 'static;
+
+    /// Add a producer that runs **every frame, on purpose** — an O(1) live
+    /// readout with nothing to gate on.
+    ///
+    /// Separate from [`add_view_model`](Self::add_view_model) so the
+    /// effectiveness tracker keeps meaning what it says. Registering these with
+    /// an always-true gate made the tracker report them as "this run condition is
+    /// not gating" on every launch — three warnings a run, two of which described
+    /// a decision rather than a defect, which is exactly how a real one
+    /// (`populate_inspector_view` at 296/300) gets read past. Declaring the
+    /// intent in the CALL makes the log's remaining entries all actionable.
+    fn add_view_model_every_frame<P, M>(&mut self, producer: P) -> &mut Self
+    where
+        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>;
 }
 
 impl ViewModelAppExt for App {
@@ -108,6 +123,17 @@ impl ViewModelAppExt for App {
                 )),
         )
     }
+
+    fn add_view_model_every_frame<P, M>(&mut self, producer: P) -> &mut Self
+    where
+        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
+    {
+        // No gate and no tracker — there is nothing to measure. The claim being
+        // made is "this producer is O(1) and has no input worth watching", and
+        // the place to check that claim is review of the call, not a runtime
+        // report that can only ever say "it ran every frame" (it will).
+        self.add_systems(Update, producer.in_set(ViewModelSet(())))
+    }
 }
 
 /// Gate for the producers that read the **selected prim out of the composed
@@ -126,15 +152,11 @@ pub fn usd_selection_view_changed(
     selection.is_changed() || target.is_changed() || revision.is_changed()
 }
 
-/// The explicit "this one really does run every frame" gate for
-/// [`ViewModelAppExt::add_view_model`].
-///
-/// Deliberately not a default: an ungated producer is a decision, and a decision
-/// belongs in the diff. Reserve it for O(1) live readouts (the shape
-/// `populate_command_deck_view` documents), never for anything that scans.
-pub fn every_frame() -> fn() -> bool {
-    || true
-}
+// `every_frame()` (an always-true gate handed to `add_view_model`) is gone: it
+// said the right thing to a reader and the wrong thing to the tracker, which
+// dutifully reported both users as broken gates every launch. The intent now
+// lives in `add_view_model_every_frame`, which is the same decision made in the
+// same place — minus the false positives.
 
 /// Publish the data-driven input convention plus the current controlled endpoint's
 /// binding into the existing View Help popup. This is presentation only: it
@@ -251,7 +273,7 @@ impl Plugin for SandboxEditUiPlugin {
         // One `ControllerLink` lookup and three `Ref` checks on a single entity,
         // then an early return — an O(1) live readout, the sanctioned
         // `every_frame` shape.
-        app.add_view_model(refresh_view_help_controls, every_frame());
+        app.add_view_model_every_frame(refresh_view_help_controls);
         app.register_panel(spawn_palette::SpawnPalette)
             .register_panel(inspector::Inspector)
             .register_panel(inspector::EnvironmentPanel)
@@ -447,7 +469,7 @@ impl Plugin for SandboxEditUiPlugin {
         // lookups each `Update` (the sanctioned live-readout exception to §7),
         // so no change-gate — same shape as the avatar status producer.
         app.init_resource::<command_deck::CommandDeckView>();
-        app.add_view_model(command_deck::populate_command_deck_view, every_frame());
+        app.add_view_model_every_frame(command_deck::populate_command_deck_view);
 
         // Joint State view-model: the selected vessel's joints and wheels are
         // live physics (θ / ω / τ change every tick), so while something is
