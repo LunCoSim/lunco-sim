@@ -215,6 +215,13 @@ but keep the live API check because it exercises the production reload and
 command paths. Do not add a second reload command or a standalone rover test
 binary.
 
+For presentation work, establish the acceptance chain in order: builtin
+raycast drive first (`DRIVETRAIN PARITY: PASS`), then the Modelica drive-law
+overlay (`MODELICA DRIVE LAW: PASS`), then optional power/thermal/autonomy.
+Never use a visual screenshot as a substitute for either verdict: a rover that
+does not move, or one still driven by the builtin kernel after a failed Modelica
+overlay, can look plausible in a parked frame.
+
 Partial USD object/reference reload is intentionally not exposed yet. Until its
 composition, connection, and Modelica-worker lifecycle are implemented as one
 operation, use the full `RestartScene` reload for rover tests. A successful full

@@ -23,6 +23,8 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 
+use crate::camera::UsdAvatarCamera;
+
 /// Walk this far up a `ChildOf` chain looking for the enclosing `Grid`.
 const MAX_MOUNT_GRID_WALK: usize = 16;
 
@@ -76,6 +78,11 @@ pub fn resolve_camera_mounts(
         (Entity, &ChildOf, &Transform),
         (
             With<SceneCamera>,
+            // An authored avatar eye is controlled by the avatar projection,
+            // not rigidly attached to the scene root it starts under. Letting
+            // it enter this follower path gives two systems ownership of its
+            // Transform after reload and makes one camera appear to jump.
+            Without<UsdAvatarCamera>,
             Without<CameraMountResolved>,
             Without<crate::UsdAnimated>,
             // A `BasisCurves` path owns its camera's pose (`camera_path.rs`). Such
@@ -178,5 +185,32 @@ pub fn follow_mounted_cameras(
         *cell = new_cell;
         tf.translation = new_local;
         tf.rotation = cam_rot;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn avatar_camera_never_enters_mounted_follower_path() {
+        let mut app = App::new();
+        app.add_systems(Update, resolve_camera_mounts);
+        let grid = app.world_mut().spawn(Grid::new(2000.0, 0.0)).id();
+        let scene_root = app.world_mut().spawn(ChildOf(grid)).id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                UsdAvatarCamera,
+                Transform::default(),
+                ChildOf(scene_root),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get::<MountedCamera>(avatar).is_none());
+        assert!(app.world().get::<CameraMountResolved>(avatar).is_none());
     }
 }

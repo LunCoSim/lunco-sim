@@ -428,7 +428,9 @@ const FALLBACK_AVATAR_GRACE_SECS: f32 = 2.0;
 /// one a few frames later, leaving the world with two cameras + two
 /// `FloatingOrigin`s (which big_space resets every frame, killing perf
 /// and breaking propagation). Wait a grace period; if the scene didn't
-/// publish a camera by then, spawn the fallback exactly once.
+/// publish a camera by then, spawn one fallback for that live scene.  The
+/// tracked entity, rather than a process-lifetime boolean, lets the shared
+/// scene teardown remove it safely before the next scene loads.
 fn spawn_fallback_avatar(
     time: Res<Time>,
     q_cameras: Query<Entity, With<Camera3d>>,
@@ -436,14 +438,18 @@ fn spawn_fallback_avatar(
     q_origins: Query<Entity, With<FloatingOrigin>>,
     active_sun: Res<lunco_environment::LunarSun>,
     mut commands: Commands,
-    mut done: Local<bool>,
+    mut fallback: Local<Option<Entity>>,
 ) {
-    if *done {
-        return;
+    if let Some(entity) = *fallback {
+        if q_cameras.get(entity).is_ok() {
+            return;
+        }
+        // The shared scene teardown (or an authored Avatar takeover) removed
+        // the previous fallback. A future camera-less scene may need one.
+        *fallback = None;
     }
     // A USD-spawned camera ends the wait immediately.
     if q_cameras.iter().next().is_some() {
-        *done = true;
         return;
     }
     // Otherwise let USD have its grace window before we step in.
@@ -536,7 +542,7 @@ fn spawn_fallback_avatar(
     }
     commands.entity(camera).try_insert(FloatingOrigin);
 
-    *done = true;
+    *fallback = Some(camera);
 }
 
 // ── wasm URL-driven boot ──────────────────────────────────────────────────────

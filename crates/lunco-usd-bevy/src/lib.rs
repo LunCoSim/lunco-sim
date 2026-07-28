@@ -675,6 +675,30 @@ pub struct MaterialPlan {
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdPreviewOnly;
 
+/// Returns whether an entity belongs to an off-screen USD preview stage.
+///
+/// Preview stages still need normal USD geometry, transforms, and materials so
+/// their viewport can render them. Their authored `Camera` prims, however,
+/// must never become Bevy window cameras: the viewport owns the one camera
+/// that renders the preview target. Walk `ChildOf` rather than testing only
+/// the entity because cameras are normally descendants of the preview root.
+fn is_preview_only(
+    entity: Entity,
+    q_child_of: &Query<&ChildOf>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
+) -> bool {
+    let mut current = entity;
+    loop {
+        if q_preview_only.contains(current) {
+            return true;
+        }
+        let Ok(parent) = q_child_of.get(current) else {
+            return false;
+        };
+        current = parent.parent();
+    }
+}
+
 /// Marker placed on an entity whose `UsdPrimPath` was added before the
 /// referenced `UsdStageAsset` finished loading. `on_stage_loaded`
 /// processes it once the asset becomes available.
@@ -793,6 +817,7 @@ fn instantiate_usd_prim(
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     is_high_precision_parent: bool,
+    preview_only: bool,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
     canonical: &mut CanonicalStages,
@@ -824,6 +849,7 @@ fn instantiate_usd_prim(
         is_instance_root,
         inherited_member,
         is_high_precision_parent,
+        preview_only,
         commands,
         asset_server,
         meshes,
@@ -844,6 +870,7 @@ fn instantiate_usd_prim_read(
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     is_high_precision_parent: bool,
+    preview_only: bool,
     commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
@@ -961,7 +988,18 @@ fn instantiate_usd_prim_read(
         // `Camera::is_active`, chosen by the switch mechanism in `lunco-avatar`.
         // A camera nested under a moving prim rides it via the shared transform
         // path below + `ChildOf` propagation ("camera on a rover").
-        camera::instantiate_camera_prim(reader, &sdf_path, prim_type.as_deref(), commands, entity);
+        // Browser previews use their dedicated off-screen camera. Translating
+        // an authored preview camera here would register a live SceneCamera
+        // and let the avatar arbiter switch the main window to it on reload.
+        if !preview_only {
+            camera::instantiate_camera_prim(
+                reader,
+                &sdf_path,
+                prim_type.as_deref(),
+                commands,
+                entity,
+            );
+        }
 
         // Horizon-map terrain self-shadowing (consumed by
         // `lunco-environment`'s horizon system). Authors opt a terrain prim
@@ -1615,6 +1653,7 @@ fn on_usd_prim_added(
         )>,
     >,
     q_child_of: Query<&ChildOf>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -1636,6 +1675,7 @@ fn on_usd_prim_added(
             .get(entity)
             .ok()
             .map_or(false, |c| q_high_precision.contains(c.parent()));
+    let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
 
     instantiate_usd_prim(
         entity,
@@ -1645,6 +1685,7 @@ fn on_usd_prim_added(
         is_instance_root,
         member,
         is_high_precision_parent,
+        preview_only,
         &mut commands,
         &stages,
         &mut canonical,
@@ -1707,6 +1748,7 @@ pub fn sync_usd_visuals(
         )>,
     >,
     q_child_of: Query<&ChildOf>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -1732,6 +1774,7 @@ pub fn sync_usd_visuals(
                     .get(entity)
                     .ok()
                     .map_or(false, |c| q_high_precision.contains(c.parent()));
+            let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
 
             instantiate_usd_prim(
                 entity,
@@ -1741,6 +1784,7 @@ pub fn sync_usd_visuals(
                 is_instance_root,
                 member,
                 is_high_precision_parent,
+                preview_only,
                 &mut commands,
                 &stages,
                 &mut canonical,

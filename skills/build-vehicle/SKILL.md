@@ -161,6 +161,37 @@ and `resync_wheels_for_stage` updates the live components — same entities, joi
 untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
 next document change would overwrite you.
 
+## Presentation-first delivery order
+
+For a Summer Space School request, author the rover, presentation course, and
+any new test scene under the Summer Space School Twin (`space-school-twin/` or
+`workshop/`), then load it through that Twin's manifest/reload path. Keep
+generic components and engine regression scenes in LunCo only when they are
+reusable beyond the school; do not make a presentation rover depend on a
+one-off engine scene.
+
+Build the smallest **builtin-drive, raycast** rover path before adding Modelica,
+power, thermal, autonomy, or a physical drivetrain. For a lunar presentation,
+start with the existing `skid_rover` on the shared `lunar_surface` base: it has
+the complete command surface and the least moving runtime parts. The first
+acceptance gate is `scenes/tests/drivetrain_parity.usda`: its scenario settles,
+drives straight, and steers both builtin-drive realizations, then emits the
+real verdict `DRIVETRAIN PARITY: PASS|FAIL`. A rover that merely composes, or
+two rovers that are both stationary, do not pass.
+
+Only after that gate passes, add one concern at a time:
+
+1. terrain/course and presentation cameras;
+2. the vehicle-specific assembly or rocker-bogie morphology;
+3. a Modelica drive-law overlay, proved by `scenes/tests/modelica_drive_law.usda`
+   (`MODELICA DRIVE LAW: PASS|FAIL` proves the expected transient lag, not merely
+   movement);
+4. battery, generation, thermal, then autonomy/story behaviour.
+
+Do not combine these stages. A failed rover with a new terrain, Modelica model,
+and scenario has too many owners to diagnose; restore the last passing stage
+before adding the next one.
+
 ## Variant axes (orthogonal, each choosing a component)
 
 Axes are **opt-in per vehicle** — a rover only has the axes its file declares.
@@ -253,7 +284,8 @@ deliberately; that is unchanged.
 
 ## Verify
 
-For iterative modeling, keep one sandbox process running and use its API. Edit
+For iterative modeling, keep one sandbox process running with an explicit
+`--api PORT` and use that API. Edit
 the USD, then use `OpenFile` for a file-backed asset, `RestartScene` for the
 mounted scene, or `ApplyUsdOp` for an in-place authored opinion. Re-run a Rhai
 telemetry observer with `RunScenario` and inspect live rover status/ports before
@@ -281,7 +313,7 @@ matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 12 s → throttle + steer 6 s.
 
 ```bash
-RUSTC_WRAPPER=sccache cargo run -j4 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
+RUSTC_WRAPPER=sccache cargo run -j4 --bin sandbox -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL' target/parity.log
 ```
 

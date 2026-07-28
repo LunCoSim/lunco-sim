@@ -45,3 +45,5 @@ graphify-out/
 # lives in code as `lunco_usd::is_runtime_state` — keep the two in step.
 .lunco/
 .tmpdir/
+*.png
+*.glb

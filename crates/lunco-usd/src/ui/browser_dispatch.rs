@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use lunco_workbench::{BrowserAction, BrowserActions};
 use lunco_workspace::WorkspaceResource;
 
-use crate::commands::spawn_usd_load;
+use crate::LoadScene;
 
 /// Lower-cased extensions this dispatch recognises as USD files.
 /// `.usdc` (binary) is included so users get a *parser failure*
@@ -64,7 +64,7 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
         return;
     }
 
-    let twin_root = {
+    let active_twin = {
         let ws = world.resource::<WorkspaceResource>();
         ws.active_twin
             .and_then(|id| ws.twin(id))
@@ -78,18 +78,40 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
         // Files section lists a scene's reference closure, whose layers routinely
         // live in the shipped asset library rather than in the open Twin. Only a
         // Twin-relative path needs a root to anchor on.
+        let Some(root) = active_twin.as_ref() else {
+            bevy::log::warn!(
+                "BrowserAction::OpenFile (USD) fired with no active Twin: {:?}",
+                relative_path
+            );
+            continue;
+        };
         let abs = if relative_path.is_absolute() {
             relative_path
         } else {
-            let Some(root) = twin_root.as_ref() else {
-                bevy::log::warn!(
-                    "BrowserAction::OpenFile (USD) fired with no active Twin: {:?}",
-                    relative_path
-                );
-                continue;
-            };
             root.join(&relative_path)
         };
-        spawn_usd_load(world, abs);
+        let Ok(rel) = abs.strip_prefix(root).map(std::path::Path::to_path_buf) else {
+            bevy::log::warn!(
+                "BrowserAction::OpenFile (USD) is outside the active Twin: {}",
+                abs.display()
+            );
+            continue;
+        };
+        let roots = world.resource::<lunco_assets::TwinRoots>();
+        let Some(twin_name) = roots
+            .names()
+            .into_iter()
+            .find(|name| roots.root_for(name).as_ref() == Some(root))
+        else {
+            bevy::log::warn!(
+                "active Twin root is not registered for scene loading: {}",
+                root.display()
+            );
+            continue;
+        };
+        world.trigger(LoadScene {
+            path: lunco_assets::twin_uri(twin_name, rel),
+            root_prim: String::new(),
+        });
     }
 }

@@ -48,6 +48,14 @@ const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
 const DEFAULT_NEAR: f32 = 0.1;
 const DEFAULT_FAR: f32 = 1.0e6;
 
+/// Marks a USD camera that is authored as the local avatar eye.
+///
+/// The avatar projection takes ownership of its grid-local pose and controls it
+/// interactively. It is therefore not a rigid follower, even during the brief
+/// load interval where it is still parented under the USD scene root.
+#[derive(Component, Default, Debug, Clone, Copy)]
+pub struct UsdAvatarCamera;
+
 /// Convert standard `UsdGeomCamera` photographic exposure into Bevy EV100.
 ///
 /// This is deliberately shared by imported cameras and `LunCoAvatarAPI`
@@ -135,6 +143,9 @@ pub(crate) fn instantiate_camera_prim(
     // source of the validator's spawn-frame reports. Until the resolver runs
     // (next Update at the latest), the camera is a plain Transform child of a
     // cell-entity: valid, propagated, and inactive anyway.
+    let is_avatar = reader
+        .scalar::<bool>(sdf_path, "lunco:avatar")
+        .unwrap_or_else(|| reader.text(sdf_path, "lunco:avatar").as_deref() == Some("true"));
     commands.entity(entity).try_insert((
         Camera {
             is_active: false,
@@ -147,6 +158,9 @@ pub(crate) fn instantiate_camera_prim(
         lunco_render::scene_camera_look(read_camera_exposure_ev100(reader, sdf_path)),
         projection,
     ));
+    if is_avatar {
+        commands.entity(entity).try_insert(UsdAvatarCamera);
+    }
 
     // Conform the authored horizontal aperture against the real window aspect
     // (USD's default `aspectRatioConformPolicy = "expandAperture"`). Bevy takes

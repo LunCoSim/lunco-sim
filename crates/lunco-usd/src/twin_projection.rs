@@ -788,7 +788,10 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                Some(cs) => match cs.projector().author_time_sample(&sp, name, type_name, *time, v) {
+                Some(cs) => match cs
+                    .projector()
+                    .author_time_sample(&sp, name, type_name, *time, v)
+                {
                     Ok(()) => true,
                     Err(e) => {
                         warn!("[twin] author keyframe {path}.{name} @ {time}: {e}");
@@ -850,7 +853,10 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                Some(cs) => match cs.projector().author_connection(&sp, name, type_name, sources) {
+                Some(cs) => match cs
+                    .projector()
+                    .author_connection(&sp, name, type_name, sources)
+                {
                     Ok(()) => true,
                     Err(e) => {
                         warn!("[twin] author connection {path}.{name}: {e}");
@@ -1027,28 +1033,51 @@ fn author_structural_edit(
     spawn_prim_op(world, scene_id, path, type_name, reference);
 }
 
-/// Re-read the whole scene from the (now-authored) live stage: for each
-/// scene-root entity of `scene_id`, drop its `UsdVisualSynced` marker + children
-/// and re-insert `UsdPrimPath`, re-firing `on_usd_prim_added` to re-instantiate
-/// the subtree — so an attribute edit that fans out through a material binding
-/// reaches every bound mesh. A scene root is an entity of this scene whose parent
-/// is *not* itself a prim of the same scene. The per-edit, synchronous successor
-/// to the old reload-driven whole-scene rebuild (matches the viewport's former
-/// `DocumentChanged` → clear-`UsdVisualSynced`-on-scene-root refresh).
+/// Re-read the whole live scene from the (now-authored) stage. Only an explicit
+/// [`UsdSceneRoot`](lunco_usd_sim::cosim::UsdSceneRoot) may seed this rebuild.
+/// Before rebuilding, retire every other projection entity for that stage.
+///
+/// This stage-scoped retirement is essential: a mounted USD camera is
+/// intentionally reparented directly to the persistent grid, so it no longer
+/// belongs to its USD root's Bevy subtree. Reinstantiating that root alone would
+/// create a replacement camera while the detached old camera kept rendering.
+/// Parentage is therefore never used as scene ownership; the stage handle is.
+///
+/// Dropping the root's `UsdVisualSynced` marker and children then re-inserting
+/// `UsdPrimPath` re-fires `on_usd_prim_added`, rebuilding exactly one subtree so
+/// an attribute edit that fans out through a material binding reaches every bound
+/// mesh. This is the per-edit, synchronous successor to the old reload-driven
+/// whole-scene rebuild.
 pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
-    let scene: Vec<(Entity, Option<Entity>)> = {
-        let mut q = world.query::<(Entity, &UsdPrimPath, Option<&ChildOf>)>();
+    let roots: Vec<Entity> = {
+        let mut q = world
+            .query_filtered::<(Entity, &UsdPrimPath), With<lunco_usd_sim::cosim::UsdSceneRoot>>();
         q.iter(world)
-            .filter(|(_, upp, _)| upp.stage_handle.id() == scene_id)
-            .map(|(e, _, parent)| (e, parent.map(|p| p.0)))
+            .filter(|(_, upp)| upp.stage_handle.id() == scene_id)
+            .map(|(entity, _)| entity)
             .collect()
     };
-    let members: std::collections::HashSet<Entity> = scene.iter().map(|(e, _)| *e).collect();
-    let roots: Vec<Entity> = scene
-        .iter()
-        .filter(|(_, parent)| parent.map(|p| !members.contains(&p)).unwrap_or(true))
-        .map(|(e, _)| *e)
-        .collect();
+
+    // `reinstantiate_entity` can only recursively despawn ordinary hierarchy
+    // children. Camera mounting deliberately breaks that hierarchy for precision,
+    // so first remove every non-root entity projected from this stage. This is the
+    // same ownership rule used by full scene teardown, kept here because a live
+    // document refresh does not pass through that lifecycle command.
+    let root_set: std::collections::HashSet<_> = roots.iter().copied().collect();
+    let stale: Vec<Entity> = {
+        let mut q = world.query::<(Entity, &UsdPrimPath)>();
+        q.iter(world)
+            .filter(|(entity, prim)| {
+                prim.stage_handle.id() == scene_id && !root_set.contains(entity)
+            })
+            .map(|(entity, _)| entity)
+            .collect()
+    };
+    for entity in stale {
+        if let Ok(entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.despawn();
+        }
+    }
     for root in roots {
         reinstantiate_entity(world, root);
     }
@@ -1292,6 +1321,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
 mod tests {
     use super::*;
     use crate::document::{LayerId, UsdOp};
+    use lunco_usd_bevy::UsdVisualSynced;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 
@@ -1372,6 +1402,46 @@ mod tests {
                 "{local} attribute edit is local to its own prim subtree"
             );
         }
+    }
+
+    /// A mounted camera is reparented directly beneath the persistent world
+    /// grid. It still belongs to the stage, but it is outside the root's Bevy
+    /// subtree. A full refresh must retire it before rebuilding the root, or
+    /// the root creates a replacement avatar alongside it.
+    #[test]
+    fn full_refresh_does_not_reinstantiate_detached_stage_camera() {
+        let mut world = World::new();
+        let stage = Handle::<UsdStageAsset>::default();
+        let root = world
+            .spawn((
+                lunco_usd_sim::cosim::UsdSceneRoot,
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Traverse".into(),
+                },
+                UsdVisualSynced,
+            ))
+            .id();
+        let detached_camera = world
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Traverse/Avatar".into(),
+                },
+                UsdVisualSynced,
+            ))
+            .id();
+
+        refresh_scene_visuals(&mut world, stage.id());
+
+        assert!(
+            world.get::<UsdVisualSynced>(root).is_none(),
+            "the explicit scene root is refreshed"
+        );
+        assert!(
+            world.get_entity(detached_camera).is_err(),
+            "a grid-direct mounted camera is retired before its root rebuilds"
+        );
     }
 
     /// (Was `find_doc_for_abs_matches_file_origin_only` — the rule moved to the

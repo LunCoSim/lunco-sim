@@ -386,7 +386,7 @@ rovers being wrong together.
 
 **How to run.**
 ```bash
-cargo run -j2 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+cargo run -j2 --bin sandbox -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
 ```
 The `LunCoProgramAPI` prim in the scene auto-runs the script on load; the run takes
 ~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:

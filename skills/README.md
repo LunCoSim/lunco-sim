@@ -66,7 +66,8 @@ one directly when doing that kind of task by hand.
 
 - **Always launch sandbox with its HTTP API**: `target/debug/sandbox --api 4101` (use
   another explicit free port when needed). The MCP bridge's old default (3000) is stale;
-  never omit `--api` from a controllable visual or runtime validation launch.
+  every controllable, visual, realtime, or scene-test sandbox process must carry
+  an explicit `--api PORT`. Only parse-only `--validate` invocations are exempt.
 - **Exit the previous session before launching the next**: send the API `Exit` command,
   verify the process and port are gone, then start the replacement. Never overlap sandbox
   GUI/API sessions or reuse a port while the old session is still alive.

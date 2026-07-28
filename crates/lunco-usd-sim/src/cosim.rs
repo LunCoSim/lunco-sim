@@ -25,13 +25,14 @@
 
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_core::{on_command, register_commands, Command, OriginAnchor, WorldGrid};
+use lunco_core::{
+    on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid,
+};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{
-    parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-};
+use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel};
+use lunco_render::SceneCamera;
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
@@ -1263,11 +1264,7 @@ const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
 ];
 
 /// Is this `inputs:` port one of [`STRUCTURAL_INPUT_BINDINGS`] on this prim?
-fn is_structural_binding(
-    view: &lunco_usd_bevy::StageView<'_>,
-    sink: &SdfPath,
-    port: &str,
-) -> bool {
+fn is_structural_binding(view: &lunco_usd_bevy::StageView<'_>, sink: &SdfPath, port: &str) -> bool {
     STRUCTURAL_INPUT_BINDINGS
         .iter()
         .any(|(name, schema)| *name == port && view.has_api_schema(sink, schema))
@@ -1431,12 +1428,13 @@ pub fn rewire_usd_connections(
                 view.type_name(&sink_sdf).as_deref(),
                 Some("Material" | "Shader" | "NodeGraph")
             );
-            let forward = attr.strip_prefix("outputs:").filter(|_| !shading_prim).map(|name| {
-                match q_actuators.get(entity).ok().and_then(|a| a.get(name)) {
-                    Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME.to_string()),
-                    None => (entity, name.to_string()),
-                }
-            });
+            let forward =
+                attr.strip_prefix("outputs:").filter(|_| !shading_prim).map(
+                    |name| match q_actuators.get(entity).ok().and_then(|a| a.get(name)) {
+                        Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME.to_string()),
+                        None => (entity, name.to_string()),
+                    },
+                );
             // `inputs:` is a sink; `outputs:` is a sink only when it forwards.
             // Everything else on the prim is not part of the wire fabric.
             let Some(sink_conn) = attr
@@ -1973,6 +1971,70 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
     }
 }
 
+/// Read-only camera/avatar inventory for diagnosing scene lifecycle failures.
+///
+/// [`lunco_api::ApiEntityRegistry`] is intentionally keyed by stable USD identity,
+/// so two accidental ECS projections of the same prim collapse to one row in
+/// `ListEntities`. This query instead enumerates the live ECS candidates by their
+/// transient entity id and reports the roles that can make a duplicate visible.
+/// It intentionally includes every Bevy camera, because a camera spawned outside
+/// the avatar path must be visible to this audit too.
+pub struct SceneCameraAuditProvider;
+
+impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
+    fn name(&self) -> &'static str {
+        "SceneCameraAudit"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let mut query = world.query_filtered::<(
+            Entity,
+            Option<&Name>,
+            Option<&UsdPrimPath>,
+            &bevy::camera::Camera,
+            Has<SceneCamera>,
+            Has<lunco_usd_bevy::camera_mount::MountedCamera>,
+            Has<Avatar>,
+            Has<LocalAvatar>,
+            Has<lunco_avatar::ProvisionalAvatarCamera>,
+        ), ()>();
+        let mut candidates: Vec<_> = query
+            .iter(world)
+            .map(
+                |(
+                    entity,
+                    name,
+                    prim,
+                    camera,
+                    scene_camera,
+                    mounted,
+                    avatar,
+                    local,
+                    provisional,
+                )| {
+                    serde_json::json!({
+                        "entity": entity.to_bits(),
+                        "name": name.map(|n| n.as_str()).unwrap_or_default(),
+                        "usd_path": prim.map(|p| p.path.as_str()),
+                        "stage": prim.map(|p| format!("{:?}", p.stage_handle.id())),
+                        "scene_camera": scene_camera,
+                        "mounted_camera": mounted,
+                        "avatar": avatar,
+                        "local_avatar": local,
+                        "provisional_avatar": provisional,
+                        "camera_active": camera.is_active,
+                    })
+                },
+            )
+            .collect();
+        candidates.sort_by_key(|row| row["entity"].as_u64());
+        lunco_api::ApiResponse::ok(serde_json::json!({
+            "count": candidates.len(),
+            "candidates": candidates,
+        }))
+    }
+}
+
 /// Reload (or load) a USD scene at runtime via the API.
 ///
 /// `curl … {"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda"}}`
@@ -2145,7 +2207,18 @@ fn on_clear_scene(trigger: On<ClearScene>, mut commands: Commands, scene: SceneE
 pub struct SceneEntities<'w, 's> {
     grid: Query<'w, 's, &'static Children, With<WorldGrid>>,
     origin: Query<'w, 's, Entity, With<OriginAnchor>>,
+    /// Every active scene root identifies the USD stage whose generated prims
+    /// belong to that scene.  A camera mount is allowed to move a prim directly
+    /// under the persistent grid, so hierarchy alone is not sufficient to find
+    /// all of these on teardown.
+    scene_roots: Query<'w, 's, &'static UsdPrimPath, With<UsdSceneRoot>>,
+    prims: Query<'w, 's, (Entity, &'static UsdPrimPath)>,
     wires: Query<'w, 's, Entity, With<SimConnection>>,
+    /// The sandbox's code-spawned safety camera is deliberately outside the
+    /// USD subtree, so it needs explicit scene-lifecycle ownership.  Leaving it
+    /// alive while a replacement USD Avatar claims the viewport is the only
+    /// route to two local cameras after a full reload.
+    provisional_avatars: Query<'w, 's, Entity, With<lunco_avatar::ProvisionalAvatarCamera>>,
 }
 
 pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
@@ -2155,7 +2228,14 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // `lunco_usd_bevy::scene_lifecycle`.
     commands.queue(lunco_usd_bevy::scene_lifecycle::run_scene_teardown);
 
-    let (q_grid, q_origin, q_wires) = (&scene.grid, &scene.origin, &scene.wires);
+    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_provisional_avatars) = (
+        &scene.grid,
+        &scene.origin,
+        &scene.scene_roots,
+        &scene.prims,
+        &scene.wires,
+        &scene.provisional_avatars,
+    );
     let mut despawned = 0usize;
 
     // Despawn all children of the WorldGrid (recursively), except the persistent OriginAnchor
@@ -2165,6 +2245,25 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
                 commands.entity(child).try_despawn();
                 despawned += 1;
             }
+        }
+    }
+
+    // Some scene-owned prims intentionally leave their authored hierarchy. In
+    // particular, `resolve_camera_mounts` moves a mounted USD camera directly
+    // beneath the grid so it can host the floating origin at full precision.
+    // It therefore survives a root-only clear and keeps rendering alongside the
+    // next scene's avatar.  Reclaim every prim from an active scene-root stage
+    // as a second, stage-scoped ownership sweep. Preview stages are not
+    // `UsdSceneRoot`s, so editor previews remain outside this lifecycle.
+    let active_stage_ids: std::collections::HashSet<_> = q_scene_roots
+        .iter()
+        .map(|root| root.stage_handle.id())
+        .collect();
+    let mut stage_prim_despawns = 0usize;
+    for (entity, prim) in q_prims.iter() {
+        if active_stage_ids.contains(&prim.stage_handle.id()) {
+            commands.entity(entity).try_despawn();
+            stage_prim_despawns += 1;
         }
     }
 
@@ -2186,7 +2285,18 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         commands.entity(e).try_despawn();
         despawned += 1;
     }
-    info!("[scene] cleanup: {} entities despawned", despawned);
+
+    // A provisional avatar belongs to the loaded scene, even though it is
+    // spawned by the UI rather than from a USD prim.  Remove it in the same
+    // deferred batch as the old stage so it cannot render alongside the next
+    // scene's authored avatar during a reload.
+    for e in q_provisional_avatars.iter() {
+        commands.entity(e).try_despawn();
+        despawned += 1;
+    }
+    info!(
+        "[scene] cleanup: {despawned} grid children and {stage_prim_despawns} stage prims queued for despawn"
+    );
     // Every scene clear resets the whole clock tree to defaults (doc 19 §11b): a sky
     // left detached at 100 000×, a scrubbed animation, a paused transport — none of it
     // may survive into the next scene. This is the single choke point all three reload
@@ -2322,7 +2432,8 @@ pub fn spawn_usd_child_with_translate(
 /// absolute path under the workspace `assets/` dir (Twin manifests store
 /// scenes as twin-root-relative; the caller joins them to an absolute
 /// path) or an already-relative asset path. Returns `None` (with a warn)
-/// if an absolute path lies outside the assets dir.
+/// if an absolute path lies outside the assets dir or a relative path repeats
+/// the asset-root `assets/` prefix.
 pub fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     // Already a scheme path (`abs://`, `lunco://`, …) — the AssetServer routes
     // it to the named source as-is.
@@ -2356,7 +2467,22 @@ pub fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
             }
         }
     } else {
-        Some(path_in.to_string())
+        // `LoadScene` is asset-root-relative. Passing `assets/scenes/...`
+        // would make AssetServer resolve `assets/assets/scenes/...`; if the
+        // caller cleared the active scene first, that typo left the viewport
+        // scene-less and therefore unlit. Reject it before any scene lifecycle
+        // work instead of accepting a second spelling for the same asset.
+        let normalized = path_in.replace('\\', "/");
+        if normalized == "assets" || normalized.starts_with("assets/") {
+            warn!(
+                "[scene] `{}` repeats the asset root; LoadScene paths are relative to `assets/` \
+                 (use `scenes/...`, not `assets/scenes/...`)",
+                path_in
+            );
+            None
+        } else {
+            Some(path_in.to_string())
+        }
     }
 }
 
@@ -2666,6 +2792,10 @@ pub(crate) fn install(app: &mut App) {
                 reg.register(ReleasePortProvider);
                 // Richer per-entity cosim introspection (not an alias of the above).
                 reg.register(CosimStatusProvider);
+                // Lifecycle diagnostics must inspect raw ECS candidates: the normal
+                // entity list is identity-deduplicated and cannot reveal two
+                // projections of the same USD camera path.
+                reg.register(SceneCameraAuditProvider);
                 // The read path for `generated://…` models — the text a
                 // projected USD network was actually compiled from.
                 reg.register(crate::domain_projection::GeneratedSourceProvider);
@@ -2701,6 +2831,22 @@ mod tests {
         // Empty override → empty sentinel; resolved downstream against
         // the parsed stage, not here.
         assert_eq!(resolve_root_prim("scene.usda", ""), "");
+    }
+
+    #[test]
+    fn scene_path_repeating_asset_root_is_rejected_before_reload() {
+        assert_eq!(
+            normalize_scene_asset_path("assets/scenes/sandbox/sandbox_scene.usda"),
+            None
+        );
+        assert_eq!(
+            normalize_scene_asset_path("assets\\scenes\\sandbox\\sandbox_scene.usda"),
+            None
+        );
+        assert_eq!(
+            normalize_scene_asset_path("scenes/sandbox/sandbox_scene.usda"),
+            Some("scenes/sandbox/sandbox_scene.usda".to_string())
+        );
     }
 
     // ── interface published at parse, not at solve ───────────────────
