@@ -158,8 +158,10 @@ impl Plugin for UsdCommandsPlugin {
                 ));
             },
         );
-        // C5-A: persist/reload the runtime overlay (C4b spawns + moves) to
-        // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
+        // C5-A: persist the runtime overlay (C4b spawns + moves) to
+        // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal. Loading
+        // it is a separate opt-in setting, so corrupt `.lunco` state cannot block
+        // authored scene loading.
         app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
         app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
         // E1b: make the default twin scene doc-backed by serving its composed

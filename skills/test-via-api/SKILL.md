@@ -209,6 +209,20 @@ needs them.
 9. Read the PNG to inspect.
 10. Check the process log for lines like `[Projection] import done in Xms: N nodes M edges`.
 11. Exit when done.
+
+## Rover modeling loop: reload the live scene, then measure it
+
+Keep one sandbox process running while iterating on a rover. Edit the USD, then
+use `OpenFile` for a file-backed asset, `RestartScene` for the mounted scene, or
+`ApplyUsdOp` for an in-place authored opinion. Reattach a diagnostic script with
+`RunScenario`; this hot-reloads only that script. Read `ScriptInspect`,
+`QueryEntity`, `rover_status`, and relevant ports while the simulation is live.
+
+A rover test must report measured telemetry and movement, not merely compile or
+compare two values at rest. Use `sandbox test` for deterministic CI verdicts,
+but keep the live API check because it exercises the production reload and
+command paths. Do not add a second reload command or a standalone rover test
+binary.
 ```
 
 ## Diagnosing common failures

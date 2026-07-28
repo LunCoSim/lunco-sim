@@ -24,9 +24,12 @@ description: >
 
 # Authoring scenarios
 
-A **scenario** is a rhai program attached to an entity that runs **every fixed
-simulation tick** via lifecycle hooks — not a one-shot snippet. It is the
-**policy** layer: navigation, missions, reactions, coordination.
+A **scenario** is a rhai program attached to an entity. Production scenarios are
+event-driven policy and must not add an `on_tick` polling loop. Continuous rover
+dynamics remain in fixed-step physics/Modelica. Test scenarios under
+`assets/scenarios/tests/` are the deliberate exception: their `on_tick` may
+sample live telemetry and advance a bounded verdict because observing the
+running simulation is the test.
 
 > **Host = mechanism, script = policy.** A scenario touches the world only
 > through the same command/query API the HTTP API, MCP, and UI use — so it
@@ -70,10 +73,11 @@ Define any subset. First param (`me`) is the host entity id; per-tick mutable
 state lives on the implicit `this` map.
 
 ```rhai
-fn on_start(me)      { this.i = 0; }                      // once, after (re)compile
-fn on_tick(me)       { this.i += 1; }                     // every FixedUpdate tick
-fn on_event(me, evt) { if evt.name == "GO" { /* … */ } }  // a TelemetryEvent arrived
-fn on_stop(me)       { brake(me); }                       // teardown: hot-reload / detach / despawn
+fn on_start(me)       { this.i = 0; }                       // once, after (re)compile
+fn on_event(me, evt)  { if evt.name == "GO" { /* … */ } } // event-driven policy
+fn on_stop(me)        { brake(me); }                       // hot-reload / detach / despawn
+// Test-only observer, only under assets/scenarios/tests/:
+// fn on_tick(me) { this.samples.push(query("rover_status", #{id: me})); }
 ```
 
 **The state rule that trips up everyone (get this right first):**
@@ -317,11 +321,11 @@ libraries → `<twin>/tools/*.rhai`.
 
 ## The recipe (checklist)
 
-1. Decide the shape: reactive (`on_event`) vs sequenced (timeline/sequencer) vs continuous (`on_tick` + `nav_to`). Reach for a Behavior Tree if it's a reactive AI.
+1. Decide the shape: reactive (`on_event`) vs sequenced (timeline/sequencer). Use a Behavior Tree for reactive AI. Use `on_tick` only for a bounded test observer in `assets/scenarios/tests/`; rover control/dynamics belong to native fixed-step systems or Modelica.
 2. Write hooks; keep ALL state on `this`; keep helpers stateless.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
 4. Wire reactions through `emit`/`on_event` (remember the one-tick delay).
-5. `RunScenario` on the target gid; verify with `ScriptInspect`; iterate by re-running (hot-reload).
+5. `RunScenario` on the target gid through the live API; verify with `ScriptInspect`; iterate by re-running (in-place hot-reload, no app restart).
 6. Persist it as a `LunCoProgramAPI` child prim on the target once it works.
 
 ## Anti-patterns (each has cost real time)

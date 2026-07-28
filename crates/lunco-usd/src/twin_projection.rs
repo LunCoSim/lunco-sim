@@ -232,7 +232,7 @@ pub struct PendingRefSpawns {
 const MAX_TWIN_DOC_ATTEMPTS: u32 = 600;
 
 /// Allocate the document for each pending twin scene once its base source text
-/// has loaded through the twin source, restore its persisted runtime overlay,
+/// has loaded through the twin source, optionally restore its persisted runtime overlay,
 /// publish the composed (`base ⊕ runtime`) source as the twin overlay — and only
 /// THEN mount the scene ([`LoadScene`]). Ordering is the whole point: the async
 /// stage load reads the overlay bytes, so the one and only projection already

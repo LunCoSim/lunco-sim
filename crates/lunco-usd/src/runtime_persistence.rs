@@ -9,9 +9,10 @@
 //!
 //! This persists the runtime overlay to its **own** file,
 //! `<twin-root>/.lunco/runtime/<scene-path-relative-to-twin>`, parallel to the
-//! journal (`journal_persistence.rs` in `lunco-workspace`), and reloads it when
-//! the document opens — so runtime state survives across sessions without ever
-//! touching the authored scene file.
+//! journal (`journal_persistence.rs` in `lunco-workspace`), and can reload it
+//! when the document opens — so runtime state survives across sessions without
+//! ever touching the authored scene file. Loading is opt-in; saving is
+//! independent and enabled by default.
 //!
 //! - **Load** on [`DocumentOpened`]: only when the persisted setting
 //!   `runtime_persistence.load` is true, read the overlay and

@@ -253,6 +253,12 @@ deliberately; that is unchanged.
 
 ## Verify
 
+For iterative modeling, keep one sandbox process running and use its API. Edit
+the USD, then use `OpenFile` for a file-backed asset, `RestartScene` for the
+mounted scene, or `ApplyUsdOp` for an in-place authored opinion. Re-run a Rhai
+telemetry observer with `RunScenario` and inspect live rover status/ports before
+restarting anything.
+
 **1. Pre-flight, before launching anything** — composes the whole reference
 closure and runs the same strict wheel reader the spawner uses, so a missing
 attribute is named in seconds rather than at spawn time
@@ -270,7 +276,7 @@ matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 12 s → throttle + steer 6 s.
 
 ```bash
-cargo run -j2 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+cargo run -j4 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL' /tmp/parity.log
 ```
 
