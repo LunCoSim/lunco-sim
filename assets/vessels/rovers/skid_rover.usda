@@ -401,7 +401,10 @@ def Xform "SkidRover" (
                 prepend references = @lunco://components/power/battery.usda@</Battery>
             )
             {
-                double3 xformOp:translate = (0, 0.35, 0)
+                # Chassis top is y=0.30; the battery case is 0.5 m tall after
+                # its authored scale, so its centre must be y=0.55 to sit on
+                # the chassis without visual or collider interpenetration.
+                double3 xformOp:translate = (0, 0.55, 0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }
             def Scope "Electrical" (
