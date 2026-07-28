@@ -1,0 +1,53 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaBalloonEarth"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Positive control for the reusable balloon.  The lunar/default asset is in
+# vacuum; this scene is the explicit atmosphere case and owns the Earth facts.
+def Xform "ModelicaBalloonEarth" (
+    kind = "assembly"
+    doc = "Earth-gravity positive control for the Modelica balloon."
+)
+{
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 9.81
+    }
+
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+    }
+
+    def Xform "EarthBalloon" (
+        prepend references = @lunco://vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>
+    )
+    {
+        double3 xformOp:translate = (0, 5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # The medium is a scene fact.  Leave the reusable asset's vacuum
+        # default untouched and author sea-level Earth density here.
+        over "Plant"
+        {
+            float inputs:rho0 = 1.225
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "modelica-balloon-earth"
+
+        def Scope "BalloonTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/modelica_balloon_earth.rhai@
+        }
+    }
+}

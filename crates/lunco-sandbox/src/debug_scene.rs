@@ -664,7 +664,14 @@ pub fn run() -> u8 {
     // Undeclared faults fail the scene. Declared ones are the fixture working.
     let broken: Vec<String> = faults
         .iter()
-        .filter(|(port, _)| !expected.contains(port))
+        // A self-coupled plant (Avian state → Modelica → Avian force) is a
+        // valid co-simulation topology. The propagation master deliberately
+        // inserts a one-step delay and records the synthetic loop diagnostic,
+        // but that is not a wire that failed to land.
+        .filter(|(port, _)| {
+            !port.starts_with(lunco_cosim::systems::propagate::ALGEBRAIC_LOOP_PORT)
+                && !expected.contains(port)
+        })
         .map(|(_, label)| label.clone())
         .collect();
     // …and a declared fault that never happened fails it too: the fixture stopped

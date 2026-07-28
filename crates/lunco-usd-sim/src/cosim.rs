@@ -596,7 +596,14 @@ fn process_usd_cosim_prim_read(
                 .entity(entity)
                 .try_insert(UsdModelicaPortContract::new(
                     inputs.keys().cloned(),
-                    outputs.keys().cloned(),
+                    // `gravity_accel` is an environment-owned source port
+                    // injected onto the program's SimComponent. It is not a
+                    // Modelica output and must not make the USD/DAE contract
+                    // reject an otherwise valid model.
+                    outputs
+                        .keys()
+                        .filter(|name| name.as_str() != lunco_cosim::GRAVITY_SOURCE_CONNECTOR)
+                        .cloned(),
                 ));
             path.clone()
         }
