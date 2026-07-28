@@ -187,10 +187,19 @@ const CORE_LINEAR_UNITS: &[(&str, &str, LinearUnit)] = &[
     ),
     // `Cylinder_1` / `Capsule_1` are USD's own axis-agnostic successors, declared
     // in the same file. Omitting them would leave the successor schema silently
-    // unannotated while its predecessor resolved.
+    // unannotated while its predecessor resolved. NOTE the successors have no
+    // `radius` — they split it into `radiusTop`/`radiusBottom`; naming `radius`
+    // here made the entry dead and warned on every palette spawn.
     (
         "Cylinder_1",
-        "radius",
+        "radiusTop",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cylinder_1",
+        "radiusBottom",
         LinearUnit::Length {
             stage_units_per_unit: 1.0,
         },
@@ -204,7 +213,14 @@ const CORE_LINEAR_UNITS: &[(&str, &str, LinearUnit)] = &[
     ),
     (
         "Capsule_1",
-        "radius",
+        "radiusTop",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Capsule_1",
+        "radiusBottom",
         LinearUnit::Length {
             stage_units_per_unit: 1.0,
         },
