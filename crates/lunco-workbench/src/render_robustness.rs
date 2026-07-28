@@ -111,6 +111,8 @@ pub struct RenderHealth {
     oom: AtomicU64,
     /// The device is gone. Terminal — no rung of the ladder can recover it.
     device_lost: AtomicBool,
+    /// Once presentation is abandoned, suppress the render-thread error storm.
+    presentation_stopped: AtomicBool,
 }
 
 impl RenderHealth {
@@ -282,6 +284,9 @@ fn set_error_handler(
         device
             .wgpu_device()
             .set_device_lost_callback(move |reason, message| {
+                if health.presentation_stopped.load(Ordering::Relaxed) {
+                    return;
+                }
                 health.device_lost.store(true, Ordering::Relaxed);
                 health.total.fetch_add(1, Ordering::Relaxed);
                 error!(
@@ -299,6 +304,9 @@ fn set_error_handler(
     device
         .wgpu_device()
         .on_uncaptured_error(Arc::new(move |err: wgpu::Error| {
+            if health.presentation_stopped.load(Ordering::Relaxed) {
+                return;
+            }
             let desc = describe(&err);
             health.total.fetch_add(1, Ordering::Relaxed);
             // Matched on the resource LABEL, which is what wgpu actually gives
@@ -415,6 +423,7 @@ fn escalate_render_recovery(
             );
         }
         Action::GiveUp => {
+            h.presentation_stopped.store(true, Ordering::Relaxed);
             let mut n = 0;
             for mut c in &mut cameras {
                 c.is_active = false;

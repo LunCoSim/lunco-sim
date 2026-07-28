@@ -91,8 +91,8 @@ pub struct LunarSunShadow {
     /// Shadow normal bias, in shadow-texel units — the main acne killer under
     /// grazing lunar light.
     pub normal_bias: f32,
-    /// Directional shadow atlas size per cascade. 4096² is the safe ceiling
-    /// (8192² × 4 cascades ≈ 1 GB VRAM).
+    /// Directional shadow atlas size per cascade. The default is 2048² to keep
+    /// the shared-GPU allocation bounded.
     pub shadow_map_size: u32,
 }
 
@@ -105,7 +105,10 @@ impl Default for LunarSunShadow {
             #[cfg(target_arch = "wasm32")]
             num_cascades: 2,
             #[cfg(not(target_arch = "wasm32"))]
-            num_cascades: 4,
+            // Two cascades retain contact detail while avoiding the large
+            // array allocation that invalidated the directional shadow view on
+            // integrated AMD/Vulkan adapters.
+            num_cascades: 2,
             minimum_distance: 0.1,
             first_cascade_far_bound: 40.0,
             maximum_distance: 1500.0,
@@ -117,14 +120,14 @@ impl Default for LunarSunShadow {
             // contact-shadow view layout after specialization.
             depth_bias: 0.06,
             normal_bias: 2.5,
-            // WEB: 2048² shadow atlas — a quarter of the shadow-pass fill +
-            // sampling cost on a WebGL iGPU, for a slightly softer terminator.
-            // Native keeps the crisp 4096² ceiling. One place → every web app
-            // (sandbox/lunica/luncosim) gets the cheaper atlas.
+            // 2048² shadow atlas keeps the shadow-pass fill and sampling cost
+            // bounded on both native and WebGL integrated GPUs.
             #[cfg(target_arch = "wasm32")]
             shadow_map_size: 2048,
             #[cfg(not(target_arch = "wasm32"))]
-            shadow_map_size: 4096,
+            // 2048² × 2 is enough for the lunar workbench and keeps the
+            // default directional allocation within shared-GPU budgets.
+            shadow_map_size: 2048,
         }
     }
 }

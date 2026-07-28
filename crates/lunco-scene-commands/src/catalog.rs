@@ -30,8 +30,10 @@
 //!
 //! The shape is dispatch/drain: [`dispatch_usd_scan`] starts one read per
 //! newly-discovered asset (Startup, and whenever the open-Twin set changes), and
-//! [`drain_usd_scan`] folds each result into [`AssetMetaStore`] and, if it is a
-//! part, [`SpawnCatalog`].
+//! [`drain_usd_scan`] publishes the completed batch into [`AssetMetaStore`] and,
+//! if it is a part, [`SpawnCatalog`].  Publication is batch-atomic: the palette
+//! never exposes a half-scanned catalog while the remaining USD files are still
+//! being fetched.
 
 use bevy::prelude::*;
 use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath};
@@ -319,6 +321,10 @@ pub struct CatalogScan {
     /// scan runs on every Twin-set change, and without this it would re-fetch
     /// the entire engine library each time a twin opened.
     dispatched: std::collections::HashSet<String>,
+    /// Results are staged until the current dispatch batch is complete.
+    staged: Vec<Scanned>,
+    batch_remaining: usize,
+    replace_on_publish: bool,
 }
 
 impl Default for CatalogScan {
@@ -328,6 +334,9 @@ impl Default for CatalogScan {
             tx,
             rx,
             dispatched: Default::default(),
+            staged: Vec::new(),
+            batch_remaining: 0,
+            replace_on_publish: false,
         }
     }
 }
@@ -338,6 +347,7 @@ impl CatalogScan {
     /// which is to pick up *edits* to files already seen.
     pub fn forget(&mut self) {
         self.dispatched.clear();
+        self.replace_on_publish = true;
     }
 }
 
@@ -391,25 +401,49 @@ pub fn dispatch_usd_scan(
         wasm_bindgen_futures::spawn_local(fut);
         started += 1;
     }
+    scan.batch_remaining = scan.batch_remaining.saturating_add(started);
     started
 }
 
 /// Fold completed reads into the metadata store and the spawn catalog. Cheap
 /// when idle: an empty channel drains in nothing.
 pub fn drain_usd_scan(
-    scan: Res<CatalogScan>,
+    mut scan: ResMut<CatalogScan>,
     mut store: ResMut<AssetMetaStore>,
     mut catalog: ResMut<SpawnCatalog>,
 ) {
+    let completed: Vec<_> = scan.rx.try_iter().collect();
+    for result in completed {
+        scan.staged.push(result);
+        scan.batch_remaining = scan.batch_remaining.saturating_sub(1);
+    }
+    if scan.batch_remaining != 0 {
+        return;
+    }
+
+    if scan.staged.is_empty() {
+        if scan.replace_on_publish {
+            store.by_path.clear();
+            catalog.entries.clear();
+            scan.replace_on_publish = false;
+        }
+        return;
+    }
+
+    if scan.replace_on_publish {
+        store.by_path.clear();
+        catalog.entries.clear();
+        scan.replace_on_publish = false;
+    }
     let mut added = 0;
-    for Scanned { asset, meta } in scan.rx.try_iter() {
+    for Scanned { asset, meta } in scan.staged.drain(..) {
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;
         }
         store.by_path.insert(asset.asset_path, meta);
     }
     if added > 0 {
-        info!("CATALOG_SCAN: +{added} spawnable(s)");
+        info!("CATALOG_SCAN: published batch with +{added} spawnable(s)");
     }
 }
 

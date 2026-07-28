@@ -178,7 +178,9 @@ impl SceneCamera {
 /// and wins when present — engine calibration is the fallback, never an override.
 pub fn scene_camera_look(authored_ev100: Option<f32>) -> (SceneCamera, Exposure) {
     (
-        SceneCamera::agx(),
+        // Keep the camera HDR so high-intensity emitters (especially the Sun)
+        // produce a controlled bloom halo instead of clipping as hard white.
+        SceneCamera::agx().with_bloom(BloomLook::default()),
         Exposure {
             ev100: authored_ev100.unwrap_or(crate::LUNAR_SUN_EXPOSURE_EV100),
         },

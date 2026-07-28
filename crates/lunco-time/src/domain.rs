@@ -1092,6 +1092,12 @@ pub fn write_epoch_from_celestial_clock(
     q_domain: Query<&TimeDomain>,
     mut last_epoch: Local<f64>,
 ) {
+    // A scene epoch is an intentional re-anchor.  The local diagnostic cursor
+    // belongs to the old anchor; comparing the first value from the new anchor
+    // against it turns every twin open into a false 241-day discontinuity.
+    if mission.is_changed() {
+        *last_epoch = 0.0;
+    }
     let Some(clocks) = clocks else { return };
     let Some(celestial_t) = resolved.get(clocks.celestial) else {
         return;

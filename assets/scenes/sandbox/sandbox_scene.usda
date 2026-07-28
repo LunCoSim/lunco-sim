@@ -138,16 +138,12 @@ def Xform "SandboxScene" (
                 # dome on the camera at far depth, which is what frees the
                 # `SkyDome` radius/origin from mattering (see that prim).
                 uniform asset info:wgsl:vertexAsset = @lunco://shaders/starfield.wgsl@
-                # Lifted above the shader's own defaults (0.05 / 0.10 / 0.9) so the
-                # sky still reads at the exposure a LUNAR SURFACE scene runs at.
-                # Nothing here is a rendering bug: the dome is `AlphaMode::Add`,
-                # so in daylight the camera is exposed for a 1e5 lux regolith and
-                # stars vanish — exactly as they do to a real camera on the Moon.
-                # They come back as the sun sets. If the sky looks black, check
-                # the sun's elevation before touching these numbers.
-                float inputs:brightness = 0.15
-                float inputs:band_intensity = 0.15
-                float inputs:point_size = 1.2
+                # Keep the star field subordinate to the physical Sun.  The
+                # camera is HDR and blooms bright emitters; overdriving these
+                # additive values makes ordinary stars compete with the Sun.
+                float inputs:brightness = 0.05
+                float inputs:band_intensity = 0.05
+                float inputs:point_size = 0.9
                 token outputs:surface
             }
         }

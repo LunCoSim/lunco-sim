@@ -37,6 +37,11 @@ use lunco_cosim::{EARTH_MOUNT_X_CONNECTOR, EARTH_MOUNT_Y_CONNECTOR, EARTH_MOUNT_
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub struct EarthDirectionWorld(pub Vec3);
 
+/// Startup frames in which a celestial scene may still be constructing its
+/// site frame.  Missing data that resolves during this window is a load-order
+/// condition, not an antenna fault.
+const EARTH_DIRECTION_WARN_AFTER_FRAMES: u8 = 10;
+
 /// Unit direction toward Earth in the coordinate frame of the prim carrying the
 /// model. `+X` is mount-right, `+Y` mount-up, and `-Z` mount-forward.
 ///
@@ -87,6 +92,7 @@ pub fn compute_local_earth(
     // rate-limited: "nobody has said where Earth is" is a structural fact about
     // the scene, so it would otherwise repeat every frame for the scene's life.
     mut warned: Local<bool>,
+    mut missing_frames: Local<u8>,
 ) {
     if q_targets.is_empty() {
         return;
@@ -103,7 +109,10 @@ pub fn compute_local_earth(
     // ephemeris".
     let present = dir.is_some();
     let Some(dir) = dir.filter(|d| d.0.is_finite() && d.0.length_squared() > 1.0e-12) else {
-        if !*warned {
+        *missing_frames = missing_frames
+            .saturating_add(1)
+            .min(EARTH_DIRECTION_WARN_AFTER_FRAMES);
+        if !*warned && *missing_frames >= EARTH_DIRECTION_WARN_AFTER_FRAMES {
             *warned = true;
             warn!(
                 "[environment] {} co-sim model(s) want a local Earth direction, but \
@@ -118,6 +127,7 @@ pub fn compute_local_earth(
         }
         return;
     };
+    *missing_frames = 0;
     if *warned {
         *warned = false;
         info!("[environment] local Earth direction is available again");

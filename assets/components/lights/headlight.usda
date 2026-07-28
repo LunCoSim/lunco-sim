@@ -41,6 +41,9 @@ def Xform "Headlight"
         float inputs:radius = 0.09
         bool inputs:normalize = true
         color3f inputs:color = (1.0, 0.95, 0.85) # Warm white halogen light
+        # Headlight shadows are part of the rover presentation.  Runtime
+        # shadow policy may disable them as a user-selected GPU fallback, but
+        # authored content keeps them enabled by default.
         bool inputs:shadow:enable = true
         # UsdLux defines this as the angle *off* the primary axis. A 20° value
         # is therefore a 40° full beam: it lights the path, not the wheel wells.
