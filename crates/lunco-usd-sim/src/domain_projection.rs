@@ -155,6 +155,7 @@ pub trait DomainSynthesizer: Send + Sync + 'static {
 }
 
 /// What a synthesizer concluded about a scope.
+#[derive(Debug)]
 pub enum SynthOutcome {
     /// Not a scope this synthesizer compiles (or nothing solvable is in it).
     NotMine,
@@ -200,6 +201,238 @@ impl SynthesizerRegistry {
     pub fn names(&self) -> Vec<&str> {
         self.0.keys().map(String::as_str).collect()
     }
+}
+
+/// A synthesizer whose EMIT policy is authored, not compiled in.
+///
+/// The house split, applied to synthesis: **facts in Rust, rules in rhai.** The
+/// composed graph is read here — membership, connectors, causal edges, the
+/// boundary, the class each member's file declares — and handed to a hook as a
+/// map. What that graph becomes in Modelica is the hook's business: which MSL
+/// class stands in for a part, whether a fuse is inserted, whether a low-fidelity
+/// variant omits parasitic resistance. None of that is a Rust concern, and none
+/// of it should require a rebuild to change.
+///
+/// The hook receives one argument — [`network_facts`] — and returns either the
+/// Modelica source as a string, or a map with a `source` key (room for a policy
+/// to report its own diagnostics later). Anything else is an authoring error
+/// against the policy, reported as such.
+///
+/// Registered through [`register_hook_synthesizer`]; the hook id is by convention
+/// `synth.<name>`, reached exactly like `lint.usd`.
+pub struct HookSynthesizer {
+    name: &'static str,
+    hook_id: String,
+}
+
+impl DomainSynthesizer for HookSynthesizer {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn synthesize(
+        &self,
+        view: &lunco_usd_bevy::StageView<'_>,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        // The READER is not the policy's business — a rhai body that had to
+        // re-walk USD would be a second, divergent definition of what a network
+        // is, which is the exact failure the one-reader rule exists to prevent.
+        let Some(network) = read_network(view, root, ctx.classes)? else {
+            return Ok(SynthOutcome::NotMine);
+        };
+        if network.pending_sources {
+            return Ok(SynthOutcome::Pending);
+        }
+        let facts = network_facts(&network, model_name);
+        let result = lunco_hooks::invoke(&self.hook_id, &[facts]).ok_or_else(|| {
+            vec![DomainProjectionError {
+                path: network.root.clone(),
+                message: format!(
+                    "synthesizer `{}` is selected but its hook `{}` is not registered",
+                    self.name, self.hook_id
+                ),
+            }]
+        })?;
+        let value = result.map_err(|error| {
+            vec![DomainProjectionError {
+                path: network.root.clone(),
+                message: format!("synthesizer `{}` failed: {}", self.name, error.0),
+            }]
+        })?;
+        let source = match &value {
+            lunco_hooks::HookValue::Str(source) => source.clone(),
+            map @ lunco_hooks::HookValue::Map(_) => match map.get("source").and_then(|v| v.as_str())
+            {
+                Some(source) => source.to_string(),
+                None => {
+                    return Err(vec![DomainProjectionError {
+                        path: network.root.clone(),
+                        message: format!(
+                            "synthesizer `{}` returned a map with no `source` key",
+                            self.name
+                        ),
+                    }])
+                }
+            },
+            _ => {
+                return Err(vec![DomainProjectionError {
+                    path: network.root.clone(),
+                    message: format!(
+                        "synthesizer `{}` must return the Modelica source as a string (or a map \
+                         with a `source` key)",
+                        self.name
+                    ),
+                }])
+            }
+        };
+        Ok(SynthOutcome::Ready(Synthesized {
+            source,
+            // The BOUNDARY stays Rust's answer even when the body is authored: it
+            // is what the runtime holds the compiled model to
+            // (`UsdModelicaPortContract`), and a policy that mis-stated it would
+            // silence its own contract check.
+            inputs: network.inputs.clone(),
+            outputs: network.outputs.keys().cloned().collect(),
+            component_paths: network
+                .components
+                .iter()
+                .map(|component| component.path.clone())
+                .collect(),
+            members: network
+                .components
+                .iter()
+                .map(|component| {
+                    (
+                        component.path.clone(),
+                        component.source_asset.clone(),
+                        component.model_class.clone(),
+                    )
+                })
+                .collect(),
+        }))
+    }
+}
+
+/// Register an authored synthesizer under `name`, backed by hook `synth.<name>`.
+///
+/// The hook itself is registered by whatever compiled it — `lunco_hooks_rhai::register_rhai_hook`
+/// for a rhai policy — so this crate needs no scripting dependency and any
+/// language that implements [`lunco_hooks::ScriptHook`] can author one.
+pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &'static str) {
+    registry.register(HookSynthesizer {
+        name,
+        hook_id: format!("synth.{name}"),
+    });
+}
+
+/// The composed network, as a map an authored policy can read.
+///
+/// Deliberately the WHOLE graph, flat and self-describing: instance name, class,
+/// constants, acausal edges, causal edges, and the wrapper boundary. A policy
+/// that needs something not in here is a reason to extend this function — not a
+/// reason for the policy to go read USD itself.
+pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::HookValue {
+    use lunco_hooks::HookValue as H;
+    let components: Vec<H> = network
+        .components
+        .iter()
+        .map(|component| {
+            H::map([
+                ("path", H::str(component.path.clone())),
+                ("instance", H::str(instance_identifier(&network.root, &component.path))),
+                ("class", H::str(component.model_class.clone())),
+                ("source_asset", H::str(component.source_asset.clone())),
+                (
+                    "constants",
+                    H::Map(
+                        component
+                            .constants
+                            .iter()
+                            .map(|(name, value)| (name.clone(), H::Float(*value)))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "connectors",
+                    H::Map(
+                        component
+                            .connectors
+                            .iter()
+                            .map(|(name, targets)| {
+                                (
+                                    name.clone(),
+                                    H::Array(targets.iter().cloned().map(H::str).collect()),
+                                )
+                            })
+                            .collect(),
+                    ),
+                ),
+                (
+                    "declared_connectors",
+                    H::Array(
+                        component
+                            .declared_connectors
+                            .iter()
+                            .cloned()
+                            .map(H::str)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "inputs",
+                    H::Map(
+                        component
+                            .inputs
+                            .iter()
+                            .map(|(name, target)| (name.clone(), H::str(target.clone())))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "declared_outputs",
+                    H::Array(
+                        component
+                            .declared_outputs
+                            .iter()
+                            .cloned()
+                            .map(H::str)
+                            .collect(),
+                    ),
+                ),
+            ])
+        })
+        .collect();
+    H::map([
+        ("model_name", H::str(model_name.to_string())),
+        ("root", H::str(network.root.clone())),
+        ("components", H::Array(components)),
+        (
+            "inputs",
+            H::Array(network.inputs.iter().cloned().map(H::str).collect()),
+        ),
+        (
+            "input_sources",
+            H::Map(
+                network
+                    .input_sources
+                    .iter()
+                    .map(|(name, source)| (name.clone(), H::str(source.clone())))
+                    .collect(),
+            ),
+        ),
+        (
+            "outputs",
+            H::Map(
+                network
+                    .outputs
+                    .iter()
+                    .map(|(name, target)| (name.clone(), H::str(target.clone())))
+                    .collect(),
+            ),
+        ),
+    ])
 }
 
 /// The built-in: a `CollectionAPI:components` scope of Modelica program facets
