@@ -69,6 +69,12 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H 'Content-Type: application
 
 ## Gotchas
 
+- **Direction tracker**: inspect the entire coordinate chain together: the
+  world-to-mount direction ports, controller setpoints, measured joint angles,
+  and the rendered boresight. A `locked` or low-error controller output alone
+  can validate the same incorrect frame convention that points the mechanism
+  away from its target.
+
 - **`read_ports` without an `api_id` is huge** — always `name_filter` and/or `ports`.
 - **`api_id` (API-stable) ≠ the rhai `GlobalEntityId`** — get `api_id` from `list_entities`, don't reuse a gid from a script.
 - **Port not found / empty?** The entity may be pre-compile (Modelica hasn't produced variables yet — `cosim_status` shows nulls until it does), or the name is a USD-path substring you haven't matched. List its ports first with `read_ports {api_id}` (no `ports` filter) to see the real names.

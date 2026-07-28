@@ -406,12 +406,11 @@ projects each to an *inactive* Bevy `Camera3d` (see [`17-view-and-intent.md §6`
 | `LunCoCameraAPI` / `lunco:cameraRole` | explicit `viewport` or `sensor` runtime role for a non-avatar camera |
 | `LunCoCameraAPI` / `lunco:cameraPose` | explicit `authored` or `mounted` sole pose authority |
 
-- **Placement:** a **top-level** `def Camera` is a static scene camera (a wide
-  shot); it can host the big_space `FloatingOrigin` directly. A `def Camera`
-  **nested under a moving prim** (e.g. under a rover Xform) becomes an *onboard*
-  camera that rides the mount — realised as a grid-direct follower so it stays
-  jitter-free at any distance (no follow-code in the USD). Aim it forward with
-  `lunco:cameraLookAt`.
+- **Placement:** `lunco:cameraPose = "authored"` keeps the camera in its USD
+  hierarchy. `lunco:cameraPose = "mounted"` explicitly creates an onboard,
+  grid-direct follower with a static local offset; it stays jitter-free and can
+  host the big_space `FloatingOrigin`. A nested prim alone never changes pose
+  authority. Aim either camera with `lunco:cameraLookAt`.
 - **Switching:** cameras spawn inactive; make one the active view with
   `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
   full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.

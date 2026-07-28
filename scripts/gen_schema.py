@@ -80,14 +80,14 @@ def schema_types(src: str) -> "OrderedDict[str, dict]":
 def write_pluginfo(types: "OrderedDict[str, dict]") -> None:
     """Replace ONLY the `Types` block, preserving every hand-authored field
     (Name/Type/Root/ResourcePath/LibraryPath/SdfMetadata) around it."""
-    plug = json.loads(PLUGINFO.read_text())
+    plug = json.loads(PLUGINFO.read_text(encoding="utf-8"))
     plug["Plugins"][0]["Info"]["Types"] = types
     text = json.dumps(plug, indent=4) + "\n"
     # Keep single-element `bases` on one line, as the file has always been
     # written — otherwise every regeneration reflows all 23 entries and the
     # real change (a schema added or removed) drowns in formatting churn.
     text = re.sub(r'\[\n\s*("(?:\w+)")\n\s*\]', r"[\1]", text)
-    PLUGINFO.write_text(text)
+    PLUGINFO.write_text(text, encoding="utf-8")
     print(f"wrote {PLUGINFO} ({len(types)} schema classes registered)")
 
 GENERATED_HEADER = '''#usda 1.0
@@ -107,7 +107,7 @@ GENERATED_HEADER = '''#usda 1.0
 
 
 def main() -> int:
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
 
     # 1. Replace the layer-metadata header (first parenthesised block after
     #    `#usda 1.0`) with the GENERATED header. The source header carries the
@@ -123,7 +123,7 @@ def main() -> int:
     #    list continues). Codeless registration reads flat class definitions.
     body = re.sub(r"[ \t]*(prepend\s+)?inherits\s*=\s*</[^>]*>,?\n", "", body)
 
-    OUT.write_text(GENERATED_HEADER + body)
+    OUT.write_text(GENERATED_HEADER + body, encoding="utf-8")
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes) from {SRC}")
 
     # 3. Re-derive the plugInfo `Types` registry from the SAME source, so a new

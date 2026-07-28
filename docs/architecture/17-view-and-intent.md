@@ -140,14 +140,12 @@ Three surfaces, one mechanism — all rebind `SceneViewport.active_camera`:
 
 ### 6.4 Rover-mounted cameras
 
-A `def Camera` authored nested under a moving prim (e.g. under a rover Xform) is
-realised as a **grid-direct follower** (`camera_mount.rs`), because big_space
-requires the `FloatingOrigin` on a grid-direct entity — a literally-nested
-camera could never host it. `resolve_camera_mounts` reparents it to the mount's
-grid with a `MountedCamera { mount, offset }`; `follow_mounted_cameras` writes
-`mount · offset` back into the camera's grid-local pose each frame in double
-precision. So an onboard rover camera rides the rover at full precision and can
-host the active-view origin — no follow-code in the authored USD.
+An onboard camera explicitly applies `LunCoCameraAPI` with
+`lunco:cameraPose = "mounted"`. `resolve_camera_mounts` realises that declared
+contract as a **grid-direct follower** (`MountedCamera { mount, offset }`), and
+`follow_mounted_cameras` writes `mount · offset` in double precision. This lets
+the camera host the active-view origin. A nested camera with `cameraPose =
+"authored"` remains in ordinary USD composition; hierarchy never infers a mount.
 
 ### 6.5 Camera rigs still live in `lunco-avatar`
 

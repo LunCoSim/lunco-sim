@@ -9,9 +9,9 @@
 //! offset (its local `xformOp:translate` + `lunco:cameraLookAt` rotation).
 //!
 //! Two systems:
-//! - [`resolve_camera_mounts`] — once per camera: a `SceneCamera` whose `ChildOf`
-//!   is not a `Grid` is reparented to the mount's grid and given a
-//!   [`MountedCamera`]; a grid-direct camera is just marked resolved.
+//! - [`resolve_camera_mounts`] — once per camera explicitly authored with
+//!   `LunCoCameraAPI:cameraPose = "mounted"`: realise it as a grid-direct
+//!   [`MountedCamera`] follower. Other camera poses remain in USD composition.
 //! - [`follow_mounted_cameras`] — each frame: write the mount's double-precision
 //!   world pose × offset back into the camera's grid-local `CellCoord`+`Transform`.
 //!
@@ -48,42 +48,13 @@ pub struct CameraMountResolved;
 /// Runs once per camera. Retries next frame if the mount's grid isn't spawned
 /// yet (async scene load).
 ///
-/// **Animated cameras are never rigged** ([`crate::UsdAnimated`] — a `def Camera`
-/// carrying `xformOp:*.timeSamples`). Rigging one froze it solid: this system
-/// snapshots the authored local pose into [`MountedCamera::offset`] once, and
-/// [`follow_mounted_cameras`] (PostUpdate) then rewrote `Transform` from that
-/// snapshot every frame — clobbering `sample_usd_animation`'s write (Update) and
-/// pinning the camera forever. Two writers on one field; the later one won.
-///
-/// The predicate this system used to key off — "parent is not a `Grid`" — is not
-/// a test for "mounted on a mover": a camera under a *static* scene-root `Xform`
-/// matched it too, so every keyframed top-level camera was silently frozen.
-///
-/// Leaving an animated camera in its authored USD hierarchy is not a compromise
-/// — it is the correct composition. Bevy's transform propagation already yields
-///     world(t) = parent_world × local(t)
-/// which is exactly what a mount means. A static parent degenerates to pure
-/// animation; a keyframed camera authored under a rover rides the rover *and*
-/// runs its move, which the snapshot rigging could never express.
-///
-/// The one thing given up is `FloatingOrigin` hosting: big_space requires that on
-/// a grid-direct entity, so an animated camera keeps the standard nested-camera
-/// precision caveat and cannot host the origin far from it. Acceptable — a frozen
-/// camera is a bug, imprecision at extreme range is a known limit. Lifting it
-/// means writing the composed pose into grid-local `CellCoord` + `Transform` from
-/// a *live* local (not a snapshot), i.e. making the follower the single writer.
-/// See `docs/architecture/51-cinematic-camera.md` §8b.
+/// `mounted` declares a static camera-local offset and gives the follower sole
+/// pose authority. Projection rejects a mounted camera with local transform time
+/// samples; a path driver changes the pose to `Path` before this system runs.
 pub fn resolve_camera_mounts(
     q_new: Query<
         (Entity, &ChildOf, &Transform, &UsdCameraPose),
-        (
-            With<SceneCamera>,
-            Without<CameraMountResolved>,
-            // A `BasisCurves` path owns its camera's pose (`camera_path.rs`). Such
-            // a camera authors no `timeSamples`, so it is NOT `UsdAnimated` and the
-            // filter above would miss it — letting the freeze bug back in through a
-            // different door. Whoever owns the pose, the mount is not it.
-        ),
+        (With<SceneCamera>, Without<CameraMountResolved>),
     >,
     q_is_grid: Query<(), With<Grid>>,
     q_parents: Query<&ChildOf>,
@@ -141,11 +112,8 @@ pub fn resolve_camera_mounts(
 /// [`resolve_camera_mounts`]); a rover that migrates grids would need the same
 /// cross-grid handling `spring_arm_system` has — deferred (rovers stay put).
 ///
-/// `Without<UsdAnimated>` backstops [`resolve_camera_mounts`]'s filter: if a
-/// camera were ever rigged before its `UsdAnimated` tag landed, this system —
-/// the one that actually does the clobbering — still stands down rather than
-/// freezing the move. The sampler must remain the sole writer for animated
-/// cameras.
+/// The explicit pose authority is established before this system runs, so this
+/// follower is the only writer of transforms for a mounted camera.
 pub fn follow_mounted_cameras(
     mut q_cam: Query<
         (&MountedCamera, &mut CellCoord, &mut Transform, &ChildOf),

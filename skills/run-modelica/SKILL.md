@@ -315,6 +315,12 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 
 ## 8. Gotchas
 
+- **Direction-to-joint controller**: write the coordinate contract before
+  changing equations: world direction, inverse mount frame, joint axes/order,
+  and the mesh's physical boresight. A compiling model or its own zero error is
+  insufficient; inspect the live direction inputs, setpoints, measured joint
+  angles, and rendered mechanism after a full scene reload.
+
 - **Missing `params`** → silent no-op. Always send `"params":{}`.
 - **Multi-class file** → `compile`/`run` need `class`. Without it, if >1
   non-package class the run aborts with `picker_pending` (the GUI would show a

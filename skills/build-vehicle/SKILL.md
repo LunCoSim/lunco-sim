@@ -192,6 +192,16 @@ Do not combine these stages. A failed rover with a new terrain, Modelica model,
 and scenario has too many owners to diagnose; restore the last passing stage
 before adding the next one.
 
+### Coordinate contract for mounted mechanisms
+
+For an antenna, camera gimbal, solar head, or other rover-mounted tracker,
+declare one coordinate contract before tuning: world axes, rover/mount local
+axes, joint positive axes and order, and the physical boresight. Derive the
+Modelica setpoint from that contract; never copy a `-Z forward` formula into a
+component whose geometry points along another axis. Validate the target vector,
+setpoint, measured joint angles, and rendered boresight together after a full
+scene reload.
+
 ## Variant axes (orthogonal, each choosing a component)
 
 Axes are **opt-in per vehicle** — a rover only has the axes its file declares.

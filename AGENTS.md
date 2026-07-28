@@ -9,7 +9,12 @@ Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
 - Check OpenUSD, Modelica, Avian, Bevy, or a maintained crate before adding a
   schema, resolver, field, or duplicate mechanism.
 - No legacy paths, shims, aliases, duplicate spellings, or writes without readers.
-  Replace the old mechanism and remove its traces in the same change.
+  Replace the old mechanism and remove its traces in the same change. Do not
+  retain a fallback, compatibility branch, or migration path that preserves an
+  incorrect former behaviour. A default is permitted only when it is the
+  documented semantic default of the authoritative input (for example, an
+  omitted USD attribute), is exercised by a reader, and does not alter an
+  explicit authored value.
 - Use composed USD reads for runtime behaviour and authored-layer reads for
   authoring/document questions. USD owns scene facts and standard fields such as
   `doc`, `metersPerUnit`, `UsdShade`, and `UsdPhysics`.

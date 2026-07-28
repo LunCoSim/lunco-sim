@@ -203,6 +203,12 @@ needs them.
 
 ## Rover modeling loop: reload the live scene, then measure it
 
+For a world-direction tracker, use the API to verify one complete coordinate
+chain after reload: target vector in the mount frame, controller setpoint,
+measured joint angle, and rendered boresight. Do not accept a controller's
+internal `locked` state alone; it can be self-consistent with an incorrect axis
+or boresight convention.
+
 Keep one sandbox process running while iterating on a rover. Edit the USD, then
 use `OpenFile` for a file-backed asset, `RestartScene` for the mounted scene, or
 `ApplyUsdOp` for an in-place authored opinion. Reattach a diagnostic script with

@@ -148,14 +148,8 @@ pub(crate) fn instantiate_camera_prim(
     // out the terrain until the late `project_env_settings`/celestial EV write
     // caught up (and on stage re-composition that window re-opened).
     //
-    // NO `CellCoord` here — deliberately. `resolve_camera_mounts` re-parents
-    // every nested camera to its enclosing grid and inserts the cell + `ChildOf`
-    // ATOMICALLY. Stamping a cell now, while the camera still sits under its
-    // USD parent, creates the one class big_space cannot propagate (a
-    // cell-entity under a non-grid parent, doc 45 class 2) — it was the sole
-    // source of the validator's spawn-frame reports. Until the resolver runs
-    // (next Update at the latest), the camera is a plain Transform child of a
-    // cell-entity: valid, propagated, and inactive anyway.
+    // Only an explicitly mounted camera is reparented to its grid. Authored,
+    // path-driven, and avatar cameras keep their normal USD hierarchy.
     // Camera purpose and pose are authored semantics, never hierarchy guesses.
     // An avatar is a viewport camera with an interactive pose. Every other
     // participating camera must apply LunCoCameraAPI and state both roles.
@@ -192,33 +186,34 @@ pub(crate) fn instantiate_camera_prim(
         // that same prim would create two pose authors, so reject the invalid
         // combination at projection rather than silently letting a later system
         // overwrite animation every frame.
-        let pose = if pose == UsdCameraPose::Mounted
+        let invalid_mounted_animation = pose == UsdCameraPose::Mounted
             && reader
                 .attr_names(sdf_path)
                 .iter()
-                .any(|name| name.starts_with("xformOp:") && name.ends_with(".timeSamples"))
-        {
+                .any(|name| name.starts_with("xformOp:") && name.ends_with(".timeSamples"));
+        if invalid_mounted_animation {
             error!(
                 "[usd-bevy] {} declares lunco:cameraPose=mounted and camera xform timeSamples; mounted cameras require a static local offset",
                 sdf_path.as_str()
             );
-            UsdCameraPose::Authored
+            // Reject this camera from runtime roles. Reclassifying it as an
+            // authored viewport would hide an invalid two-writer declaration.
+            (false, false, UsdCameraPose::Authored)
         } else {
-            pose
-        };
-        match reader
-            .text(sdf_path, "lunco:cameraRole")
-            .as_deref()
-            .unwrap_or("viewport")
-        {
-            "viewport" => (true, false, pose),
-            "sensor" => (false, true, pose),
-            other => {
-                warn!(
-                    "[usd-bevy] {} has invalid lunco:cameraRole '{other}'",
-                    sdf_path.as_str()
-                );
-                (false, false, pose)
+            match reader
+                .text(sdf_path, "lunco:cameraRole")
+                .as_deref()
+                .unwrap_or("viewport")
+            {
+                "viewport" => (true, false, pose),
+                "sensor" => (false, true, pose),
+                other => {
+                    warn!(
+                        "[usd-bevy] {} has invalid lunco:cameraRole '{other}'",
+                        sdf_path.as_str()
+                    );
+                    (false, false, pose)
+                }
             }
         }
     };

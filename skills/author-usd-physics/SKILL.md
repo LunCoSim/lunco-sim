@@ -143,6 +143,18 @@ orientation is allowed where it belongs in the joint frames; continuous yaw or
 pitch is a joint state. Euler writes bypass contacts, limits, solver state, and
 the measurable `angle` output, then race the physics bridge.
 
+### Coordinate contract for direction-tracking mechanisms
+
+Before authoring or changing a tracker, write down and validate the complete
+chain: world direction convention, mount-frame conversion, each joint's positive
+axis/order, and the physical boresight of the final geometry. Do not assume the
+vehicle's conventional `-Z` forward is the antenna or panel boresight: inspect
+the composed asset. Derive the Modelica vector-to-angle equations from that
+actual geometry, then verify live that the target vector, controller setpoint,
+joint angle, and visible boresight agree. A controller's self-error/"locked"
+output alone is not evidence of physical pointing; it can validate the same
+wrong convention it commanded.
+
 `PhysicsRevoluteJoint` is a generic mechanism, not a wheel marker. A vehicle is
 articulated only through explicit `PhysicsArticulationRootAPI` or revolute joints
 whose `body1` actually applies `PhysxVehicleWheelAPI`. Do not infer vehicle

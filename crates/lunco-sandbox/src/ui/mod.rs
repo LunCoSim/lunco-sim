@@ -12,14 +12,10 @@
 //! (`SandboxEditUiPlugin`, `UsdUiPlugin`, `ModelicaUiPlugin`, …) — the app crate
 //! is now structurally identical to them.
 
-use bevy::prelude::*;
+use bevy::{math::DVec3, prelude::*};
 use big_space::prelude::*;
-use leafwing_input_manager::prelude::*;
 
-use lunco_avatar::{
-    AdaptiveNearPlane, FreeFlightCamera, IntentAnalogState, ProvisionalAvatarCamera,
-};
-use lunco_core::{Avatar, LocalAvatar};
+use lunco_avatar::{FreeFlightCamera, ProvisionalAvatarCamera};
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_render::SceneCamera;
 
@@ -419,19 +415,11 @@ fn mode_exposure(
 /// Grace period before [`spawn_fallback_avatar`] steps in (USD load is async).
 const FALLBACK_AVATAR_GRACE_SECS: f32 = 2.0;
 
-/// Spawns a default avatar if no USD-defined Avatar was loaded.
+/// Spawns a provisional avatar only for a loaded scene with no viewport camera.
 ///
-/// This acts as a fallback when the scene file doesn't contain an Avatar
-/// prim, ensuring the user always has a controllable camera.
-///
-/// USD asset loading is async — checking for `Camera3d` on frame 1 is too
-/// eager and would spawn a fallback even when the scene *will* provide
-/// one a few frames later, leaving the world with two cameras + two
-/// `FloatingOrigin`s (which big_space resets every frame, killing perf
-/// and breaking propagation). Wait a grace period; if the scene didn't
-/// publish a camera by then, spawn one fallback for that live scene.  The
-/// tracked entity, rather than a process-lifetime boolean, lets the shared
-/// scene teardown remove it safely before the next scene loads.
+/// USD loading is asynchronous, so the guard waits for a scene camera rather
+/// than inspecting generic render cameras on the first frame. The tracked
+/// entity is scene-owned and is removed by the normal scene teardown.
 fn spawn_fallback_avatar(
     time: Res<Time>,
     q_cameras: Query<Entity, With<SceneCamera>>,
@@ -461,87 +449,29 @@ fn spawn_fallback_avatar(
         return;
     };
 
-    info!("No USD camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning fallback FreeFlightCamera");
-    let camera = commands
-        .spawn((
-            // `SceneCamera` is what marks this as THE scene camera. It is not cosmetic:
-            // `lunco-celestial`'s `update_globe_lod` now selects the camera with
-            // `With<SceneCamera>` (it used to use `With<Camera3d>`, which forced every
-            // domain crate to link a GPU stack merely to ask "which camera is the scene
-            // one?"). Without it this fallback camera would stream NO globe tiles.
-            // The `Camera3d` below is redundant in a render build — the `SceneCamera`
-            // binder inserts it — but harmless, and it keeps this spawn readable.
-            // See docs/architecture/render-decoupling.md.
-            //
-            // `agx()` (NOT `default()`): this fallback and the USD avatar camera
-            // (`lunco-usd-sim/src/lib.rs`, `SceneCamera::agx()`) MUST share the SAME
-            // tone curve. `SceneCamera::default()` is TonyMcMapface; the avatar is
-            // AgX. While the active window camera flips between the two (provisional
-            // → USD takeover, stage recompose re-instantiating the avatar prim), a
-            // mismatch re-grades the whole frame through a different curve — a
-            // uniform global lift that reads as "brightness jumps after load" even
-            // with EV and sun lux flat. `agx()` keeps the grade identical across a
-            // switch.
-            // One constructor for grade + exposure, shared with the USD camera
-            // projection and the avatar camera — see `lunco_render::scene_camera_look`.
-            // The live `LunarSun` exposure is passed as the authored opinion so this
-            // stand-in matches whatever the active scene is calibrated to.
-            lunco_render::scene_camera_look(Some(active_sun.exposure_ev100)),
-            Camera3d::default(),
-            // NO SMAA on this (workbench) camera: SMAA's post-process resolve does
-            // not survive the full-window-3D + egui-overlay compositing, so it
-            // renders a blank/black viewport (and crashes outright without the
-            // `smaa_luts` feature). MSAA (the `Camera3d` default) covers geometry
-            // edges. See the matching note on the USD avatar camera in lunco-usd-sim.
-            //
-            FreeFlightCamera {
-                yaw: -2.245559,
-                pitch: -0.303039,
-                damping: None,
-            },
-            AdaptiveNearPlane,
-            // Provisional: the authored USD Avatar camera (if the scene has one)
-            // takes over and despawns this in the same flush it spawns — see
-            // `ProvisionalAvatarCamera`. Without the marker, a slow (web/HTTP) scene
-            // load that finishes *after* this stand-in appears leaves two order-0
-            // window cameras → camera-order ambiguity + duplicate GizmoCamera.
-            ProvisionalAvatarCamera,
-            Transform::from_translation(Vec3::new(-30.0, 15.0, -20.0)),
-            GlobalTransform::default(),
-            // NO `FloatingOrigin` here — see the claim below. Spawning a camera is not
-            // an origin claim, and adding one unconditionally is what produced
-            // "BigSpace … has multiple floating origins" 1–2 ms after this very log
-            // line, reproducibly, on every run that fell back.
-            CellCoord::default(),
-            Avatar,
-            LocalAvatar,
-            // Nested: a tuple bundle tops out at 15 elements and adding `SceneCamera`
-            // (the render-decoupling intent marker, above) pushed this spawn to 16.
-            // Grouping the input triple is semantically identical — a nested tuple is
-            // just as much a `Bundle`.
-            (
-                IntentAnalogState::default(),
-                ActionState::<lunco_core::UserIntent>::default(),
-                lunco_controller::get_avatar_input_map(),
-            ),
-            ChildOf(grid),
-        ))
-        .id();
+    info!(
+        "No USD viewport camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning provisional avatar"
+    );
+    let camera =
+        lunco_avatar::spawn_avatar_camera(&mut commands, grid, DVec3::new(-30.0, 15.0, -20.0));
+    // The shared constructor owns the avatar contract; this caller adds only
+    // provisional lifecycle and initial-view state.
+    commands.entity(camera).try_insert((
+        ProvisionalAvatarCamera,
+        FreeFlightCamera {
+            yaw: -2.245559,
+            pitch: -0.303039,
+            damping: None,
+        },
+        bevy::camera::Exposure {
+            ev100: active_sun.exposure_ev100,
+        },
+    ));
 
-    // CLAIM the origin rather than adding one. `world.rs` states the invariant —
-    // the anchor is the neutral default holder and "a camera, when one exists,
-    // claims the `FloatingOrigin` from here" — so at this point the anchor (or a
-    // prior camera) already holds one, and a bare insert makes two. big_space
-    // then finds >1, logs, and zeroes the space's origin for that frame; it
-    // recovers next frame, so this is churn and log noise rather than permanent
-    // corruption, but it is neither free nor correct.
-    //
-    // Strip-then-insert in one flush keeps exactly one holder, and mirrors what
-    // `lunco-usd-bevy`'s `reconcile_scene_viewport` does for scene cameras.
+    // The constructor owns the sole origin; clear the prior scene holder.
     for prior in q_origins.iter() {
         commands.entity(prior).remove::<FloatingOrigin>();
     }
-    commands.entity(camera).try_insert(FloatingOrigin);
 
     *fallback = Some(camera);
 }
