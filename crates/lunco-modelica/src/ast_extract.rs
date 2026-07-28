@@ -43,6 +43,10 @@ fn parse(source: &str) -> Option<StoredDefinition> {
 pub struct ModelInterface {
     /// First non-package class, fully qualified when nested.
     pub model_name: Option<String>,
+    /// The file's `within` clause — the package its classes actually live in.
+    /// The only authority on what a `.mo` is CALLED from outside it, which is
+    /// what a generated model instantiating it has to get right.
+    pub within: Option<String>,
     /// `parameter` declarations with their authored values.
     pub parameters: HashMap<String, f64>,
     /// Every declared input, seeded with its authored default (`0.0` when it has
@@ -70,6 +74,7 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
     let defaults = extract_inputs_with_defaults_from_ast(&ast);
     ModelInterface {
         model_name: extract_model_name_from_ast(&ast),
+        within: within_package(&ast),
         parameters: extract_parameters_from_ast(&ast),
         inputs: extract_input_names_from_ast(&ast)
             .into_iter()

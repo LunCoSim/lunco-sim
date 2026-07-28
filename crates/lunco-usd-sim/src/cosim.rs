@@ -1149,6 +1149,12 @@ pub fn fire_connected_events(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
+    // Nothing is listening: don't index the scene. This runs every FixedUpdate
+    // tick and the index below is a full scan of every cosim participant plus a
+    // fresh allocation — paid on every scene, while `LunCoEvent` prims are rare.
+    if bindings.is_empty() {
+        return;
+    }
     let instance_of =
         |entity| lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
     let mut by_path = HashMap::new();
@@ -2505,7 +2511,13 @@ pub(crate) fn install(app: &mut App) {
     app.init_asset::<ModelicaSource>()
         .init_asset::<PythonSource>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
-        .init_resource::<WiringDirty>();
+        .init_resource::<WiringDirty>()
+        .init_resource::<crate::domain_projection::MemberClasses>()
+        .init_resource::<crate::domain_projection::ProjectionDirty>()
+        // The open synthesizer registry (doc 37 §8): the acausal-network
+        // synthesizer registers itself as the default; another domain is a
+        // `register()` from any plugin, not an edit here.
+        .init_resource::<crate::domain_projection::SynthesizerRegistry>();
     // USD source-load and contract failures use the same core notice stream as
     // the Modelica compiler, so the workbench console has one observable error
     // surface. `add_message` is idempotent when the Modelica plugin registered
@@ -2540,6 +2552,11 @@ pub(crate) fn install(app: &mut App) {
             // to load (network on wasm, async I/O on native).
             dispatch_loaded_modelica_sources,
             dispatch_loaded_python_sources,
+            // Reads the class each member's `.mo` declares, so the projector
+            // below instantiates what the file says rather than what its path
+            // implies. Before it in the chain: a class landing this frame should
+            // project this frame.
+            crate::domain_projection::resolve_member_classes,
             crate::domain_projection::project_domain_islands,
             // Wiring is derived from native `connectionPaths`: rebuilds the
             // `SimConnection` set whenever prims spawn/despawn (structural) or a

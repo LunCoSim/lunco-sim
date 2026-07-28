@@ -6,7 +6,7 @@
 //! while a boundary output still named it, which rejected the whole electrical
 //! domain of a rover that was otherwise fine — lived entirely here.
 
-use lunco_usd_sim::domain_projection::{emit_modelica, read_network};
+use lunco_usd_sim::domain_projection::{emit_modelica, read_network, MemberClasses};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
@@ -24,7 +24,7 @@ fn reads_a_composed_collection_into_one_generated_model() {
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let network = read_network(&view, &root)
+    let network = read_network(&view, &root, &MemberClasses::path_derived_only())
         .expect("a well-formed network is not an error")
         .expect("a scope with a component collection is a network");
 
@@ -74,7 +74,7 @@ fn a_boundary_output_published_through_an_omitted_part_drops_with_it() {
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let network = read_network(&view, &root)
+    let network = read_network(&view, &root, &MemberClasses::path_derived_only())
         .expect(
             "an unwired part must not reject the network — this is the failure that took a \
              rover's whole electrical domain offline",
@@ -90,12 +90,60 @@ fn a_boundary_output_published_through_an_omitted_part_drops_with_it() {
 }
 
 #[test]
+fn the_class_a_file_declares_beats_the_one_its_path_implies() {
+    let stage = stage("electrical_network.usda");
+    let view = stage.view();
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+
+    // What `resolve_member_classes` reads out of the `.mo` — here the battery's
+    // file declares a class its directory layout does NOT imply, which is what a
+    // renamed folder or a hand-written `within` looks like.
+    let mut classes = MemberClasses::path_derived_only();
+    classes.declare(
+        "lunco://models/LunCo/Electrical/Battery.mo",
+        "Vendor.Power.Cell",
+    );
+
+    let network = read_network(&view, &root, &classes)
+        .expect("declaring a class is not an authoring error")
+        .expect("still a network");
+    let source = emit_modelica(&network, "Rig_Electrical_System");
+    assert!(
+        source.contains("Vendor.Power.Cell Rig_x2f_Battery"),
+        "the generated model must instantiate what the FILE declares, not what the asset path \
+         implies — a guess here surfaces as `class not found` against source nobody can read:\n{source}"
+    );
+}
+
+#[test]
+fn a_member_whose_class_is_unknown_defers_instead_of_guessing() {
+    let stage = stage("electrical_network.usda");
+    let view = stage.view();
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+
+    // The production default: nothing resolved yet, because no `.mo` has loaded.
+    let network = read_network(&view, &root, &MemberClasses::default())
+        .expect("waiting is not an error")
+        .expect("the scope is still a network");
+    assert!(
+        network.pending_sources,
+        "a network whose member classes are unread must report itself pending, so the projector \
+         waits rather than compiling a path-derived guess"
+    );
+    assert!(
+        network.components.is_empty(),
+        "a pending network states no members: every conclusion drawn from a partial set — which \
+         parts are unwired, which boundary outputs have sources — would be a false authoring error"
+    );
+}
+
+#[test]
 fn rejects_members_whose_opinions_cannot_be_generated() {
     let stage = stage("unusable_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let errors = read_network(&view, &root).expect_err("unusable authoring is an error");
+    let errors = read_network(&view, &root, &MemberClasses::path_derived_only()).expect_err("unusable authoring is an error");
     assert!(
         errors
             .iter()

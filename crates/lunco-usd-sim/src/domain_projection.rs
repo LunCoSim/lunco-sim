@@ -4,7 +4,7 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -52,6 +52,9 @@ pub struct GeneratedModelicaSource {
     pub source: String,
     /// Included composed USD component paths.
     pub component_paths: Vec<String>,
+    /// `(prim path, source asset, instantiated class)` per member — the
+    /// attribution a `generated://` compile error needs.
+    pub members: Vec<(String, String, String)>,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -59,6 +62,9 @@ pub struct GeneratedModelicaSource {
 pub struct DomainComponent {
     /// Composed USD path of the `LunCoProgramAPI` facet.
     pub path: String,
+    /// The `info:sourceAsset` this facet names — the file whose `within` + class
+    /// decides what [`MemberClasses`] lets the emitter instantiate.
+    pub source_asset: String,
     /// Fully-qualified class derived from `info:sourceAsset`.
     pub model_class: String,
     /// Constant public inputs, emitted as component modifications.
@@ -86,6 +92,10 @@ pub struct DomainNetwork {
     pub input_sources: BTreeMap<String, String>,
     /// Public wrapper output name to component output property.
     pub outputs: BTreeMap<String, String>,
+    /// At least one member's `.mo` has not loaded, so its class is a PATH GUESS
+    /// rather than what the file declares. The projector waits instead of
+    /// compiling a guess. See [`MemberClasses`].
+    pub pending_sources: bool,
 }
 
 /// One authoring error that prevents a safe runtime projection.
@@ -104,6 +114,140 @@ pub struct DomainProjectionError {
 // where that policy lives. A partitioner here would have to invent extra
 // entities to host the extra models, and the two definitions of "island" would
 // then have to agree forever.
+
+/// What a synthesizer hands back: the compilation unit, plus the boundary the
+/// runtime holds it to.
+#[derive(Clone, Debug, Default)]
+pub struct Synthesized {
+    /// The Modelica source to compile.
+    pub source: String,
+    /// Public causal inputs of the generated model.
+    pub inputs: BTreeSet<String>,
+    /// Public causal outputs of the generated model.
+    pub outputs: BTreeSet<String>,
+    /// Composed USD paths absorbed into this unit.
+    pub component_paths: Vec<String>,
+    /// `(prim, source asset, class)` per member — attribution + class audit.
+    pub members: Vec<(String, String, String)>,
+}
+
+/// One way of turning a composed USD scope into ONE Modelica compilation unit.
+///
+/// The seam doc 37 §8 asks for. What ships is the acausal-network synthesizer
+/// below; a `thermal`, `harness` or `comms-link` synthesizer is a registration,
+/// not an edit to [`project_domain_islands`]. A scope selects one with
+/// `uniform token lunco:synthesizer`; absent means the default.
+///
+/// Not yet rhai-authored: a rhai body would need an emit surface of its own
+/// (`ApplyModelicaOp`-style verbs) before policy could live outside Rust. The
+/// registry is what makes that a later addition rather than a rewrite.
+pub trait DomainSynthesizer: Send + Sync + 'static {
+    /// Registry key, and the token a scope names.
+    fn name(&self) -> &'static str;
+    /// Turn one composed scope into a compilation unit.
+    fn synthesize(
+        &self,
+        view: &lunco_usd_bevy::StageView<'_>,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>>;
+}
+
+/// What a synthesizer concluded about a scope.
+pub enum SynthOutcome {
+    /// Not a scope this synthesizer compiles (or nothing solvable is in it).
+    NotMine,
+    /// Cannot be decided yet — a member's source has not loaded, so the class it
+    /// declares is not knowable. NOT an error and NOT a reason to guess: the
+    /// projection simply waits and is re-triggered when the source lands.
+    Pending,
+    Ready(Synthesized),
+}
+
+/// Read-only facts a synthesizer may need beyond the stage itself.
+pub struct SynthContext<'a> {
+    /// Class-per-source-asset, as declared BY THE FILE. See [`MemberClasses`].
+    pub classes: &'a MemberClasses,
+}
+
+/// The synthesizer a scope names with `lunco:synthesizer`, or the default.
+pub const DEFAULT_SYNTHESIZER: &str = "acausal-network";
+
+/// Open registry of synthesizers, by name. No enum: a new domain is a
+/// registration from any plugin.
+#[derive(Resource)]
+pub struct SynthesizerRegistry(
+    std::collections::BTreeMap<String, std::sync::Arc<dyn DomainSynthesizer>>,
+);
+
+impl Default for SynthesizerRegistry {
+    fn default() -> Self {
+        let mut registry = Self(Default::default());
+        registry.register(AcausalNetworkSynthesizer);
+        registry
+    }
+}
+
+impl SynthesizerRegistry {
+    pub fn register(&mut self, synthesizer: impl DomainSynthesizer) {
+        self.0
+            .insert(synthesizer.name().to_string(), std::sync::Arc::new(synthesizer));
+    }
+    pub fn get(&self, name: &str) -> Option<&std::sync::Arc<dyn DomainSynthesizer>> {
+        self.0.get(name)
+    }
+    pub fn names(&self) -> Vec<&str> {
+        self.0.keys().map(String::as_str).collect()
+    }
+}
+
+/// The built-in: a `CollectionAPI:components` scope of Modelica program facets
+/// wired by `connectors:*` (acausal) and `inputs:`/`outputs:` (causal) becomes
+/// one DAE. This is the electrical/thermal/hydraulic shape — every physical
+/// domain whose parts share a potential/flow pair.
+pub struct AcausalNetworkSynthesizer;
+
+impl DomainSynthesizer for AcausalNetworkSynthesizer {
+    fn name(&self) -> &'static str {
+        DEFAULT_SYNTHESIZER
+    }
+    fn synthesize(
+        &self,
+        view: &lunco_usd_bevy::StageView<'_>,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        let Some(network) = read_network(view, root, ctx.classes)? else {
+            return Ok(SynthOutcome::NotMine);
+        };
+        if network.pending_sources {
+            return Ok(SynthOutcome::Pending);
+        }
+        Ok(SynthOutcome::Ready(Synthesized {
+            source: emit_modelica(&network, model_name),
+            inputs: network.inputs.clone(),
+            outputs: network.outputs.keys().cloned().collect(),
+            component_paths: network
+                .components
+                .iter()
+                .map(|component| component.path.clone())
+                .collect(),
+            members: network
+                .components
+                .iter()
+                .map(|component| {
+                    (
+                        component.path.clone(),
+                        component.source_asset.clone(),
+                        component.model_class.clone(),
+                    )
+                })
+                .collect(),
+        }))
+    }
+}
 
 /// Emit one deterministic Modelica wrapper for a composed network scope.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
@@ -243,12 +387,18 @@ pub fn project_domain_islands(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     dirty: Res<WiringDirty>,
+    // A member class landing is the projector's third trigger: the networks that
+    // returned `Pending` have to be re-asked, and no prim spawned or changed.
+    mut projection_dirty: ResMut<ProjectionDirty>,
+    classes: Res<MemberClasses>,
+    registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    if added.is_empty() && identity_added.is_empty() && !dirty.0 {
+    if added.is_empty() && identity_added.is_empty() && !dirty.0 && !projection_dirty.0 {
         return;
     }
+    projection_dirty.0 = false;
     let Some(channels) = channels else { return };
 
     for (entity, prim, previous, installed_model) in &prims {
@@ -283,7 +433,26 @@ pub fn project_domain_islands(
         if view.type_name(&root_path).as_deref() != Some("Scope") {
             continue;
         }
-        let network = match read_network(&view, &root_path) {
+        // WHICH synthesizer turns this scope into a model is authored, not
+        // hardcoded: `lunco:synthesizer` names one from the open registry, and
+        // absent means the acausal-network default. An unknown name is an
+        // authoring error, not a silent fallback to some other domain's rules.
+        let requested = view
+            .text(&root_path, "lunco:synthesizer")
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string());
+        let Some(synthesizer) = registry.get(&requested).cloned() else {
+            let known = registry.names().join(", ");
+            error!(
+                "[domain-projection] `{}` names synthesizer `{requested}`, which is not \
+                 registered (known: {known}) — the scope is not projected.",
+                prim.path
+            );
+            continue;
+        };
+        let model_name = network_model_name(&prim.path, instance_id);
+        let ctx = SynthContext { classes: &classes };
+        let synthesized = match synthesizer.synthesize(&view, &root_path, &model_name, &ctx) {
             Ok(network) => network,
             Err(errors) => {
                 let message = errors
@@ -295,7 +464,6 @@ pub fn project_domain_islands(
                 if previous.is_some_and(|state| state.fingerprint == fingerprint) {
                     continue;
                 }
-                let model_name = network_model_name(&prim.path, instance_id);
                 notices.write(ModelicaNotice {
                     level: NoticeLevel::Error,
                     text: format!("[{model_name}] Projection error: {message}"),
@@ -310,7 +478,7 @@ pub fn project_domain_islands(
                 commands.entity(entity).try_insert((
                     ModelicaModel {
                         model_path: PathBuf::from(format!("generated://{model_name}.mo")),
-                        model_name,
+                        model_name: model_name.clone(),
                         session_id: installed_model.map_or(1, |model| model.session_id + 1),
                         is_stepping: false,
                         is_compiling: false,
@@ -323,12 +491,18 @@ pub fn project_domain_islands(
                         network_root: prim.path.clone(),
                         source: String::new(),
                         component_paths: Vec::new(),
+                        members: Vec::new(),
                     },
                 ));
                 continue;
             }
         };
-        let Some(network) = network else {
+        // Waiting on a member's declared class: no verdict, no state written, so
+        // the next trigger asks again.
+        if matches!(synthesized, SynthOutcome::Pending) {
+            continue;
+        }
+        let SynthOutcome::Ready(synthesized) = synthesized else {
             if previous.is_some() {
                 // The authored collection ceased to describe a compilable
                 // network. Retire its runtime projection in the same update;
@@ -344,8 +518,8 @@ pub fn project_domain_islands(
             }
             continue;
         };
-        let model_name = network_model_name(&network.root, instance_id);
-        let source = emit_modelica(&network, &model_name);
+        let component_count = synthesized.component_paths.len();
+        let source = synthesized.source;
         let source_for_diagnostics = source.clone();
         let fingerprint = source_fingerprint(&source);
         if previous.is_some_and(|state| state.fingerprint == fingerprint) {
@@ -388,9 +562,10 @@ pub fn project_domain_islands(
             realtime_safe: false,
         });
         info!(
-            "[domain-projection] compiling `{}` from {} component(s) as generated://{}.mo",
-            network.root,
-            network.components.len(),
+            "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
+             generated://{}.mo",
+            prim.path,
+            component_count,
             model_name
         );
         if let Err(error) = dispatch {
@@ -417,18 +592,15 @@ pub fn project_domain_islands(
             // actionable error instead of an island that steps and publishes
             // nothing.
             UsdModelicaPortContract::new(
-                network.inputs.iter().cloned(),
-                network.outputs.keys().cloned(),
+                synthesized.inputs.iter().cloned(),
+                synthesized.outputs.iter().cloned(),
             ),
             DomainProjectionState { fingerprint },
             GeneratedModelicaSource {
-                network_root: network.root.clone(),
+                network_root: prim.path.clone(),
                 source: source_for_diagnostics,
-                component_paths: network
-                    .components
-                    .iter()
-                    .map(|component| component.path.clone())
-                    .collect(),
+                component_paths: synthesized.component_paths,
+                members: synthesized.members,
             },
         ));
     }
@@ -469,6 +641,13 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                         .unwrap_or_default(),
                     "error": model.and_then(|model| model.last_error.clone()),
                     "components": generated.component_paths,
+                    "members": generated
+                        .members
+                        .iter()
+                        .map(|(prim, asset, class)| serde_json::json!({
+                            "prim": prim, "source_asset": asset, "class": class,
+                        }))
+                        .collect::<Vec<_>>(),
                     "source": generated.source,
                 })
             })
@@ -509,6 +688,7 @@ fn source_fingerprint(source: &str) -> u64 {
 pub fn read_network(
     view: &lunco_usd_bevy::StageView<'_>,
     root: &SdfPath,
+    classes: &MemberClasses,
 ) -> Result<Option<DomainNetwork>, Vec<DomainProjectionError>> {
     let root_string = root.to_string();
     if !is_domain_network_root(view, root) {
@@ -524,6 +704,8 @@ pub fn read_network(
         })?;
     let mut components = Vec::new();
     let mut extraction_errors = Vec::new();
+    // Set when a member's class is not knowable yet — see `pending_sources`.
+    let mut pending_sources = false;
     for path in member_paths {
         if path.is_property_path() || path.is_prim_variant_selection_path() {
             continue;
@@ -541,7 +723,11 @@ pub fn read_network(
             );
             continue;
         }
-        let model_class = match modelica_member_class(view, &path) {
+        // The path-derived name is the FALLBACK; the file's own `within` + class
+        // is the answer, once `resolve_member_classes` has read it. A member with
+        // no verdict yet leaves the whole network pending rather than compiling a
+        // guess.
+        let derived = match modelica_member_class(view, &path) {
             Ok(class) => class,
             Err(issue) => {
                 extraction_errors.push(DomainProjectionError {
@@ -551,6 +737,17 @@ pub fn read_network(
                 continue;
             }
         };
+        let source_asset = view.asset(&path, "info:sourceAsset").unwrap_or_default();
+        let Some(model_class) = classes.resolve(&source_asset, &derived) else {
+            pending_sources = true;
+            continue;
+        };
+        if model_class != derived {
+            debug!(
+                "[domain-projection] {path} instantiates `{model_class}` as declared by \
+                 `{source_asset}` (its path implies `{derived}`)"
+            );
+        }
         let attrs = view.attr_names(&path);
         let mut constants = BTreeMap::new();
         let mut connectors = BTreeMap::new();
@@ -607,6 +804,7 @@ pub fn read_network(
         }
         components.push(DomainComponent {
             path: path.to_string(),
+            source_asset,
             model_class,
             constants,
             connectors,
@@ -617,6 +815,20 @@ pub fn read_network(
     }
     if !extraction_errors.is_empty() {
         return Err(extraction_errors);
+    }
+    if pending_sources {
+        // The member set is INCOMPLETE while a class is unknown, so every
+        // conclusion below — which parts are unwired, whether a boundary output
+        // has a source — would be drawn from a partial network and reported as
+        // an authoring error. Say "not yet" instead.
+        return Ok(Some(DomainNetwork {
+            root: root_string,
+            components: Vec::new(),
+            inputs: BTreeSet::new(),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            pending_sources: true,
+        }));
     }
     // A component with an acausal port but no authored edge is a legitimate
     // installed-but-unwired part (for example, a solar panel before a battery
@@ -711,6 +923,7 @@ pub fn read_network(
         inputs,
         input_sources,
         outputs,
+        pending_sources: false,
     };
     let mut errors = validate_network(&network);
     // Say WHY a causal source is missing when the answer is "it was installed
@@ -937,6 +1150,207 @@ fn instance_identifier(root: &str, path: &str) -> String {
     modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
 }
 
+/// What class a member's source asset actually declares.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemberClass {
+    /// Read from the file: `within` + the class it declares.
+    Declared(String),
+    /// The file could not be read (a failed fetch, an unparseable source) or did
+    /// not resolve within [`CLASS_RESOLVE_MAX_SECS`]. The path-derived name is
+    /// used instead — the old behaviour, kept as the FALLBACK so an unreachable
+    /// source degrades to a guess rather than freezing the projection.
+    Unavailable,
+}
+
+/// How long a member source may stay unresolved before the projector stops
+/// waiting for it and falls back to the path-derived class.
+///
+/// Same reasoning as `cosim::SCENE_LOAD_MAX_SECS`: on the web a fetch can 404
+/// without ever reporting a failure, and a projection that waits forever is
+/// strictly worse than one that compiles a guess and says so.
+const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
+
+/// The class each member source declares — the ONE authority on what a generated
+/// model may instantiate.
+///
+/// The emitter has to name a class while it is reading the stage, where the
+/// `.mo` may be an unfetched HTTP resource, so the name used to be DERIVED from
+/// the asset path (`models/LunCo/Electrical/Battery.mo` → `LunCo.Electrical.Battery`).
+/// That assumes the directory layout mirrors the package, which is true of the
+/// shipped library and silently false the moment a directory is renamed or a
+/// file's `within` says otherwise — and the symptom is "class not found" from
+/// the compiler, against generated source, naming neither the prim nor the file.
+///
+/// So the file is loaded and read, and a network whose members are not all
+/// resolved yet simply does not project until they are. Keyed by asset path, so
+/// one file is fetched and parsed once per session however many networks
+/// instantiate it.
+#[derive(Resource, Default)]
+pub struct MemberClasses {
+    known: HashMap<String, MemberClass>,
+    pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
+    path_only: bool,
+}
+
+impl MemberClasses {
+    /// An index that never resolves anything and always answers with the
+    /// path-derived name — for callers with no asset loading at all (the reader
+    /// tests, a tool reading a stage offline). Production uses the default,
+    /// which waits for [`resolve_member_classes`] to read the files.
+    pub fn path_derived_only() -> Self {
+        Self {
+            path_only: true,
+            ..Default::default()
+        }
+    }
+
+    /// State a verdict directly, bypassing the loader.
+    pub fn declare(&mut self, asset: impl Into<String>, class: impl Into<String>) {
+        self.known
+            .insert(asset.into(), MemberClass::Declared(class.into()));
+    }
+
+    /// The class to instantiate for `asset`, given the name derived from its
+    /// path. `None` = not resolved yet: the caller must wait, not guess.
+    pub fn resolve(&self, asset: &str, derived: &str) -> Option<String> {
+        match self.known.get(asset) {
+            Some(MemberClass::Declared(class)) => Some(class.clone()),
+            Some(MemberClass::Unavailable) => Some(derived.to_string()),
+            None if self.path_only => Some(derived.to_string()),
+            None => None,
+        }
+    }
+
+    /// Has a verdict for `asset` (either answer)?
+    pub fn is_known(&self, asset: &str) -> bool {
+        self.known.contains_key(asset)
+    }
+}
+
+/// Set when a member class resolves, so the projection that was waiting on it
+/// re-runs. Prim spawn and live edits are the projector's other triggers; an
+/// asset finishing its load is neither.
+#[derive(Resource, Default)]
+pub struct ProjectionDirty(pub bool);
+
+/// Resolve every member source's DECLARED class, so the emitter never has to
+/// guess one.
+///
+/// Scans the stage for component collections, loads each member's
+/// `info:sourceAsset` once, and reads `within` + the class the file declares.
+/// Until a member has a verdict its network does not project at all
+/// ([`SynthOutcome::Pending`]) — compiling a path-guessed class is what produced
+/// "class not found" against generated source, naming neither the prim nor the
+/// file.
+///
+/// A source that fails to load, cannot be parsed, or simply never resolves
+/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Unavailable`], and
+/// the path-derived name is used after all. Waiting forever on an unreachable
+/// asset would be worse than compiling the guess: the scene would have no
+/// electrical domain and nothing to say about why.
+pub fn resolve_member_classes(
+    prims: Query<&UsdPrimPath>,
+    added: Query<(), Added<UsdPrimPath>>,
+    mut classes: ResMut<MemberClasses>,
+    mut projection_dirty: ResMut<ProjectionDirty>,
+    dirty: Res<WiringDirty>,
+    stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
+    asset_server: Res<AssetServer>,
+    sources: Res<Assets<lunco_modelica::source_asset::ModelicaSource>>,
+    // REAL time, like every other give-up deadline in this crate: a paused or
+    // time-warped simulation must not change when a load is declared lost.
+    time: Res<Time<bevy::time::Real>>,
+) {
+    let now = time.elapsed_secs_f64();
+
+    // Discovery runs on the same triggers as the projector — plus never at all
+    // once every member is known, which is the steady state.
+    if !added.is_empty() || dirty.0 {
+        for prim in &prims {
+            let id = prim.stage_handle.id();
+            if canonical.get(id).is_none() {
+                if let Some(recipe) = stages
+                    .get(&prim.stage_handle)
+                    .and_then(|stage| stage.recipe.clone())
+                {
+                    canonical.get_or_build(id, &recipe);
+                }
+            }
+            let Some(stage) = canonical.get(id) else {
+                continue;
+            };
+            let view = stage.view();
+            let Ok(root) = SdfPath::new(&prim.path) else {
+                continue;
+            };
+            if !is_domain_network_root(&view, &root) {
+                continue;
+            }
+            let Ok(members) = view.collection_members(&root, "components") else {
+                continue;
+            };
+            for member in members {
+                if !view.has_api_schema(&member, "LunCoProgramAPI") {
+                    continue;
+                }
+                let Some(asset) = view.asset(&member, "info:sourceAsset") else {
+                    continue;
+                };
+                if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
+                    continue;
+                }
+                let handle = asset_server.load(asset.clone());
+                classes
+                    .pending
+                    .insert(asset, (handle, now + CLASS_RESOLVE_MAX_SECS));
+            }
+        }
+    }
+
+    if classes.pending.is_empty() {
+        return;
+    }
+    let settled: Vec<(String, Option<String>)> = classes
+        .pending
+        .iter()
+        .filter_map(|(asset, (handle, expires))| {
+            if let Some(source) = sources.get(handle) {
+                let interface = parse_model_interface(&source.text, "member-class.mo");
+                let class = interface.model_name.map(|declared| match interface.within {
+                    Some(within) => format!("{within}.{declared}"),
+                    None => declared,
+                });
+                return Some((asset.clone(), class));
+            }
+            if asset_server.load_state(handle).is_failed() || now >= *expires {
+                return Some((asset.clone(), None));
+            }
+            None
+        })
+        .collect();
+    for (asset, class) in settled {
+        classes.pending.remove(&asset);
+        match class {
+            Some(class) => {
+                classes.known.insert(asset, MemberClass::Declared(class));
+            }
+            None => {
+                warn!(
+                    "[domain-projection] could not read the class declared by `{asset}` (load \
+                     failed, unparseable, or not resolved within {CLASS_RESOLVE_MAX_SECS:.0}s) — \
+                     falling back to the class its PATH implies. If the compiler then reports an \
+                     unknown class, that guess is why."
+                );
+                classes.known.insert(asset, MemberClass::Unavailable);
+            }
+        }
+        // The projection that was waiting on this member has no other reason to
+        // re-run: an asset load is neither a prim spawn nor a USD edit.
+        projection_dirty.0 = true;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,6 +1358,7 @@ mod tests {
     fn component(path: &str, target: Option<&str>) -> DomainComponent {
         DomainComponent {
             path: path.into(),
+            source_asset: "lunco://models/LunCo/Electrical/DCMotor.mo".into(),
             model_class: "LunCo.Electrical.DCMotor".into(),
             constants: BTreeMap::from([("rated_power".into(), 2000.0)]),
             connectors: target
@@ -970,6 +1385,7 @@ mod tests {
             inputs: BTreeSet::from(["drive_left".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            pending_sources: false,
         };
         let source = emit_modelica(&network, "Electrical System");
         assert!(source.contains("input Real drive_left;"));
@@ -997,6 +1413,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            pending_sources: false,
         };
         let source = emit_modelica(&network, "Electrical");
         assert!(source.contains("connect(Bus_x2f_Model.p, LoadA_x2f_Model.p);"));
@@ -1015,6 +1432,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            pending_sources: false,
         };
         let errors = validate_network(&network);
         assert!(errors
@@ -1085,6 +1503,7 @@ mod tests {
                 ("right".into(), "/Controls.outputs:throttle".into()),
             ]),
             outputs: BTreeMap::new(),
+            pending_sources: false,
         };
         assert!(validate_network(&network)
             .iter()
@@ -1102,6 +1521,7 @@ mod tests {
             inputs: BTreeSet::from(["demand".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            pending_sources: false,
         };
         assert!(validate_network(&network)
             .iter()
@@ -1125,6 +1545,7 @@ mod tests {
                     network_root: "/Electrical".into(),
                     source: "model Electrical end Electrical;".into(),
                     component_paths: vec!["/Battery".into()],
+                    members: Vec::new(),
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),

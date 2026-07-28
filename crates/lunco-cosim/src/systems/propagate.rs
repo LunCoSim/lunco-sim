@@ -439,6 +439,36 @@ pub fn propagate_connections(
             *last_targets = names;
         }
 
+        // Both ledgers are keyed by `(Entity, port)` and both RATCHET — `faults`
+        // so a gate can ask "did anything never land", `landed` so a wire that
+        // once worked is never re-reported. Neither is scoped to a scene, and
+        // nothing clears them on teardown: after `LoadScene` the entries of the
+        // PREVIOUS scene remain, keyed to entities that no longer exist. A
+        // verdict read after a reload (`scene_test`'s gate, `GET /api/diagnostics`)
+        // then answers for a scene that is not loaded — and in a long session the
+        // ledger only grows.
+        //
+        // Despawn is the exact retirement condition, and a rewire is when it is
+        // cheap to notice: prim despawn is one of the two things that rebuild the
+        // fabric. Keys are collected before taking the resource borrow because the
+        // liveness test needs `&World`.
+        let dead: Vec<(Entity, String)> = {
+            let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+            diag.faults
+                .keys()
+                .chain(diag.landed.iter())
+                .filter(|(entity, _)| !world.entities().contains(*entity))
+                .cloned()
+                .collect()
+        };
+        if !dead.is_empty() {
+            let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+            for key in dead {
+                diag.faults.remove(&key);
+                diag.landed.remove(&key);
+            }
+        }
+
         // M6 — publish this fabric's algebraic loops into the faults ledger.
         // Loop entries are facts about THE CURRENT FABRIC (unlike never-landed
         // wire faults, which are history), so a rewire retracts stale ones and
@@ -522,18 +552,42 @@ pub fn propagate_connections(
     // Targets that DID take their write this tick — the proof a wire is real, and
     // the only thing that can retract a fault (see below).
     let mut landed: Vec<(Entity, String)> = Vec::new();
+    // Manual holds outrank the fabric — see `crate::PortHolds`. Expired first (on
+    // the REAL clock, so a paused or warped sim cannot extend a hold), then
+    // snapshotted, because the write loop below owns `&mut World`.
+    let now_real = world
+        .get_resource::<Time<bevy::time::Real>>()
+        .map(|time| time.elapsed_secs_f64())
+        .unwrap_or(0.0);
+    let held: std::collections::HashMap<(Entity, String), f64> = match world
+        .get_resource_mut::<crate::PortHolds>()
+    {
+        Some(mut holds) if !holds.is_empty() => {
+            holds.expire(now_real);
+            holds.snapshot()
+        }
+        _ => Default::default(),
+    };
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity, is_client) {
             continue;
         }
+        // A HELD port is not driven by its wire. Without this, a `SetPort` on a
+        // wired input is overwritten by the next propagation tick — the write
+        // "succeeds" and nothing happens, which is indistinguishable from a
+        // broken port to whoever sent it.
+        let value = held
+            .get(&(t.entity, t.name.clone()))
+            .copied()
+            .unwrap_or(acc[i]);
         let written = match t.resolved {
             // Fast path; on a stale handle fall back to the name write (short-
             // circuits when the slot write succeeds, so never double-writes).
             Some(r) => {
-                registry.write_resolved(world, t.entity, r, acc[i])
-                    || registry.write_port(world, t.entity, &t.name, acc[i])
+                registry.write_resolved(world, t.entity, r, value)
+                    || registry.write_port(world, t.entity, &t.name, value)
             }
-            None => registry.write_port(world, t.entity, &t.name, acc[i]),
+            None => registry.write_port(world, t.entity, &t.name, value),
         };
         // A target on an entity that exposes NO PORT SURFACE AT ALL is not a
         // dangling wire, and reporting it as one buried the real diagnostic:

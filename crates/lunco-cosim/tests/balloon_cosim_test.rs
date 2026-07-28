@@ -67,13 +67,27 @@ fn compile_balloon_model(
         let source = balloon_mo().to_string();
         let model_name = extract_model_name(&source).unwrap_or_else(|| "Balloon".into());
         let params = extract_parameters(&source);
-        let inputs = extract_inputs_with_defaults(&source);
+        let mut inputs = extract_inputs_with_defaults(&source);
+        // THE SCENE STATES THE ATMOSPHERE. `Balloon.mo`'s `rho0` defaults to 0 —
+        // "a body with no declared atmosphere is in vacuum, which is the correct
+        // reading of the Moon" — and in vacuum buoyancy and drag are identically
+        // zero, so every assertion below reads 0 and blames the solver. An
+        // Earth-like scene authors 1.225 (the model's own words); a production
+        // scene wires it from the environment prim. This test is the scene.
+        inputs.insert("rho0".to_string(), 1.225);
 
         commands.entity(entity).try_insert(ModelicaModel {
             model_path: std::path::PathBuf::from("balloon.mo"),
             model_name: model_name.clone(),
             parameters: params,
             inputs: inputs.into_iter().collect(),
+            // Compiling a model does NOT start it — the worker parks it
+            // (`paused = !resume_after_compile`) so opening a document in the
+            // workbench cannot silently launch a live simulation. Every path that
+            // wants a model stepping says so; the USD cosim binder sets this for
+            // exactly the same reason. Without it this test compiles a balloon
+            // that never takes a step, and every downstream assertion reads 0.
+            resume_after_compile: true,
             ..default()
         });
 

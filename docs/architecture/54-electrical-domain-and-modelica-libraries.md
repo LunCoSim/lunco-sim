@@ -52,6 +52,21 @@ connector Pin
 end Pin;
 ```
 
+**Membership is what makes a facet ours.** A prim listed in
+`collection:components:includes` is compiled INTO the generated model, and for that reason
+gets no solver of its own and no runtime wires on its `inputs:` — both would duplicate what
+the wrapper's equations already do. A facet that declares `connectors:*` and belongs to NO
+collection cannot be solved at all (its pins only mean something inside a `connect()` set)
+and says so at load rather than sitting inert.
+
+**Which synthesizer runs is authored.** `uniform token lunco:synthesizer` on the network
+scope names one from the open `SynthesizerRegistry`
+(`lunco_usd_sim::domain_projection`); absent means `"acausal-network"`, the built-in that
+this section describes. A new physical domain — thermal, harness, comms-link — is a
+`DomainSynthesizer` impl plus a `register()` call from any plugin: no enum, no edit to the
+projector. (The synthesizer body is Rust today; moving the netlist-mapping POLICY into rhai
+needs an emit surface that does not exist yet.)
+
 At runtime `lunco-usd-sim` asks OpenUSD to compute the collection's included prims, then
 projects every included Modelica program facet into one generated Modelica wrapper.
 Acausal facets contribute `connect()` equations; causal-only blocks participate through
