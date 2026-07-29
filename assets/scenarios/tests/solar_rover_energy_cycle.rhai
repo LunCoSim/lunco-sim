@@ -24,6 +24,7 @@ const HINGE_TOL = 0.18;
 const SOC_DROP_MIN = 0.01;
 const SOC_RECOVER_MIN = 0.005;
 const MOTION_MIN_M = 0.25;
+const IDLE_DRIVE_TOL = 0.001;
 
 // Generated electrical-island ports are named from their member paths. This
 // reads the Modelica result, not an authored USD output declaration.
@@ -66,6 +67,8 @@ fn on_start(me) {
     this.hinge_after_step = ();
     this.position_before_drive = ();
     this.position_after_drive = ();
+    this.island_drive_left_after_stop = ();
+    this.island_drive_right_after_stop = ();
     this.peak_motor_power = 0.0;
 
     print("[solar-cycle] ── solar rover energy cycle ─────────────────────");
@@ -138,6 +141,11 @@ fn on_tick(me) {
     }
 
     if this.phase == "charge" {
+        // Read the USD-forwarded actuator outputs after the lifecycle boundary,
+        // not merely the logical throttle request. This makes a failed safe-stop
+        // distinguishable from an idle electrical-model defect.
+        this.island_drive_left_after_stop = get(this.elec, "drive_left");
+        this.island_drive_right_after_stop = get(this.elec, "drive_right");
         if phase_t < CHARGE_S { return; }
         this.soc_after_charge = island_value(this.elec, "Battery", "soc_out");
         this.done = true;
@@ -189,6 +197,11 @@ fn verdict(s) {
         f.push(t_true(s.soc_after_charge - s.soc_after_drive > SOC_RECOVER_MIN,
             "battery SOC did not recover after the patrol stopped"));
     }
+    if s.island_drive_left_after_stop != () && s.island_drive_right_after_stop != () {
+        f.push(t_true(s.island_drive_left_after_stop.abs() < IDLE_DRIVE_TOL &&
+                      s.island_drive_right_after_stop.abs() < IDLE_DRIVE_TOL,
+            "disengaged autopilot left drive demand on the electrical island"));
+    }
 
     print("[solar-cycle] SOC " + r4(s.soc_before_drive) + " -> " +
           r4(s.soc_after_drive) + " -> " + r4(s.soc_after_charge));
@@ -198,5 +211,7 @@ fn verdict(s) {
           r4(get(s.tracker, "sun_mount_x")));
     print("[solar-cycle] power " + r2(s.power_before) + "W -> " +
           r2(s.power_after_step) + "W, motor peak=" + r2(s.peak_motor_power) + "W");
+    print("[solar-cycle] post-stop electrical inputs left/right=" +
+          r4(s.island_drive_left_after_stop) + "/" + r4(s.island_drive_right_after_stop));
     report_verdict(f, "SOLAR ROVER ENERGY CYCLE", "SOLAR_ROVER_ENERGY_CYCLE");
 }

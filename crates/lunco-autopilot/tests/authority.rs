@@ -109,6 +109,30 @@ fn autopilot_stops_the_moment_it_loses_ownership() {
 }
 
 #[test]
+fn disengaged_actor_cannot_emit_a_final_same_tick_command() {
+    let mut app = build();
+    let rover = spawn_vessel(&mut app, 0x23);
+    let actor = app
+        .world_mut()
+        .spawn(Autopilot::forward(rover, 0, 0.8))
+        .id();
+
+    app.update(); // register and claim before the lifecycle boundary
+    app.world_mut()
+        .get_mut::<Autopilot>(actor)
+        .expect("actor remains available until deferred cleanup")
+        .disengage();
+
+    // This models a DisengageAutopilot observer running before the producer in
+    // the same FixedUpdate. The actor is still an entity, but it must be inert.
+    app.world_mut().run_schedule(FixedUpdate);
+    assert!(
+        app.world().resource::<DriveLog>().0.is_empty(),
+        "a synchronously disengaged actor must not write SetPorts before its deferred despawn"
+    );
+}
+
+#[test]
 fn multi_actor_two_autopilots_own_distinct_vessels() {
     let mut app = build();
     let rover_a = spawn_vessel(&mut app, 0xA1);

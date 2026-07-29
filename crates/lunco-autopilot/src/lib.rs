@@ -110,6 +110,18 @@ impl Autopilot {
     pub fn holding(vessel: Entity, index: u64) -> Self {
         Self::forward(vessel, index, 0.0)
     }
+
+    /// Disable this actor's control writer immediately.
+    ///
+    /// Entity despawns are deferred in Bevy. A lifecycle command can arrive
+    /// before `drive_autopilots` in the same fixed tick, so relying on the
+    /// despawn alone would let the still-present actor emit one final `SetPorts`
+    /// command after the vessel was safely stopped. Flipping this state is the
+    /// synchronous half of disengage; the deferred despawn remains the ownership
+    /// and presentation cleanup.
+    pub fn disengage(&mut self) {
+        self.engaged = false;
+    }
 }
 
 // ── Behaviour tree ───────────────────────────────────────────────────────────
@@ -2050,11 +2062,12 @@ pub struct DisengageAutopilot {
 #[on_command(DisengageAutopilot)]
 fn on_disengage_autopilot(
     _trigger: On<DisengageAutopilot>,
-    q: Query<(Entity, &Autopilot)>,
+    mut q: Query<(Entity, &mut Autopilot)>,
     mut q_control: Query<(Option<&mut InputPorts>, Option<&ActuatorPorts>)>,
     mut q_ports: Query<&mut Port>,
     mut registry: ResMut<SessionRegistry>,
     holds: Option<ResMut<lunco_cosim::PortHolds>>,
+    fence: Option<ResMut<lunco_cosim::ControlWriteFence>>,
     mut commands: Commands,
 ) {
     // Despawning the actor — not just braking it — is what makes "disengaged"
@@ -2063,8 +2076,19 @@ fn on_disengage_autopilot(
     // holding a Brake would pin the Command Deck on "Disengage" forever, with
     // "Engage" unreachable. The vessel's `AutopilotBehaviorSpec` mirror lives on
     // the VESSEL, not the actor, so the patrol survives for a later re-engage.
-    match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
-        Some((entity, ap)) => {
+    match q.iter_mut().find(|(_, ap)| ap.vessel == cmd.vessel) {
+        Some((entity, mut ap)) => {
+            // This must happen before any deferred cleanup. `on_tick` scenarios
+            // and the autopilot producer share FixedUpdate, so either may run
+            // first; an immediately-disabled actor cannot write a final drive
+            // command if it runs later in this same tick.
+            ap.disengage();
+            // `SetPorts` is deferred. Fence the shared port boundary now so an
+            // already-emitted autopilot trigger cannot land after this observer
+            // and recreate the drive demand or its hold.
+            if let Some(mut fence) = fence {
+                fence.block(cmd.vessel);
+            }
             // An actor's last SetPorts is level-triggered. End its lease through
             // the shared control boundary, which clears both logical inputs and
             // the derived actuator ports the electrical island actually reads.

@@ -101,6 +101,11 @@ impl Plugin for CoSimPlugin {
         // Manual setpoints that outrank the wiring fabric until they expire —
         // without it, a `SetPort` on a WIRED input lives less than one tick.
         app.init_resource::<connection::PortHolds>();
+        // A lifecycle command may retire a producer after its SetPorts trigger
+        // was emitted but before its deferred write lands. Keep that stale write
+        // outside the shared control boundary until next tick.
+        app.init_resource::<connection::ControlWriteFence>();
+        app.add_systems(FixedFirst, connection::clear_control_write_fence);
         {
             let mut registry = app
                 .world_mut()
@@ -339,6 +344,12 @@ fn on_set_ports(
     let target = cmd.target;
     let writes = cmd.writes.clone();
     commands.queue(move |world: &mut World| {
+        if world
+            .get_resource::<connection::ControlWriteFence>()
+            .is_some_and(|fence| fence.blocks(target))
+        {
+            return;
+        }
         // A setpoint on a WIRED input has to outrank the wire, or the next
         // propagation tick overwrites it and the caller sees a write that
         // "succeeded" and did nothing. The hold expires on its own

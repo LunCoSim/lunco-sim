@@ -450,10 +450,20 @@ pub fn safe_stop_control_surface(
     let Some(actuators) = actuators else {
         return;
     };
-    for (name, entity) in &actuators.ports {
-        if let Ok(mut port) = ports.get_mut(*entity) {
-            port.value = if name == "brake" { 1.0 } else { 0.0 };
+    safe_stop_actuators(actuators, |entity, value| {
+        if let Ok(mut port) = ports.get_mut(entity) {
+            port.value = value;
         }
+    });
+}
+
+/// Neutralize all declared actuators while engaging the discrete brake gate.
+///
+/// Kept apart from its caller so every lifecycle boundary uses the identical
+/// actuator mapping.
+fn safe_stop_actuators(actuators: &ActuatorPorts, mut write: impl FnMut(Entity, f64)) {
+    for (name, entity) in &actuators.ports {
+        write(*entity, if name == "brake" { 1.0 } else { 0.0 });
     }
 }
 
