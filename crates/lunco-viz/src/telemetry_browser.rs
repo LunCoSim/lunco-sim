@@ -173,6 +173,29 @@ pub fn plot_node_at(
     }
 }
 
+/// Bind a telemetry drag payload to an existing visualization.
+pub fn bind_dropped_channel(
+    registry: &mut VisualizationRegistry,
+    viz_id: VizId,
+    payload: &ChannelDragPayload,
+) -> bool {
+    let source = SignalRef::new(Entity::from_bits(payload.entity_bits), payload.path.clone());
+    let Some(config) = registry.get_mut(viz_id) else {
+        return false;
+    };
+    if config.inputs.iter().any(|binding| binding.source == source) {
+        return false;
+    }
+    config.inputs.push(SignalBinding {
+        source,
+        role: "y".into(),
+        label: None,
+        color: None,
+        visible: true,
+    });
+    true
+}
+
 // ── Cached catalog ───────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -751,8 +774,11 @@ impl Panel for TelemetryBrowserPanel {
         // In-crate door that needs no canvas at all: a dedicated
         // plot tab through the existing VizPanel/LinePlot substrate.
         if ui.button("Open as plot tab").clicked() {
+            let Some(viz_registry) = ctx.resource::<VisualizationRegistry>() else {
+                return;
+            };
             let cfg = VisualizationConfig {
-                id: VizId::next(),
+                id: viz_registry.allocate_id(),
                 title: sel.path.clone(),
                 kind: LINE_PLOT_KIND,
                 view: ViewTarget::Panel2D,

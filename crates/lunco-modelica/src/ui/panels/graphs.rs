@@ -51,6 +51,14 @@ impl InstancePanel for ModelicaPlotPanel {
         PanelSlot::Bottom
     }
 
+    fn menu_entry(&self) -> Option<lunco_workbench::InstancePanelMenuEntry> {
+        Some(lunco_workbench::InstancePanelMenuEntry {
+            group: lunco_workbench::PanelMenuGroup::Design,
+            title: "📈 Graphs",
+            instance: DEFAULT_MODELICA_GRAPH.0,
+        })
+    }
+
     fn title(&self, world: &World, instance: u64) -> String {
         let id = VizId(instance);
         // The default plot keeps the historical "Graphs" name. Other
@@ -77,6 +85,21 @@ impl InstancePanel for ModelicaPlotPanel {
 /// renders the polished toolbar (live-summary / Fit / CSV / new-plot),
 /// then dispatches to the experiments overlay + LinePlot kind.
 fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
+    // Telemetry browser rows use the shared ChannelDragPayload. The graph
+    // body is a drop target; registry mutation is deferred through PanelCtx.
+    let drop_target = ui.interact(
+        ui.max_rect(),
+        ui.id().with(("graph_drop_target", viz_id.0)),
+        egui::Sense::hover(),
+    );
+    if let Some(payload) = drop_target.dnd_release_payload::<lunco_viz::ChannelDragPayload>() {
+        ctx.defer(move |world| {
+            if let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() {
+                lunco_viz::bind_dropped_channel(&mut registry, viz_id, &payload);
+            }
+        });
+    }
+
     // Mark this plot as the active one for global readers (canvas
     // overlay, telemetry, runner auto-pick). Hover wins over
     // render-order: with two plot panels visible side-by-side, the
@@ -148,16 +171,22 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     }
 }
 
-/// The pure-live action header: a single right-aligned button row above
-/// the dedicated LinePlot. The experiments body doesn't use this — it
-/// renders [`plot_action_buttons`] inline on its own pickers row.
+/// The pure-live action controls share the LinePlot selector row visually.
+/// They are painted as a compact right-aligned overlay, so they do not
+/// reserve a second vertical toolbar row above the graph.
 fn render_plot_header(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            plot_action_buttons(ui, ctx, viz_id);
+    let rect = ui.max_rect();
+    egui::Area::new(egui::Id::new(("plot_actions", viz_id.0)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(
+            (rect.right() - 190.0).max(rect.left()),
+            rect.top() + 1.0,
+        ))
+        .show(ui.ctx(), |ui| {
+            ui.horizontal(|ui| {
+                plot_action_buttons(ui, ctx, viz_id);
+            });
         });
-    });
-    ui.separator();
 }
 
 /// The shared action cluster for every Modelica plot tab: `➕` opens a

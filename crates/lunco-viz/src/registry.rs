@@ -25,6 +25,20 @@ pub struct VisualizationRegistry {
 }
 
 impl VisualizationRegistry {
+    /// Allocate an id that is not currently present in this registry.
+    ///
+    /// `VizId::next` is process-global, while a canonical visualization may
+    /// be authored with a fixed id. Allocation must therefore check the live
+    /// registry before inserting a new configuration.
+    pub fn allocate_id(&self) -> VizId {
+        loop {
+            let id = VizId::next();
+            if !self.instances.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
     pub fn insert(&mut self, config: VisualizationConfig) -> VizId {
         let id = config.id;
         self.instances.insert(id, config);

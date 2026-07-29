@@ -118,7 +118,10 @@ pub use workspace_state::{
     WorkspaceStatePlugin,
 };
 
-pub use panel::{InstancePanel, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, TabId};
+pub use panel::{
+    InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot,
+    TabId,
+};
 
 /// SystemSet that runs the main workbench egui pass. Use
 /// `.after(WorkbenchRenderSet)` for systems that need to read
@@ -232,6 +235,19 @@ pub struct OpenTab {
     pub instance: u64,
 }
 
+/// Request opening a multi-instance tab while preserving the currently
+/// focused tab. Used when creating a secondary view from an active editor or
+/// graph; ordinary navigation continues to use [`OpenTab`].
+#[derive(Event, Clone, Copy, Debug)]
+pub struct OpenTabPreserveFocus {
+    /// The [`InstancePanel::kind`] to open.
+    pub kind: PanelId,
+    /// The tab's instance discriminant.
+    pub instance: u64,
+    /// Explicit tab to restore when the caller has a more precise focus source.
+    pub restore: Option<TabId>,
+}
+
 /// Request the workbench close a multi-instance tab, if open.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct CloseTab {
@@ -275,6 +291,14 @@ fn running_app_name() -> &'static str {
 fn on_open_tab(trigger: On<OpenTab>, mut layout: ResMut<WorkbenchLayout>) {
     let ev = *trigger.event();
     layout.open_instance(ev.kind, ev.instance);
+}
+
+fn on_open_tab_preserve_focus(
+    trigger: On<OpenTabPreserveFocus>,
+    mut layout: ResMut<WorkbenchLayout>,
+) {
+    let ev = *trigger.event();
+    layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore);
 }
 
 fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
@@ -614,6 +638,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
             .add_observer(on_open_tab)
+            .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
             .add_systems(
                 Update,
@@ -1021,6 +1046,30 @@ impl WorkbenchLayout {
             // Empty dock (e.g. 3D app with no center tabs). Seed a
             // single leaf with this tab so at least something shows.
             self.dock = DockState::new(vec![tab]);
+        }
+    }
+
+    /// Open an instance tab without changing the user's current tab.
+    pub fn open_instance_without_focus(
+        &mut self,
+        kind: PanelId,
+        instance: u64,
+        restore: Option<TabId>,
+    ) {
+        let previous = restore.or_else(|| {
+            self.dock.main_surface().focused_leaf().and_then(|node| {
+                match &self.dock.main_surface()[node] {
+                    egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0).cloned(),
+                    _ => None,
+                }
+            })
+        });
+        self.open_instance(kind, instance);
+        if let Some(previous) = previous {
+            if let Some(path) = self.dock.find_tab(&previous) {
+                self.dock.set_focused_node_and_surface(path.node_path());
+                let _ = self.dock.set_active_tab(path);
+            }
         }
     }
 
@@ -3265,10 +3314,15 @@ fn render_layout(
                 // in the dock; clicking a closed one re-docks it in its default
                 // slot. `Hidden` panels never appear (fixtures like the
                 // viewport, legacy entries, instance-tab facets).
-                let panels_meta: Vec<(PanelMenuGroup, PanelId, String, PanelSlot, bool)> = {
-                    // Only track singleton tabs for the "Panels" menu —
-                    // instance tabs (one per open doc) aren't a menu
-                    // concept.
+                struct ViewPanelEntry {
+                    group: PanelMenuGroup,
+                    title: String,
+                    slot: PanelSlot,
+                    open: bool,
+                    singleton: Option<PanelId>,
+                    instance: Option<(PanelId, u64)>,
+                }
+                let panels_meta: Vec<ViewPanelEntry> = {
                     let docked: std::collections::HashSet<PanelId> = layout
                         .dock
                         .iter_all_tabs()
@@ -3277,22 +3331,44 @@ fn render_layout(
                             TabId::Instance { .. } => None,
                         })
                         .collect();
-                    let mut sorted: Vec<(PanelMenuGroup, PanelId, String, PanelSlot, bool)> =
+                    let mut sorted: Vec<ViewPanelEntry> =
                         layout
                             .panels
                             .values()
                             .filter(|p| p.menu_group() != PanelMenuGroup::Hidden)
                             .map(|p| {
                                 let id = p.id();
-                                (
-                                    p.menu_group(),
-                                    id,
-                                    p.title(),
-                                    p.default_slot(),
-                                    docked.contains(&id),
-                                )
+                                ViewPanelEntry {
+                                    group: p.menu_group(),
+                                    title: p.title(),
+                                    slot: p.default_slot(),
+                                    open: docked.contains(&id),
+                                    singleton: Some(id),
+                                    instance: None,
+                                }
                             })
                             .collect();
+                    // Instance panels normally have no global menu entry.
+                    // Include only the canonical instance explicitly exposed
+                    // by the panel, so document tabs remain discoverable by
+                    // their owning workflow rather than becoming noise here.
+                    for (kind, panel) in &layout.instance_panels {
+                        let Some(entry) = panel.menu_entry() else {
+                            continue;
+                        };
+                        let tab = TabId::Instance {
+                            kind: *kind,
+                            instance: entry.instance,
+                        };
+                        sorted.push(ViewPanelEntry {
+                            group: entry.group,
+                            title: entry.title.to_owned(),
+                            slot: panel.default_slot(),
+                            open: layout.dock.find_tab(&tab).is_some(),
+                            singleton: None,
+                            instance: Some((*kind, entry.instance)),
+                        });
+                    }
                     // Group first, then title — but sort titles on their FIRST
                     // ALPHANUMERIC char: sorting on the raw string put every
                     // emoji-prefixed title ("🛠 Tools") in a block after every
@@ -3304,12 +3380,22 @@ fn render_layout(
                             .to_lowercase()
                     };
                     sorted.sort_by(|a, b| {
-                        a.0.cmp(&b.0).then_with(|| sort_key(&a.2).cmp(&sort_key(&b.2)))
+                        a.group
+                            .cmp(&b.group)
+                            .then_with(|| sort_key(&a.title).cmp(&sort_key(&b.title)))
                     });
                     sorted
                 };
                 let mut last_group: Option<PanelMenuGroup> = None;
-                for (group, id, title, slot, is_open) in panels_meta {
+                for entry in panels_meta {
+                    let ViewPanelEntry {
+                        group,
+                        title,
+                        slot,
+                        open: is_open,
+                        singleton,
+                        instance,
+                    } = entry;
                     if last_group != Some(group) {
                         if last_group.is_some() {
                             ui.separator();
@@ -3327,6 +3413,15 @@ fn render_layout(
                     let mut checked = is_open;
                     if ui.checkbox(&mut checked, title).clicked() {
                         if checked && !is_open {
+                            if let Some((kind, instance)) = instance {
+                                layout.open_instance(kind, instance);
+                                ui.close();
+                                continue;
+                            }
+                            let Some(id) = singleton else {
+                                ui.close();
+                                continue;
+                            };
                             // Track in the slot list so persistence /
                             // perspective queries see it. Insert into
                             // the *live* dock without a full rebuild
@@ -3367,6 +3462,15 @@ fn render_layout(
                             }
                             layout.insert_panel_into_dock(id, slot);
                         } else if !checked && is_open {
+                            if let Some((kind, instance)) = instance {
+                                layout.close_instance(kind, instance);
+                                ui.close();
+                                continue;
+                            }
+                            let Some(id) = singleton else {
+                                ui.close();
+                                continue;
+                            };
                             // Untrack from slot lists.
                             layout.side_browser.retain(|p| *p != id);
                             layout.center.retain(|p| *p != id);

@@ -53,6 +53,19 @@ impl InstancePanel for VizPanel {
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
         let id = VizId(instance);
 
+        let drop_target = ui.interact(
+            ui.max_rect(),
+            ui.id().with(("viz_drop_target", instance)),
+            egui::Sense::hover(),
+        );
+        if let Some(payload) = drop_target.dnd_release_payload::<crate::ChannelDragPayload>() {
+            ctx.defer(move |world| {
+                if let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() {
+                    crate::bind_dropped_channel(&mut registry, id, &payload);
+                }
+            });
+        }
+
         // Pull the needed data off the world eagerly (O(1) resource
         // reads) so we don't hold conflicting borrows while rendering.
         let (config, viz) = {

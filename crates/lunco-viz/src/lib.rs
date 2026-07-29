@@ -44,8 +44,8 @@ pub use signal::{
 };
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{
-    drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest, TelemetryBrowserPanel,
-    TELEMETRY_BROWSER_PANEL_ID,
+    bind_dropped_channel, drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest,
+    TelemetryBrowserPanel, TELEMETRY_BROWSER_PANEL_ID,
 };
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};
