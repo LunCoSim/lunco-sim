@@ -11,13 +11,39 @@ mod resolver;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use openusd::ar::ResolvedPath;
 use openusd::sdf::Data;
 use openusd::usd::Stage;
 use openusd::usda;
 
-pub use resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
+pub use resolver::{canonicalize_at, is_binary_asset, LuncoUsdResolver, SharedLayerBytes};
+
+/// True when `path` is a USD layer that can declare further asset dependencies.
+pub fn is_usd_layer(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("usd" | "usda" | "usdc")
+    )
+}
+
+/// Extract every raw dependency declared by a USDA layer, including
+/// asset-valued attributes as well as composition arcs.
+///
+/// This is USD interpretation only. Traversal and storage access remain in
+/// `lunco-assets`.
+pub fn layer_dependency_arcs(text: &str) -> Option<Vec<String>> {
+    let data = usda::parse(text).ok()?;
+    Some(
+        data.composition_asset_dependencies()
+            .into_iter()
+            .chain(data.asset_dependencies())
+            .collect(),
+    )
+}
 
 /// Compose a native USDA file using the canonical LunCo asset traversal.
 ///
@@ -41,13 +67,19 @@ pub fn compose_file_to_stage_with_assets(path: &Path, assets_root: Option<&Path>
     let mut bytes = HashMap::from([(root_id.clone(), root_bytes)]);
     let mut queue = vec![root_id.clone()];
     while let Some(id) = queue.pop() {
-        let raw = bytes.get(&id).cloned().expect("queued USD layer is present");
+        let raw = bytes
+            .get(&id)
+            .cloned()
+            .expect("queued USD layer is present");
         for child_id in child_layer_ids(&id, &raw)? {
             if bytes.contains_key(&child_id) {
                 continue;
             }
             let child = lunco_assets::read_asset_bytes(&child_id, assets_root).map_err(|e| {
-                anyhow!("failed to fetch sublayer {child_id} for {}: {e}", path.display())
+                anyhow!(
+                    "failed to fetch sublayer {child_id} for {}: {e}",
+                    path.display()
+                )
             })?;
             bytes.insert(child_id.clone(), child);
             queue.push(child_id);
@@ -65,7 +97,8 @@ pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
     let mut parser = usda::parser::Parser::new(text);
     let specs = parser.parse().map_err(|e| {
-        let highlight = parser.last_error_highlight()
+        let highlight = parser
+            .last_error_highlight()
             .map(|h| format!("\n{}", h.render()))
             .unwrap_or_default();
         anyhow!("USD parse error in {id}: {e}{highlight}")

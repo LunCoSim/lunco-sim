@@ -18,9 +18,11 @@ Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
 - Use composed USD reads for runtime behaviour and authored-layer reads for
   authoring/document questions. USD owns scene facts and standard fields such as
   `doc`, `metersPerUnit`, `UsdShade`, and `UsdPhysics`.
-- Asset identity, traversal, and storage belong to `lunco-assets`; OpenUSD
-  assembly (sublayers, references, payloads, variants) belongs to
-  `lunco-usd-compose`, re-exported by `lunco-usd`. A composed stage is inert:
+- Asset identity, traversal, and storage belong to `lunco-assets`; USD-related
+  runtime crates do not call `std::fs` for asset bytes. They use the asset
+  boundary, while `lunco-usd-compose` supplies USD dependency interpretation
+  and OpenUSD assembly (sublayers, references, payloads, variants), re-exported
+  by `lunco-usd`. A composed stage is inert:
   it must not launch Modelica, Rhai, behaviour trees, physics, or rendering.
   Those are separate downstream projections. A tutorial projects metadata from
   a supplied stage; it never opens layers itself.

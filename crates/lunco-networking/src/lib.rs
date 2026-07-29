@@ -74,10 +74,9 @@ mod shared;
 /// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
 #[cfg(feature = "networking")]
 pub mod sync;
-// The scenario manifest needs USD's reference closure (native only — it reads
-// scene files off the host filesystem). That walk is USD domain knowledge and
-// lives once, in `lunco_usd_bevy::closure`; this crate used to carry a
-// near-identical copy, which is why it talked to `openusd` directly.
+// The scenario manifest uses `lunco-assets` for native closure traversal and
+// `lunco-usd-compose` for USD dependency interpretation. This crate neither
+// reads USD files itself nor carries a second closure walker.
 #[cfg(feature = "networking")]
 mod client;
 /// Client-prediction diagnostics (render-jitter / velocity / correction census).

@@ -51,7 +51,6 @@ mod camera;
 pub mod camera_mount;
 pub mod camera_switch;
 pub mod camera_track;
-pub mod closure;
 mod compose;
 pub mod dome;
 mod light;

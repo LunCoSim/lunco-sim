@@ -13,13 +13,14 @@
 //! # The `lunco://` hole this had to close first
 //!
 //! Shipped assets are REQUIRED to be referenced as `@lunco://…@`, and
-//! [`reference_closure`](lunco_usd_bevy::closure::reference_closure) drops every
-//! schemed arc because it has no resolver — so the plain walk reports a
-//! library-built scene as one file. This section walks with
-//! [`reference_closure_with`](lunco_usd_bevy::closure::reference_closure_with) and
+//! [`lunco_assets::transitive_file_closure`] drops every schemed arc because it
+//! has no resolver — so the plain walk reports a library-built scene as one
+//! file. This section uses [`lunco_assets::transitive_file_closure_with`] and
 //! supplies the resolver: `lunco://` against the shipped asset root, `twin://`
-//! against [`TwinRoots`]. Anything it still cannot reach is COUNTED and shown, so
-//! a partial answer never reads as a complete one.
+//! against [`TwinRoots`]. USD dependency interpretation comes from
+//! `lunco-usd-compose`; asset traversal and storage stay in `lunco-assets`.
+//! Anything it still cannot reach is COUNTED and shown, so a partial answer
+//! never reads as a complete one.
 //!
 //! # The Modelica schemes come for free
 //!
@@ -228,13 +229,18 @@ pub fn produce_scene_file_view(
 
     let assets_root = assets_root_for(&roots);
     let unresolved = std::sync::atomic::AtomicUsize::new(0);
-    let files = lunco_usd_bevy::closure::reference_closure_with(&roots, |reference| {
-        let resolved = resolve_scheme(reference, assets_root.as_deref(), twins.as_deref());
-        if resolved.is_none() {
-            unresolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        resolved
-    });
+    let files = lunco_assets::transitive_file_closure_with(
+        &roots,
+        |reference| {
+            let resolved = resolve_scheme(reference, assets_root.as_deref(), twins.as_deref());
+            if resolved.is_none() {
+                unresolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            resolved
+        },
+        lunco_usd_compose::is_usd_layer,
+        lunco_usd_compose::layer_dependency_arcs,
+    );
 
     let mut rows: Vec<SceneFileRow> = files
         .into_iter()

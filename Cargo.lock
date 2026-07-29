@@ -7390,6 +7390,7 @@ dependencies = [
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-bevy",
+ "lunco-usd-compose",
  "lunco-workbench",
  "lunco-workspace",
  "rustls-pemfile",
@@ -7844,6 +7845,7 @@ dependencies = [
  "anyhow",
  "lunco-assets",
  "openusd",
+ "tempfile",
 ]
 
 [[package]]

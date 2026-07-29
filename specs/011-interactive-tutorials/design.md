@@ -317,7 +317,7 @@ targets a lesson that does not exist.
 
 ### Still open
 
-A recursive, resolver-anchored `compute_all_dependencies` in the openusd fork,
-so `lunco_usd_bevy::closure::reference_closure` can be deleted (`TODO(openusd)`
-at the call site). A resolver context has a root; `base.join` does not. This also
-unblocks binary layers (`.usdc`/`.usdz`) and scheme-aware walking.
+A recursive, resolver-anchored `compute_all_dependencies` in the openusd fork
+would replace the remaining native path-based closure in `lunco-assets`. A
+resolver context has a root; `base.join` does not. This also unblocks binary
+layers (`.usdc`/`.usdz`) and scheme-aware walking.
