@@ -1238,11 +1238,12 @@ pub struct WiringDirty(pub bool);
 /// the order they spawn or which end is removed.
 ///
 /// Trigger (dormant otherwise — steady state is zero work):
-/// - **structural** — any `UsdPrimPath` entity added or removed. Covers initial
-///   scene load (the reconcile spawns prims → this fires), async payload/vessel
-///   spawn, source-after-sink ordering (the late source's spawn re-runs this and
-///   completes the deferred edge), and prim removal (the rebuild omits any edge
-///   whose endpoint is gone — no dangling `SimConnection`).
+/// - **structural** — any `UsdPrimPath` entity added or removed, or a projected
+///   [`ModelicaModel`] arriving on a domain root. Covers initial scene load (the
+///   reconcile spawns prims → this fires), async payload/vessel spawn,
+///   source-after-sink ordering, and a generated island publishing its boundary
+///   contract (each re-runs this and completes the deferred edge); prim removal
+///   omits its edge — no dangling `SimConnection`.
 /// - **live edit** — [`WiringDirty`], set by the op-driven projection
 ///   ([`lunco_usd::live_consume`]) when a `connectionPaths` change is drained
 ///   from the live stage (an edit that is not itself a prim spawn/despawn).
@@ -1309,9 +1310,14 @@ fn is_structural_binding(view: &lunco_usd_bevy::StageView<'_>, sink: &SdfPath, p
 pub fn rewire_usd_connections(
     mut commands: Commands,
     added: Query<(), Added<UsdPrimPath>>,
+    // A projected domain root has no runtime input contract until
+    // `project_domain_islands` installs its ModelicaModel. Treat that transition
+    // like any other endpoint arrival: it must re-derive the USD wire cache.
+    added_modelica: Query<(), Added<ModelicaModel>>,
     mut removed: RemovedComponents<UsdPrimPath>,
     mut dirty: ResMut<WiringDirty>,
     q_all: Query<(Entity, &UsdPrimPath)>,
+    q_modelica: Query<(), With<ModelicaModel>>,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
     // the same asset compose byte-IDENTICAL stage-relative paths (`/DescentLander`,
@@ -1344,16 +1350,13 @@ pub fn rewire_usd_connections(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
-    // ⚠ DO NOT "fix" the short-circuit here by draining `removed` unconditionally.
-    // It looks like a bug — `||` means a frame with any `added` never reads the
-    // removal queue, so those events re-fire and keep `structural` true for several
-    // extra frames. Those extra rewires are LOAD-BEARING: a `.mo` model publishes
-    // its `SimComponent` when its asset finishes loading, which is not a prim spawn
-    // and raises no other rebuild signal, so the trailing rewires are what re-resolve
-    // a self-wire against the model that has just appeared. Draining eagerly makes
-    // `sun_tracker` fail with `yaw = 0` — the wire never binds.
-    let structural =
-        !added.is_empty() || !id_assigned.is_empty() || removed.read().next().is_some();
+    // `Added<ModelicaModel>` is the explicit endpoint-contract transition. This
+    // pass no longer relies on accidentally deferred removal events to get an
+    // extra rewire after a generated model appears.
+    let structural = !added.is_empty()
+        || !added_modelica.is_empty()
+        || !id_assigned.is_empty()
+        || removed.read().next().is_some();
     if !structural && !dirty.0 {
         return;
     }
@@ -1504,6 +1507,18 @@ pub fn rewire_usd_connections(
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
                 && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+            {
+                continue;
+            }
+            // A domain root's `inputs:` are live boundary wires, but no wire may
+            // exist until projection has installed the generated Modelica model.
+            // Before then there is no target contract to resolve against; creating
+            // a SimConnection early only produces a false unknown-port warning on
+            // the first fixed tick. `Added<ModelicaModel>` above re-runs this pass
+            // when the contract arrives.
+            if attr.starts_with("inputs:")
+                && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+                && !q_modelica.contains(entity)
             {
                 continue;
             }

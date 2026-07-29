@@ -44,7 +44,10 @@ pub mod btcpp_xml;
 /// Behaviour trees authored as USD prims (one prim per node) — the source of truth
 /// for a mission. `AutopilotBehaviorSpec` is derived from them, never authored.
 pub mod usd_tree;
-use lunco_core::{GlobalEntityId, InputPorts, NetworkRole, SessionId, SessionRegistry};
+use lunco_core::{
+    safe_stop_control_surface, ActuatorPorts, GlobalEntityId, InputPorts, NetworkRole, Port,
+    SessionId, SessionRegistry,
+};
 use lunco_cosim::SetPorts;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2047,7 +2050,13 @@ pub struct DisengageAutopilot {
 #[on_command(DisengageAutopilot)]
 fn on_disengage_autopilot(
     _trigger: On<DisengageAutopilot>,
-    mut q: Query<(Entity, &Autopilot, Option<&mut InputPorts>)>,
+    mut q: Query<(
+        Entity,
+        &Autopilot,
+        Option<&mut InputPorts>,
+        Option<&ActuatorPorts>,
+    )>,
+    mut q_ports: Query<&mut Port>,
     mut registry: ResMut<SessionRegistry>,
     holds: Option<ResMut<lunco_cosim::PortHolds>>,
     mut commands: Commands,
@@ -2058,25 +2067,12 @@ fn on_disengage_autopilot(
     // holding a Brake would pin the Command Deck on "Disengage" forever, with
     // "Engage" unreachable. The vessel's `AutopilotBehaviorSpec` mirror lives on
     // the VESSEL, not the actor, so the patrol survives for a later re-engage.
-    match q.iter_mut().find(|(_, ap, _)| ap.vessel == cmd.vessel) {
-        Some((entity, ap, inputs)) => {
-            // An actor's last `SetPorts` is a level-triggered command. Once the
-            // actor is gone there is no next tick to replace it, so reset the
-            // physical command surface synchronously at the ownership boundary.
-            // Going through a nested `SetPorts` command here is too late: its
-            // deferred write can land after this actor is despawned and after the
-            // mixer has already propagated the stale drive demand.
-            if let Some(mut inputs) = inputs {
-                if let Some(throttle) = inputs.values.get_mut("throttle") {
-                    *throttle = 0.0;
-                }
-                if let Some(steer) = inputs.values.get_mut("steer") {
-                    *steer = 0.0;
-                }
-                if let Some(brake) = inputs.values.get_mut("brake") {
-                    *brake = 1.0;
-                }
-            }
+    match q.iter_mut().find(|(_, ap, _, _)| ap.vessel == cmd.vessel) {
+        Some((entity, ap, inputs, actuators)) => {
+            // An actor's last SetPorts is level-triggered. End its lease through
+            // the shared control boundary, which clears both logical inputs and
+            // the derived actuator ports the electrical island actually reads.
+            safe_stop_control_surface(inputs, actuators, &mut q_ports);
             // A prior `SetPorts` may still hold one of these inputs above the
             // wiring fabric. Release it with the actor so no stale command can
             // overwrite the neutral-brake state on the following propagation tick.

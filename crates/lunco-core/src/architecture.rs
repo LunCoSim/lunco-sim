@@ -359,6 +359,21 @@ impl InputPorts {
     pub fn cmd(&self, name: &str) -> f64 {
         self.values.get(name).copied().unwrap_or(0.0)
     }
+
+    /// Move the logical command surface to its safe state without inventing
+    /// undeclared ports. This is the input half of [`safe_stop_control_surface`].
+    pub fn safe_stop(&mut self) {
+        if let Some(throttle) = self.values.get_mut("throttle") {
+            *throttle = 0.0;
+        }
+        if let Some(steer) = self.values.get_mut("steer") {
+            *steer = 0.0;
+        }
+        if let Some(brake) = self.values.get_mut("brake") {
+            *brake = 1.0;
+            self.brake_active = true;
+        }
+    }
 }
 
 /// The [`InputPorts`] governing `entity` — its own, or the nearest ancestor's.
@@ -416,6 +431,32 @@ impl ActuatorPorts {
     }
 }
 
+/// Apply the control lifecycle's safe-stop boundary immediately.
+///
+/// `InputPorts` are the command request, while the wired Modelica/hardware path
+/// reads the derived actuator [`Port`]s. Waiting for a later drive-mixer tick to
+/// copy one into the other leaves an actor's final drive demand live after its
+/// lease has ended. This operation clears every actuator output now and closes the
+/// discrete brake gate when present, so the next co-simulation propagation sees a
+/// neutral vehicle regardless of schedule phase.
+pub fn safe_stop_control_surface(
+    inputs: Option<&mut InputPorts>,
+    actuators: Option<&ActuatorPorts>,
+    ports: &mut Query<&mut Port>,
+) {
+    if let Some(inputs) = inputs {
+        inputs.safe_stop();
+    }
+    let Some(actuators) = actuators else {
+        return;
+    };
+    for (name, entity) in &actuators.ports {
+        if let Ok(mut port) = ports.get_mut(*entity) {
+            port.value = if name == "brake" { 1.0 } else { 0.0 };
+        }
+    }
+}
+
 // ── Action Status ─────────────────────────────────────────────────────────────
 
 /// Status of a long-running simulation action.
@@ -468,6 +509,33 @@ mod tests {
             0.0,
             "A port should initialize to zero"
         );
+    }
+
+    #[test]
+    fn safe_stop_neutralizes_inputs_and_derived_actuators() {
+        let mut world = World::new();
+        let left = world.spawn(Port { value: 0.8 }).id();
+        let right = world.spawn(Port { value: -0.4 }).id();
+        let brake = world.spawn(Port { value: 0.0 }).id();
+        let mut inputs = InputPorts::new(&["throttle", "steer", "brake"]);
+        inputs.values.insert("throttle".into(), 0.9);
+        inputs.values.insert("steer".into(), -0.5);
+        let actuators = ActuatorPorts::new(std::collections::HashMap::from([
+            ("drive_left".into(), left),
+            ("drive_right".into(), right),
+            ("brake".into(), brake),
+        ]));
+
+        let mut ports = world.query::<&mut Port>();
+        safe_stop_control_surface(Some(&mut inputs), Some(&actuators), &mut ports);
+
+        assert_eq!(inputs.cmd("throttle"), 0.0);
+        assert_eq!(inputs.cmd("steer"), 0.0);
+        assert_eq!(inputs.cmd("brake"), 1.0);
+        assert!(inputs.brake_active);
+        assert_eq!(world.get::<Port>(left).unwrap().value, 0.0);
+        assert_eq!(world.get::<Port>(right).unwrap().value, 0.0);
+        assert_eq!(world.get::<Port>(brake).unwrap().value, 1.0);
     }
 
     /// `"back"` used to appear in BOTH the `MoveBackward` and the `Cancel` arm;
