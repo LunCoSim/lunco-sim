@@ -52,7 +52,9 @@ GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
 - `ui` (default) — winit windowing backend, render-effect features, and every
   UI crate (egui workbench, material/blueprint editors, doc/theme/ui).
 - `lunco-api` (default) — compiles the API in; native HTTP transport.
-- `networking` (default) — multiplayer over WebTransport (lightyear).
+- `networking` (opt-in) — multiplayer over WebTransport (lightyear). Enable it
+  explicitly with `--features networking`; ordinary GUI and test runs do not
+  bind multiplayer ports.
 - `server` — lean headless build: API + networking host, NO `ui`. Build with
   `--no-default-features --features server`. Skips `celestial`.
 - `celestial` — bundled Earth texture + Artemis-II ephemeris (10s of MB).
@@ -65,8 +67,11 @@ mode so USD visual sync can populate the meshes avian colliders key off.
 ## Builds
 
 ```bash
-# Windowed GUI (HTTP API + multiplayer wire live by default)
+# Windowed GUI (single-player by default; HTTP API remains opt-in at runtime via --api)
 cargo run -p lunco-luncosim --bin luncosim
+
+# Windowed GUI with multiplayer support
+cargo run -p lunco-luncosim --bin luncosim --features networking
 
 # Lean headless multiplayer server
 cargo build -p lunco-luncosim --bin luncosim --no-default-features --features server

@@ -2059,6 +2059,20 @@ fn on_disengage_autopilot(
     // the VESSEL, not the actor, so the patrol survives for a later re-engage.
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, ap)) => {
+            // The actor was the only recurring writer of vehicle controls. Before
+            // removing it, publish the same safe stop setpoint that a `Brake`
+            // behaviour emits; otherwise its final drive demand remains latched
+            // in the vessel ports after the actor is gone.
+            commands.trigger(SetPorts {
+                target: cmd.vessel,
+                writes: vec![
+                    ("throttle".to_string(), 0.0),
+                    ("steer".to_string(), 0.0),
+                    ("brake".to_string(), 1.0),
+                ],
+                seq: 0,
+                tick: 0,
+            });
             // Release the AiAgent claim, or the vessel stays owned by a session
             // whose actor is gone — `may_possess` would then deny the human the
             // very vessel the UI reports as disengaged.

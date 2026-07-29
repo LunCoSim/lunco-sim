@@ -128,9 +128,9 @@ fn on_tick(me) {
             this.peak_motor_power = motor;
         }
         if phase_t < DRIVE_S { return; }
-        cmd("DisengageAutopilot", #{ vessel: this.rover });
         this.soc_after_drive = island_value(this.elec, "Battery", "soc_out");
         this.position_after_drive = world_pos(this.rover);
+        cmd("DisengageAutopilot", #{ vessel: this.rover });
         this.phase = "charge";
         this.phase_started = this.t;
         print("[solar-cycle] patrol stopped; observing idle solar recharge");
