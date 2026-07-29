@@ -416,7 +416,7 @@ every step until a body leaves the world.
   the host.
 - A part that must move relative to its host = a body **and** a joint, authored
   together. That is what a mount (`AttachSpec`) writes, and it is why
-  `mount_probe.usda` may keep its body.
+  `mounting/demo_probe.usda` may keep its body.
 - Same answer in every robotics dialect: URDF lumps a fixed-jointed link into its
   parent's inertia, MJCF welds a jointless nested body, and neither has a notion
   of a link inside a link attached to nothing. Reflected rotor inertia belongs to

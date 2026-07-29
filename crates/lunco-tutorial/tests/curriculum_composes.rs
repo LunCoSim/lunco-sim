@@ -22,17 +22,19 @@ fn resolve(asset: &str) -> Option<std::path::PathBuf> {
         .map(|rest| repo("assets").join(rest))
 }
 
-/// The luncosim app composes BOTH the track named after it and `basic` — which is
-/// the whole point of the app root layer: a track is not owned by the app it
-/// happens to be named after, and no `hosts` attribute says so.
+/// The unified LunCoSim app composes its flagship tour plus the reusable
+/// sandbox-authoring and basic-driving tracks. A track is not owned by the app
+/// it happens to be named after; the app root is the sole offer/order manifest.
 #[test]
 fn the_app_layer_composes_the_tracks_it_offers() {
-    let c = curriculum::read(repo("assets/tutorials/luncosim.usda").to_str().unwrap());
+    let stage = lunco_usd_compose::compose_file_to_stage(&repo("assets/tutorials/luncosim.usda"))
+        .expect("compose luncosim curriculum");
+    let c = curriculum::project(&stage);
     let labels: Vec<&str> = c.tracks.iter().map(|t| t.label.as_str()).collect();
     assert_eq!(
         c.tracks.len(),
-        2,
-        "expected luncosim + basic, got {labels:?}"
+        3,
+        "expected luncosim + sandbox + basic, got {labels:?}"
     );
     assert!(!c.lessons.is_empty(), "no lessons composed");
     for t in &c.tracks {
@@ -44,12 +46,10 @@ fn the_app_layer_composes_the_tracks_it_offers() {
 /// worse than absent: it appears in the menu and fails when a student picks it.
 #[test]
 fn every_lesson_resolves_its_script() {
-    for app in ["luncosim", "lunica", "luncosim"] {
-        let c = curriculum::read(
-            repo(&format!("assets/tutorials/{app}.usda"))
-                .to_str()
-                .unwrap(),
-        );
+    for app in ["luncosim", "lunica", "sandbox"] {
+        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
+            .expect("compose curriculum");
+        let c = curriculum::project(&stage);
         for lesson in &c.lessons {
             let path = resolve(&lesson.script).unwrap_or_else(|| {
                 panic!("{}: unresolvable script '{}'", lesson.path, lesson.script)
@@ -73,12 +73,10 @@ fn every_lesson_resolves_its_script() {
 fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
     let mut with = 0;
     let mut without = 0;
-    for app in ["luncosim", "lunica", "luncosim"] {
-        let c = curriculum::read(
-            repo(&format!("assets/tutorials/{app}.usda"))
-                .to_str()
-                .unwrap(),
-        );
+    for app in ["luncosim", "lunica", "sandbox"] {
+        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
+            .expect("compose curriculum");
+        let c = curriculum::project(&stage);
         for lesson in &c.lessons {
             match &lesson.world {
                 Some(w) => {
@@ -104,12 +102,10 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
 /// A chain must not strand a student: every `next` targets a composed lesson.
 #[test]
 fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
-    for app in ["luncosim", "lunica", "luncosim"] {
-        let c = curriculum::read(
-            repo(&format!("assets/tutorials/{app}.usda"))
-                .to_str()
-                .unwrap(),
-        );
+    for app in ["luncosim", "lunica", "sandbox"] {
+        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
+            .expect("compose curriculum");
+        let c = curriculum::project(&stage);
         let known: std::collections::HashSet<&str> =
             c.lessons.iter().map(|l| l.path.as_str()).collect();
         for lesson in &c.lessons {

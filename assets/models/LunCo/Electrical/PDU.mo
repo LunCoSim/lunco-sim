@@ -1,5 +1,4 @@
 within LunCo.Electrical;
-import LunCo.Electrical.Pin;
 
 // Electrical Power Subsystem (EPS) Power Distribution Unit (PDU).
 // Regulates 28V main bus voltage, manages solar generation & battery charge/discharge balance,

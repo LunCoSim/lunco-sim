@@ -35,7 +35,7 @@ use openusd::usda;
 use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
-use crate::resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
+use lunco_usd_compose::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.

@@ -408,10 +408,20 @@ def Xform "SixWheelRover" (
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+                float inputs:sun_mount_x.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_z>
+
+                def Xform "Environment" (
+                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+                )
+                {
+                }
             }
             over "Electrical"
             {
                 float outputs:solar_power.connect = </SixWheelRover/SolarPanel.outputs:power_out>
+                float outputs:solar_incidence.connect = </SixWheelRover/SolarPanel.outputs:cos_incidence>
                 prepend rel collection:components:includes = [</SixWheelRover/SolarPanel>]
             }
         }

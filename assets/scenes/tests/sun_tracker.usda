@@ -9,9 +9,7 @@
 # (Phase 5). No actuator hack — the chain is entirely the unified wiring
 # fabric:
 #
-#   solar bridge  ──(out sun_mount_x/y/z)──┐
-#                                      │  self-wire  sun_mount_* -> sun_mount_*
-#   Controller (SunTracker.mo) ◄───────┘
+#   Environment probe ──(out sun_mount_x/y/z)──► Controller (SunTracker.mo)
 #        │  output `yaw` (first-order servo onto sun_az)
 #        │  cross-prim wire  yaw -> angle
 #        ▼
@@ -177,16 +175,22 @@ def Xform "SunTrackerTest" (
             float inputs:angle.connect = </SunTrackerTest/SolarTower/Controller.outputs:yaw>
         }
 
-        # Controller — the SunTracker.mo co-sim model. Self-loop connections feed
-        # the solar bridge's explicit mount-frame direction into the model.
+        def Xform "Environment" (
+            prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+        )
+        {
+        }
+
+        # Controller — the SunTracker.mo co-sim model consumes the probe's
+        # explicit mount-frame direction.
         def Xform "Controller" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
-            float inputs:sun_mount_x.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_x>
-            float inputs:sun_mount_y.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_y>
-            float inputs:sun_mount_z.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_z>
+            float inputs:sun_mount_x.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_z>
         }
     }
 

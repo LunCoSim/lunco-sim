@@ -214,7 +214,7 @@ fn modelica_balloon_asset_wiring_migrated() {
 #[test]
 fn sun_tracker_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("scenes/tests/sun_tracker.usda"));
-    // Self-loop on the controller + cross-prim edge onto the hinge.
+    // Explicit environment provider into the controller + controller onto hinge.
     assert_eq!(
         conns(
             &app,
@@ -222,7 +222,7 @@ fn sun_tracker_asset_wiring_migrated() {
             "/SunTrackerTest/SolarTower/Controller",
             "inputs:sun_mount_x"
         ),
-        ["/SunTrackerTest/SolarTower/Controller.outputs:sun_mount_x"]
+        ["/SunTrackerTest/SolarTower/Environment.outputs:sun_mount_x"]
     );
     assert_eq!(
         conns(&app, id, "/SunTrackerTest/SolarTower/Hinge", "inputs:angle"),

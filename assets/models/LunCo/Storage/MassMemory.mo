@@ -1,5 +1,4 @@
 within LunCo.Storage;
-import LunCo.Electrical.Pin;
 
 // Onboard Solid-State Mass Memory (SSMM / Flash Storage) dynamics.
 // Tracks stored science data (GB), write/read power draw on EPS bus Pin, and storage fill.
@@ -16,7 +15,7 @@ model MassMemory
   output Real fill_pct "Storage fill percentage, 0..100 %";
   output Real power_draw_w "Total electrical power draw, W";
 
-  Pin p "Electrical bus pin";
+  LunCo.Electrical.Pin p "Electrical bus pin";
 equation
   der(stored_gb) = max(-stored_gb, (write_rate_gbps - read_rate_gbps) / 8.0);
   fill_pct = (stored_gb / capacity_gb) * 100.0;

@@ -1,5 +1,4 @@
 within LunCo.Storage;
-import LunCo.Thermal.HeatPort;
 
 // Cryogenic Propellant Storage Tank: thermal heat ingress drives boil-off rate & pressure.
 model CryoTank
@@ -14,7 +13,7 @@ model CryoTank
   output Real boiloff_rate_kgs "Boil-off venting rate, kg/s";
   output Real fill_pct "Tank propellant mass percentage, 0..100 %";
 
-  HeatPort port "Thermal heat ingress port";
+  LunCo.Thermal.HeatPort port "Thermal heat ingress port";
 equation
   boiloff_rate_kgs = max(0.0, port.Q / max(1000.0, h_fg));
   der(m_prop_kg) = max(-m_prop_kg, -(mass_out_flow + boiloff_rate_kgs));

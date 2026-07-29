@@ -1,5 +1,4 @@
 within LunCo.Electrical;
-import LunCo.Electrical.Pin;
 
 // On-Board Computer (OBC / Flight Computer) baseline power draw & processing load.
 model OnboardComputer

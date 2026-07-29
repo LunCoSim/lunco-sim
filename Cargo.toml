@@ -19,6 +19,7 @@ members = [
     "crates/lunco-modelica",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
+    "crates/lunco-usd-compose",
     "crates/lunco-usd-sim",
     "crates/lunco-usd-terrain",
     "crates/lunco-usd",

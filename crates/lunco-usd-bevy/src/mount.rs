@@ -315,9 +315,9 @@ def Xform "World"
         // reads the plug frame off its `defaultPrim`. Validates against the shipped
         // demo component, whose hub sits 0.4 m above the part origin.
         let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/components/mount_probe.usda");
+            .join("../../assets/components/mounting/demo_probe.usda");
         let plug = super::read_asset_plug_frame(&asset)
-            .expect("mount_probe.usda composes and advertises a plug");
+            .expect("demo_probe.usda composes and advertises a plug");
         assert!(
             close(plug.translation, [0.0, 0.4, 0.0]),
             "asset plug frame {:?}",

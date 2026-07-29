@@ -55,7 +55,6 @@ pub mod closure;
 mod compose;
 pub mod dome;
 mod light;
-mod resolver;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
 pub use camera::{UsdCameraPose, UsdSensorCamera, read_camera_exposure_ev100};

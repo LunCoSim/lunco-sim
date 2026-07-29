@@ -34,7 +34,7 @@ use lunco_assets::asset_path::{canonicalize, canonicalize_root};
 /// author the `references` arc, and PCP composes it on the next read. `Rc`
 /// (not `Arc`) because the composed `Stage` is `!Send` and lives on the main
 /// thread; the resolver shares its thread.
-pub(crate) type SharedLayerBytes = Rc<RefCell<HashMap<String, Vec<u8>>>>;
+pub type SharedLayerBytes = Rc<RefCell<HashMap<String, Vec<u8>>>>;
 
 /// File extensions openusd cannot parse as USD layers — non-USD binary assets
 /// referenced through `payload`/`references` (glTF, OBJ, STL). Pixar handles
@@ -55,7 +55,7 @@ const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
 /// True if `asset_path` names a non-USD binary asset (see
 /// [`BINARY_ASSET_EXTENSIONS`]). Strips URL query (`?…`) / fragment (`#…`)
 /// first — the NASA Perseverance URL carries an `?emrc=…` query.
-pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
+pub fn is_binary_asset(asset_path: &str) -> bool {
     let stem = asset_path
         .split('?')
         .next()
@@ -83,7 +83,7 @@ pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
 /// openusd hands the anchor as an `Option` (absent when it is resolving a ROOT
 /// layer), so this is where that absence is mapped onto the explicit
 /// [`canonicalize_root`] rather than smuggled through as an empty anchor.
-pub(crate) fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
+pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
     match anchor.and_then(|a| a.to_str()) {
         Some(a) => canonicalize(asset_path, a),
         None => canonicalize_root(asset_path),
@@ -109,13 +109,13 @@ pub(crate) fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -
 /// The byte map is [`SharedLayerBytes`] so the owning [`CanonicalStage`] can
 /// inject a spawned asset's layer closure at runtime and have a
 /// subsequently-authored reference compose (demand-driven resolution).
-pub(crate) struct LuncoUsdResolver {
+pub struct LuncoUsdResolver {
     bytes: SharedLayerBytes,
 }
 
 impl LuncoUsdResolver {
     /// Build a resolver owning a fresh shared map seeded with `bytes`.
-    pub(crate) fn new(bytes: HashMap<String, Vec<u8>>) -> Self {
+    pub fn new(bytes: HashMap<String, Vec<u8>>) -> Self {
         Self {
             bytes: Rc::new(RefCell::new(bytes)),
         }
@@ -124,7 +124,7 @@ impl LuncoUsdResolver {
     /// A clone of the shared byte-map handle, so the caller (the
     /// [`CanonicalStage`] that installs this resolver into a live stage) can
     /// keep injecting layer bytes after the stage is built.
-    pub(crate) fn shared(&self) -> SharedLayerBytes {
+    pub fn shared(&self) -> SharedLayerBytes {
         self.bytes.clone()
     }
 }

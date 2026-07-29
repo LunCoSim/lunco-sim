@@ -41,18 +41,37 @@ Design: [`56-asset-resolution-and-cache.md`](../../docs/architecture/56-asset-re
 
 ## Where things live
 
+The canonical human/AI map is [`assets/README.md`](../../assets/README.md).
+Read it before adding a file; the filesystem is the runtime manifest and the
+README defines the stable taxonomy.
+
 | Folder | Holds |
 |---|---|
-| `assets/components/` | reusable part prims referenced into vessels — `mobility/`, `power/`, `thermal/`, `lights/`, `gnc/`, `comms/` |
+| `assets/components/` | reusable part prims referenced into vessels — domain folders include `avionics/`, `cameras/`, `comms/`, `environment/`, `gnc/`, `lights/`, `mobility/`, `mounting/`, `payload/`, `power/`, `terrain/`, `thermal/` |
 | `assets/vessels/` | whole vehicles — `rovers/`, `landers/`, `satellites/`, `balloons/`, plus `control_profiles.usda` |
 | `assets/structures/` | surface installations — habitat, mast, ISRU plant, landing pad |
 | `assets/props/` | simple scene objects — ball, ramp, wall |
-| `assets/scenes/` | loadable stages — `luncosim/*.usda` |
+| `assets/scenes/` | loadable stages — `base/`, `luncosim/`, `tests/`, `celestial/` |
 | `assets/models/` | behaviour sources: `.mo` (Modelica), `.py` |
 | `assets/scenarios/` | `.rhai` bound as a `LunCoProgramAPI` source |
+| `assets/behaviors/` | reusable `.btxml` behavior trees |
 | `assets/scripting/` | importable rhai modules — `lib/`, `prelude/`, `policy/`, `tools/` |
 | `assets/shaders/` | `.wgsl` |
-| `assets/celestial/`, `missions/`, `tutorials/`, `config/` | the rest |
+| `assets/celestial/`, `missions/`, `tutorials/`, `lighting/`, `config/` | global/application data |
+
+## Architecture boundary
+
+- USD owns assembly, transforms, variants, references, and wiring.
+- Modelica owns continuous/domain math.
+- Rhai owns scenario orchestration, rules, scoring, and assertions.
+- BT.CPP XML owns reusable inspectable behavior.
+- Rust owns only general heavy runtime capabilities and bridges; expose their
+  controls to Rhai instead of baking mission policy into Rust.
+
+Environment facts are produced by a distinct
+`components/environment/probe.usda` source prim. Never make a Modelica/Python
+consumer declare `gravity_accel`, `sun_mount_*`, or `earth_mount_*` as its own
+output and connect that output back to itself.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
 (`SOURCE_EXTS`, `crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`,

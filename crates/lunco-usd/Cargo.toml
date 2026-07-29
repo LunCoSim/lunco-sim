@@ -14,6 +14,7 @@ big_space = { workspace = true }
 # Core USD subsystems — egui-free. The server keeps these: visual sync (meshes
 # for colliders), avian physics mapping, sim/scene + cosim LoadScene.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-autopilot = { path = "../lunco-autopilot" }

@@ -422,7 +422,7 @@ plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not th
 
 - **`read_asset_plug_frame(fs_path)`** (`mount.rs`) composes the asset's full closure off disk
   (`compose_file_to_stage`, resolving its references) and reads the plug frame off its `defaultPrim` — the
-  part every `AttachSpec` references in. Tested against the shipped demo component (`mount_probe.usda`,
+  part every `AttachSpec` references in. Tested against the shipped demo component (`mounting/demo_probe.usda`,
   plug 0.4 m above the part origin). Native-only (composition does file I/O).
 - **Socket schema** gained `lunco:mount:asset` (the raw component path a socket is designed to hold), read
   into `MountSocket.asset`. An **empty** socket (no `rel :part`) that names an asset offers `⊕ Attach` in
@@ -430,8 +430,8 @@ plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not th
   `read_asset_plug_frame`s it, `AttachSpec::from_mount`s it onto the socket frame, and dispatches the
   journaled `AttachComponent` (references + places + joints the part). Socket joint token → typed
   `AttachJoint` via `attach_joint_from`.
-- **Demo:** `components/mount_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on
-  `Base` (`sandbox_scene.usda`) naming it. Select `Base` → `🔩 Mount` → `⊕ Attach mount_probe.usda`.
+- **Demo:** `components/mounting/demo_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on
+  `Base` (`sandbox_scene.usda`) naming it. Select `Base` → `🔩 Mount` → `⊕ Attach demo_probe.usda`.
 - **Verified:** the reader/compose piece by the disk-compose test above; `from_mount` by its matrix tests;
   `AttachComponent` was already API-verified (JSON contract above) with 5 op tests. Not run: the literal
   egui click-through (no egui MCP automation; a live GUI instance was unavailable — the user's own

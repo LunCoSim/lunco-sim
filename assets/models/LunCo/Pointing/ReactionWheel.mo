@@ -1,5 +1,4 @@
 within LunCo.Pointing;
-import LunCo.Electrical.Pin;
 
 // Reaction Control Wheel (Reaction Wheel / Flywheel for spacecraft attitude control).
 // Stores angular momentum h = I_wheel * omega and draws power from EPS bus Pin during acceleration.
@@ -16,7 +15,7 @@ model ReactionWheel
   output Real torque_out_nm "Reaction torque applied to vehicle, N.m";
   output Real power_draw_w "Electrical power draw, W";
 
-  Pin p "Electrical bus pin";
+  LunCo.Electrical.Pin p "Electrical bus pin";
 equation
   torque_out_nm = max(-max_torque_nm, min(max_torque_nm, torque_cmd));
   der(omega) = torque_out_nm / i_wheel;

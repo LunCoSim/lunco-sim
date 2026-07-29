@@ -121,7 +121,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
 /// the one returned, so a miss reports the deepest place we looked.
 ///
 /// That last part is a trap for whoever reads the log, which is why [`read`]
-/// also names every root. A miss on `lunco://environment/lunar_surface.usda`
+/// also names every root. A miss on `lunco://components/cameras/lunar_surface_camera.usda`
 /// surfaced as `Path not found: C:\Users\…\AppData\Local\lunco\environment/…`,
 /// and a bug report reasonably concluded that `lunco://` resolved *into the
 /// AppData cache and never into the install's own `assets/`* — the exact

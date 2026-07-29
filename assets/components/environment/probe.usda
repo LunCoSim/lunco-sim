@@ -13,8 +13,7 @@
 def Xform "EnvironmentProbe" (
     doc = "Mount-frame source for local gravity and Sun/Earth direction signals."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEnvironmentProbeAPI"]
+    prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
 )
 {
-    uniform bool lunco:spawnable = true
 }

@@ -219,18 +219,24 @@ def Xform "CommsAntenna" (
         }
     }
 
-    # Pointing mathematics is Modelica, not a scenario script. The environment
-    # bridge supplies the self-looped unit direction in THIS root's mount frame:
+    # Pointing mathematics is Modelica, not a scenario script. A distinct
+    # environment source supplies the unit direction in THIS root's mount frame:
     # +X right, +Y up, -Z forward. EarthTracker is the sole vector→joint-angle
     # conversion; hosts never copy an axis or sign convention.
+    def Xform "Environment" (
+        prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+    )
+    {
+    }
+
     def Xform "EarthTrackerController" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
-        float inputs:earth_mount_x.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_x>
-        float inputs:earth_mount_y.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_y>
-        float inputs:earth_mount_z.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_z>
+        float inputs:earth_mount_x.connect = </CommsAntenna/Environment.outputs:earth_mount_x>
+        float inputs:earth_mount_y.connect = </CommsAntenna/Environment.outputs:earth_mount_y>
+        float inputs:earth_mount_z.connect = </CommsAntenna/Environment.outputs:earth_mount_z>
     }
 
     # ── The two hinges. BOTH live here, and nowhere else. ────────────────────

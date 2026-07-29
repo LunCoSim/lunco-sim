@@ -3,10 +3,10 @@
 //! The guided-tour kind (same pattern as `sandbox/sandbox_intro.rhai`): a
 //! narrated slideshow that advances on the coach card's Back / Next / Skip
 //! (which emit `cmd:TutorialNext` / `cmd:TutorialBack` / `cmd:TutorialSkip`).
-//! The cursor lives on `this.i`. No scene is loaded — LunCoSim already boots
-//! the live solar system (celestial bodies + ephemeris), so this tour just
-//! frames what's already on screen. `steps()` is a fn (not a const) so helpers
-//! can call it; `this` is bound only in the directly-called hook.
+//! The cursor lives on `this.i`. The curriculum payload declares the world and
+//! the shared launcher mounts it before this script runs. `steps()` is a fn
+//! (not a const) so helpers can call it; `this` is bound only in the
+//! directly-called hook.
 
 fn steps() {
     [

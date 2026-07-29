@@ -141,6 +141,15 @@ def Xform "SolarRoverTest" (
                 double3 xformOp:scale = (0.3, 0.2, 0.25)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 custom token connectors:p.connect = </SolarRoverTest/SolarRover/Battery.connectors:p>
+                float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_z>
+
+                def Xform "Environment" (
+                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+                )
+                {
+                }
             }
         }
 
@@ -157,16 +166,21 @@ def Xform "SolarRoverTest" (
             float inputs:angle.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
         }
 
+        def Xform "TrackingEnvironment" (
+            prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+        )
+        {
+        }
+
         # ── Sun Tracker Controller (Modelica) ──
         def Xform "SunTrackerController" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
-            # Self-wire the environment's explicit mount-frame Sun direction.
-            float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_mount_x>
-            float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_mount_y>
-            float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_mount_z>
+            float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_z>
             # Fast tracking speed so panel rotation is crisp and visible
             float inputs:tau = 0.2
         }

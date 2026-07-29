@@ -281,7 +281,7 @@ def Xform "SandboxScene" (
     # lunco:cameraMode = "freeflight" | "orbit" | "springarm"
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
-        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         # Direct lunar daylight (128 klx) needs a daylight camera grade.  This
@@ -678,7 +678,7 @@ def Xform "SandboxScene" (
 
             # An EMPTY socket for the new-attach flow: it names a default component
             # (`lunco:mount:asset`) but holds no part yet. Selecting Base → 🔩 Mount →
-            # "⊕ Attach mount_probe.usda" composes that asset, reads its plug frame,
+            # "⊕ Attach demo_probe.usda" composes that asset, reads its plug frame,
             # and references + joints it here with the plug landed on this socket.
             def Xform "probe" (
                 kind = "subcomponent"
@@ -686,7 +686,7 @@ def Xform "SandboxScene" (
             {
                 uniform token lunco:mount:socket = "probe"
                 uniform token lunco:mount:joint  = "fixed"
-                uniform asset lunco:mount:asset  = @lunco://components/mount_probe.usda@
+                uniform asset lunco:mount:asset  = @lunco://components/mounting/demo_probe.usda@
                 double3 xformOp:translate = (0, -2.5, 0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }

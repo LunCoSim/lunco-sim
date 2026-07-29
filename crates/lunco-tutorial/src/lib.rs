@@ -218,10 +218,15 @@ impl CurriculumRoot {
         if !self.layer.is_file() {
             return 0;
         }
-        let Some(layer) = self.layer.to_str() else {
-            return 0;
+        let composed = match lunco_usd_compose::compose_file_to_stage(&self.layer) {
+            Ok(stage) => curriculum::project(&stage),
+            Err(error) => {
+                let layer = self.layer.display();
+                warn!("[tutorial] curriculum layer '{layer}' did not compose: {error}");
+                failures.push(format!("curriculum layer '{layer}' did not compose: {error}"));
+                return 0;
+            }
         };
-        let composed = curriculum::read(layer);
         failures.extend(composed.failures);
         let tracks = composed.tracks.len();
         for track in composed.tracks {

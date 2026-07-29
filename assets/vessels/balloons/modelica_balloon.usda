@@ -40,6 +40,15 @@ def Xform "ModelicaBalloon" (
     float outputs:height = 0.0
     float outputs:velocity_y = 0.0
 
+    # A separate source node publishes place-dependent facts. The plant remains
+    # an ordinary consumer, so environment data never masquerades as a model
+    # output or creates a synthetic self-cycle.
+    def Xform "Environment" (
+        prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+    )
+    {
+    }
+
     # The Modelica program is a distinct child prim. This keeps the USD/Modelica
     # contract exact: Plant declares only its Modelica inputs, while the parent
     # exposes only Avian facts and force sinks.
@@ -49,10 +58,7 @@ def Xform "ModelicaBalloon" (
         uniform bool lunco:program:realtimeSafe = true
         float inputs:height.connect = </ModelicaBalloon.outputs:height>
         float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
-        # The environment bridge writes gravity_accel onto this SimComponent.
-        # The rigid-body parent has no solver component of its own.
-        float outputs:gravity_accel = 0.0
-        float inputs:gravity.connect = </ModelicaBalloon/Plant.outputs:gravity_accel>
+        float inputs:gravity.connect = </ModelicaBalloon/Environment.outputs:gravity_accel>
         # `rho0` is left at the model's default of 0 — VACUUM. This asset is
         # lunar by default, so the envelope neither lifts nor drags. A scene with
         # an atmosphere states it, and gets the full profile back:

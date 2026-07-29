@@ -86,7 +86,7 @@ pub struct CanonicalStage {
     /// arc composes on the live stage (sink-driven referenced spawn). `None` for
     /// stages built via [`from_stage`](Self::from_stage) over a foreign resolver
     /// (native `compose_file_to_stage` / tests) — those can't gain layers.
-    resolver_bytes: Option<crate::resolver::SharedLayerBytes>,
+    resolver_bytes: Option<lunco_usd_compose::SharedLayerBytes>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
 }
@@ -325,7 +325,7 @@ impl CanonicalStage {
     /// so the injected bytes match what PCP demands.
     pub fn canonical_reference_id(&self, asset_path: &str) -> String {
         let anchor = openusd::ar::ResolvedPath::new(&self.scene_layer);
-        crate::resolver::canonicalize_at(asset_path, Some(&anchor))
+        lunco_usd_compose::canonicalize_at(asset_path, Some(&anchor))
     }
 
     /// Author a `references = @asset_path@` arc onto the prim at `path` (root

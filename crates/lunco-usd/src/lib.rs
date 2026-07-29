@@ -52,6 +52,11 @@ pub use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, UsdAvianPlugin, UsdCollis
 pub use lunco_usd_bevy::{
     usd_data::UsdDataExt, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
 };
+/// Asset-backed OpenUSD assembly. This is the public composition boundary:
+/// `lunco-assets` supplies canonical identities and bytes, while this crate
+/// interprets USD sublayers, references, payloads, and variants into a stage.
+#[cfg(not(target_arch = "wasm32"))]
+pub use lunco_usd_compose::compose_file_to_stage;
 pub use lunco_usd_sim::cosim::{ClearScene, LoadScene, RestartScene};
 pub use lunco_usd_sim::UsdSimPlugin;
 pub use lunco_usd_sim::{GroundColliderPending, NoRenderVisuals};

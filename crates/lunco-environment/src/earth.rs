@@ -54,11 +54,8 @@ const EARTH_DIRECTION_WARN_AFTER_FRAMES: u8 = 10;
 /// heading the moment it turns. `EarthTracker.mo` says so in its own port doc
 /// ("direction to Earth, vessel frame"); this is the frame that makes that true.
 ///
-/// This deliberately differs from [`LocalSolar`](crate::LocalSolar), which is
-/// documented and tested as world-axis. The two should converge on the mount
-/// frame — a solar tracker on a turning rover has the identical bug — but that
-/// is a change to a shipped, test-pinned contract and belongs in its own step,
-/// not smuggled in beside a new feature.
+/// This uses the same mount-frame convention as [`LocalSolar`](crate::LocalSolar),
+/// so Earth and Sun trackers remain correct as their vehicle turns.
 ///
 /// Cached per-entity, which is now load-bearing rather than forward-looking: two
 /// models on differently-oriented mounts get genuinely different directions.

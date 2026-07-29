@@ -1,5 +1,4 @@
 within LunCo.Sensors;
-import LunCo.Electrical.Pin;
 
 // Electrical Bus Voltage & Current Transducer Sensor Model.
 // Reads ground-truth EPS bus voltage and current from Pin, generating calibrated telemetry outputs
@@ -10,7 +9,7 @@ model ElectricalSensor
   parameter Real v_max_meas = 50.0 "Maximum voltage measurement range, V";
   parameter Real i_max_meas = 100.0 "Maximum current measurement range, A";
 
-  Pin p "Electrical sensing pin";
+  LunCo.Electrical.Pin p "Electrical sensing pin";
 
   output Real v_bus_sensor "Measured EPS bus voltage reported to FSW, V";
   output Real i_bus_sensor "Measured EPS bus current reported to FSW, A";

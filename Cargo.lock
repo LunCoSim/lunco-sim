@@ -7712,6 +7712,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-usd-compose",
  "lunco-workbench",
  "lunco-workspace",
  "openusd",
@@ -7788,6 +7789,7 @@ dependencies = [
  "lunco-ui",
  "lunco-usd-avian",
  "lunco-usd-bevy",
+ "lunco-usd-compose",
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
@@ -7827,11 +7829,21 @@ dependencies = [
  "lunco-core",
  "lunco-render",
  "lunco-time",
+ "lunco-usd-compose",
  "openusd",
  "spade",
  "tempfile",
  "truck-geometry",
  "wgpu-types",
+]
+
+[[package]]
+name = "lunco-usd-compose"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lunco-assets",
+ "openusd",
 ]
 
 [[package]]
