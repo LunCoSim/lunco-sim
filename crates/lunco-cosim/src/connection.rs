@@ -125,6 +125,39 @@ pub struct PortHolds {
     holds: std::collections::HashMap<(Entity, String), (f64, f64)>,
 }
 
+/// A one-fixed-tick lifecycle fence for deferred control writes.
+///
+/// `SetPorts` reaches its backend through a command-world closure. A control
+/// owner can be retired after it emitted a trigger but before that closure runs;
+/// without this fence the obsolete write can outlive the owner and re-arm its
+/// hold. Lifecycle handlers block the endpoint synchronously, and
+/// [`clear_control_write_fence`] opens it at the next fixed-tick boundary.
+#[derive(Resource, Debug, Default)]
+pub struct ControlWriteFence {
+    blocked: std::collections::HashSet<Entity>,
+}
+
+impl ControlWriteFence {
+    /// Reject deferred writes to `entity` until the next fixed tick.
+    pub fn block(&mut self, entity: Entity) {
+        self.blocked.insert(entity);
+    }
+
+    /// Whether a lifecycle boundary currently rejects writes to `entity`.
+    pub fn blocks(&self, entity: Entity) -> bool {
+        self.blocked.contains(&entity)
+    }
+
+    fn clear(&mut self) {
+        self.blocked.clear();
+    }
+}
+
+/// Open control endpoints at the start of the next fixed tick.
+pub fn clear_control_write_fence(mut fence: ResMut<ControlWriteFence>) {
+    fence.clear();
+}
+
 /// How long a hold lasts when the caller does not say.
 ///
 /// Long enough to drive interactively at human rates (a slider, a keypress
