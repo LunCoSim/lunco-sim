@@ -1998,6 +1998,11 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
+                    // The Modelica worker's durable failure verdict is the
+                    // reason readiness may be holding the world. Surface it
+                    // here beside timing/ports so live API diagnosis does not
+                    // require access to the process log.
+                    "modelica_error": model.and_then(|m| m.last_error.clone()),
                     "outputs": outputs,
                     "inputs": inputs,
                 })

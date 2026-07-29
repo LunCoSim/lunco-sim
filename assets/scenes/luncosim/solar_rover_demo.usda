@@ -184,8 +184,6 @@ def Xform "SolarRoverTest" (
             float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_x>
             float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_y>
             float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_z>
-            # Fast tracking speed so panel rotation is crisp and visible
-            float inputs:tau = 0.2
         }
 
         # ── Electrical domain (runtime-generated Modelica) ───────────────
