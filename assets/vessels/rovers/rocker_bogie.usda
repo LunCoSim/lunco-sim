@@ -248,6 +248,7 @@ def Xform "RockerBogie" (
                 over "DishHead"
                 {
                     double3 xformOp:scale = (0.45, 0.45, 0.45)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                     over "LinkAperture"
                     {
                         string lunco:link:class = "rover"

@@ -25,6 +25,29 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::document::{ModelicaDocument, ModelicaOp};
 
+/// Runtime-generated Modelica documents projected from composed USD networks.
+///
+/// These are intentionally separate from [`ModelicaDocumentRegistry`]: they
+/// have no authored file and must disappear with the simulation projection.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct GeneratedModelicaSources {
+    /// Current generated network documents.
+    pub entries: Vec<GeneratedModelicaSourceEntry>,
+}
+
+/// One ephemeral Modelica source document available to the workbench.
+#[derive(Clone, Debug)]
+pub struct GeneratedModelicaSourceEntry {
+    /// Stable generated URI used by solver diagnostics.
+    pub uri: String,
+    /// Composed USD network that produced the document.
+    pub network_root: String,
+    /// Exact source sent to the compiler.
+    pub source: String,
+    /// Last compiler/projection error, if any.
+    pub error: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Model File Tracking
 // ---------------------------------------------------------------------------

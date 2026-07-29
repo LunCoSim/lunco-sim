@@ -409,6 +409,15 @@ pub struct OpenSourceView {
     pub asset_path: String,
 }
 
+/// Open an ephemeral generated document in the read-only source viewer.
+#[Command(default)]
+pub struct OpenEphemeralSource {
+    /// URI shown as the document identity.
+    pub uri: String,
+    /// Complete generated source text.
+    pub text: String,
+}
+
 /// Open one file belonging to an open Twin in the editable source panel.
 #[Command(default)]
 pub struct OpenTwinSource {
@@ -619,6 +628,7 @@ impl Plugin for WorkbenchPlugin {
         register_all_commands(app);
         source_viewer::__register_on_open_file_for_text(app);
         source_viewer::__register_on_open_source_view(app);
+        source_viewer::__register_on_open_ephemeral_source(app);
         source_viewer::__register_on_open_twin_source(app);
         source_viewer::__register_on_save_source_text(app);
         app.register_instance_panel(source_viewer::SourceEditorPanel);

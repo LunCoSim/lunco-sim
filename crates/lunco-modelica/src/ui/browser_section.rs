@@ -33,6 +33,7 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
+use lunco_workbench::OpenEphemeralSource;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 use rumoca_compile::parsing::ClassType;
 
@@ -162,6 +163,41 @@ impl BrowserSection for ModelicaSection {
 
         for (doc_id, doc_name) in workspace_docs {
             render_workspace_doc_row(ui, ctx, doc_id, &doc_name);
+        }
+
+        // Generated USD-owned islands are runtime documents, not authored
+        // files, so they do not belong in ModelicaDocumentRegistry. They are
+        // still first-class design artifacts: expose the exact compiler input
+        // and keep the click path identical to other source tabs.
+        let generated = ctx
+            .resource::<crate::state::GeneratedModelicaSources>()
+            .map(|sources| sources.entries.clone())
+            .unwrap_or_default();
+        if !generated.is_empty() {
+            ui.separator();
+            let header = egui::CollapsingHeader::new("⚡ Generated networks")
+                .id_salt("twin.modelica.generated")
+                .default_open(false);
+            header.show(ui, |ui| {
+                for entry in generated {
+                    ui.horizontal(|ui| {
+                        let label = entry.uri.strip_prefix("generated://").unwrap_or(&entry.uri);
+                        let response = ui.selectable_label(false, label);
+                        if response.clicked() {
+                            ctx.trigger(OpenEphemeralSource {
+                                uri: entry.uri.clone(),
+                                text: entry.source.clone(),
+                            });
+                        }
+                        if let Some(error) = &entry.error {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 140, 70),
+                                format!("⚠ {error}"),
+                            );
+                        }
+                    });
+                }
+            });
         }
     }
 }

@@ -1754,6 +1754,7 @@ fn build_modelica_core(app: &mut App) {
     // adds core first, so the GUI still gets them. Guarded/idempotent so the
     // UI's own `WorkbenchState`/registry init (a legacy safety net) is a no-op.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
+    app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
         app.add_plugins(crate::api::ModelicaApiEditPlugin);
     }

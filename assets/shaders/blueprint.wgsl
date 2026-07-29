@@ -87,7 +87,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         // unconditional: textureSample is illegal in non-uniform flow.)
         let img = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
         let img_pole = textureSample(albedo_tex, albedo_smp, vec2(0.5, in.uv.y)).rgb;
-        let pole = smoothstep(0.95, 0.995, abs(in.uv.y * 2.0 - 1.0));
+        // Equirectangular pixels become extremely wide in the last few
+        // latitude rows. On the cube-sphere this otherwise appears as a
+        // bright/dark radial strip when a polar tile crosses a face edge.
+        // Start the fixed-longitude blend earlier so the cap is stable before
+        // the projection becomes singular.
+        let pole = smoothstep(0.80, 0.96, abs(in.uv.y * 2.0 - 1.0));
         base *= mix(img, img_pole, pole);
         let ll_coords = in.uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);

@@ -64,6 +64,11 @@ def Xform "WaypointMarker" (
     def Sphere "Dome"
     {
         double radius = 2.5
+        # The marker origin is the terrain contact point. Lift the visual
+        # centre by one radius so the complete dome is above the surface;
+        # the trigger remains independently authored at ground level.
+        double3 xformOp:translate = (0, 2.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
         # Was 0.28 — legible at a glance now, still transparent enough to see

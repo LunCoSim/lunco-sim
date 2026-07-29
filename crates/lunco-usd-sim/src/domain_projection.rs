@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use lunco_modelica::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, NoticeLevel,
-    parse_model_interface,
+    parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice,
+    NoticeLevel,
 };
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -843,6 +843,31 @@ pub fn project_domain_islands(
     }
 }
 
+/// Publish the current generated sources to the UI-facing derived registry.
+pub fn publish_generated_sources(
+    q_generated: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
+    mut generated: ResMut<lunco_modelica::state::GeneratedModelicaSources>,
+) {
+    generated.entries = q_generated
+        .iter()
+        .map(
+            |(source, model)| lunco_modelica::state::GeneratedModelicaSourceEntry {
+                uri: model
+                    .map(|m| format!("generated://{}.mo", m.model_name))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "generated://{}.mo",
+                            source.network_root.trim_matches('/').replace('/', "_")
+                        )
+                    }),
+                network_root: source.network_root.clone(),
+                source: source.source.clone(),
+                error: model.and_then(|m| m.last_error.clone()),
+            },
+        )
+        .collect();
+}
+
 /// `GeneratedModelicaSource` — read back the exact Modelica text a projected
 /// network was compiled from.
 ///
@@ -1672,16 +1697,12 @@ mod tests {
             pending_sources: false,
         };
         let errors = validate_network(&network);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.message.contains("outside collection"))
-        );
-        assert!(
-            errors
-                .iter()
-                .all(|error| !error.message.contains("multiple disconnected"))
-        );
+        assert!(errors
+            .iter()
+            .any(|error| error.message.contains("outside collection")));
+        assert!(errors
+            .iter()
+            .all(|error| !error.message.contains("multiple disconnected")));
     }
 
     #[test]
@@ -1748,11 +1769,9 @@ mod tests {
             outputs: BTreeMap::new(),
             pending_sources: false,
         };
-        assert!(
-            validate_network(&network)
-                .iter()
-                .any(|error| error.message.contains("boundary identity is ambiguous"))
-        );
+        assert!(validate_network(&network)
+            .iter()
+            .any(|error| error.message.contains("boundary identity is ambiguous")));
     }
 
     #[test]
@@ -1768,11 +1787,9 @@ mod tests {
             outputs: BTreeMap::new(),
             pending_sources: false,
         };
-        assert!(
-            validate_network(&network)
-                .iter()
-                .any(|error| error.message.contains("not a valid Modelica identifier"))
-        );
+        assert!(validate_network(&network)
+            .iter()
+            .any(|error| error.message.contains("not a valid Modelica identifier")));
     }
 
     #[test]

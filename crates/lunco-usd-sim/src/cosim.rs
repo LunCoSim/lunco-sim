@@ -26,17 +26,17 @@
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::{
-    Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid, on_command, register_commands,
+    on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid,
 };
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel, parse_model_interface};
+use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel};
 use lunco_render::SceneCamera;
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
-    ScriptRegistry,
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
+    ScriptRegistry,
 };
 use lunco_usd_bevy::{
     CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
@@ -47,6 +47,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use crate::UsdSimProcessed;
+
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CosimUpdateSet {
+    Scene,
+    Projection,
+    Wiring,
+}
 
 /// Telemetry event published when a USD-declared model could not be handed to
 /// the solver at all — the worker channel was closed, so the compile that
@@ -2717,6 +2724,17 @@ pub(crate) fn install(app: &mut App) {
     // them is part of driving them — see `crate::readiness`.
     app.add_plugins(crate::readiness::UsdReadinessPlugin);
 
+    app.configure_sets(
+        Update,
+        (
+            CosimUpdateSet::Scene,
+            CosimUpdateSet::Projection,
+            CosimUpdateSet::Wiring,
+        )
+            .chain()
+            .after(lunco_usd_bevy::sync_usd_visuals),
+    );
+
     app.add_systems(
         Update,
         // Drain the single-flight guard the frame after the last prim of
@@ -2745,7 +2763,24 @@ pub(crate) fn install(app: &mut App) {
             // implies. Before it in the chain: a class landing this frame should
             // project this frame.
             crate::domain_projection::resolve_member_classes,
+        )
+            .chain()
+            .in_set(CosimUpdateSet::Scene),
+    );
+
+    app.add_systems(
+        Update,
+        (
             crate::domain_projection::project_domain_islands,
+            crate::domain_projection::publish_generated_sources,
+        )
+            .chain()
+            .in_set(CosimUpdateSet::Projection),
+    );
+
+    app.add_systems(
+        Update,
+        (
             // Wiring is derived from native `connectionPaths`: rebuilds the
             // `SimConnection` set whenever prims spawn/despawn (structural) or a
             // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
@@ -2760,7 +2795,7 @@ pub(crate) fn install(app: &mut App) {
             tag_cosim_opaque,
         )
             .chain()
-            .after(lunco_usd_bevy::sync_usd_visuals),
+            .in_set(CosimUpdateSet::Wiring),
     );
 
     app.add_systems(
