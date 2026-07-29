@@ -203,8 +203,7 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
 /// directory, so the on-disk reference tree resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
-    let assets_root = lunco_assets::shipped_asset_root(path);
-    compose_file_to_stage_with_assets(path, assets_root)
+    lunco_usd_compose::compose_file_to_stage(path)
 }
 
 /// Compose an on-disk USD layer while resolving `lunco://` references against
@@ -218,57 +217,7 @@ pub fn compose_file_to_stage_with_assets(
     path: &std::path::Path,
     assets_root: Option<&std::path::Path>,
 ) -> Result<Stage> {
-    // Anchor the root at `lunco://` when the file lives under a shipped-asset
-    // root. `canonicalize` passes `scheme://` ids through and PRESERVES the scheme
-    // when anchoring a relative child, so one `lunco://` root makes every id in the
-    // closure uniformly `lunco://` — a single resolution rule for the whole walk.
-    let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
-        Some(rel) => lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel)),
-        // NOT the raw path: every id in the map must be keyed by `canonicalize`,
-        // the same function the resolver's `create_identifier` applies, or the
-        // lookup misses and composition fails to resolve its own root layer.
-        None => canonicalize_root(&path.to_string_lossy()),
-    };
-
-    let root_bytes =
-        std::fs::read(path).map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
-    let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
-    bytes.insert(root_id.clone(), root_bytes);
-    let mut queue = vec![root_id.clone()];
-
-    while let Some(id) = queue.pop() {
-        let raw = bytes
-            .get(&id)
-            .cloned()
-            .expect("queued id is present in map");
-        for child_id in child_layer_ids(&id, &raw)? {
-            if bytes.contains_key(&child_id) {
-                continue;
-            }
-            let file = id_to_disk_path(&child_id, assets_root)?;
-            let fetched = std::fs::read(&file).map_err(|e| {
-                anyhow!(
-                    "failed to fetch sublayer {child_id} from {}: {e}",
-                    file.display()
-                )
-            })?;
-            bytes.insert(child_id.clone(), fetched);
-            queue.push(child_id);
-        }
-    }
-
-    Ok(build_stage_with_resolver(&StageRecipe { root_id, bytes })?.0)
-}
-
-/// Where an id's bytes live on disk, as an error rather than an `Option` — the
-/// mapping itself belongs to `lunco-assets` (it is asset-location knowledge, not
-/// USD composition); this only supplies the composition-side diagnostic.
-fn id_to_disk_path(id: &str, assets_root: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
-    lunco_assets::id_to_disk_path(id, assets_root).ok_or_else(|| {
-        anyhow!(
-            "`{id}` is a shipped-asset ref, but the composed file is outside any `assets/` root"
-        )
-    })
+    lunco_usd_compose::compose_file_to_stage_with_assets(path, assets_root)
 }
 
 // Writes USDA fixtures to a temp dir and composes them from disk. Native-only

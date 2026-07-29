@@ -25,11 +25,18 @@ pub use resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binar
 /// all arcs in the closure use the same canonical identity space.
 pub fn compose_file_to_stage(path: &Path) -> Result<Stage> {
     let assets_root = lunco_assets::shipped_asset_root(path);
+    compose_file_to_stage_with_assets(path, assets_root)
+}
+
+/// Compose an authored file with an explicit shipped-asset root. Twin/campaign
+/// callers use this when the scene itself is outside the library but its
+/// `lunco://` arcs still target the engine asset source.
+pub fn compose_file_to_stage_with_assets(path: &Path, assets_root: Option<&Path>) -> Result<Stage> {
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
         Some(rel) => lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel)),
         None => lunco_assets::asset_path::canonicalize_root(&path.to_string_lossy()),
     };
-    let root_bytes = std::fs::read(path)
+    let root_bytes = lunco_assets::read_asset_file_bytes(path)
         .map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
     let mut bytes = HashMap::from([(root_id.clone(), root_bytes)]);
     let mut queue = vec![root_id.clone()];
@@ -39,11 +46,8 @@ pub fn compose_file_to_stage(path: &Path) -> Result<Stage> {
             if bytes.contains_key(&child_id) {
                 continue;
             }
-            let file = lunco_assets::id_to_disk_path(&child_id, assets_root).ok_or_else(|| {
-                anyhow!("failed to resolve asset {child_id} from {}", path.display())
-            })?;
-            let child = std::fs::read(&file).map_err(|e| {
-                anyhow!("failed to fetch sublayer {child_id} from {}: {e}", file.display())
+            let child = lunco_assets::read_asset_bytes(&child_id, assets_root).map_err(|e| {
+                anyhow!("failed to fetch sublayer {child_id} for {}: {e}", path.display())
             })?;
             bytes.insert(child_id.clone(), child);
             queue.push(child_id);

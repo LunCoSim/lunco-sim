@@ -87,6 +87,27 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
     }
 }
 
+/// Read bytes for a canonical asset identity through the native asset-location
+/// policy. USD composition deliberately calls this instead of touching the
+/// filesystem: asset-root selection and diagnostic paths stay owned here.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result<Vec<u8>> {
+    let path = id_to_disk_path(id, assets_root).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("asset `{id}` has no resolvable native root"),
+        )
+    })?;
+    std::fs::read(path)
+}
+
+/// Native read for a caller-selected root document. Kept in `lunco-assets` so
+/// USD consumers never perform their own filesystem access.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_file_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path)
+}
+
 /// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then each cache root
 /// in [`cache_roots`](crate::cache_roots) order.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
