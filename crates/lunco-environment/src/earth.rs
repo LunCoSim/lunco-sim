@@ -74,7 +74,7 @@ pub struct LocalEarth {
     pub direction: Vec3,
 }
 
-/// Computes [`LocalEarth`] for every co-sim model entity from
+/// Computes [`LocalEarth`] for every explicit environment probe from
 /// [`EarthDirectionWorld`].
 ///
 /// Change-guarded (writes only when the direction actually moves) — mirrors
@@ -86,7 +86,7 @@ pub fn compute_local_earth(
     dir: Option<Res<EarthDirectionWorld>>,
     q_targets: Query<
         (Entity, Option<&LocalEarth>, Option<&GlobalTransform>),
-        With<lunco_cosim::SimComponent>,
+        With<crate::EnvironmentProbe>,
     >,
     // One-shot latch for the no-data diagnostic below. Latched rather than
     // rate-limited: "nobody has said where Earth is" is a structural fact about
@@ -154,20 +154,23 @@ pub fn compute_local_earth(
 /// Publishes each entity's [`LocalEarth`] as `SimComponent` **outputs** in the
 /// explicit mount-frame vector convention.
 ///
-/// The authored wire is a SELF-loop on the controller prim — the same shape the
-/// sun-tracker uses, and it is not redundant:
+/// The authored wire starts on a distinct environment probe:
 ///
 /// ```usda
-/// float inputs:earth_mount_x.connect = </…/EarthTrackerController.outputs:earth_mount_x>
+/// float inputs:earth_mount_x.connect = </…/Environment.outputs:earth_mount_x>
 /// ```
 ///
-/// This function fills the *output* half from outside the model; the connection
-/// is what carries it into the model's *input* half. Cosim itself never learns
-/// what Earth is.
+/// This function fills the probe output; the connection carries it into the
+/// model input. Cosim itself never learns what Earth is.
 ///
 /// Writes every tick rather than on change, because a model's own output sync
 /// rewrites its outputs map — same reasoning as the gravity and solar bridges.
-pub fn inject_local_earth_into_cosim(mut q: Query<(&LocalEarth, &mut lunco_cosim::SimComponent)>) {
+pub fn inject_local_earth_into_cosim(
+    mut q: Query<
+        (&LocalEarth, &mut lunco_cosim::SimComponent),
+        With<crate::EnvironmentProbe>,
+    >,
+) {
     for (earth, mut comp) in &mut q {
         comp.outputs.insert(
             EARTH_MOUNT_X_CONNECTOR.to_string(),

@@ -66,6 +66,16 @@ pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_
 pub mod solar;
 pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 
+/// Explicit USD-authored source of mount-local environmental signals.
+///
+/// `lunco-usd-sim` projects `LunCoEnvironmentProbeAPI` prims to this marker plus
+/// a source-only `SimComponent`. Environment systems publish onto probes; models
+/// consume them through ordinary USD connections. Keeping provider and consumer
+/// on distinct entities avoids environment self-wires and false feedback cycles.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct EnvironmentProbe;
+
 /// Earth's direction as a co-simulation source (`LocalEarth` + the earth→cosim
 /// bridge) — what a high-gain antenna points at, the twin of [`solar`] for the
 /// other body in a lunar sky.
@@ -268,7 +278,10 @@ pub fn feed_gravity_into_imu_sensors(
 /// tick. Writes every tick because a model's own output sync may rewrite its
 /// outputs map.
 pub fn inject_local_gravity_into_cosim(
-    mut q: Query<(&LocalGravity, &mut lunco_cosim::SimComponent)>,
+    mut q: Query<
+        (&LocalGravity, &mut lunco_cosim::SimComponent),
+        With<EnvironmentProbe>,
+    >,
 ) {
     for (gravity, mut comp) in &mut q {
         comp.outputs.insert(
@@ -616,6 +629,7 @@ impl Plugin for EnvironmentPlugin {
         // (a sun-tracking Modelica model on the `--no-ui` server needs them).
         app.register_type::<LocalSolar>();
         app.register_type::<LocalEarth>();
+        app.register_type::<EnvironmentProbe>();
         app.register_type::<Earthshine>();
         // Declared here, WRITTEN by lunco-celestial (which depends on this crate,
         // so the dependency cannot run the other way). Init'd unconditionally and

@@ -1,0 +1,55 @@
+#usda 1.0
+(
+    defaultPrim = "ScienceCamera"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Electrically honest science camera/payload.
+#
+# The component owns its capture-to-data and capture-to-power equations. An
+# assembly decides what commands `inputs:active`, where
+# `outputs:data_rate_out_bps` is routed, and which electrical bus receives its
+# `connectors:p` pin.
+def Xform "ScienceCamera" (
+    doc = "Science camera payload with capture-controlled electrical load and data production."
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+)
+{
+    uniform bool lunco:spawnable = true
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/CameraPayload.mo@
+
+    float inputs:p_active_w = 4.5
+    float inputs:p_idle_w = 0.2
+    float inputs:data_rate_mbps = 15.0
+    float inputs:active = 0.0
+    float outputs:power_draw_w
+    float outputs:data_rate_out_mbps
+    float outputs:data_rate_out_bps
+    custom token connectors:p
+
+    float physics:mass = 2.0
+    double3 xformOp:scale = (0.28, 0.18, 0.22)
+    uniform token[] xformOpOrder = ["xformOp:scale"]
+
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        bool physics:collisionEnabled = true
+        color3f[] primvars:displayColor = [(0.14, 0.16, 0.18)]
+    }
+
+    def Cylinder "Lens"
+    {
+        double radius = 0.18
+        double height = 0.20
+        uniform token axis = "Z"
+        double3 xformOp:translate = (0, 0, 0.58)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.08, 0.16, 0.32)]
+    }
+}

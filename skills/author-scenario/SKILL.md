@@ -173,7 +173,7 @@ target/debug/luncosim test \
     --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
-Build `target/debug/luncosim` in the main worktree before running gates. Test
+Build `target/debug/luncosim` in the current worktree before running gates. Test
 commands consume that exact build; they do not use `cargo run` or the former
 `sandbox` executable name.
 

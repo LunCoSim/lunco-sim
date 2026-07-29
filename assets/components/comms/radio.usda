@@ -86,6 +86,7 @@ def Xform "CommsRadio" (
                     # ── Traffic: what the vehicle generates, and what it can hold ─
                     float inputs:data_in_bps = 500000
                     float inputs:buffer_capacity_bits = 80000000
+                    float outputs:tx_active
                 }
             }
         }

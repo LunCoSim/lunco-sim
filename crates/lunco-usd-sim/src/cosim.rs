@@ -350,6 +350,7 @@ pub fn process_usd_cosim_prims(
     // the asset's recipe.
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
+    mut wiring_dirty: ResMut<WiringDirty>,
 ) {
     // Which prims a component collection already owns, per stage. Computed once
     // per run rather than per prim (it is a full stage walk), and NOT cached
@@ -400,6 +401,22 @@ pub fn process_usd_cosim_prims(
         // reason. See `lunco_usd_bevy::sync_usd_visuals` for the policy.
         commands.entity(entity).try_insert(UsdSourcedCosim);
         let view = cs.view();
+        if view.has_api_schema(&sdf_path, "LunCoEnvironmentProbeAPI") {
+            let (_, outputs) = declared_interface(&view, &sdf_path);
+            commands.entity(entity).try_insert((
+                lunco_environment::EnvironmentProbe,
+                SimComponent {
+                    model_name: "EnvironmentProbe".into(),
+                    outputs,
+                    ..default()
+                },
+            ));
+            // A stage may finish composing after the prim's Added event. Force
+            // the native USD wiring cache to resolve connections from this
+            // newly published source interface in the same update cycle.
+            wiring_dirty.0 = true;
+            continue;
+        }
         let members = members_by_stage.entry(id).or_insert_with(|| {
             lunco_usd_bevy::program::network_member_paths(&view)
                 .into_iter()

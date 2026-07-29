@@ -64,7 +64,7 @@ one directly when doing that kind of task by hand.
 
 ## Cross-cutting conventions (baked into every skill)
 
-- **Use the built production binary**: build in the main worktree, then invoke
+- **Use the built production binary**: build in the current worktree, then invoke
   `target/debug/luncosim` directly for validation, tests, and launches. Do not
   use the former `sandbox` name or substitute `cargo run` for the built binary.
 - **Always launch luncosim with its HTTP API**: `target/debug/luncosim --api 4101` (use
