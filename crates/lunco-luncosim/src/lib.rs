@@ -43,7 +43,9 @@ use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
-use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
+use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
+#[cfg(feature = "networking")]
+use lunco_usd::LoadScene;
 // The USD-reading systems read the LIVE canonical stage via `StageView`, which
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
 // AUTHORED layer; the retired flattened reader used to blur the two). Since the
