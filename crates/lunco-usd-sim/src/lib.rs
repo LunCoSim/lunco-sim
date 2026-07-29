@@ -907,6 +907,9 @@ fn process_usd_sim_prim_read(
                     unit: reader
                         .text(&sdf_path, "lunco:telemetry:unit")
                         .unwrap_or_default(),
+                    description: reader
+                        .text(&sdf_path, "lunco:telemetry:description")
+                        .filter(|text| !text.trim().is_empty()),
                     source,
                     rate_hz: reader.real(&sdf_path, "lunco:telemetry:rateHz"),
                     // Absent ⇒ enabled. An authored channel is a live one; you turn it off

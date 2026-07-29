@@ -16,7 +16,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::signal::{SignalRef, SignalType};
+use crate::signal::{PersistedSignalRef, SignalRef, SignalType};
 use crate::view::{Panel2DCtx, ViewKind, ViewTarget};
 
 /// Identifier for a kind of visualization.
@@ -76,6 +76,12 @@ impl VizId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalBinding {
     pub source: SignalRef,
+    /// Stable owner identity captured while the source is alive. The live
+    /// [`SignalRef`] is intentionally still used by the renderer, but its Bevy
+    /// entity is transient across a scene reload. The viz plugin resolves this
+    /// identity to the replacement entity as soon as the new scene publishes it.
+    #[serde(default)]
+    pub persisted_source: Option<PersistedSignalRef>,
     pub role: String,
     /// Legend label override. Defaults to `source.path` when `None`.
     #[serde(default)]
@@ -89,6 +95,22 @@ pub struct SignalBinding {
     /// binding.
     #[serde(default = "default_true")]
     pub visible: bool,
+}
+
+impl SignalBinding {
+    /// Make a live binding. The viz lifecycle fills `persisted_source` as soon
+    /// as the owner has a `GlobalEntityId`; keeping construction here prevents
+    /// new UI paths from accidentally omitting the reload contract.
+    pub fn live(source: SignalRef, role: impl Into<String>) -> Self {
+        Self {
+            source,
+            persisted_source: None,
+            role: role.into(),
+            label: None,
+            color: None,
+            visible: true,
+        }
+    }
 }
 
 fn default_true() -> bool {

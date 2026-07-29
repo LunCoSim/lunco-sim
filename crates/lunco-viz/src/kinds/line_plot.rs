@@ -20,11 +20,13 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
-use crate::signal::{ScalarSample, SignalRef, SignalRegistry, SignalType};
+use crate::signal::{PersistedSignalRef, ScalarSample, SignalRef, SignalRegistry, SignalType};
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
+use lunco_core::GlobalEntityId;
 
 /// LinePlot-specific options stashed in
 /// [`VisualizationConfig::style`]. Serialised as JSON for on-disk
@@ -38,6 +40,10 @@ pub struct LinePlotStyle {
     /// time, producing a phase-space trajectory.
     #[serde(default)]
     pub x_signal: Option<SignalRef>,
+    /// Stable counterpart of `x_signal`, maintained by the viz lifecycle so a
+    /// phase-space plot survives the same scene reload as its Y bindings.
+    #[serde(default)]
+    pub x_persisted_signal: Option<PersistedSignalRef>,
     /// Optional axis labels. If `None`, labels are auto-derived
     /// from the X-signal path (or `"time (s)"`) and the first Y
     /// binding's path.
@@ -80,6 +86,39 @@ impl LinePlotStyle {
     }
     fn save(&self, config: &mut VisualizationConfig) {
         config.style = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+    }
+}
+
+/// Keep the optional phase-space X axis on the same stable-identity lifecycle
+/// as normal `SignalBinding`s. A missing source remains absent until a matching
+/// content entity returns; it is never rebound by mnemonic alone.
+pub(crate) fn reconcile_persisted_x_source(
+    config: &mut VisualizationConfig,
+    gid_of: &HashMap<Entity, GlobalEntityId>,
+    entity_of: &HashMap<GlobalEntityId, Entity>,
+) {
+    let mut style = LinePlotStyle::load(config);
+    let Some(x) = style.x_signal.clone() else {
+        return;
+    };
+    let mut changed = false;
+    if style.x_persisted_signal.is_none() {
+        let persisted = x.to_persisted(|entity| gid_of.get(&entity).copied());
+        if persisted.is_some() {
+            style.x_persisted_signal = persisted;
+            changed = true;
+        }
+    }
+    if let Some(persisted) = &style.x_persisted_signal {
+        if let Some(source) = persisted.resolve(|gid| entity_of.get(&gid).copied()) {
+            if style.x_signal.as_ref() != Some(&source) {
+                style.x_signal = Some(source);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        style.save(config);
     }
 }
 
@@ -195,6 +234,20 @@ impl Visualization for LinePlot {
             });
             return;
         }
+
+        // A scene replacement removes the previous entity-scoped histories
+        // before the replacement source has emitted. Do not render that as a
+        // blank chart: tell the participant exactly what is happening and keep
+        // the binding alive for the lifecycle reconciler to restore.
+        let unavailable: Vec<String> = y_bindings
+            .iter()
+            .filter(|b| {
+                registry
+                    .scalar_history(&b.source)
+                    .is_none_or(|history| history.is_empty())
+            })
+            .map(|b| b.label.clone().unwrap_or_else(|| b.source.path.clone()))
+            .collect();
 
         // Plot pixel width — needed *before* tessellation because the
         // decimation depth (and thus the cache key) depends on it.
@@ -312,6 +365,49 @@ impl Visualization for LinePlot {
                 Some(Line::new(label, PlotPoints::new(series.1.clone())).color(color))
             })
             .collect();
+
+        if lines.is_empty() {
+            let muted = ctx
+                .wb
+                .resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.text_subdued)
+                .unwrap_or(egui::Color32::DARK_GRAY);
+            let names = unavailable.join(", ");
+            ctx.ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label(egui::RichText::new("Waiting for telemetry.").color(muted));
+                ui.label(
+                    egui::RichText::new(if names.is_empty() {
+                        "The bound source has not emitted a sample yet.".to_string()
+                    } else {
+                        format!("Awaiting: {names}")
+                    })
+                    .size(10.0)
+                    .color(muted),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "The plot will reconnect automatically when this scene publishes it.",
+                    )
+                    .size(10.0)
+                    .color(muted),
+                );
+            });
+            return;
+        }
+
+        if !unavailable.is_empty() {
+            ctx.ui.label(
+                egui::RichText::new(format!("Waiting for: {}", unavailable.join(", ")))
+                    .size(10.0)
+                    .color(
+                        ctx.wb
+                            .resource::<lunco_theme::Theme>()
+                            .map(|t| t.tokens.text_subdued)
+                            .unwrap_or(egui::Color32::DARK_GRAY),
+                    ),
+            );
+        }
 
         // Consume any pending Fit request for this viz. `auto_bounds`
         // alone only controls the *initial* policy — once the user
@@ -539,13 +635,7 @@ fn apply_edit(world: &mut World, viz: crate::viz::VizId, edit: Edit) {
         }
         Edit::AddY(sig) => {
             if !cfg.inputs.iter().any(|b| b.source == sig) {
-                cfg.inputs.push(SignalBinding {
-                    source: sig,
-                    role: ROLE_Y.role.to_string(),
-                    label: None,
-                    color: None,
-                    visible: true,
-                });
+                cfg.inputs.push(SignalBinding::live(sig, ROLE_Y.role));
             }
         }
         Edit::RemoveY(sig) => {
@@ -643,6 +733,7 @@ mod tests {
         };
         let style = LinePlotStyle {
             x_signal: Some(SignalRef::new(bevy::prelude::Entity::PLACEHOLDER, "phi")),
+            x_persisted_signal: None,
             x_label: Some("phi [rad]".into()),
             y_label: Some("w [rad/s]".into()),
             log_y: true,

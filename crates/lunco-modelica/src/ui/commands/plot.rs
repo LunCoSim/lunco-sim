@@ -84,13 +84,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
             {
                 continue;
             }
-            inputs.push(SignalBinding {
-                source: SignalRef::new(entity, s.clone()),
-                role: "y".into(),
-                label: None,
-                color: None,
-                visible: true,
-            });
+            inputs.push(SignalBinding::live(SignalRef::new(entity, s.clone()), "y"));
         }
         let mut registry = world.resource_mut::<VisualizationRegistry>();
         registry.insert(VisualizationConfig {
@@ -151,12 +145,6 @@ pub fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Command
         if cfg.inputs.iter().any(|b| b.source == signal_ref) {
             return;
         }
-        cfg.inputs.push(SignalBinding {
-            source: signal_ref,
-            role: "y".into(),
-            label: None,
-            color: None,
-            visible: true,
-        });
+        cfg.inputs.push(SignalBinding::live(signal_ref, "y"));
     });
 }

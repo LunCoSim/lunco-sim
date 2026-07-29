@@ -166,6 +166,10 @@ pub struct Parameter {
     pub name: String,
     /// Engineering units (e.g., "degC").
     pub unit: String,
+    /// Human-facing explanation of the measurement. USD authors this through
+    /// `lunco:telemetry:description`; API-created channels may leave it empty.
+    /// The retained signal metadata carries it through to telemetry tooltips.
+    pub description: Option<String>,
     /// Where the value comes from.
     pub source: ChannelSource,
     /// The entity whose value this channel measures. `None` ⇒ the entity carrying this
@@ -209,6 +213,7 @@ impl Default for Parameter {
         Self {
             name: String::new(),
             unit: String::new(),
+            description: None,
             source: ChannelSource::default(),
             target: None,
             rate_hz: None,

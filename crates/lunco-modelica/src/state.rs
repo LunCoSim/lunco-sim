@@ -38,6 +38,9 @@ pub struct GeneratedModelicaSources {
 /// One ephemeral Modelica source document available to the workbench.
 #[derive(Clone, Debug)]
 pub struct GeneratedModelicaSourceEntry {
+    /// The ordinary Modelica document backing this generated scene network.
+    /// It is read-only, but otherwise opens in the standard Modelica view.
+    pub document: DocumentId,
     /// Stable generated URI used by solver diagnostics.
     pub uri: String,
     /// Composed USD network that produced the document.

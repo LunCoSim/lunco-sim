@@ -7911,6 +7911,7 @@ dependencies = [
  "bevy_egui",
  "egui_plot",
  "lunco-canvas",
+ "lunco-core",
  "lunco-signal",
  "lunco-theme",
  "lunco-workbench",
