@@ -74,6 +74,9 @@ def Xform "WaypointMarker" (
         # Was 0.28 — legible at a glance now, still transparent enough to see
         # the terrain (and any vehicle) through the dome.
         float[] primvars:displayOpacity = [0.45]
+        # Waypoints are navigational annotations, not scenery. Keep their glow
+        # visible without making a floating dome cast a terrain shadow.
+        bool primvars:doNotCastShadows = true
         bool physics:collisionEnabled = false
     }
 

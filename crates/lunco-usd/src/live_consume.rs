@@ -80,33 +80,33 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
             resynced.extend(c.resynced.iter().map(|p| p.to_string()));
-            // ⚠ NORMALISE TO THE PRIM. An info-only notice names the thing that
-            // changed, and for a value edit on an EXISTING attribute that is the
-            // PROPERTY path (`/World/Pin.xformOp:translate`) — only a change that
-            // creates the spec names the prim. Every consumer below reads
-            // attributes OFF a prim, so a property path made
-            // `get_attribute_as_vec3` look for
-            // `/World/Pin.xformOp:translate.xformOp:translate`, find nothing, and
-            // drop the edit: the move journalled, saved, and re-composed on the
-            // stage while the live entity never moved. Exactly the silent failure
-            // `apply_translates_live`'s own debug line was written to catch —
-            // except the path never reached it.
-            info_only.extend(c.info_only.iter().map(|p| p.prim_path().to_string()));
+            // Keep BOTH forms the USD sink reports: the prim path lets the
+            // transform/light consumers read the changed value back from its
+            // owner, while the property path names *which* attribute changed.
+            // The latter is essential for `info:sourceCode`: losing it forced
+            // the waypoint editor to mutate `BehaviorXml` directly on the rover
+            // instead of consuming the authored USD edit.
+            info_only.extend(c.info_only.iter().map(|p| p.to_string()));
         }
         resynced.sort();
         resynced.dedup();
         info_only.sort();
         info_only.dedup();
 
-        apply_translates_live(world, id, &info_only);
-        apply_rotates_live(world, id, &info_only);
+        let prim_paths: Vec<String> = info_only
+            .iter()
+            .filter(|path| !path.contains('.'))
+            .cloned()
+            .collect();
+        apply_translates_live(world, id, &prim_paths);
+        apply_rotates_live(world, id, &prim_paths);
         // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not
         // transforms, so neither of the above sees them. Without this, a
         // `SetDomeLight` on an already-live dome would journal and save but
         // leave the rendered sky untouched. Runs before the general refresh
         // below, which then skips domes — this path is the cheaper one (it keeps
         // the projected cubemap when only the brightness moved).
-        refresh_domes_live(world, id, &info_only);
+        refresh_domes_live(world, id, &prim_paths);
         // EVERYTHING ELSE. Any other authored attribute — a colour, a material
         // input, a light's intensity, a radius, `visibility` — re-projects here,
         // so a live edit shows up without reloading the scene.

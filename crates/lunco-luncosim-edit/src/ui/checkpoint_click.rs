@@ -40,7 +40,7 @@ use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
 use crate::SelectedEntities;
@@ -300,6 +300,7 @@ pub fn on_scene_click_checkpoint(
     q_prim: Query<&UsdPrimPath>,
     q_xml: Query<(Entity, &BehaviorXml)>,
     doc_ctx: WaypointDocContext,
+    canonical: NonSend<CanonicalStages>,
 
     mut commands: Commands,
 ) {
@@ -422,7 +423,7 @@ pub fn on_scene_click_checkpoint(
     // one marker implementation for scene-authored and click-dropped waypoints
     // alike — the two used to be different objects that only looked alike, and
     // the Rust one drew itself in the vessel's hull colour.
-    let marker_path = author_marker_prim(&mut commands, host, doc, &root, hit);
+    let marker_path = author_marker_prim(&mut commands, doc, &root, hit, &canonical, vessel_prim);
 
     // ── The mission's topology ────────────────────────────────────────────────
     // Append the leaf FIRST: if the tree is a shape the editor must not restructure,
@@ -438,9 +439,20 @@ pub fn on_scene_click_checkpoint(
         }
     };
 
-    // ── Author: update ECS component immediately and persist to USD document ─
-    commands.entity(vessel).insert(BehaviorXml(xml.clone()));
-    let mission = ensure_mission_program(&mut commands, host, doc, &vessel_prim.path);
+    // ── Author the one canonical mission edit ────────────────────────────────
+    // `project_stage_changes` consumes the resulting `info:sourceCode` property
+    // notice and updates the owning vessel's derived `BehaviorXml`. Writing that
+    // component here as well reset a running route before its new marker existed.
+    let mission = ensure_mission_program(
+        &mut commands,
+        host,
+        doc,
+        &vessel_prim.path,
+        canonical
+            .get(vessel_prim.stage_handle.id())
+            .zip(SdfPath::new(&join_prim(&vessel_prim.path, MISSION_PROGRAM)).ok())
+            .is_some_and(|(stage, mission)| stage.view().has_prim(&mission)),
+    );
     info!(
         "[waypoint] writing to doc {:?}, mission prim {:?}",
         doc, mission
@@ -524,6 +536,7 @@ pub fn on_scene_click_place_waypoint(
     raycaster: lunco_physics::GridSpatialQuery,
     q_vessel: Query<(Entity, &BehaviorXml, &UsdPrimPath)>,
     doc_ctx: WaypointDocContext,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
 ) {
     if placement.0.is_none() || click.button != PointerButton::Primary {
@@ -591,16 +604,15 @@ pub fn on_scene_click_place_waypoint(
         .nth(1)
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
-    let Some(host) = doc_ctx.usd_registry.host(doc) else {
+    if doc_ctx.usd_registry.host(doc).is_none() {
         warn!("[waypoint] placement failed: no USD host for document {doc:?}");
         return;
-    };
-    let new_target = author_marker_prim(&mut commands, host, doc, &root, world);
+    }
+    let new_target = author_marker_prim(&mut commands, doc, &root, world, &canonical, vessel_prim);
     let edited = insert_waypoint_after(&xml.0, &pending.coord_key, &new_target);
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
-            commands.entity(vessel).insert(BehaviorXml(new_xml.clone()));
             commands.trigger(ApplyUsdOp {
                 doc,
                 op: UsdOp::SetAttribute {
@@ -784,21 +796,6 @@ pub fn draw_waypoint_context_menu(
     menu_state.dwell = dwell;
 
     if let Some(value) = edited {
-        // UPDATE THE LIVE COMPONENT TOO, not only the document.
-        //
-        // `compile_behavior_xml` watches `Changed<BehaviorXml>`; that component IS
-        // the running mission. Authoring `info:sourceCode` alone only edits the
-        // document, and the ECS does not learn about it until the USD round-trip
-        // projects back — so Delete, Dwell and Smooth all appeared to do nothing:
-        // the rover kept driving the tree it already had.
-        //
-        // The drop (`on_scene_click_checkpoint`) and Insert-after
-        // (`on_scene_click_place_waypoint`) paths have always written both. This
-        // menu was the one edit surface that wrote only one, which is why it was
-        // the one that did not work.
-        commands
-            .entity(marker_vessel)
-            .insert(BehaviorXml(value.clone()));
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetAttribute {
@@ -1135,14 +1132,15 @@ fn vessel_for_target<'a>(
 /// trigger zone all come from the referenced asset.
 fn author_marker_prim(
     commands: &mut Commands,
-    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     root: &str,
     at: DVec3,
+    canonical: &CanonicalStages,
+    vessel_prim: &UsdPrimPath,
 ) -> String {
     let route_scope = join_prim(root, ROUTE_SCOPE);
     // `AddPrim` on an existing prim is a rejection, not a merge.
-    if !prim_exists(host, &route_scope) {
+    if !composed_prim_exists(canonical, vessel_prim, &route_scope) {
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::AddPrim {
@@ -1157,7 +1155,7 @@ fn author_marker_prim(
     // First free `W<n>` — the name a scene author would have written by hand.
     let marker_name = (0..)
         .map(|n| format!("W{n}"))
-        .find(|name| !prim_exists(host, &join_prim(&route_scope, name)))
+        .find(|name| !composed_prim_exists(canonical, vessel_prim, &join_prim(&route_scope, name)))
         .expect("an unbounded search always finds a free name");
     let marker_path = join_prim(&route_scope, &marker_name);
     commands.trigger(ApplyUsdOp {
@@ -1204,14 +1202,20 @@ fn join_prim(parent: &str, name: &str) -> String {
 ///
 /// `AddPrim` on an existing prim is a rejection rather than a merge, so it is only
 /// authored when genuinely absent — the same rule the `Behaviors` scope follows.
+///
+/// `mission_exists` comes from the **live composed stage**, not the document
+/// layer. Traverse authors its mission inside the selected site variant; an
+/// authored-layer lookup cannot see that composed prim and used to create a
+/// duplicate Mission on the first Alt-click, forcing a rover re-projection.
 fn ensure_mission_program(
     commands: &mut Commands,
     host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     vessel_path: &str,
+    mission_exists: bool,
 ) -> String {
     let path = join_prim(vessel_path, MISSION_PROGRAM);
-    if !prim_exists(host, &path) {
+    if !mission_exists && !prim_exists(host, &path) {
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::AddPrim {
@@ -1244,6 +1248,21 @@ fn prim_exists(
     };
     host.document().data().spec(&sdf).is_some()
         || host.document().runtime_data().spec(&sdf).is_some()
+}
+
+/// Runtime waypoint creation targets the selected USD variant, so its existence
+/// decisions must read the live composed stage. The document's authored layers
+/// deliberately retain the variant opinions unflattened and therefore cannot
+/// answer whether `/Traverse/Route` or `/Traverse/Route/W0` already exists.
+fn composed_prim_exists(
+    canonical: &CanonicalStages,
+    vessel_prim: &UsdPrimPath,
+    path: &str,
+) -> bool {
+    canonical
+        .get(vessel_prim.stage_handle.id())
+        .zip(SdfPath::new(path).ok())
+        .is_some_and(|(stage, prim)| stage.view().has_prim(&prim))
 }
 
 /// System that checks if a vessel is close to any of its waypoints.
@@ -1517,8 +1536,12 @@ register_commands!(
 
 /// Half-width (world units) of the route ribbon — a thin drawn line, not a road.
 const PATH_HALF_WIDTH: f32 = 0.12;
-/// Lift above the sampled path so the ribbon doesn't z-fight the terrain it hugs.
-const PATH_LIFT: f32 = 0.12;
+/// Centre height of the route ribbon above sampled terrain. This is the centre of the authored waypoint
+/// dome (`vessels/markers/waypoint.usda`): route connections meet a waypoint in
+/// its middle instead of visually entering through the buried lower hemisphere.
+/// The ribbon still samples every DEM height, so this is a constant clearance,
+/// not a straight chord that can cut through a ridge or crater.
+const WAYPOINT_CONNECTION_HEIGHT: f32 = 2.5;
 /// Resample spacing for a `smooth` route's ribbon. Matches the autopilot's own
 /// resampling, so the drawn curve IS the driven curve.
 const PATH_SPACING: f64 = 2.0;
@@ -1606,7 +1629,7 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
             right = DVec3::X;
         }
         let right = right.normalize() * PATH_HALF_WIDTH as f64;
-        let base = (points[i] - anchor).as_vec3() + Vec3::Y * PATH_LIFT;
+        let base = (points[i] - anchor).as_vec3() + Vec3::Y * WAYPOINT_CONNECTION_HEIGHT;
         let r = right.as_vec3();
         pos.push((base - r).to_array());
         pos.push((base + r).to_array());
@@ -1716,7 +1739,10 @@ pub fn sync_waypoint_path_mesh(
                 let ground = surface.height_at(position)?;
                 let target = lunco_core::coords::GridPos(DVec3::new(
                     position.0.x,
-                    ground + PATH_LIFT as f64,
+                    // The marker asset owns the visible dome's +2.5 m centre
+                    // transform. Keep its root at terrain level; applying the
+                    // connection height here as well would double-lift routes.
+                    ground,
                     position.0.z,
                 ));
                 Some((

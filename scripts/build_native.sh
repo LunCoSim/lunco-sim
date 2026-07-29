@@ -163,10 +163,10 @@ resolve_cache_dir() {
 }
 
 # ── Portable directory sync ───────────────────────────────────────────────
-# rsync isn't on Windows runners (Git Bash has no rsync). This wrapper
-# uses rsync when available (fast, incremental, --delete) and falls back
-# to cp -r + rm -rf for the same semantics. `--delete` is emulated by
-# wiping the dest before copying.
+# Desktop bundles must be reproducible on Linux, macOS and Git Bash. Use the
+# same copy primitive everywhere: `source/.` means "contents including hidden
+# files" on each of those platforms, unlike a shell glob or the previous
+# rsync/cp split.
 #
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash>
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash> no-delete
@@ -183,43 +183,19 @@ resolve_cache_dir() {
 # `lunco_twin::is_runtime_state`; keep the two in step.
 sync_dir() {
     local src="$1" dest="$2" no_delete="${3:-}"
-    if command -v rsync &>/dev/null; then
-        if [ "$no_delete" = "no-delete" ]; then
-            rsync -a --exclude='.lunco/' --exclude='history/' "$src" "$dest"
-        else
-            rsync -a --delete --exclude='.lunco/' --exclude='history/' "$src" "$dest"
-        fi
-    else
-        # cp -r fallback (Windows Git Bash). No trailing slash semantics —
-        # cp copies the dir itself, so we mirror "contents-of" by wiping
-        # dest and copying the src's children.
-        mkdir -p "$dest"
-        if [ "$no_delete" != "no-delete" ]; then
-            rm -rf "${dest:?}"/* 2>/dev/null || true
-        fi
-        # cp -r "$src"* "$dest" — the glob handles visible files; dotfiles
-        # need a separate pass (shopt -s dotglob would be cleaner but bash
-        # 3.2 on macOS handles it; Git Bash on Windows also supports it).
-        #
-        # `2>/dev/null` used to sit on this cp, with `||` falling through to the
-        # `"$src".` spelling. That combination could not distinguish "this shell
-        # doesn't do dotglob" (the case the fallback is FOR) from "the copy
-        # half-failed" — a partial tree, on Windows most plausibly a path over
-        # MAX_PATH — and it discarded the message that would have said which.
-        # A package that ships an incomplete assets/ tree looks identical at
-        # runtime to one whose asset resolution is broken, and that is exactly
-        # the wrong place to start debugging. Let cp speak, and fail the build.
-        if ! ( shopt -s dotglob nullglob 2>/dev/null; cp -r "$src"* "$dest" ); then
-            cp -r "$src". "$dest" || {
-                echo "ERROR: failed to copy '$src' → '$dest'." >&2
-                echo "       The package would ship an incomplete assets/ tree." >&2
-                return 1
-            }
-        fi
-        # `cp` has no --exclude, so the copy is pruned after the fact. Same rule
-        # as the rsync branch above; a bundle must not carry session state.
-        find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
+    if [ "$no_delete" != "no-delete" ]; then
+        rm -rf "${dest:?}"
     fi
+    mkdir -p "$dest"
+    cp -R "${src%/}/." "$dest" || {
+        echo "ERROR: failed to copy '$src' → '$dest'." >&2
+        echo "       The package would ship an incomplete assets/ tree." >&2
+        return 1
+    }
+    # Runtime state is never distributable, regardless of the platform doing
+    # the copy. Prune after the uniform copy rather than relying on a
+    # platform-specific exclude flag.
+    find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
 # ── Download cache assets for a binary ────────────────────────────────────
