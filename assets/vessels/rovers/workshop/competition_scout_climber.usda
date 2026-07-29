@@ -1,0 +1,98 @@
+#usda 1.0
+(
+    defaultPrim = "CompetitionScoutClimber"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "CompetitionScoutClimber" (
+    kind = "assembly"
+    doc = "Competition Scout Climber: a 55-point camera rover with cleated tires, high torque, low centre of mass, battery power, and short-range Scout communications."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+    variants = {
+        string power = "battery"
+        string generation = "none"
+        string thermal = "basic"
+    }
+)
+{
+    uniform bool lunco:spawnable = true
+    float lunco:spawnLift = 1.0
+
+    float3 physics:centerOfMass = (0.0, -0.25, 0.0)
+    float physics:mass = 1300.0
+    float3 physics:diagonalInertia = (2200.0, 2800.0, 1100.0)
+    float physxRigidBody:angularDamping = 3.0
+
+    over "Body"
+    {
+        color3f[] primvars:displayColor = [(0.78, 0.30, 0.08)]
+        over "HullLook"
+        {
+            over "Shader"
+            {
+                color3f inputs:accent_color = (0.96, 0.76, 0.18)
+            }
+        }
+    }
+
+    def Camera "MappingCamera"
+    {
+        custom double3 lunco:cameraLookAt = (0.0, 0.45, -12.0)
+        double3 xformOp:translate = (0.0, 1.05, -0.8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 32.0
+        float2 clippingRange = (0.1, 100000.0)
+    }
+
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    over "LinkAperture"
+                    {
+                        string lunco:link:class = "scout"
+                        double lunco:link:minElevationDeg = -30.0
+                        double lunco:link:maxRangeM = 65.0
+                    }
+                }
+            }
+        }
+    }
+
+    over "RockerL"
+    {
+        over "Wheel_FL" (variants = { string tire = "cleated" }) { }
+        over "Motor_FL" { float lunco:motor:stallTorque = 4.40 }
+        over "Gearbox_FL" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+    over "RockerR"
+    {
+        over "Wheel_FR" (variants = { string tire = "cleated" }) { }
+        over "Motor_FR" { float lunco:motor:stallTorque = 4.40 }
+        over "Gearbox_FR" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+    over "BogieL"
+    {
+        over "Wheel_ML" (variants = { string tire = "cleated" }) { }
+        over "Wheel_RL" (variants = { string tire = "cleated" }) { }
+        over "Motor_ML" { float lunco:motor:stallTorque = 4.40 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 4.40 }
+        over "Gearbox_ML" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Gearbox_RL" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+    over "BogieR"
+    {
+        over "Wheel_MR" (variants = { string tire = "cleated" }) { }
+        over "Wheel_RR" (variants = { string tire = "cleated" }) { }
+        over "Motor_MR" { float lunco:motor:stallTorque = 4.40 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 4.40 }
+        over "Gearbox_MR" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Gearbox_RR" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+}

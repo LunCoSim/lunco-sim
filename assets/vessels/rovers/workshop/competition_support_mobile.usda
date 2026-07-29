@@ -1,0 +1,73 @@
+#usda 1.0
+(
+    defaultPrim = "CompetitionSupportMobile"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "CompetitionSupportMobile" (
+    kind = "assembly"
+    doc = "Competition Support Mobile: a 45-point communications rover with cleated tires, stronger motors, low centre of mass, and medium relay range."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+    variants = {
+        string drivetrain = "raycast"
+        string power = "battery"
+        string generation = "none"
+        string thermal = "basic"
+    }
+)
+{
+    uniform bool lunco:spawnable = true
+    float lunco:spawnLift = 1.0
+
+    float3 physics:centerOfMass = (0.0, -0.20, 0.0)
+
+    over "Chassis"
+    {
+        color3f[] primvars:displayColor = [(0.08, 0.54, 0.30)]
+        over "HullLook"
+        {
+            over "Shader"
+            {
+                color3f inputs:accent_color = (0.46, 0.92, 0.34)
+            }
+        }
+    }
+
+    over "Comms"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    over "LinkAperture"
+                    {
+                        string lunco:link:class = "support"
+                        double lunco:link:minElevationDeg = -30.0
+                        double lunco:link:maxRangeM = 110.0
+                    }
+                }
+            }
+        }
+    }
+
+    over "Wheel_FL" (variants = { string tire = "cleated" }) { }
+    over "Wheel_FR" (variants = { string tire = "cleated" }) { }
+    over "Wheel_RL" (variants = { string tire = "cleated" }) { }
+    over "Wheel_RR" (variants = { string tire = "cleated" }) { }
+
+        # Presentation tuning: 5× the inherited 2,400 rad/s motor no-load speed.
+        # The gearbox ratio is unchanged, so every wheel's axle speed ceiling is 5×.
+        over "Motor_FL" { float lunco:motor:stallTorque = 3.20 }
+        over "Motor_FR" { float lunco:motor:stallTorque = 3.20 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 3.20 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 3.20 }
+
+    over "Gearbox_FL" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_FR" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_RL" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_RR" { float lunco:gearbox:ratio = 40.0; float lunco:gearbox:maxOutputTorque = 1000.0 }
+}

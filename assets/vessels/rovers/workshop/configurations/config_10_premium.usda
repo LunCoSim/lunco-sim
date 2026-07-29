@@ -1,0 +1,62 @@
+#usda 1.0
+(
+    defaultPrim = "Config10Premium"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Config10Premium" (
+    kind = "assembly"
+    doc = "Premium, 85 points: advanced suspension 15 + high-torque drive 20 + cleated tires 10 + extended battery 15 + mapping camera 10 + long-range relay 15. Basic rover systems are free."
+    prepend references = @lunco://vessels/rovers/workshop/drag/drag_rocker_max.usda@</DragRockerMax>
+)
+{
+    uniform bool lunco:spawnable = true
+
+    def Cube "ExtendedBattery"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-0.66, 0.98, 0.18)
+        double3 xformOp:scale = (0.72, 0.44, 0.84)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.86, 0.18, 0.56)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "SuspensionBrace"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, 0.72, 0.0)
+        double3 xformOp:scale = (1.85, 0.16, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.94, 0.38, 0.68)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "EquipmentMast"
+    {
+        uniform token axis = "Y"
+        double radius = 0.10
+        double height = 1.60
+        double3 xformOp:translate = (0.48, 1.45, 0.04)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.84, 0.82, 0.88)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "MappingCameraPod"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.30, 2.22, -0.18)
+        double3 xformOp:scale = (0.48, 0.34, 0.56)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.98, 0.42, 0.72)]
+        bool physics:collisionEnabled = false
+    }
+    def Sphere "RelayDish"
+    {
+        double radius = 0.40
+        double3 xformOp:translate = (0.70, 2.18, 0.14)
+        double3 xformOp:scale = (1.0, 0.28, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.94, 0.70, 0.86)]
+        bool physics:collisionEnabled = false
+    }
+}

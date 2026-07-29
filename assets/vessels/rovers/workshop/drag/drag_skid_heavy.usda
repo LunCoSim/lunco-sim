@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "DragSkidHeavy"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "DragSkidHeavy" (
+    kind = "assembly"
+    doc = "55-point Drag Skid Heavy: the heaviest four-wheel profile with maximum skid torque."
+    prepend references = @lunco://vessels/rovers/workshop/competition_support_mobile.usda@</CompetitionSupportMobile>
+)
+{
+    uniform bool lunco:spawnable = true
+    float physics:mass = 1100.0
+
+    over "Chassis"
+    {
+        color3f[] primvars:displayColor = [(0.54, 0.16, 0.74)]
+    }
+
+    over "Wheel_FL" (variants = { string tire = "regolith" }) { }
+    over "Wheel_FR" (variants = { string tire = "regolith" }) { }
+    over "Wheel_RL" (variants = { string tire = "regolith" }) { }
+    over "Wheel_RR" (variants = { string tire = "regolith" }) { }
+
+    over "Motor_FL" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_FR" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_RL" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_RR" { float lunco:motor:stallTorque = 0.88 }
+}

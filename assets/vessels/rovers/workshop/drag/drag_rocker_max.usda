@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "DragRockerMax"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "DragRockerMax" (
+    kind = "assembly"
+    doc = "60-point Drag Rocker Max: the heaviest and highest-torque six-wheel race profile."
+    prepend references = @lunco://vessels/rovers/workshop/competition_scout_climber.usda@</CompetitionScoutClimber>
+)
+{
+    uniform bool lunco:spawnable = true
+    float physics:mass = 1550.0
+
+    over "Body"
+    {
+        color3f[] primvars:displayColor = [(0.92, 0.20, 0.60)]
+    }
+
+    over "RockerL"
+    {
+        over "Wheel_FL" (variants = { string tire = "cleated" }) { }
+        over "Motor_FL" { float lunco:motor:stallTorque = 1.00 }
+    }
+    over "RockerR"
+    {
+        over "Wheel_FR" (variants = { string tire = "cleated" }) { }
+        over "Motor_FR" { float lunco:motor:stallTorque = 1.00 }
+    }
+    over "BogieL"
+    {
+        over "Wheel_ML" (variants = { string tire = "cleated" }) { }
+        over "Wheel_RL" (variants = { string tire = "cleated" }) { }
+        over "Motor_ML" { float lunco:motor:stallTorque = 1.00 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 1.00 }
+    }
+    over "BogieR"
+    {
+        over "Wheel_MR" (variants = { string tire = "cleated" }) { }
+        over "Wheel_RR" (variants = { string tire = "cleated" }) { }
+        over "Motor_MR" { float lunco:motor:stallTorque = 1.00 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 1.00 }
+    }
+}

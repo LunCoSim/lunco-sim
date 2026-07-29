@@ -1,0 +1,489 @@
+#usda 1.0
+(
+    defaultPrim = "LunarRoverShootingRangeShort"
+    upAxis = "Y"
+    metersPerUnit = 1
+    timeCodesPerSecond = 1
+    startTimeCode = 0
+    endTimeCode = 8
+)
+
+def Xform "LunarRoverShootingRangeShort" (
+    kind = "assembly"
+    doc = "Vertical lunar rover range vignette: two solver-driven rovers, attached weapons, recoil pulses, and ballistic ejecta."
+)
+{
+    # Authored first so offscreen recording selects it deterministically.
+    def Camera "ShortsCamera"
+    {
+        double3 xformOp:translate.timeSamples = {
+            0: (0.0, 10.0, 28.0),
+            2: (0.0, 9.5, 26.0),
+            4: (0.0, 9.0, 24.0),
+            6: (0.0, 9.5, 26.0),
+            8: (0.0, 10.0, 28.0),
+        }
+        double3 xformOp:rotateXYZ.timeSamples = {
+            0: (-17.0, 0.0, 0.0),
+            2: (-17.0, 0.0, 0.0),
+            4: (-17.0, 0.0, 0.0),
+            6: (-17.0, 0.0, 0.0),
+            8: (-17.0, 0.0, 0.0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float focalLength = 18.0
+        float exposure:fStop = 16
+        float exposure:iso = 100
+        float exposure:responsivity = 1
+        float exposure:time = 0.04419417
+        float2 clippingRange = (0.1, 100000.0)
+    }
+
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Regolith" (prepend apiSchemas = ["PhysicsMaterialAPI"])
+        {
+            float physics:dynamicFriction = 0.92
+            float physics:staticFriction = 1.06
+            float physics:restitution = 0.06
+        }
+    }
+
+    def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
+        double3 xformOp:scale = (22.0, 1.0, 28.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.28, 0.27, 0.26)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </LunarRoverShootingRangeShort/PhysicsMaterials/Regolith>
+    }
+
+    # Graphic range markers echo the Summer Space School race-video language.
+    def Cube "RedRangeMarker"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-3.0, 0.025, -2.0)
+        double3 xformOp:scale = (0.18, 0.05, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.92, 0.18, 0.10)]
+    }
+    def Cube "BlueRangeMarker"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.0, 0.025, -2.0)
+        double3 xformOp:scale = (0.18, 0.05, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.12, 0.62, 0.94)]
+    }
+
+    def Xform "GunnerA" (
+        prepend references = @lunco://vessels/rovers/workshop/configurations/config_07_armored.usda@</Config07Armored>
+    )
+    {
+        double3 xformOp:translate = (-3.0, 1.45, 5.0)
+        double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def Xform "Autocannon" (prepend apiSchemas = ["PhysicsMassAPI"])
+        {
+            float physics:mass = 120.0
+
+            def Cylinder "Pedestal"
+            {
+                uniform token axis = "Y"
+                double radius = 0.34
+                double height = 0.64
+                double3 xformOp:translate = (0.0, 1.38, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.18, 0.19, 0.22)]
+                bool physics:collisionEnabled = false
+            }
+            def Cylinder "Turret"
+            {
+                uniform token axis = "Y"
+                double radius = 0.52
+                double height = 0.34
+                double3 xformOp:translate = (0.0, 1.76, -0.10)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.80, 0.22, 0.12)]
+                bool physics:collisionEnabled = false
+            }
+            def Cylinder "Barrel"
+            {
+                uniform token axis = "Z"
+                double radius = 0.14
+                double height = 2.65
+                double3 xformOp:translate = (0.0, 1.78, -1.52)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.10, 0.11, 0.13)]
+                bool physics:collisionEnabled = false
+            }
+            def Sphere "MuzzleFlash"
+            {
+                double radius = 0.70
+                double3 xformOp:translate = (0.0, 1.78, -2.88)
+                double3 xformOp:scale.timeSamples = {
+                    0: (0.0, 0.0, 0.0),
+                    1.49: (0.0, 0.0, 0.0),
+                    1.50: (1.0, 0.72, 2.10),
+                    1.70: (0.0, 0.0, 0.0),
+                    2.33: (0.0, 0.0, 0.0),
+                    2.34: (1.0, 0.72, 2.10),
+                    2.54: (0.0, 0.0, 0.0),
+                    8: (0.0, 0.0, 0.0),
+                }
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                color3f[] primvars:displayColor = [(1.0, 0.54, 0.06)]
+                bool physics:collisionEnabled = false
+            }
+        }
+    }
+
+    def Xform "GunnerB" (
+        prepend references = @lunco://vessels/rovers/workshop/configurations/config_10_premium.usda@</Config10Premium>
+    )
+    {
+        double3 xformOp:translate = (3.0, 1.45, 5.0)
+        double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        over "MappingCamera" (
+            active = false
+        ) { }
+
+        def Xform "MissileRack" (prepend apiSchemas = ["PhysicsMassAPI"])
+        {
+            float physics:mass = 180.0
+
+            def Cube "Rack"
+            {
+                double size = 1.0
+                double3 xformOp:translate = (0.0, 1.62, -0.12)
+                double3 xformOp:scale = (1.18, 0.46, 0.78)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                color3f[] primvars:displayColor = [(0.12, 0.42, 0.78)]
+                bool physics:collisionEnabled = false
+            }
+            def Cylinder "TubeL"
+            {
+                uniform token axis = "Z"
+                double radius = 0.18
+                double height = 1.38
+                double3 xformOp:translate = (-0.34, 1.68, -0.82)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.08, 0.10, 0.14)]
+                bool physics:collisionEnabled = false
+            }
+            def Cylinder "TubeR"
+            {
+                uniform token axis = "Z"
+                double radius = 0.18
+                double height = 1.38
+                double3 xformOp:translate = (0.34, 1.68, -0.82)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.08, 0.10, 0.14)]
+                bool physics:collisionEnabled = false
+            }
+            def Sphere "LaunchFlash"
+            {
+                double radius = 0.42
+                double3 xformOp:translate = (0.0, 1.68, -1.56)
+                double3 xformOp:scale.timeSamples = {
+                    0: (0.0, 0.0, 0.0),
+                    3.99: (0.0, 0.0, 0.0),
+                    4.00: (1.0, 0.82, 2.35),
+                    4.28: (0.0, 0.0, 0.0),
+                    8: (0.0, 0.0, 0.0),
+                }
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                color3f[] primvars:displayColor = [(0.10, 0.36, 1.0)]
+                bool physics:collisionEnabled = false
+            }
+        }
+    }
+
+    # Two independent downrange targets. Each is a free rigid body with a broad
+    # base so impact forces can move it under lunar gravity without scripting.
+    def Xform "Targets"
+    {
+        def Xform "CannonTarget" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"])
+        {
+            double3 xformOp:translate = (-3.0, 0.16, -8.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float physics:mass = 80.0
+
+            def Cylinder "Base" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+            {
+                uniform token axis = "Y"
+                double radius = 0.92
+                double height = 0.28
+                color3f[] primvars:displayColor = [(0.18, 0.18, 0.20)]
+            }
+            def Cylinder "Post" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+            {
+                uniform token axis = "Y"
+                double radius = 0.10
+                double height = 1.65
+                double3 xformOp:translate = (0.0, 0.92, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.28, 0.28, 0.30)]
+            }
+            def Cylinder "Plate" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+            {
+                uniform token axis = "Z"
+                double radius = 0.78
+                double height = 0.18
+                double3 xformOp:translate = (0.0, 1.78, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.92, 0.26, 0.10)]
+            }
+            def Cylinder "Bullseye"
+            {
+                uniform token axis = "Z"
+                double radius = 0.28
+                double height = 0.20
+                double3 xformOp:translate = (0.0, 1.78, 0.12)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.98, 0.82, 0.12)]
+            }
+        }
+
+        def Xform "MissileTarget" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"])
+        {
+            double3 xformOp:translate = (3.0, 0.18, -9.5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float physics:mass = 125.0
+
+            def Cylinder "Base" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+            {
+                uniform token axis = "Y"
+                double radius = 1.05
+                double height = 0.32
+                color3f[] primvars:displayColor = [(0.15, 0.17, 0.21)]
+            }
+            def Cylinder "Post" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+            {
+                uniform token axis = "Y"
+                double radius = 0.12
+                double height = 1.90
+                double3 xformOp:translate = (0.0, 1.02, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.25, 0.28, 0.34)]
+            }
+            def Cylinder "Plate" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+            {
+                uniform token axis = "Z"
+                double radius = 0.92
+                double height = 0.22
+                double3 xformOp:translate = (0.0, 2.02, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.10, 0.52, 0.94)]
+            }
+            def Cylinder "Bullseye"
+            {
+                uniform token axis = "Z"
+                double radius = 0.33
+                double height = 0.24
+                double3 xformOp:translate = (0.0, 2.02, 0.14)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.86, 0.94, 1.0)]
+            }
+        }
+
+        def Cube "Backstop" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0.0, 1.1, -13.0)
+            double3 xformOp:scale = (8.0, 2.2, 0.45)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.16, 0.16, 0.17)]
+        }
+    }
+    # Both weapons fire parallel downrange, one projectile per marked lane.
+    def Capsule "CannonTracer"
+    {
+        uniform token axis = "Z"
+        double radius = 0.10
+        double height = 1.20
+        double3 xformOp:translate.timeSamples = {
+            0: (-3.0, -4.0, 2.0),
+            1.50: (-3.0, 1.82, 2.0),
+            1.64: (-3.0, 1.42, -2.5),
+            1.78: (-3.0, 1.62, -7.55),
+            1.82: (-3.0, -4.0, -7.55),
+            2.34: (-3.0, 1.82, 2.0),
+            2.48: (-3.0, 1.40, -2.5),
+            2.62: (-3.0, 1.58, -7.55),
+            2.66: (-3.0, -4.0, -7.55),
+            8: (-3.0, -4.0, 2.0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(1.0, 0.72, 0.08)]
+        bool physics:collisionEnabled = false
+    }
+
+    def Capsule "MicroMissile"
+    {
+        uniform token axis = "Z"
+        double radius = 0.16
+        double height = 1.20
+        double3 xformOp:translate.timeSamples = {
+            0: (3.0, -4.0, 3.35),
+            4.00: (3.0, 1.72, 3.35),
+            4.26: (3.0, 2.05, -0.5),
+            4.52: (3.0, 1.84, -4.8),
+            4.84: (3.0, 1.82, -9.02),
+            4.88: (3.0, -4.0, -9.02),
+            8: (3.0, -4.0, 3.35),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.40, 0.72, 1.0)]
+        bool physics:collisionEnabled = false
+    }
+
+    # Short luminous contact cues stay compact in vacuum; no atmospheric bloom.
+    def Sphere "CannonImpact"
+    {
+        double radius = 0.48
+        double3 xformOp:translate = (-3.0, 1.78, -7.72)
+        double3 xformOp:scale.timeSamples = {
+            0: (0.0, 0.0, 0.0),
+            1.77: (0.0, 0.0, 0.0),
+            1.78: (1.0, 1.0, 0.55),
+            1.95: (0.0, 0.0, 0.0),
+            2.61: (0.0, 0.0, 0.0),
+            2.62: (1.0, 1.0, 0.55),
+            2.79: (0.0, 0.0, 0.0),
+            8: (0.0, 0.0, 0.0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(1.0, 0.48, 0.05)]
+    }
+
+    def Sphere "MissileImpact"
+    {
+        double radius = 0.65
+        double3 xformOp:translate = (3.0, 2.02, -9.18)
+        double3 xformOp:scale.timeSamples = {
+            0: (0.0, 0.0, 0.0),
+            4.83: (0.0, 0.0, 0.0),
+            4.84: (1.0, 1.0, 0.62),
+            5.10: (0.0, 0.0, 0.0),
+            8: (0.0, 0.0, 0.0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.18, 0.52, 1.0)]
+    }
+
+    # Discrete regolith grains follow slow lunar ballistic arcs at each target.
+    def Scope "Ejecta"
+    {
+        def Sphere "A1"
+        {
+            double radius = 0.11
+            double3 xformOp:translate.timeSamples = {
+                0: (-3.0, -3.0, -8.0),
+                1.78: (-3.0, 0.18, -7.85),
+                2.18: (-2.62, 0.73, -7.50),
+                2.58: (-2.24, 1.02, -7.15),
+                2.98: (-1.86, 1.05, -6.80),
+                3.38: (-1.48, 0.82, -6.45),
+                3.78: (-1.10, -3.0, -6.10),
+                8: (-3.0, -3.0, -8.0),
+            }
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.48, 0.46, 0.43)]
+        }
+        def Sphere "A2"
+        {
+            double radius = 0.085
+            double3 xformOp:translate.timeSamples = {
+                0: (-3.0, -3.0, -8.0),
+                1.78: (-3.0, 0.18, -7.86),
+                2.18: (-3.42, 0.81, -7.62),
+                2.58: (-3.84, 1.18, -7.38),
+                2.98: (-4.26, 1.29, -7.14),
+                3.38: (-4.68, 1.14, -6.90),
+                3.78: (-5.10, 0.73, -6.66),
+                4.08: (-5.42, -3.0, -6.48),
+                8: (-3.0, -3.0, -8.0),
+            }
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.62, 0.60, 0.56)]
+        }
+        def Sphere "A3"
+        {
+            double radius = 0.095
+            double3 xformOp:translate.timeSamples = {
+                0: (-3.0, -3.0, -8.0),
+                2.62: (-3.0, 0.18, -7.84),
+                3.02: (-2.88, 0.68, -8.28),
+                3.42: (-2.76, 0.92, -8.72),
+                3.82: (-2.64, 0.90, -9.16),
+                4.22: (-2.52, 0.62, -9.60),
+                4.52: (-2.43, -3.0, -9.93),
+                8: (-3.0, -3.0, -8.0),
+            }
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.38, 0.37, 0.35)]
+        }
+        def Sphere "B1"
+        {
+            double radius = 0.12
+            double3 xformOp:translate.timeSamples = {
+                0: (3.0, -3.0, -9.5),
+                4.84: (3.0, 0.20, -9.34),
+                5.24: (3.48, 0.87, -8.98),
+                5.64: (3.96, 1.28, -8.62),
+                6.04: (4.44, 1.43, -8.26),
+                6.44: (4.92, 1.32, -7.90),
+                6.84: (5.40, 0.95, -7.54),
+                7.24: (5.88, 0.32, -7.18),
+                7.44: (6.12, -3.0, -7.0),
+                8: (3.0, -3.0, -9.5),
+            }
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.56, 0.54, 0.50)]
+        }
+        def Sphere "B2"
+        {
+            double radius = 0.09
+            double3 xformOp:translate.timeSamples = {
+                0: (3.0, -3.0, -9.5),
+                4.84: (3.0, 0.20, -9.34),
+                5.24: (2.56, 0.77, -9.08),
+                5.64: (2.12, 1.08, -8.82),
+                6.04: (1.68, 1.13, -8.56),
+                6.44: (1.24, 0.92, -8.30),
+                6.84: (0.80, 0.45, -8.04),
+                7.04: (0.58, -3.0, -7.91),
+                8: (3.0, -3.0, -9.5),
+            }
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.42, 0.41, 0.39)]
+        }
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-32.0, 28.0, -10.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "RangeSequence" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/workshops/lunar_rover_shooting_range_short.rhai@
+        }
+    }
+}

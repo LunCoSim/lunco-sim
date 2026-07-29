@@ -1,0 +1,52 @@
+#usda 1.0
+(
+    defaultPrim = "Config07Armored"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Config07Armored" (
+    kind = "assembly"
+    doc = "Armored, 45 points: armor 15 + redundant computer 10 + high-torque drive 20. Basic rover systems are free."
+    prepend references = @lunco://vessels/rovers/workshop/drag/drag_skid_heavy.usda@</DragSkidHeavy>
+)
+{
+    uniform bool lunco:spawnable = true
+
+    def Cube "ArmorTop"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, 0.92, 0.0)
+        double3 xformOp:scale = (1.75, 0.22, 1.15)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.48, 0.46, 0.54)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "ArmorLeft"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-1.02, 0.62, 0.0)
+        double3 xformOp:scale = (0.18, 0.72, 1.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.56, 0.54, 0.62)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "ArmorRight"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (1.02, 0.62, 0.0)
+        double3 xformOp:scale = (0.18, 0.72, 1.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.56, 0.54, 0.62)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "BackupComputer"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, 1.28, 0.0)
+        double3 xformOp:scale = (0.46, 0.34, 0.52)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.86, 0.86, 0.90)]
+        bool physics:collisionEnabled = false
+    }
+}
