@@ -2949,6 +2949,7 @@ pub(crate) fn install(app: &mut App) {
         Update,
         (
             crate::domain_projection::project_domain_islands,
+            crate::domain_projection::sync_generated_network_documents,
             crate::domain_projection::publish_generated_sources,
         )
             .chain()

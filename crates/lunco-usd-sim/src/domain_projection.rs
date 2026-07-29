@@ -6,8 +6,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use bevy::ecs::system::SystemParam;
-use lunco_doc::DocumentOrigin;
 
 use bevy::prelude::*;
 use lunco_modelica::{
@@ -26,17 +24,6 @@ use lunco_usd_bevy::program::{
 };
 
 use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
-
-/// Keep the projection system below Bevy's flat system-parameter arity limit.
-/// The document registry is one coherent concern: a generated network updates
-/// its read-only Modelica source and keeps the scene entity linked to it.
-#[derive(SystemParam)]
-struct ProjectionDocuments<'w, 's> {
-    registry: ResMut<'w, lunco_modelica::state::ModelicaDocumentRegistry>,
-    // Keeps the standard two-lifetime SystemParam shape without creating a
-    // second world access. The value is never read.
-    _lifetime: Local<'s, ()>,
-}
 
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
@@ -647,7 +634,6 @@ pub fn project_domain_islands(
     classes: Res<MemberClasses>,
     registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
-    mut documents: ProjectionDocuments,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
     if added.is_empty() && identity_added.is_empty() && !dirty.0 && !projection_dirty.0 {
@@ -786,19 +772,6 @@ pub fn project_domain_islands(
         let compiled_name = interface.model_name.unwrap_or_else(|| model_name.clone());
         let session_id = installed_model.map_or(1, |model| model.session_id + 1);
         let doc_uri = format!("generated://{model_name}.mo");
-        let document = installed_model
-            .map(|model| model.document)
-            .filter(|doc| !doc.is_unassigned() && documents.registry.host(*doc).is_some())
-            .unwrap_or_else(|| {
-                documents.registry.allocate_with_origin(
-                    source.clone(),
-                    DocumentOrigin::Bundled {
-                        filename: format!("generated/{model_name}.mo"),
-                    },
-                )
-            });
-        documents.registry.checkpoint_source(document, source.clone());
-        documents.registry.link(entity, document);
         let mut model = ModelicaModel {
             model_path: PathBuf::from(&doc_uri),
             model_name: compiled_name.clone(),
@@ -808,7 +781,6 @@ pub fn project_domain_islands(
             is_stepping: true,
             is_compiling: true,
             resume_after_compile: true,
-            document,
             ..default()
         };
         let dispatch = channels.tx.send(ModelicaCommand::Compile {
@@ -868,6 +840,41 @@ pub fn project_domain_islands(
                 members: synthesized.members,
             },
         ));
+    }
+}
+
+/// Give every successful generated network a normal, read-only Modelica
+/// document. This is intentionally a separate system: the compiler projection
+/// owns synthesis, while the document registry owns inspectable source and the
+/// scene-to-document link used by the standard Modelica UI and API.
+pub fn sync_generated_network_documents(
+    mut generated: Query<
+        (Entity, &GeneratedModelicaSource, &mut ModelicaModel),
+        Or<(Added<GeneratedModelicaSource>, Changed<GeneratedModelicaSource>)>,
+    >,
+    mut documents: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
+) {
+    for (entity, source, mut model) in &mut generated {
+        // Projection errors are represented by an empty diagnostic source and
+        // must not create a misleading editable-looking blank document.
+        if source.source.is_empty() {
+            continue;
+        }
+        let document = if !model.document.is_unassigned()
+            && documents.host(model.document).is_some()
+        {
+            model.document
+        } else {
+            documents.allocate_with_origin(
+                source.source.clone(),
+                lunco_doc::DocumentOrigin::Bundled {
+                    filename: format!("generated/{}.mo", model.model_name),
+                },
+            )
+        };
+        documents.checkpoint_source(document, source.source.clone());
+        documents.link(entity, document);
+        model.document = document;
     }
 }
 
