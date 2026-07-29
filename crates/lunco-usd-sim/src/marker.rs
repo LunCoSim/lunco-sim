@@ -42,6 +42,11 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::camera::SceneCamera;
 
+/// Marks a USD-authored mission waypoint so presentation systems can keep its
+/// visual and route geometry on the same composed terrain surface.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct WaypointMarker;
+
 /// A prim that asked to be drawn at a constant apparent size.
 ///
 /// The geometry it is authored on must be UNIT-sized (radius/half-extent 1),

@@ -158,7 +158,9 @@ const DEFAULT_SEED: u64 = 0x5EED_1EAF_C0FF_EE01;
 
 #[derive(Clone)]
 struct Cli {
-    /// Asset-root-relative USD scene path, e.g. `scenes/tests/drivetrain_parity.usda`.
+    /// USD scene path. Accepts an asset-root-relative path such as
+    /// `scenes/tests/drivetrain_parity.usda`, a cwd-relative path, or an
+    /// absolute path into a custom Twin.
     /// Consumed by `SandboxCorePlugin`, which does its own `--scene` parse off
     /// `std::env::args()`; we parse it too only so we can REQUIRE it and print it.
     scene: String,
@@ -339,8 +341,9 @@ USAGE:
     sandbox test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
                [--threads N] [--jitter FRAC] [--seed U64]
 
-    --scene PATH             REQUIRED. USD scene path relative to assets/, e.g.
-                             scenes/tests/drivetrain_parity.usda
+    --scene PATH             REQUIRED. USD scene path. It may be relative to
+                             assets/, relative to the current directory, or an
+                             absolute path into a custom Twin.
     --max-ticks N            Safety bound on simulated ticks (default {DEFAULT_MAX_TICKS}).
                              Exhausting it with no verdict exits 2.
     --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core::FIXED_HZ).

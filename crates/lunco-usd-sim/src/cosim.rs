@@ -1264,6 +1264,15 @@ pub struct WiringDirty(pub bool);
 /// reader must be cited here. If no code reads it at parse and no backend claims it at
 /// runtime, the wire is dangling for real and belongs in the diagnostic, not in this table.
 const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
+    // `Motor.inputs:demand` is the authored command annotation on a motor
+    // instance. The live axle command is consumed by `MotorActuator` through
+    // the wheel's resolved drive port; the motor prim itself is folded into
+    // `PowertrainParams` by `powertrain::find_for_wheel`. In the infinite-power
+    // variant there is no Modelica island to own this USD edge, so materialising
+    // it as a runtime SimConnection creates a false dangling-wire fault. The
+    // battery variant is handled by domain projection because those motors are
+    // collection members of the generated electrical network.
+    ("demand", "LunCoMotorAPI"),
     // `Gearbox.inputs:torque ← Motor.outputs:torque`. Read by
     // `powertrain::find_for_wheel`, which folds `stallTorque × ratio × efficiency`
     // into a static `WheelParams`. Live axle torque is written every tick by

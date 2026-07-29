@@ -1650,10 +1650,27 @@ pub fn sync_waypoint_path_mesh(
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    mut q_waypoints: Query<(&lunco_usd_sim::marker::WaypointMarker, &mut Transform)>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
+    // Waypoint prims author a planimetric position; their height is terrain
+    // presentation, not a second hand-maintained elevation. Keep the marker
+    // root on the same oracle used by the route ribbon and the collider. The
+    // dome/zone are authored above that root, so moving the root fixes both the
+    // visible pin and its trigger without changing mission coordinates.
+    if surface.has_terrain() {
+        for (_, mut transform) in &mut q_waypoints {
+            let p = transform.translation.as_dvec3();
+            if let Some(ground) = surface.height_at(lunco_core::coords::GridPos(p)) {
+                let target_y = ground as f32 + PATH_LIFT;
+                if (transform.translation.y - target_y).abs() > 1.0e-3 {
+                    transform.translation.y = target_y;
+                }
+            }
+        }
+    }
     let Some((grid_entity, grid)) = q_grids.iter().next() else {
         return;
     };

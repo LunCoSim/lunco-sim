@@ -111,8 +111,3 @@ pub fn inject_local_solar_into_cosim(mut q: Query<(&LocalSolar, &mut lunco_cosim
             .insert(SUN_MOUNT_Z_CONNECTOR.to_string(), solar.direction.z as f64);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

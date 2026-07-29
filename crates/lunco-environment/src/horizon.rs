@@ -200,7 +200,10 @@ impl HeightField {
             // for the shadow's soft EDGE; it must never dim ground that has no occluder.
             // Keep in sync with `horizon_march.wgsl`, which marches the same formula.
             let rise = (h - (h0 + slope * t)) / width;
-            vis = vis.min(1.0 - rise);
+            // Match horizon_march.wgsl: a continuous cubic edge prevents each
+            // one-texel crater rim from becoming a saw-toothed shadow boundary.
+            let edge = smoothstep01(rise.clamp(0.0, 1.0));
+            vis = vis.min(1.0 - edge);
             if vis <= 0.0 {
                 return Some(0.0);
             }
@@ -296,6 +299,11 @@ impl HeightField {
         }
         bytes
     }
+}
+
+#[inline]
+fn smoothstep01(x: f32) -> f32 {
+    x * x * (3.0 - 2.0 * x)
 }
 
 /// Baked heightfield living on the terrain entity: CPU copy for entity

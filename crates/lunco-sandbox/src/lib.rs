@@ -214,7 +214,8 @@ FLAGS:
         --api [PORT]     Serve the HTTP command API (default {api}). NOT implied
                          by --no-ui: without this flag there is no API port.
                          POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
-        --scene PATH     Load this USD scene at startup, relative to assets/.
+        --scene PATH     Load this USD scene at startup. PATH may be relative to
+                         assets/, relative to the current directory, or absolute.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
         --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.btxml/.xml):
                          parse-only, no window/GPU/app. Prints a report and
@@ -2296,9 +2297,10 @@ impl Plugin for SandboxCorePlugin {
         // without networking; the activation projector is networking-gated for now.
         register_all_commands(app);
 
-        // `--scene <path>` overrides the default sandbox_scene.usda load. Path is
-        // relative to the asset source root (`assets/`). Used by automated joint/
-        // physics tests that need an isolated minimal scene.
+        // `--scene <path>` overrides the default sandbox_scene.usda load. The
+        // resolver accepts the shipped asset-root spelling, a workspace/cwd
+        // relative path, or an absolute filesystem path. The latter two are
+        // required for running a custom Twin without copying it into assets/.
         let scene_path = {
             let mut s = "scenes/sandbox/sandbox_scene.usda".to_string();
             for i in 0..args.len() {
@@ -3555,13 +3557,10 @@ fn setup_sandbox(world: &mut World) {
 #[cfg(not(target_arch = "wasm32"))]
 fn load_startup_scene(world: &mut World, scene_path: String) {
     // --- Load scene from USD ---
-    // Resolve the absolute path to find the enclosing Twin folder.
-    let pb = std::path::PathBuf::from(&scene_path);
-    let abs_path = if pb.is_absolute() {
-        pb
-    } else {
-        lunco_assets::assets_dir_abs().join(pb)
-    };
+    // Resolve the absolute path to find the enclosing Twin folder. This is
+    // deliberately shared by shipped scenes and external Twin roots: a CLI
+    // spelling must never change which document root gets mounted.
+    let abs_path = resolve_scene_cli_path(&scene_path);
 
     // The root that owns this scene — nearest `twin.toml` ancestor, else the
     // containing folder. Shared with the runtime open path (`OpenFile` →
@@ -3617,6 +3616,45 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     // `drain_pending_twin_docs`), and terrain edits stay on the incremental
     // re-bake — `LiveRebuildExempt` + `edit_confined_to_exempt_subtree` keep a
     // terrain-confined USD edit from ever reloading the scene.
+}
+
+/// Resolve a `--scene` argument without forcing every Twin into the engine's
+/// shipped `assets/` tree.
+///
+/// Resolution order is intentionally deterministic:
+///
+/// 1. absolute filesystem path;
+/// 2. existing path relative to the process working directory;
+/// 3. an explicit `assets/...` spelling relative to the process working
+///    directory (useful when invoking the binary from the repository root);
+/// 4. the normal asset-root-relative spelling used by packaged launches.
+///
+/// We do not canonicalize here. The Twin opener should receive the user's
+/// path, including a custom Twin's symlink/layout, and report a precise error
+/// if it does not exist.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_scene_cli_path(input: &str) -> std::path::PathBuf {
+    use std::path::{Path, PathBuf};
+
+    let path = Path::new(input);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd_relative = cwd.join(path);
+    if cwd_relative.exists() {
+        return cwd_relative;
+    }
+
+    if let Ok(without_assets) = path.strip_prefix("assets") {
+        let asset_spelling = lunco_assets::assets_dir_abs().join(without_assets);
+        if asset_spelling.exists() {
+            return asset_spelling;
+        }
+    }
+
+    lunco_assets::assets_dir_abs().join(path)
 }
 
 /// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a

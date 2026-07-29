@@ -229,6 +229,8 @@ pub fn populate_inspector_view(world: &mut World) {
 /// rendered readout would print the same degrees, nothing runs.
 pub(crate) fn inspector_inputs_changed(
     mut first: Local<bool>,
+    mut joint_poll: Local<f32>,
+    time: Res<Time>,
     view: Res<InspectorView>,
     selection: Res<crate::SelectedEntities>,
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
@@ -304,15 +306,24 @@ pub(crate) fn inspector_inputs_changed(
         ev_moved || bloom_moved
     };
 
+    // A joint's measured angle is a continuously changing Avian value, but the
+    // Inspector is a human readout rather than a telemetry oscilloscope. Poll
+    // it at 10 Hz so the producer remains genuinely gated while the displayed
+    // value stays responsive. The old `view.joint.is_some()` clause made the
+    // supposedly change-driven system unconditional for every selected joint.
+    *joint_poll += time.delta_secs();
+    let joint_due = view.joint.is_some() && *joint_poll >= 0.1;
+    if joint_due {
+        *joint_poll = 0.0;
+    }
+
     let run = !*first
         || selection.is_changed()
         || ambient.is_some_and(|a| a.is_changed())
         || sun_moved
         || camera_changed
         || removed
-        // A selected joint IS live physics (θ moves every tick), so this one
-        // genuinely runs every frame — but only while a joint is selected.
-        || view.joint.is_some();
+        || joint_due;
     *first = true;
     run
 }
