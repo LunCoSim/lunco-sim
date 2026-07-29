@@ -101,7 +101,8 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
     let mut out = Curriculum::default();
     for err in stage.composition_errors() {
         warn!("[tutorial] composed curriculum stage: {err:?}");
-        out.failures.push(format!("composed curriculum stage: {err:?}"));
+        out.failures
+            .push(format!("composed curriculum stage: {err:?}"));
     }
     let root = stage.prim(sdf::Path::abs_root());
     let Ok(top) = root.children() else {

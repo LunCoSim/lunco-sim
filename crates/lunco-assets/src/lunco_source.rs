@@ -101,11 +101,58 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
     std::fs::read(path)
 }
 
+/// Read a canonical asset identity when the composing document belongs to an
+/// open Twin.  The synchronous USD composer cannot call Bevy's async reader,
+/// so it uses this asset-owned equivalent of the registered `twin://` source.
+/// Library assets keep the ordinary `assets_root` policy; Twin assets are
+/// resolved inside the explicitly supplied Twin root and its cache.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_bytes_with_twin_root(
+    id: &str,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+) -> std::io::Result<Vec<u8>> {
+    if let Some((_name, rel)) = crate::parse_twin_uri(id) {
+        let root = twin_root.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Twin asset `{id}` has no composing Twin root"),
+            )
+        })?;
+        let mut relative = PathBuf::new();
+        for component in Path::new(rel).components() {
+            match component {
+                std::path::Component::Normal(part) => relative.push(part),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Twin asset `{id}` escapes its root"),
+                    ));
+                }
+            }
+        }
+        let authored = root.join(&relative);
+        if authored.is_file() {
+            return std::fs::read(authored);
+        }
+        let cached = crate::twin_cache_dir(root).join(relative);
+        return std::fs::read(cached);
+    }
+    read_asset_bytes(id, assets_root)
+}
+
 /// Native read for a caller-selected root document. Kept in `lunco-assets` so
 /// USD consumers never perform their own filesystem access.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_file_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
+}
+
+/// Read authored UTF-8 text through the asset boundary.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
+    String::from_utf8(read_asset_file_bytes(path)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then each cache root

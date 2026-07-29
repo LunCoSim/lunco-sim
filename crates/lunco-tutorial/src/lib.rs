@@ -203,7 +203,7 @@ impl CurriculumRoot {
             "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
             "twin" => {
                 let (_twin, rel) = rest.split_once('/')?;
-                std::fs::read_to_string(self.base.as_ref()?.join(rel)).ok()
+                lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
             }
             _ => None,
         }
@@ -218,12 +218,18 @@ impl CurriculumRoot {
         if !self.layer.is_file() {
             return 0;
         }
-        let composed = match lunco_usd_compose::compose_file_to_stage(&self.layer) {
+        let composed = match lunco_usd_compose::compose_file_to_stage_with_roots(
+            &self.layer,
+            lunco_assets::shipped_asset_root(&self.layer),
+            self.base.as_deref(),
+        ) {
             Ok(stage) => curriculum::project(&stage),
             Err(error) => {
                 let layer = self.layer.display();
                 warn!("[tutorial] curriculum layer '{layer}' did not compose: {error}");
-                failures.push(format!("curriculum layer '{layer}' did not compose: {error}"));
+                failures.push(format!(
+                    "curriculum layer '{layer}' did not compose: {error}"
+                ));
                 return 0;
             }
         };

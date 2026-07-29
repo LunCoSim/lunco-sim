@@ -1274,7 +1274,7 @@ fn settle_binding_epoch(
         model.map(|model| &model.status), None | Some(SimStatus::Compiling)
     ));
     let settled = awaiting.is_empty() && joints.is_empty() && wheels.is_empty()
-        && differentials.is_empty() && models_terminal {
+        && differentials.is_empty() && models_terminal;
     if settled {
         revision.seal_epoch();
     } else {

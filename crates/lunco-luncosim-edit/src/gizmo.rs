@@ -25,6 +25,12 @@ use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTa
 pub struct GizmoPrevPos {
     /// Parent-local position in the previous frame (meters).
     pub local_pos: DVec3,
+    /// Parent-local rotation at the previous authoritative step.
+    ///
+    /// Avian writeback can restore the old orientation while virtual time is
+    /// paused. Keeping the rotation anchor beside the translation anchor makes
+    /// rotate and translate obey the same drag contract.
+    pub local_rotation: Quat,
     /// Grid-ABSOLUTE position in the previous frame (meters).
     ///
     /// The drag velocity MUST be differenced from this, never from `local_pos`:
@@ -171,8 +177,11 @@ pub fn sync_gizmo_proxies(
 /// mistake that produces unbounded cell-drift when a driver writes a render-frame
 /// value into a cell-local field and big_space re-bins it every frame.
 ///
-/// Runs in `First`: strictly after the gizmo crate's `Last`, with no ambiguity to
-/// lose.
+/// Runs in `PostUpdate`, after the interaction cadence and Avian writeback but
+/// before transform propagation.  The gizmo crate updates its proxy in `Last`,
+/// so this consumes that completed render-frame edit on the next authoritative
+/// cycle without making the real entity compete with the gizmo crate for its
+/// `Transform`.
 pub fn apply_gizmo_proxy_drag(
     mut q_proxies: Query<(&Transform, &mut GizmoProxy, &GizmoTarget)>,
     mut q_targets: Query<&mut Transform, Without<GizmoProxy>>,
@@ -283,6 +292,7 @@ pub fn capture_gizmo_start(
             .try_insert(RigidBody::Kinematic)
             .try_insert(GizmoPrevPos {
                 local_pos,
+                local_rotation: tf.rotation,
                 abs_pos,
                 original_body,
                 had_translation_interpolation: had_translation,
@@ -370,6 +380,7 @@ pub fn sync_gizmo_transforms(
             }
             prev.abs_pos = abs_pos;
             prev.local_pos = local_pos;
+            prev.local_rotation = tf.rotation;
         }
     }
 }
@@ -394,6 +405,7 @@ pub fn sync_gizmo_transforms(
 pub fn restore_dragged_transform(mut q: Query<(&mut Transform, &GizmoPrevPos)>) {
     for (mut tf, prev) in q.iter_mut() {
         tf.translation = prev.local_pos.as_vec3();
+        tf.rotation = prev.local_rotation;
     }
 }
 
@@ -422,6 +434,7 @@ pub fn restore_dragged_transform(mut q: Query<(&mut Transform, &GizmoPrevPos)>) 
 /// fight.
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
     q_prev_pos: Query<(Entity, &GizmoPrevPos)>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
@@ -438,11 +451,19 @@ pub fn restore_gizmo_dynamic(
     mut commands: Commands,
 ) {
     let mut restored_any = false;
+    let released = mouse
+        .as_deref()
+        .is_some_and(|buttons| buttons.just_released(MouseButton::Left));
     for (entity, prev) in q_prev_pos.iter() {
-        if gizmo_targets
+        // `GizmoTarget::is_active` is the transform-gizmo crate's authoritative
+        // interaction state.  Do not combine it with raw mouse state here:
+        // `Last` is deliberately later than input processing, and doing so can
+        // release a target during the same engagement frame, hiding the gizmo
+        // and preventing the next drag while paused.
+        let active = gizmo_targets
             .iter()
-            .any(|(link, gt)| link.target == entity && gt.is_active())
-        {
+            .any(|(link, gt)| link.target == entity && gt.is_active());
+        if active && !released {
             continue;
         }
 
@@ -643,6 +664,7 @@ mod tests {
     fn test_gizmo_prev_pos_component() {
         let pos = GizmoPrevPos {
             local_pos: DVec3::new(1.0, 2.0, 3.0),
+            local_rotation: Quat::IDENTITY,
             abs_pos: DVec3::new(1.0, 2.0, 3.0),
             original_body: Some(RigidBody::Dynamic),
             had_translation_interpolation: false,
@@ -671,6 +693,7 @@ mod tests {
                 GizmoTarget::default(),
                 GizmoPrevPos {
                     local_pos: DVec3::ZERO,
+                    local_rotation: Quat::IDENTITY,
                     abs_pos: DVec3::ZERO,
                     original_body: Some(RigidBody::Dynamic),
                     had_translation_interpolation: false,
@@ -728,6 +751,7 @@ mod tests {
                 GizmoTarget::default(),
                 GizmoPrevPos {
                     local_pos: DVec3::ZERO,
+                    local_rotation: Quat::IDENTITY,
                     abs_pos: DVec3::ZERO,
                     original_body: None,
                     had_translation_interpolation: false,
@@ -803,6 +827,7 @@ mod tests {
                 lunco_core::GlobalEntityId::from_raw(42),
                 GizmoPrevPos {
                     local_pos: DVec3::new(3.0, 4.0, 5.0),
+                    local_rotation: Quat::IDENTITY,
                     abs_pos: DVec3::new(3.0, 4.0, 5.0),
                     original_body: Some(RigidBody::Dynamic),
                     had_translation_interpolation: false,

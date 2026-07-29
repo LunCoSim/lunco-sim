@@ -162,6 +162,12 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(
             PostUpdate,
             gizmo::restore_dragged_transform
+                // The avatar and controller write their authoritative pose in
+                // InteractionSchedule.  Restore the drag anchor only after that
+                // cadence and after Avian writeback, so the editor cannot race
+                // either pose authority (and still works while virtual time is
+                // paused).
+                .after(lunco_time::InteractionStepSet)
                 .after(avian3d::schedule::PhysicsSystems::Writeback)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
@@ -190,6 +196,13 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(
             PostUpdate,
             gizmo::apply_gizmo_proxy_drag
+                // Apply the render-frame delta in the same PostUpdate cycle in
+                // which the avatar's InteractionSchedule has advanced.  The
+                // actual write must remain here: it is after Avian writeback
+                // and before transform propagation, which is the only ordering
+                // that prevents physics from erasing the edit or feeding it
+                // back through the proxy.
+                .after(lunco_time::InteractionStepSet)
                 .after(gizmo::restore_dragged_transform)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
