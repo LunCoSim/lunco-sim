@@ -44,7 +44,7 @@ pub mod btcpp_xml;
 /// Behaviour trees authored as USD prims (one prim per node) — the source of truth
 /// for a mission. `AutopilotBehaviorSpec` is derived from them, never authored.
 pub mod usd_tree;
-use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
+use lunco_core::{GlobalEntityId, InputPorts, NetworkRole, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2047,8 +2047,9 @@ pub struct DisengageAutopilot {
 #[on_command(DisengageAutopilot)]
 fn on_disengage_autopilot(
     _trigger: On<DisengageAutopilot>,
-    q: Query<(Entity, &Autopilot)>,
+    mut q: Query<(Entity, &Autopilot, Option<&mut InputPorts>)>,
     mut registry: ResMut<SessionRegistry>,
+    holds: Option<ResMut<lunco_cosim::PortHolds>>,
     mut commands: Commands,
 ) {
     // Despawning the actor — not just braking it — is what makes "disengaged"
@@ -2057,22 +2058,33 @@ fn on_disengage_autopilot(
     // holding a Brake would pin the Command Deck on "Disengage" forever, with
     // "Engage" unreachable. The vessel's `AutopilotBehaviorSpec` mirror lives on
     // the VESSEL, not the actor, so the patrol survives for a later re-engage.
-    match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
-        Some((entity, ap)) => {
-            // The actor was the only recurring writer of vehicle controls. Before
-            // removing it, publish the same safe stop setpoint that a `Brake`
-            // behaviour emits; otherwise its final drive demand remains latched
-            // in the vessel ports after the actor is gone.
-            commands.trigger(SetPorts {
-                target: cmd.vessel,
-                writes: vec![
-                    ("throttle".to_string(), 0.0),
-                    ("steer".to_string(), 0.0),
-                    ("brake".to_string(), 1.0),
-                ],
-                seq: 0,
-                tick: 0,
-            });
+    match q.iter_mut().find(|(_, ap, _)| ap.vessel == cmd.vessel) {
+        Some((entity, ap, inputs)) => {
+            // An actor's last `SetPorts` is a level-triggered command. Once the
+            // actor is gone there is no next tick to replace it, so reset the
+            // physical command surface synchronously at the ownership boundary.
+            // Going through a nested `SetPorts` command here is too late: its
+            // deferred write can land after this actor is despawned and after the
+            // mixer has already propagated the stale drive demand.
+            if let Some(mut inputs) = inputs {
+                if let Some(throttle) = inputs.values.get_mut("throttle") {
+                    *throttle = 0.0;
+                }
+                if let Some(steer) = inputs.values.get_mut("steer") {
+                    *steer = 0.0;
+                }
+                if let Some(brake) = inputs.values.get_mut("brake") {
+                    *brake = 1.0;
+                }
+            }
+            // A prior `SetPorts` may still hold one of these inputs above the
+            // wiring fabric. Release it with the actor so no stale command can
+            // overwrite the neutral-brake state on the following propagation tick.
+            if let Some(mut holds) = holds {
+                for port in ["throttle", "steer", "brake"] {
+                    holds.release(cmd.vessel, port);
+                }
+            }
             // Release the AiAgent claim, or the vessel stays owned by a session
             // whose actor is gone — `may_possess` would then deny the human the
             // very vessel the UI reports as disengaged.
