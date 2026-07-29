@@ -128,8 +128,9 @@ def Xform "SandboxScene" (
         float physics:maxDistance = 2.0
     }
 
-    # ---- Generic D6 joint, all DOF locked except rotation about Z ----
-    # Expect: "Reduced PhysicsD6Joint -> PhysicsRevoluteJoint (axis ...Z...)".
+    # ---- Standard generic joint, all DOF locked except rotation about Z ----
+    # `PhysicsJoint` is USD Physics' generic six-DOF schema. Its per-DOF
+    # PhysicsLimitAPI instances reduce this shape to a revolute hinge.
     def Cube "D6Anchor" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
@@ -163,7 +164,7 @@ def Xform "SandboxScene" (
         }
     }
 
-    def PhysicsD6Joint "D6Hinge" (
+    def PhysicsJoint "D6Hinge" (
         prepend apiSchemas = ["PhysicsLimitAPI:transX", "PhysicsLimitAPI:transY", "PhysicsLimitAPI:transZ", "PhysicsLimitAPI:rotX", "PhysicsLimitAPI:rotY"]
     )
     {

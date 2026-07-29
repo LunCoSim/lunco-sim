@@ -165,7 +165,10 @@ def Xform "SolarRoverTest" (
             point3f physics:localPos0 = (0, 0.85, 0)
             point3f physics:localPos1 = (0, 0, 0)
 
-            # Wire Hinge motor angle input to the SunTracker model output
+            # Declare the joint's command input, then wire it to the tracker.
+            # `angle` is the shared revolute-joint port: its input side drives
+            # the angular motor while its output side reports measured twist.
+            float inputs:angle
             float inputs:angle.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
         }
 
