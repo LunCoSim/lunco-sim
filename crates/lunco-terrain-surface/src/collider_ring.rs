@@ -734,9 +734,19 @@ pub fn settle_grounded_assemblies(
     rotations: Query<&avian3d::prelude::Rotation>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
+    holds: Option<Res<lunco_physics::PhysicsHolds>>,
     mut commands: Commands,
 ) {
     if q_needs.is_empty() {
+        return;
+    }
+    // The marker is an initial-placement request, not an estimate.  The DEM
+    // height oracle and its collider ring become usable in different frames;
+    // consuming it while the terrain-ready hold is active samples the
+    // pre-residency pose and leaves raycast wheels outside their cast range.
+    // Keep it armed until the same readiness gate that releases physics has
+    // confirmed a live surface under every dynamic body.
+    if holds.is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY)) {
         return;
     }
     // Query the oracle in the SAME grid-absolute frame as avian `Position` (terrain
@@ -799,14 +809,17 @@ pub fn settle_grounded_assemblies(
                 over_terrain = true;
             }
         }
-        // One-shot: consume the marker on the whole assembly regardless.
+        if !over_terrain || lift <= 0.0 {
+            continue;
+        }
+        // Consume only after an actual placement.  During terrain/celestial
+        // startup the same assembly can be observed before its final
+        // grid-absolute pose exists; treating that zero-lift observation as a
+        // completed settle loses the sole chance to lift its wheel probes.
         for &m in &members {
             commands
                 .entity(m)
                 .try_remove::<lunco_core::NeedsGroundSettle>();
-        }
-        if !over_terrain || lift <= 0.0 {
-            continue;
         }
         for &m in &members {
             if let Ok((_, mut pos, lin, ang)) = bodies.get_mut(m) {

@@ -2885,11 +2885,13 @@ fn activate_dynamic_bodies(
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
-    // Vehicle roots only: both physical and raycast wheel assemblies get a
-    // one-time drop-onto-terrain settle. Free dynamic bodies (balloons, etc.)
-    // must NOT be pinned to the ground.
+    // Physical wheels arm their joint-connected assembly for one-time
+    // drop-onto-terrain placement. Raycast vehicles deliberately do NOT arm it
+    // here: their contact footprint is only valid after the wheel projection has
+    // completed, and `collect_raycast_settle_footprints` inserts the footprint
+    // and request atomically. Free dynamic bodies (balloons, etc.) must NOT be
+    // pinned to the ground.
     q_wheel: Query<(), With<PhysicalWheel>>,
-    q_vehicle: Query<(), With<DriveMix>>,
 ) {
     // Ground still building → gravity would win the race; keep everything
     // kinematic until the terrain collider lands.
@@ -2911,11 +2913,11 @@ fn activate_dynamic_bodies(
             // would not help — it only proves validity at queue time, not apply).
             commands.entity(entity).try_insert(RigidBody::Dynamic);
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
-            // Authored vehicle poses put the chassis datum at the terrain datum,
-            // while the lowest wheel contact is below it. Flag the complete
-            // vehicle for one shared placement pass so both physical and raycast
-            // wheels clear the one-sided heightfield before their first query.
-            if q_wheel.contains(entity) || q_vehicle.contains(entity) {
+            // A physical wheel is part of the chassis' joint-connected assembly,
+            // so marking it moves the whole vehicle as one. Raycast wheels need
+            // their projected contact footprint first; that path marks its root
+            // in `collect_raycast_settle_footprints` instead.
+            if q_wheel.contains(entity) {
                 commands
                     .entity(entity)
                     .try_insert(lunco_core::NeedsGroundSettle);
