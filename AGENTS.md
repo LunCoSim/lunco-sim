@@ -52,6 +52,8 @@ Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
 
 - Every controllable launch uses an explicit API port:
   `target/debug/luncosim --api 4101` (or another free port).
+- Networking is opt-in (`cargo build -p lunco-luncosim --features networking`);
+  normal local builds and scene tests must not start a multiplayer host.
 - Reuse the existing session for asset, shader, and Rhai reloads through its API.
   When a replacement is required, stop the previous session through API `Exit`,
   verify its process and API port are gone, then launch the replacement. Never

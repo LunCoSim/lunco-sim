@@ -312,9 +312,12 @@ def Scope "Amplifier" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 }
 ```
 
-`rewire_usd_connections` resolves each connection to ECS entities
-(deferred until both endpoints exist — handles async USD asset loads)
-and spawns one `SimConnection` per resolved edge.
+`rewire_usd_connections` resolves each connection to ECS entities and spawns one
+`SimConnection` per resolved edge. A generated domain root's `inputs:` boundary
+is deferred until projection has installed its `ModelicaModel`: the model-arrival
+event explicitly rebuilds the derived wire cache. The connection system therefore
+waits for both entities **and** the target's runtime contract; it never creates an
+edge merely to discover on a later fixed tick that the port surface was absent.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `cross_entity_cosim_test` exercises the canonical chain
@@ -341,8 +344,11 @@ correct. On the solar-rover demo that was `sun_azimuth`, `panel_yaw` and
 Two lessons generalise beyond Modelica:
 
 - **A not-yet-ready participant must not look like a misconfigured one.** The
-  fix is to remove the window (publish what is already known), not to teach the
-  master to tolerate it — a tolerance would also swallow the real error.
+  composer defers an edge until its target contract exists; the propagation
+  master classifies a compiling endpoint as `pending`, not failed. Once the
+  contract is running or errored, an unknown input becomes one terminal fault.
+  This keeps load ordering out of both logs and test verdicts without swallowing
+  a real typo.
 - **A deduplicated diagnostic must be scoped to what it describes.** That report
   is deduped per port NAME in a `Local`, so one load-time false positive
   silenced the genuine report for that name for the rest of the process. It now
