@@ -40,6 +40,7 @@
 use bevy::prelude::*;
 
 pub mod avian;
+pub mod binding;
 pub mod component;
 pub mod connection;
 pub mod diagnostics;
@@ -51,6 +52,7 @@ pub mod systems;
 pub mod telemetry;
 
 pub use avian::*;
+pub use binding::*;
 pub use component::*;
 pub use connection::*;
 pub use diagnostics::{BrokenConnection, CosimDiagnostics};
@@ -63,6 +65,31 @@ pub use suggestion::*;
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
 use lunco_core::{on_command, register_commands, Command};
+
+fn endpoint_ready_on_add<T: Component>(
+    trigger: On<Add, T>,
+    mut commands: Commands,
+    mut revision: ResMut<BindingRevision>,
+) {
+    commands.entity(trigger.entity).try_insert(EndpointLifecycle::Ready);
+    revision.request();
+}
+
+fn sync_model_endpoint_lifecycle(
+    query: Query<(Entity, &SimComponent), Changed<SimComponent>>,
+    mut commands: Commands,
+    mut revision: ResMut<BindingRevision>,
+) {
+    for (entity, component) in &query {
+        let state = match &component.status {
+            SimStatus::Compiling => EndpointLifecycle::Pending,
+            SimStatus::Error(message) => EndpointLifecycle::Failed(message.clone()),
+            _ => EndpointLifecycle::Ready,
+        };
+        commands.entity(entity).try_insert(state);
+        revision.request();
+    }
+}
 
 /// Plugin for co-simulation orchestration.
 ///
@@ -94,7 +121,8 @@ impl Plugin for CoSimPlugin {
         // registers them here; wires, the API, the inspector, and scripts all
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
-        app.init_resource::<lunco_core::ports::PortRegistry>();
+        app.init_resource::<lunco_core::ports::PortRegistry>()
+            .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
         app.init_resource::<diagnostics::CosimDiagnostics>();
@@ -106,6 +134,22 @@ impl Plugin for CoSimPlugin {
         // outside the shared control boundary until next tick.
         app.init_resource::<connection::ControlWriteFence>();
         app.add_systems(FixedFirst, connection::clear_control_write_fence);
+        app.add_observer(binding::on_add_connection)
+            .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
+            .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
+        app.add_systems(
+            Update,
+            (
+                sync_model_endpoint_lifecycle
+                    .run_if(|q: Query<(), Changed<SimComponent>>| !q.is_empty()),
+                binding::bind_connections
+                    .run_if(|revision: Res<BindingRevision>| revision.pending()),
+            )
+                .chain(),
+        );
         {
             let mut registry = app
                 .world_mut()

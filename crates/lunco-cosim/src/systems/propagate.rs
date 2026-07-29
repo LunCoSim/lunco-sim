@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
 
-use crate::SimConnection;
+use crate::{BoundConnection, SimConnection};
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -158,7 +158,7 @@ impl CompiledWiring {
         // Registry is `Copy` fn-pointers; clone it out so resolution below borrows
         // `world` immutably alongside the collected connections.
         let registry = world.resource::<PortRegistry>().clone();
-        let mut q = world.query::<&SimConnection>();
+        let mut q = world.query_filtered::<&SimConnection, With<BoundConnection>>();
         let conns: Vec<SimConnection> = q.iter(world).cloned().collect();
 
         for c in &conns {
@@ -396,7 +396,7 @@ impl CompiledWiring {
 /// standalone propagate into everything.
 pub fn propagate_connections(
     world: &mut World,
-    mut wiring: Local<RebuildOnChange<SimConnection, CompiledWiring>>,
+    mut wiring: Local<RebuildOnChange<BoundConnection, CompiledWiring>>,
     mut acc: Local<Vec<f64>>,
     // Dangling-wire names already reported. Dedup is per PORT NAME, not per
     // call site: a `warn_once!` here reported only the FIRST dangling wire in

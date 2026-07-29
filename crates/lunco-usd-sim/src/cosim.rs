@@ -1230,6 +1230,75 @@ pub struct UsdWiredConnection;
 #[derive(Resource, Default)]
 pub struct WiringDirty(pub bool);
 
+/// Coalesces endpoint lifecycle events into one settlement decision. It is not
+/// a timer: observers and Modelica change detection are its only writers.
+#[derive(Resource, Default)]
+struct BindingEpochDirty(pub bool);
+
+#[derive(Resource)]
+struct BindingEpochWait(lunco_readiness::ReadinessTicket);
+
+fn request_binding_epoch<T: Component>(
+    _trigger: On<Add, T>,
+    mut dirty: ResMut<BindingEpochDirty>,
+) { dirty.0 = true; }
+
+fn request_binding_epoch_on_remove<T: Component>(
+    _trigger: On<Remove, T>,
+    mut dirty: ResMut<BindingEpochDirty>,
+) { dirty.0 = true; }
+
+fn request_binding_epoch_on_model_change(
+    changed: Query<(), Changed<SimComponent>>,
+    mut dirty: ResMut<BindingEpochDirty>,
+) { if !changed.is_empty() { dirty.0 = true; } }
+
+/// The sole USD-side transition from a loading projection epoch to a bindable
+/// one.  Failed models are terminal: readiness policy decides whether to hold
+/// physics, while the binder must be allowed to record the failed endpoint.
+fn settle_binding_epoch(
+    awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
+    joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
+    wheels: Query<(), With<crate::PendingWheelWiring>>,
+    differentials: Query<(), With<crate::PendingDifferential>>,
+    models: Query<Option<&SimComponent>, With<UsdSourcedCosim>>,
+    connections: Query<(), With<SimConnection>>,
+    mut dirty: ResMut<BindingEpochDirty>,
+    mut revision: ResMut<lunco_cosim::BindingRevision>,
+    wait: Option<Res<BindingEpochWait>>,
+    mut readiness: ResMut<lunco_readiness::ReadinessRegistry>,
+    mut commands: Commands,
+) {
+    dirty.0 = false;
+    let models_terminal = models.iter().all(|model| !matches!(
+        model.map(|model| &model.status), None | Some(SimStatus::Compiling)
+    ));
+    let settled = awaiting.is_empty() && joints.is_empty() && wheels.is_empty()
+        && differentials.is_empty() && models_terminal {
+    if settled {
+        revision.seal_epoch();
+    } else {
+        revision.open_epoch();
+    }
+    // Binding is a participant-initialisation fact. The readiness policy owns
+    // whether that fact holds the world; this producer merely reports it.
+    match (!settled && !connections.is_empty(), wait) {
+        (true, None) => {
+            let ticket = readiness.begin(
+                lunco_readiness::Subject::World,
+                lunco_readiness::kinds::PARTICIPANT_INIT,
+                "USD connection binding",
+            );
+            commands.insert_resource(BindingEpochWait(ticket));
+        }
+        (false, Some(wait)) => {
+            readiness.finish(wait.0);
+            commands.remove_resource::<BindingEpochWait>();
+        }
+        _ => {}
+    }
+}
+
 /// Derive the co-sim wiring from native USD `connectionPaths`. `SimConnection`s
 /// are a **pure derived cache**: whenever the wiring
 /// topology may have changed, the whole derived set is rebuilt from the composed
@@ -2746,12 +2815,25 @@ pub(crate) fn install(app: &mut App) {
         .init_asset::<PythonSource>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>()
+        .init_resource::<BindingEpochDirty>()
         .init_resource::<crate::domain_projection::MemberClasses>()
         .init_resource::<crate::domain_projection::ProjectionDirty>()
         // The open synthesizer registry (doc 37 §8): the acausal-network
         // synthesizer registers itself as the default; another domain is a
         // `register()` from any plugin, not an edit here.
         .init_resource::<crate::domain_projection::SynthesizerRegistry>();
+    app.add_observer(request_binding_epoch::<UsdPrimPath>)
+        .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+        .add_observer(request_binding_epoch::<ModelicaModel>)
+        .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
+        .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
+        .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
+        .add_observer(request_binding_epoch::<crate::PendingWheelWiring>)
+        .add_observer(request_binding_epoch_on_remove::<crate::PendingWheelWiring>)
+        .add_observer(request_binding_epoch::<crate::PendingDifferential>)
+        .add_observer(request_binding_epoch_on_remove::<crate::PendingDifferential>)
+        .add_observer(request_binding_epoch::<SimConnection>)
+        .add_observer(request_binding_epoch_on_remove::<SimConnection>);
     // USD source-load and contract failures use the same core notice stream as
     // the Modelica compiler, so the workbench console has one observable error
     // surface. `add_message` is idempotent when the Modelica plugin registered
@@ -2781,6 +2863,20 @@ pub(crate) fn install(app: &mut App) {
         // `Option<Res>` + a bounded `Query::iter` only when a guard is
         // set); no per-frame cost in steady state.
         clear_scene_load_in_flight.after(lunco_usd_bevy::sync_usd_visuals),
+    );
+
+    app.add_systems(
+        Update,
+        settle_binding_epoch
+            .after(CosimUpdateSet::Projection)
+            .before(CosimUpdateSet::Wiring)
+            .run_if(|dirty: Res<BindingEpochDirty>| dirty.0),
+    );
+    app.add_systems(
+        Update,
+        request_binding_epoch_on_model_change
+            .after(CosimUpdateSet::Wiring)
+            .run_if(|changed: Query<(), Changed<SimComponent>>| !changed.is_empty()),
     );
 
     app.add_systems(
