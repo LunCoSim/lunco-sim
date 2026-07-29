@@ -158,6 +158,13 @@ fn on_start(me) {
     this.vmax_rc = 0.0; this.vmax_ph = 0.0;
     this.vsum_rc = 0.0; this.vsum_ph = 0.0; this.vn = 0;
     this.vterm_rc = 0.0; this.vterm_ph = 0.0;
+    // The trailing straight-line window is the high-speed stability gate.  A
+    // mean terminal speed alone can hide a rover alternating above and below
+    // the target, so retain extrema of both speed and chassis height.
+    this.vmin_rc = (); this.vmax_plateau_rc = ();
+    this.vmin_ph = (); this.vmax_plateau_ph = ();
+    this.ymin_rc = (); this.ymax_rc = ();
+    this.ymin_ph = (); this.ymax_ph = ();
     this.f0_rc = ();   this.f0_ph = ();
     // Accumulated swept yaw (degrees) + the previous tick's forward vector the
     // accumulation differences against. Start at 0.0, not `()`: the steer phase
@@ -277,6 +284,14 @@ fn on_tick(me) {
             this.vsum_rc += v_rc;
             this.vsum_ph += v_ph;
             this.vn += 1;
+            if this.vmin_rc == () || v_rc < this.vmin_rc { this.vmin_rc = v_rc; }
+            if this.vmax_plateau_rc == () || v_rc > this.vmax_plateau_rc { this.vmax_plateau_rc = v_rc; }
+            if this.vmin_ph == () || v_ph < this.vmin_ph { this.vmin_ph = v_ph; }
+            if this.vmax_plateau_ph == () || v_ph > this.vmax_plateau_ph { this.vmax_plateau_ph = v_ph; }
+            if this.ymin_rc == () || pos_rc[1] < this.ymin_rc { this.ymin_rc = pos_rc[1]; }
+            if this.ymax_rc == () || pos_rc[1] > this.ymax_rc { this.ymax_rc = pos_rc[1]; }
+            if this.ymin_ph == () || pos_ph[1] < this.ymin_ph { this.ymin_ph = pos_ph[1]; }
+            if this.ymax_ph == () || pos_ph[1] > this.ymax_ph { this.ymax_ph = pos_ph[1]; }
         }
 
         if t >= this.next_sample {
@@ -367,6 +382,10 @@ fn on_tick(me) {
                 d_rc:     this.d_rc,     d_ph:     this.d_ph,
                 yaw_rc:   this.yaw_rc,   yaw_ph:   this.yaw_ph,
                 v_ceiling: this.v_ceiling,
+                vmin_rc: this.vmin_rc, vmax_plateau_rc: this.vmax_plateau_rc,
+                vmin_ph: this.vmin_ph, vmax_plateau_ph: this.vmax_plateau_ph,
+                ymin_rc: this.ymin_rc, ymax_rc: this.ymax_rc,
+                ymin_ph: this.ymin_ph, ymax_ph: this.ymax_ph,
                 mp:       this.mp
             });
         }
@@ -474,6 +493,21 @@ fn verdict(s) {
     f.push(t_range(s.vterm_ph, lo, hi,
                    "physical terminal speed vs authored omega_max*r=" + s.v_ceiling));
 
+    // High-speed stability: evaluate the whole trailing plateau rather than a
+    // single sample.  A forward/back limit cycle leaves the mean speed plausible
+    // while widening this span; vertical chassis bob is its usual companion.
+    // The limits are deliberately generous compared with steady solver noise but
+    // far below the old visible oscillation.  They guard each realization on its
+    // own, so two equally unstable rovers cannot pass by matching one another.
+    let vspan_rc = s.vmax_plateau_rc - s.vmin_rc;
+    let vspan_ph = s.vmax_plateau_ph - s.vmin_ph;
+    let yspan_rc = s.ymax_rc - s.ymin_rc;
+    let yspan_ph = s.ymax_ph - s.ymin_ph;
+    f.push(t_range(vspan_rc, 0.0, 0.75, "raycast high-speed speed ripple (m/s)"));
+    f.push(t_range(vspan_ph, 0.0, 0.75, "physical high-speed speed ripple (m/s)"));
+    f.push(t_range(yspan_rc, 0.0, 0.08, "raycast high-speed chassis bob (m)"));
+    f.push(t_range(yspan_ph, 0.0, 0.08, "physical high-speed chassis bob (m)"));
+
     // Yaw: direction first (intolerant), then magnitude (loose).
     if s.yaw_rc == () || s.yaw_ph == () {
         f.push("heading change: MISSING (world_forward returned () for a rover)");
@@ -505,6 +539,8 @@ fn verdict(s) {
     print("[parity]   v_terminal (m/s)  " + r2(s.vterm_rc) + "       " + r2(s.vterm_ph));
     print("[parity]   v_peak     (m/s)  " + r2(s.vmax_rc) + "       " + r2(s.vmax_ph));
     print("[parity]   distance   (m)    " + r2(s.d_rc) + "       " + r2(s.d_ph));
+    print("[parity]   speed ripple(m/s) " + r2(vspan_rc) + "       " + r2(vspan_ph));
+    print("[parity]   chassis bob (m)  " + r2(yspan_rc) + "       " + r2(yspan_ph));
     print("[parity]   yaw        (deg)  " + s.yaw_rc + "       " + s.yaw_ph);
     print("[parity]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 

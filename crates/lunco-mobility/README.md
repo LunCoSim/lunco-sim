@@ -10,7 +10,7 @@ This crate implements high-performance physics models for surface vehicles, focu
 - **Suspension Physics** — Spring-damper system (Hooke's Law) for realistic vehicle dynamics and oscillation suppression.
 - **Traction & Friction** — Coulomb friction model for longitudinal drive and lateral skid/slip behaviors.
 - **Steering Mixing** — Differential (Skid), Ackermann, and **`GenericDriveMix`** (a USD-authored linear per-port mix for arbitrary motor topologies, incl. true per-wheel independent drive).
-- **Differential Coupling** — `DifferentialCoupling`, a soft holonomic constraint averaging two rockers' pitch for rocker-bogie suspension (Avian has no gear joint).
+- **Differential Coupling** — `DifferentialCoupling`, an ideal per-substep holonomic gear that mirrors two rockers' pitch for rocker-bogie suspension (Avian has no gear joint).
 - **Joint-Based Suspension** — Prismatic joint support for vehicles with physical collision wheels.
 
 These are **parameterized primitives** — a vehicle is a USD file, not a Rust struct. See [`docs/architecture/33-spacecraft-modeling.md`](../../docs/architecture/33-spacecraft-modeling.md).
@@ -26,7 +26,7 @@ lunco-mobility/
   ├── DifferentialDrive    — Control mixing for skid-steer rovers
   ├── AckermannSteer       — Control mixing for articulated steering
   ├── GenericDriveMix      — USD-authored linear per-port mix (arbitrary motor topology)
-  ├── DifferentialCoupling — Soft rocker-bogie differential constraint
+  ├── DifferentialCoupling — Per-substep rocker-bogie gear constraint
   └── systems.rs           — Ray-world intersection and force application logic
 ```
 
@@ -36,6 +36,16 @@ By using a single ray per wheel:
 1. We eliminate wheel "snagging" on terrain geometry.
 2. We ensure numeric stability during high-speed travel.
 3. We provide a clean interface for visual wheel mesh positioning.
+
+### Drivetrain ownership
+
+Each moving quantity has one writer. Raycast wheels solve their tyre patch force
+in `lunco-mobility`; jointed wheels receive torque only through
+`lunco-hardware::MotorActuator`; and a rocker-bogie differential projects its
+gear relation inside Avian's substep solver. Co-simulation marks actuator-owned
+joints and does not position-hold them. Never add a second damping or drive
+force path to "calm" a rover: use the high-speed `drivetrain_parity` regression
+to identify the owner that is unstable.
 
 ## Usage
 
