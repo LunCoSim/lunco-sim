@@ -463,7 +463,11 @@ pub(crate) fn update_links(
             // the hook reads the first cause, not every cause.
             let occluder_blocked = cheap_ok
                 && !terrain_blocked
-                && occluder_blocks(a.pose.local, b.pose.local, &occluders);
+                // `world_pose` above produces grid-absolute coordinates, which
+                // match `SolarFramePose::pos`. `local` is intentionally only
+                // for the site-local DEM oracle; mixing it here made authored
+                // occluders miss every link away from the floating origin.
+                && occluder_blocks(a.pose.pos, b.pose.pos, &occluders);
 
             let ctx = HookValue::map([
                 // Identity first (the ids `find()` speaks), labels alongside for a
