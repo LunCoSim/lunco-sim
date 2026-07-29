@@ -466,9 +466,12 @@ def Xform "SkidRover" (
                 # Electrical` — and every solar rover's island was rejected. See
                 # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
-                float inputs:sun_mount_x.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_z>
+                # Environment is runtime-provided, not a generated Modelica
+                # component. It crosses the electrical island once through its
+                # typed boundary, then the panel consumes that boundary input.
+                float inputs:sun_mount_x.connect = </SkidRover/Electrical.inputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SkidRover/Electrical.inputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SkidRover/Electrical.inputs:sun_mount_z>
 
                 def Xform "Environment" (
                     prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -482,6 +485,9 @@ def Xform "SkidRover" (
             # layers are present, never a panel-side dependency.
             over "Electrical"
             {
+                float inputs:sun_mount_x.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_z>
                 float outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
                 float outputs:solar_incidence.connect = </SkidRover/SolarPanel.outputs:cos_incidence>
                 prepend rel collection:components:includes = [</SkidRover/SolarPanel>]

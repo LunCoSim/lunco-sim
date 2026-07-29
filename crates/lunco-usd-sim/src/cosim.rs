@@ -1576,6 +1576,12 @@ pub fn rewire_usd_connections(
             else {
                 continue;
             };
+            // `connectionPaths` belong to the USD property named
+            // `inputs:<port>.connect`; `.connect` is metadata on that property,
+            // never part of the simulation port's name.  Keep the raw `attr`
+            // for the stage lookup below, but use this canonical connector name
+            // for every runtime decision and edge endpoint.
+            let sink_conn = sink_conn.strip_suffix(".connect").unwrap_or(sink_conn);
             // A structural binding is already resolved; building a phantom wire
             // for it manufactures a dangling-wire report that can never clear.
             if is_structural_binding(&view, &sink_sdf, sink_conn) {
