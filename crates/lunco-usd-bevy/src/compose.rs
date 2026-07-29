@@ -401,7 +401,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     #[test]
     fn lander_scene_composes_nested_and_referenced_control_profiles() {
         let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/scenes/sandbox/lander_ops.usda");
+            .join("../../assets/scenes/luncosim/lander_ops.usda");
         let stage = compose_file_to_stage(&scene).expect("compose lander_ops.usda");
         let view = StageView::new(&stage);
 

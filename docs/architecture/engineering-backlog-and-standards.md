@@ -310,7 +310,7 @@ remains is the Storage-API migration, which needs a dependency line from
 ## 8. Testing debt
 
 - **Zero-test crates:** `lunco-worker-transport` (the wire handshake — the
-  exact place silent corruption lives, see §4), `lunco-sandbox-server`, and
+  exact place silent corruption lives, see §4), `lunco-luncosim-server`, and
   the `luncosim` binary itself. The review's meta-finding: the bimodal
   coverage map matches the bug map.
 - **`lunco-command-macro` is structurally untestable** — the logic lives

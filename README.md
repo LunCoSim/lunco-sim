@@ -48,7 +48,7 @@ Most simulators focus on isolated physics. **LunCo** focuses on the **System-of-
 Both windowed apps also run in your browser. These are **early preview builds — expect rough edges and missing features**:
 
 - **[lunica.lunco.space](https://lunica.lunco.space)** — the Modelica engineering workbench
-- **[sandbox.lunco.space](https://sandbox.lunco.space)** — the physics sandbox
+- **[sandbox.lunco.space](https://sandbox.lunco.space)** — the LunCoSim web client
 
 ### 💻 Run locally
 
@@ -70,7 +70,7 @@ cargo run --release -p luncosim
 Validate robotics, suspension, and environment interactions in a collaborative 3D scene (windowed, or headless with `--no-ui`).
 
 ```bash
-cargo run --release -p lunco-sandbox --bin sandbox
+cargo run --release -p lunco-luncosim --bin luncosim
 ```
 
 ### 3. Lunica — the Engineering Workbench

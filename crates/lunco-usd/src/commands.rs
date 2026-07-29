@@ -1183,7 +1183,7 @@ pub fn on_redo_usd_document(
 /// `UndoManager::take_undo_group` then undoes the whole group.
 ///
 /// **Every multi-op USD handler should route through this** — including the
-/// `realign_component_ops` call sites in `lunco-sandbox-edit` (`ui/inspector.rs`,
+/// `realign_component_ops` call sites in `lunco-luncosim-edit` (`ui/inspector.rs`,
 /// `ui/usd_mount.rs`), which still apply op-by-op.
 ///
 /// Ops that are rejected are logged and skipped (unchanged semantics — a partial
@@ -1672,14 +1672,14 @@ mod tests {
 
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let mut backed = DocBackedTwinScenes::default();
-        let scene = std::path::Path::new("/twins/moonbase/scenes/sandbox.usda");
+        let scene = std::path::Path::new("/twins/moonbase/scenes/luncosim.usda");
 
         let (doc, _) = registry.open_file(scene.to_path_buf(), "#usda 1.0\n".to_string());
-        backed.track(doc, "moonbase".into(), "scenes/sandbox.usda".into());
+        backed.track(doc, "moonbase".into(), "scenes/luncosim.usda".into());
 
         assert_eq!(
             doc_backed_source_for_abs(scene, &registry, &backed).as_deref(),
-            Some("twin://moonbase/scenes/sandbox.usda"),
+            Some("twin://moonbase/scenes/luncosim.usda"),
             "a doc-backed scene routes through the source that composes its runtime overlay"
         );
     }
@@ -1694,11 +1694,11 @@ mod tests {
 
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let mut backed = DocBackedTwinScenes::default();
-        let tracked = std::path::Path::new("/twins/moonbase/scenes/sandbox.usda");
+        let tracked = std::path::Path::new("/twins/moonbase/scenes/luncosim.usda");
         let untracked = std::path::Path::new("/twins/moonbase/scenes/other.usda");
 
         let (doc, _) = registry.open_file(tracked.to_path_buf(), "#usda 1.0\n".to_string());
-        backed.track(doc, "moonbase".into(), "scenes/sandbox.usda".into());
+        backed.track(doc, "moonbase".into(), "scenes/luncosim.usda".into());
         // A document exists for this file, but no twin scene is backed by it.
         registry.open_file(untracked.to_path_buf(), "#usda 1.0\n".to_string());
 
@@ -1729,7 +1729,7 @@ mod tests {
         let registry = DocumentRegistry::<UsdDocument>::default();
         let backed = DocBackedTwinScenes::default();
         for path in [
-            "twin://moonbase/scenes/sandbox.usda",
+            "twin://moonbase/scenes/luncosim.usda",
             "lunco://vessels/rovers/skid_rover.usda",
         ] {
             assert_eq!(

@@ -296,7 +296,7 @@ fn draw_top_banner(
             // Session banner: full-screen click-blocking scrim, banner fill
             // (`from_rgb(30, 30, 46)` is Catppuccin Mocha `base` retyped by hand,
             // so it does NOT follow a light/dark switch) and its accent stroke.
-            // BLOCKED: `lunco-networking` is reachable from `lunco-sandbox-server`
+            // BLOCKED: `lunco-networking` is reachable from `lunco-luncosim-server`
             // and `lunco-theme` pulls bevy_egui -> bevy_render -> wgpu, so the dep
             // must be optional behind this crate's existing `ui` feature (which
             // already gates `bevy_egui`) before any of this can move.

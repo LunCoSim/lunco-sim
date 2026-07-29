@@ -17,7 +17,7 @@
 #
 # Available binaries:
 #   lunica   - Modelica Workbench IDE
-#   sandbox  - Simulation Sandbox (ground physics)
+#   luncosim  - Simulation Sandbox (ground physics)
 #   luncosim - Full lunar-mission simulator (celestial + orbital). No Modelica
 #              worker / MSL bundle (not a Modelica IDE). Textures load over HTTP
 #              (built without `celestial` embed-assets).
@@ -60,21 +60,18 @@ get_binary_config() {
         lunica)
             echo "lunco-modelica"
             ;;
-        sandbox)
-            echo "lunco-sandbox"
-            ;;
         luncosim)
-            echo "luncosim"
+            echo "lunco-luncosim"
             ;;
         *)
             error "Unknown binary: $binary"
-            error "Available binaries: lunica, sandbox, luncosim"
+            error "Available binaries: lunica, luncosim"
             exit 1
             ;;
     esac
 }
 
-# The web-target name IS the cargo bin name — both `lunica` and `sandbox`
+# The web-target name IS the cargo bin name — both `lunica` and `luncosim`
 # are single cfg-gated sources that compile to desktop and wasm via
 # `#[cfg(target_arch = "wasm32")]`. No `_web` aliases, no `--out-name`
 # rename. Kept as a function so the build flow has one obvious seam if a
@@ -88,7 +85,7 @@ get_cargo_bin_name() {
 #   $1 src   — path to the Twin folder (contains the scene .usda + assets)
 #   $2 name  — dist folder name under assets/twins/  (URL-safe)
 #   $3 scene — scene .usda filename within the twin
-#   $4 dist  — dist root (…/dist/sandbox)
+#   $4 dist  — dist root (…/dist/luncosim)
 #
 # Copies src → dist/assets/twins/<name>/ and prints a JSON object
 # {"name":…,"path":"twins/<name>/<scene>"} on stdout (empty on failure) so
@@ -117,7 +114,7 @@ stage_one_twin() {
     printf '{"name":"%s","path":"twins/%s/%s"}' "$name" "$name" "$scene"
 }
 
-# Pack the sandbox's Twin(s) and write dist/scenes.json (read by the
+# Pack the luncosim's Twin(s) and write dist/scenes.json (read by the
 # index.html autoloader). See the LC_TWIN_* env docs at the call site.
 stage_twins() {
     local dist="$1"
@@ -165,8 +162,8 @@ stage_twins() {
 
     if [ -z "$entries" ]; then
         # No twin baked in → boot the lightweight demo scene (staged under
-        # assets/scenes/sandbox/). The moonbase arrives from the server on connect.
-        printf '{"default":"scenes/sandbox/sandbox_scene.usda","scenes":[]}\n' > "$dist/scenes.json"
+        # assets/scenes/luncosim/). The moonbase arrives from the server on connect.
+        printf '{"default":"scenes/luncosim/sandbox_scene.usda","scenes":[]}\n' > "$dist/scenes.json"
         info "Wrote scenes.json (default: lightweight demo; moonbase via server)"
         return 0
     fi
@@ -344,21 +341,18 @@ build_wasm() {
     # is a real cargo feature (egui/winit/workbench live behind it, no longer
     # unconditional deps). `--no-default-features` strips it, so we re-add it
     # explicitly — without it the wasm build links no window/egui (lunco_workbench
-    # unresolved) and degrades to a headless server in the browser. luncosim is
-    # the exception (it has no `ui` feature — egui is an unconditional dep there).
+    # unresolved) and degrades to a headless server in the browser. LunCoSim
+    # enables its explicit `ui` feature here.
     #
-    # sandbox carries the optional multiplayer wire (lightyear WebTransport,
+    # luncosim carries the optional multiplayer wire (lightyear WebTransport,
     # client-only on wasm); lunica does not. Browser join is URL-driven
     # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
     local wasm_features="lunco-api,ui"
-    # luncosim has no `lunco-api` cargo feature (the API is an unconditional dep,
-    # JS-bridge on wasm). Build it with NO features: celestial bodies load when
-    # `sandbox` is off (the default), and we deliberately skip `celestial`
+    # LunCoSim has a `lunco-api` feature for native transport and a networking
+    # feature. The browser uses the JS bridge and deliberately skips `celestial`
     # (embed-assets) on web — baking the Earth/Moon textures via `include_bytes!`
     # bloats the wasm and needs the asset cache; the browser loads them over HTTP.
     if [ "$binary" = "luncosim" ]; then
-        wasm_features=""
-    elif [ "$binary" = "sandbox" ]; then
         wasm_features="lunco-api,networking,ui"
         # Opt the client-prediction diagnostics into the browser build with
         # NET_DIAG=1 (off by default — same `net-diag` cargo feature as native).
@@ -374,10 +368,10 @@ build_wasm() {
     # lightyear_link) pulls getrandom 0.4 — both refuse to compile for
     # wasm32-unknown-unknown unless a backend is named. This cfg is version-
     # agnostic (covers 0.3 and 0.4 alike); the matching `wasm_js` *feature* is
-    # enabled per-version on getrandom in the crates' wasm deps (lunco-sandbox /
+    # enabled per-version on getrandom in the crates' wasm deps (lunco-luncosim /
     # lunco-networking). Both cfg and feature are required.
     # `${wasm_features:+--features ...}` omits the flag entirely when empty
-    # (luncosim builds with no extra features).
+    # (the web luncosim build uses the explicit networking + UI features above).
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
         cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features ${wasm_features:+--features "$wasm_features"}
 
@@ -385,9 +379,9 @@ build_wasm() {
     # without this every rumoca compile (a few seconds for non-trivial
     # models) blocks the render loop and the page appears frozen. Both
     # binaries that embed the Modelica workbench need it — lunica is
-    # the workbench, sandbox embeds it as the Design workspace.
+    # the workbench, luncosim embeds it as the Design workspace.
     case "$binary" in
-        lunica|sandbox)
+        lunica|luncosim)
             local base_target_dir
             base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
             local worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/lunica_worker.wasm"
@@ -408,7 +402,7 @@ build_wasm() {
             # Same rationale as the Modelica worker: wasm32 has no threads, so the
             # ~40 MB GeoTIFF decode + crater stamp would freeze the page. Runs the
             # SAME `bake_grid` the native async task uses; streamed twin terrains
-            # (moonbase) need it. Built for lunica+sandbox alongside lunica_worker.
+            # (moonbase) need it. Built for lunica+luncosim alongside lunica_worker.
             local dem_worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/dem_worker.wasm"
             if should_rebuild_worker "$dem_worker_wasm"; then
                 info "Building companion worker bundle: dem_worker"
@@ -466,8 +460,8 @@ generate_bindings() {
     local cargo_bin
     cargo_bin=$(get_cargo_bin_name "$binary")
     # `--out-name "$binary"` normalises wasm-bindgen output to the
-    # friendly name (e.g. `sandbox.js`, `sandbox_bg.wasm`) even
-    # when the cargo binary is named differently (e.g. `sandbox`).
+    # friendly name (e.g. `luncosim.js`, `sandbox_bg.wasm`) even
+    # when the cargo binary is named differently (e.g. `luncosim`).
     # Downstream code (dist copy, index.html `import init from
     # './<binary>.js'`) keeps using `$binary` throughout.
     $wasm_bindgen_cmd "$cargo_out_dir/${cargo_bin}.wasm" \
@@ -545,7 +539,7 @@ generate_bindings() {
         #   __LC_BUNDLE__ → cargo bin / wasm-bindgen out-name (e.g. lunica)
         #   __LC_NAME__   → display name (bundle, first letter upper-cased)
         local app_name="${binary}"
-        [ "$binary" = "sandbox" ] && app_name="LunCoSim"
+        [ "$binary" = "luncosim" ] && app_name="LunCoSim"
         sed -i "s/__LC_BUNDLE__/$binary/g; s|__LC_NAME__|$app_name|g" "$dist_dir/index.html"
         info "Filled template: bundle=$binary, name=$app_name"
         # Inject the actual uncompressed WASM size so the loading UI
@@ -603,11 +597,11 @@ generate_bindings() {
         warn "DejaVu Sans not found — math/arrow glyphs will tofu in browser."
     fi
 
-    # sandbox loads scene files via the bevy AssetServer over HTTP
-    # (`assets/scenes/sandbox/sandbox_scene.usda` and friends). Copy the
+    # luncosim loads scene files via the bevy AssetServer over HTTP
+    # (`assets/scenes/luncosim/sandbox_scene.usda` and friends). Copy the
     # workspace `assets/` tree next to the wasm so they're same-origin.
     # lunica doesn't need this — its models live in the MSL bundle.
-    if [ "$binary" = "sandbox" ] && [ -d "$PROJECT_DIR/assets" ]; then
+    if [ "$binary" = "luncosim" ] && [ -d "$PROJECT_DIR/assets" ]; then
         info "Copying assets/ → $dist_dir/assets/"
         # `.lunco/` (runtime overlay) and `history/` (edit journal) are per-session
         # state that a dev run writes into `assets/`, which is itself an open twin.
@@ -667,12 +661,12 @@ generate_bindings() {
     # was prototyped and backed out (2026-07-18) to avoid growing the shared
     # manifest schema; see `docs/architecture/56-asset-resolution-and-cache.md`.
 
-    # luncosim and sandbox render Earth/Moon as celestial bodies whose imagery is
+    # luncosim and luncosim render Earth/Moon as celestial bodies whose imagery is
     # a declared dataset (`crates/lunco-celestial/Assets.toml`), loaded as
     # `lunco://textures/<tex>`. On wasm every root of that scheme is an HTTP root,
     # so staging into `assets/.cache/textures/` — the PACKED cache, exactly where
     # `build_native.sh` puts it — serves them same-origin with no web-only path.
-    if [ "$binary" = "luncosim" ] || [ "$binary" = "sandbox" ]; then
+    if [ "$binary" = "luncosim" ] || [ "$binary" = "luncosim" ]; then
         local missing_celestial=0
         for tex in earth.png moon.png; do
             local tex_found=0
@@ -713,7 +707,7 @@ the browser. Run: cargo run -p lunco-assets -- download -g celestial && cargo ru
         done
     fi
 
-    # sandbox references glTF models via `lunco://models/<name>.glb`. The
+    # luncosim references glTF models via `lunco://models/<name>.glb`. The
     # `lunco://` reader resolves `assets/` first, then the cache root — on wasm
     # both are HTTP roots — so a model staged here is fetched from
     # `<origin>/.cache/models/<name>.glb` (cache_dir() = ".cache").
@@ -721,7 +715,7 @@ the browser. Run: cargo run -p lunco-assets -- download -g celestial && cargo ru
     # idea as the luncosim textures above. Populate the cache first with:
     #   cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance \
     #     && cargo run -p lunco-assets --bin lunco-assets -- process -g models
-    if [ "$binary" = "sandbox" ]; then
+    if [ "$binary" = "luncosim" ]; then
         local models_src=""
         for candidate in \
             "$PROJECT_DIR/../.cache/models" \
@@ -745,7 +739,7 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
         fi
     fi
 
-    # Pack the Twin(s) the sandbox should offer, and write scenes.json so the
+    # Pack the Twin(s) the luncosim should offer, and write scenes.json so the
     # index.html autoloader opens the default one on boot. Dynamic, not
     # compiled in — override the source or add scenes without rebuilding:
     #   LC_TWIN_SRC=/path/to/twin        default twin folder to pack
@@ -754,8 +748,8 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
     #   LC_TWIN_NAME=moonbase            dist name under assets/twins/
     #   LC_TWIN_SCENE=moonbase_scene.usda   scene file within the twin
     #   LC_TWIN_EXTRA="lab=lab.usda=/path/lab;…"  extra non-default scenes
-    # Or edit dist/sandbox/scenes.json after the build.
-    if [ "$binary" = "sandbox" ]; then
+    # Or edit dist/luncosim/scenes.json after the build.
+    if [ "$binary" = "luncosim" ]; then
         stage_twins "$dist_dir"
     fi
 
@@ -765,14 +759,14 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
     info "Bundle sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
     info "Bundle ready: $dist_dir"
 
-    # ── Worker bundle (lunica + sandbox) ──────────────────────
+    # ── Worker bundle (lunica + luncosim) ──────────────────────
     # Generate bindings for the off-thread Modelica worker and place its
     # output under `dist/<bin>/worker/` so the main page can
     # `new Worker('./worker/worker_bootstrap.js', { type: 'module' })`. The
     # worker bundle is a SECOND wasm instance — it has its own memory and
     # state — and there is no way to share Rust globals or `Arc`s with it.
     case "$binary" in
-        lunica|sandbox) staged_worker=1 ;;
+        lunica|luncosim) staged_worker=1 ;;
         *) staged_worker=0 ;;
     esac
     if [ "$staged_worker" = "1" ]; then
@@ -885,7 +879,7 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
         # `#[wasm_bindgen(start)]` worker entry actually fires.
         # The worker bootstrap shim always lives next to the worker
         # source (in `lunco-modelica`), regardless of which main bundle
-        # is consuming it. Same file for lunica and sandbox.
+        # is consuming it. Same file for lunica and luncosim.
         local worker_bootstrap="$PROJECT_DIR/crates/lunco-modelica/web/worker_bootstrap.js"
         if [ -f "$worker_bootstrap" ]; then
             cp "$worker_bootstrap" "$worker_dist_dir/worker_bootstrap.js"
@@ -905,7 +899,7 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
             "$binary"
     fi
 
-    # ── DEM bake worker bundle (lunica + sandbox) ─────────────
+    # ── DEM bake worker bundle (lunica + luncosim) ─────────────
     # A SECOND companion worker (independent of the Modelica one): the off-thread
     # DEM bake. Staged under `dist/<bin>/dem-worker/` so the page can
     # `new Worker('./dem-worker/dem_worker_bootstrap.js', { type: 'module' })`.
@@ -956,7 +950,7 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
 # Pack MSL into a versioned, compressed bundle and place it next to the
 # wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
 # need CORS configuration. Both wasm bundles ship MSL — lunica because
-# the workbench *is* the MSL editor, sandbox because its Design
+# the workbench *is* the MSL editor, luncosim because its Design
 # workspace embeds the same Modelica panels and they'd be empty without
 # the standard library.
 # Content-hash the worker wasm in dist so a rebuilt worker is never served
@@ -1023,7 +1017,7 @@ hash_worker_wasm() {
 build_msl_index() {
     local binary="$1"
     case "$binary" in
-        lunica|sandbox) ;;
+        lunica|luncosim) ;;
         *) return 0 ;;
     esac
     if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ "${MSL_REINDEX:-}" != "force" ]; then
@@ -1041,7 +1035,7 @@ build_msl_index() {
 build_msl_bundle() {
     local binary="$1"
     case "$binary" in
-        lunica|sandbox) ;;
+        lunica|luncosim) ;;
         *) return 0 ;;
     esac
     # Refresh the palette index first so bundled extras carry icons/ports.
@@ -1175,10 +1169,10 @@ clean() {
     base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
     rm -rf "$base_target_dir/web"
     rm -rf "$PROJECT_DIR/dist"
-    # Drop cargo wasm outputs from both profiles (lunica + sandbox + worker).
+    # Drop cargo wasm outputs from both profiles (lunica + luncosim + worker).
     for profile in web-dev web-release; do
-        rm -f "$base_target_dir/wasm32-unknown-unknown/$profile/"{lunica,sandbox,lunica_worker}.wasm
-        rm -f "$base_target_dir/wasm32-unknown-unknown/$profile/"{lunica,sandbox,lunica_worker}.d
+        rm -f "$base_target_dir/wasm32-unknown-unknown/$profile/"{lunica,luncosim,lunica_worker}.wasm
+        rm -f "$base_target_dir/wasm32-unknown-unknown/$profile/"{lunica,luncosim,lunica_worker}.d
     done
     success "Cleaned"
 }
@@ -1199,7 +1193,7 @@ show_help() {
     echo "Profile (default: fast dev build, no wasm-opt):"
     echo "  --release              Shippable build (fat LTO + wasm-opt size pass)"
     echo ""
-    echo "Twin packing (sandbox only — CLI flags override LC_TWIN_* env vars):"
+    echo "Twin packing (luncosim only — CLI flags override LC_TWIN_* env vars):"
     echo "  --twin-src <path>      Twin folder to pack (default: ~/Documents/lunco/moonbase/twin)"
     echo "                         Pass empty string ('') to skip twin packing entirely"
     echo "  --twin-name <name>     Dist name under assets/twins/ (default: derived from folder)"
@@ -1208,15 +1202,15 @@ show_help() {
     echo ""
     echo "Available binaries:"
     echo "  lunica       - Modelica Workbench IDE (default port: 8080)"
-    echo "  sandbox      - Rover Physics Sandbox (default port: 8081)"
+    echo "  luncosim      - Rover Physics Sandbox (default port: 8081)"
     echo ""
     echo "Examples:"
     echo "  $0 build lunica                              # Fast dev build"
     echo "  $0 build lunica --release                   # Shippable optimized build"
     echo "  $0 all lunica                               # Build (dev) and serve"
-    echo "  $0 all sandbox 8082                         # Build and serve on custom port"
-    echo "  $0 build sandbox --twin-src ~/twins/mb      # Custom moonbase twin path"
-    echo "  $0 build sandbox --twin-src '' # No twin"
+    echo "  $0 all luncosim 8082                         # Build and serve on custom port"
+    echo "  $0 build luncosim --twin-src ~/twins/mb      # Custom moonbase twin path"
+    echo "  $0 build luncosim --twin-src '' # No twin"
     echo "  $0 clean                                    # Clean all artifacts"
     echo ""
     echo "Prerequisites:"
@@ -1317,7 +1311,7 @@ main() {
             check_prerequisites
             local crate=$(get_binary_config "$binary")
             local default_port=8080
-            if [ "$binary" = "sandbox" ]; then
+            if [ "$binary" = "luncosim" ]; then
                 default_port=8081
             fi
             serve_web "$binary" "$crate" "${port:-$default_port}"
@@ -1331,7 +1325,7 @@ main() {
             check_prerequisites
             local crate=$(get_binary_config "$binary")
             local default_port=8080
-            if [ "$binary" = "sandbox" ]; then
+            if [ "$binary" = "luncosim" ]; then
                 default_port=8081
             fi
             build_wasm "$binary" "$crate"

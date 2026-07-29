@@ -232,7 +232,7 @@ fn sun_tracker_asset_wiring_migrated() {
 
 #[test]
 fn sandbox_scene_asset_wiring_migrated() {
-    let (app, id) = build_from_source(&asset_src("scenes/sandbox/sandbox_scene.usda"));
+    let (app, id) = build_from_source(&asset_src("scenes/luncosim/sandbox_scene.usda"));
     assert_eq!(
         conns(&app, id, "/SandboxScene/Amplifier", "inputs:signal"),
         ["/SandboxScene/Oscillator.outputs:signal"]
@@ -257,7 +257,7 @@ fn sandbox_scene_asset_wiring_migrated() {
 #[test]
 fn lander_asset_wiring_migrated() {
     let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/scenes/sandbox/lander_ops.usda");
+        .join("../../assets/scenes/luncosim/lander_ops.usda");
     let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose lander_ops.usda");
     let view = lunco_usd_bevy::StageView::new(&stage);
     let lander = SdfPath::new("/LanderTest/Lander").unwrap();

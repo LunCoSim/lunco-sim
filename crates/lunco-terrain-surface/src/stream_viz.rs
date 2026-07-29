@@ -1810,10 +1810,10 @@ fn bootstrap_cover_is_ready(
 ///
 /// # Who sets it
 ///
-/// `lunco-sandbox`, mirroring `OfflineRecordingState::active` — the same inversion
+/// `lunco-luncosim`, mirroring `OfflineRecordingState::active` — the same inversion
 /// as `report_terrain_status`/`report_scene_spawn_status`, for the same reason.
 /// `lunco-workbench` (which owns the recorder) is a UI-shell crate and cannot name
-/// terrain; `lunco-terrain-surface` must not know what a recorder is. `lunco-sandbox`
+/// terrain; `lunco-terrain-surface` must not know what a recorder is. `lunco-luncosim`
 /// is the assembly point that sees both.
 ///
 /// Distinct from [`LodFrozen`], which is an authored per-terrain opt-in that stops

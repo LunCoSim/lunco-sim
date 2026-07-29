@@ -84,7 +84,7 @@ def Xform "DecorBanner" (apiSchemas = ["PhysicsRigidBodyAPI"])
 ## What the markers mean (for engine devs)
 
 Derived markers live in `lunco-core` (`session.rs`) and are read by the client proxy/
-prediction systems in `lunco-sandbox-edit` (`commands.rs`):
+prediction systems in `lunco-luncosim-edit` (`commands.rs`):
 
 - `NetReplicate` — host serialises this body's WORLD pose+velocity each snapshot
   (`gather_snapshot`); client pins it kinematic and drives it from the snapshot curve.

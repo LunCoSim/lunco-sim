@@ -162,7 +162,7 @@ pub(crate) fn crater_placements(
 /// A request to build a DEM tile **onto the entity carrying this component**.
 /// [`start_dem_builds`] kicks the off-thread bake; [`finish_dem_builds`] inserts
 /// `Mesh3d` + `Collider` onto the same entity. Public so the USD→DEM bridge (in
-/// `lunco-sandbox`) can place it on an authored terrain prim.
+/// `lunco-luncosim`) can place it on an authored terrain prim.
 #[derive(Component)]
 pub struct DemTerrainRequest {
     /// DEM site directory (contains `materials/textures/heightmap.tif`).

@@ -305,11 +305,11 @@ mod tests {
         let mut ws = WorkspaceResource::new();
         ws.add_twin(open_twin(dir.path()));
 
-        let scene = dir.path().join("scenes/sandbox/scene.usda");
+        let scene = dir.path().join("scenes/luncosim/scene.usda");
         let rt = runtime_path(&ws, &scene).expect("scene inside twin resolves");
         assert_eq!(
             rt,
-            dir.path().join(".lunco/runtime/scenes/sandbox/scene.usda")
+            dir.path().join(".lunco/runtime/scenes/luncosim/scene.usda")
         );
 
         // A path outside every twin has nowhere stable to persist.

@@ -339,7 +339,7 @@ impl SignalRegistry {
 /// [`SignalRegistry`] does: the surfaces that read it (`lunco-viz`'s telemetry
 /// browser today, a HUD or a recorder tomorrow) must not depend on whichever app
 /// crate owns the selection UX, and the app crate that WRITES it
-/// (`lunco-sandbox-edit`'s `SelectedEntities` mirror) must not depend on a GPU
+/// (`lunco-luncosim-edit`'s `SelectedEntities` mirror) must not depend on a GPU
 /// stack. Empty ⇒ no focus; every consumer shows everything.
 ///
 /// Roots, not channel owners: a channel sits on the prim it measures (a motor, a

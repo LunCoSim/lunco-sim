@@ -20,7 +20,7 @@
 #     }
 #
 # Every reference arc has to remap that path and merge that `prepend` list op. At
-# one arc it demonstrably works (`scenes/sandbox/solar_rover_demo.usda`). At two
+# one arc it demonstrably works (`scenes/luncosim/solar_rover_demo.usda`). At two
 # arcs a workshop build reported the panel dropping out of the composed
 # collection while `outputs:solar_power.connect` still pointed at it, so
 # `project_domain_islands` rejected the whole network with
@@ -46,7 +46,7 @@
 #                          rig that could not have shown one.
 #
 # WHAT IT ACTUALLY FOUND, 2026-07-27: BOTH DEAD, and the arc count is innocent.
-# `scenes/sandbox/solar_rover_demo.usda` — shipped, one arc, membership authored
+# `scenes/luncosim/solar_rover_demo.usda` — shipped, one arc, membership authored
 # in the scene itself, no profile anywhere — was rejected with the same error, so
 # no solar electrical island in this repo had ever assembled. Four faults, none of
 # them nesting:
@@ -114,7 +114,7 @@ def Xform "SolarDomainNestedRef" (
 
     # ── CONTROL: one reference arc ───────────────────────────────────────────
     # The selection is made HERE, in the scene that references the base. This is
-    # the arrangement that already works in `scenes/sandbox/solar_rover_demo.usda`,
+    # the arrangement that already works in `scenes/luncosim/solar_rover_demo.usda`,
     # and it is what makes a red on `Nested` mean "the extra arc", rather than
     # "solar is broken".
     def Xform "Direct" (

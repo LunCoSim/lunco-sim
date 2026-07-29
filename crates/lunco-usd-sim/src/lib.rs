@@ -120,7 +120,7 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// is structurally gone.
 ///
 /// It is kept because it is `pub` and inserted outside this crate
-/// (`lunco-sandbox`'s headless boot, `lunco-usd`'s integration tests), and because
+/// (`lunco-luncosim`'s headless boot, `lunco-usd`'s integration tests), and because
 /// it remains a correct, cheap "don't wait" switch. Removing it is a separate,
 /// cross-crate change.
 #[derive(Resource, Default, Debug, Clone, Copy)]
@@ -2818,7 +2818,7 @@ fn resolve_differential_coupling(
 
 /// Set while a ground provider's static collider is still building (the DEM
 /// terrain build — tracked by the assembly crate that sees both worlds, e.g.
-/// `lunco-sandbox`). While `true`, [`activate_dynamic_bodies`] holds bodies
+/// `lunco-luncosim`). While `true`, [`activate_dynamic_bodies`] holds bodies
 /// kinematic so a rover spawned over not-yet-collidable terrain doesn't
 /// free-fall through the surface during the multi-second collider bake.
 #[derive(Resource, Default)]

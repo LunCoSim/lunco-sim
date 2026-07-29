@@ -25,7 +25,7 @@
 //! ANCESTOR test against [`lunco_signal::TelemetryFocus`]
 //! ([`entity_in_focus`]), not by entity equality, which would show nothing for
 //! every rover ever selected. The focus resource is written by whichever app owns
-//! selection (`lunco-sandbox-edit` mirrors `SelectedEntities` into it); a host
+//! selection (`lunco-luncosim-edit` mirrors `SelectedEntities` into it); a host
 //! without one leaves it empty and the toggle disabled.
 //!
 //! ## Getting a channel onto a canvas
@@ -450,7 +450,7 @@ impl Panel for TelemetryBrowserPanel {
 
         // ── Selection scope ──────────────────────────────────────
         // The focus resource is written by whichever app owns selection
-        // (`lunco-sandbox-edit` mirrors `SelectedEntities` into it); absent ⇒ a host
+        // (`lunco-luncosim-edit` mirrors `SelectedEntities` into it); absent ⇒ a host
         // with no selection concept at all, and the toggle simply has nothing to do.
         let focus: Vec<Entity> = ctx
             .resource::<TelemetryFocus>()

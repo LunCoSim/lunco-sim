@@ -72,7 +72,7 @@ consumers) — were **never cross-wired**, so warp was effectively cosmetic.
 ### 1c. The one thing already correct
 
 The netcode already does it right in miniature: `gen_t = tick · SECS_PER_TICK`
-(`lunco-sandbox-edit/src/commands.rs:467`) **derives** seconds from ticks (never accumulates),
+(`lunco-luncosim-edit/src/commands.rs:467`) **derives** seconds from ticks (never accumulates),
 and `lightyear tick_duration = SECS_PER_TICK` (`lunco-networking/src/shared.rs:99`). The
 master we want already exists and already works; this design generalizes it.
 
@@ -439,7 +439,7 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
   `TimeWarpState` by the `lunco-core` ↔ `lunco-time` layering, since `advance_sim_tick` can't import
   the spine). Collapsed to one: `advance_sim_tick` and the physics gates
   (hardware/mobility/usd-sim) now read `Res<Time<Virtual>>` directly (`relative_speed_f64() > 0`),
-  and `TimeWarpState` is deleted (struct + the manual sandbox/example inserts — Bevy's default
+  and `TimeWarpState` is deleted (struct + the manual luncosim/example inserts — Bevy's default
   `Time<Virtual>` is already *running*). `advance_clock` now **returns `f64`** (the one control
   output) and mutates the clock; the caller reads `epoch`/`regime` back from it — the
   `ClockSample` struct (which duplicated clock state) is gone. The control write is also
@@ -459,7 +459,7 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
 - **Single authoritative writer per context** (resolves the old web-build conflict where two systems
   fought the sun every frame): it targets the **brightest** `DirectionalLight` (canonical `pick_sun`
   rule — Earthshine fill ~12 lx ≪ ~128 000 lx, and it dodges the `single_mut()`-with-two-lights trap),
-  and **returns early under `NoOpEphemerisProvider`** (every position ZERO ⇒ degenerate), so sandbox /
+  and **returns early under `NoOpEphemerisProvider`** (every position ZERO ⇒ degenerate), so luncosim /
   no-ephemeris contexts keep dynamic manual `SetEnvironmentLight` (yaw/pitch) control. The ephemeris is
   authoritative only when a real provider (`lunco-celestial-ephemeris`) is installed.
 - The terrain `sun_dir` shader uniform follows for free: `pick_sun`/`wire_terrain_materials`
@@ -748,7 +748,7 @@ readers in `lunco-celestial` untouched — the clock becomes the source, the vie
 `enable_celestial_on_site_anchor` flips it as a side effect of a scene authoring a site anchor. That
 is a code-side switch for what is really *scene content*, and it has already produced one bug: the
 trajectory layer ignored the flag and spawned Earth/Moon orbit views into every scene, including a
-sandbox that had asked for no celestial content at all.
+luncosim that had asked for no celestial content at all.
 
 **Bodies become USD prims.** Nothing celestial exists unless the scene says so:
 
@@ -759,8 +759,8 @@ def Xform "Moon"  (prepend apiSchemas = ["LuncoCelestialBodyAPI"]) { int lunco:b
 ```
 
 with a reusable `assets/celestial/solar_system.usda` that a scene pulls in by `references` when it
-wants the standard set. The default sandbox references nothing ⇒ no Sun, no Earth, no Moon, no orbit
-views, no ephemeris — which is the correct reading of "the sandbox is a flat test arena".
+wants the standard set. The default luncosim references nothing ⇒ no Sun, no Earth, no Moon, no orbit
+views, no ephemeris — which is the correct reading of "the luncosim is a flat test arena".
 
 The `big_space` precision scaffolding (grids, SOI, `GravityProvider`, `GlobeLod`, reference frames)
 stays in code — it is derived structure, not authored content — but it is **built from the declared

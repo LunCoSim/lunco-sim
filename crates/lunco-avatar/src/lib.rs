@@ -606,11 +606,11 @@ impl Plugin for LunCoAvatarPlugin {
         //
         // The observer reads two click-arbitration resources — `DragModeActive`
         // (gizmo drag in progress) and `SpawnToolActive` (click-to-place armed).
-        // Both are normally owned by the editor (`lunco-sandbox-edit`), but the
+        // Both are normally owned by the editor (`lunco-luncosim-edit`), but the
         // observer lives here and fires on the FIRST pointer event, so a binary
         // that uses the avatar without the editor (luncosim) would panic on the
         // missing `Res`. Guarantee them here — `init_resource` is idempotent, so
-        // a host that inserts its own (sandbox) keeps that value.
+        // a host that inserts its own (luncosim) keeps that value.
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
         app.init_resource::<lunco_core::TerrainToolActive>();
@@ -742,7 +742,7 @@ impl Plugin for LunCoAvatarPlugin {
 
         // Possessed-rover name tags: an egui screen-space overlay (the scene has
         // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
-        // here — not in `AvatarUiPlugin` — because the sandbox adds only
+        // here — not in `AvatarUiPlugin` — because the luncosim adds only
         // `LunCoAvatarPlugin`; `AvatarUiPlugin` is luncosim-only.
         #[cfg(feature = "ui")]
         app.add_systems(
@@ -881,7 +881,7 @@ fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
 /// Spawns a fully-configured avatar camera entity.
 ///
 /// Call this from setup code instead of manually assembling the avatar entity.
-/// Ensures consistency between the main client and the sandbox binary.
+/// Ensures consistency between the main client and the luncosim binary.
 ///
 /// # Arguments
 /// * `commands` — Bevy commands for entity spawning.
@@ -1111,7 +1111,7 @@ fn site_body_center(
 }
 
 /// Radial "up" for a camera at `pos` in ITS parent grid's frame. In the old
-/// rover sandbox the grid origin IS the body centre, so `pos` normalized is
+/// rover luncosim the grid origin IS the body centre, so `pos` normalized is
 /// the surface normal. A site-anchored scene parents free cameras to the
 /// WorldGrid, whose origin is the SITE point on the sphere — there the body
 /// centre sits `radius + height` straight down (`site_center`), and ignoring
@@ -1364,7 +1364,7 @@ fn spring_arm_system(
         q_avatar.iter_mut()
     {
         // Skip follow while the target is being dragged by the editor gizmo
-        // (marker set by sandbox-edit; never present on a headless server).
+        // (marker set by luncosim-edit; never present on a headless server).
         if q_dragging.get(arm.target).is_ok() {
             continue;
         }
@@ -1804,7 +1804,7 @@ fn orbit_system(
     for (avatar_ent, mut tf, mut cell, mut orbit, child_of, mut zoom, sample) in q_avatar.iter_mut()
     {
         // Skip follow while the target is being dragged by the editor gizmo
-        // (marker set by sandbox-edit; never present on a headless server).
+        // (marker set by luncosim-edit; never present on a headless server).
         if q_dragging.get(orbit.target).is_ok() {
             continue;
         }
@@ -2151,7 +2151,7 @@ fn orbit_system(
         *last_pose.0 = orbit.yaw;
         *last_pose.1 = orbit.pitch;
 
-        // NOTE: below the grid's switching threshold (1e10 m in the sandbox)
+        // NOTE: below the grid's switching threshold (1e10 m in the luncosim)
         // this keeps the camera in cell (0,0,0) with the full translation in
         // f32 — the SAME single-cell convention every other entity in the app
         // uses. An experiment splitting the camera into real 2000 m cells
@@ -2882,7 +2882,7 @@ pub fn avatar_raycast_possession(
         return;
     }
     // Shift+click is reserved for entity selection / gizmo multi-select in
-    // lunco-sandbox-edit (`on_scene_click_select`, the other global
+    // lunco-luncosim-edit (`on_scene_click_select`, the other global
     // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
     // a Shift+click never does. This modifier split is what keeps the two
     // observers from both acting on a single click.
@@ -3808,7 +3808,7 @@ fn update_avatar_clip_planes_system(
                 }
             }
             let (near, far) = if max_far <= 0.0 {
-                // No `CelestialBody` contributed (flat sandbox scene, or the
+                // No `CelestialBody` contributed (flat luncosim scene, or the
                 // offscreen USD preview camera). The body-derived `min_dist` is
                 // still its 1e15 sentinel here — feeding it to the clamp below
                 // pins `near` to the 100 m ceiling, which clips away the ENTIRE

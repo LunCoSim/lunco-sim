@@ -15,7 +15,7 @@
 
 Findings:
 - **No data-driven tutorial engine, no `TutorialStep` state machine, no goal evaluation.** Steps are `const` Rust arrays; advancement is entirely user-driven.
-- Everything is **welded to the lunica Modelica workbench**. The sandbox explicitly disables the coachmark overlay (`ModelicaUiConfig { include_help_overlay: false }`, `lunco-sandbox/src/ui/mod.rs:134`).
+- Everything is **welded to the lunica Modelica workbench**. The sandbox explicitly disables the coachmark overlay (`ModelicaUiConfig { include_help_overlay: false }`, `lunco-luncosim/src/ui/mod.rs:134`).
 - Spec 011 Story-1/3 (detect "Rover moved 10 m", evaluate "Reach Tycho with >20% battery") are **unimplemented**.
 
 ## 2. Key realization — the Rhai substrate is already a tutorial engine
@@ -183,7 +183,7 @@ All six tasks are implemented. Deviations from the plan are noted inline.
 - **Data tutorial** — `assets/tutorials/first_drive/` (`.usda` + `.rhai` + this dir's
   `README.md`): possess (advances on `cmd:PossessVessel`) → drive to flag (advances
   on `enter:waypoint`) → `MISSION_COMPLETE`. Second built-in reuses the existing
-  `scenes/sandbox/lander_ops.usda`.
+  `scenes/luncosim/lander_ops.usda`.
 
 **Not done (noted follow-up):** the hardcoded lunica `SCREENS`/`PATHS` in
 `lunco-modelica` are left intact — ripping out a working shipped tour without

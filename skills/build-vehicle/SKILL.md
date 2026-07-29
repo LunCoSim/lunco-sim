@@ -148,7 +148,7 @@ see [`author-usd-component`](../author-usd-component/SKILL.md#adding-a-new-lunco
 
 To reach one wheel: select the rover, then **Alt+Shift+click** the wheel — that
 drills the Inspector to that subpart's own PRIM
-(`crates/lunco-sandbox-edit/src/selection.rs:315`). Plain **Shift+click is the
+(`crates/lunco-luncosim-edit/src/selection.rs:315`). Plain **Shift+click is the
 multi-select toggle** and explicitly *clears* the drill target; it does not drill.
 The drill also requires the rover to already be the primary selection.
 
@@ -294,7 +294,7 @@ deliberately; that is unchanged.
 
 ## Verify
 
-For iterative modeling, keep one sandbox process running with an explicit
+For iterative modeling, keep one luncosim process running with an explicit
 `--api PORT` and use that API. Edit
 the USD, then use `OpenFile` for a file-backed asset, `RestartScene` for the
 mounted scene, or `ApplyUsdOp` for an in-place authored opinion. Re-run a Rhai
@@ -312,7 +312,7 @@ attribute is named in seconds rather than at spawn time
 ([`validate-assets`](../validate-assets/SKILL.md)):
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate assets/vessels/rovers/my_rover.usda
+cargo run -p lunco-luncosim --bin luncosim -- --validate assets/vessels/rovers/my_rover.usda
 ```
 
 **2. Drivetrain parity regression** — the guard that the two realizations stay
@@ -323,7 +323,7 @@ matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 12 s → throttle + steer 6 s.
 
 ```bash
-RUSTC_WRAPPER=sccache cargo run -j4 --bin sandbox -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
+RUSTC_WRAPPER=sccache cargo run -j4 --bin luncosim -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL' target/parity.log
 ```
 

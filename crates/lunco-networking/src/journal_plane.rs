@@ -243,7 +243,7 @@ pub fn scene_ops_after(
 /// This is the single strategy-honoring selection every document domain must
 /// route its journal replay through. USD does today ([`scene_ops_after`]); when
 /// networked **Modelica** replay is wired (the deferred multi-doc / cross-peer
-/// `DocumentId` follow-up — see `lunco_sandbox::replay_scenario_journal`), it MUST
+/// `DocumentId` follow-up — see `lunco_luncosim::replay_scenario_journal`), it MUST
 /// select via `domain_ops_after(.., DomainKind::Modelica)` and feed
 /// [`lunco_modelica`]'s `replay_op`, NOT iterate raw `entries()` (insertion order),
 /// or Modelica state would diverge under a scripted merge policy. Verified for both

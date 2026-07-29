@@ -1,6 +1,6 @@
 //! The bridge READ pass vs avian's render interpolation.
 //!
-//! Production (`lunco-sandbox`) enables
+//! Production (`lunco-luncosim`) enables
 //! `PhysicsInterpolationPlugin::interpolate_all()`, which rewrites every body's
 //! `Transform` to an EASED (render-time) pose in `RunFixedMainLoop`, after the
 //! last fixed tick of the frame. The bridge's READ pass (`pose_to_position`)

@@ -1,7 +1,7 @@
 //! Client-side netcode: snapshot interpolation, prediction, rollback,
 //! reconciliation and correction smoothing over avian bodies.
 //!
-//! Split out of `lunco-sandbox-edit::commands`, which had fused two unrelated
+//! Split out of `lunco-luncosim-edit::commands`, which had fused two unrelated
 //! subsystems in one file: the scene/document command layer (spawn / move / delete
 //! / set-property / focus / shader) and *this* — the client half of the wire. The
 //! netcode half never touched an editor symbol; its dependencies are `lunco-core`
@@ -2336,7 +2336,7 @@ pub fn apply_net_replication(
 /// register: snapshot ingest + interpolation, kinematic proxy driving, owned-rover
 /// prediction / reconciliation / rollback, and correction smoothing.
 ///
-/// `SpawnCommandPlugin` (lunco-sandbox-edit) keeps `apply_replicated_spawns`, the
+/// `SpawnCommandPlugin` (lunco-luncosim-edit) keeps `apply_replicated_spawns`, the
 /// first system of the old `Update` chain, because it spawns from the editor's
 /// catalog. The chain's relative order survives the split via
 /// [`lunco_core::NetcodeSet`]: sandbox-edit puts its system in
@@ -2367,7 +2367,7 @@ impl Plugin for NetcodePredictionPlugin {
         app.init_resource::<crate::session::IncomingSnapshots>();
         app.init_resource::<crate::session::DivergenceStats>();
         // The netcode `Update` pipeline now spans two crates: `apply_replicated_spawns`
-        // (lunco-sandbox-edit) is the chain's first system and stays there, so the
+        // (lunco-luncosim-edit) is the chain's first system and stays there, so the
         // ordering it used to get from `.chain()` is expressed as a set relation.
         app.configure_sets(
             Update,

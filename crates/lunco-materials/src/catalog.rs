@@ -6,7 +6,7 @@
 //! nothing here names a material or a render pipeline, so it stays on the
 //! render-free side of the boundary with `dyn_params` and `look`.
 //!
-//! Catalog *discovery* lives in ONE place — `lunco-sandbox-edit`'s
+//! Catalog *discovery* lives in ONE place — `lunco-luncosim-edit`'s
 //! `maintain_catalogs`, which scans engine + Twin shaders via the shared
 //! `lunco_assets::discovery` walk. This module only seeds the wasm-safe defaults in
 //! [`ShaderCatalog::default`].
@@ -31,7 +31,7 @@ pub struct ShaderEntry {
 
 /// The shaders the Inspector's picker offers. Seeded with the curated prop
 /// shaders (so it is never empty and works on wasm, where there is no
-/// filesystem to scan), then augmented on native by `lunco-sandbox-edit`'s
+/// filesystem to scan), then augmented on native by `lunco-luncosim-edit`'s
 /// `maintain_catalogs` (via the shared `lunco_assets::discovery` walk).
 #[derive(Resource, Clone, Debug)]
 pub struct ShaderCatalog {

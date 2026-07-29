@@ -8,7 +8,7 @@ entry points `RunLint` (live scene) and `ValidateAsset` (file).
 
 ## What it is for
 
-Some authoring mistakes have no symptom. In July 2026 every rover in the sandbox
+Some authoring mistakes have no symptom. In July 2026 every rover in the luncosim
 lost all four drive motors on the first physics step:
 `components/mobility/motor.usda` applied `PhysicsRigidBodyAPI`, the motors were
 children of the chassis body, and no joint named them — so each was a separate,
@@ -100,7 +100,7 @@ unregister_hook("lint.usd");                              // back to no USD rule
 | | Subject | Reached by |
 |---|---|---|
 | `RunLint` | every **loaded** stage — including runtime spawns and edits no file describes | `cmd`/HTTP/MCP |
-| `ValidateAsset` | one **file**, composed pre-flight | `sandbox --validate <path>`, HTTP query |
+| `ValidateAsset` | one **file**, composed pre-flight | `luncosim --validate <path>`, HTTP query |
 
 Both hand the policy the **same facts in the same shape**. `ValidateAsset` merges
 the domain facts at top level for exactly that reason: nest them and `facts.bodies`

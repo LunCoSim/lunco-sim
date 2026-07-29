@@ -2,7 +2,7 @@
 # ============================================================================
 # LunCoSim — native desktop build + package assembler
 # ============================================================================
-# Builds a LunCoSim desktop binary (lunica or sandbox) for the
+# Builds a LunCoSim desktop binary (lunica or luncosim) for the
 # host platform (Linux, macOS, Windows) and assembles a self-contained
 # distributable directory containing the binary, the assets/ tree with the
 # relevant cache subdirs (fonts, MSL, models, …) packed INSIDE it, and a
@@ -19,7 +19,7 @@
 #
 # Binaries:
 #     lunica      — Modelica Workbench IDE (desktop GUI)
-#     sandbox     — Rover Physics Sandbox (desktop GUI)
+#     luncosim    — LunCoSim desktop GUI
 #
 # Options:
 #     --release          Optimized release build (default: dev)
@@ -34,9 +34,9 @@
 #
 # Examples:
 #     ./scripts/build_native.sh lunica --release --package
-#     ./scripts/build_native.sh sandbox --release --package
+#     ./scripts/build_native.sh luncosim --release --package
 #     ./scripts/build_native.sh lunica                    # quick dev build
-#     ./scripts/build_native.sh sandbox --target aarch64-unknown-linux-gnu
+#     ./scripts/build_native.sh luncosim --target aarch64-unknown-linux-gnu
 #
 # Platform detection is automatic. The script works on:
 #   Linux   (x86_64 / aarch64)  — needs libasound2, libudev, libwayland, libxkbcommon
@@ -47,7 +47,7 @@
 #   cargo run -p lunco-assets -- download -g fonts        # UI font
 #   cargo run -p lunco-assets -- download -g modelica     # MSL (for lunica)
 #   cargo run -p lunco-assets -- download -g models && \
-#     cargo run -p lunco-assets -- process -g models      # rover model (for sandbox)
+#     cargo run -p lunco-assets -- process -g models      # rover model (for luncosim)
 #
 # The package layout:
 #   dist/<binary>-<platform>-<arch>/
@@ -78,8 +78,8 @@ usage() {
 get_crate() {
     case "$1" in
         lunica)   echo "lunco-modelica" ;;
-        sandbox)  echo "lunco-sandbox" ;;
-        *) error "Unknown binary: $1"; error "Available: lunica, sandbox"; exit 1 ;;
+        luncosim) echo "lunco-luncosim" ;;
+        *) error "Unknown binary: $1"; error "Available: lunica, luncosim"; exit 1 ;;
     esac
 }
 
@@ -134,11 +134,11 @@ is_windows() { [[ "$1" == *windows* ]]; }
 # ── Per-binary cache subdirs ──────────────────────────────────────────────
 # Each binary needs a different subset of the .cache/ tree at runtime.
 #   lunica:   fonts (UI fallback) + msl (Modelica Standard Library) + thermofluidstream
-#   sandbox:  fonts (UI rendering) + Earth/Moon imagery
+#   luncosim:  fonts (UI rendering) + Earth/Moon imagery
 cache_subdirs_for() {
     case "$1" in
         lunica)   echo "fonts msl thermofluidstream" ;;
-        sandbox)  echo "fonts textures" ;;
+        luncosim) echo "fonts textures" ;;
     esac
 }
 
@@ -242,7 +242,7 @@ download_cache_for() {
     fi
     info "Downloading cache assets for $binary → $cache_dir"
 
-    # Every binary needs the UI font; lunica also needs MSL, while sandbox
+    # Every binary needs the UI font; lunica also needs MSL, while luncosim
     # ships its declared Earth/Moon imagery for an offline launch.
     local groups_to_download=""
     local groups_to_process=""
@@ -250,7 +250,7 @@ download_cache_for() {
         lunica)
             groups_to_download="fonts modelica"
             ;;
-        sandbox)
+        luncosim)
             groups_to_download="fonts celestial"
             groups_to_process="celestial"
             ;;
@@ -283,7 +283,7 @@ download_cache_for() {
 # payload it promises to ship was actually materialised.
 required_cache_files_for() {
     case "$1" in
-        sandbox) echo "fonts/DejaVuSans.ttf textures/earth.png textures/moon.png" ;;
+        luncosim) echo "fonts/DejaVuSans.ttf textures/earth.png textures/moon.png" ;;
     esac
 }
 
@@ -332,10 +332,10 @@ EOF
 # them available to the runtime and to downstream bundle tools.
 stage_app_icons() {
     local dir="$1" binary="$2" platform="$3"
-    [ "$binary" = "sandbox" ] || return 0
+    [ "$binary" = "luncosim" ] || return 0
     local source="$PROJECT_DIR/assets/icons"
     if [ ! -d "$source" ]; then
-        warn "No sandbox icon source at $source"
+        warn "No luncosim icon source at $source"
         return 0
     fi
     mkdir -p "$dir/icons"
@@ -347,7 +347,7 @@ stage_app_icons() {
 [Desktop Entry]
 Type=Application
 Name=LunCoSim
-Comment=LunCoSim lunar simulation sandbox
+            Comment=LunCoSim lunar simulation
 Exec=./run.sh
 Icon=luncosim
 Terminal=false
@@ -361,7 +361,7 @@ EOF
             cp -f "$source/windows/luncosim.ico" "$dir/LunCoSim.ico"
             ;;
     esac
-    info "Sandbox app identity/icons staged for $platform"
+    info "LunCoSim app identity/icons staged for $platform"
 }
 
 # The Quadro K2100M on the reported Windows laptop loses its Vulkan device,
@@ -371,13 +371,13 @@ EOF
 #
 # `.sh` deliberately targets Git Bash, which is already the shell used to run
 # this packager on Windows. PowerShell users can apply the same one-line
-# `WGPU_BACKEND=dx12` setting before invoking sandbox.exe.
+# `WGPU_BACKEND=dx12` setting before invoking luncosim.exe.
 write_dx12_compat_launcher() {
     local dir="$1" binary="$2"
     local launcher="$dir/${binary}_dx12.sh"
     cat > "$launcher" <<EOF
 #!/usr/bin/env bash
-# DX12 compatibility launcher for the Windows sandbox package.
+# DX12 compatibility launcher for the Windows luncosim package.
 #
 # Use this on legacy NVIDIA laptops where Vulkan reports Device(Lost) during
 # the first rendered scene. This changes only the wgpu backend; simulation,
@@ -396,10 +396,10 @@ EOF
 
 # Fast is the deliberately simple visual profile for old/integrated GPUs. It
 # keeps the caller's selected backend: use it when the normal backend works but
-# the scene is too slow. `sandbox_dx12_fast.sh` combines it with the K2100M
+# the scene is too slow. `luncosim_dx12_fast.sh` combines it with the K2100M
 # DX12 workaround above when Vulkan itself is unreliable.
 #
-# These are Git-Bash launchers. The quoted `"$@"` preserves normal sandbox CLI
+# These are Git-Bash launchers. The quoted `"$@"` preserves normal luncosim CLI
 # arguments, so a tester can still add `--scene` or `--no-vsync` after the script.
 write_fast_compat_launchers() {
     local dir="$1" binary="$2"
@@ -408,9 +408,9 @@ write_fast_compat_launchers() {
 
     cat > "$fast" <<EOF
 #!/usr/bin/env bash
-# Fast-renderer launcher for the Windows sandbox package.
+# Fast-renderer launcher for the Windows luncosim package.
 #
-# Keeps the current wgpu backend, but starts sandbox with the fast visual
+# Keeps the current wgpu backend, but starts luncosim with the fast visual
 # profile: unlit texture-free PBR plus HDR, bloom and MSAA disabled. It also
 # opens a smaller 960x540 window, which reduces the framebuffer work on old GPUs.
 set -euo pipefail
@@ -421,7 +421,7 @@ EOF
 
     cat > "$dx12_fast" <<EOF
 #!/usr/bin/env bash
-# DX12 + fast-renderer compatibility launcher for the Windows sandbox package.
+# DX12 + fast-renderer compatibility launcher for the Windows luncosim package.
 #
 # Use this on legacy NVIDIA laptops when Vulkan loses the GPU device and the
 # normal DX12 renderer is still too slow. It changes only renderer startup
@@ -483,18 +483,18 @@ API testing, etc.). See \`skills/README.md\` for the index.
 \`AGENTS.md\` documents the project conventions for AI agents (Bevy 0.18,
 plugin layering, tunability mandate, TDD-first).
 EOF
-    if is_windows "$platform" && [ "$binary" = "sandbox" ]; then
+    if is_windows "$platform" && [ "$binary" = "luncosim" ]; then
         cat >> "$readme" <<'EOF'
 ## Legacy GPU launchers (Git Bash)
 
-- `sandbox_dx12.sh` — use when Vulkan fails with `Device(Lost)`.
-- `sandbox_fast.sh` — keeps the normal backend but uses the fast visual
+- `luncosim_dx12.sh` — use when Vulkan fails with `Device(Lost)`.
+- `luncosim_fast.sh` — keeps the normal backend but uses the fast visual
   profile for slow GPUs.
-- `sandbox_dx12_fast.sh` — combines DX12 with the fast visual profile.
+- `luncosim_dx12_fast.sh` — combines DX12 with the fast visual profile.
 
 The fast profile is also available directly as:
 
-    .\sandbox.exe --render-profile fast
+    .\luncosim.exe --render-profile fast
 
 EOF
     fi
@@ -599,8 +599,8 @@ done
 
 # Validate binary
 case "$BINARY" in
-    lunica|sandbox) ;;
-    *) error "Unknown binary: $BINARY"; error "Available: lunica, sandbox"; exit 1 ;;
+    lunica|luncosim) ;;
+    *) error "Unknown binary: $BINARY"; error "Available: lunica, luncosim"; exit 1 ;;
 esac
 
 CRATE="$(get_crate "$BINARY")"
@@ -652,7 +652,7 @@ fi
 info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
 cd "$PROJECT_DIR"
 
-cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" \
+    cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 8 \
     --bin "$BINARY" -p "$CRATE" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
@@ -674,8 +674,8 @@ fi
 
 # `download_cache_for` can continue after an individual download failure to
 # preserve useful diagnostics. Packaging cannot: it must contain every
-# runtime-required file, including sandbox's processed Earth/Moon textures.
-if [ "$NO_CACHE" -eq 0 ] && [ "$BINARY" = "sandbox" ]; then
+# runtime-required file, including luncosim's processed Earth/Moon textures.
+if [ "$NO_CACHE" -eq 0 ] && [ "$BINARY" = "luncosim" ]; then
     CACHE_SRC="$(resolve_cache_dir)"
     verify_required_cache_files "$BINARY" "$CACHE_SRC"
 fi
@@ -715,6 +715,9 @@ else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
 
+if [ "$BINARY" = "luncosim" ]; then
+    "$PROJECT_DIR/scripts/generate_icons.sh"
+fi
 stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE"
 
 # Copy docs/, skills/, + AGENTS.md so end users have the architecture docs,
@@ -772,11 +775,11 @@ fi
 # Write launcher script
 if is_windows "$TRIPLE"; then
     write_launcher_windows "$OUT_DIR" "$BINARY"
-    if [ "$BINARY" = "sandbox" ]; then
+    if [ "$BINARY" = "luncosim" ]; then
         write_dx12_compat_launcher "$OUT_DIR" "$BINARY"
         write_fast_compat_launchers "$OUT_DIR" "$BINARY"
-        info "DX12 compatibility launcher: $OUT_DIR/sandbox_dx12.sh"
-        info "Fast-renderer launchers: $OUT_DIR/sandbox_fast.sh and $OUT_DIR/sandbox_dx12_fast.sh"
+        info "DX12 compatibility launcher: $OUT_DIR/luncosim_dx12.sh"
+        info "Fast-renderer launchers: $OUT_DIR/luncosim_fast.sh and $OUT_DIR/luncosim_dx12_fast.sh"
     fi
 else
     write_launcher_unix "$OUT_DIR" "$BINARY"

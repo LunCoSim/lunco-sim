@@ -577,7 +577,7 @@ exact system name before relying on it; `lunco-celestial` (`big_space_setup.rs`,
 `systems.rs`, `placement.rs`, `trajectories.rs`, `gravity.rs`, `missions.rs`,
 `globe_lod.rs`), `lunco-celestial-ephemeris/src/lib.rs`, `lunco-core/src/world.rs`,
 `lunco-avatar/src/lib.rs`, `lunco-networking/src/sync.rs`,
-`lunco-usd-bevy/src/camera_switch.rs`, `lunco-sandbox-edit/src/{gizmo,selection}.rs`.
+`lunco-usd-bevy/src/camera_switch.rs`, `lunco-luncosim-edit/src/{gizmo,selection}.rs`.
 
 **External:** Aevyrie, big_space docs (decision matrix, precision table); Thorne,
 GRAPHITE 2005 (floating origin / "spatial jitter"); O'Neil, Game Developer 2002;

@@ -359,7 +359,7 @@ replaces the active scene without restarting the binary:
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda","root_prim":""}}'
+  -d '{"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda","root_prim":""}}'
 ```
 
 It despawns every entity carrying `UsdPrimPath`, despawns every

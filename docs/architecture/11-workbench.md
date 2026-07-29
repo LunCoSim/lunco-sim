@@ -15,7 +15,7 @@
 > terminology table in §1 is canonical.
 >
 > `lunco-workbench` is the canonical workbench crate, depended on by ~10 crates
-> (luncosim, lunco-sandbox, lunco-sandbox-edit, lunco-usd, lunco-modelica,
+> (luncosim, lunco-luncosim, lunco-luncosim-edit, lunco-usd, lunco-modelica,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
 ## Contents
@@ -399,7 +399,7 @@ restart:
 The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur.
 
 **Reconciliation.** Restore maps stored string ids back to the panels /
-perspectives registered in *this* binary (sandbox and lunica ship
+perspectives registered in *this* binary (luncosim and lunica ship
 different sets) and **drops anything unknown** — `PanelId` /
 `PerspectiveId` hold `&'static str`, so the live registry is the source
 of truth, never the file.
@@ -515,7 +515,7 @@ User-global `~/.lunco/settings.json` is the baseline. A per-Twin
 `<twin>/.lunco/settings.json` layered on top would let projects
 enforce conventions (e.g. a library Twin might pin
 `modelica.naming.rename_class_renames_file = "Always"` while a
-sandbox Twin keeps `"Never"`). Resolution order:
+luncosim Twin keeps `"Never"`). Resolution order:
 
 ```
 defaults  ←  ~/.lunco/settings.json  ←  <active_twin>/.lunco/settings.json
@@ -552,7 +552,7 @@ no novel design.
 ```
   Apps
    ├── Panel crates (domain-specific UI)
-   │    lunco-modelica/ui   lunco-sandbox-edit/ui   lunco-mission/ui
+   │    lunco-modelica/ui   lunco-luncosim-edit/ui   lunco-mission/ui
    │         │                     │                       │
    │         ▼                     ▼                       ▼
    ├── lunco-workbench  (app scaffold — this document)
@@ -588,11 +588,11 @@ lives in domain crates.
 Each binary is ~50 lines of plugin registration:
 
 ```
-lunco-sandbox = workbench + SpawnPalette + SceneTree + Inspector +
+lunco-luncosim = workbench + SpawnPalette + SceneTree + Inspector +
                         ModelicaInspector + 3D viewport
-                        (sandbox editor with compact Modelica view)
+                        (luncosim editor with compact Modelica view)
 
-luncosim              = workbench + all sandbox panels + MissionControl +
+luncosim              = workbench + all luncosim panels + MissionControl +
                         CelestialBrowser + full 3D world
                         (main client, everything enabled)
 
@@ -602,7 +602,7 @@ lunica    = workbench + CodeEditor + Diagram + PackageBrowser +
 ```
 
 Same workbench shell, different panel sets, different default workspaces.
-`lunica` opens in the Analyze workspace; `lunco-sandbox`
+`lunica` opens in the Analyze workspace; `lunco-luncosim`
 in Build; `luncosim` in Observe with quick access to all others.
 
 

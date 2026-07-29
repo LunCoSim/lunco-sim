@@ -29,7 +29,7 @@ rate**.
 | Unsubscribe | `TelemetrySubscriptions::unsubscribe()` exists, but **no `UnsubscribeTelemetry` request reaches it** |
 | The only "subscribe at a rate" in the product | **a JS `setTimeout` poll loop in the MCP server** (`mcp/src/index.js:810` `watch_ports`, 50–5000 ms, ≤120 samples) |
 
-**Phase 0 (landed 2026-07-13):** `LunCoTelemetryPlugin` is now added in `lunco-sandbox`. It
+**Phase 0 (landed 2026-07-13):** `LunCoTelemetryPlugin` is now added in `lunco-luncosim`. It
 had never been added, so `SubscribeTelemetry` — whose consumer half (`sampled_param_observer`,
 `TelemetryResponse::from_sampled`, `lunco_core::log`) was fully shipped — advertised parameter
 telemetry that **could never arrive**. Sampling is `run_if`-gated on a `Parameter` existing and

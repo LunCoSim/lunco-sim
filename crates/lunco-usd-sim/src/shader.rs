@@ -119,7 +119,7 @@ fn apply_usd_shader_material_read(
     // TERRAIN prims are excluded: a DEM terrain's material is authored by the
     // terrain pipeline (engine-filled height/shadow params, derived maps), and
     // its bound Material network is consumed by the terrain layer binder
-    // (`lunco-sandbox::bind_terrain_layers`) instead. Minting a ShaderLook
+    // (`lunco-luncosim::bind_terrain_layers`) instead. Minting a ShaderLook
     // here would hand the terrain entity a SECOND material that replaces the
     // engine-authored one — losing the heightfield binding and every engine
     // param the moment a scene binds a Material to its Terrain prim.

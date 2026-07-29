@@ -554,7 +554,7 @@ pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<crate::ScreenNo
         // Toast bg/fg per severity (success / warn / error / info) drawn over the
         // 3D viewport, each modulating alpha by `fade`. `tokens.success|warning|
         // error` cover the foregrounds; the dark tinted backgrounds have no token.
-        // BLOCKED: `lunco-avatar` is reachable from `lunco-sandbox-server`, so it
+        // BLOCKED: `lunco-avatar` is reachable from `lunco-luncosim-server`, so it
         // must not gain an unconditional `lunco-theme` edge (bevy_egui -> wgpu).
         let (bg, fg) = match t.kind.as_str() {
             "success" => (

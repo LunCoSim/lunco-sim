@@ -124,7 +124,7 @@ impl Plugin for UsdBevyPlugin {
         // component type. Register the bounded set a glTF scene can contain so
         // the registry is complete WITHOUT pulling the inventory-based
         // auto-register closure into the link (it overflowed clang's command
-        // line — see the bevy dep note in `lunco-sandbox/Cargo.toml`).
+        // line — see the bevy dep note in `lunco-luncosim/Cargo.toml`).
         app.register_type::<Transform>()
             .register_type::<GlobalTransform>()
             .register_type::<Visibility>()

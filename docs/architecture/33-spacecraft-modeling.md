@@ -72,13 +72,13 @@ or an RCS thruster all need **body-frame force** and **torque**.
   `propagate.rs` unchanged. Compiles clean.
 - Unlocks gimbaled thrust, thrusters, reaction wheels, any body-frame actuation.
 - **Verified end-to-end** via `Lander.mo` + `lander_ops.usda` on the headless
-  `sandbox-server`: lander fell from 12 m, engine arrested it to a soft hover at
+  `luncosim-server`: lander fell from 12 m, engine arrested it to a soft hover at
   the 6 m set-point — `thrust ≈ 14716 N ≈ mass·g`, `vy ≈ 0`, controller `a_cmd ≈ g`.
 - Booting the lean headless server also required fixing pre-existing headless-safety
   bugs (render-gated resources held non-optionally by CPU systems): `WorkspaceResource`
   made optional in `lunco-networking` tutor systems; `Assets<ShaderMaterial>` store
-  `init_asset`'d in `TerrainSurfacePlugin`. Use the `sandbox-server` bin for headless,
-  not `sandbox --no-ui` (the latter keeps `ui` systems compiled without a GPU).
+  `init_asset`'d in `TerrainSurfacePlugin`. Use the `luncosim-server` bin for headless,
+  not `luncosim --no-ui` (the latter keeps `ui` systems compiled without a GPU).
 
 ### G1b — Attitude + body-rate output ports  **[DONE]**
 The rigid-body port group exposed only the *translational* half of state
@@ -262,7 +262,7 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   `drive:angular:maxForce` wheelie cannot recur here.
 - **Proof:** `assets/scenes/tests/prismatic_drive.usda` — a standard
   `PhysicsPrismaticJoint` + `PhysicsDriveAPI:linear` elevator (50 kg platform).
-  **Verified live** on the headless `sandbox-server`: (A) the USD load-time drive
+  **Verified live** on the headless `luncosim-server`: (A) the USD load-time drive
   holds at `-1.5276` (target `-1.5`; ~0.027 m droop = spring-damper steady-state
   under load); (B) `SetPort displacement -0.5` → `-0.5276`; (C) `+0.3` → `+0.2716`;
   (D) `-5.0` clamps at `-3.0000` (authored `limitLower`). Projection math

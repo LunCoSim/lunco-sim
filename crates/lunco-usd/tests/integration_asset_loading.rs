@@ -135,7 +135,7 @@ fn test_sandbox_rover_files_compose() {
 
 #[test]
 fn test_sandbox_scene_composes() {
-    let p = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
+    let p = Path::new("../../assets/scenes/luncosim/sandbox_scene.usda");
     let stage = compose_stage_from_file(p);
     let view = StageView::new(&stage);
 
@@ -702,7 +702,7 @@ fn test_rover_files_have_no_baked_position() {
 fn test_full_scene_loads_with_rovers() {
     // Load scene — Ground + Ramp + 5 rover instances (2 base files)
     // Matrix: 2 steering × 2 wheel types = 4 variants, plus 1 extra Ackermann
-    let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
+    let scene_path = Path::new("../../assets/scenes/luncosim/sandbox_scene.usda");
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -880,7 +880,7 @@ fn test_valentine_color_override() {
     use openusd::sdf::Path as SdfPath;
 
     // Load scene
-    let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
+    let scene_path = Path::new("../../assets/scenes/luncosim/sandbox_scene.usda");
     let stage = compose_stage_from_file(scene_path);
     let view = StageView::new(&stage);
 

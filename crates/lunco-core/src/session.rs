@@ -523,7 +523,7 @@ pub struct NetSpawn {
 /// One replicated spawn the host told us to instantiate locally, pinned to the
 /// host-allocated `gid` (M1 content-reconstruction: geometry loads locally,
 /// identity comes from the host). Filled by the wire layer on a client; drained
-/// by the spawn domain (`lunco-sandbox-edit`).
+/// by the spawn domain (`lunco-luncosim-edit`).
 #[derive(Clone, Debug)]
 pub struct ReplicatedSpawn {
     pub gid: u64,

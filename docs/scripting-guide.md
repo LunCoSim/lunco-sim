@@ -32,10 +32,10 @@ API, MCP, and UI use — so it inherits [every command](./commands-reference.md)
 free and stays decoupled from physics. Scripts are **host-authoritative**
 ([Part II §L](#l-networking--determinism)).
 
-You'll need a running app with its API on, e.g. the sandbox:
+You'll need a running app with its API on, e.g. the luncosim:
 
 ```sh
-cargo run -p lunco-sandbox --bin sandbox -- --api 3000
+cargo run -p lunco-luncosim --bin luncosim -- --api 3000
 ```
 
 ## 1. Mental model

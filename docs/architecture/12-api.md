@@ -14,10 +14,10 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 
 ```bash
 # Default port (4101)
-cargo run --bin sandbox -- --api
+cargo run --bin luncosim -- --api
 
 # Custom port
-cargo run --bin sandbox -- --api 8080
+cargo run --bin luncosim -- --api 8080
 ```
 
 The `--api` flag enables the HTTP server. Without it, the sim runs normally with no network exposure.
@@ -284,7 +284,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{
     "command": "LoadScene",
     "params": {
-      "path": "scenes/sandbox/sandbox_scene.usda",
+      "path": "scenes/luncosim/sandbox_scene.usda",
       "root_prim": ""
     }
   }'
@@ -602,7 +602,7 @@ that want a runtime-toggleable opt-out.
 
 | Binary | Flag | Default Port |
 |---|---|---|
-| `sandbox` | `--api [PORT]` | 4101 |
+| `luncosim` | `--api [PORT]` | 4101 |
 | `lunica` | `--api [PORT]` | 4101 |
 
 ## Troubleshooting

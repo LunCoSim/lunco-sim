@@ -3,7 +3,7 @@
 //! USD authors material params in camelCase by convention (`colorA`, `baseColor`,
 //! `morphStart`); WGSL `struct Material` fields are snake_case (`color_a`,
 //! `base_color`, `morph_start`). Both authoring paths (USD → `lunco-usd-sim`, the
-//! live `SetObjectProperty` command → `lunco-sandbox-edit`) bridge the two through
+//! live `SetObjectProperty` command → `lunco-luncosim-edit`) bridge the two through
 //! here, so an authored name actually resolves to a schema field instead of
 //! silently packing to nothing.
 

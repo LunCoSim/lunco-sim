@@ -90,7 +90,7 @@ panel) carries algebraic unknowns. Handed the explicit stepper it failed every
 step with `rk45 backend only supports a narrow explicit ODE subset: algebraic
 refresh row 2 cannot be solved for …Battery.p.i`, published no ports, and
 reported nothing a driver would see. Every solar rover in the repo was dead,
-including the shipped `scenes/sandbox/solar_rover_demo.usda` — which is the class
+including the shipped `scenes/luncosim/solar_rover_demo.usda` — which is the class
 of model §2 above calls the adaptive solver's *sweet spot*.
 
 Both paths now call `lunco_experiments::solver::resolve`, from two facts — and

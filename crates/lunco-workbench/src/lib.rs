@@ -243,11 +243,11 @@ pub struct CloseTab {
 
 /// Name of the binary actually running, for the Help menu's build line.
 ///
-/// This crate is a LIBRARY shared by every workbench app (`sandbox`, `lunica`,
+/// This crate is a LIBRARY shared by every workbench app (`luncosim`, `lunica`,
 /// …), so it cannot know at compile time which one linked it — `CARGO_BIN_NAME`
 /// is set for bin targets and would be wrong (or absent) here. The running
 /// executable's own file stem is the one answer that is true in every app, so
-/// the sandbox stops introducing itself as Lunica.
+/// the luncosim stops introducing itself as Lunica.
 ///
 /// Resolved once: the path cannot change while the process lives.
 fn running_app_name() -> &'static str {
@@ -261,7 +261,7 @@ fn running_app_name() -> &'static str {
                 // A stripped/unreadable `/proc/self/exe` is possible; the crate
                 // name is a truthful fallback, unlike a hardcoded app name.
                 .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string())
-                .replace("sandbox", "LunCoSim")
+                .replace("luncosim", "LunCoSim")
         }
         // On the web there is no executable path; the bundle name is the
         // closest true answer and is set by the build script per app.
@@ -1532,7 +1532,7 @@ impl WorkbenchLayout {
     /// dock:
     ///
     /// - **Singleton** tabs whose `PanelId` isn't registered here are
-    ///   dropped (e.g. a `sandbox`-only panel loaded into `lunica`).
+    ///   dropped (e.g. a `luncosim`-only panel loaded into `lunica`).
     /// - **Instance** tabs are remapped: each carries the *old* session's
     ///   instance id; `id_map` translates it to the freshly-restored id.
     ///   A tab whose kind isn't registered is dropped; one whose document
@@ -1616,7 +1616,7 @@ impl WorkbenchLayout {
     /// The registered singleton panel that IS the full-window 3D scene
     /// (`Panel::scene_target() == Some(SceneTarget::MainViewport)`), if any.
     /// App-agnostic — every workbench app that hosts a 3D scene registers exactly
-    /// one such panel (the sandbox's `ViewportPanel`); tooling apps register none.
+    /// one such panel (the luncosim's `ViewportPanel`); tooling apps register none.
     /// Used to keep that panel foregrounded so a co-tenant tab can never blank the
     /// viewport controls (see [`reconcile_dock`](Self::reconcile_dock)).
     fn scene_viewport_panel_id(&self) -> Option<PanelId> {
@@ -1752,7 +1752,7 @@ impl WorkbenchLayout {
     /// tabs instead of a fresh preset. `id_map` remaps saved instance ids
     /// onto live tabs across ALL trees (instance ids are global — the doc
     /// set is opened once). Perspectives not registered in this app are
-    /// skipped (a `sandbox`-only perspective loaded into `lunica`).
+    /// skipped (a `luncosim`-only perspective loaded into `lunica`).
     pub(crate) fn seed_perspective_docks(
         &mut self,
         docks: &std::collections::HashMap<String, crate::workspace_state::PerspectiveDockSnapshot>,
@@ -1823,7 +1823,7 @@ impl WorkbenchLayout {
     /// holds a `&'static str` and can't be rebuilt from a runtime
     /// `String`, so restore looks the string up here and drops ids that
     /// aren't registered in the current binary (e.g. a perspective only
-    /// `sandbox` ships, loaded into `lunica`).
+    /// `luncosim` ships, loaded into `lunica`).
     pub fn activate_perspective_by_str(&mut self, id: &str) -> bool {
         let found = self
             .perspectives
@@ -2066,7 +2066,7 @@ impl WorkbenchLayout {
         // `render_layout` — so a non-empty dock here is *not* shown).
         //
         // A pure 3D app keeps no instance tabs at all, but a hybrid app
-        // (the rover sandbox embeds the Modelica workbench) can have
+        // (the rover luncosim embeds the Modelica workbench) can have
         // document/model tabs open while a viewport-only perspective is
         // active. Park those instance tabs in the dock rather than dropping
         // them — wiping would lose the open documents on every viewport
@@ -2161,7 +2161,7 @@ impl WorkbenchLayout {
     /// [`Self::rebuild_dock`] re-attaches the open document/instance
     /// tabs, so only the saved split *sizes* are lost — not the open
     /// documents or the chrome. Viewport-only perspectives (no
-    /// registered centre singleton — the sandbox's `View`) are left
+    /// registered centre singleton — the luncosim's `View`) are left
     /// untouched: their chrome lives outside the dock by design.
     pub(crate) fn ensure_chrome_present(&mut self) {
         if !self.perspective_chrome_complete() {
@@ -3870,12 +3870,12 @@ fn render_layout(
     //   1. If the active perspective is centre-driven (non-empty centre
     //      intent, e.g. the modelica workbench's Code/Diagram), render the
     //      full DockArea.
-    //   2. Otherwise (viewport-only perspective like the sandbox's `View`),
+    //   2. Otherwise (viewport-only perspective like the luncosim's `View`),
     //      render the side panels with plain SidePanel / TopBottomPanel and
     //      leave the central area transparent for the 3D viewport.
     //
     // The gate is the centre *intent* (`layout.center`), not merely "does
-    // the dock hold any tab". A hybrid app (the rover sandbox embeds the
+    // the dock hold any tab". A hybrid app (the rover luncosim embeds the
     // Modelica workbench) can have document/model instance tabs parked in
     // the dock while a viewport-only perspective is active — e.g. restored
     // on boot before the user switches to a doc-capable perspective.
@@ -3913,7 +3913,7 @@ fn render_layout(
         // Tab body fill is set further below alongside the
         // per-state tab colours so the body matches the active tab.
         // Always opaque, in every app. Transparency on the bar made
-        // the Modelica workbench look broken, and the sandbox's
+        // the Modelica workbench look broken, and the luncosim's
         // centre is a transparent `ViewportPanel` anyway — a dark
         // strip above its invisible header just looks like the top
         // edge of the viewport tile, which is fine.
@@ -4029,7 +4029,7 @@ fn render_layout(
         // looks right whether the user runs in 1280×720 or 4K. Targets
         // mirror a 10/80/10 split: side panels 10% of window width each;
         // bottom dock 20% of window height. egui then owns the live width
-        // in its own memory for the session (not persisted — sandbox-style
+        // in its own memory for the session (not persisted — luncosim-style
         // perspectives keep their sizes in the dock tree via 5a instead).
         let side_default = (screen.width() * 0.10).max(140.0);
         let right_default = (screen.width() * 0.10).max(140.0);

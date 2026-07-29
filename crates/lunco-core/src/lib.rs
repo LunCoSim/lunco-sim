@@ -789,12 +789,12 @@ pub fn not_rolling_back(rb: Option<Res<RollbackInProgress>>) -> bool {
 }
 
 /// Ordering anchor for the client-netcode `Update` pipeline, which now **spans two
-/// crates**: the spawn half (`apply_replicated_spawns`, in `lunco-sandbox-edit`,
+/// crates**: the spawn half (`apply_replicated_spawns`, in `lunco-luncosim-edit`,
 /// because it instantiates from the spawn catalog) must run before the prediction
 /// half (interp / kinematic-pin / reconcile / rollback, in `lunco-networking`).
 /// The two used to sit in one `.chain()` in a single file; a plain `.chain()` can't
 /// express the ordering across the crate boundary, and neither crate may depend on
-/// the other (`lunco-networking` must never gain a `lunco-sandbox-edit` edge — see
+/// the other (`lunco-networking` must never gain a `lunco-luncosim-edit` edge — see
 /// its Cargo.toml, review A6). `lunco-core` is the one crate both already depend on,
 /// so the shared set lives here.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

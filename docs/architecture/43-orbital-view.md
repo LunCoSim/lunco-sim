@@ -4,7 +4,7 @@
 
 The celestial placement substrate: a Keplerian satellite, geodetically-placed
 ground stations (Earth + Moon), the **site frame** that grounds scene-local prims
-on a body, and a sandbox that can switch between the surface (moonbase terrain)
+on a body, and a luncosim that can switch between the surface (moonbase terrain)
 and a solar-system view of the same scene.
 
 **Connectivity is not in this doc.** Links are a generic, domain-free kernel over
@@ -26,11 +26,11 @@ this geometry — see [`49-connectivity-link-kernel.md`](49-connectivity-link-ke
 | Discrete events | `lunco-core/telemetry.rs` `TelemetryEvent` (observer bus) | AOS/LOS edges go here |
 | USD→component bridge | `lunco-usd-sim/lib.rs` `process_usd_sim_prim_read<R: UsdRead>` attr branches (e.g. `lunco:sensor:range` → `RangeSensor`) | Exact shape to clone for comms/orbit/anchor attrs |
 | USD wiring | native `connectionPaths` (`rewire_usd_connections`), journaled `ApplyUsdOp` | Components wire ports without new Rust |
-| Attr write-back for UI | `sandbox-edit inspector apply_usd_attribute_change` → `UsdOp::SetAttribute` (journaled) | Generic; only widgets are missing |
+| Attr write-back for UI | `luncosim-edit inspector apply_usd_attribute_change` → `UsdOp::SetAttribute` (journaled) | Generic; only widgets are missing |
 | Moonbase twin | `~/Documents/models/moonbase/twin/moonbase_scene.usda` — Shackleton connecting-ridge glb (16×16 km), structures incl. `comms_mast.usda`, skid/ackermann rovers | No georef anchor authored yet |
 
 Missing (all greenfield): Kepler propagator, geodetic↔cartesian math, LOS/
-occlusion/link layer, ground-station/satellite/antenna assets, sandbox solar
+occlusion/link layer, ground-station/satellite/antenna assets, luncosim solar
 view + surface⇄orbital transition, positioning UI.
 
 ## 2. Design
@@ -146,12 +146,12 @@ Bridged in `process_usd_sim_prim_read` (lunco-usd-sim gains a
 - `assets/scenes/tests/comms_demo.usda` — minimal headless-testable
   scene (anchor + rover antenna + satellite + Earth station).
 
-### 2.6 Solar-system view in the sandbox
+### 2.6 Solar-system view in the luncosim
 
-The sandbox already runs `WorldShellPlugin` + big_space; the solar hierarchy is
+The luncosim already runs `WorldShellPlugin` + big_space; the solar hierarchy is
 designed to nest under the shell root. Enablement is per-twin:
-`twin.toml [celestial] enabled = true` (moonbase: on; default sandbox twin:
-off — existing test scenes unchanged). When enabled the sandbox app adds
+`twin.toml [celestial] enabled = true` (moonbase: on; default luncosim twin:
+off — existing test scenes unchanged). When enabled the luncosim app adds
 `CelestialPlugin` + `EphemerisPlugin` (dropping its direct `GravityPlugin`
 add — CelestialPlugin includes it).
 
@@ -187,7 +187,7 @@ a settings-menu checkbox. Connectivity itself is doc 49's, not this doc's.
   `placement.rs` (`anchor_solar_frame_to_site`,
   `place_celestial_bound_entities`).
 - **`CelestialConfig`** `{spawn_hierarchy, spawn_observer_camera}` gates the
-  hierarchy: defaults preserve `luncosim`; the sandbox runs the celestial
+  hierarchy: defaults preserve `luncosim`; the luncosim runs the celestial
   stack dormant and `enable_celestial_on_site_anchor` flips it when a
   site-anchored scene loads. The hierarchy spawn moved Startup→Update
   (idempotent, `run_if`), the Observer Camera + its FloatingOrigin claim are

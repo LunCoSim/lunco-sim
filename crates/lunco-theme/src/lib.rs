@@ -20,8 +20,8 @@
 //! ## The consequence today
 //!
 //! `lunco-networking` and `lunco-avatar` are both reachable from
-//! `lunco-sandbox-server` (verified with
-//! `cargo tree -p lunco-sandbox-server -i <crate> -e normal`). Neither may take
+//! `lunco-luncosim-server` (verified with
+//! `cargo tree -p lunco-luncosim-server -i <crate> -e normal`). Neither may take
 //! a plain dependency on this crate. If they need tokens, the dep must be
 //! **optional and behind their existing `ui` feature** — which is already how
 //! `lunco-networking` gates egui

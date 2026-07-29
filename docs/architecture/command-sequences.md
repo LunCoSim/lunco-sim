@@ -458,7 +458,7 @@ sim-only) and declarative `timeline` (portable, stored, synced) are two authorin
 
 ### Tutorial tracks — wired + verified (2026-07-12)
 Basic (`assets/tutorials/basic/`, B1–B5) + Space School (SS1–SS4) registered
-into the shared registry (one-plugin pattern in `lunco-sandbox/src/ui/mod.rs`; `b1`/`ss1`
+into the shared registry (one-plugin pattern in `lunco-luncosim/src/ui/mod.rs`; `b1`/`ss1`
 `first_start:false`). Verified live on a dev build: **B1** mission+autopilot → both objectives →
 `MISSION_COMPLETE` → chain prompt (screenshot); **SS1** coach tour + `traverse.usda`; **B3** tip-over +
 the new `world_rotation`/`tilt_deg` path (`[debug] tilt at start: 0.0°`); **B4** variant spawns

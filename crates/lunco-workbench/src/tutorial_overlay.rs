@@ -14,7 +14,7 @@
 //! ```
 //!
 //! Lives in `lunco-workbench` (not a tutorial-only crate) because both the
-//! sandbox and the lunica Modelica workbench load `WorkbenchPlugin`, so the
+//! luncosim and the lunica Modelica workbench load `WorkbenchPlugin`, so the
 //! same HUD is available to every app. The [`HelpAnchors`](crate::HelpAnchors)
 //! rect registry it spotlights against already lives here too.
 //!
@@ -410,7 +410,7 @@ fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryVal
 /// a speech-bubble tail, and a themed card with a full-width accent banner,
 /// body, progress bar, clickable jump-dots, and Back / Skip / Next·Done
 /// controls. Controls fire `cmd:Tutorial{Next,Back,Skip,Goto}` on the bus; the
-/// running rhai tour advances on them. Shared by lunica and the sandbox.
+/// running rhai tour advances on them. Shared by lunica and the luncosim.
 fn draw_tour(
     mut egui_ctx: EguiContexts,
     hud: Res<TutorialHud>,

@@ -276,7 +276,7 @@ carry `PhysicsCollisionAPI` only and get **no** independent body.
 > including its host-facing hinge: compose its root directly onto the host body
 > and USD path translation maps the assembly root to that body. The host must
 > not duplicate an attachment joint or be named by the lower-level assembly.
-> `sandbox --validate`
+> `luncosim --validate`
 > reports the mistake as `[usd/nested-body-no-joint]`; see
 > [`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body).
 
@@ -425,7 +425,7 @@ wheels.
 **Pre-flight first — it costs seconds and needs no app:**
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate assets/<your file>.usda
+cargo run -p lunco-luncosim --bin luncosim -- --validate assets/<your file>.usda
 ```
 
 It parses the layer, **composes the whole reference closure** (so a dangling

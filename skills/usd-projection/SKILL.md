@@ -84,7 +84,7 @@ Two failure modes this exists to prevent:
 
 - **Counting the registry** ("there's only one document") — false. The registry
   also holds terrain and script documents.
-- **Hardcoding `/World`** — the sandbox scene is rooted at `/SandboxScene`. A
+- **Hardcoding `/World`** — the luncosim scene is rooted at `/SandboxScene`. A
   prim authored outside the mounted `defaultPrim` subtree *composes into the
   layer and is then never mounted*: it saves, it journals, and it is invisible.
   This failure is completely silent.

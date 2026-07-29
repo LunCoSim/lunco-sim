@@ -30,7 +30,7 @@ transport-http = ["dep:axum", "dep:tokio"]
 # request wakes the app immediately (vs. waiting for the next reactive tick).
 # Needs `bevy::winit`. OFF for a headless `--no-ui` server — it has no event loop
 # (ScheduleRunnerPlugin ticks continuously), so the waker is a no-op anyway.
-# GUI binaries enable it via `lunco-sandbox`'s `ui` feature.
+# GUI binaries enable it via `lunco-luncosim`'s `ui` feature.
 winit = ["bevy/bevy_winit"]
 
 # NOTE: there is no `transport-wasm` feature. On wasm32 the only usable

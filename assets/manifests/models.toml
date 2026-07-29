@@ -19,7 +19,7 @@
 #
 # Third-party USD tools (Blender, usdview) still can't fetch it and fall
 # back to the prim's local Cube placeholder (see `def Cube "Perseverance"`
-# in `assets/scenes/sandbox/sandbox_scene.usda`) — but the reference is now
+# in `assets/scenes/luncosim/sandbox_scene.usda`) — but the reference is now
 # a plain library path rather than a scheme naming our download cache.
 # See `docs/architecture/56-asset-resolution-and-cache.md`.
 

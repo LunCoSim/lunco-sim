@@ -65,7 +65,7 @@ This separation allows for seamless interoperability with NVIDIA Omniverse and o
 ## 5. Crate Layering
 
 ```
-Apps (luncosim, lunco-sandbox, lunica)
+Apps (luncosim, lunco-luncosim, lunica)
    │
    ├── Networking (lunco-networking, replication, auth) ← Native Layer 2b
    │

@@ -33,8 +33,7 @@ primary four:
 
 | App | Purpose |
 |---|---|
-| [**luncosim**](apps/luncosim/README.md) | Flagship lunar-mission simulator (full FSW/robotics/avatar stack) |
-| [**sandbox**](apps/sandbox/README.md) | Ground mobility and physics testing (+ headless [server](apps/sandbox/OPS.md)) |
+| [**luncosim**](apps/luncosim/README.md) | LunCoSim ground mobility and physics application (+ headless [server](apps/luncosim/OPS.md)) |
 | [**lunica**](apps/lunica/README.md) | Modelica engineering workbench |
 | [**assets-manager**](apps/assets-manager/README.md) | Download and process workspace assets |
 

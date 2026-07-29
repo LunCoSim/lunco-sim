@@ -87,7 +87,7 @@ default = []
 # fallback: `doc_resolve::resolve_doc_for_entity` falls back to the VIEWPORT's
 # active document when the registry match fails, and a viewport is a GUI notion
 # (`lunco_usd::ui::viewport::UsdViewportState`). A headless server has no
-# viewport, so there the registry match is the only answer. `lunco-sandbox-edit`'s
+# viewport, so there the registry match is the only answer. `lunco-luncosim-edit`'s
 # `ui` feature forwards to this one so GUI behaviour is unchanged.
 ui = ["lunco-usd/ui"]
 

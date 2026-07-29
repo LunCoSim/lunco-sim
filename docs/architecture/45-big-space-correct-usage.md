@@ -223,7 +223,7 @@ Corollaries:
 ### Phase 5 landed (2026-07-11): the physics transform domain
 
 `BigSpacePhysicsBridgePlugin` (`lunco-usd-avian/src/big_space_bridge.rs`,
-registered in the sandbox after `PhysicsPlugins`) disables all three of
+registered in the luncosim after `PhysicsPlugins`) disables all three of
 avian's f32 sync systems — `propagate_before_physics` (writer 2 above),
 `transform_to_position`, `position_to_transform`; all runtime `run_if`
 gates on `PhysicsTransformConfig` — and owns the sync in the f64 cell
@@ -267,7 +267,7 @@ chain:
   `propagate_collider_transforms` (ColliderTransformPlugin — NOT among the
   three syncs Phase 5 disables) only descends from tree roots WITH a
   `Transform`; with it frozen, `update_collider_scale`'s child branch read a
-  stale `ColliderTransform`, and the sandbox Ground — a UNIT cube with
+  stale `ColliderTransform`, and the luncosim Ground — a UNIT cube with
   `xformOp:scale = (4000, 0.2, 4000)` — collapsed to a ~1 m collider. The
   camera-relative jump probe stayed SILENT throughout (the chase cam falls
   with its rover): co-falling is invisible to relative probes; absolute API
@@ -280,12 +280,12 @@ chain:
   and keep the running scale, faithful to avian's recursion — with NO tree
   root involved. avian's own pass still runs and no-ops on rootless trees.
   With that in place: **WorldRoot is `Transform`-free (big_space-canonical)
-  and `BigSpaceValidationPlugin` is re-enabled** in sandbox debug builds.
+  and `BigSpaceValidationPlugin` is re-enabled** in luncosim debug builds.
   Pinned by `bridge_physics.rs::
   scaled_child_collider_ground_settles_without_root_transform` and the
   structural ABSENCE assert in `world_shell_origin_tracking.rs`.
   Consequence: any app that spawns the world shell AND avian physics must
-  register `BigSpacePhysicsBridgePlugin` (the sandbox does; `luncosim` has
+  register `BigSpacePhysicsBridgePlugin` (the luncosim does; `luncosim` has
   no physics content).
 - **Trajectory views only carry `CellCoord` under Grid parents**
   (`trajectory_alignment_system`): views spawn cell-less; the alignment

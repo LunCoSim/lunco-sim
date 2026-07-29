@@ -66,13 +66,13 @@ leave a camera under-exposed, because the two move together.
 angular diameter); EV 15 ≈ `Exposure::SUNLIGHT` lands 0.13-albedo regolith at mid-gray.
 **Raise EV100 to darken the image, lower it to brighten.**
 
-> A non-lunar scene (the sandbox) deliberately `insert_resource`s its own **studio** values
+> A non-lunar scene (the luncosim) deliberately `insert_resource`s its own **studio** values
 > before plugins are added, because the calibrated lunar pair crushes an editor's dark
 > blueprint ground to black. That is not a bug to "fix at the source" — a shared test scene
 > has many consumers. **Author cinematic values in the scene that wants them**, as an
 > override on the light prim, not in the shared asset.
 
-The exact mismatch above produced a black viewport in practice: a 10 klx sandbox sun under
+The exact mismatch above produced a black viewport in practice: a 10 klx luncosim sun under
 a 128 klx-tuned EV15 camera.
 
 ### Uniform ambient is the SUM of authored untextured `DomeLight` prims
@@ -94,7 +94,7 @@ Two consequences that are not obvious:
 > [!WARNING]
 > **This is the repo's worked example of the two-writers bug** (see `AGENTS.md` §3, "Do not
 > preserve legacy, shims, or fallbacks"). A scene could once author both the custom
-> attribute — assigned by `lunco-sandbox::project_env_settings` — and a dome, whose sum was
+> attribute — assigned by `lunco-luncosim::project_env_settings` — and a dome, whose sum was
 > assigned by the light loader. Two writers, one field, load order deciding the winner.
 > Because a textured dome contributes zero, authoring a starfield sky drove the sum to zero
 > and **silently deleted the scene's regolith-bounce fill**; the projector's memoised

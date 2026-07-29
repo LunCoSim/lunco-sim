@@ -4,7 +4,7 @@
 //! A scene pulls its rovers/components from outside its own folder:
 //!
 //! ```text
-//! assets/scenes/sandbox/sandbox_scene.usda
+//! assets/scenes/luncosim/sandbox_scene.usda
 //!   prepend references = @../../vessels/rovers/ackermann_rover.usda@   // → assets/vessels/…
 //! ```
 //!
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn closure_follows_out_of_tree_reference() {
         let dir = tempfile::tempdir().unwrap();
-        let scenes = dir.path().join("scenes/sandbox");
+        let scenes = dir.path().join("scenes/luncosim");
         let vessels = dir.path().join("vessels");
         std::fs::create_dir_all(&scenes).unwrap();
         std::fs::create_dir_all(&vessels).unwrap();

@@ -7,7 +7,7 @@ description: >
   USE THIS SKILL when the user says "validate this asset", "check the file
   compiles", "did I break the rover", "why won't this wheel spawn", "lint my
   Modelica model", "check the shader params", "syntax-check the scenario", or
-  when you are about to launch the whole sandbox just to find out whether a file
+  when you are about to launch the whole luncosim just to find out whether a file
   you edited is well-formed. Also use it as the CHEAP first step of any
   authoring loop (author-usd-component, build-vehicle, use-asset-library).
   Project-specific and non-obvious: it is a QUERY that returns data (not a
@@ -26,7 +26,7 @@ description: >
 
 `ValidateAsset` answers one question — **does this file parse, and would the
 engine accept it?** — without a scene, a cosim, a GPU, or a window. It is the
-cheapest possible check and it is safe to run against a live sandbox
+cheapest possible check and it is safe to run against a live luncosim
 **mid-simulation**: it only reads files.
 
 Implementation: [`crates/lunco-scene-commands/src/validate.rs`](../../crates/lunco-scene-commands/src/validate.rs).
@@ -40,13 +40,13 @@ file), [`use-asset-library`](../use-asset-library/SKILL.md) (get it discovered),
 ### CLI — no app, no window, no GPU
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate \
+cargo run -p lunco-luncosim --bin luncosim -- --validate \
   assets/models/LunCo/Electrical/Battery.mo \
   assets/vessels/rovers/skid_rover.usda \
   assets/shaders/rover_hull.wgsl
 ```
 
-The flag is intercepted in `crates/lunco-sandbox/src/bin/sandbox.rs:19-33`
+The flag is intercepted in `crates/lunco-luncosim/src/bin/luncosim.rs:19-33`
 **before** the Bevy `App` is built, and the process `exit`s — nothing is
 rendered, no window opens, no port is bound. Run it anywhere, any time.
 
@@ -62,7 +62,7 @@ rendered, no window opens, no port is bound. Run it anywhere, any time.
 - Output per file: `OK  <path> (<kind>)` / `FAIL  <path> (<kind>)`, then
   indented `error:` and `warning:` lines on stdout.
 
-### API — against a running sandbox
+### API — against a running luncosim
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
@@ -73,7 +73,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 Only one param: **`path`** (string). It is a **query provider**, so the data
 comes back in the response body — you do **not** poll `QueryCommandResult`.
 
-**Answered by sandbox binaries only.** `ValidateAsset` is registered in
+**Answered by luncosim binaries only.** `ValidateAsset` is registered in
 `SpawnCommandPlugin` (`crates/lunco-scene-commands/src/commands.rs:2923`), which
 `lunica` does not link — asking lunica gives `CommandNotFound`. Use the CLI form
 when only lunica is up.
@@ -149,7 +149,7 @@ Three stages, first failure short-circuits:
 > schema-shaped, so it cannot see that two colliders on the same vehicle overlap,
 > or that a strut hangs lower than the foot that is supposed to carry it — facts
 > about composed transforms and extents, not about attributes. Clearance is a
-> **runtime** check: run the scene under `sandbox test` and assert the mechanism
+> **runtime** check: run the scene under `luncosim test` and assert the mechanism
 > moved (see [`author-usd-physics`](../author-usd-physics/SKILL.md#2-a-prismatic-joint-carries-moment)).
 > A vehicle can validate perfectly and still land on its shins.
 
@@ -246,14 +246,14 @@ drive it / assert     ← author-scenario, drivetrain_parity
 ```
 
 Validate **every file you touched** before you launch anything. A `--validate`
-run costs seconds; a sandbox launch that dies on a typo costs a compile.
+run costs seconds; a luncosim launch that dies on a typo costs a compile.
 
 ## Anti-patterns
 
-- ❌ Launching the full sandbox to find out whether a file parses — that is what
+- ❌ Launching the full luncosim to find out whether a file parses — that is what
   `--validate` is for.
 - ❌ Sending `ValidateAsset` to **lunica** and concluding the command doesn't
-  exist. It is sandbox-only; use the CLI.
+  exist. It is luncosim-only; use the CLI.
 - ❌ Treating a `.wgsl` `ok: true` as "the shader compiles" — no naga runs.
   Only a real load proves the pipeline builds.
 - ❌ Passing a bare `models/X.mo` from an arbitrary CWD and trusting which file

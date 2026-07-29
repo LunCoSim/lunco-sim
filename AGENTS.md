@@ -30,18 +30,18 @@ Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
 
 - Test scenes are under `assets/scenes/tests/`, scenarios under
   `assets/scenarios/tests/`. A green gate needs a negative fixture and a real verdict.
-- Use only the production `sandbox` binary for scene tests and visual validation.
+- Use only the production `luncosim` binary for scene tests and visual validation.
   Full scene reload is supported; partial object/reference reload remains TODO.
 - Establish a behaviour baseline before physics/vehicle changes and rerun it.
   Capture real exit codes and inspect verdicts.
-- Use focused tests first, then production sandbox. Use `-j 4`, repository
+- Use focused tests first, then production luncosim. Use `-j 4`, repository
   `target/`, and regular `sccache`; never use managed temporary build directories
   or custom temporary files. Avoid overlapping Cargo builds.
 
 ## Sandbox lifecycle
 
 - Every controllable launch uses an explicit API port:
-  `target/debug/sandbox --api 4101` (or another free port).
+  `target/debug/luncosim --api 4101` (or another free port).
 - Reuse the existing session for asset, shader, and Rhai reloads through its API.
   When a replacement is required, stop the previous session through API `Exit`,
   verify its process and API port are gone, then launch the replacement. Never
@@ -66,5 +66,4 @@ Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
 - Search with `rg` and exclude `target/`.
 - Run `git diff --check`, focused formatting/checks, and relevant runtime tests.
 - Fix warnings introduced by the change. Report exact tests, runtime/API checks,
-  sandbox port/session state, and remaining blockers. Never claim unobserved results.
-
+  luncosim port/session state, and remaining blockers. Never claim unobserved results.

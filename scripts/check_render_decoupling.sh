@@ -45,7 +45,7 @@ cd "$PROJECT_DIR"
 
 # The headless server. Anything reachable from here on normal edges ships in
 # the `--no-ui` binary and in the wasm worker.
-PKG="lunco-sandbox-server"
+PKG="lunco-luncosim-server"
 
 # `naga` is deliberately ABSENT from this list. It remains in the graph via
 # `bevy_shader`, which supplies the WGSL compiler that `SetShaderSource` /

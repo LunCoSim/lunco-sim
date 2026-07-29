@@ -1,11 +1,11 @@
 // Networking GUI drive/collision probe — repeatable harness for the two-app
-// (host + client) sandbox test.
+// (host + client) luncosim test.
 //
 // Prereqs: launch both peers with NET_DIAG=1 so the per-step jump + interp
 // starvation diagnostics are emitted to their logs:
 //
-//   NET_DIAG=1 cargo run -j2 --bin sandbox --features networking -- --host 5888 --api 4101
-//   NET_DIAG=1 cargo run -j2 --bin sandbox --features networking -- --connect 127.0.0.1:5888 --api 4102
+//   NET_DIAG=1 cargo run -j2 --bin luncosim --features networking -- --host 5888 --api 4101
+//   NET_DIAG=1 cargo run -j2 --bin luncosim --features networking -- --connect 127.0.0.1:5888 --api 4102
 //
 // Then:  node crates/lunco-networking/scripts/drive_probe.mjs [clientPort] [roverGid] [seconds]
 //

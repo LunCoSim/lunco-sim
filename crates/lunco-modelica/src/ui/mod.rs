@@ -547,7 +547,7 @@ impl Perspective for AnalyzePerspective {
         PerspectiveId("modelica_analyze")
     }
     fn title(&self) -> String {
-        "📐 Design".into()
+        "Lunica".into()
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -645,7 +645,7 @@ impl Plugin for ModelicaUiPlugin {
         // ModalQueue + modal host live in lunco-ui. `render_close_dialogs`
         // (added below by ModelicaCommandsPlugin) consumes ModalQueue, so
         // LuncoUiPlugin must be present whenever Modelica UI is mounted —
-        // not just in the 3D `lunco-sandbox` binary that originally added it.
+        // not just in the 3D `lunco-luncosim` binary that originally added it.
         if !app.is_plugin_added::<lunco_ui::LuncoUiPlugin>() {
             app.add_plugins(lunco_ui::LuncoUiPlugin);
         }
@@ -941,7 +941,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_perspective_help(
                 lunco_workbench::PerspectiveId("modelica_analyze"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "📐 Design",
+                    title: "Lunica",
                     description: "Modelica engineering workbench. Author models as \
                                   text or wired diagrams, then compile and simulate.",
                     shortcuts: vec![

@@ -29,10 +29,10 @@ workbench. The API server only exists when you pass `--api`. Default port is
 | App | Launch | Modelica surface |
 |---|---|---|
 | **`lunica`** | `cargo run --bin lunica -- --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
-| **`sandbox`** | `cargo run --release -p lunco-sandbox --bin sandbox -- --api 4101` | Physics test bed; Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
-| **`luncosim`** | `cargo run -p luncosim -- --api 4101` | Flagship sim; same — Modelica under `modelica_analyze`. |
+| **`luncosim`** | `cargo run --release -p lunco-luncosim --bin luncosim -- --api 4101` | Physics test bed; Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
+| **`luncosim-server`** | `cargo run -p lunco-luncosim-server -- --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
 
-**In `sandbox`/`luncosim`, switch to the Modelica view before plotting/screenshotting.**
+**In `luncosim`/`luncosim`, switch to the Modelica view before plotting/screenshotting.**
 The compile/run/experiment *commands and query providers work regardless* (they're
 headless-safe), but the diagram/plot panels only paint when their perspective is
 active. Switch with:
@@ -333,7 +333,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   `OpenFile` is filesystem-only.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
-- **Blank plot/diagram in `sandbox`/`luncosim`** → the Modelica perspective
+- **Blank plot/diagram in `luncosim`/`luncosim`** → the Modelica perspective
   isn't active. `ActivatePerspective{"id":"modelica_analyze"}` before capturing
   (§0). In `lunica` it's already the whole app. Commands/results don't need it —
   only the visible panels do.

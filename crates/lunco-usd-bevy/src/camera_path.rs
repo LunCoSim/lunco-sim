@@ -304,7 +304,7 @@ pub enum CameraPathAction {
 /// by the path prim's USD path (full path or its leaf, like [`SetActiveCamera`]).
 ///
 /// Exists because path release is otherwise owned entirely by the offline recorder
-/// (`start_camera_paths_when_recording_starts` in `lunco-sandbox`), and in an
+/// (`start_camera_paths_when_recording_starts` in `lunco-luncosim`), and in an
 /// ordinary interactive session no recorder ever runs — so an authored path would
 /// sit held at its first frame forever. This is the deliberate, *explicit* answer to
 /// that: one verb the user (or a script, or the HTTP API) invokes. It is NOT a

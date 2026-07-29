@@ -320,7 +320,7 @@ fn on_client_disconnected(
     local.0 = SessionId::LOCAL;
     // Deliberately KEEP role == Client (and the Disconnected Client entity + the
     // status endpoint) on an *involuntary* drop. The host-loss quiescence path
-    // `force_kinematic_proxies` (lunco-sandbox-edit) is gated on role == Client and
+    // `force_kinematic_proxies` (lunco-luncosim-edit) is gated on role == Client and
     // re-pins proxies Kinematic so a Dynamic body re-inserted after host loss doesn't
     // free-fall through the terrain (the "-195 km cosim ball" fix). Flipping to
     // Standalone here makes that system no-op — so we don't. A clean user-initiated

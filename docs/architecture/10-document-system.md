@@ -459,7 +459,7 @@ When adding a new domain (Modelica, USD, SysML, Mission):
 
 Keep the *core document and ops in the domain crate* (`lunco-modelica`,
 `lunco-usd`, etc.). Keep *views in UI sub-modules* (`lunco-modelica/ui`,
-`lunco-sandbox-edit/ui`).
+`lunco-luncosim-edit/ui`).
 
 ## 10. Design principles
 
@@ -557,4 +557,3 @@ this decision: [`research/undo-redo-libraries.md`](research/undo-redo-libraries.
 - [`20-domain-modelica.md`](20-domain-modelica.md) — first domain implementation (ModelicaDocument)
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as a second Document domain
 - [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md) — library survey & decision rationale
-

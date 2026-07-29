@@ -224,7 +224,7 @@ may not; `WireResult::Log` is the portable channel.
 
 ## Inline fallback
 
-If `install_worker` fails (worker bundle missing, browser sandbox
+If `install_worker` fails (worker bundle missing, browser luncosim
 refuses, etc.) the inline path stays alive. `pump_commands_to_worker`
 early-returns on `WORKER.get().is_none()`, so commands stay in
 `rx_cmd`; `inline_worker_process` then drains them on the main thread

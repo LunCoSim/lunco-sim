@@ -49,3 +49,6 @@ graphify-out/
 *.glb
 assets/icons/macos/luncosim.icns
 assets/icons/windows/luncosim.ico
+assets/icons/linux/
+assets/icons/macos/png/
+assets/icons/windows/png/

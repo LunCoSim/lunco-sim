@@ -460,7 +460,7 @@ impl Plugin for ShaderMaterialPlugin {
         app.init_resource::<ShaderCatalog>();
         // Reflect each shader's `Material` struct → per-material `ParamSchema`.
         app.add_systems(Update, reflect_shader_schemas);
-        // Catalog discovery lives in ONE place — `lunco-sandbox-edit`'s
+        // Catalog discovery lives in ONE place — `lunco-luncosim-edit`'s
         // `maintain_catalogs`, which scans engine + Twin shaders via the shared
         // `lunco_assets::discovery` walk. This crate only seeds the wasm-safe
         // defaults in `ShaderCatalog::default`.

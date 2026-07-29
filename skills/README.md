@@ -64,12 +64,12 @@ one directly when doing that kind of task by hand.
 
 ## Cross-cutting conventions (baked into every skill)
 
-- **Always launch sandbox with its HTTP API**: `target/debug/sandbox --api 4101` (use
+- **Always launch luncosim with its HTTP API**: `target/debug/luncosim --api 4101` (use
   another explicit free port when needed). The MCP bridge's old default (3000) is stale;
-  every controllable, visual, realtime, or scene-test sandbox process must carry
+  every controllable, visual, realtime, or scene-test luncosim process must carry
   an explicit `--api PORT`. Only parse-only `--validate` invocations are exempt.
 - **Exit the previous session before launching the next**: send the API `Exit` command,
-  verify the process and port are gone, then start the replacement. Never overlap sandbox
+  verify the process and port are gone, then start the replacement. Never overlap luncosim
   GUI/API sessions or reuse a port while the old session is still alive.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
@@ -78,7 +78,7 @@ one directly when doing that kind of task by hand.
   doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
   silently. See [**usd-projection**](usd-projection/SKILL.md).
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
-- **Validate before you run.** `sandbox -- --validate <files…>` parses assets in
+- **Validate before you run.** `luncosim -- --validate <files…>` parses assets in
   seconds with no GPU and catches broken references, missing wheel attrs and
   `if`/`when` in Modelica — **and runs the authored lint rules**, which is what
   reports a part that would fall off a vehicle. On a *loaded* scene use the verb:

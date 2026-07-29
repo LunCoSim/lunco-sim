@@ -386,7 +386,7 @@ def Xform "Rover" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
 }
 ```
 
-This shipped. Four motors per rover, on every rover in the sandbox, gone on the
+This shipped. Four motors per rover, on every rover in the luncosim, gone on the
 first physics step — while the rovers still drove, still steered and still made
 their authored top speed. Every parity gate stayed green; the bug was found in a
 screenshot of hardware lying on the regolith.
@@ -536,7 +536,7 @@ that is its own scaled mesh) is separate, and a proxy inherits the same frame.
 ### Catch it before the screenshot
 
 ```bash
-cargo run -q -p lunco-sandbox --bin sandbox -j 2 -- --validate assets/vessels/rovers/skid_rover.usda
+cargo run -q -p lunco-luncosim --bin luncosim -j 2 -- --validate assets/vessels/rovers/skid_rover.usda
 ```
 
 ```
@@ -580,11 +580,11 @@ from the assets rather than left looking meaningful.
 
 ## Verify it, headlessly
 
-`sandbox test` runs one authored scene plus its scenario deterministically, and
+`luncosim test` runs one authored scene plus its scenario deterministically, and
 its exit code comes from a telemetry verdict:
 
 ```
-cargo run -q -p lunco-sandbox --bin sandbox -j 4 -- \
+cargo run -q -p lunco-luncosim --bin luncosim -j 4 -- \
     test --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 

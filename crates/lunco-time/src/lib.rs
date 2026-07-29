@@ -76,7 +76,7 @@ pub const J2000_JD: f64 = 2_451_545.0;
 /// TODO(P11): a ceiling alone is a mitigation, not the fix. The structural fix is
 /// a **per-frame fixed-step budget** (cap the steps drained per frame and degrade
 /// fidelity rather than spin — doc 28 §3.3). That budget lives with the
-/// `Time<Fixed>`/`max_delta` configuration in `lunco-sandbox`, not here.
+/// `Time<Fixed>`/`max_delta` configuration in `lunco-luncosim`, not here.
 pub const MAX_REALTIME_RATE: f64 = 8.0;
 
 /// Transport play state. Replaces the scattered `paused` booleans.

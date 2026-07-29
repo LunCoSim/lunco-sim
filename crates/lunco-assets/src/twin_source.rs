@@ -349,12 +349,12 @@ mod tests {
     fn overlay_keyed_by_reader_facing_path() {
         let roots = TwinRoots::default();
         let bytes = Arc::new(b"#usda 1.0\n".to_vec());
-        roots.set_overlay("moonbase", "scenes/sandbox.usda", bytes.clone());
+        roots.set_overlay("moonbase", "scenes/luncosim.usda", bytes.clone());
 
-        // The reader receives `moonbase/scenes/sandbox.usda` (scheme stripped).
+        // The reader receives `moonbase/scenes/luncosim.usda` (scheme stripped).
         assert_eq!(
             roots
-                .overlay_for(Path::new("moonbase/scenes/sandbox.usda"))
+                .overlay_for(Path::new("moonbase/scenes/luncosim.usda"))
                 .as_deref(),
             Some(&*bytes),
             "overlay hit for the exact reader-facing path"
@@ -366,10 +366,10 @@ mod tests {
             "no overlay for an unrelated path"
         );
 
-        roots.clear_overlay("moonbase", "scenes/sandbox.usda");
+        roots.clear_overlay("moonbase", "scenes/luncosim.usda");
         assert!(
             roots
-                .overlay_for(Path::new("moonbase/scenes/sandbox.usda"))
+                .overlay_for(Path::new("moonbase/scenes/luncosim.usda"))
                 .is_none(),
             "cleared overlay falls back to disk"
         );

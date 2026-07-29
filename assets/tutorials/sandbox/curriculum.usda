@@ -67,7 +67,7 @@ def Scope "Sandbox" (
 
     def Scope "LanderMission" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-        prepend payload = @lunco://scenes/sandbox/lander_ops.usda@
+        prepend payload = @lunco://scenes/luncosim/lander_ops.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/lander_mission.rhai@
@@ -138,7 +138,7 @@ def Scope "Sandbox" (
 
     def Scope "Cosim" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-        prepend payload = @lunco://scenes/sandbox/lander_ops.usda@
+        prepend payload = @lunco://scenes/luncosim/lander_ops.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/cosim.rhai@

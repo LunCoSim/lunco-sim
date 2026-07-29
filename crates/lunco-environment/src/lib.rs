@@ -582,7 +582,7 @@ impl Plugin for EnvironmentPlugin {
 
         // ── Rollback replay ──────────────────────────────────────────────────
         // WEIGHT IS PART OF THE REPLAYED TICK. The shipped app sets avian's own
-        // `Gravity::ZERO` (`lunco-sandbox`) — gravity reaches a rigid body ONLY
+        // `Gravity::ZERO` (`lunco-luncosim`) — gravity reaches a rigid body ONLY
         // through this force write. `replay_one_tick` runs `RollbackReplay` and
         // then steps `PhysicsSchedule`, and the physics step CLEARS the force
         // accumulator; so without this system in the schedule every replayed

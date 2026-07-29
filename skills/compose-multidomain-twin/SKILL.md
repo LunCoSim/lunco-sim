@@ -94,7 +94,7 @@ This skill is the *assembly* layer over the single-domain skills:
 A **Twin** = a folder + a `twin.toml` manifest that owns a default USD scene:
 
 ```toml
-name = "sandbox"
+name = "luncosim"
 version = "0.1.0"
 description = "…"
 [usd]

@@ -29,7 +29,7 @@ def Xform "World"
     print("🚀 Starting LunCoSim Sandbox with API on port 4101...")
     log_file = open("/tmp/sandbox_http_apply_test.log", "w")
     proc = subprocess.Popen(
-        ["cargo", "run", "-p", "lunco-sandbox", "--bin", "sandbox", "--", "--api", "4101"],
+        ["cargo", "run", "-p", "lunco-luncosim", "--bin", "luncosim", "--", "--api", "4101"],
         stdout=log_file,
         stderr=log_file,
         preexec_fn=os.setsid

@@ -16,7 +16,7 @@
 //! rotation/scale is explicitly rejected by doc 41 (avian colliders, `big_space`
 //! and the f64 frame tree all assume SI Y-up, so non-SI must never flow
 //! downstream). Every consumer — `lunco-usd-bevy`'s visual sync, `lunco-usd-avian`'s
-//! colliders, `lunco-sandbox-edit`'s gizmo — already funnels through these:
+//! colliders, `lunco-luncosim-edit`'s gizmo — already funnels through these:
 //!
 //! | decoder | conversion |
 //! |---|---|

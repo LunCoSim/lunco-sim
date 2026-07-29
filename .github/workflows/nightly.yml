@@ -1,7 +1,7 @@
 # ============================================================================
 # LunCoSim — nightly desktop builds (manual trigger)
 # ============================================================================
-# Builds the sandbox as a native desktop binary for
+# Builds LunCoSim as a native desktop binary for
 # Linux (x86_64), macOS (arm64 + x86_64 cross-compiled on Apple Silicon),
 # and Windows (x86_64), packages each with assets + docs + skills + cache,
 # and uploads the archives as GitHub Actions artifacts. A GitHub Release is
@@ -10,7 +10,7 @@
 # Trigger: workflow_dispatch ONLY (manual, from the Actions tab).
 #   https://github.com/LunCoSim/luncosim-workspace/actions/workflows/nightly.yml
 #
-# Each OS job downloads the cache assets the sandbox needs, builds it, and
+# Each OS job downloads the cache assets LunCoSim needs, builds it, and
 # packages it via scripts/build_native.sh.
 # TODO(lunica-separate-repo): move Lunica's GitHub build/release pipeline to
 # the future standalone Lunica repository.
@@ -60,7 +60,7 @@ jobs:
             echo "tag=nightly-${{ steps.timestamp.outputs.timestamp }}" >> "$GITHUB_OUTPUT"
           fi
 
-  # ── Build the sandbox per OS ─────────────────────────────────────────────
+  # ── Build LunCoSim per OS ────────────────────────────────────────────────
   build:
     needs: meta
     name: ${{ matrix.label }}
@@ -165,24 +165,24 @@ jobs:
         with:
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
-      # ── Build + package the sandbox (native arch) ───────────────────────
+      # ── Build + package LunCoSim (native arch) ──────────────────────────
       # --package creates a
       # .tar.gz (unix) or .zip (windows) archive in dist/.
       # docs/ + AGENTS.md are bundled by build_native.sh (not --no-assets).
       # Cache download runs automatically before staging (unless
       # --skip-download), so the .cache/ subdirs are populated in-place.
-      - name: Build sandbox (desktop)
-        run: ./scripts/build_native.sh sandbox --release --package
+      - name: Build LunCoSim (desktop)
+        run: ./scripts/build_native.sh luncosim --release --package
 
       # The package builder emits these Git-Bash launchers only for the Windows
-      # sandbox. Keep all compatibility paths under CI: they are useful only if
+      # LunCoSim. Keep all compatibility paths under CI: they are useful only if
       # they reach the downloadable bundle.
       - name: Verify Windows GPU compatibility launchers
         if: matrix.platform == 'windows'
         run: |
-          for launcher in sandbox_dx12.sh sandbox_fast.sh sandbox_dx12_fast.sh; do
-            test -x "dist/sandbox-windows-x86_64/$launcher"
-            unzip -l dist/sandbox-windows-x86_64-*.zip | grep -F "$launcher"
+          for launcher in luncosim_dx12.sh luncosim_fast.sh luncosim_dx12_fast.sh; do
+            test -x "dist/luncosim-windows-x86_64/$launcher"
+            unzip -l dist/luncosim-windows-x86_64-*.zip | grep -F "$launcher"
           done
 
       # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
@@ -196,16 +196,16 @@ jobs:
         if: matrix.cross_target != ''
         run: rustup target add ${{ matrix.cross_target }}
 
-      - name: Build sandbox (cross ${{ matrix.cross_target }})
+      - name: Build LunCoSim (cross ${{ matrix.cross_target }})
         if: matrix.cross_target != ''
-        run: ./scripts/build_native.sh sandbox --release --package --target ${{ matrix.cross_target }} --skip-download
+        run: ./scripts/build_native.sh luncosim --release --package --target ${{ matrix.cross_target }} --skip-download
 
       # ── Upload artifacts (native arch) ──────────────────────────────────
-      - name: Upload sandbox artifact
+      - name: Upload LunCoSim artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sandbox-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/sandbox-${{ matrix.platform }}-${{ matrix.arch }}-*.*
+          name: luncosim-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/luncosim-${{ matrix.platform }}-${{ matrix.arch }}-*.*
           if-no-files-found: error
           retention-days: 30
 
@@ -213,12 +213,12 @@ jobs:
       # `platform_short` in build_native.sh maps *darwin* → "macos", so the
       # cross-compiled dist dir is dist/<bin>-macos-x86_64/ regardless of
       # which arch ran the build.
-      - name: Upload sandbox (cross) artifact
+      - name: Upload LunCoSim (cross) artifact
         if: matrix.cross_target != ''
         uses: actions/upload-artifact@v4
         with:
-          name: sandbox-macos-x86_64
-          path: dist/sandbox-macos-x86_64-*.*
+          name: luncosim-macos-x86_64
+          path: dist/luncosim-macos-x86_64-*.*
           if-no-files-found: error
           retention-days: 30
 
@@ -259,69 +259,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_BODY: |
-            ## LunCo Nightly Build — ${{ needs.meta.outputs.date }}
+            ## LunCoSim nightly — ${{ needs.meta.outputs.date }}
 
-            Welcome to the nightly development snapshot of **LunCo** — the open-source, high-fidelity co-simulation platform for space mission design and system engineering.
+            Development build of **LunCoSim**, the open-source lunar mission simulator.
 
-            > 🛠️ **Status: Active Development**
-            > LunCoSim is in active pre-alpha development. These nightly builds represent our latest progress and are automatically updated. Expect frequent changes, experimental features, and occasional bugs as we work toward stable releases.
+            ### Install
 
-            ---
+            Download the archive for your operating system, extract it, and launch:
 
-            ### 🚀 Featured Applications
+            - Linux/macOS: `./run.sh`
+            - Windows: double-click `run.bat`
 
-            #### 1. **Sandbox: Physics & Environment Sandbox**
-            The **Sandbox** is an interactive, real-time 3D simulation environment built to validate planetary rover dynamics, suspension behavior, and physical interactions.
-            *   **Drive the Perseverance Rover:** Take control of the built-in rover model and test ground mobility across customized planetary terrains.
-            *   **High-Precision Space Physics:** Powered by Avian3D and double-precision (`f64`) spatial math to ensure robust physics simulations from millimeter-scale joints to solar-system scales.
-            *   **OpenUSD Scene Integration:** Load, compose, and inspect 3D scenes dynamically using the industry-standard Universal Scene Description format.
-            *   **Collaborative Design:** Networked multiplayer support (via WebTransport) allows multiple users to join, edit, and run simulations in the same environment.
+            These builds are unsigned and intended for testing. macOS may require
+            `xattr -cr .` after extraction; Windows may require **More info → Run anyway**.
 
-            ---
-
-            ### 📦 Downloads & Platform Support
-
-            Select the archive matching your operating system. Each bundle contains the pre-compiled native application and all necessary assets.
-
-            | Application | Linux (x86_64) | macOS (Apple Silicon) | macOS (Intel) | Windows (x86_64) |
-            | :--- | :---: | :---: | :---: | :---: |
-            | **Sandbox** | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.zip` |
-
-            ---
-
-            ### 🛠️ How to Run & Security Instructions
-
-            #### 🔒 Bypassing Unsigned Binary Warnings
-            Because these are automated development builds, the binaries are not code-signed. Follow these steps to bypass the operating system warning:
-
-            *   **Windows (SmartScreen):**
-                1. Double-click `run.bat` or the executable.
-                2. On the blue *"Windows protected your PC"* popup, click **"More info"**.
-                3. Click **"Run anyway"**.
-            *   **macOS (Gatekeeper):**
-                *   *Method A (Recommended):* Open Terminal in the extracted folder, run `xattr -cr .` to clear quarantine flags, and run `./run.sh`.
-                *   *Method B:* Control-click (or right-click) `run.sh` or the application, select **Open**, and click **Open** in the confirmation dialog.
-
-            #### 🏎️ Quick Start Commands
-
-            **Linux / macOS:**
-            ```bash
-            # Extract the archive
-            tar -xzf <archive-name>.tar.gz
-            cd <folder-name>
-            # Launch the application
-            ./run.sh
-            ```
-
-            **Windows:**
-            1. Extract the `.zip` archive (Right-click → *Extract All*).
-            2. Double-click `run.bat` to launch.
-
-            ---
-
-            ### 💬 Feedback & Community
-            *   **Join our Discord:** Chat with space engineers and creators on [Discord](https://discord.gg/A6U3GdvQum).
-            *   **Report Issues:** Found a bug? Open a ticket on [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
+            See the [README](${{ github.server_url }}/${{ github.repository }}) for source builds and
+            [report issues](${{ github.server_url }}/${{ github.repository }}/issues) for problems.
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"

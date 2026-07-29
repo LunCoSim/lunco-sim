@@ -1,5 +1,10 @@
 # LunCoSim (LCS) app icons — night theme
 
+The three SVGs in `svg/` are the source of truth. Run
+`scripts/generate_icons.sh` to derive Linux PNGs, Windows ICO/PNGs, and the
+macOS ICNS/PNGs. Derived raster and platform files are ignored by Git so icon
+changes are made once, in SVG, and CI regenerates the complete bundle.
+
 Background #0A0A0F · letters #FFFFFF · S-glyph #4DE3F5. Mark only, no wordmark. All three platforms are full-bleed: the tile fills the canvas edge to edge, the mark occupies 72% of the canvas width, and only the corner radius differs per platform (macOS 26%, Windows 6%, Linux 24%).
 
 ## macOS

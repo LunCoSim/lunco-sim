@@ -45,7 +45,7 @@ fn first_rel_target(view: &StageView<'_>, prop_path: &str) -> Option<String> {
 /// Reference composition: a referenced rover surfaces its Chassis + wheels.
 #[test]
 fn reference_geometry_composes() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     for p in [
         "/SandboxScene/Skid_Raycast_1",
@@ -64,7 +64,7 @@ fn reference_geometry_composes() {
 /// must win over the referenced base colour. Authored on the CHILD Chassis.
 #[test]
 fn over_color_override_composes() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     // `primvars:displayColor` is ARRAY-valued (`color3f[]`) per UsdGeomGprim.
     let c = lunco_usd_bevy::read_primvar_vec3(
@@ -87,7 +87,7 @@ fn over_color_override_composes() {
 /// vehicle + articulation schemas.
 #[test]
 fn api_schemas_compose() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     let ok = view.has_api_schema(
         &SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap(),
@@ -103,7 +103,7 @@ fn api_schemas_compose() {
 /// points at its wheel body).
 #[test]
 fn joint_relationship_targets_survive() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     let target = first_rel_target(
         &view,
@@ -171,7 +171,7 @@ fn standalone_rover_reader_is_complete() {
 /// path-translated into the instance namespace.
 #[test]
 fn drivetrain_physical_variant_brings_joints() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     for (rover, _drive) in [
         ("Skid_Physical_1", "PhysxVehicleTankDifferentialAPI"),
@@ -201,7 +201,7 @@ fn drivetrain_physical_variant_brings_joints() {
 /// realization must leave the composed wheel where the asset authored it.
 #[test]
 fn drivetrain_variants_share_the_axle_mount() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     let y = |path: &str| -> f64 {
         view.value::<[f64; 3]>(&SdfPath::new(path).unwrap(), "xformOp:translate")
@@ -222,7 +222,7 @@ fn drivetrain_variants_share_the_axle_mount() {
 /// — neither is re-listed on the scene instance anymore.
 #[test]
 fn drivetrain_physical_composes_articulation_and_drive() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     let skid = SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap();
     assert!(
@@ -239,7 +239,7 @@ fn drivetrain_physical_composes_articulation_and_drive() {
 /// so the joint prims authored only under `physical` are absent.
 #[test]
 fn drivetrain_raycast_has_no_joints() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     assert!(
         !view.has_prim(&SdfPath::new("/SandboxScene/Skid_Raycast_1/Wheel_FL_Hinge").unwrap()),

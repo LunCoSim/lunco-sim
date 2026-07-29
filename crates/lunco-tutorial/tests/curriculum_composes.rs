@@ -22,17 +22,17 @@ fn resolve(asset: &str) -> Option<std::path::PathBuf> {
         .map(|rest| repo("assets").join(rest))
 }
 
-/// The sandbox app composes BOTH the track named after it and `basic` — which is
+/// The luncosim app composes BOTH the track named after it and `basic` — which is
 /// the whole point of the app root layer: a track is not owned by the app it
 /// happens to be named after, and no `hosts` attribute says so.
 #[test]
 fn the_app_layer_composes_the_tracks_it_offers() {
-    let c = curriculum::read(repo("assets/tutorials/sandbox.usda").to_str().unwrap());
+    let c = curriculum::read(repo("assets/tutorials/luncosim.usda").to_str().unwrap());
     let labels: Vec<&str> = c.tracks.iter().map(|t| t.label.as_str()).collect();
     assert_eq!(
         c.tracks.len(),
         2,
-        "expected sandbox + basic, got {labels:?}"
+        "expected luncosim + basic, got {labels:?}"
     );
     assert!(!c.lessons.is_empty(), "no lessons composed");
     for t in &c.tracks {
@@ -44,7 +44,7 @@ fn the_app_layer_composes_the_tracks_it_offers() {
 /// worse than absent: it appears in the menu and fails when a student picks it.
 #[test]
 fn every_lesson_resolves_its_script() {
-    for app in ["sandbox", "lunica", "luncosim"] {
+    for app in ["luncosim", "lunica", "luncosim"] {
         let c = curriculum::read(
             repo(&format!("assets/tutorials/{app}.usda"))
                 .to_str()
@@ -73,7 +73,7 @@ fn every_lesson_resolves_its_script() {
 fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
     let mut with = 0;
     let mut without = 0;
-    for app in ["sandbox", "lunica", "luncosim"] {
+    for app in ["luncosim", "lunica", "luncosim"] {
         let c = curriculum::read(
             repo(&format!("assets/tutorials/{app}.usda"))
                 .to_str()
@@ -104,7 +104,7 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
 /// A chain must not strand a student: every `next` targets a composed lesson.
 #[test]
 fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
-    for app in ["sandbox", "lunica", "luncosim"] {
+    for app in ["luncosim", "lunica", "luncosim"] {
         let c = curriculum::read(
             repo(&format!("assets/tutorials/{app}.usda"))
                 .to_str()

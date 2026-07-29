@@ -518,11 +518,11 @@ mod tests {
     fn test_assets_are_identified_by_their_directory_not_their_name() {
         assert!(is_test_asset("scenes/tests/landing_legs.usda"));
         assert!(is_test_asset("scenarios/tests/landing_legs.rhai"));
-        assert!(!is_test_asset("scenes/sandbox/lander_cinematic.usda"));
+        assert!(!is_test_asset("scenes/luncosim/lander_cinematic.usda"));
         assert!(!is_test_asset("behaviors/solar_rover_patrol.btxml"));
         // The suffix convention it replaces — a file that merely READS as a test
         // is still shown, because nothing but its folder makes it one.
-        assert!(!is_test_asset("scenes/sandbox/something_test.usda"));
+        assert!(!is_test_asset("scenes/luncosim/something_test.usda"));
         // A file literally named `tests.usda` is a file, not a directory.
         assert!(!is_test_asset("scenes/tests.usda"));
     }

@@ -191,7 +191,7 @@ sites. Semantics unchanged — deliberately.
 
 ### 5. Exposure — silent frame fallback ✅ FIXED
 
-`mode_exposure` (`sandbox/src/ui/mod.rs:312-315`) resolved the camera position via
+`mode_exposure` (`luncosim/src/ui/mod.rs:312-315`) resolved the camera position via
 `cell` + a **direct** `ChildOf` → `Grid` edge, and silently fell back to `tf.translation`
 otherwise. Possess a vessel and the camera reparents to it, losing both — so a metres-scale
 offset from the vessel was substituted for a grid-absolute geographic position, `local_up`

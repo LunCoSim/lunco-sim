@@ -1,0 +1,122 @@
+[package]
+name = "lunco-luncosim-edit"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+# THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
+# shader catalogs, the runtime-layer USD persisters, `SelectedEntities` — everything
+# a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
+# on it; the direction never reverses. This crate re-exports it (`lib.rs`) so the
+# panels keep saying `crate::catalog::…`.
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+# NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
+# `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
+# (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
+# `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
+# is the enforcement — put `bevy_pbr` back and the rule quietly rots.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+# Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
+# goes through it instead of `Assets<StandardMaterial>`.
+lunco-render = { path = "../lunco-render" }
+# egui inspector, theme, transform gizmo, and the picking backend are all editor
+# concerns — optional, on `ui`. `commands::SpawnCommandPlugin` (the only thing a
+# headless server adds from this crate) uses none of them.
+bevy_egui = { workspace = true, optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
+transform-gizmo-bevy = { version = "0.9.0", optional = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
+# Generic node-graph substrate for the USD connection canvas (a second projector
+# over it, mirroring lunco-modelica's diagram). Editor-only → optional, on `ui`.
+lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+# Persisted view prefs (Entity list "show system entities") — a `SettingsSection`,
+# not a bespoke file.
+lunco-settings = { path = "../lunco-settings" }
+avian3d = { workspace = true }
+
+big_space.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+# NO vehicle-topology dep: the "is a wheeled vehicle" signal was once needed here
+# for the predict-membership queries, but those moved out with the netcode
+# (→ `lunco-networking::prediction`, which now uses `lunco_core::ActuatorPorts`).
+# Nothing in the editor names it any more, so the edge is gone.
+lunco-time = { path = "../lunco-time" }
+lunco-doc = { path = "../lunco-doc" }
+# `JournalResource` — the run condition that attaches the shader-journal recorder
+# (`shader_doc::wire_shader_journal_handle`) when the journal appears. The
+# ShaderDocument domain itself moved to `lunco-scene-commands`.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-api = { path = "../lunco-api", default-features = false }
+lunco-controller = { path = "../lunco-controller" }
+# Read the avatar's `ActionState<UserIntent>` so "grab the controls" (any drive
+# intent) can take a vessel back from its autopilot — via the DATA keymap, not
+# hardcoded WASD.
+leafwing-input-manager = { workspace = true }
+lunco-mobility = { path = "../lunco-mobility" }
+# Joint State panel reads the SAME actuator surface both wheel realizations
+# share: `SteeringActuator::output_angle` and the authored torque-speed law
+# `axle_torque` — reused, never transcribed. Render-free core-sim crate,
+# already in this crate's closure via lunco-mobility.
+lunco-hardware = { path = "../lunco-hardware" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+# `default-features = false` keeps modelica/avatar egui-free for the headless
+# server; the `ui` feature below re-enables them. The egui inspector
+# (`ui/inspector.rs::modelica_parameters_section`) uses lunco-modelica's egui UI
+# surface, so `ui` propagates `lunco-modelica/ui`.
+lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+# Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-materials = { path = "../lunco-materials" }
+# Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-autopilot = { path = "../lunco-autopilot" }
+lunco-assets = { path = "../lunco-assets" }
+# Script-authored click tools: the palette lists every tool exposing
+# `on_click/1` (discovery via `lunco-tools`) and arms it; the click is handed to
+# the tool's own rhai handler through `RunRhai` (`lunco-scripting`).
+lunco-tools = { path = "../lunco-tools" }
+lunco-scripting = { path = "../lunco-scripting" }
+
+[features]
+default = ["ui"]
+# In-scene editor: gizmo, selection, inspector panels, physics-viz, spawn ghost.
+# OFF ⇒ this crate is nothing but a re-export of `lunco-scene-commands` — no egui,
+# no winit, no picking. A headless server should not depend on it at all: it wants
+# `lunco-scene-commands` directly (`commands::SpawnCommandPlugin`).
+ui = [
+    "dep:bevy_egui",
+    "dep:lunco-theme",
+    "dep:transform-gizmo-bevy",
+    "dep:lunco-workbench",
+    "dep:lunco-canvas",
+    # Forwards to the command layer's lone GUI concession:
+    # `doc_resolve::resolve_doc_for_entity`'s fallback to the viewport's active
+    # document. Drop this and a GUI edit resolves a different document.
+    "lunco-scene-commands/ui",
+    "lunco-modelica/ui",
+    "lunco-avatar/ui",
+    "lunco-usd/ui",
+    "bevy/bevy_post_process",
+    "bevy/bevy_anti_alias",
+    "bevy/mesh_picking",
+    # Immediate-mode gizmo overlays: `physics_viz` (velocity/force arrows),
+    # `joint_viz` (joint + wheel-force lines) and `selection` (selection bounds)
+    # all take a `Gizmos` param, and all three are `ui`-gated. The crate used to
+    # get `bevy_gizmos` for free from another crate's feature union; the render
+    # decoupling took that away, so declare it where it is actually used.
+    "bevy/bevy_gizmos",
+]
+
+[lints]
+workspace = true

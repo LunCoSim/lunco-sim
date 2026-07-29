@@ -8,7 +8,7 @@ description = "LunCoSim's own workbench shell — activity bar, side browsers, c
 
 [features]
 default = []
-# Screenshot capture. Enabled by any binary that serves the API (lunco-sandbox, lunica).
+# Screenshot capture. Enabled by any binary that serves the API (lunco-luncosim, lunica).
 api = ["dep:lunco-api", "dep:image"]  # `web-time` is already an unconditional dep
 
 # `screenshot.rs` (and hence `CaptureFromCamera`) is `#[cfg(feature = "api")]`, so its test

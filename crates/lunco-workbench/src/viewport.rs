@@ -854,7 +854,7 @@ pub(crate) fn apply_workbench_viewport(
 /// 3D scene with no chrome painted on top.
 ///
 /// Parked *instance* tabs (open documents/models) are deliberately
-/// ignored: a hybrid app (the rover sandbox embeds the Modelica
+/// ignored: a hybrid app (the rover luncosim embeds the Modelica
 /// workbench) can have documents open while a viewport-only perspective
 /// is active. `rebuild_dock` parks those instance tabs in the dock so
 /// they survive and re-attach on switch, and `render_layout` keeps the
@@ -935,7 +935,7 @@ pub(crate) fn check_camera_invariants(
 /// tooling binaries (`model_viewer`) deliberately want a
 /// bare full-window 3D camera and never register a [`ViewportPanel`], so
 /// auto-tagging is the host app's choice. Workbench apps that DO show the
-/// 3D scene inside a [`ViewportPanel`] (sandbox, luncosim) add this in
+/// 3D scene inside a [`ViewportPanel`] (luncosim, luncosim) add this in
 /// `Update` so avatar-/USD-spawned cameras — which land async, long after
 /// `Startup` — get the marker the moment they appear.
 ///

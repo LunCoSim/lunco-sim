@@ -235,7 +235,7 @@ impl DivergenceStats {
 /// `Position`/`Rotation` lets avian writeback + interpolation render it smoothly
 /// with no second writer anywhere.
 ///
-/// It once lived in `lunco-core` (review A6) because `lunco-sandbox-edit` owned
+/// It once lived in `lunco-core` (review A6) because `lunco-luncosim-edit` owned
 /// the producer/drain systems; those now live in this crate's `prediction`, so
 /// the type followed them here (review C7) — this crate is its only consumer.
 #[derive(Component, Clone, Copy, Debug, Default)]

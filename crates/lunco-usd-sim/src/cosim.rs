@@ -20,7 +20,7 @@
 //!
 //! No domain-specific markers (`BalloonModelMarker`, …) are inserted
 //! here. The legacy catalog/imperative spawn path in
-//! `lunco-sandbox-edit` keeps using its own markers; this translator
+//! `lunco-luncosim-edit` keeps using its own markers; this translator
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
@@ -2060,7 +2060,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 
 /// Reload (or load) a USD scene at runtime via the API.
 ///
-/// `curl … {"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda"}}`
+/// `curl … {"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
 ///
 /// - `path`: USD asset path relative to the asset root.
 /// - `root_prim`: optional override for the SDF path of the prim to
@@ -2887,7 +2887,7 @@ mod tests {
     #[test]
     fn scene_path_repeating_asset_root_is_rejected_before_reload() {
         assert_eq!(
-            normalize_scene_asset_path("assets/scenes/sandbox/sandbox_scene.usda"),
+            normalize_scene_asset_path("assets/scenes/luncosim/sandbox_scene.usda"),
             None
         );
         assert_eq!(
@@ -2895,8 +2895,8 @@ mod tests {
             None
         );
         assert_eq!(
-            normalize_scene_asset_path("scenes/sandbox/sandbox_scene.usda"),
-            Some("scenes/sandbox/sandbox_scene.usda".to_string())
+            normalize_scene_asset_path("scenes/luncosim/sandbox_scene.usda"),
+            Some("scenes/luncosim/sandbox_scene.usda".to_string())
         );
     }
 

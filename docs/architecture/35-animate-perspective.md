@@ -21,7 +21,7 @@
 
 ## The target use case (driving example)
 
-The lunar-descent cinematic (`scenes/sandbox/lander_cinematic.usda` +
+The lunar-descent cinematic (`scenes/luncosim/lander_cinematic.usda` +
 `scenarios/lander_cinematic.rhai`) authors camera cuts and beat timing in
 imperative rhai (`set_camera("TrackCam"); wait(6.0)`). You cannot **see** the
 cut sequence, **scrub** back to review a beat, or **drag** a cut to retime it.
@@ -57,7 +57,7 @@ the timeline as data.
 | Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | |
 | Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
 | Declarative timeline data | JSON steps (`{wait}`,`{emit}`,`{cmd,params}`,`{move_to}`) persisted `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
-| 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`sandbox-edit/src/ui/inspector.rs:588`) | |
+| 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`luncosim-edit/src/ui/inspector.rs:588`) | |
 | Reactive multi-instance panel host | `VizPanel` / `Panel2DCtx` read-only ctx + `defer` write (`lunco-viz/src/panel.rs,view.rs`) | pattern to copy |
 | Pannable/zoomable 2D paint plane | `lunco-canvas` — Scene/Viewport/Selection/Tool/Layer/Overlay, `click_and_drag`, layered painters | track-canvas base |
 | Value-curve lane | `egui_plot` via `LinePlot` (`lunco-viz/src/kinds/line_plot.rs`), time-on-X default | |

@@ -120,7 +120,7 @@ def Scope "Looks"
 
 Asset paths are **scene-root-relative** and resolve through `twin://`, so they
 travel with the twin. Read by `read_material_network_layer_maps`
-(`lunco-sandbox`), which walks `material:binding` → Material →
+(`lunco-luncosim`), which walks `material:binding` → Material →
 `outputs:surface.connect` → Shader. Roles: `albedo`, `mineral`, `surface`
 (packed R=rough G=AO B=rockDens), `normal`.
 

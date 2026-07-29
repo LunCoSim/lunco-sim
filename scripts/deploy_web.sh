@@ -10,7 +10,7 @@
 #     # or:
 #     DEPLOY_TARGET="user@host:/var/www/lunco" ./scripts/deploy_web.sh
 #     # build a different binary first:
-#     BIN=sandbox ./scripts/deploy_web.sh user@host:/path
+#     BIN=luncosim ./scripts/deploy_web.sh user@host:/path
 #
 # Environment variables:
 #     BIN              binary name (default: lunica)
@@ -60,18 +60,18 @@ Usage:
 
 Types:
     lunica    - Web workbench IDE (default)
-    sandbox   - Web simulation sandbox
-    server    - Native headless sandbox server (binary + assets)
+    luncosim   - Web simulation luncosim
+    server    - Native headless luncosim server (binary + assets)
 
 Examples:
     # Deploy lunica to ~/lunica:
     $0 rod@38.242.231.159:~/lunica
 
-    # Deploy sandbox (web client) to ~/sandbox:
-    $0 rod@38.242.231.159:~/sandbox sandbox
+    # Deploy luncosim (web client) to ~/luncosim:
+    $0 rod@38.242.231.159:~/luncosim luncosim
 
     # Deploy native server (binary + assets) to a path you choose:
-    $0 rod@38.242.231.159 server ~/sandbox-server
+    $0 rod@38.242.231.159 server ~/luncosim-server
 EOF
     exit 2
 fi
@@ -106,9 +106,9 @@ fi
 # Determine source directory and validate bundle
 if [ "$TYPE" = "server" ]; then
     DIST_DIR="$PROJECT_DIR/dist/server"
-    if [ ! -x "$DIST_DIR/sandbox" ] || [ ! -d "$DIST_DIR/assets" ]; then
-        error "No server bundle at $DIST_DIR (missing sandbox binary or assets/)"
-        info  "Build it first:  ./scripts/build.sh sandbox-server --release"
+    if [ ! -x "$DIST_DIR/luncosim" ] || [ ! -d "$DIST_DIR/assets" ]; then
+        error "No server bundle at $DIST_DIR (missing luncosim binary or assets/)"
+        info  "Build it first:  ./scripts/build.sh luncosim-server --release"
         exit 1
     fi
 else

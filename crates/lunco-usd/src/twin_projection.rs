@@ -171,7 +171,7 @@ pub fn scene_document_for(
     scene: AssetId<UsdStageAsset>,
 ) -> Option<DocumentId> {
     // `AssetPath::path()` is the path WITHOUT the `twin://` source scheme, i.e.
-    // `<name>/<rel>`. `rel` may contain slashes (`scenes/sandbox/scene.usda`), so
+    // `<name>/<rel>`. `rel` may contain slashes (`scenes/luncosim/scene.usda`), so
     // split only on the FIRST one. (Same idiom as `cache_terrain_document`.)
     let asset_path = asset_server.get_path(scene)?;
     let rel_path = asset_path.path().to_string_lossy();

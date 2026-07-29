@@ -47,7 +47,7 @@ Design: [`56-asset-resolution-and-cache.md`](../../docs/architecture/56-asset-re
 | `assets/vessels/` | whole vehicles — `rovers/`, `landers/`, `satellites/`, `balloons/`, plus `control_profiles.usda` |
 | `assets/structures/` | surface installations — habitat, mast, ISRU plant, landing pad |
 | `assets/props/` | simple scene objects — ball, ramp, wall |
-| `assets/scenes/` | loadable stages — `sandbox/*.usda` |
+| `assets/scenes/` | loadable stages — `luncosim/*.usda` |
 | `assets/models/` | behaviour sources: `.mo` (Modelica), `.py` |
 | `assets/scenarios/` | `.rhai` bound as a `LunCoProgramAPI` source |
 | `assets/scripting/` | importable rhai modules — `lib/`, `prelude/`, `policy/`, `tools/` |
@@ -246,7 +246,7 @@ The **web** build has no filesystem: it fetches `assets/manifest.json`
 (`.usda`/`.wgsl`/`.rhai`/`.mo`/`.btxml`):
 
 ```bash
-./scripts/build_web.sh build sandbox
+./scripts/build_web.sh build luncosim
 ```
 
 which rsyncs `assets/` into `dist/` and runs
@@ -263,7 +263,7 @@ There is no standalone regenerate command.
 ## Validate before you run
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate assets/vessels/rovers/my_rover.usda
+cargo run -p lunco-luncosim --bin luncosim -- --validate assets/vessels/rovers/my_rover.usda
 ```
 
 Seconds, no GPU, no app. Composes the whole reference closure — so it catches

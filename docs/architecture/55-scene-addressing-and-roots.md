@@ -44,7 +44,7 @@ Each conversion site implements its own partial rules:
   asset-relative, **refuses** anything outside `assets/`.
 - `twin_source_for_workspace_scene` (same file) — asset-relative → `twin://`,
   but only for roots already registered.
-- `load_startup_scene` (`lunco-sandbox/src/lib.rs`) — walks up for `twin.toml`,
+- `load_startup_scene` (`lunco-luncosim/src/lib.rs`) — walks up for `twin.toml`,
   opens the Twin, registers it, mounts doc-first. **This is the only place that
   actually does the right thing**, and it is reachable only from `--scene` at boot.
 - `on_open_file` (`lunco-usd/src/commands.rs`) — routes `OpenFile` to
