@@ -1576,6 +1576,12 @@ pub fn rewire_usd_connections(
             else {
                 continue;
             };
+            // `connectionPaths` belong to the USD property named
+            // `inputs:<port>.connect`; `.connect` is metadata on that property,
+            // never part of the simulation port's name.  Keep the raw `attr`
+            // for the stage lookup below, but use this canonical connector name
+            // for every runtime decision and edge endpoint.
+            let sink_conn = sink_conn.strip_suffix(".connect").unwrap_or(sink_conn);
             // A structural binding is already resolved; building a phantom wire
             // for it manufactures a dangling-wire report that can never clear.
             if is_structural_binding(&view, &sink_sdf, sink_conn) {
@@ -1770,6 +1776,14 @@ pub fn rewire_usd_connections(
                         offset,
                     },
                     UsdWiredConnection,
+                    // Keep the immutable USD fact on the derived runtime edge.
+                    // The generic binder has no USD dependency, but its terminal
+                    // diagnostics still need to name the authored source and
+                    // sink that must be repaired.
+                    Name::new(format!(
+                        "UsdWire {src} -> {}.{sink_conn}",
+                        prim_path.path
+                    )),
                     // A derived edge is a PURE CACHE of USD wiring — every peer
                     // re-derives it from the same stage, so it must never carry
                     // network identity. `Local` is not a micro-optimisation here,
