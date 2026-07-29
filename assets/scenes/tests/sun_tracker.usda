@@ -96,8 +96,9 @@ def Xform "SunTrackerTest" (
         double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        # Mast — the FIXED base body. A disabled rigid body is a USD static
-        # anchor: it cannot acquire angular velocity from the revolute joint.
+        # Mast — the fixed base body. A kinematic rigid body is a USD static
+        # anchor that still participates in Avian's joint solver; disabling the
+        # body entirely leaves the revolute motor without a solver endpoint.
         # Its own cylinder is the
         # collider; the Pad is a visual-only child.
         def Cylinder "Mast" (
@@ -111,7 +112,7 @@ def Xform "SunTrackerTest" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
             float physics:mass = 100.0
-            bool physics:rigidBodyEnabled = false
+            bool physics:kinematicEnabled = true
 
             def Cube "Pad"
             {
@@ -124,12 +125,11 @@ def Xform "SunTrackerTest" (
             }
         }
 
-        # YawHead — the DYNAMIC rotating body. Its origin sits ON the hinge
-        # axis (world 0,5.3,0) and its cylinder is centred there, so the body's
-        # centre of mass is on the rotation axis → zero gravity torque about Y;
-        # the motor only fights the head's rotational inertia. The Panel is a
-        # visual-only child (no mass, no collider) so its 4 m span never
-        # destabilizes the solver — it just rides the head's rotation.
+        # YawHead — the dynamic rotating body. Its centre is offset from the
+        # hinge axis, giving the revolute constraint a non-degenerate physical
+        # frame (the same arrangement as the dedicated motor regression). The
+        # panel is a visual-only child, so it rides the head without adding a
+        # second collider or mass path.
         def Cylinder "YawHead" (
             prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
         )
@@ -137,7 +137,7 @@ def Xform "SunTrackerTest" (
             uniform token axis = "Y"
             double radius = 0.4
             double height = 0.5
-            double3 xformOp:translate = (0, 5.3, 0)
+            double3 xformOp:translate = (1.0, 5.3, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             float physics:mass = 50.0
@@ -157,7 +157,8 @@ def Xform "SunTrackerTest" (
 
         # Yaw hinge — vertical axis. body0 = fixed Mast, body1 = YawHead.
         # Anchors coincide at world (0, 5.3, 0): the Mast-local point (0,2.6,0)
-        # (2.6 above the mast centre at y=2.7 → y=5.3) and the YawHead origin.
+        # (2.6 above the mast centre at y=2.7 → y=5.3) and the YawHead-local
+        # point (-1,0,0).
         # Auto-exposes the `angle` port (lunco-cosim `JointSim`); the YawWire
         # drives it.
         def PhysicsRevoluteJoint "Hinge"
@@ -166,7 +167,7 @@ def Xform "SunTrackerTest" (
             rel physics:body1 = </SunTrackerTest/SolarTower/YawHead>
             uniform token physics:axis = "Y"
             point3f physics:localPos0 = (0, 2.6, 0)
-            point3f physics:localPos1 = (0, 0, 0)
+            point3f physics:localPos1 = (-1, 0, 0)
 
             # Cross-prim wiring — the controller model's `yaw` output drives this
             # joint's `angle` input (JointSim backend). The joint is a physics

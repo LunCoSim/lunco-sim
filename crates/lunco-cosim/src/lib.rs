@@ -71,23 +71,37 @@ fn endpoint_ready_on_add<T: Component>(
     mut commands: Commands,
     mut revision: ResMut<BindingRevision>,
 ) {
-    commands.entity(trigger.entity).try_insert(EndpointLifecycle::Ready);
+    commands
+        .entity(trigger.entity)
+        .try_insert(EndpointLifecycle::Ready);
     revision.request();
+    commands.queue(binding::bind_connections);
 }
 
-fn sync_model_endpoint_lifecycle(
-    query: Query<(Entity, &SimComponent), Changed<SimComponent>>,
-    mut commands: Commands,
-    mut revision: ResMut<BindingRevision>,
-) {
-    for (entity, component) in &query {
-        let state = match &component.status {
-            SimStatus::Compiling => EndpointLifecycle::Pending,
-            SimStatus::Error(message) => EndpointLifecycle::Failed(message.clone()),
-            _ => EndpointLifecycle::Ready,
-        };
-        commands.entity(entity).try_insert(state);
-        revision.request();
+fn sync_model_endpoint_lifecycle(world: &mut World) {
+    let transitions: Vec<(Entity, EndpointLifecycle)> = world
+        .query_filtered::<(Entity, &SimComponent), Changed<SimComponent>>()
+        .iter(world)
+        .map(|(entity, component)| {
+            let state = match &component.status {
+                SimStatus::Compiling => EndpointLifecycle::Pending,
+                SimStatus::Error(message) => EndpointLifecycle::Failed(message.clone()),
+                _ => EndpointLifecycle::Ready,
+            };
+            (entity, state)
+        })
+        .collect();
+
+    let mut changed = false;
+    for (entity, state) in transitions {
+        if world.get::<EndpointLifecycle>(entity) != Some(&state) {
+            world.entity_mut(entity).insert(state);
+            changed = true;
+        }
+    }
+    if changed {
+        world.resource_mut::<BindingRevision>().request();
+        binding::bind_connections(world);
     }
 }
 
@@ -142,13 +156,8 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
         app.add_systems(
             Update,
-            (
-                sync_model_endpoint_lifecycle
-                    .run_if(|q: Query<(), Changed<SimComponent>>| !q.is_empty()),
-                binding::bind_connections
-                    .run_if(|revision: Res<BindingRevision>| revision.pending()),
-            )
-                .chain(),
+            sync_model_endpoint_lifecycle
+                .run_if(|q: Query<(), Changed<SimComponent>>| !q.is_empty()),
         );
         {
             let mut registry = app
@@ -310,6 +319,131 @@ impl Plugin for CoSimPlugin {
         // Register the typed command observers generated below (the
         // `register_commands!` list turns into `register_all_commands(app)`).
         register_all_commands(app);
+    }
+}
+
+#[cfg(test)]
+mod binding_lifecycle_tests {
+    use super::*;
+    use avian3d::prelude::RevoluteJoint;
+
+    #[test]
+    fn model_ready_transition_binds_waiting_edge_in_same_update() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        let source = app
+            .world_mut()
+            .spawn({
+                let mut c = SimComponent::default();
+                c.inputs.insert("sun_mount_x".into(), 0.0);
+                c
+            })
+            .id();
+        let target = app
+            .world_mut()
+            .spawn({
+                let mut c = SimComponent::default();
+                c.status = SimStatus::Compiling;
+                c.inputs.insert("sun_mount_x".into(), 0.0);
+                c
+            })
+            .id();
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "sun_mount_x".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "sun_mount_x".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+        app.update();
+        assert!(app.world().get::<BoundConnection>(edge).is_none());
+        app.world_mut()
+            .get_mut::<SimComponent>(target)
+            .unwrap()
+            .status = SimStatus::Idle;
+        app.update();
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+
+    #[test]
+    fn admitted_revolute_joint_binds_waiting_angle_edge() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        let controller = app
+            .world_mut()
+            .spawn({
+                let mut c = SimComponent::default();
+                c.outputs.insert("yaw".into(), 0.0);
+                c
+            })
+            .id();
+        let body0 = app.world_mut().spawn_empty().id();
+        let body1 = app.world_mut().spawn_empty().id();
+        let hinge = app.world_mut().spawn(RevoluteJoint::new(body0, body1)).id();
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: controller,
+                start_connector: "yaw".into(),
+                start_is_input: false,
+                end_element: hinge,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+        app.update();
+        app.update();
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+
+    #[test]
+    fn late_joint_admission_rebinds_after_epoch_sealed() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        let controller = app
+            .world_mut()
+            .spawn({
+                let mut c = SimComponent::default();
+                c.outputs.insert("yaw".into(), 0.0);
+                c
+            })
+            .id();
+        let hinge = app.world_mut().spawn_empty().id();
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: controller,
+                start_connector: "yaw".into(),
+                start_is_input: false,
+                end_element: hinge,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+        app.update();
+        app.world_mut()
+            .resource_mut::<BindingRevision>()
+            .seal_epoch();
+        binding::bind_connections(app.world_mut());
+        assert_eq!(
+            app.world().get::<ConnectionBinding>(edge),
+            Some(&ConnectionBinding::Failed)
+        );
+        let body0 = app.world_mut().spawn_empty().id();
+        let body1 = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .entity_mut(hinge)
+            .insert(RevoluteJoint::new(body0, body1));
+        app.update();
+        app.update();
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
     }
 }
 

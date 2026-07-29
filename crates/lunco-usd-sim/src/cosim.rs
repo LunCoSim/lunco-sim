@@ -1266,7 +1266,7 @@ fn settle_binding_epoch(
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
     wheels: Query<(), With<crate::PendingWheelWiring>>,
     differentials: Query<(), With<crate::PendingDifferential>>,
-    models: Query<Option<&SimComponent>, With<UsdSourcedCosim>>,
+    models: Query<&SimComponent, With<UsdSourcedCosim>>,
     connections: Query<(), With<SimConnection>>,
     mut dirty: ResMut<BindingEpochDirty>,
     mut revision: ResMut<lunco_cosim::BindingRevision>,
@@ -1274,12 +1274,9 @@ fn settle_binding_epoch(
     mut readiness: ResMut<lunco_readiness::ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    let models_terminal = models.iter().all(|model| {
-        !matches!(
-            model.map(|model| &model.status),
-            None | Some(SimStatus::Compiling)
-        )
-    });
+    let models_terminal = models
+        .iter()
+        .all(|model| !matches!(model.status, SimStatus::Compiling));
     let settled = awaiting.is_empty()
         && joints.is_empty()
         && wheels.is_empty()
@@ -1297,6 +1294,7 @@ fn settle_binding_epoch(
         dirty.0 = true;
         revision.open_epoch();
     }
+    commands.queue(lunco_cosim::binding::bind_connections);
     // Binding is a participant-initialisation fact. The readiness policy owns
     // whether that fact holds the world; this producer merely reports it.
     match (!settled && !connections.is_empty(), wait) {

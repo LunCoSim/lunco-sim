@@ -297,33 +297,30 @@ remains is the Storage-API migration, which needs a dependency line from
 
 **Scope:** small.
 
-### Event-driven USD connection binding transaction
+### Event-driven USD connection binding transaction — implemented
 
-**What:** Replace the current USD wiring reconciliation with an explicit
-connection-binding transaction. USD composition publishes immutable connection
-specifications; endpoint projectors publish lifecycle events (`Pending`,
-`Ready`, `Failed`) with a projection revision; one binder consumes the settled
-revision and creates the active `SimConnection` graph. Propagation consumes
-only bound connections.
+USD composition publishes inert `SimConnection` specifications. The runtime
+marks every executable endpoint `Pending`, `Ready`, or `Failed`, and the
+`lunco-cosim` binder is the only path that adds `BoundConnection`. Fixed-step
+propagation sees bound edges only; it neither discovers topology nor diagnoses
+ports.
 
-**Why:** Today topology discovery, endpoint realization, and fault reporting
-are separate mechanisms. A joint, generated Modelica island, or actuator child
-port can exist in USD before its runtime port surface exists, so ordering looks
-like an `unknown input port` fault. Per-type retries or tick delays merely move
-that race. The binder must distinguish a pending endpoint from a ready endpoint
-whose named port is genuinely absent, and emit that terminal diagnostic once on
-the state transition rather than from the per-tick exchange loop.
+`BindingRevision` makes the transaction reactive: prim, Modelica, joint, wheel,
+and differential projection changes request an epoch; USD holds readiness while
+that epoch is unsettled and seals it after its pending projectors reach a
+terminal state. A sealed exact-port miss becomes one `CosimDiagnostics` fault
+at binding time. It is never re-emitted by the per-tick exchange loop.
 
-**Scope:** medium. Keep `lunco-usd-compose` responsible only for composed USD
-facts and `PortRegistry` only for reading/writing live values. Add a neutral
-endpoint-lifecycle event/component in `lunco-cosim`; have Modelica, Avian joint,
-and actuator projections publish it at their own real completion points; let a
-scene/instance binding epoch seal only after all declared endpoints reach a
-terminal state. Reuse the existing readiness policy to hold physics while the
-epoch is pending, but do not infer binding from a timer or from the policy's
-chosen hold action. Dynamic edits open a new affected-instance epoch. Add
-black-box tests for delayed joint admission, generated Modelica boundaries, and
-a terminal miss that produces exactly one diagnostic.
+Modelica lifecycle publication and binding run in one Update transaction. This
+is important: a `Compiling → Ready` transition is visible to the binder before
+its revision is consumed, so a generated boundary cannot need an incidental
+later tick to become live. Regression coverage in `lunco-cosim` covers delayed
+joint admission, generated Modelica boundaries, and one-shot terminal misses.
+
+Ownership remains strict: `lunco-usd-compose` composes USD facts,
+`lunco-usd-sim` projects them and owns scene readiness, and `PortRegistry`
+resolves already-live values. No layer polls files, retries a connection each
+physics tick, or uses a delay as a substitute for endpoint readiness.
 
 ## 7. Dependencies & supply chain
 
