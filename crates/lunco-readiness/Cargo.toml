@@ -12,6 +12,8 @@ description = "Readiness registry: what the world is still waiting on, and — b
 # (Modelica, scripting, scene load) can report readiness without pulling physics.
 bevy = { workspace = true }
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-settings = { path = "../lunco-settings" }
+serde.workspace = true
 
 [lints]
 workspace = true

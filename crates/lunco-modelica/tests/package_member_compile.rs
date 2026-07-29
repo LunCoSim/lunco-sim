@@ -13,6 +13,7 @@
 //! screen. These tests pin the resolution so it cannot regress into silence.
 
 use lunco_modelica::ModelicaCompiler;
+use rumoca_sim::{SimOptions, SimulationSession};
 
 fn package_member(suffix: &str) -> String {
     lunco_assets::models::package_files("LunCo")
@@ -82,6 +83,64 @@ fn sun_tracker_package_member_compiles() {
         "lunco://models/LunCo/Pointing/SunTracker.mo",
     );
     assert!(result.is_ok(), "SunTracker: {:?}", result.err());
+}
+
+/// The tracker is used through USD wires, so compilation alone is not its
+/// contract.  The solver must retain the public sun-vector inputs and change
+/// its yaw output after a new vector arrives.  This pins the Modelica half of
+/// the USD → Modelica → joint chain independently of Bevy port propagation.
+#[test]
+fn sun_tracker_reacts_to_a_runtime_sun_vector() {
+    let mut compiler = ModelicaCompiler::new();
+    let dae = compiler
+        .compile_str(
+            "SunTracker",
+            &package_member("Pointing/SunTracker.mo"),
+            "lunco://models/LunCo/Pointing/SunTracker.mo",
+        )
+        .expect("SunTracker compiles");
+
+    let mut opts = SimOptions::default();
+    opts.atol = 1e-3;
+    opts.rtol = 1e-3;
+    // `SimulationSession::default()` ends at one second.  This regression
+    // deliberately performs a post-settle input step, so it needs the same
+    // non-trivial horizon that the live co-simulation session uses.
+    opts.t_end = 10.0;
+    let mut stepper = SimulationSession::new(&dae.dae, opts).expect("SunTracker stepper builds");
+
+    for input in ["sun_mount_x", "sun_mount_y", "sun_mount_z"] {
+        assert!(
+            stepper.input_names().iter().any(|name| name == input),
+            "SunTracker must expose `{input}` as a runtime input, got {:?}",
+            stepper.input_names()
+        );
+    }
+
+    stepper.set_input("sun_mount_x", 0.0).expect("set initial x");
+    stepper.set_input("sun_mount_y", 0.0).expect("set initial y");
+    stepper.set_input("sun_mount_z", -1.0).expect("set initial z");
+    for _ in 0..240 {
+        stepper.step(1.0 / 60.0).expect("settle initial yaw");
+    }
+    let yaw_before = stepper
+        .get("yaw")
+        .expect("read initial yaw")
+        .expect("yaw is observable");
+
+    stepper.set_input("sun_mount_x", 1.0).expect("step x");
+    for _ in 0..240 {
+        stepper.step(1.0 / 60.0).expect("settle stepped yaw");
+    }
+    let yaw_after = stepper
+        .get("yaw")
+        .expect("read stepped yaw")
+        .expect("yaw is observable");
+
+    assert!(
+        (yaw_after - yaw_before).abs() > 0.2,
+        "SunTracker ignored its updated sun vector: yaw {yaw_before} -> {yaw_after}"
+    );
 }
 
 #[test]

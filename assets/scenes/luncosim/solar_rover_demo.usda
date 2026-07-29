@@ -141,9 +141,12 @@ def Xform "SolarRoverTest" (
                 double3 xformOp:scale = (0.3, 0.2, 0.25)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 custom token connectors:p.connect = </SolarRoverTest/SolarRover/Battery.connectors:p>
-                float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_z>
+                # Environment is a runtime provider, not a Modelica component.
+                # Cross the generated-island boundary through Electrical's typed
+                # inputs, then feed the panel from that boundary.
+                float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/Electrical.inputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/Electrical.inputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/Electrical.inputs:sun_mount_z>
 
                 def Xform "Environment" (
                     prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -187,10 +190,15 @@ def Xform "SolarRoverTest" (
 
         # ── Electrical domain (runtime-generated Modelica) ───────────────
         # The inherited battery variant contributes Battery, motors and this
-        # Scope. This scene contributes the panel member and its one explicit
-        # bus connection. No hand-written rover-level `.mo` duplicates topology.
+        # Scope. This scene contributes the panel and maps its environment probe
+        # through typed network boundary inputs. The probe is a runtime provider,
+        # not a generated Modelica member. No hand-written rover-level `.mo`
+        # duplicates topology.
         over "Electrical"
         {
+            float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_z>
             float outputs:solar_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:power_out>
             prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
         }

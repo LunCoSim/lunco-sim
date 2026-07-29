@@ -7445,6 +7445,8 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-hooks",
+ "lunco-settings",
+ "serde",
 ]
 
 [[package]]
