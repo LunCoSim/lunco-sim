@@ -238,9 +238,7 @@ def Xform "SkidRover" (
     #
     # `inputs:demand` wires to the SAME drive channel the wheel binds to: the
     # index-parity default puts the even (left) wheels on `drive_left` and the odd
-    # (right) wheels on `drive_right`, and those ports live on this rover ROOT (the
-    # drive law writes them there — see `components/thermal/motor_thermal.usda` for
-    # the same root-port connect shape).
+    # (right) wheels on `drive_right`, and those ports live on this rover ROOT.
     #
     # `lunco:motor:drivenWheel` names the WHEEL, not a joint, so it is authored here
     # UNCONDITIONALLY — outside every variant. A wheel exists in both realizations;
@@ -496,10 +494,10 @@ def Xform "SkidRover" (
         }
     }
 
-    # --- Thermal: do the motors have temperatures ---------------------------
-    # `none` is EMPTY. `basic` composes the RoverMotorThermal.mo per-side heat
-    # balance onto the root: pure telemetry (`temp_left`/`temp_right`, kelvin,
-    # 250 K ambient placeholder).
+    # --- Thermal: generated physical heat network ----------------------------
+    # `basic` adds heat-load bridges, thermal masses and radiators to the same
+    # generated electrical-system collection. Motor loss power is the only
+    # thermal excitation; no drive command enters the thermal model.
     variantSet "thermal" = {
         "none" {
         }

@@ -21,6 +21,7 @@ model DCMotor
   // A reported quantity is not a causal claim — `p.i` and `p.v` are still solved
   // acausally by the connection set; this only says the number leaves the model.
   output Real electrical_power "Electrical power drawn, W";
+  output Real heat "Electrical loss delivered to the thermal network, W";
 equation
   // A MOTOR DRIVE IS CURRENT-CONTROLLED. The inner loop of every real controller
   // regulates current (torque ∝ current); the bus voltage sets how much SPEED
@@ -30,6 +31,10 @@ equation
 
   // Power drawn FOLLOWS from the current and the voltage actually present.
   electrical_power = p.i * p.v;
+  // The electrical loss is a physical observable, not a second command path.
+  // A generated thermal assembly feeds this into `LunCo.Thermal.HeatLoad`,
+  // which injects it into an acausal heat-port network of masses and radiators.
+  heat = max(0.0, electrical_power) * (1.0 - efficiency);
 
   // ⚠ This model HID the loop rather than causing it. As `p.i = power / p.v`,
   // `demand = 0` made the draw zero, `0/p.v` collapsed, and a parked rover's bus

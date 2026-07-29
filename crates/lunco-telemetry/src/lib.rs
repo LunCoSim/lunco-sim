@@ -170,6 +170,7 @@ fn on_control_telemetry(
             let param = Parameter {
                 name,
                 unit: cmd.unit.clone().unwrap_or_default(),
+                description: None,
                 source,
                 target: Some(entity),
                 rate_hz: cmd.rate_hz,
@@ -282,6 +283,7 @@ fn spawn_engine_health_channels(
             Parameter {
                 name: name.to_string(),
                 unit: unit.to_string(),
+                description: None,
                 source: ChannelSource::Diagnostic(path.to_string()),
                 rate_hz: Some(2.0),
                 target: None,
@@ -422,9 +424,11 @@ fn retain_sample(
     };
     // The channel may live on its own entity, so find it by (target, name) rather than by
     // looking on the measured entity.
-    let retention = channels
+    let channel = channels
         .iter()
         .find(|p| p.name == s.name && p.target.unwrap_or(s.source) == s.source)
+        ;
+    let retention = channel
         .and_then(|p| p.retention)
         .unwrap_or(settings.default_retention);
 
@@ -441,7 +445,7 @@ fn retain_sample(
     signals.update_meta(
         lunco_signal::SignalRef::new(s.source, s.name.clone()),
         lunco_signal::SignalMeta {
-            description: None,
+            description: channel.and_then(|p| p.description.clone()),
             unit: (!s.unit.is_empty()).then(|| s.unit.clone()),
             provenance: Some("telemetry".to_string()),
         },

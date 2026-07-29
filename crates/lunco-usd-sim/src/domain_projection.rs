@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use bevy::ecs::system::SystemParam;
+use lunco_doc::DocumentOrigin;
 
 use bevy::prelude::*;
 use lunco_modelica::{
@@ -24,6 +26,17 @@ use lunco_usd_bevy::program::{
 };
 
 use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
+
+/// Keep the projection system below Bevy's flat system-parameter arity limit.
+/// The document registry is one coherent concern: a generated network updates
+/// its read-only Modelica source and keeps the scene entity linked to it.
+#[derive(SystemParam)]
+struct ProjectionDocuments<'w, 's> {
+    registry: ResMut<'w, lunco_modelica::state::ModelicaDocumentRegistry>,
+    // Keeps the standard two-lifetime SystemParam shape without creating a
+    // second world access. The value is never read.
+    _lifetime: Local<'s, ()>,
+}
 
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
@@ -634,6 +647,7 @@ pub fn project_domain_islands(
     classes: Res<MemberClasses>,
     registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
+    mut documents: ProjectionDocuments,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
     if added.is_empty() && identity_added.is_empty() && !dirty.0 && !projection_dirty.0 {
@@ -772,6 +786,19 @@ pub fn project_domain_islands(
         let compiled_name = interface.model_name.unwrap_or_else(|| model_name.clone());
         let session_id = installed_model.map_or(1, |model| model.session_id + 1);
         let doc_uri = format!("generated://{model_name}.mo");
+        let document = installed_model
+            .map(|model| model.document)
+            .filter(|doc| !doc.is_unassigned() && documents.registry.host(*doc).is_some())
+            .unwrap_or_else(|| {
+                documents.registry.allocate_with_origin(
+                    source.clone(),
+                    DocumentOrigin::Bundled {
+                        filename: format!("generated/{model_name}.mo"),
+                    },
+                )
+            });
+        documents.registry.checkpoint_source(document, source.clone());
+        documents.registry.link(entity, document);
         let mut model = ModelicaModel {
             model_path: PathBuf::from(&doc_uri),
             model_name: compiled_name.clone(),
@@ -781,6 +808,7 @@ pub fn project_domain_islands(
             is_stepping: true,
             is_compiling: true,
             resume_after_compile: true,
+            document,
             ..default()
         };
         let dispatch = channels.tx.send(ModelicaCommand::Compile {
@@ -852,6 +880,7 @@ pub fn publish_generated_sources(
         .iter()
         .map(
             |(source, model)| lunco_modelica::state::GeneratedModelicaSourceEntry {
+                document: model.map(|m| m.document).unwrap_or_default(),
                 uri: model
                     .map(|m| format!("generated://{}.mo", m.model_name))
                     .unwrap_or_else(|| {

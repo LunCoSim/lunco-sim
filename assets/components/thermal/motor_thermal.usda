@@ -5,20 +5,98 @@
     metersPerUnit = 1
 )
 
-# Drive-motor THERMAL model for a rover — Thermal Domain Layer
+# Drive-motor thermal assembly. It is not a special runtime program: every
+# member below joins the rover's generated `Electrical` system collection.
+# Motor electrical losses cross through `HeatLoad` and are then conserved by
+# ordinary HeatPort connections into thermal masses and radiators.
 def Scope "Thermal" (
     kind = "component"
     doc = "Thermal Domain Layer for motor thermal dissipation."
 )
 {
-    # The physics: per-side first-order heat balance, solver-clocked.
-    def Scope "MotorThermal" (
+    def Xform "MotorHeat_FL" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset info:sourceAsset = @lunco://models/RoverMotorThermal.mo@
-        uniform bool lunco:program:realtimeSafe = true
-        float inputs:drive_left.connect = </Thermal.outputs:drive_left>
-        float inputs:drive_right.connect = </Thermal.outputs:drive_right>
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/HeatLoad.mo@
+        float inputs:heat_w.connect = </Thermal/Motor_FL.outputs:heat>
+        custom token connectors:port.connect = </Thermal/MotorThermalLeft.connectors:port>
+    }
+    def Xform "MotorHeat_RL" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/HeatLoad.mo@
+        float inputs:heat_w.connect = </Thermal/Motor_RL.outputs:heat>
+        custom token connectors:port.connect = </Thermal/MotorThermalLeft.connectors:port>
+    }
+    def Xform "MotorHeat_FR" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/HeatLoad.mo@
+        float inputs:heat_w.connect = </Thermal/Motor_FR.outputs:heat>
+        custom token connectors:port.connect = </Thermal/MotorThermalRight.connectors:port>
+    }
+    def Xform "MotorHeat_RR" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/HeatLoad.mo@
+        float inputs:heat_w.connect = </Thermal/Motor_RR.outputs:heat>
+        custom token connectors:port.connect = </Thermal/MotorThermalRight.connectors:port>
+    }
+    def Xform "MotorThermalLeft" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
+        float inputs:c_th = 4000.0
+        float inputs:T_init = 250.0
+        custom token connectors:port
+    }
+    def Xform "MotorThermalRight" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
+        float inputs:c_th = 4000.0
+        float inputs:T_init = 250.0
+        custom token connectors:port
+    }
+    def Xform "MotorRadiatorLeft" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/Radiator.mo@
+        float inputs:area = 0.35
+        float inputs:emissivity = 0.90
+        float inputs:T_sink = 250.0
+        custom token connectors:port.connect = </Thermal/MotorThermalLeft.connectors:port>
+    }
+    def Xform "MotorRadiatorRight" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/Radiator.mo@
+        float inputs:area = 0.35
+        float inputs:emissivity = 0.90
+        float inputs:T_sink = 250.0
+        custom token connectors:port.connect = </Thermal/MotorThermalRight.connectors:port>
+    }
+    over "Electrical"
+    {
+        float outputs:motor_temp_left.connect = </Thermal/MotorThermalLeft.outputs:temp_k>
+        float outputs:motor_temp_right.connect = </Thermal/MotorThermalRight.outputs:temp_k>
+        prepend rel collection:components:includes = [
+            </Thermal/MotorHeat_FL>,
+            </Thermal/MotorHeat_RL>,
+            </Thermal/MotorHeat_FR>,
+            </Thermal/MotorHeat_RR>,
+            </Thermal/MotorThermalLeft>,
+            </Thermal/MotorThermalRight>,
+            </Thermal/MotorRadiatorLeft>,
+            </Thermal/MotorRadiatorRight>,
+        ]
     }
 }

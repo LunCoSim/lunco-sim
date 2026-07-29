@@ -1,8 +1,8 @@
 //! Telemetry channel browser — the real replacement for the deleted
 //! `lunco-ui/src/telemetry.rs` tombstone panel.
 //!
-//! Lists every scalar channel in the [`SignalRegistry`], grouped by
-//! owning entity, with unit (from [`crate::signal::SignalMeta`]) and
+//! Lists every scalar channel in the [`SignalRegistry`], grouped by the
+//! subsystem it serves, with unit (from [`crate::signal::SignalMeta`]) and
 //! live latest value. A filter box narrows the list; clicking a row
 //! shows a detail strip with the latest value and a small inline
 //! preview plot (reusing the min-max decimation path in
@@ -186,13 +186,7 @@ pub fn bind_dropped_channel(
     if config.inputs.iter().any(|binding| binding.source == source) {
         return false;
     }
-    config.inputs.push(SignalBinding {
-        source,
-        role: "y".into(),
-        label: None,
-        color: None,
-        visible: true,
-    });
+    config.inputs.push(SignalBinding::live(source, "y"));
     true
 }
 
@@ -202,16 +196,17 @@ pub fn bind_dropped_channel(
 struct Row {
     sig: SignalRef,
     unit: Option<String>,
+    description: Option<String>,
+    provenance: Option<String>,
+    owner: String,
+    in_focus: bool,
+    model_internal: bool,
 }
 
 #[derive(Clone, Debug)]
 struct Group {
     label: String,
     rows: Vec<Row>,
-    /// True when this group's owning entity is the focused root or a descendant
-    /// of one (see [`TelemetryFocus`]). Resolved at build time — the ancestor
-    /// walk is not something to redo per frame per row.
-    in_focus: bool,
 }
 
 #[derive(Default)]
@@ -240,6 +235,35 @@ fn catalog_key(reg: &SignalRegistry) -> u64 {
     acc ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
+/// Human-oriented subsystem name. Generated co-simulation variables remain
+/// available under **Model internals**, but are not allowed to crowd out an
+/// authored mission channel such as `power.battery_soc`.
+fn subsystem_for(path: &str, provenance: Option<&str>) -> (&'static str, bool) {
+    let internal = provenance == Some("cosim")
+        || path.starts_with("sim.")
+        || path.contains("_x2f_");
+    if internal {
+        return ("Model internals", true);
+    }
+    let lower = path.to_ascii_lowercase();
+    let group = if lower.starts_with("power.") || lower.contains("battery") {
+        "Power"
+    } else if lower.starts_with("thermal.") || lower.contains("temp") {
+        "Thermal"
+    } else if lower.starts_with("comms.") || lower.contains("radio") || lower.contains("link") {
+        "Communications"
+    } else if lower.starts_with("mobility.") || lower.starts_with("drive") || lower.contains("speed") {
+        "Mobility"
+    } else if lower.starts_with("pointing.") || lower.contains("mast") || lower.contains("antenna") {
+        "Pointing"
+    } else if provenance == Some("modelica") {
+        "Modelica"
+    } else {
+        "Controls & status"
+    };
+    (group, false)
+}
+
 /// Rebuild the grouped/sorted catalog. `name_of` resolves an entity's
 /// display name (the panel passes a `PanelCtx::get::<Name>` closure —
 /// O(1) per entity, not a scan).
@@ -248,29 +272,32 @@ fn build_groups(
     name_of: impl Fn(Entity) -> Option<String>,
     in_focus: impl Fn(Entity) -> bool,
 ) -> Vec<Group> {
-    use std::collections::HashMap;
-    let mut by_entity: HashMap<Entity, Vec<Row>> = HashMap::new();
+    use std::collections::BTreeMap;
+    let mut by_subsystem: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     for (sig, _hist) in reg.iter_scalar() {
-        let unit = reg.meta(sig).and_then(|m| m.unit.clone());
-        by_entity.entry(sig.entity).or_default().push(Row {
+        let meta = reg.meta(sig);
+        let provenance = meta.and_then(|m| m.provenance.clone());
+        let (subsystem, model_internal) = subsystem_for(&sig.path, provenance.as_deref());
+        let owner = if sig.entity == Entity::PLACEHOLDER {
+            "Global".to_string()
+        } else {
+            name_of(sig.entity).unwrap_or_else(|| format!("Entity {}", sig.entity))
+        };
+        by_subsystem.entry(subsystem.to_string()).or_default().push(Row {
             sig: sig.clone(),
-            unit,
+            unit: meta.and_then(|m| m.unit.clone()),
+            description: meta.and_then(|m| m.description.clone()),
+            provenance,
+            owner,
+            in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
+            model_internal,
         });
     }
-    let mut groups: Vec<Group> = by_entity
+    let mut groups: Vec<Group> = by_subsystem
         .into_iter()
-        .map(|(entity, mut rows)| {
-            rows.sort_by(|a, b| a.sig.path.cmp(&b.sig.path));
-            let label = if entity == Entity::PLACEHOLDER {
-                "Global".to_string()
-            } else {
-                name_of(entity).unwrap_or_else(|| format!("Entity {entity}"))
-            };
-            Group {
-                label,
-                rows,
-                in_focus: entity != Entity::PLACEHOLDER && in_focus(entity),
-            }
+        .map(|(label, mut rows)| {
+            rows.sort_by(|a, b| a.sig.path.cmp(&b.sig.path).then_with(|| a.owner.cmp(&b.owner)));
+            Group { label, rows }
         })
         .collect();
     groups.sort_by(|a, b| a.label.cmp(&b.label));
@@ -422,6 +449,9 @@ pub struct TelemetryBrowserPanel {
     /// checkbox disabled) while nothing is selected, so the panel never goes blank
     /// just because the user hasn't clicked anything yet.
     focus_only: bool,
+    /// Generated co-simulation variables are useful when diagnosing a model but
+    /// normally duplicate an authored channel. Keep them opt-in.
+    show_model_internals: bool,
 }
 
 impl Default for TelemetryBrowserPanel {
@@ -432,6 +462,7 @@ impl Default for TelemetryBrowserPanel {
             selected: None,
             preview: None,
             focus_only: true,
+            show_model_internals: false,
         }
     }
 }
@@ -500,6 +531,9 @@ impl Panel for TelemetryBrowserPanel {
                         .color(subdued),
                 );
             }
+            ui.checkbox(&mut self.show_model_internals, "Model internals")
+                .on_hover_text(
+                    "Show generated co-simulation variables. Authored USD telemetry \n                     is the canonical mission view; internals remain here for diagnosis.");
         });
         ui.separator();
 
@@ -544,7 +578,7 @@ impl Panel for TelemetryBrowserPanel {
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
         let scoped = self.focus_only && !focus.is_empty();
-        if scoped && !self.catalog.groups.iter().any(|g| g.in_focus) {
+        if scoped && !self.catalog.groups.iter().flat_map(|g| &g.rows).any(|r| r.in_focus) {
             ui.label(
                 egui::RichText::new(
                     "The selection publishes no telemetry — author `lunco:telemetry` \
@@ -567,13 +601,14 @@ impl Panel for TelemetryBrowserPanel {
             .max_height((ui.available_height() - detail_reserve).max(60.0))
             .show(ui, |ui| {
                 for group in &self.catalog.groups {
-                    if scoped && !group.in_focus {
-                        continue;
-                    }
                     let visible: Vec<&Row> = group
                         .rows
                         .iter()
-                        .filter(|r| filter_match(&self.filter, &group.label, &r.sig.path))
+                        .filter(|r| {
+                            (!scoped || r.in_focus)
+                                && (self.show_model_internals || !r.model_internal)
+                                && filter_match(&self.filter, &group.label, &r.sig.path)
+                        })
                         .collect();
                     if visible.is_empty() {
                         continue;
@@ -677,6 +712,25 @@ impl Panel for TelemetryBrowserPanel {
                                         ui.label(
                                             egui::RichText::new(&row.sig.path).strong().monospace(),
                                         );
+                                        ui.label(egui::RichText::new(format!("Source: {}", row.owner)).small());
+                                        if let Some(description) = &row.description {
+                                            ui.label(description);
+                                        } else if row.model_internal {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Generated co-simulation diagnostic; use the \n                                                     authored mission channel where one is available.",
+                                                )
+                                                .small()
+                                                .weak(),
+                                            );
+                                        }
+                                        if let Some(provenance) = &row.provenance {
+                                            ui.label(
+                                                egui::RichText::new(format!("Declared by: {provenance}"))
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
                                         ui.label(
                                             egui::RichText::new(
                                                 "drag onto a canvas to plot; \
@@ -782,13 +836,7 @@ impl Panel for TelemetryBrowserPanel {
                 title: sel.path.clone(),
                 kind: LINE_PLOT_KIND,
                 view: ViewTarget::Panel2D,
-                inputs: vec![SignalBinding {
-                    source: sel.clone(),
-                    role: "y".to_string(),
-                    label: None,
-                    color: None,
-                    visible: true,
-                }],
+                inputs: vec![SignalBinding::live(sel.clone(), "y")],
                 style: serde_json::Value::Null,
             };
             let instance = cfg.id.raw();
