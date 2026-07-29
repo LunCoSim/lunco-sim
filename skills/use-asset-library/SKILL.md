@@ -291,6 +291,11 @@ strict wheel reader. See [`validate-assets`](../validate-assets/SKILL.md).
 
 ## Anti-patterns
 
+USD composition is owned by `lunco-usd-compose`: `lunco-assets` supplies
+canonical IDs, traversal, and bytes; composition interprets USD arcs into an
+inert stage. Modelica, Rhai, behavior trees, physics, and rendering bind later
+in their own layers. A tutorial only projects metadata from that stage.
+
 - ❌ A bare relative reference to a **shipped** asset — it resolves against the
   anchoring document, so the file breaks the moment a Twin mounts it. Use
   `@lunco://…@`.
