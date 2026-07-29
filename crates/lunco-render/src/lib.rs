@@ -17,7 +17,10 @@ pub mod camera;
 pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
-pub use camera::{scene_camera_look, BloomLook, MsaaLevel, SceneCamera, ToneMap, WorldLabel};
+pub use camera::{
+    scene_camera_look, usd_default_perspective_projection, BloomLook, MsaaLevel, SceneCamera,
+    ToneMap, WorldLabel,
+};
 pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_DEG};
 
 /// The systems that BIND a look intent (`PbrLook`, …) onto an entity as a

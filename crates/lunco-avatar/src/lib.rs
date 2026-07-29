@@ -915,7 +915,11 @@ pub fn spawn_avatar_camera(
             // Bevy's EV 9.7 against the 131 klx lunar sun (~5 stops open, every
             // surface white) and, because `project_env_settings` only writes
             // cameras that already have the component, permanently uncorrectable.
-            (Camera::default(), lunco_render::scene_camera_look(None)),
+            (
+                Camera::default(),
+                lunco_render::scene_camera_look(None),
+                lunco_render::usd_default_perspective_projection(),
+            ),
             FreeFlightCamera {
                 yaw,
                 pitch,

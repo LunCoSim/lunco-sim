@@ -488,6 +488,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         ui.label(format!("Name: {name}"));
     }
 
+    if let Some(projection) = ctx.get::<Projection>(entity).cloned() {
+        camera_projection_section(ui, ctx, entity, projection);
+    }
+
     ui.separator();
 
     // ── Comms & Orbit (doc 43): geodetic anchor / Kepler orbit /
@@ -762,6 +766,75 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             });
         });
     }
+}
+
+/// Edit the selected camera's live projection. `Projection` is the shared
+/// camera contract: USD import, the free-flight camera, and the render binder
+/// all use it, so the Inspector does not maintain a second FOV or clipping
+/// state. The render pipeline never replaces this component.
+fn camera_projection_section(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    entity: Entity,
+    projection: Projection,
+) {
+    let Projection::Perspective(mut perspective) = projection else {
+        return;
+    };
+    egui::CollapsingHeader::new("Camera Projection")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut fov_deg = perspective.fov.to_degrees();
+            let mut near = perspective.near;
+            let mut far = perspective.far;
+            let fov_changed = ui
+                .add(egui::Slider::new(&mut fov_deg, 1.0..=179.0).text("Vertical FOV"))
+                .changed();
+            let near_changed = ui
+                .add(egui::DragValue::new(&mut near).speed(0.01).prefix("Near: "))
+                .changed();
+            let far_changed = ui
+                .add(egui::DragValue::new(&mut far).speed(100.0).prefix("Far: "))
+                .changed();
+            if !(fov_changed || near_changed || far_changed) {
+                return;
+            }
+            perspective.fov = fov_deg.to_radians();
+            perspective.near = near.max(0.001);
+            perspective.far = far.max(perspective.near + 0.001);
+            let authored_fov = perspective.fov;
+            let authored_near = perspective.near;
+            let authored_far = perspective.far;
+            ctx.defer(move |world| {
+                if let Some(mut current) = world.get_mut::<Projection>(entity) {
+                    *current = Projection::Perspective(perspective);
+                }
+                // USD owns authored camera facts. Preserve the USD default
+                // vertical aperture while converting the Inspector's vertical
+                // FOV back to the standard `focalLength` attribute; composed
+                // camera reloads therefore retain the edit instead of
+                // reverting to an ECS-only override.
+                if world.get::<UsdPrimPath>(entity).is_some() {
+                    const VERTICAL_APERTURE_MM: f32 = 15.2908;
+                    let focal_length =
+                        VERTICAL_APERTURE_MM / (2.0 * (authored_fov * 0.5).tan());
+                    apply_usd_attribute_change(
+                        world,
+                        entity,
+                        "focalLength",
+                        "float",
+                        format!("{focal_length}"),
+                    );
+                    apply_usd_attribute_change(
+                        world,
+                        entity,
+                        "clippingRange",
+                        "float2",
+                        format!("({}, {})", authored_near, authored_far),
+                    );
+                }
+            });
+        });
 }
 
 /// Live sun + ambient controls. Reads the change-driven [`InspectorView`]

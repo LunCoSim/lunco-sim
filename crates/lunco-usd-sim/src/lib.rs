@@ -2896,9 +2896,16 @@ fn collect_raycast_settle_footprints(
             })
             .collect::<Vec<_>>();
         if !contacts.is_empty() {
-            commands
-                .entity(root)
-                .insert(lunco_core::GroundSettleFootprint(contacts));
+            commands.entity(root).insert((
+                lunco_core::GroundSettleFootprint(contacts),
+                // Authored raycast vehicles can already be Dynamic when
+                // they enter the scene, so they never pass through the
+                // ShouldBeDynamic activation path that normally arms
+                // ground placement. The footprint and the placement
+                // request are one fact: publish both from the topology
+                // owner, otherwise the raycast visuals start embedded.
+                lunco_core::NeedsGroundSettle,
+            ));
         }
     }
 }
