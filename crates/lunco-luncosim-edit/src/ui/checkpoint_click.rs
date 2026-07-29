@@ -811,16 +811,21 @@ pub fn draw_waypoint_context_menu(
         });
     }
 
-    // Un-author the pin itself, AFTER the mission no longer references it — the
-    // leg is what makes a marker a waypoint, so dropping it first means the prim
-    // is never briefly a waypoint of a route that no longer names it.
+    // Deactivate the pin itself, AFTER the mission no longer references it. A
+    // route waypoint is normally authored in the scene/variant layer, while
+    // interactive edits target the runtime overlay; `RemovePrim` can only
+    // remove a spec authored by that same layer and therefore left the original
+    // marker composed. `active = false` is the authoritative stronger opinion:
+    // it hides the authored prim and its subtree, is undoable, and does not
+    // mutate the source scene merely to satisfy a runtime delete.
     if let Some(marker_path) = deleted_marker {
-        info!("[waypoint] deleting marker prim {marker_path}");
+        info!("[waypoint] deactivating marker prim {marker_path}");
         commands.trigger(ApplyUsdOp {
             doc,
-            op: UsdOp::RemovePrim {
+            op: UsdOp::SetActive {
                 edit_target: LayerId::runtime(),
                 path: marker_path,
+                active: false,
             },
         });
     }
@@ -1542,8 +1547,14 @@ pub enum PathPart {
 }
 
 /// Cheap change-signature for a route: its ordered coord keys + smooth flag +
-/// which points are already visited (visited legs drop out of the curve).
-fn route_signature(targets: &[String], smooth: bool, reached: Option<&ReachedWaypoints>) -> u64 {
+/// which points are already visited (visited legs drop out of the curve), plus
+/// the rover pose used as the live start of the remaining leg.
+fn route_signature(
+    targets: &[String],
+    smooth: bool,
+    reached: Option<&ReachedWaypoints>,
+    rover_pos: Option<DVec3>,
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     smooth.hash(&mut h);
@@ -1553,6 +1564,14 @@ fn route_signature(targets: &[String], smooth: bool, reached: Option<&ReachedWay
             .map(|r| r.0.contains(t))
             .unwrap_or(false)
             .hash(&mut h);
+    }
+    // A centimetre-level camera/render update should not continuously recreate the
+    // mesh, but the route must visibly follow the rover as it drives. Quantising to
+    // decimetres makes that explicit and keeps the update cost bounded.
+    if let Some(pos) = rover_pos {
+        for component in [pos.x, pos.y, pos.z] {
+            (component * 10.0).round().to_bits().hash(&mut h);
+        }
     }
     h.finish()
 }
@@ -1742,6 +1761,9 @@ pub fn sync_waypoint_path_mesh(
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
         let smooth = route_is_smooth(&xml.0);
+        let rover_pos =
+            lunco_core::coords::world_position(vessel, &q_parents, &q_grids_only, &q_spatial)
+                .map(|p| p.0);
         // Focus is part of the signature: it changes the ribbon's colour, so a
         // selection change has to rebuild it (the mesh is only rebuilt when this
         // number moves).
@@ -1749,7 +1771,7 @@ pub fn sync_waypoint_path_mesh(
         // availability in the change key so a ribbon first created during the
         // loading frame is rebuilt once the analytic surface can clamp its
         // interpolated samples.
-        let signature = route_signature(&targets, smooth, reached)
+        let signature = route_signature(&targets, smooth, reached, rover_pos)
             ^ (focused as u64)
             ^ ((surface.has_terrain() as u64) << 1);
 
@@ -1779,7 +1801,7 @@ pub fn sync_waypoint_path_mesh(
         let closed = xml.0.contains("forever") && pts.len() > 2;
 
         for part in [PathPart::Driven, PathPart::Remaining] {
-            let slice: Vec<DVec3> = match part {
+            let mut slice: Vec<DVec3> = match part {
                 // `min(len)` guards the boundary-sharing when everything is driven.
                 PathPart::Driven if driven_upto > 0 => pts[..(driven_upto + 1).min(pts.len())]
                     .iter()
@@ -1792,6 +1814,21 @@ pub fn sync_waypoint_path_mesh(
                     .collect(),
                 _ => Vec::new(),
             };
+
+            // The remaining ribbon is an active driving cue, not merely a
+            // drawing of the authored route.  Lead it from the rover's current
+            // grid-absolute pose to its next unresolved waypoint so the route
+            // remains intelligible after the vehicle has departed its start.
+            if part == PathPart::Remaining {
+                if let Some(rover_pos) = rover_pos {
+                    if slice
+                        .first()
+                        .is_none_or(|first| first.distance(rover_pos) > 0.01)
+                    {
+                        slice.insert(0, rover_pos);
+                    }
+                }
+            }
 
             let key = (vessel, part);
             // Unchanged → leave this ribbon alone.

@@ -709,6 +709,13 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
 /// ABOVE (a body already below a one-sided heightfield never recovers).
 const SETTLE_CLEARANCE: f64 = 0.6;
 
+// A raycast contact is the *wheel axle*, not a rigid tyre volume. Its cast
+// starts at the suspension strut top and only supports the chassis once it is
+// slightly compressed, so placing the tyre a large distance above the terrain
+// leaves the ground outside the spring's rest-length window. Keep the contact
+// just below the datum to establish a real normal force on the first step.
+const RAYCAST_SETTLE_CLEARANCE: f64 = -0.02;
+
 /// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
 /// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).
 ///
@@ -775,28 +782,39 @@ pub fn settle_grounded_assemblies(
         }
         let members = joint_component(seed, &adj);
         done.extend(members.iter().copied());
-        // Lift = how far the deepest member sits below (surface + clearance). The
-        // chassis (high) never drives it; the low wheels do.
         let mut lift = 0.0_f64;
         let mut over_terrain = false;
-        for &m in &members {
-            let Some(p) = pos_of.get(&m) else { continue };
-            if p.0.x.abs() > half || p.0.z.abs() > half {
-                continue; // this member is off the terrain footprint
-            }
-            over_terrain = true;
-            let surface = hf.0.height_at(p.0.x, p.0.z);
-            lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
-        }
         // Probe-only contact geometry (raycast wheels) belongs to the same
         // placement pass as rigid members. It is authored in the vehicle frame,
         // transformed once by the solved root pose, and sampled from the same
         // oracle as every other terrain consumer.
-        if let (Some(footprint), Some(root_pos)) =
-            (footprints.get(seed).ok().flatten(), pos_of.get(&seed))
-        {
+        // A dynamic physical wheel can be the first `NeedsGroundSettle` seed
+        // encountered for a jointed vehicle. The raycast contact footprint,
+        // however, belongs to its DriveMix root. Resolve it from the seed and
+        // then across the whole assembly instead of assuming the arbitrary
+        // dynamic member owns it. Raycast vehicles MUST use only this geometry:
+        // their high chassis has no terrain contact, and its near-zero generic
+        // lift used to consume the request before a wheel probe could settle it.
+        let raycast_footprint = footprints
+            .get(seed)
+            .ok()
+            .flatten()
+            .map(|footprint| (seed, footprint))
+            .or_else(|| {
+                members.iter().find_map(|member| {
+                    footprints
+                        .get(*member)
+                        .ok()
+                        .flatten()
+                        .map(|footprint| (*member, footprint))
+                })
+            });
+        if let Some((footprint_owner, footprint)) = raycast_footprint {
+            let Some(root_pos) = pos_of.get(&footprint_owner) else {
+                continue;
+            };
             let root_rot = rotations
-                .get(seed)
+                .get(footprint_owner)
                 .map(|rotation| rotation.0)
                 .unwrap_or(DQuat::IDENTITY);
             for contact in &footprint.0 {
@@ -805,8 +823,20 @@ pub fn settle_grounded_assemblies(
                     continue;
                 }
                 let surface = hf.0.height_at(point.x, point.z);
-                lift = lift.max(surface + SETTLE_CLEARANCE - (point.y - contact.radius));
+                lift = lift.max(surface + RAYCAST_SETTLE_CLEARANCE - (point.y - contact.radius));
                 over_terrain = true;
+            }
+        } else {
+            // Physical wheels are real bodies, so lift from the deepest dynamic
+            // member. The chassis (high) never drives it; the low wheels do.
+            for &m in &members {
+                let Some(p) = pos_of.get(&m) else { continue };
+                if p.0.x.abs() > half || p.0.z.abs() > half {
+                    continue; // this member is off the terrain footprint
+                }
+                over_terrain = true;
+                let surface = hf.0.height_at(p.0.x, p.0.z);
+                lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
             }
         }
         if !over_terrain || lift <= 0.0 {
