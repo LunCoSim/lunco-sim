@@ -4,6 +4,7 @@ within LunCo.Sensors;
 // Measures component ground-truth temperature from HeatPort, modeling sensor thermal response lag,
 // calibration offset, and 12-bit ADC telemetry count outputs for thermal control scripts.
 model ThermalSensor
+  extends LunCo.Icons.Sensor;
   parameter Real cal_offset_k = 0.35 "Sensor calibration offset bias, K";
   parameter Real tau_sec = 2.0 "Sensor thermal probe response time constant, s";
   parameter Real t_min_k = 100.0 "ADC minimum scale temperature, K";

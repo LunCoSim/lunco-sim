@@ -11,6 +11,7 @@ within LunCo.Mechanics;
 // Composed here, behind a `GearRatio`, the reflection is not a formula anyone maintains:
 // it falls out of the two equation sets being solved together.
 model Inertia
+  extends LunCo.Icons.Mechanics;
   parameter Real J = 1.0e-4 "Moment of inertia about the axis, kg.m2";
   parameter Real w_init = 0.0 "Initial angular velocity, rad/s";
 

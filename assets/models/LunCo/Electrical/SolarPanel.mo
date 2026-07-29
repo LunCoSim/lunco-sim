@@ -4,6 +4,7 @@ within LunCo.Electrical;
 // then clamped to the lit hemisphere. It pushes that power onto the bus as current at
 // the bus voltage — `p.i` is negative because current LEAVES the panel into the node.
 model SolarPanel
+  extends LunCo.Icons.SolarPanel;
   parameter Real area = 6.0 "Collecting area, m2";
   parameter Real efficiency = 0.30 "Irradiance-to-electrical conversion, 0..1";
   // Module voltage at the maximum-power point. A PV module's photocurrent is set

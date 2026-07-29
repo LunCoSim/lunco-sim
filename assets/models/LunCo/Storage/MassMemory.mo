@@ -3,6 +3,7 @@ within LunCo.Storage;
 // Onboard Solid-State Mass Memory (SSMM / Flash Storage) dynamics.
 // Tracks stored science data (GB), write/read power draw on EPS bus Pin, and storage fill.
 model MassMemory
+  extends LunCo.Icons.Storage;
   parameter Real capacity_gb = 512.0 "Total mass memory capacity, GB";
   parameter Real p_standby_w = 0.5 "Standby power draw, W";
   parameter Real p_write_per_gbps = 3.5 "Write power draw per Gbps, W/(Gbps)";

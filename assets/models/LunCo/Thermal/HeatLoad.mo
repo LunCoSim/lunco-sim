@@ -3,6 +3,7 @@ within LunCo.Thermal;
 // from a physical component's loss output; the heat port then participates in
 // the same conservation equations as every thermal mass and radiator.
 model HeatLoad
+  extends LunCo.Icons.HeatLoad;
   input Real heat_w "Dissipated power received from the physical component, W";
   HeatPort port "Thermal node receiving the dissipated heat";
 equation

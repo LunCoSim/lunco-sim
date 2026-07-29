@@ -3,6 +3,7 @@ within LunCo.Sensors;
 // Landing Leg Touchdown Contact Switch Sensor.
 // Detects ground contact force on landing foot, triggering touchdown event & engine shutoff.
 model TouchdownSensor
+  extends LunCo.Icons.Sensor;
   parameter Real force_threshold_n = 200.0 "Contact force threshold to trigger touchdown switch, N";
 
   input Real contact_force_n "Measured ground reaction force on landing leg strut, N";

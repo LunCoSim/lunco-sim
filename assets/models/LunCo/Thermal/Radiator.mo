@@ -1,6 +1,7 @@
 within LunCo.Thermal;
 // Vacuum radiative cooling (Stefan-Boltzmann T^4 law into deep space sink).
 model Radiator
+  extends LunCo.Icons.Radiator;
   parameter Real area = 1.0 "Radiator emitting area, m²";
   parameter Real emissivity = 0.90 "Thermal emissivity, 0..1";
   parameter Real sigma = 5.670374e-8 "Stefan-Boltzmann constant, W/(m².K⁴)";

@@ -4,6 +4,7 @@ within LunCo.Electrical;
 // `p.i < 0`; SoC falls when the loads outdraw the sources
 // and rises when they do not — the balance is the circuit's, not a number anyone sums.
 model Battery
+  extends LunCo.Icons.Battery;
   parameter Real voltage_nom = 48.0 "Nominal terminal voltage, V";
   parameter Real R_internal = 0.01 "Equivalent series resistance, Ohm";
   parameter Real capacity = 208.0 "Total capacity, Ah";

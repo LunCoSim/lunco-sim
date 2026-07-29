@@ -3,6 +3,7 @@ within LunCo.Pointing;
 // Reaction Control Wheel (Reaction Wheel / Flywheel for spacecraft attitude control).
 // Stores angular momentum h = I_wheel * omega and draws power from EPS bus Pin during acceleration.
 model ReactionWheel
+  extends LunCo.Icons.Mechanics;
   parameter Real i_wheel = 0.02 "Flywheel moment of inertia, kg.m²";
   parameter Real max_torque_nm = 0.2 "Maximum motor torque, N.m";
   parameter Real p_idle_w = 0.5 "Standby electronics power draw, W";

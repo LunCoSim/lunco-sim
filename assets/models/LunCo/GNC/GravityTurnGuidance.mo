@@ -3,6 +3,7 @@ within LunCo.GNC;
 // Gravity Turn Guidance for high-speed orbital / atmospheric entry braking.
 // Aligns main engine thrust vector retrograde (opposite to velocity vector) to maximize energy dissipation.
 model GravityTurnGuidance
+  extends LunCo.Icons.Guidance;
   parameter Real min_speed_m_s = 5.0 "Minimum speed threshold to maintain gravity turn alignment, m/s";
 
   input Real vel_x "Lander velocity X, m/s";

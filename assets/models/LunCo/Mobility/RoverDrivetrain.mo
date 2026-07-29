@@ -17,6 +17,7 @@ within LunCo.Mobility;
 // Native USD connections fan them onto wheel drive ports.
 
 model RoverDrivetrain
+  extends LunCo.Icons.Mobility;
   parameter Real tau_m = 0.15 "Motor electrical + inertia lag (s)";
   parameter Real steer_gain = 1.0 "Differential authority of steer vs throttle";
 

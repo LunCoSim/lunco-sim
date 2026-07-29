@@ -638,6 +638,9 @@ impl Perspective for ViewPerspective {
     fn title(&self) -> String {
         "🎬 View".into()
     }
+    fn restores_cached_layout(&self) -> bool {
+        false
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(None);

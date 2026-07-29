@@ -1,6 +1,7 @@
 within LunCo.Comms;
 // Antenna gain model: directional antenna gain as a function of pointing elevation angle.
 model AntennaGain
+  extends LunCo.Icons.Comms;
   parameter Real gain_max_dbi = 18.0 "Peak bore-sight antenna gain, dBi";
   parameter Real min_elevation_deg = 5.0 "Minimum elevation mask angle, deg";
 

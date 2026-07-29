@@ -1,5 +1,6 @@
 within LunCo.Propulsion;
 model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
+  extends LunCo.Icons.Propulsion;
   // The nozzle's PARAMETERS live in USD (they are the vehicle's design), the
   // consequences of those parameters live here (they are physics). Nothing
   // about a nozzle changes per frame, so nothing about it belongs in a

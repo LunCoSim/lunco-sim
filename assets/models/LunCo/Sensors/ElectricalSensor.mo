@@ -4,6 +4,7 @@ within LunCo.Sensors;
 // Reads ground-truth EPS bus voltage and current from Pin, generating calibrated telemetry outputs
 // and 12-bit ADC telemetry counts for Rhai power management and load-shedding scripts.
 model ElectricalSensor
+  extends LunCo.Icons.Sensor;
   parameter Real v_scale_factor = 0.10 "Voltage divider attenuation scale factor (0..5V scale)";
   parameter Real i_gain_v_a = 0.05 "Hall-effect current sensor sensitivity, V/A";
   parameter Real v_max_meas = 50.0 "Maximum voltage measurement range, V";

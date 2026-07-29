@@ -1,5 +1,6 @@
 within LunCo.Pointing;
 model DishPattern "Parabolic dish main lobe: what pointing error costs the link."
+  extends LunCo.Icons.Pointing;
   // The half of "pointing" that is not mechanism. A parabolic reflector's main
   // lobe is Gaussian to first order, so the usable fraction of peak gain falls
   // off with the SQUARE of the off-boresight angle measured in beamwidths.

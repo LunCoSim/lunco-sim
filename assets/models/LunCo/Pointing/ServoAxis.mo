@@ -1,5 +1,6 @@
 within LunCo.Pointing;
 model ServoAxis "One first-order pointing axis: ease an angle onto its command."
+  extends LunCo.Icons.Pointing;
   // The shared mechanism behind every tracker in this package. A real gimbal
   // (or a panel drive) does not snap to its setpoint — it eases on with a
   // characteristic time. That is one line of ODE, and it is the SAME line for

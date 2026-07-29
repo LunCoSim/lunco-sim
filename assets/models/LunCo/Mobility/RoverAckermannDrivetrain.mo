@@ -20,6 +20,7 @@ within LunCo.Mobility;
 // them onto the FSW ports.
 
 model RoverAckermannDrivetrain
+  extends LunCo.Icons.Mobility;
   parameter Real tau_m = 0.15 "Motor electrical + inertia lag (s)";
 
   input Real throttle "Normalized forward command, -1..1";

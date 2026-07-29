@@ -2,6 +2,7 @@ within LunCo.Electrical;
 // Navigation / Hazard / Science Camera Payload dynamics.
 // Converts active capture state into electrical power draw on EPS bus Pin and data generation rate.
 model CameraPayload
+  extends LunCo.Icons.Camera;
   parameter Real p_active_w = 4.5 "Active camera streaming power draw, W";
   parameter Real p_idle_w = 0.2 "Standby power draw, W";
   parameter Real data_rate_mbps = 15.0 "Science/Nav image data output rate, Mbps";

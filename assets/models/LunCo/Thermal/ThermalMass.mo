@@ -2,6 +2,7 @@ within LunCo.Thermal;
 // Lumped thermal capacitance (heat mass storage).
 // Differential equation: c_th * der(port.T) = port.Q
 model ThermalMass
+  extends LunCo.Icons.ThermalMass;
   parameter Real c_th = 4000.0 "Thermal heat capacity, J/K";
   parameter Real T_init = 293.15 "Initial temperature at t=0, K";
 

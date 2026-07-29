@@ -3,6 +3,7 @@ within LunCo.GNC;
 // Lander Attitude Rate & Position PID Feedback Controller Model.
 // Calculates continuous control torques and forces in Modelica (zero math in Rhai).
 model LanderPID
+  extends LunCo.Icons.Guidance;
   parameter Real kp_pitch = 4.5 "Proportional gain for pitch control";
   parameter Real kd_pitch = 2.1 "Derivative gain for pitch rate dampening";
   parameter Real kp_z = 3.0 "Proportional gain for altitude descent control";

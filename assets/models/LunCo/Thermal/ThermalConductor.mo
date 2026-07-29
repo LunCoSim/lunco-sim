@@ -1,6 +1,7 @@
 within LunCo.Thermal;
 // Linear thermal conduction between two heat ports: Q = G * (port_a.T - port_b.T)
 model ThermalConductor
+  extends LunCo.Icons.ThermalConductor;
   parameter Real G = 10.0 "Thermal conductance, W/K";
 
   HeatPort port_a;

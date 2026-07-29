@@ -1,5 +1,6 @@
 within LunCo.Pointing;
 model RateIntegrator "One integrating axis: advance an angle at a commanded rate."
+  extends LunCo.Icons.Pointing;
   // The other half of this package's shared mechanism. `ServoAxis` eases an
   // angle ONTO a setpoint; this one has no setpoint at all — it simply turns,
   // which is what an orbiting body's bearing does. One line of ODE, the same

@@ -9,6 +9,7 @@ within LunCo.Mechanics;
 //
 // `physxVehicleWheel:dampingRate` is the authored spelling of `d`.
 model BearingFriction
+  extends LunCo.Icons.Mechanics;
   parameter Real d = 0.0 "Viscous damping coefficient, N.m per rad/s";
 
   Flange flange;

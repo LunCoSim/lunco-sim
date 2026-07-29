@@ -2,6 +2,7 @@ within LunCo.Storage;
 
 // Cryogenic Propellant Storage Tank: thermal heat ingress drives boil-off rate & pressure.
 model CryoTank
+  extends LunCo.Icons.Storage;
   parameter Real m_init_kg = 500.0 "Initial propellant mass, kg";
   parameter Real h_fg = 447000.0 "Latent heat of vaporization, J/kg";
   parameter Real p_max_bar = 25.0 "Maximum relief valve pressure, bar";

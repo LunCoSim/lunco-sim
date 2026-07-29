@@ -4,6 +4,7 @@ within LunCo.Sensors;
 // Converts ground-truth physics acceleration and rate gyro inputs into flight-software sensor readings.
 // Applies calibration bias, scale factor error, mounting misalignment, and sensor status flags.
 model IMUSensor
+  extends LunCo.Icons.Sensor;
   parameter Real accel_bias_x = 0.015 "Accelerometer X bias offset, m/s²";
   parameter Real accel_bias_y = -0.010 "Accelerometer Y bias offset, m/s²";
   parameter Real accel_bias_z = 0.020 "Accelerometer Z bias offset, m/s²";

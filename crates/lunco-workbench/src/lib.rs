@@ -1406,6 +1406,11 @@ impl WorkbenchLayout {
         if !self.perspectives.iter().any(|w| w.id() == id) {
             return;
         }
+        let restores_cached_layout = self
+            .perspectives
+            .iter()
+            .find(|w| w.id() == id)
+            .is_some_and(|w| w.restores_cached_layout());
         let prev = self.active_perspective;
         let switching = prev != Some(id);
 
@@ -1416,10 +1421,15 @@ impl WorkbenchLayout {
             }
             // Restore a visited perspective's cached layout verbatim — its
             // tabs and splits come back exactly as left, no preset rebuild.
-            if let Some(slot) = self.dock_cache.remove(&id) {
-                self.restore_perspective(slot);
-                self.active_perspective = Some(id);
-                return;
+            if restores_cached_layout {
+                if let Some(slot) = self.dock_cache.remove(&id) {
+                    self.restore_perspective(slot);
+                    self.active_perspective = Some(id);
+                    return;
+                }
+            } else {
+                // A presentation workspace must never revive stale document tabs.
+                self.dock_cache.remove(&id);
             }
             // First visit: drop the live dock so the incoming preset's
             // rebuild seeds an empty skeleton instead of merging the

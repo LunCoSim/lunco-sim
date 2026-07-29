@@ -5,6 +5,7 @@ within LunCo.Electrical;
 // A higher-fidelity variant may replace it with a shaft-coupled machine without
 // changing the public `p` connector or demand input.
 model DCMotor
+  extends LunCo.Icons.Motor;
   parameter Real efficiency = 0.85 "Electrical-to-mechanical efficiency, 0..1";
   parameter Real rated_power = 2000.0 "Continuous rated shaft power, W";
   // Bus voltage the drive is rated at. Used to turn the nameplate power rating

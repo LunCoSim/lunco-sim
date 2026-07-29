@@ -3,6 +3,7 @@ within LunCo.Electrical;
 // voltage); `i` is a `flow`, so Modelica sums the currents at every node to zero — that
 // is Kirchhoff's current law, and it is why a bus needs no count of what is on it.
 connector Pin
+  extends LunCo.Icons.ElectricalPin;
   Real v "Node voltage, V";
   flow Real i "Current INTO the pin, A";
 end Pin;

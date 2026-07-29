@@ -1,6 +1,7 @@
 within LunCo.Comms;
 // Onboard telemetry data buffer dynamics: der(buffer_mb) = (rate_in_kbps - rate_out_kbps) / 8000
 model DataBuffer
+  extends LunCo.Icons.DataBuffer;
   parameter Real capacity_mb = 1024.0 "Telemetry buffer capacity, MB";
   parameter Real buffer_init_mb = 0.0 "Initial buffer fill at t=0, MB";
 

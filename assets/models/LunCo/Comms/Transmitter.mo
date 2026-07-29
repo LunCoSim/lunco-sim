@@ -1,6 +1,7 @@
 within LunCo.Comms;
 // RF Transmitter: converts transmit state into electrical power draw on EPS bus Pin.
 model Transmitter
+  extends LunCo.Icons.Comms;
   parameter Real p_rf_w = 5.0 "RF output transmit power, W";
   parameter Real eta_tx = 0.40 "Transmitter RF efficiency, 0..1";
   parameter Real p_idle_w = 1.5 "Idle receiver standby power draw, W";

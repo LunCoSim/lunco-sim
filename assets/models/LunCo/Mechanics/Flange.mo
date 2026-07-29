@@ -9,6 +9,7 @@ within LunCo.Mechanics;
 // differentiate it for speed, but never the reverse, and two components joined here cannot
 // disagree about position the way two speed-coupled ones drift apart under integration.
 connector Flange
+  extends LunCo.Icons.Flange;
   Real phi "Absolute rotation angle, rad";
   flow Real tau "Torque INTO the flange, N.m";
 end Flange;

@@ -4,6 +4,7 @@ within LunCo.GNC;
 // Calculates required thrust acceleration vector to guide a fast-moving lander to a target landing point.
 // Acceleration law: a_cmd = (6/t_go²) * (p_target - p - v*t_go) - (2/t_go) * (v_target - v) + g_lunar
 model PoweredDescentGuidance
+  extends LunCo.Icons.Guidance;
   parameter Real g_lunar = 1.62 "Lunar gravity acceleration, m/s²";
   parameter Real a_max = 12.0 "Maximum engine thrust acceleration capacity, m/s²";
 

@@ -3,6 +3,7 @@ within LunCo.Thermal;
 // Thermo-electrical survival heater.
 // Draws electrical power from EPS bus Pin when component temperature drops below setpoint T_set.
 model ThermostatHeater
+  extends LunCo.Icons.Heater;
   parameter Real t_set_k = 263.15 "Thermostat turn-on temperature setpoint (-10°C), K";
   parameter Real p_heater_w = 15.0 "Electric heater power capacity, W";
   parameter Real eta_heat = 0.98 "Electrical to thermal heating conversion efficiency, 0..1";

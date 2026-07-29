@@ -1,5 +1,6 @@
 within LunCo.Propulsion;
 model PlumePhotometry "What an exhaust plume is worth as a light source."
+  extends LunCo.Icons.Propulsion;
   // Emissive geometry in a forward renderer illuminates nothing. A descent burn
   // therefore leaves the regolith directly under the vehicle lit only by the sun,
   // which on an airless body — hard shadows, no atmospheric scatter to hide it —
