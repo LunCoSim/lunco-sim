@@ -1238,20 +1238,25 @@ struct BindingEpochDirty(pub bool);
 #[derive(Resource)]
 struct BindingEpochWait(lunco_readiness::ReadinessTicket);
 
-fn request_binding_epoch<T: Component>(
-    _trigger: On<Add, T>,
-    mut dirty: ResMut<BindingEpochDirty>,
-) { dirty.0 = true; }
+fn request_binding_epoch<T: Component>(_trigger: On<Add, T>, mut dirty: ResMut<BindingEpochDirty>) {
+    dirty.0 = true;
+}
 
 fn request_binding_epoch_on_remove<T: Component>(
     _trigger: On<Remove, T>,
     mut dirty: ResMut<BindingEpochDirty>,
-) { dirty.0 = true; }
+) {
+    dirty.0 = true;
+}
 
 fn request_binding_epoch_on_model_change(
     changed: Query<(), Changed<SimComponent>>,
     mut dirty: ResMut<BindingEpochDirty>,
-) { if !changed.is_empty() { dirty.0 = true; } }
+) {
+    if !changed.is_empty() {
+        dirty.0 = true;
+    }
+}
 
 /// The sole USD-side transition from a loading projection epoch to a bindable
 /// one.  Failed models are terminal: readiness policy decides whether to hold
@@ -1269,15 +1274,27 @@ fn settle_binding_epoch(
     mut readiness: ResMut<lunco_readiness::ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    dirty.0 = false;
-    let models_terminal = models.iter().all(|model| !matches!(
-        model.map(|model| &model.status), None | Some(SimStatus::Compiling)
-    ));
-    let settled = awaiting.is_empty() && joints.is_empty() && wheels.is_empty()
-        && differentials.is_empty() && models_terminal;
+    let models_terminal = models.iter().all(|model| {
+        !matches!(
+            model.map(|model| &model.status),
+            None | Some(SimStatus::Compiling)
+        )
+    });
+    let settled = awaiting.is_empty()
+        && joints.is_empty()
+        && wheels.is_empty()
+        && differentials.is_empty()
+        && models_terminal;
     if settled {
+        dirty.0 = false;
         revision.seal_epoch();
     } else {
+        // Keep the reconciliation scheduled until every deferred stage,
+        // joint, wheel, differential, and model participant has reached a
+        // terminal state. Some of those transitions come from async asset or
+        // compiler completion and do not emit one of the structural events
+        // that originally opened this epoch.
+        dirty.0 = true;
         revision.open_epoch();
     }
     // Binding is a participant-initialisation fact. The readiness policy owns

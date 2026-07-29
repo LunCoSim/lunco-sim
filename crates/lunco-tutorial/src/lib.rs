@@ -220,7 +220,7 @@ impl CurriculumRoot {
         }
         let composed = match lunco_usd_compose::compose_file_to_stage_with_roots(
             &self.layer,
-            lunco_assets::shipped_asset_root(&self.layer),
+            Some(lunco_assets::assets_dir_abs().as_path()),
             self.base.as_deref(),
         ) {
             Ok(stage) => curriculum::project(&stage),
