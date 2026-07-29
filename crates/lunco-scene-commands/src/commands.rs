@@ -2408,6 +2408,8 @@ pub fn apply_pending_focus(
     >,
     q_grids: Query<&Grid>,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
+    q_celestial_decl: Query<(), With<lunco_celestial::CelestialBodyDecl>>,
+    q_children: Query<&Children>,
     mut commands: Commands,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
 ) {
@@ -2417,7 +2419,26 @@ pub fn apply_pending_focus(
     // `FocusTarget` flow (OrbitCamera flies to the body's grid — doc 47
     // Phase 6 — with sunlit-side arrival). Local framing stays for
     // metre-scale subjects (wheels, rovers, props).
-    if q_celestial.get(target).is_ok() {
+    let mut is_celestial = q_celestial.get(target).is_ok() || q_celestial_decl.get(target).is_ok();
+    let mut pending = vec![target];
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for parent in pending.drain(..) {
+            if let Ok(children) = q_children.get(parent) {
+                for child in children.iter() {
+                    if q_celestial.get(child).is_ok() || q_celestial_decl.get(child).is_ok() {
+                        is_celestial = true;
+                    }
+                    next.push(child);
+                }
+            }
+        }
+        if is_celestial || next.is_empty() {
+            break;
+        }
+        pending = next;
+    }
+    if is_celestial {
         commands.remove_resource::<PendingFocus>();
         commands.trigger(lunco_avatar::FocusTarget {
             avatar: None,

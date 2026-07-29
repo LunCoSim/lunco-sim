@@ -3632,6 +3632,8 @@ fn on_focus_command(
     mut commands: Commands,
     q_avatar: Query<(Entity, &Transform, Option<&Camera>, Option<&OrbitCamera>), With<Avatar>>,
     q_bodies: Query<&CelestialBody>,
+    q_body_decls: Query<&lunco_celestial::CelestialBodyDecl>,
+    q_body_entities: Query<(Entity, &CelestialBody)>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
 ) {
@@ -3655,15 +3657,19 @@ fn on_focus_command(
 
     // Compute distance based on target type.
     let mut distance = 20.0;
-    let physical_target = get_physical_body(cmd.target, &q_children, &q_bodies);
-    let is_body = q_bodies.contains(physical_target);
+    let physical_target = resolve_declared_body(cmd.target, &q_body_decls, &q_body_entities)
+        .unwrap_or_else(|| get_physical_body(cmd.target, &q_children, &q_bodies));
+    let is_body = q_bodies.get(physical_target).is_ok();
 
     // Already orbiting this very body (clicking the focused globe, re-clicking
     // its view pill): a repeat focus must be a NO-OP. Re-running the swap
     // re-arms `SunlitArrival`, which snaps the camera back to the arrival
     // pose — "I jump to the original position".
     if let Some(orbit) = current_orbit {
-        if get_physical_body(orbit.target, &q_children, &q_bodies) == physical_target {
+        if resolve_declared_body(orbit.target, &q_body_decls, &q_body_entities)
+            .unwrap_or_else(|| get_physical_body(orbit.target, &q_children, &q_bodies))
+            == physical_target
+        {
             return;
         }
     }
@@ -3690,7 +3696,7 @@ fn on_focus_command(
         // orbit_system idles until `sample_orbit_frame` refreshes it.
         .remove::<OrbitFrameSample>()
         .try_insert(OrbitCamera {
-            target: cmd.target,
+            target: physical_target,
             distance,
             yaw,
             pitch,
@@ -4193,16 +4199,42 @@ fn get_physical_body(
         return target;
     }
 
-    // Search children (one level deep is enough for our current Grid -> Body setup).
-    if let Ok(children) = q_children.get(target) {
-        for child in children.iter() {
-            if bodies.contains(child) {
-                return child;
+    // Body projections may be wrapped by a scene grid, a body frame, and a
+    // render/physics holder. Walk the composed hierarchy rather than assuming
+    // the body is an immediate child; API focus targets are stable USD prims,
+    // while the physical CelestialBody component is projected deeper.
+    let mut pending = vec![target];
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for parent in pending.drain(..) {
+            if let Ok(children) = q_children.get(parent) {
+                for child in children.iter() {
+                    if bodies.contains(child) {
+                        return child;
+                    }
+                    next.push(child);
+                }
             }
         }
+        if next.is_empty() {
+            break;
+        }
+        pending = next;
     }
 
     target // Fallback
+}
+
+fn resolve_declared_body(
+    target: Entity,
+    declarations: &Query<&lunco_celestial::CelestialBodyDecl>,
+    bodies: &Query<(Entity, &CelestialBody)>,
+) -> Option<Entity> {
+    let decl = declarations.get(target).ok()?;
+    bodies
+        .iter()
+        .find(|(_, body)| body.ephemeris_id == decl.naif)
+        .map(|(entity, _)| entity)
 }
 
 /// Global visual settings for floating rover name tags.

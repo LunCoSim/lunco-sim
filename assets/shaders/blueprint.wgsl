@@ -79,21 +79,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (mat.transition < 0.5) {
         // --- Lat/Long grid (spherical bodies) — needs UVs.
 #ifdef VERTEX_UVS_A
-        // POLES: equirect longitude degenerates toward |lat| 90° — the
-        // pole-cap tiles compress the whole texture width into a small
-        // vertex fan, which renders as a smeared radial stripe down the
-        // polar meridian. Real polar imagery is nearly longitude-invariant,
-        // so cross-fade to a fixed-longitude sample there. (Both samples are
-        // unconditional: textureSample is illegal in non-uniform flow.)
-        let img = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
-        let img_pole = textureSample(albedo_tex, albedo_smp, vec2(0.5, in.uv.y)).rgb;
-        // Equirectangular pixels become extremely wide in the last few
-        // latitude rows. On the cube-sphere this otherwise appears as a
-        // bright/dark radial strip when a polar tile crosses a face edge.
-        // Start the fixed-longitude blend earlier so the cap is stable before
-        // the projection becomes singular.
-        let pole = smoothstep(0.80, 0.96, abs(in.uv.y * 2.0 - 1.0));
-        base *= mix(img, img_pole, pole);
+        // Globe tiles deliberately unwrap a tile that crosses the equirectangular
+        // anti-meridian (its mesh UV can be just below 0 or just above 1). The
+        // default Bevy image sampler clamps, so sampling that unwrapped value
+        // paints a hard diagonal strip across the globe. Wrap longitude in the
+        // shader after interpolation; this preserves the continuous seam-free
+        // interpolation while keeping ordinary [0,1] tiles unchanged.
+        let globe_uv = vec2(fract(in.uv.x), in.uv.y);
+        // Keep the authored equirectangular image continuous all the way to
+        // the poles. A fixed-longitude pole blend looks mathematically tidy,
+        // but the real raster contains non-uniform polar detail; blending it
+        // into every meridian paints a conspicuous radial wedge on the globe.
+        let img = textureSample(albedo_tex, albedo_smp, globe_uv).rgb;
+        base *= img;
         let ll_coords = in.uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
         let ll_line = min(ll_f.x, ll_f.y);
