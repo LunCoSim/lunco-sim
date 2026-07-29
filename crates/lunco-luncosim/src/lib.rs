@@ -3448,6 +3448,22 @@ pub struct SandboxHeadlessPlugin;
 
 impl Plugin for SandboxHeadlessPlugin {
     fn build(&self, app: &mut App) {
+        // A scenario's presentation intents remain valid in a headless run, but
+        // there is deliberately no workbench/HUD to receive them. Acknowledge
+        // the explicit presentation surface as no-ops so one scenario works in
+        // interactive and acceptance modes; every other unknown command still
+        // fails loudly through the normal reflection dispatcher.
+        app.insert_resource(lunco_scripting::bridge_core::IgnoredScenarioCommands::new(
+            [
+                "SetHint",
+                "SetObjectives",
+                "Spotlight",
+                "ClearSpotlight",
+                "SetTourStep",
+                "ClearTour",
+            ],
+        ));
+
         // Modelica COMPILE CORE only (channels + worker thread + `.mo` asset
         // loader + compile-dispatch systems) — NO egui/viz/workbench. Windowed
         // builds get this transitively via `ModelicaWorkbenchPlugin`; headless

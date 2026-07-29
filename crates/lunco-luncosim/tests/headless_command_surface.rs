@@ -67,3 +67,12 @@ fn a_windowless_host_can_probe_mount_and_shut_down() {
 fn an_unregistered_name_does_not_resolve() {
     assert!(!resolves(&headless_app(), "NoSuchCommandExists"));
 }
+
+#[test]
+fn presentation_commands_are_explicitly_ignored_not_registered() {
+    let policy =
+        lunco_scripting::bridge_core::IgnoredScenarioCommands::new(["SetHint", "SetObjectives"]);
+    assert!(policy.accepts("SetHint"));
+    assert!(policy.accepts("SetObjectives"));
+    assert!(!policy.accepts("NoSuchCommandExists"));
+}
