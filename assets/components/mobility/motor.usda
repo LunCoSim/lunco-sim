@@ -298,25 +298,4 @@ def Xform "Motor" (
         color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
     }
 
-    # --- Optional: thermal behaviour ---
-    # A motor that does not model its temperature is still a motor. This child is where
-    # the state lives when it does: delete the prim and the mechanics are untouched,
-    # which is exactly the separability a `LunCoProgramAPI` child is for (a bolted-on
-    # program, not the part's own engine).
-    #
-    # NOT `realtimeSafe`: it drives no force port, only telemetry. `RoverMotorThermal.mo`
-    # is a per-SIDE bank model, so a vessel wires the side command into `drive_left` /
-    # `drive_right` and reads `temp_left` / `temp_right` back; a per-motor model replaces
-    # only this one asset path.
-    def Scope "Thermal" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
-        doc = "First-order lumped heat balance for the motor bank. Pure telemetry — nothing in the sim acts on the temperature."
-    )
-    {
-        uniform asset info:sourceAsset = @lunco://models/RoverMotorThermal.mo@
-        uniform bool lunco:program:realtimeSafe = false
-
-        float inputs:drive_left.connect = </Motor.inputs:demand>
-        float inputs:drive_right.connect = </Motor.inputs:demand>
-    }
 }

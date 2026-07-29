@@ -161,9 +161,13 @@ pub fn bind_connections(world: &mut World) {
             .insert((entity, port.clone()), failure)
             .is_none();
         if inserted {
+            let authored_edge = world
+                .get::<Name>(edge)
+                .map(Name::as_str)
+                .unwrap_or("runtime-created connection");
             warn!(
-                "[cosim] connection binding failed: endpoint {:?} has no required port '{}'",
-                entity, port
+                "[cosim] connection binding failed: {authored_edge}; endpoint {:?} has no required port '{}'",
+                entity, port,
             );
         }
         world
