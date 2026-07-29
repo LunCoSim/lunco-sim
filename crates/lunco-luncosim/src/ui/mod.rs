@@ -151,13 +151,21 @@ impl Plugin for SandboxUiPlugin {
                 app.add_observer(models_palette::on_scene_click_attach);
                 app.add_systems(Update, models_palette::attach_escape_system);
             })
-            // ModelicaPlugin's AnalyzePerspective registers before SandboxEditUiPlugin's
-            // workspaces; without this nudge we'd boot into the Modelica layout.
-            // Activate the 3D-only View workspace by default.
+            // Build is the default simulation workbench: viewport, inspector,
+            // telemetry catalog, and the default Graphs instance are ready on
+            // launch. View remains the intentionally uncluttered observer mode.
             .add_systems(
                 Startup,
                 |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-                    layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
+                    layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
+                    layout.open_instance(
+                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+                    );
+                    layout.move_instance_to_front(
+                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+                    );
                 },
             )
             .insert_resource(CurrentScenePath::default())

@@ -1780,10 +1780,7 @@ pub fn rewire_usd_connections(
                     // The generic binder has no USD dependency, but its terminal
                     // diagnostics still need to name the authored source and
                     // sink that must be repaired.
-                    Name::new(format!(
-                        "UsdWire {src} -> {}.{sink_conn}",
-                        prim_path.path
-                    )),
+                    Name::new(format!("UsdWire {src} -> {}.{sink_conn}", prim_path.path)),
                     // A derived edge is a PURE CACHE of USD wiring — every peer
                     // re-derives it from the same stage, so it must never carry
                     // network identity. `Local` is not a micro-optimisation here,

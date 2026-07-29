@@ -4,7 +4,7 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -490,6 +490,107 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
     }
 }
 
+/// Place generated components by network topology, not by source-file order.
+///
+/// Causal edges flow from an output to a consumer; acausal connector edges are
+/// bidirectional. We start at sources (or graph roots), breadth-first layer the
+/// graph, then sort each layer by stable composed path. The emitted Modelica
+/// `Placement` annotations let every regular Modelica diagram consumer render
+/// the same legible energy/thermal flow without a generated-network-only UI.
+fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
+    let paths: BTreeSet<_> = network.components.iter().map(|c| c.path.clone()).collect();
+    let mut neighbours: BTreeMap<String, BTreeSet<String>> = paths
+        .iter()
+        .map(|path| (path.clone(), BTreeSet::new()))
+        .collect();
+    let mut incoming: BTreeMap<String, usize> =
+        paths.iter().map(|path| (path.clone(), 0)).collect();
+    for component in &network.components {
+        for target in component.connectors.values().flatten() {
+            if let Some((target, _)) = target.split_once(".connectors:") {
+                if paths.contains(target) {
+                    neighbours
+                        .get_mut(&component.path)
+                        .expect("component path indexed")
+                        .insert(target.to_string());
+                    neighbours
+                        .get_mut(target)
+                        .expect("component path indexed")
+                        .insert(component.path.clone());
+                }
+            }
+        }
+        for target in component.inputs.values() {
+            if let Some((source, _)) = target.split_once(".outputs:") {
+                if paths.contains(source) {
+                    neighbours
+                        .get_mut(source)
+                        .expect("component path indexed")
+                        .insert(component.path.clone());
+                    *incoming
+                        .get_mut(&component.path)
+                        .expect("component path indexed") += 1;
+                }
+            }
+        }
+    }
+    let mut roots: Vec<_> = network
+        .components
+        .iter()
+        .filter(|component| {
+            incoming[&component.path] == 0
+                && (component.model_class.contains("Battery")
+                    || component.model_class.contains("Solar")
+                    || component.model_class.contains("Source"))
+        })
+        .map(|component| component.path.clone())
+        .collect();
+    if roots.is_empty() {
+        roots = network
+            .components
+            .iter()
+            .filter(|component| incoming[&component.path] == 0)
+            .map(|component| component.path.clone())
+            .collect();
+    }
+    if roots.is_empty() {
+        roots.extend(paths.iter().take(1).cloned());
+    }
+    roots.sort();
+    let mut rank = BTreeMap::new();
+    let mut queue: VecDeque<_> = roots.into_iter().map(|path| (path, 0usize)).collect();
+    while let Some((path, layer)) = queue.pop_front() {
+        if rank.contains_key(&path) {
+            continue;
+        }
+        rank.insert(path.clone(), layer);
+        for neighbour in &neighbours[&path] {
+            if !rank.contains_key(neighbour) {
+                queue.push_back((neighbour.clone(), layer + 1));
+            }
+        }
+    }
+    let fallback = rank.values().copied().max().unwrap_or(0) + 1;
+    for path in paths {
+        rank.entry(path).or_insert(fallback);
+    }
+    let mut layers: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for (path, layer) in rank {
+        layers.entry(layer).or_default().push(path);
+    }
+    let mut placements = BTreeMap::new();
+    for (layer, paths) in layers {
+        let count = paths.len() as i32;
+        for (row, path) in paths.into_iter().enumerate() {
+            placements.insert(
+                path,
+                (-100 + layer as i32 * 55, (count - 1 - row as i32 * 2) * 22),
+            );
+        }
+    }
+    placements
+}
+
 /// Emit one deterministic Modelica wrapper for a composed network scope.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
     let model_name = modelica_identifier(model_name);
@@ -509,6 +610,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         .iter()
         .map(|(boundary, source)| (source.as_str(), boundary.as_str()))
         .collect();
+    let placements = network_layout(network);
 
     for input in &network.inputs {
         source.push_str(&format!("  input Real {};\n", modelica_identifier(input)));
@@ -535,7 +637,10 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             }
             source.push(')');
         }
-        source.push_str(";\n");
+        let (x, y) = placements[&component.path];
+        source.push_str(&format!(
+            " annotation(Placement(transformation(origin = {{{x}, {y}}}, extent = {{{{-10, -10}}, {{10, 10}}}})));\n"
+        ));
     }
 
     source.push_str("equation\n");
@@ -850,7 +955,10 @@ pub fn project_domain_islands(
 pub fn sync_generated_network_documents(
     mut generated: Query<
         (Entity, &GeneratedModelicaSource, &mut ModelicaModel),
-        Or<(Added<GeneratedModelicaSource>, Changed<GeneratedModelicaSource>)>,
+        Or<(
+            Added<GeneratedModelicaSource>,
+            Changed<GeneratedModelicaSource>,
+        )>,
     >,
     mut documents: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
 ) {
@@ -860,18 +968,17 @@ pub fn sync_generated_network_documents(
         if source.source.is_empty() {
             continue;
         }
-        let document = if !model.document.is_unassigned()
-            && documents.host(model.document).is_some()
-        {
-            model.document
-        } else {
-            documents.allocate_with_origin(
-                source.source.clone(),
-                lunco_doc::DocumentOrigin::Bundled {
-                    filename: format!("generated/{}.mo", model.model_name),
-                },
-            )
-        };
+        let document =
+            if !model.document.is_unassigned() && documents.host(model.document).is_some() {
+                model.document
+            } else {
+                documents.allocate_with_origin(
+                    source.source.clone(),
+                    lunco_doc::DocumentOrigin::Bundled {
+                        filename: format!("generated/{}.mo", model.model_name),
+                    },
+                )
+            };
         documents.checkpoint_source(document, source.source.clone());
         documents.link(entity, document);
         model.document = document;

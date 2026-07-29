@@ -1307,9 +1307,8 @@ def Xform "RockerBogie" (
     }
 
     # --- Thermal: do the motors have temperatures ---------------------------
-    # `none` is EMPTY. `basic` composes the RoverMotorThermal.mo per-side heat
-    # balance onto the root: pure telemetry (`temp_left`/`temp_right`, kelvin,
-    # readable/watchable ports), nothing acts on it — same choose-a-component
+    # `none` is EMPTY. `basic` composes each motor's solved electrical loss into
+    # a ThermalMass/Radiator network in the generated Electrical model.
     # shape as `power`.
     variantSet "thermal" = {
         "none" {

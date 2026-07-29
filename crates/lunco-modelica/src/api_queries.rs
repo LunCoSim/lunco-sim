@@ -1135,7 +1135,8 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
                 return err_doc_not_found(doc_id);
             };
             let document = host.document();
-            if !matches!(document.origin(), DocumentOrigin::Bundled { filename } if filename.starts_with("generated/")) {
+            if !matches!(document.origin(), DocumentOrigin::Bundled { filename } if filename.starts_with("generated/"))
+            {
                 return err_doc_not_found(doc_id);
             }
             return ApiResponse::ok(serde_json::json!({

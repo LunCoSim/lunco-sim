@@ -667,16 +667,9 @@ impl Perspective for BuildPerspective {
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        layout.set_side_browser_tabs(vec![
-            PanelId("entity_list"),
-            PanelId("spawn_palette"),
-            PanelId("tools_palette"),
-            // Capture the current view as a Camera prim (doc 50).
-            PanelId("cinematic_tools"),
-            // Optional — registered by the rover binary; filtered out
-            // in other apps.
-            PanelId("rover_models"),
-        ]);
+        // Build is the simulation workbench: keep the mission-oriented
+        // telemetry catalog visible while editing and running the scene.
+        layout.set_side_browser(Some(PanelId("telemetry_browser")));
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),
