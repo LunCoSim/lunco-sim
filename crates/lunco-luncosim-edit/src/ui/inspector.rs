@@ -816,8 +816,7 @@ fn camera_projection_section(
                 // reverting to an ECS-only override.
                 if world.get::<UsdPrimPath>(entity).is_some() {
                     const VERTICAL_APERTURE_MM: f32 = 15.2908;
-                    let focal_length =
-                        VERTICAL_APERTURE_MM / (2.0 * (authored_fov * 0.5).tan());
+                    let focal_length = VERTICAL_APERTURE_MM / (2.0 * (authored_fov * 0.5).tan());
                     apply_usd_attribute_change(
                         world,
                         entity,
