@@ -1700,7 +1700,10 @@ pub fn sync_waypoint_path_mesh(
                     ground + PATH_LIFT as f64,
                     position.0.z,
                 ));
-                Some((entity, lunco_core::coords::world_to_grid_local(target, grid_world, grid)))
+                Some((
+                    entity,
+                    lunco_core::coords::world_to_grid_local(target, grid_world, grid),
+                ))
             })
             .collect::<Vec<_>>()
     } else {

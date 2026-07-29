@@ -100,7 +100,10 @@ const MAX_IMAGERY_ATTEMPTS: u8 = 3;
 /// Globe tile UVs are intentionally unwrapped across the anti-meridian; keeping
 /// that continuity until texture sampling prevents a diagonal seam in the
 /// interpolated triangle.
-fn load_body_image(asset_server: &AssetServer, path: impl Into<bevy::asset::AssetPath<'static>>) -> Handle<Image> {
+fn load_body_image(
+    asset_server: &AssetServer,
+    path: impl Into<bevy::asset::AssetPath<'static>>,
+) -> Handle<Image> {
     asset_server
         .load_builder()
         .with_settings(|settings: &mut ImageLoaderSettings| {

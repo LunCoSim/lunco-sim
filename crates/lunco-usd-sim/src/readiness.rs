@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 use lunco_modelica::ModelicaModel;
-use lunco_readiness::{ReadinessRegistry, ReadinessTicket, Subject, kinds};
+use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
 use lunco_cosim::SimComponent;

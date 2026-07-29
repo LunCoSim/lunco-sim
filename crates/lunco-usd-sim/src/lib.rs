@@ -55,7 +55,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use lunco_usd_avian::ShouldBeDynamic;
-use lunco_usd_bevy::{CanonicalStages, UsdRead, instance_key};
+use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -69,7 +69,7 @@ use lunco_controller::get_avatar_input_map;
 use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_cosim::{SimConnection, ports::PORT_NAME};
+use lunco_cosim::{ports::PORT_NAME, SimConnection};
 use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
@@ -1977,7 +1977,10 @@ fn setup_physical_wheel(
         scale: existing_tf.scale,
     };
 
-    let cyl = Collider::cylinder(radius as f64, (radius * 0.5) as f64);
+    // Keep the rigid collider identical to the authored cylinder that produced
+    // the visual mesh. `Collider::cylinder` takes the full height; deriving a
+    // width from radius made the collider wider/narrower than the tire.
+    let cyl = Collider::cylinder(params.radius, params.height);
     let collider = if wheel_axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {
         cyl
     } else {
