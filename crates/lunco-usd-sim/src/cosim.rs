@@ -1266,7 +1266,17 @@ fn settle_binding_epoch(
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
     wheels: Query<(), With<crate::PendingWheelWiring>>,
     differentials: Query<(), With<crate::PendingDifferential>>,
-    models: Query<Option<&SimComponent>, With<UsdSourcedCosim>>,
+    // `UsdSourcedCosim` marks the USD projection domain, not a solver.  It is
+    // intentionally also present on native endpoints such as a revolute joint
+    // so they can expose ports through the same scene surface.  A joint has no
+    // `SimComponent` by design, and treating that absence as a compiling model
+    // leaves the whole world held forever after its physical admission.
+    //
+    // Solver readiness therefore ranges over actual `SimComponent` owners only.
+    // Native endpoints have dedicated readiness facts above (`PendingUsdJoint`,
+    // wheel wiring, and differential wiring), so omitting them here does not
+    // weaken the binding transaction.
+    models: Query<&SimComponent, With<UsdSourcedCosim>>,
     connections: Query<(), With<SimConnection>>,
     mut dirty: ResMut<BindingEpochDirty>,
     mut revision: ResMut<lunco_cosim::BindingRevision>,
@@ -1275,12 +1285,9 @@ fn settle_binding_epoch(
     mut commands: Commands,
 ) {
     dirty.0 = false;
-    let models_terminal = models.iter().all(|model| {
-        !matches!(
-            model.map(|model| &model.status),
-            None | Some(SimStatus::Compiling)
-        )
-    });
+    let models_terminal = models
+        .iter()
+        .all(|model| !matches!(model.status, SimStatus::Compiling));
     let settled = awaiting.is_empty()
         && joints.is_empty()
         && wheels.is_empty()
