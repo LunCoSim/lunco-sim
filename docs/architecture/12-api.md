@@ -14,10 +14,10 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 
 ```bash
 # Default port (4101)
-cargo run --bin luncosim -- --api
+target/debug/luncosim --api
 
 # Custom port
-cargo run --bin luncosim -- --api 8080
+target/debug/luncosim --api 8080
 ```
 
 The `--api` flag enables the HTTP server. Without it, the sim runs normally with no network exposure.

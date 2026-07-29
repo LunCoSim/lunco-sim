@@ -1651,7 +1651,13 @@ pub fn sync_waypoint_path_mesh(
     q_grids_only: Query<&big_space::prelude::Grid>,
     mut spatial: ParamSet<(
         Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-        Query<(&lunco_usd_sim::marker::WaypointMarker, &mut Transform)>,
+        Query<(
+            Entity,
+            &lunco_usd_sim::marker::WaypointMarker,
+            &mut big_space::grid::cell::CellCoord,
+            &mut Transform,
+        )>,
+        Query<Entity, With<lunco_usd_sim::marker::WaypointMarker>>,
     )>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1662,25 +1668,51 @@ pub fn sync_waypoint_path_mesh(
     // root on the same oracle used by the route ribbon and the collider. The
     // dome/zone are authored above that root, so moving the root fixes both the
     // visible pin and its trigger without changing mission coordinates.
-    if surface.has_terrain() {
-        for (_, mut transform) in spatial.p1().iter_mut() {
-            let p = transform.translation.as_dvec3();
-            if let Some(ground) = surface.height_at(lunco_core::coords::GridPos(p)) {
-                let target_y = ground as f32 + PATH_LIFT;
-                if (transform.translation.y - target_y).abs() > 1.0e-3 {
-                    transform.translation.y = target_y;
-                }
-            }
-        }
-    }
-    let q_spatial = spatial.p0();
     let Some((grid_entity, grid)) = q_grids.iter().next() else {
         return;
     };
-    let grid_world =
+    let grid_world = {
+        let q_spatial = spatial.p0();
         lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
-            .unwrap_or(lunco_core::coords::GridPos(DVec3::ZERO));
+            .unwrap_or(lunco_core::coords::GridPos(DVec3::ZERO))
+    };
 
+    // Waypoint transforms are grid-local, while the surface oracle returns a
+    // grid-absolute elevation. Compute the absolute target first, then split it
+    // back into the marker's CellCoord + local Transform. Writing an absolute
+    // elevation directly into Transform was the reason markers stayed below the
+    // rendered terrain at the lunar site.
+    let waypoint_updates = if surface.has_terrain() {
+        let waypoint_entities: Vec<Entity> = spatial.p2().iter().collect();
+        let q_spatial = spatial.p0();
+        waypoint_entities
+            .into_iter()
+            .filter_map(|entity| {
+                let position = lunco_core::coords::world_position(
+                    entity,
+                    &q_parents,
+                    &q_grids_only,
+                    &q_spatial,
+                )?;
+                let ground = surface.height_at(position)?;
+                let target = lunco_core::coords::GridPos(DVec3::new(
+                    position.0.x,
+                    ground + PATH_LIFT as f64,
+                    position.0.z,
+                ));
+                Some((entity, lunco_core::coords::world_to_grid_local(target, grid_world, grid)))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    for (entity, (cell, local)) in waypoint_updates {
+        if let Ok((_, _, mut marker_cell, mut transform)) = spatial.p1().get_mut(entity) {
+            *marker_cell = cell;
+            transform.translation = local;
+        }
+    }
+    let q_spatial = spatial.p0();
     // Existing ribbons, keyed by (vessel, part).
     let mut existing: std::collections::HashMap<(Entity, PathPart), (Entity, u64)> =
         std::collections::HashMap::new();

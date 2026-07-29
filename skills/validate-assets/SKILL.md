@@ -40,7 +40,7 @@ file), [`use-asset-library`](../use-asset-library/SKILL.md) (get it discovered),
 ### CLI — no app, no window, no GPU
 
 ```bash
-cargo run -p lunco-luncosim --bin luncosim -- --validate \
+target/debug/luncosim --validate \
   assets/models/LunCo/Electrical/Battery.mo \
   assets/vessels/rovers/skid_rover.usda \
   assets/shaders/rover_hull.wgsl

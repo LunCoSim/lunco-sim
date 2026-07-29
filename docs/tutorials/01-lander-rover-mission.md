@@ -23,7 +23,7 @@ menu in the luncosim.
 You can run your work at any point with:
 
 ```
-cargo run -p lunco-luncosim --bin luncosim -- --api 4101 --scene scenes/luncosim/my_mission.usda
+target/debug/luncosim --api 4101 --scene scenes/luncosim/my_mission.usda
 ```
 
 ---

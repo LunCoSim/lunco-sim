@@ -64,6 +64,9 @@ one directly when doing that kind of task by hand.
 
 ## Cross-cutting conventions (baked into every skill)
 
+- **Use the built production binary**: build in the main worktree, then invoke
+  `target/debug/luncosim` directly for validation, tests, and launches. Do not
+  use the former `sandbox` name or substitute `cargo run` for the built binary.
 - **Always launch luncosim with its HTTP API**: `target/debug/luncosim --api 4101` (use
   another explicit free port when needed). The MCP bridge's old default (3000) is stale;
   every controllable, visual, realtime, or scene-test luncosim process must carry
@@ -78,7 +81,7 @@ one directly when doing that kind of task by hand.
   doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
   silently. See [**usd-projection**](usd-projection/SKILL.md).
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
-- **Validate before you run.** `luncosim -- --validate <files…>` parses assets in
+- **Validate before you run.** `target/debug/luncosim --validate <files…>` parses assets in
   seconds with no GPU and catches broken references, missing wheel attrs and
   `if`/`when` in Modelica — **and runs the authored lint rules**, which is what
   reports a part that would fall off a vehicle. On a *loaded* scene use the verb:

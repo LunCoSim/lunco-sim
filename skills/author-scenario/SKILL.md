@@ -169,9 +169,29 @@ per-sample table — a run with no sample rows proves nothing.
 Run it headlessly:
 
 ```
-cargo run -q -p lunco-luncosim --bin luncosim -j 4 -- \
-    test --scene scenes/tests/landing_legs.usda --max-ticks 500
+target/debug/luncosim test \
+    --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
+
+Build `target/debug/luncosim` in the main worktree before running gates. Test
+commands consume that exact build; they do not use `cargo run` or the former
+`sandbox` executable name.
+
+### Keep test hooks below Rhai's expression-complexity ceiling
+
+Treat `on_tick` as a dispatcher, not as the whole mission:
+
+- one helper per phase;
+- one sampler and one accumulator;
+- a final verdict/report helper;
+- short structured log rows instead of long concatenation expressions.
+
+Hook-bound `this` is not available inside helpers. In the production host,
+ordinary map arguments are passed by value and script-defined map helpers do not
+resolve as mutable methods. Therefore phase helpers should be reducers: accept
+an explicit state map, return the updated map, and let `on_tick` copy the
+returned keys into `this`. This both controls parser complexity and makes phase
+logic independently testable.
 
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
 
@@ -386,7 +406,7 @@ rovers being wrong together.
 
 **How to run.**
 ```bash
-cargo run -j2 --bin luncosim -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+target/debug/luncosim --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
 ```
 The `LunCoProgramAPI` prim in the scene auto-runs the script on load; the run takes
 ~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:

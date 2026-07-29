@@ -81,30 +81,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 #ifdef VERTEX_UVS_A
         // Globe tiles deliberately unwrap a tile that crosses the equirectangular
         // anti-meridian (its mesh UV can be just below 0 or just above 1). The
-        // default Bevy image sampler clamps, so sampling that unwrapped value
-        // paints a hard diagonal strip across the globe. Wrap longitude in the
-        // shader after interpolation; this preserves the continuous seam-free
-        // interpolation while keeping ordinary [0,1] tiles unchanged.
-        let globe_uv = vec2(fract(in.uv.x), in.uv.y);
+        // imagery sampler uses repeat addressing, so keep that unwrapped value
+        // through interpolation and let the sampler perform the wrap. Applying
+        // `fract` here would reintroduce a discontinuity at x=1 inside a triangle,
+        // which is the diagonal imagery strip seen on Earth.
+        let globe_uv = in.uv;
         // The longitude coordinate is singular at both poles. A cube-sphere
         // triangle fan therefore interpolates several unrelated equirectangular
         // columns into a visible radial wedge. Collapse only the polar caps to
         // one longitude; below the cap the authored imagery remains untouched.
         let img = textureSample(albedo_tex, albedo_smp, globe_uv).rgb;
-        // The raster is equirectangular and its two edge columns represent the
-        // same anti-meridian. Feather both sides over a few texels before the
-        // cube-sphere interpolant reaches the seam; otherwise a clamp-addressed
-        // sampler turns the edge discontinuity into a long diagonal stripe.
-        let seam_left = textureSample(albedo_tex, albedo_smp, vec2(0.005, globe_uv.y)).rgb;
-        let seam_right = textureSample(albedo_tex, albedo_smp, vec2(0.995, globe_uv.y)).rgb;
-        let left_weight = 1.0 - smoothstep(0.0, 0.03, globe_uv.x);
-        let right_weight = smoothstep(0.97, 1.0, globe_uv.x);
-        let seam_img = mix(mix(img, seam_right, left_weight), seam_left, right_weight);
         let north_cap = 1.0 - smoothstep(0.0, 0.18, globe_uv.y);
         let south_cap = smoothstep(0.82, 1.0, globe_uv.y);
         let pole_img = textureSample(albedo_tex, albedo_smp, vec2(0.5, globe_uv.y)).rgb;
         let cap_weight = max(north_cap, south_cap);
-        let stable_img = mix(seam_img, pole_img, cap_weight);
+        let stable_img = mix(img, pole_img, cap_weight);
         base *= stable_img;
         let ll_coords = in.uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);

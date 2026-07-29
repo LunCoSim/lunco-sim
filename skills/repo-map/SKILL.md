@@ -55,8 +55,9 @@ When those disagree with anything here, they win.
 Launch (workspace `default-members` make a bare `cargo run` ambiguous — **always pass a target**):
 
 ```bash
-cargo run --release -p lunco-luncosim --bin luncosim
-cargo run --release -p lunco-luncosim --bin luncosim -- --api 4101
+cargo build -p lunco-luncosim --bin luncosim
+target/debug/luncosim
+target/debug/luncosim --api 4101
 cargo run -p lunco-luncosim-server
 cargo run --bin lunica
 ```
@@ -120,7 +121,9 @@ Use this to jump to the right one; read the index for the full responsibility.
 
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
 - **`lunica` ≠ the main sim.** It's the Modelica workbench (crate `lunco-modelica`). The flagship is `luncosim`; the physics bed is `luncosim`.
-- **`cargo run` alone is ambiguous** — `default-members` are `lunco-luncosim` and `lunco-modelica`. Always `-p <crate>` and/or `--bin <name>`.
+- **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
+  then execute `target/debug/luncosim` directly. Bare `cargo run` is also
+  ambiguous because the default members are `lunco-luncosim` and `lunco-modelica`.
 - **`lunco-luncosim` produces the `luncosim` binary** (crate name ≠ binary name); `luncosim-server` is a *separate crate* (`lunco-luncosim-server`) that exists only to default to headless.
 - **API port is 4101** everywhere — not 3000 (a stale MCP default) and not 3001.
 - **Don't `pkill`** a running app to restart — use the API `Exit` command (see `test-via-api`).

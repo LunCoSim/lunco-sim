@@ -312,7 +312,7 @@ attribute is named in seconds rather than at spawn time
 ([`validate-assets`](../validate-assets/SKILL.md)):
 
 ```bash
-cargo run -p lunco-luncosim --bin luncosim -- --validate assets/vessels/rovers/my_rover.usda
+target/debug/luncosim --validate assets/vessels/rovers/my_rover.usda
 ```
 
 **2. Drivetrain parity regression** — the guard that the two realizations stay
@@ -323,7 +323,7 @@ matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 12 s → throttle + steer 6 s.
 
 ```bash
-RUSTC_WRAPPER=sccache cargo run -j4 --bin luncosim -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
+target/debug/luncosim --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL' target/parity.log
 ```
 

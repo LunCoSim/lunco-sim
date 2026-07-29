@@ -263,7 +263,7 @@ There is no standalone regenerate command.
 ## Validate before you run
 
 ```bash
-cargo run -p lunco-luncosim --bin luncosim -- --validate assets/vessels/rovers/my_rover.usda
+target/debug/luncosim --validate assets/vessels/rovers/my_rover.usda
 ```
 
 Seconds, no GPU, no app. Composes the whole reference closure — so it catches

@@ -153,7 +153,7 @@ instance (or only lunica) up, the same checks run as a one-shot CLI that builds
 no app at all:
 
 ```bash
-cargo run -p lunco-luncosim --bin luncosim -- --validate assets/models/LunCo/Electrical/Battery.mo
+target/debug/luncosim --validate assets/models/LunCo/Electrical/Battery.mo
 ```
 
 Full runbook — per-extension checks, exit codes, and the CWD path-resolution

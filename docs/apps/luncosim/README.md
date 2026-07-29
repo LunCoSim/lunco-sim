@@ -34,7 +34,7 @@ The luncosim has two workspaces, switched via the tabs at the top of the window:
 ## CLI Usage
 
 ```bash
-cargo run --bin luncosim -- [FLAGS]
+target/debug/luncosim [FLAGS]
 ```
 
 ### Flags

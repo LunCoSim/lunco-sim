@@ -29,7 +29,7 @@ workbench. The API server only exists when you pass `--api`. Default port is
 | App | Launch | Modelica surface |
 |---|---|---|
 | **`lunica`** | `cargo run --bin lunica -- --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
-| **`luncosim`** | `cargo run --release -p lunco-luncosim --bin luncosim -- --api 4101` | Physics test bed; Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
+| **`luncosim`** | `target/debug/luncosim --api 4101` | Mission simulator; Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. Build the binary in the main worktree first. |
 | **`luncosim-server`** | `cargo run -p lunco-luncosim-server -- --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
 
 **In `luncosim`/`luncosim`, switch to the Modelica view before plotting/screenshotting.**

@@ -31,6 +31,8 @@ Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
 - Test scenes are under `assets/scenes/tests/`, scenarios under
   `assets/scenarios/tests/`. A green gate needs a negative fixture and a real verdict.
 - Use only the production `luncosim` binary for scene tests and visual validation.
+  Build it in this worktree, then invoke `target/debug/luncosim` directly; do not
+  use an old `sandbox` executable name or hide a rebuild behind `cargo run`.
   Full scene reload is supported; partial object/reference reload remains TODO.
 - Establish a behaviour baseline before physics/vehicle changes and rerun it.
   Capture real exit codes and inspect verdicts.

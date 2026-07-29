@@ -536,7 +536,7 @@ that is its own scaled mesh) is separate, and a proxy inherits the same frame.
 ### Catch it before the screenshot
 
 ```bash
-cargo run -q -p lunco-luncosim --bin luncosim -j 2 -- --validate assets/vessels/rovers/skid_rover.usda
+target/debug/luncosim --validate assets/vessels/rovers/skid_rover.usda
 ```
 
 ```
@@ -584,8 +584,8 @@ from the assets rather than left looking meaningful.
 its exit code comes from a telemetry verdict:
 
 ```
-cargo run -q -p lunco-luncosim --bin luncosim -j 4 -- \
-    test --scene scenes/tests/landing_legs.usda --max-ticks 500
+target/debug/luncosim test \
+    --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
 A physics change is not done until a scene runs clean: **zero** `left the

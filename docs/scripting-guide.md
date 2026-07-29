@@ -35,7 +35,7 @@ free and stays decoupled from physics. Scripts are **host-authoritative**
 You'll need a running app with its API on, e.g. the luncosim:
 
 ```sh
-cargo run -p lunco-luncosim --bin luncosim -- --api 3000
+target/debug/luncosim --api 4101
 ```
 
 ## 1. Mental model

@@ -60,20 +60,18 @@ cd lunco-sim
 Then launch the entry point that fits your goal (each also builds for the browser via `scripts/build_web.sh`):
 
 ### 1. LunCoSim — the Full Mission Simulator
-The flagship: celestial bodies, ephemeris, solar-system-scale precision, and the complete flight-software / robotics / avatar stack.
+The flagship mission simulator includes celestial bodies, ephemeris, robotics,
+physics, avatar tooling, and the collaborative USD scene.
 
 ```bash
-cargo run --release -p luncosim
+cargo build -p lunco-luncosim --bin luncosim
+target/debug/luncosim
 ```
 
-### 2. The Physics Sandbox
-Validate robotics, suspension, and environment interactions in a collaborative 3D scene (windowed, or headless with `--no-ui`).
+After building, use `target/debug/luncosim` directly for launches, validation,
+and scene tests. The former sandbox executable name is retired.
 
-```bash
-cargo run --release -p lunco-luncosim --bin luncosim
-```
-
-### 3. Lunica — the Engineering Workbench
+### 2. Lunica — the Engineering Workbench
 Focus on Modelica modeling, schematic diagramming, and subsystem analysis.
 
 ```bash
