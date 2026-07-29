@@ -2963,6 +2963,8 @@ mod tests {
         let mut model = dispatched_but_unsolved();
         assert_eq!(modelica_status(&model), SimStatus::Compiling);
         model.variables.insert("soc_out".into(), 1.0);
+        model.is_compiled = true;
+        model.current_time = lunco_core::SECS_PER_TICK;
         assert_eq!(modelica_status(&model), SimStatus::Running);
         model.paused = true;
         assert_eq!(modelica_status(&model), SimStatus::Paused);
