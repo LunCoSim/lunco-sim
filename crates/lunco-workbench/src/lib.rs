@@ -261,12 +261,13 @@ fn running_app_name() -> &'static str {
                 // A stripped/unreadable `/proc/self/exe` is possible; the crate
                 // name is a truthful fallback, unlike a hardcoded app name.
                 .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string())
+                .replace("sandbox", "LunCoSim")
         }
         // On the web there is no executable path; the bundle name is the
         // closest true answer and is set by the build script per app.
         #[cfg(target_arch = "wasm32")]
         {
-            env!("CARGO_PKG_NAME").to_string()
+            "LunCoSim".to_string()
         }
     })
 }

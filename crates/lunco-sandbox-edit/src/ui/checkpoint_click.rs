@@ -1613,6 +1613,20 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
     Some(mesh)
 }
 
+/// Raise interpolated route samples to the analytic surface when a smooth leg
+/// crosses relief between two authored waypoints.  Waypoint endpoints are
+/// placed on the ground, but Catmull–Rom samples can dip through a crater rim
+/// or ridge; the ribbon must follow the same height oracle as placement and
+/// terrain rendering rather than assuming endpoint heights describe the whole
+/// segment.
+fn follow_surface(points: &mut [DVec3], surface: &lunco_terrain_surface::GridSurfaceQuery) {
+    for point in points {
+        if let Some(ground) = surface.height_at(lunco_core::coords::GridPos(*point)) {
+            point.y = point.y.max(ground);
+        }
+    }
+}
+
 /// Spawn/refresh each vessel's route ribbon as REAL scene geometry.
 ///
 /// This replaces the old egui screen-space line stroke, which had no depth and so
@@ -1636,6 +1650,7 @@ pub fn sync_waypoint_path_mesh(
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    surface: lunco_terrain_surface::GridSurfaceQuery,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
@@ -1675,7 +1690,13 @@ pub fn sync_waypoint_path_mesh(
         // Focus is part of the signature: it changes the ribbon's colour, so a
         // selection change has to rebuild it (the mesh is only rebuilt when this
         // number moves).
-        let signature = route_signature(&targets, smooth, reached) ^ (focused as u64);
+        // Terrain may finish streaming after the route binding.  Include its
+        // availability in the change key so a ribbon first created during the
+        // loading frame is rebuilt once the analytic surface can clamp its
+        // interpolated samples.
+        let signature = route_signature(&targets, smooth, reached)
+            ^ (focused as u64)
+            ^ ((surface.has_terrain() as u64) << 1);
 
         // All control points, in order, each tagged with whether it's been driven.
         let pts: Vec<(DVec3, bool)> = targets
@@ -1745,6 +1766,12 @@ pub fn sync_waypoint_path_mesh(
                     path.push(first); // seal the loop
                 }
             }
+
+            // The route's control points are ground-authored, but the smooth
+            // interpolation between them is not.  Clamp every generated sample
+            // against the composed DEM before the ribbon receives its visual
+            // clearance, so crater crossings cannot draw through the ground.
+            follow_surface(&mut path, &surface);
 
             let anchor = path[0];
             let Some(mesh) = build_ribbon_mesh(&path, anchor) else {

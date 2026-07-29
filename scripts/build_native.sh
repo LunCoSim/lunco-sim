@@ -326,6 +326,44 @@ $binary.exe %*
 EOF
 }
 
+# Stage the supplied desktop icon layouts into the distributable package and
+# emit the Linux desktop entry from the same canonical LunCoSim name. The
+# source files live under assets/icons so ordinary asset packaging also keeps
+# them available to the runtime and to downstream bundle tools.
+stage_app_icons() {
+    local dir="$1" binary="$2" platform="$3"
+    [ "$binary" = "sandbox" ] || return 0
+    local source="$PROJECT_DIR/assets/icons"
+    if [ ! -d "$source" ]; then
+        warn "No sandbox icon source at $source"
+        return 0
+    fi
+    mkdir -p "$dir/icons"
+    case "$platform" in
+        *linux*)
+            sync_dir "$source/linux" "$dir/icons/linux"
+            sync_dir "$source/svg" "$dir/icons/svg"
+            cat > "$dir/LunCoSim.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=LunCoSim
+Comment=LunCoSim lunar simulation sandbox
+Exec=./run.sh
+Icon=luncosim
+Terminal=false
+Categories=Science;Education;
+EOF
+            ;;
+        *darwin*)
+            cp -f "$source/macos/luncosim.icns" "$dir/LunCoSim.icns"
+            ;;
+        *windows*)
+            cp -f "$source/windows/luncosim.ico" "$dir/LunCoSim.ico"
+            ;;
+    esac
+    info "Sandbox app identity/icons staged for $platform"
+}
+
 # The Quadro K2100M on the reported Windows laptop loses its Vulkan device,
 # while its DX12 backend completes the same scene load. Keep this launcher
 # separate from run.bat: Vulkan remains the default for machines where it is
@@ -676,6 +714,8 @@ if [ "$NO_ASSETS" -eq 0 ] && [ -d "$PROJECT_DIR/assets" ]; then
 else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
+
+stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE"
 
 # Copy docs/, skills/, + AGENTS.md so end users have the architecture docs,
 # tutorials, skills (project-level agent skills), and agent guidelines

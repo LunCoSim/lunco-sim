@@ -544,7 +544,8 @@ generate_bindings() {
         # Fill the shared template's per-app placeholders:
         #   __LC_BUNDLE__ → cargo bin / wasm-bindgen out-name (e.g. lunica)
         #   __LC_NAME__   → display name (bundle, first letter upper-cased)
-        local app_name="$(tr '[:lower:]' '[:upper:]' <<< "${binary:0:1}")${binary:1}"
+        local app_name="${binary}"
+        [ "$binary" = "sandbox" ] && app_name="LunCoSim"
         sed -i "s/__LC_BUNDLE__/$binary/g; s|__LC_NAME__|$app_name|g" "$dist_dir/index.html"
         info "Filled template: bundle=$binary, name=$app_name"
         # Inject the actual uncompressed WASM size so the loading UI

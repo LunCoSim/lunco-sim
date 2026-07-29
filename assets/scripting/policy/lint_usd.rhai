@@ -534,6 +534,15 @@ fn dynamic_body_no_collider(facts) {
     let out = [];
     for b in facts.bodies {
         if !b.simulated || b.kinematic { continue; }
+        // A jointed colliderless link is a valid articulated mechanism part. The
+        // constraint, not world contact, is what keeps it with its host. This is
+        // the same topology the loader consumes, so do not report it as a free
+        // body here.
+        if b.jointed { continue; }
+        // Raycast wheels are deliberately not rigid-body/collider shapes: their
+        // suspension cast and analytic tyre model provide the contact. The
+        // PhysxVehicleWheelAPI is the authored fact that selects that realization.
+        if schemas_of(facts, b.path).contains("PhysxVehicleWheelAPI") { continue; }
         if b.subtree_collider { continue; }
         let m = "is a dynamic body with no PhysicsCollisionAPI in its subtree —";
         m += " it cannot touch anything and will accelerate out of the scene";

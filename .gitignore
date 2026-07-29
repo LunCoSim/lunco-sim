@@ -47,3 +47,5 @@ graphify-out/
 .tmpdir/
 *.png
 *.glb
+assets/icons/macos/luncosim.icns
+assets/icons/windows/luncosim.ico

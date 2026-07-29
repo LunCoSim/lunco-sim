@@ -609,8 +609,8 @@ fn default_plugins_with_profile(
             }
         }
         let title = match api_port {
-            Some(p) => format!("sandbox — Listening on {p}"),
-            None => "sandbox".to_string(),
+            Some(p) => format!("LunCoSim — Listening on {p}"),
+            None => "LunCoSim".to_string(),
         };
         let present = if no_vsync || networked {
             bevy::window::PresentMode::Mailbox
