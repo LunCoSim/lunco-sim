@@ -114,6 +114,7 @@ fn lint_usd(facts) {
     for f in connector_requires_modelica(facts) { out.push(f); }
     for f in connector_requires_network_scope(facts) { out.push(f); }
     for f in nested_body_no_joint(facts) { out.push(f); }
+    for f in nested_link_node(facts) { out.push(f); }
     for f in joint_target_not_a_body(facts) { out.push(f); }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
     for f in mass_outside_any_body(facts) { out.push(f); }
@@ -130,6 +131,43 @@ fn lint_usd(facts) {
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
     for f in electrical_island_reference_device(facts) { out.push(f); }
     out
+}
+
+/// A link endpoint must be the single physical phase centre of its assembly.
+/// A nested endpoint is always a duplicate declaration and would create a
+/// spurious short link between the parent and child nodes.
+fn nested_link_node(facts) {
+    let out = [];
+    for prim in facts.prims {
+        if !is_link_prim(prim) { continue; }
+        if has_link_parent(prim.parent, facts) {
+            let issue = nested_link_finding(prim.path);
+            out.push(issue);
+        }
+    }
+    out
+}
+
+fn is_link_prim(prim) {
+    prim.schemas.contains("LunCoLinkAPI")
+}
+
+fn has_link_parent(path, facts) {
+    for prim in facts.prims {
+        if prim.path == path {
+            return is_link_prim(prim);
+        }
+    }
+    false
+}
+
+fn nested_link_finding(path) {
+    finding(
+        "nested-link-node",
+        "error",
+        path,
+        "Link endpoint is nested below another link endpoint; keep only the physical phase-centre endpoint (usually the aperture) to prevent a self-link.",
+    )
 }
 
 /// OpenUSD permits an omitted `metersPerUnit` and defines its fallback as

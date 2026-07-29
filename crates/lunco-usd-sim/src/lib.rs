@@ -199,6 +199,9 @@ impl Plugin for UsdSimPlugin {
                     project_celestial_comms_prims
                         .run_if(any_unprojected_celestial)
                         .after(lunco_usd_bevy::sync_usd_visuals),
+                    remove_nested_link_nodes
+                        .run_if(any_nested_link_nodes)
+                        .after(project_celestial_comms_prims),
                     activate_dynamic_bodies.run_if(any_with_component::<ShouldBeDynamic>),
                     collect_raycast_settle_footprints.after(process_usd_sim_prims),
                 ),
@@ -2537,6 +2540,49 @@ fn project_celestial_comms_prims(
         );
         commands.entity(entity).try_insert(CelestialProjected);
     }
+}
+
+/// Keep one physical connectivity endpoint per authored assembly. A nested
+/// `linkNode` is an authoring error (the usual case is a wrapper and its feed
+/// aperture both being marked); remove the outer projection before the link
+/// kernel sees it. The USD lint reports the source error, while this runtime
+/// normalization keeps a malformed custom Twin from creating a self-link.
+fn remove_nested_link_nodes(
+    mut commands: Commands,
+    nodes: Query<(Entity, &lunco_celestial::link::LinkNode)>,
+    parents: Query<&ChildOf>,
+) {
+    for (entity, _) in &nodes {
+        let mut cursor = entity;
+        while let Ok(child_of) = parents.get(cursor) {
+            cursor = child_of.parent();
+            if nodes.get(cursor).is_ok() {
+                commands
+                    .entity(cursor)
+                    .try_remove::<lunco_celestial::link::LinkNode>();
+                commands
+                    .entity(cursor)
+                    .try_remove::<lunco_celestial::link::LinkState>();
+                break;
+            }
+        }
+    }
+}
+
+fn any_nested_link_nodes(
+    nodes: Query<Entity, With<lunco_celestial::link::LinkNode>>,
+    parents: Query<&ChildOf>,
+) -> bool {
+    for entity in &nodes {
+        let mut cursor = entity;
+        while let Ok(child_of) = parents.get(cursor) {
+            cursor = child_of.parent();
+            if nodes.get(cursor).is_ok() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Walks `entity`'s `ChildOf` ancestry looking for a `UsdPreviewOnly`

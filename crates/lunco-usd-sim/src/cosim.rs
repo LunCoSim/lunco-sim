@@ -1284,7 +1284,6 @@ fn settle_binding_epoch(
     mut readiness: ResMut<lunco_readiness::ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    dirty.0 = false;
     let models_terminal = models
         .iter()
         .all(|model| !matches!(model.status, SimStatus::Compiling));
@@ -1294,8 +1293,15 @@ fn settle_binding_epoch(
         && differentials.is_empty()
         && models_terminal;
     if settled {
+        dirty.0 = false;
         revision.seal_epoch();
     } else {
+        // Keep the reconciliation scheduled until every deferred stage,
+        // joint, wheel, differential, and model participant has reached a
+        // terminal state. Some of those transitions come from async asset or
+        // compiler completion and do not emit one of the structural events
+        // that originally opened this epoch.
+        dirty.0 = true;
         revision.open_epoch();
     }
     // Seal/open is an event, not a condition the fixed-step master polls. Run
