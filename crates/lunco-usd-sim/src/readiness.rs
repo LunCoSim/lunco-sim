@@ -191,7 +191,7 @@ mod tests {
             status: lunco_cosim::SimStatus::Error("bad model".into()),
             ..default()
         };
-        assert!(
+        assert_eq!(
             modelica_wait_kind(Some(&failed)),
             Some(kinds::PROGRAM_FAILED),
             "a failed model remains a named policy fact"
