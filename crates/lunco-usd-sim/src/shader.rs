@@ -34,11 +34,11 @@
 use bevy::prelude::*;
 use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
-    AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer, to_snake_case,
+    to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::{
-    CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced, get_attribute_as_vec3,
+    get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;

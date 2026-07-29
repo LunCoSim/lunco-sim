@@ -18,6 +18,7 @@
 //! | Param | Attribute | Required |
 //! |---|---|---|
 //! | radius | `physxVehicleWheel:radius` | yes |
+//! | height | `height` | yes |
 //! | mass | `physics:mass` | yes |
 //! | moment of inertia | `physxVehicleWheel:moi` | no (0 ⇒ derived ½·m·r² from authored mass+radius) |
 //! | peak axle torque | MOTOR `lunco:motor:stallTorque` x gearbox `ratio` x `efficiency` | via motor |
@@ -90,6 +91,10 @@ pub struct SuspensionParams {
 pub struct WheelParams {
     /// Wheel radius, m (`physxVehicleWheel:radius`).
     pub radius: f64,
+    /// Wheel width along its authored cylinder axis, m (`height`). This is read
+    /// from the same composed USD prim that produces the visual mesh so the
+    /// physical wheel collider cannot silently use a different width.
+    pub height: f64,
     /// Wheel mass, kg (`physics:mass`). Same value for both kinds — the old
     /// raycast-25 / physical-100 Rust fork is gone; feel is authored.
     pub mass: f64,
@@ -185,6 +190,7 @@ impl WheelParams {
         };
 
         let radius = req("physxVehicleWheel:radius");
+        let height = req("height");
         let mass = req("physics:mass");
         // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
         // therefore no torque — that is a castor, not a wheel with a default torque.
@@ -233,6 +239,7 @@ impl WheelParams {
 
         Ok(WheelParams {
             radius,
+            height,
             mass,
             moment_of_inertia,
             reflected_inertia,
@@ -364,7 +371,7 @@ impl WheelParams {
     /// contact+joint solver then can't build enough support impulse and the
     /// rover sinks through the one-sided terrain heightfield.
     pub fn wheel_density(&self) -> f32 {
-        let volume = std::f64::consts::PI * self.radius.powi(2) * (self.radius * 0.5);
+        let volume = std::f64::consts::PI * self.radius.powi(2) * self.height;
         (self.mass / volume.max(1e-6)) as f32
     }
 }
@@ -609,7 +616,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         // for unrelated edits).
         if (old_radius as f64 - u.params.radius).abs() > 1e-6 {
             let radius = u.params.radius;
-            let cyl = Collider::cylinder(radius, radius * 0.5);
+            let cyl = Collider::cylinder(radius, u.params.height);
             let collider = if axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {
                 cyl
             } else {
