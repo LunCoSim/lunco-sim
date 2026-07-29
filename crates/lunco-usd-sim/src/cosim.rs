@@ -1309,15 +1309,20 @@ fn is_structural_binding(view: &lunco_usd_bevy::StageView<'_>, sink: &SdfPath, p
 
 pub fn rewire_usd_connections(
     mut commands: Commands,
-    added: Query<(), Added<UsdPrimPath>>,
-    // A projected domain root has no runtime input contract until
-    // `project_domain_islands` installs its ModelicaModel. Treat that transition
-    // like any other endpoint arrival: it must re-derive the USD wire cache.
-    added_modelica: Query<(), Added<ModelicaModel>>,
+    // Any endpoint identity or contract arriving must re-derive the USD wire
+    // cache. Keeping the three arrival causes in one query avoids giving the
+    // composition system parallel change-detection paths.
+    wiring_arrivals: Query<
+        (),
+        Or<(
+            Added<UsdPrimPath>,
+            Added<ModelicaModel>,
+            Added<lunco_core::GlobalEntityId>,
+        )>,
+    >,
     mut removed: RemovedComponents<UsdPrimPath>,
     mut dirty: ResMut<WiringDirty>,
-    q_all: Query<(Entity, &UsdPrimPath)>,
-    q_modelica: Query<(), With<ModelicaModel>>,
+    q_all: Query<(Entity, &UsdPrimPath, Has<ModelicaModel>)>,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
     // the same asset compose byte-IDENTICAL stage-relative paths (`/DescentLander`,
@@ -1332,11 +1337,6 @@ pub fn rewire_usd_connections(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
-    // Identity is minted a frame after the prim spawns (`assign_global_entity_ids`,
-    // PostUpdate). Re-run once the ids land so the instance-scoped resolution below
-    // sees them — otherwise the first, pre-identity pass would fall back to the
-    // scene namespace and briefly cross-wire the spawns.
-    id_assigned: Query<(), Added<lunco_core::GlobalEntityId>>,
     // The realtime gate: whether the SOURCE program promised it is realtime-safe,
     // and whether the SINK is a client-predicted dynamic body (a `RigidBody` NOT
     // opted out of prediction). Absence of the promise is the dangerous case;
@@ -1353,10 +1353,7 @@ pub fn rewire_usd_connections(
     // `Added<ModelicaModel>` is the explicit endpoint-contract transition. This
     // pass no longer relies on accidentally deferred removal events to get an
     // extra rewire after a generated model appears.
-    let structural = !added.is_empty()
-        || !added_modelica.is_empty()
-        || !id_assigned.is_empty()
-        || removed.read().next().is_some();
+    let structural = !wiring_arrivals.is_empty() || removed.read().next().is_some();
     if !structural && !dirty.0 {
         return;
     }
@@ -1372,7 +1369,7 @@ pub fn rewire_usd_connections(
     // keeps two spawns of one asset distinct: their identical stage-relative paths
     // now land under different instance keys instead of overwriting each other.
     let mut by_path: HashMap<(Option<u64>, String), Entity> = HashMap::new();
-    for (e, p) in q_all.iter() {
+    for (e, p, _) in q_all.iter() {
         by_path.insert((instance_of(e), p.path.clone()), e);
     }
 
@@ -1393,7 +1390,7 @@ pub fn rewire_usd_connections(
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path) in q_all.iter() {
+    for (entity, prim_path, has_modelica) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -1518,7 +1515,7 @@ pub fn rewire_usd_connections(
             // when the contract arrives.
             if attr.starts_with("inputs:")
                 && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
-                && !q_modelica.contains(entity)
+                && !has_modelica
             {
                 continue;
             }

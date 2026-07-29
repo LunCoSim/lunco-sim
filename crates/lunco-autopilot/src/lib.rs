@@ -2068,11 +2068,11 @@ fn on_disengage_autopilot(
     // "Engage" unreachable. The vessel's `AutopilotBehaviorSpec` mirror lives on
     // the VESSEL, not the actor, so the patrol survives for a later re-engage.
     match q.iter_mut().find(|(_, ap, _, _)| ap.vessel == cmd.vessel) {
-        Some((entity, ap, inputs, actuators)) => {
+        Some((entity, ap, mut inputs, actuators)) => {
             // An actor's last SetPorts is level-triggered. End its lease through
             // the shared control boundary, which clears both logical inputs and
             // the derived actuator ports the electrical island actually reads.
-            safe_stop_control_surface(inputs, actuators, &mut q_ports);
+            safe_stop_control_surface(inputs.as_deref_mut(), actuators, &mut q_ports);
             // A prior `SetPorts` may still hold one of these inputs above the
             // wiring fabric. Release it with the actor so no stale command can
             // overwrite the neutral-brake state on the following propagation tick.

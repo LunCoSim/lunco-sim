@@ -513,6 +513,20 @@ mod tests {
 
     #[test]
     fn safe_stop_neutralizes_inputs_and_derived_actuators() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        #[derive(Component)]
+        struct StopTarget;
+
+        fn stop_target(
+            mut target: Query<(&mut InputPorts, &ActuatorPorts), With<StopTarget>>,
+            mut ports: Query<&mut Port>,
+        ) {
+            for (mut inputs, actuators) in &mut target {
+                safe_stop_control_surface(Some(&mut inputs), Some(actuators), &mut ports);
+            }
+        }
+
         let mut world = World::new();
         let left = world.spawn(Port { value: 0.8 }).id();
         let right = world.spawn(Port { value: -0.4 }).id();
@@ -526,8 +540,9 @@ mod tests {
             ("brake".into(), brake),
         ]));
 
-        let mut ports = world.query::<&mut Port>();
-        safe_stop_control_surface(Some(&mut inputs), Some(&actuators), &mut ports);
+        let target = world.spawn((inputs, actuators, StopTarget)).id();
+        world.run_system_once(stop_target).unwrap();
+        let inputs = world.get::<InputPorts>(target).unwrap();
 
         assert_eq!(inputs.cmd("throttle"), 0.0);
         assert_eq!(inputs.cmd("steer"), 0.0);

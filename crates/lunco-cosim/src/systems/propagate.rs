@@ -765,8 +765,6 @@ mod wire_order_tests {
     #[test]
     fn a_hold_outranks_its_wire_until_it_expires() {
         use bevy::ecs::system::RunSystemOnce;
-        use lunco_core::ports::PortDirection;
-
         let mut world = World::new();
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
         world.init_resource::<crate::PortHolds>();
