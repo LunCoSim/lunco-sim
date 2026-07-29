@@ -28,14 +28,13 @@ use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{Data, Path as SdfPath, Value};
+use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
-use openusd::usda;
 
 use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
-use lunco_usd_compose::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
+use lunco_usd_compose::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, child_layer_ids, is_binary_asset};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
@@ -105,47 +104,6 @@ pub(crate) async fn fetch_layer_closure(
     }
 
     Ok(StageRecipe { root_id, bytes })
-}
-
-/// The closure ids a layer's bytes reference, canonicalized against that layer as
-/// anchor — the discovery half of the pre-fetch BFS, shared by both fetchers
-/// ([`fetch_layer_closure`] over Bevy's `AssetServer`, [`compose_file_to_stage`]
-/// over the filesystem). Only they differ in how bytes arrive; *which* layers a
-/// closure needs is one rule, so it lives in one place.
-///
-/// Only the non-binary `.usda` closure is walked: binary-asset arcs (glTF/…) are
-/// discovered post-composition by [`discover_binary_sites`] so an arc authored
-/// inside a referenced `.usda` wrapper anchors on its COMPOSED prim.
-fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
-    let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-    // `usda::parse` drops the parser's source span. Keep the parser alive so a
-    // malformed authored layer reports the actual line, column and source text,
-    // rather than the unhelpful bare "attribute type expected".
-    let mut parser = usda::parser::Parser::new(text);
-    let specs = parser.parse().map_err(|e| {
-        let where_ = parser
-            .last_error_highlight()
-            .map(|highlight| format!("\n{}", highlight.render()))
-            .unwrap_or_default();
-        anyhow!("USD parse error in {id}: {e}{where_}")
-    })?;
-    let data = Data::from_specs(specs);
-    let anchor = ResolvedPath::new(id);
-    // Composition arcs come from openusd (`SdfLayer::GetCompositionAssetDependencies`),
-    // not from matching raw spec fields here. Binary leaves are dropped because
-    // this is the PRE-FETCH: everything it returns will be parsed as a layer,
-    // and a `.glb` is stubbed by the resolver instead.
-    //
-    // TODO(web): this exists because a stage cannot be opened until its layers'
-    // bytes are local — on wasm they arrive over HTTP. The native path asks the
-    // library for the dependency set instead (see `closure::reference_closure`);
-    // fold this into that once the resolver can drive an async fetch.
-    Ok(data
-        .composition_asset_dependencies()
-        .into_iter()
-        .filter(|arc| !is_binary_asset(arc))
-        .map(|child| canonicalize_at(&child, Some(&anchor)))
-        .collect())
 }
 
 /// Test-only convenience: the composed [`Stage`] alone, discarding the resolver

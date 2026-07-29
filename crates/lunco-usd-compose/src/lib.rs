@@ -55,7 +55,9 @@ pub fn compose_file_to_stage(path: &Path) -> Result<Stage> {
         .map_err(|e| anyhow!("USD composition error: {e}"))
 }
 
-fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
+/// Discover a USDA layer's non-binary composition dependencies in canonical
+/// asset identity space. Fetch adapters use this; they do not parse arcs.
+pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
     let mut parser = usda::parser::Parser::new(text);
     let specs = parser.parse().map_err(|e| {
