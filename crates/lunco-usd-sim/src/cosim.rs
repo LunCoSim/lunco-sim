@@ -1046,13 +1046,16 @@ pub fn wrap_modelica_into_simcomponent(
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.
 ///
-/// A durable worker error wins; otherwise no solved variables yet means the
-/// interface is declared but the solver has not produced a state: `Compiling`.
+/// A durable worker error wins. Compilation also is not readiness: its result
+/// contains an initial algebraic snapshot, but no live inputs have reached the
+/// solver yet. A model becomes `Running` only after its first successful solver
+/// advance, so load readiness cannot release physics onto zero-valued,
+/// compile-time ports.
 /// One place keeps bind-time insertion and per-tick sync consistent.
 fn modelica_status(model: &ModelicaModel) -> SimStatus {
     if let Some(error) = &model.last_error {
         SimStatus::Error(error.clone())
-    } else if model.variables.is_empty() {
+    } else if !model.is_compiled || model.current_time <= 0.0 || model.variables.is_empty() {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
