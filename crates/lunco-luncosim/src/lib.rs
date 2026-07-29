@@ -539,6 +539,31 @@ fn sandbox_window(
     window
 }
 
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+fn apply_luncosim_window_icon(
+    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    winit_windows: NonSend<bevy_winit::WinitWindows>,
+    mut installed: Local<bool>,
+) {
+    if *installed {
+        return;
+    }
+    let rgba = include_bytes!(concat!(env!("OUT_DIR"), "/luncosim-icon.rgba"));
+    for entity in &windows {
+        let Some(window) = winit_windows.get_window(entity) else {
+            continue;
+        };
+        match winit::window::Icon::from_rgba(rgba.to_vec(), 64, 64) {
+            Ok(icon) => {
+                window.set_window_icon(Some(icon));
+                *installed = true;
+                info!("[window] installed LunCoSim icon");
+            }
+            Err(error) => warn!("[window] failed to install LunCoSim icon: {error}"),
+        }
+    }
+}
+
 #[cfg(all(test, feature = "ui"))]
 mod window_tests {
     use super::sandbox_window;

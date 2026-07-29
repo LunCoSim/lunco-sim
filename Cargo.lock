@@ -7158,6 +7158,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy_egui",
+ "bevy_winit",
  "big_space",
  "console_error_panic_hook",
  "getrandom 0.3.4",
@@ -7212,6 +7213,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "winit",
 ]
 
 [[package]]

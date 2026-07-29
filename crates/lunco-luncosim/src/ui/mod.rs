@@ -55,6 +55,11 @@ pub(crate) struct SandboxUiPlugin;
 
 impl Plugin for SandboxUiPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(lunco_workbench::tutorial_overlay::TutorialOverlayPerspective(
+            Some(lunco_workbench::PerspectiveId("sandbox_view")),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Update, crate::apply_luncosim_window_icon);
         app.init_resource::<lunco_workbench::AutoTagWorkbenchCameras>();
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
         // requestAnimationFrame on web) act as the frame timer; ReactiveLowPower

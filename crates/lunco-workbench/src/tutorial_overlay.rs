@@ -46,6 +46,12 @@ pub struct TutorialHud {
     pub tour: Option<TourStep>,
 }
 
+/// Optional host policy for where tutorial overlays may appear. A host with a
+/// dedicated full-window 3D perspective sets the required perspective; hosts
+/// without one keep the default and show tutorials in every perspective.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct TutorialOverlayPerspective(pub Option<crate::PerspectiveId>);
+
 /// One coach-mark step of a guided tour (see [`TutorialHud::tour`]).
 #[derive(Clone, Debug, Default)]
 pub struct TourStep {
@@ -204,7 +210,7 @@ fn draw_tutorial_hud(
         .unwrap_or_else(lunco_theme::Theme::dark);
 
     egui::Area::new(egui::Id::new("lunco_tutorial_hud"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Background)
         .interactable(false)
         .fixed_pos(egui::pos2(screen.left() + 16.0, screen.top() + 44.0))
         .show(ctx, |ui| {
@@ -250,6 +256,15 @@ fn draw_tutorial_hud(
         });
 }
 
+fn tutorial_overlay_visible(
+    layout: Option<Res<crate::WorkbenchLayout>>,
+    policy: Res<TutorialOverlayPerspective>,
+) -> bool {
+    policy
+        .0
+        .is_none_or(|required| layout.is_some_and(|l| l.active_perspective() == Some(required)))
+}
+
 /// Draw the spotlight: dim the screen except the anchored widget's rect, ring
 /// it with a pulsing accent, and show a caption callout. Falls back to a full
 /// dim + centred caption when the anchor isn't currently painted.
@@ -274,7 +289,7 @@ fn draw_spotlight(
     let target = anchors.get(&key);
 
     egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Background)
         .interactable(false)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -521,7 +536,7 @@ fn draw_tour(
 
     // ── Scrim + ring + speech-bubble tail (behind the card) ──────────────────
     egui::Area::new(egui::Id::new("lunco_tour_scrim"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Background)
         .interactable(false)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -807,6 +822,7 @@ pub struct TutorialOverlayPlugin;
 impl Plugin for TutorialOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialHud>();
+        app.init_resource::<TutorialOverlayPerspective>();
         register_all_commands(app);
         // HUD / tour / spotlight are per-client presentation — client-local, so a
         // client-scoped tutorial scenario may drive them (see `ClientCommandPolicy`).
@@ -819,7 +835,9 @@ impl Plugin for TutorialOverlayPlugin {
             .mark_client_local::<ClearTour>();
         app.add_systems(
             EguiPrimaryContextPass,
-            (draw_tutorial_hud, draw_spotlight, draw_tour).after(crate::WorkbenchRenderSet),
+            (draw_tutorial_hud, draw_spotlight, draw_tour)
+                .after(crate::WorkbenchRenderSet)
+                .run_if(tutorial_overlay_visible),
         );
     }
 }

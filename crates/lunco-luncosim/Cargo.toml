@@ -22,6 +22,8 @@ path = "src/bin/luncosim.rs"
 # in the lib handle platform differences. Served at `dist/luncosim/`.
 
 [dependencies]
+winit = { version = "0.30.13", optional = true }
+bevy_winit = { version = "0.19", optional = true }
 # Render ASSET-STORE features (always on, even headless): `bevy_pbr` pulls
 # `bevy_render`, which registers `Assets<Mesh>`/`Assets<StandardMaterial>` —
 # USD visual sync populates the meshes avian colliders key off, and the
@@ -212,6 +214,8 @@ default = ["ui", "celestial", "lunco-api", "transport-http", "networking"]
 # intent (`PbrLook`/`ShaderLook`/`SceneCamera`); this binds it.
 # See docs/architecture/render-decoupling.md.
 ui = [
+    "dep:winit",
+    "dep:bevy_winit",
     # The screenshot backend lives in the workbench, which only a GUI build links at all.
     # NOT on the `lunco-api` feature: the headless server enables that too, and hanging the
     # workbench off it dragged egui + wgpu straight back into the --no-ui binary.
