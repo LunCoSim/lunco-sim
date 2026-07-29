@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use avian3d::prelude::{Collider, RigidBody};
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
@@ -724,12 +724,14 @@ const SETTLE_CLEARANCE: f64 = 0.6;
 pub fn settle_grounded_assemblies(
     terrains: Query<&crate::stream_viz::DemHeightField, With<TerrainColliderRing>>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
+    footprints: Query<Option<&lunco_core::GroundSettleFootprint>>,
     mut bodies: Query<(
         Entity,
         &mut avian3d::prelude::Position,
         Option<&mut avian3d::prelude::LinearVelocity>,
         Option<&mut avian3d::prelude::AngularVelocity>,
     )>,
+    rotations: Query<&avian3d::prelude::Rotation>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
     mut commands: Commands,
@@ -775,6 +777,27 @@ pub fn settle_grounded_assemblies(
             over_terrain = true;
             let surface = hf.0.height_at(p.0.x, p.0.z);
             lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
+        }
+        // Probe-only contact geometry (raycast wheels) belongs to the same
+        // placement pass as rigid members. It is authored in the vehicle frame,
+        // transformed once by the solved root pose, and sampled from the same
+        // oracle as every other terrain consumer.
+        if let (Some(footprint), Some(root_pos)) =
+            (footprints.get(seed).ok().flatten(), pos_of.get(&seed))
+        {
+            let root_rot = rotations
+                .get(seed)
+                .map(|rotation| rotation.0)
+                .unwrap_or(DQuat::IDENTITY);
+            for contact in &footprint.0 {
+                let point = root_pos.0 + root_rot * contact.local_offset;
+                if point.x.abs() > half || point.z.abs() > half {
+                    continue;
+                }
+                let surface = hf.0.height_at(point.x, point.z);
+                lift = lift.max(surface + SETTLE_CLEARANCE - (point.y - contact.radius));
+                over_terrain = true;
+            }
         }
         // One-shot: consume the marker on the whole assembly regardless.
         for &m in &members {

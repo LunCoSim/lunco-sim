@@ -200,6 +200,7 @@ impl Plugin for UsdSimPlugin {
                         .run_if(any_unprojected_celestial)
                         .after(lunco_usd_bevy::sync_usd_visuals),
                     activate_dynamic_bodies.run_if(any_with_component::<ShouldBeDynamic>),
+                    collect_raycast_settle_footprints.after(process_usd_sim_prims),
                 ),
             );
         // Self-healing watchdog: a USD prim that stays unprocessed forever means
@@ -2833,9 +2834,11 @@ fn activate_dynamic_bodies(
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
-    // Physical wheels only: they get a one-time drop-onto-terrain settle. Free
-    // Dynamic bodies (balloons, etc.) must NOT be pinned to the ground.
+    // Vehicle roots only: both physical and raycast wheel assemblies get a
+    // one-time drop-onto-terrain settle. Free dynamic bodies (balloons, etc.)
+    // must NOT be pinned to the ground.
     q_wheel: Query<(), With<PhysicalWheel>>,
+    q_vehicle: Query<(), With<DriveMix>>,
 ) {
     // Ground still building → gravity would win the race; keep everything
     // kinematic until the terrain collider lands.
@@ -2857,11 +2860,11 @@ fn activate_dynamic_bodies(
             // would not help — it only proves validity at queue time, not apply).
             commands.entity(entity).try_insert(RigidBody::Dynamic);
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
-            // A physical wheel drops from the authored pose (chassis at the surface,
-            // wheels hanging below it) — which starts the wheels embedded in the
-            // one-sided terrain heightfield. Flag the assembly for a one-time
-            // ground-settle that lifts it so the wheels clear the surface.
-            if q_wheel.contains(entity) {
+            // Authored vehicle poses put the chassis datum at the terrain datum,
+            // while the lowest wheel contact is below it. Flag the complete
+            // vehicle for one shared placement pass so both physical and raycast
+            // wheels clear the one-sided heightfield before their first query.
+            if q_wheel.contains(entity) || q_vehicle.contains(entity) {
                 commands
                     .entity(entity)
                     .try_insert(lunco_core::NeedsGroundSettle);
@@ -2870,6 +2873,32 @@ fn activate_dynamic_bodies(
                 "Activated RigidBody::Dynamic for stage: {:?}",
                 path.stage_handle
             );
+        }
+    }
+}
+
+/// Publish raycast wheel contact geometry to the shared terrain placement pass.
+/// USD simulation knows the wheel topology; terrain owns all surface sampling
+/// and body translation. There is one settle mechanism for every vehicle type.
+fn collect_raycast_settle_footprints(
+    roots: Query<(Entity, &Children), (With<DriveMix>, Without<lunco_core::GroundSettleFootprint>)>,
+    wheels: Query<(&WheelRaycast, &Transform, &ChildOf)>,
+    mut commands: Commands,
+) {
+    for (root, children) in &roots {
+        let contacts = children
+            .iter()
+            .filter_map(|child| wheels.get(child).ok())
+            .filter(|(_, _, parent)| parent.parent() == root)
+            .map(|(wheel, transform, _)| lunco_core::GroundSettleContact {
+                local_offset: transform.translation.as_dvec3(),
+                radius: wheel.wheel_radius,
+            })
+            .collect::<Vec<_>>();
+        if !contacts.is_empty() {
+            commands
+                .entity(root)
+                .insert(lunco_core::GroundSettleFootprint(contacts));
         }
     }
 }
