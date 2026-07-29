@@ -79,7 +79,7 @@ use lunco_mobility::{
 };
 use lunco_render::{PbrLook, SceneCamera};
 use openusd::sdf::Path as SdfPath;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub mod wheel_params;
 use wheel_params::{SuspensionParams, WheelParams};
@@ -127,6 +127,58 @@ use wheel_params::{SuspensionParams, WheelParams};
 pub struct NoRenderVisuals;
 
 pub struct UsdSimPlugin;
+
+/// Immutable USD topology facts used by the simulation projector for one
+/// composed stage revision.  This is deliberately separate from ECS entities:
+/// a wheel and its sibling joint can arrive on different frames, while their
+/// relationships are already complete in the canonical stage.
+#[derive(Default)]
+struct StageJointTopology {
+    canonical_generation: Option<u64>,
+    projection_revision: Option<u64>,
+    joint_targets: HashMap<String, String>,
+    articulation_roots: HashSet<String>,
+    wheel_attachment_targets: HashMap<String, String>,
+}
+
+/// Per-canonical-stage cache of immutable wheel/joint topology.
+///
+/// The canonical stage generation catches live authored changes; the USD
+/// projection revision catches a replacement stage whose local generation
+/// starts at zero again after an asset reload. A stage is scanned once for that
+/// combined stamp rather than once for every frame that a prim waits for its
+/// visuals.
+#[derive(Resource, Default)]
+struct JointTopologyIndex {
+    by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, StageJointTopology>,
+}
+
+impl JointTopologyIndex {
+    fn refresh_if_stale(
+        &mut self,
+        stage: bevy::asset::AssetId<UsdStageAsset>,
+        generation: u64,
+        projection_revision: u64,
+        reader: &lunco_usd_bevy::StageView<'_>,
+    ) {
+        let topology = self.by_stage.entry(stage).or_default();
+        if topology.canonical_generation == Some(generation)
+            && topology.projection_revision == Some(projection_revision)
+        {
+            return;
+        }
+        topology.joint_targets.clear();
+        topology.articulation_roots.clear();
+        topology.wheel_attachment_targets.clear();
+        collect_joint_scan_read(reader, topology);
+        topology.canonical_generation = Some(generation);
+        topology.projection_revision = Some(projection_revision);
+    }
+
+    fn get(&self, stage: bevy::asset::AssetId<UsdStageAsset>) -> Option<&StageJointTopology> {
+        self.by_stage.get(&stage)
+    }
+}
 
 /// Retire authored cameras at the shared scene-teardown boundary. The scene
 /// entity despawn and the render-world extraction are not the same instant; a
@@ -188,6 +240,7 @@ impl Plugin for UsdSimPlugin {
             // skips the system entirely on frames with no unprocessed
             // USD prim (archetype-level check, near-zero cost).
             .init_resource::<GroundColliderPending>()
+            .init_resource::<JointTopologyIndex>()
             .add_systems(
                 Update,
                 (
@@ -440,7 +493,6 @@ fn process_usd_sim_prims(
         ),
         Without<UsdSimProcessed>,
     >,
-    q_all_prims: Query<&UsdPrimPath>,
     q_grids: Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
@@ -450,6 +502,8 @@ fn process_usd_sim_prims(
     // Read the LIVE canonical stage (source of truth), built on demand from
     // the asset recipe.
     mut canonical: NonSendMut<CanonicalStages>,
+    mut topology_index: ResMut<JointTopologyIndex>,
+    stage_revision: Res<lunco_usd_bevy::UsdStageRevision>,
     // The active-scene sun: the avatar camera's exposure is read from the SAME
     // resource the sun illuminance comes from, so they can't drift (a dimmed
     // sun under a bright-tuned camera blacked the viewport). `Option` so the
@@ -470,78 +524,31 @@ fn process_usd_sim_prims(
     // Whether visual components will ever arrive. `false` headless ⇒ build the
     // physics now and skip the visual-only split.
     let visuals_coming = no_render_visuals.is_none();
-    // --- Pass 1: collect authored revolute joints by their `body1` target ---
-    //
-    // Standard OpenUSD: a `def PhysicsRevoluteJoint` declares `rel
-    // physics:body1 = </path/to/wheel>`. Presence of such a joint
-    // targeting a wheel prim is the discriminator between joint-based
-    // and raycast wheels — no custom `lunco:` tokens are involved.
-    //
-    // We also remember the joint's prim path so the joint-based wheel
-    // setup can read `drive:angular:physics:maxForce` (the motor stall
-    // torque, authored via `UsdPhysicsDriveAPI:angular`) from it.
-    let mut joint_targets: HashMap<(Handle<UsdStageAsset>, String), String> = HashMap::new();
-    // Articulated ROOTS, derived only from *wheel* hinges in the same scan: a
-    // `PhysicsRevoluteJoint` whose `body1` applies `PhysxVehicleWheelAPI` names
-    // the chassis at `physics:body0`. A revolute joint is a generic USD mechanism
-    // (antenna, solar tracker, arm, …), not evidence that its parent is a vehicle.
-    // This (plus an explicit `PhysicsArticulationRootAPI`) is the declarative source
-    // of truth for `ArticulatedVehicle`; it replaces the old runtime `ChildOf` walk.
-    // See `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
-    let mut articulation_roots: std::collections::HashSet<(Handle<UsdStageAsset>, String)> =
-        Default::default();
-    // WheelAttachment → (wheel, suspension) target pairs, scanned in the same
-    // Pass 1. The CANONICAL (Omniverse) suspension binding: a
-    // `PhysxVehicleWheelAttachmentAPI` prim references a wheel prim via
-    // `physxVehicleWheelAttachment:wheel` and a suspension prim via
-    // `physxVehicleWheelAttachment:suspension`. Keyed by (stage, WHEEL path) —
-    // the same key shape as `joint_targets`, since a prim path is unique only
-    // within its stage — so the wheel branch (Pass 2) can look up its suspension
-    // prim in O(1). Empty for
-    // LunCo's flat composition (wheel references suspension directly) — see
-    // doc 53 §3.2.
-    let mut wheel_attachment_targets: HashMap<(Handle<UsdStageAsset>, String), String> =
-        HashMap::new();
-
-    // Scan the **stage data** rather than spawned entities. Joint and
-    // wheel prims may be spawned on different frames; reading from the
-    // SDF data directly avoids the race where a wheel is processed
-    // before its joint sibling has an entity in the ECS.
-    //
-    // TODO(CQ-212): this Pass-1 re-scans every spec of every stage on
-    // *every frame* to rebuild `joint_targets` / `articulation_roots`,
-    // even when no stage SDF changed. Cache a per-stage joint index
-    // (keyed by stage `Handle` + an asset-change/generation stamp) and
-    // only rescan a stage when its SDF actually mutates; readers then do
-    // a direct path→spec lookup. (Sibling spots: `shader.rs` reads scan
-    // the whole stage per prim; `loaded_stages.rs` `prim_type_name` is an
-    // O(n²) tree render.) Deferred per request — not modifying USD here.
-    // Tracked in docs/architecture/engineering-backlog-and-standards.md.
-    let mut seen_stages: std::collections::HashSet<Handle<UsdStageAsset>> = Default::default();
-    for prim_path in q_all_prims.iter() {
-        if !seen_stages.insert(prim_path.stage_handle.clone()) {
+    // Build (or refresh) each involved stage's immutable topology once. The
+    // canonical generation is the authored-composition invalidation signal;
+    // waiting for a mesh or another sibling no longer re-scans every spec.
+    let mut seen_stages = HashSet::new();
+    for (_, prim_path, ..) in query.iter() {
+        let id = prim_path.stage_handle.id();
+        if !seen_stages.insert(id) {
             continue;
         }
-        // Scan the live canonical stage, built on demand from the recipe.
-        let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
                 .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
+                .and_then(|asset| asset.recipe.clone())
             {
                 canonical.get_or_build(id, &recipe);
             }
         }
-        let Some(cs) = canonical.get(id) else {
-            continue;
-        };
-        collect_joint_scan_read(
-            &cs.view(),
-            &prim_path.stage_handle,
-            &mut joint_targets,
-            &mut articulation_roots,
-            &mut wheel_attachment_targets,
-        );
+        if let Some(stage) = canonical.get(id) {
+            topology_index.refresh_if_stale(
+                id,
+                stage.generation(),
+                stage_revision.0,
+                &stage.view(),
+            );
+        }
     }
 
     // --- Pass 2: Process all prims ---
@@ -590,6 +597,9 @@ fn process_usd_sim_prims(
         let Some(cs) = canonical.get(id) else {
             continue;
         };
+        let Some(topology) = topology_index.get(id) else {
+            continue;
+        };
         process_usd_sim_prim_read(
             &cs.view(),
             entity,
@@ -601,9 +611,7 @@ fn process_usd_sim_prims(
             maybe_shader_mat,
             maybe_child_of,
             wait_for_visuals,
-            &joint_targets,
-            &articulation_roots,
-            &wheel_attachment_targets,
+            topology,
             &q_existing_floating_origins,
             &q_provisional_cameras,
             &q_grids,
@@ -621,10 +629,7 @@ fn process_usd_sim_prims(
 /// `PhysxVehicleWheelAttachmentAPI` wheel→suspension bindings (doc 53 §3.2).
 fn collect_joint_scan_read(
     reader: &lunco_usd_bevy::StageView<'_>,
-    stage_handle: &Handle<UsdStageAsset>,
-    joint_targets: &mut HashMap<(Handle<UsdStageAsset>, String), String>,
-    articulation_roots: &mut std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
-    wheel_attachment_targets: &mut HashMap<(Handle<UsdStageAsset>, String), String>,
+    topology: &mut StageJointTopology,
 ) {
     for path in reader.prim_paths() {
         if reader.type_name(&path).as_deref() == Some("PhysicsRevoluteJoint") {
@@ -634,9 +639,11 @@ fn collect_joint_scan_read(
                     .ok()
                     .is_some_and(|wheel| reader.has_api_schema(&wheel, "PhysxVehicleWheelAPI"));
                 if is_vehicle_wheel {
-                    joint_targets.insert((stage_handle.clone(), body1), path.as_str().to_string());
+                    topology
+                        .joint_targets
+                        .insert(body1, path.as_str().to_string());
                     if let Some(body0) = reader.rel_target(&path, "physics:body0") {
-                        articulation_roots.insert((stage_handle.clone(), body0));
+                        topology.articulation_roots.insert(body0);
                     }
                 }
             }
@@ -658,7 +665,7 @@ fn collect_joint_scan_read(
                     suspension,
                     path.as_str()
                 );
-                wheel_attachment_targets.insert((stage_handle.clone(), wheel), suspension);
+                topology.wheel_attachment_targets.insert(wheel, suspension);
             }
         }
     }
@@ -680,9 +687,7 @@ fn process_usd_sim_prim_read(
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     wait_for_visuals: bool,
-    joint_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
-    articulation_roots: &std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
-    wheel_attachment_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
+    topology: &StageJointTopology,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
@@ -699,15 +704,14 @@ fn process_usd_sim_prim_read(
     // live avian `RigidBody`, which materialises later). Runs once per prim (this
     // pass is gated `Without<UsdSimProcessed>`). Replaces the old runtime `ChildOf`
     // walk + `setup_physical_wheel` side-effect. See USD_REPLICATION_POLICY.md.
-    let net_key = (prim_path.stage_handle.clone(), prim_path.path.clone());
-    if articulation_roots.contains(&net_key)
+    if topology.articulation_roots.contains(&prim_path.path)
         || reader.has_api_schema(&sdf_path, "PhysicsArticulationRootAPI")
     {
         commands
             .entity(entity)
             .try_insert(lunco_core::ArticulatedVehicle);
     }
-    if joint_targets.contains_key(&net_key) {
+    if topology.joint_targets.contains_key(&prim_path.path) {
         commands
             .entity(entity)
             .try_insert(lunco_core::ArticulatedLink);
@@ -1426,8 +1430,10 @@ fn process_usd_sim_prim_read(
         // components/mobility/wheel.usda, which every wheel composes.
         // Read BEFORE spawning the port entities so an invalid wheel
         // synthesizes nothing.
-        let attachment_susp =
-            wheel_params::attachment_suspension_path(prim_path, wheel_attachment_targets);
+        let attachment_susp = wheel_params::attachment_suspension_path(
+            &prim_path.path,
+            &topology.wheel_attachment_targets,
+        );
         let powertrain = powertrain::find_for_wheel(reader, &sdf_path);
         let params = match WheelParams::read(
             reader,
@@ -1500,7 +1506,6 @@ fn process_usd_sim_prim_read(
 
         // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
         // pointing at this wheel via `physics:body1` ⇒ joint-based.
-        let key = (prim_path.stage_handle.clone(), prim_path.path.clone());
         // Front wheels (index < 2) of an Ackermann rover steer. Gate on the
         // rover's drive type — a skid rover keeps all wheels fixed (it steers
         // by skidding), so only wire the steering port when the wheel's VEHICLE
@@ -1538,7 +1543,7 @@ fn process_usd_sim_prim_read(
             // Not a steering vehicle: no lock, because there is no steering.
             None => 0.0,
         };
-        if joint_targets.contains_key(&key) {
+        if topology.joint_targets.contains_key(&prim_path.path) {
             setup_physical_wheel(
                 &mut commands,
                 entity,
@@ -2953,6 +2958,80 @@ fn collect_raycast_settle_footprints(
                 lunco_core::NeedsGroundSettle,
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod topology_index_tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+
+    const WHEEL_STAGE: &str = r#"#usda 1.0
+def Xform "Rover" {
+    def Xform "Chassis" {}
+    def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {}
+    def PhysicsRevoluteJoint "WheelJoint" {
+        rel physics:body0 = </Rover/Chassis>
+        rel physics:body1 = </Rover/Wheel>
+    }
+    def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
+        rel physxVehicleWheelAttachment:wheel = </Rover/Wheel>
+        rel physxVehicleWheelAttachment:suspension = </Rover/Suspension>
+    }
+    def Xform "Suspension" {}
+}
+"#;
+
+    #[test]
+    fn topology_index_builds_stage_local_wheel_facts_once_per_generation() {
+        let stage =
+            CanonicalStage::from_recipe(&StageRecipe::from_source("topology.usda", WHEEL_STAGE))
+                .expect("fixture composes");
+        let id = Handle::<UsdStageAsset>::default().id();
+        let mut index = JointTopologyIndex::default();
+
+        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        let topology = index.get(id).expect("first generation is indexed");
+        assert_eq!(
+            topology.joint_targets.get("/Rover/Wheel"),
+            Some(&"/Rover/WheelJoint".to_string())
+        );
+        assert!(topology.articulation_roots.contains("/Rover/Chassis"));
+        assert_eq!(
+            topology.wheel_attachment_targets.get("/Rover/Wheel"),
+            Some(&"/Rover/Suspension".to_string())
+        );
+        assert_eq!(topology.canonical_generation, Some(stage.generation()));
+        assert_eq!(topology.projection_revision, Some(1));
+
+        // Same stamp is a cache hit; a new projection revision (for example an
+        // asset reload that replaces a generation-zero canonical stage) must
+        // rebuild instead of retaining stale topology.
+        index
+            .by_stage
+            .get_mut(&id)
+            .expect("indexed stage")
+            .joint_targets
+            .clear();
+        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        assert!(
+            index
+                .get(id)
+                .expect("indexed stage")
+                .joint_targets
+                .is_empty(),
+            "unchanged stamps must not rescan"
+        );
+        index.refresh_if_stale(id, stage.generation(), 2, &stage.view());
+        assert_eq!(
+            index
+                .get(id)
+                .expect("reindexed stage")
+                .joint_targets
+                .get("/Rover/Wheel"),
+            Some(&"/Rover/WheelJoint".to_string()),
+            "a projection revision must rebuild a replacement stage"
+        );
     }
 }
 

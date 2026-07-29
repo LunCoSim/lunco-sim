@@ -55,7 +55,7 @@
 use avian3d::prelude::{
     AngularMotor, Collider, ColliderDensity, MotorModel, Position, RevoluteJoint, Rotation,
 };
-use bevy::asset::{AssetId, Handle};
+use bevy::asset::AssetId;
 use bevy::log::{info, warn};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
@@ -381,19 +381,17 @@ impl WheelParams {
 ///
 /// 1. **Canonical (relationship):** if a `PhysxVehicleWheelAttachmentAPI` prim
 ///    targets this wheel, the Pass-1 scan recorded the suspension prim it binds —
-///    return that path. Keyed by (stage, wheel path) like `joint_targets`: prim
-///    paths are only unique WITHIN a stage, so the same rover loaded twice
-///    repeats `/Rover/Wheel_FL`, and matching on the path alone would let one
-///    instance resolve another instance's suspension.
+///    return that path. The map belongs to one composed stage, so its keys are
+///    stage-local paths; independent instances retain independent topology maps.
 /// 2. **Flat (fallback):** `None` — [`WheelParams::read`] then reads the attrs
 ///    directly off the wheel prim (LunCo's compact composition, where the wheel
 ///    references the suspension and the attrs compose onto the wheel itself).
 pub(crate) fn attachment_suspension_path(
-    wheel_prim: &UsdPrimPath,
-    wheel_attachment_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
+    wheel_path: &str,
+    wheel_attachment_targets: &HashMap<String, String>,
 ) -> Option<SdfPath> {
     wheel_attachment_targets
-        .get(&(wheel_prim.stage_handle.clone(), wheel_prim.path.clone()))
+        .get(wheel_path)
         .and_then(|s| SdfPath::new(s).ok())
 }
 
@@ -495,7 +493,6 @@ struct WheelUpdate {
 pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     // 1. Collect this stage's spawned wheels + vehicle roots (plain data out).
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
-    let mut stage_handle: Option<Handle<UsdStageAsset>> = None;
     {
         let mut q = world.query::<(
             Entity,
@@ -507,7 +504,6 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             if prim.stage_handle.id() != id || (rc.is_none() && pw.is_none()) {
                 continue;
             }
-            stage_handle.get_or_insert_with(|| prim.stage_handle.clone());
             rows.push((e, prim.path.clone(), pw.is_some()));
         }
     }
@@ -539,19 +535,16 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         };
         let Some(cs) = stages.get(id) else { return };
         let view = cs.view();
-        // Rebuild the canonical attachment map for suspension resolution — the
-        // same Pass-1 scan the spawn path runs.
-        let mut attach: HashMap<(Handle<UsdStageAsset>, String), String> = HashMap::new();
-        if let Some(handle) = &stage_handle {
-            let mut joints = HashMap::new();
-            let mut roots = std::collections::HashSet::new();
-            crate::collect_joint_scan_read(&view, handle, &mut joints, &mut roots, &mut attach);
-        }
+        // This runs only for a stage-change resync, so rebuilding its small
+        // stage-local topology snapshot is correct and avoids coupling this
+        // exclusive live-edit path to the normal projector cache.
+        let mut topology = crate::StageJointTopology::default();
+        crate::collect_joint_scan_read(&view, &mut topology);
         for (entity, path, physical) in &rows {
             let Ok(sp) = SdfPath::new(path) else { continue };
-            let susp = stage_handle
-                .as_ref()
-                .and_then(|h| attach.get(&(h.clone(), path.clone())))
+            let susp = topology
+                .wheel_attachment_targets
+                .get(path)
                 .and_then(|s| SdfPath::new(s).ok());
             let powertrain = crate::powertrain::find_for_wheel(&view, &sp);
             match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
