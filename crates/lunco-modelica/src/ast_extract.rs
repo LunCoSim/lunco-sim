@@ -18,7 +18,6 @@ use rumoca_compile::parsing::ast::AstIndexMap;
 use rumoca_compile::parsing::{
     Causality, ClassDef, ClassType, Expression, StoredDefinition, TerminalType, Variability,
 };
-use rumoca_phase_parse::parse_to_ast;
 use std::collections::{BTreeSet, HashMap};
 
 // ---------------------------------------------------------------------------
@@ -29,8 +28,19 @@ use std::collections::{BTreeSet, HashMap};
 ///
 /// Returns `None` on parse failure. Use [`extract_from_source`] for the
 /// high-level API that extracts all symbols in one pass.
+fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
+    // Keep this prepass on the same tolerant syntax path as the production
+    // compiler. The strict semantic AST rejects valid library members that
+    // reference package imports or use recoverable Modelica constructs; that
+    // made the input-default strip warn and silently demote every bound input
+    // in those files even though Rumoca could compile them successfully.
+    rumoca_phase_parse::parse_to_syntax(source, file_label)
+        .best_effort()
+        .clone()
+}
+
 fn parse(source: &str) -> Option<StoredDefinition> {
-    parse_to_ast(source, "model.mo").ok()
+    Some(parse_recovered(source, "model.mo"))
 }
 
 // ---------------------------------------------------------------------------
@@ -68,9 +78,7 @@ pub struct ModelInterface {
 /// name/parameter/input snapshots, the same recovery `Session::recovered_file_query`
 /// gives the engine side.
 pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
-    let ast = rumoca_phase_parse::parse_to_syntax(source, file_label)
-        .best_effort()
-        .clone();
+    let ast = parse_recovered(source, file_label);
     let defaults = extract_inputs_with_defaults_from_ast(&ast);
     ModelInterface {
         model_name: extract_model_name_from_ast(&ast),
