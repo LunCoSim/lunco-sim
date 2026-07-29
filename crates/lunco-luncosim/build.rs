@@ -11,27 +11,9 @@
 
 fn main() {
     let project_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let icon_script = project_dir.join("../../scripts/generate_icons.sh");
-    let _ = std::process::Command::new("bash")
-        .arg(&icon_script)
-        .current_dir(&project_dir)
-        .status();
-    let icon_png = project_dir.join("../../assets/icons/linux/hicolor/64x64/apps/luncosim.png");
     let icon_rgba =
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("luncosim-icon.rgba");
-    let converted = std::process::Command::new("convert")
-        .args([icon_png.to_str().unwrap(), "-resize", "64x64!", "RGBA:"])
-        .output();
-    if let Ok(output) = converted {
-        if output.status.success() {
-            let _ = std::fs::write(&icon_rgba, output.stdout);
-        }
-    }
-    println!("cargo:rerun-if-changed={}", icon_script.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        project_dir.join("../../assets/icons/svg").display()
-    );
+    write_window_icon(&project_dir, &icon_rgba);
     let sha = std::process::Command::new("git")
         .args(["rev-parse", "--short=8", "HEAD"])
         .output()
@@ -57,4 +39,39 @@ fn main() {
     // first compile and every later build lies about which commit it is.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/index");
+}
+
+fn write_window_icon(project_dir: &std::path::Path, icon_rgba: &std::path::Path) {
+    let icon_name = match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("windows") => "lcs-night-win.svg",
+        Ok("macos") => "lcs-night-mac.svg",
+        _ => "lcs-night-linux.svg",
+    };
+    let icon_svg = project_dir.join("../../assets/icons/svg").join(icon_name);
+    println!("cargo:rerun-if-changed={}", icon_svg.display());
+
+    let svg = std::fs::read(&icon_svg).unwrap_or_else(|error| {
+        panic!(
+            "failed to read LunCoSim window icon {}: {error}",
+            icon_svg.display()
+        )
+    });
+    let tree = usvg::Tree::from_data(&svg, &usvg::Options::default()).unwrap_or_else(|error| {
+        panic!(
+            "failed to parse LunCoSim window icon {}: {error}",
+            icon_svg.display()
+        )
+    });
+    let size = tree.size();
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 64)
+        .expect("64 by 64 LunCoSim window icon dimensions are valid");
+    let transform =
+        resvg::tiny_skia::Transform::from_scale(64.0 / size.width(), 64.0 / size.height());
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    std::fs::write(icon_rgba, pixmap.data()).unwrap_or_else(|error| {
+        panic!(
+            "failed to write rendered LunCoSim window icon {}: {error}",
+            icon_rgba.display()
+        )
+    });
 }
