@@ -239,9 +239,8 @@ fn catalog_key(reg: &SignalRegistry) -> u64 {
 /// available under **Model internals**, but are not allowed to crowd out an
 /// authored mission channel such as `power.battery_soc`.
 fn subsystem_for(path: &str, provenance: Option<&str>) -> (&'static str, bool) {
-    let internal = provenance == Some("cosim")
-        || path.starts_with("sim.")
-        || path.contains("_x2f_");
+    let internal =
+        provenance == Some("cosim") || path.starts_with("sim.") || path.contains("_x2f_");
     if internal {
         return ("Model internals", true);
     }
@@ -252,9 +251,13 @@ fn subsystem_for(path: &str, provenance: Option<&str>) -> (&'static str, bool) {
         "Thermal"
     } else if lower.starts_with("comms.") || lower.contains("radio") || lower.contains("link") {
         "Communications"
-    } else if lower.starts_with("mobility.") || lower.starts_with("drive") || lower.contains("speed") {
+    } else if lower.starts_with("mobility.")
+        || lower.starts_with("drive")
+        || lower.contains("speed")
+    {
         "Mobility"
-    } else if lower.starts_with("pointing.") || lower.contains("mast") || lower.contains("antenna") {
+    } else if lower.starts_with("pointing.") || lower.contains("mast") || lower.contains("antenna")
+    {
         "Pointing"
     } else if provenance == Some("modelica") {
         "Modelica"
@@ -283,20 +286,28 @@ fn build_groups(
         } else {
             name_of(sig.entity).unwrap_or_else(|| format!("Entity {}", sig.entity))
         };
-        by_subsystem.entry(subsystem.to_string()).or_default().push(Row {
-            sig: sig.clone(),
-            unit: meta.and_then(|m| m.unit.clone()),
-            description: meta.and_then(|m| m.description.clone()),
-            provenance,
-            owner,
-            in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
-            model_internal,
-        });
+        by_subsystem
+            .entry(subsystem.to_string())
+            .or_default()
+            .push(Row {
+                sig: sig.clone(),
+                unit: meta.and_then(|m| m.unit.clone()),
+                description: meta.and_then(|m| m.description.clone()),
+                provenance,
+                owner,
+                in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
+                model_internal,
+            });
     }
     let mut groups: Vec<Group> = by_subsystem
         .into_iter()
         .map(|(label, mut rows)| {
-            rows.sort_by(|a, b| a.sig.path.cmp(&b.sig.path).then_with(|| a.owner.cmp(&b.owner)));
+            rows.sort_by(|a, b| {
+                a.sig
+                    .path
+                    .cmp(&b.sig.path)
+                    .then_with(|| a.owner.cmp(&b.owner))
+            });
             Group { label, rows }
         })
         .collect();
@@ -578,7 +589,14 @@ impl Panel for TelemetryBrowserPanel {
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
         let scoped = self.focus_only && !focus.is_empty();
-        if scoped && !self.catalog.groups.iter().flat_map(|g| &g.rows).any(|r| r.in_focus) {
+        if scoped
+            && !self
+                .catalog
+                .groups
+                .iter()
+                .flat_map(|g| &g.rows)
+                .any(|r| r.in_focus)
+        {
             ui.label(
                 egui::RichText::new(
                     "The selection publishes no telemetry — author `lunco:telemetry` \
@@ -613,12 +631,22 @@ impl Panel for TelemetryBrowserPanel {
                     if visible.is_empty() {
                         continue;
                     }
+                    // A same-named signal on separate physical components is
+                    // not a duplicate sample (four wheels really have four
+                    // torques), but rendering four bare `axle_torque` labels
+                    // makes it indistinguishable from duplicated telemetry.
+                    // Keep every physical measurement and qualify only the
+                    // ambiguous labels with their owning prim.
+                    let mut path_count = std::collections::BTreeMap::new();
+                    for row in &visible {
+                        *path_count.entry(row.sig.path.as_str()).or_insert(0usize) += 1;
+                    }
                     egui::CollapsingHeader::new(
                         egui::RichText::new(format!("{} ({})", group.label, visible.len()))
                             .strong(),
                     )
                     .id_salt(("tb_group", &group.label))
-                    .default_open(true)
+                    .default_open(group.label != "Controls & status")
                     .show(ui, |ui| {
                         // THREE ALIGNED COLUMNS — channel, value, unit.
                         //
@@ -645,11 +673,21 @@ impl Panel for TelemetryBrowserPanel {
                                     let drag_id = ui.id().with(("tb_row", &row.sig));
 
                                     // Column 1 — the channel, and the drag handle.
+                                    let label = if path_count
+                                        .get(row.sig.path.as_str())
+                                        .copied()
+                                        .unwrap_or_default()
+                                        > 1
+                                    {
+                                        format!("{} · {}", row.owner, row.sig.path)
+                                    } else {
+                                        row.sig.path.clone()
+                                    };
                                     let inner =
                                         ui.dnd_drag_source(drag_id, payload.clone(), |ui| {
                                             ui.selectable_label(
                                                 is_sel,
-                                                egui::RichText::new(&row.sig.path)
+                                                egui::RichText::new(label)
                                                     .color(theme.tokens.text),
                                             )
                                         });
