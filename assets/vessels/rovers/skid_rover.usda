@@ -58,6 +58,7 @@ def Xform "SkidRover" (
     # rover without one has wheels, motors and power and sits there, unable to be
     # driven by human, autopilot, script or API.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend variantSets = ["drivetrain", "power", "generation", "thermal"]
     variants = {
         string drivetrain = "raycast"

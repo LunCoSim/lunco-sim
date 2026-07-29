@@ -36,6 +36,7 @@ def Xform "SixWheelIndependent" (
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
     # this rover accepts no commands at all. See `skid_rover.usda`.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
 )
 {
     uniform bool lunco:spawnable = true

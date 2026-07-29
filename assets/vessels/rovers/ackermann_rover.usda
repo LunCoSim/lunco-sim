@@ -33,6 +33,7 @@ def Xform "AckermannRover" (
     # vehicle comes with its computer, and without one this rover accepts no
     # commands at all. See `skid_rover.usda` for the full rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend variantSets = ["drivetrain"]
     variants = {
         string drivetrain = "raycast"

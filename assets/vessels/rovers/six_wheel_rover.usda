@@ -37,6 +37,7 @@ def Xform "SixWheelRover" (
     # difficulty variants (`variants/rover_*.usda`) inherit it through this base
     # and need nothing of their own. See `skid_rover.usda` for the rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = {
         string power = "infinite"
