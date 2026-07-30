@@ -320,10 +320,12 @@ $binary.exe %*
 EOF
 }
 
-# Stage the supplied desktop icon layouts into the distributable package and
-# emit the Linux desktop entry from the same canonical LunCoSim name. The
-# source files live under assets/icons so ordinary asset packaging also keeps
-# them available to the runtime and to downstream bundle tools.
+# Stage the tracked, canonical SVG icons into the distributable package and
+# emit the Linux desktop entry from the same canonical LunCoSim name. Raster
+# PNG, ICO, and ICNS files are developer-generated outputs and intentionally
+# ignored, so a clean CI checkout must never require them. Linux follows the
+# Freedesktop hicolor scalable-app layout; downstream installers can place this
+# directory under their icon root without rasterising the source artwork.
 stage_app_icons() {
     local dir="$1" binary="$2" platform="$3"
     [ "$binary" = "luncosim" ] || return 0
@@ -332,35 +334,27 @@ stage_app_icons() {
         warn "No luncosim icon source at $source"
         return 0
     fi
-    mkdir -p "$dir/icons"
+    if [ ! -f "$source/svg/lcs-night-linux.svg" ]; then
+        warn "No canonical Linux LunCoSim SVG at $source/svg/lcs-night-linux.svg"
+        return 0
+    fi
+    mkdir -p "$dir/icons/svg"
+    sync_dir "$source/svg/" "$dir/icons/svg/"
     case "$platform" in
         *linux*)
-            sync_dir "$source/linux" "$dir/icons/linux"
-            sync_dir "$source/svg" "$dir/icons/svg"
+            mkdir -p "$dir/icons/hicolor/scalable/apps"
+            cp -f "$source/svg/lcs-night-linux.svg" \
+                "$dir/icons/hicolor/scalable/apps/luncosim.svg"
             cat > "$dir/LunCoSim.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=LunCoSim
-            Comment=LunCoSim lunar simulation
+Comment=LunCoSim lunar simulation
 Exec=./run.sh
 Icon=luncosim
 Terminal=false
 Categories=Science;Education;
 EOF
-            ;;
-        *darwin*)
-            if [ -f "$source/macos/luncosim.icns" ]; then
-                cp -f "$source/macos/luncosim.icns" "$dir/LunCoSim.icns"
-            else
-                warn "No generated macOS .icns; package retains canonical SVG icons"
-            fi
-            ;;
-        *windows*)
-            if [ -f "$source/windows/luncosim.ico" ]; then
-                cp -f "$source/windows/luncosim.ico" "$dir/LunCoSim.ico"
-            else
-                warn "No generated Windows .ico; package retains canonical SVG icons"
-            fi
             ;;
     esac
     info "LunCoSim app identity/icons staged for $platform"
