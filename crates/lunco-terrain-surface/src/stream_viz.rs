@@ -1611,6 +1611,11 @@ fn spawn_tile(
     origin_y: f64,
     native_shadow_casters: bool,
 ) -> Entity {
+    // Once the terrain's heightfield cache is available it is the authoritative
+    // terrain-to-terrain shadow path. Keeping every streamed tile in the CSM
+    // caster set then spends a full shadow pass on geometry the cache already
+    // shadows, and lets the coarse atlas flicker across the surface at low sun.
+    let heightfield_shadow_active = shadow.is_some_and(|cache| cache.on > 0.5);
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
@@ -1633,14 +1638,20 @@ fn spawn_tile(
         // list unless the user opts in.
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
-        #[cfg(target_arch = "wasm32")]
+        // The tile's heightfield visibility cache is the one authority for
+        // terrain self-shadowing. Receiving the coarse directional CSM as
+        // well causes a second, saw-toothed shadow to appear when the native
+        // shadow atlas settles under a grazing lunar sun. The tile stays a
+        // caster, so it still casts correctly onto the rover and other PBR
+        // objects.
         bevy::light::NotShadowReceiver,
     ));
-    // The native Bevy shadow pass is the authoritative way for terrain to
-    // occlude dynamic PBR objects (wheels, hulls, instruments). The terrain
-    // shader's horizon march remains its far-field self-shadow detail; it is
-    // not a substitute for a caster in the light's shadow map.
-    if !native_shadow_casters {
+    // Before the cache is ready, native CSM remains the fallback that lets
+    // terrain occlude dynamic PBR objects. Once it is ready, omit all streamed
+    // terrain from the atlas: terrain cannot receive CSM shadows and the cache
+    // owns its self-shadow, so keeping these casters only causes flicker and a
+    // high-cost shadow pass.
+    if !native_shadow_casters || heightfield_shadow_active {
         tile.insert(bevy::light::NotShadowCaster);
     }
     tile.id()
@@ -2920,6 +2931,7 @@ pub(crate) fn bind_authored_maps_to_tiles(
 /// every sun-driven re-bake) lands long after tiles exist — restate it on the
 /// resident Lit tiles' looks.
 pub(crate) fn bind_shadow_cache_to_tiles(
+    mut commands: Commands,
     changed: Query<(&TileShadowCache, &LodTiles), (Changed<TileShadowCache>, With<TerrainLodViz>)>,
     mut looks: Query<&mut ShaderLook>,
 ) {
@@ -2928,6 +2940,14 @@ pub(crate) fn bind_shadow_cache_to_tiles(
             continue;
         }
         for entity in tiles.tile_entities() {
+            let mut tile = commands.entity(entity);
+            if cache.on > 0.5 {
+                tile.try_insert(bevy::light::NotShadowCaster);
+            } else {
+                // A stale/rebuilding cache must restore the documented CSM
+                // fallback until the new heightfield visibility arrives.
+                tile.try_remove::<bevy::light::NotShadowCaster>();
+            }
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
             }
