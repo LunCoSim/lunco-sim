@@ -119,7 +119,14 @@ impl CosimTelemetryClock {
     }
 }
 
-/// Publish every co-simulated component's variables into the [`SignalRegistry`].
+/// Publish observable co-simulated variables into the [`SignalRegistry`].
+///
+/// A USD-generated Modelica network provides [`CosimOutputMetadata`]. Its
+/// metadata is the authored public observability contract: retain only entries
+/// represented there, so anonymous solver expansion (for example `port.T` and
+/// `port.i`) cannot flood the operator browser with undocumented implementation
+/// detail. Standalone co-sim components without that source contract retain the
+/// generic `sim.*` surface.
 ///
 /// Runs in `FixedUpdate` (the sim clock's schedule) and self-paces to
 /// [`CosimTelemetrySettings::rate_hz`]; the fixed rate is the ceiling.
@@ -162,6 +169,9 @@ pub fn publish_cosim_variables(
                 commands.entity(entity).try_insert(SignalSource);
             }
             let metadata = output_metadata.and_then(|metadata| metadata.outputs.get(name));
+            if output_metadata.is_some() && metadata.is_none() {
+                continue;
+            }
             let signal_name = metadata
                 .and_then(|entry| entry.canonical_name.clone())
                 .unwrap_or_else(|| format!("{VARIABLE_NAMESPACE}{name}"));
@@ -289,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn publisher_uses_authored_output_metadata_without_inventing_a_description() {
+    fn generated_models_publish_only_authored_observability_contract() {
         let mut app = app();
         let entity = with_outputs(&mut app, &[("temperature", 280.0), ("undocumented", 1.0)]);
         app.world_mut()
@@ -318,12 +328,11 @@ mod tests {
                 group_path: None,
             })
         );
-        assert_eq!(
+        assert!(
             registry
-                .meta(&SignalRef::new(entity, "sim.undocumented"))
-                .and_then(|meta| meta.description.as_deref()),
-            None,
-            "an undocumented model output must remain undocumented"
+                .scalar_history(&SignalRef::new(entity, "sim.undocumented"))
+                .is_none(),
+            "a generated model's undocumented solver temporary is not operator telemetry"
         );
     }
 

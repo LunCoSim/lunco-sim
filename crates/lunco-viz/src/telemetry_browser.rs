@@ -602,38 +602,30 @@ fn render_tree_node(
                         },
                     );
                     let response = inner.inner;
-                    let value_response = ui
-                        .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(
-                                    latest.map(fmt_value).unwrap_or_else(|| "—".into()),
-                                )
-                                .monospace()
-                                .color(if latest.is_some() {
-                                    theme.tokens.text
-                                } else {
-                                    theme.tokens.text_subdued
-                                }),
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                latest.map(fmt_value).unwrap_or_else(|| "—".into()),
                             )
-                        })
-                        .inner;
+                            .monospace()
+                            .color(if latest.is_some() {
+                                theme.tokens.text
+                            } else {
+                                theme.tokens.text_subdued
+                            }),
+                        )
+                    });
                     let unit_response = ui.label(
                         egui::RichText::new(pretty_unit(row.unit.as_deref()))
                             .small()
                             .color(theme.tokens.text_subdued),
                     );
                     let tip = unit_tooltip(row.unit.as_deref());
-                    let unit_response = if !tip.is_empty() {
-                        unit_response.on_hover_text(tip)
-                    } else {
-                        unit_response
-                    };
+                    if !tip.is_empty() {
+                        unit_response.on_hover_text(tip);
+                    }
                     ui.end_row();
-                    // The signal's explanation belongs to the whole row, not only the
-                    // narrow draggable label. Values and units are normally where a user
-                    // pauses to ask "what does this mean?".
-                    let row_response = response.union(value_response).union(unit_response);
-                    if row_response.double_clicked() {
+                    if response.double_clicked() {
                         queue_plot_drop(
                             ui.ctx(),
                             PlotDropRequest {
@@ -642,47 +634,60 @@ fn render_tree_node(
                             },
                         );
                         *clicked = Some(row.sig.clone());
-                    } else if row_response.clicked() {
+                    } else if response.clicked() {
                         *clicked = Some(row.sig.clone());
                     }
-                    row_response.on_hover_ui(|ui| {
-                        ui.label(egui::RichText::new(&row.sig.path).strong().monospace());
-                        if let Some(description) = &row.description {
-                            ui.label(description);
-                        } else {
-                            ui.label(
-                                egui::RichText::new("No description is authored for this value.")
-                                    .small()
-                                    .weak(),
-                            );
-                        }
-                        if let Some(unit) = &row.unit {
-                            ui.label(egui::RichText::new(format!("Unit: {unit}")).small().weak());
-                        }
-                        if let Some(provenance) = &row.provenance {
-                            ui.label(
-                                egui::RichText::new(format!("Declared by: {provenance}"))
-                                    .small()
-                                    .weak(),
-                            );
-                        }
-                        if !row.active {
-                            ui.label(
-                                egui::RichText::new(
-                                    "Publisher despawned; samples are retained for review.",
-                                )
-                                .small()
-                                .weak(),
-                            );
-                        }
-                        ui.label(
-                            egui::RichText::new("Drag to a canvas; double-click to plot.")
-                                .small()
-                                .weak(),
-                        );
-                    });
+                    // One tooltip closure per row. `on_hover_ui` registers a
+                    // closure for every widget it is called on each frame (the
+                    // body only runs when the pointer is over the cell), so
+                    // attaching it to the drag label, value cell, AND unit cell
+                    // tripled the per-frame closure registrations and was a real
+                    // FPS cost on channel-dense scenes. The drag label is the
+                    // primary hover target; the unit cell keeps its own cheap
+                    // static-text tooltip for the dimensionless case.
+                    attach_row_tooltip(response, row);
                 }
             });
+    });
+}
+
+/// Attach the source-authored explanation to a single telemetry-row cell.
+/// Called once per row on the drag label only; see the call site for why the
+/// value/unit cells do not each get their own `on_hover_ui` closure.
+fn attach_row_tooltip(response: egui::Response, row: &Row) {
+    response.on_hover_ui(|ui| {
+        ui.label(egui::RichText::new(&row.sig.path).strong().monospace());
+        if let Some(description) = &row.description {
+            ui.label(description);
+        } else {
+            ui.label(
+                egui::RichText::new("No description is authored for this value.")
+                    .small()
+                    .weak(),
+            );
+        }
+        if let Some(unit) = &row.unit {
+            ui.label(egui::RichText::new(format!("Unit: {unit}")).small().weak());
+        }
+        if let Some(provenance) = &row.provenance {
+            ui.label(
+                egui::RichText::new(format!("Declared by: {provenance}"))
+                    .small()
+                    .weak(),
+            );
+        }
+        if !row.active {
+            ui.label(
+                egui::RichText::new("Publisher despawned; samples are retained for review.")
+                    .small()
+                    .weak(),
+            );
+        }
+        ui.label(
+            egui::RichText::new("Drag to a canvas; double-click to plot.")
+                .small()
+                .weak(),
+        );
     });
 }
 

@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
-use crate::signal::{PersistedSignalRef, ScalarSample, SignalRef, SignalRegistry, SignalType};
+use crate::signal::{
+    PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
+};
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
 use lunco_core::GlobalEntityId;
@@ -110,15 +112,17 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
     format!("[{owner}.{}]", signal.path)
 }
 
-fn binding_label(wb: &PanelCtx, binding: &SignalBinding) -> String {
+/// Operator-facing label for a binding, with its unit appended when the
+/// registry carries one. `meta` is the already-resolved registry metadata for
+/// `binding.source`; callers that render many chips per frame resolve it once
+/// instead of asking `binding_label` to re-query the registry on every call.
+fn binding_label(wb: &PanelCtx, binding: &SignalBinding, meta: Option<&SignalMeta>) -> String {
     let label = binding
         .label
         .clone()
         .unwrap_or_else(|| component_parameter_label(wb, &binding.source));
-    let unit = wb
-        .resource::<SignalRegistry>()
-        .and_then(|registry| registry.meta(&binding.source))
-        .and_then(|meta| meta.unit.as_deref())
+    let unit = meta
+        .and_then(|m| m.unit.as_deref())
         .filter(|unit| !unit.is_empty() && *unit != "1");
     unit.map_or(label.clone(), |unit| format!("{label} [{unit}]"))
 }
@@ -126,8 +130,9 @@ fn binding_label(wb: &PanelCtx, binding: &SignalBinding) -> String {
 /// Human-facing metadata shown wherever a signal can be selected.  Keep the
 /// signal identity in the label and put authored documentation in the hint so
 /// long Modelica/USD prose does not make the graph toolbar unusable.
-fn signal_hint(wb: &PanelCtx, signal: &SignalRef) -> Option<String> {
-    let meta = wb.resource::<SignalRegistry>()?.meta(signal)?;
+/// `meta` is the already-resolved registry metadata for `signal`.
+fn signal_hint(meta: Option<&SignalMeta>) -> Option<String> {
+    let meta = meta?;
     let mut parts = Vec::new();
     if let Some(unit) = meta.unit.as_deref().filter(|u| !u.is_empty()) {
         parts.push(format!("unit: {unit}"));
@@ -295,7 +300,13 @@ impl Visualization for LinePlot {
                     .scalar_history(&b.source)
                     .is_none_or(|history| history.is_empty())
             })
-            .map(|b| binding_label(&ctx.wb, b))
+            .map(|b| {
+                let meta = ctx
+                    .wb
+                    .resource::<SignalRegistry>()
+                    .and_then(|r| r.meta(&b.source));
+                binding_label(&ctx.wb, b, meta)
+            })
             .collect();
 
         // Plot pixel width — needed *before* tessellation because the
@@ -392,7 +403,8 @@ impl Visualization for LinePlot {
                 }
                 // Entity identity is part of the visible label: four physical
                 // wheels may all expose `axle_torque` at once.
-                let label = binding_label(&ctx.wb, b);
+                let meta = registry.meta(&b.source);
+                let label = binding_label(&ctx.wb, b, meta);
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
@@ -479,7 +491,14 @@ impl Visualization for LinePlot {
             });
         let mut y_label = style.y_label.unwrap_or_else(|| {
             if y_bindings.len() == 1 {
-                binding_label(&ctx.wb, y_bindings[0])
+                // Resolve meta via a short-lived borrow so the long-lived
+                // `registry` (held since the top of the body) is not captured
+                // across the `ctx.wb.defer` for fit requests below.
+                let meta = ctx
+                    .wb
+                    .resource::<SignalRegistry>()
+                    .and_then(|r| r.meta(&y_bindings[0].source));
+                binding_label(&ctx.wb, y_bindings[0], meta)
             } else {
                 "(see legend)".to_string()
             }
@@ -546,8 +565,8 @@ enum Edit {
 fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<Edit> {
     // Snapshot available signals + current style so we can render
     // without holding a long-lived registry borrow.
+    let registry = ctx.wb.resource::<SignalRegistry>();
     let (available, current_y_paths): (Vec<SignalRef>, std::collections::HashSet<SignalRef>) = {
-        let registry = ctx.wb.resource::<SignalRegistry>();
         let available: Vec<SignalRef> = registry
             .map(|r| {
                 r.iter_signals()
@@ -570,8 +589,23 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         .map(|t| t.tokens.text_subdued)
         .unwrap_or(egui::Color32::DARK_GRAY);
 
+    // Resolve registry metadata for a signal at most once per toolbar render.
+    // The previous version asked the registry for `meta(&source)` twice per Y
+    // chip (once inside `binding_label`, again inside `signal_hint`) and once
+    // more per addable — a steady stream of HashMap probes and string
+    // allocations every frame. Resolving once and passing the borrow down keeps
+    // each chip to a single lookup.
+    let meta_of = |sig: &SignalRef| registry.and_then(|r| r.meta(sig));
+
     let mut edit: Option<Edit> = None;
     let mut removed: Option<SignalRef> = None;
+
+    // One control row: X picker, Y chips (in a bounded scroll surface), add
+    // combo, and the log-Y toggle. The chips live inside a single bounded
+    // `ScrollArea` so a large telemetry set cannot grow the header past the
+    // dock (the original `horizontal_wrapped` bug), but unlike the previous
+    // three-`horizontal`-block layout this opens one child UI per region
+    // instead of three per frame.
     ctx.ui.horizontal(|ui| {
         // X picker.
         ui.label(egui::RichText::new("X:").size(11.0));
@@ -600,33 +634,31 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
             });
     });
 
-    // Y bindings are independent from the plot body. Keep the toolbar at a
-    // bounded height and give a large telemetry set its own scroll surface;
-    // horizontal_wrapped() used to grow the header until it pushed the graph
-    // completely out of the dock.
-    ctx.ui.horizontal(|ui| {
-        egui::ScrollArea::vertical()
-            .id_salt(("lp_y_bindings", config.id.raw()))
-            .max_height(74.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
-                        let chip = ui
-                            .small_button(format!("{} ✕", binding_label(&ctx.wb, b)))
-                            .on_hover_text("Remove from this plot");
-                        let chip = if let Some(hint) = signal_hint(&ctx.wb, &b.source) {
-                            chip.on_hover_text(hint)
-                        } else {
-                            chip
-                        };
-                        if chip.clicked() {
-                            removed = Some(b.source.clone());
-                        }
+    // Y chips: a bounded vertical scroll surface wraps the wrapped row, so the
+    // header stays usable with many bindings without spawning a second child UI
+    // just to host the list.
+    egui::ScrollArea::vertical()
+        .id_salt(("lp_y_bindings", config.id.raw()))
+        .max_height(74.0)
+        .auto_shrink([false, true])
+        .show(ctx.ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
+                    let meta = meta_of(&b.source);
+                    let chip = ui
+                        .small_button(format!("{} ✕", binding_label(&ctx.wb, b, meta)))
+                        .on_hover_text("Remove from this plot");
+                    let chip = if let Some(hint) = signal_hint(meta) {
+                        chip.on_hover_text(hint)
+                    } else {
+                        chip
+                    };
+                    if chip.clicked() {
+                        removed = Some(b.source.clone());
                     }
-                });
+                }
             });
-    });
+        });
 
     ctx.ui.horizontal(|ui| {
         // Add remains outside the scrolling list so it is always reachable.
@@ -640,8 +672,9 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 .width(120.0)
                 .show_ui(ui, |ui| {
                     for sig in addables {
+                        let meta = meta_of(sig);
                         let button = ui.button(component_parameter_label(&ctx.wb, sig));
-                        let button = if let Some(hint) = signal_hint(&ctx.wb, sig) {
+                        let button = if let Some(hint) = signal_hint(meta) {
                             button.on_hover_text(hint)
                         } else {
                             button
