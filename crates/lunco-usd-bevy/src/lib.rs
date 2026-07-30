@@ -959,7 +959,9 @@ fn instantiate_usd_prim_read(
 
         // Skip inactive prims
         if !reader.is_active(&sdf_path) {
-            commands.entity(entity).try_insert(UsdVisualSynced);
+            commands
+                .entity(entity)
+                .try_insert((UsdVisualSynced, Visibility::Hidden));
             return;
         }
 
