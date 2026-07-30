@@ -107,6 +107,84 @@ fn schemas_of(facts, path) {
     []
 }
 
+/// Return "" if every member's acausal connector agrees on one name, or a string
+/// naming the first two distinct names found (e.g. "`p` and `port`").
+///
+/// ⚠ A SEPARATE FUNCTION FOR THE SAME REASON `electrical_tally` is one: rhai caps
+/// expression complexity and rejects the whole policy at compile time if the
+/// nested member/program/connector loop carries an `if/else if` inside it. Flat
+/// helpers that return early are the documented workaround.
+/// Flat list of every acausal connector name a scope's members declare, in walk
+/// order. Split out of `scope_connector_mismatch` for the same reason
+/// `electrical_tally` is split: rhai caps expression complexity and rejects the
+/// whole policy if the member/program/connector nesting carries logic inside it.
+fn scope_connector_list(facts, members) {
+    let list = [];
+    for member in members {
+        for program in facts.connector_programs {
+            if program.path != member { continue; }
+            for c in program.connectors { list.push(c); }
+        }
+    }
+    list
+}
+
+/// "" if every connector name agrees, else "first/second" naming the mismatch.
+fn scope_connector_mismatch(facts, members) {
+    let list = scope_connector_list(facts, members);
+    if list.len() <= 1 { return ""; }
+    let first = list[0];
+    for c in list {
+        if c != first { return first + "/" + c; }
+    }
+    ""
+}
+
+/// One acausal network scope must use ONE connector name.
+///
+/// THE BUG THIS CATCHES. A network scope fuses its members into one generated
+/// Modelica DAE, and every acausal edge becomes `connect(a.X, b.X)` where `X` is
+/// the `connectors:<name>` attribute. If one member declares `connectors:p` (a
+/// `Pin`, electrical) and another declares `connectors:port` (a `HeatPort`,
+/// thermal) inside the SAME scope, any wire between them cannot be authored at
+/// all (the names differ) — and if a future model renamed its member so the names
+/// matched, the generated `connect(Pin, HeatPort)` would be a Modelica type error
+/// against generated source the author cannot easily read.
+///
+/// This is the trap the thermal/electrical split exists to avoid: thermal and
+/// electrical belong in SEPARATE scopes (separate `CollectionAPI:components`),
+/// joined only by causal `inputs:`/`outputs:` wires. A scope mixing `p` and
+/// `port` is almost certainly a domain that was not split — e.g. thermal members
+/// accidentally included in an `Electrical` collection.
+///
+/// NAME CONVENTION. The connector attribute name MUST equal the Modelica
+/// connector member name in the bound `.mo` (`Pin p` → `connectors:p`,
+/// `HeatPort port` → `connectors:port`). This rule enforces the scope-level half:
+/// within one island, one name. The per-member half (the name matches the `.mo`)
+/// is the authoring rule documented alongside this policy.
+///
+/// ⚠ EXPRESSION COMPLEXITY. rhai caps expression depth and rejects the whole
+/// policy at compile time if a rule is too dense (see the note on
+/// `electrical_tally`). So this rule does the minimum: it short-circuits the
+/// moment it finds a SECOND distinct connector name, and builds no intermediate
+/// array. A single helper that collects all names then checks `.len()` trips the
+/// cap inside the nested member/program loop.
+fn mixed_connector_domains(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        let pair = scope_connector_mismatch(facts, scope.members);
+        if pair == "" { continue; }
+        let m = "mixes acausal connector names `" + pair + "` in one network —";
+        m += " an acausal connect() requires both ends to share one name AND one";
+        m += " physical type (Pin, HeatPort, …). Different names mean different";
+        m += " connector types were fused into one DAE — usually a thermal or";
+        m += " mechanical domain that belongs in its own Scope with its own";
+        m += " CollectionAPI:components, joined by causal inputs:/outputs:.";
+        out.push(finding("mixed-connector-domains", "error", scope.path, m));
+    }
+    out
+}
+
 fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
@@ -130,6 +208,7 @@ fn lint_usd(facts) {
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
     for f in electrical_island_reference_device(facts) { out.push(f); }
+    for f in mixed_connector_domains(facts) { out.push(f); }
     out
 }
 

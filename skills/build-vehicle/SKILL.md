@@ -37,7 +37,7 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 | Tire | `mobility/tires/*.usda` | grip (`lunco:tire:frictionCoefficient`, `physxVehicleTire:longitudinalStiffness`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
-| Motor thermal | `thermal/motor_thermal.usda` | per-side motor heat balance (`RoverMotorThermal.mo`), telemetry-only — chosen via the rover's `thermal` variantSet |
+| Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from `Electrical` — chosen via the rover's `thermal` variantSet |
 | Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
 | Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Modelica motor-lag drivetrain, one per steering family (see below) |
@@ -262,12 +262,17 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   and current limiting are equations and therefore belong in the projected
   Modelica island. Production Rhai must never scale drive ports per tick.
 - `thermal` = **none | basic** — do the motors have temperatures. `none` is
-  EMPTY; `basic` references `components/thermal/motor_thermal.usda`:
-  `RoverMotorThermal.mo` per-side first-order heat balance (dissipation
-  follows command magnitude, losses follow excess over a 250 K lunar-day
-  ambient), publishing `temp_left`/`temp_right` (K) as PURE TELEMETRY ports —
-  no bridge, nothing acts on them. Exemplar: six_wheel_rover; same
-  choose-a-component shape.
+  EMPTY; `basic` authors a `Scope "Thermal"` with its own
+  `CollectionAPI:components`, compiled to a SEPARATE generated DAE from
+  `Electrical`. Each driven motor gets one `MotorHeatLoad` (from
+  `thermal/motor_thermal.usda`); the motor's solved `outputs:heat` crosses into
+  the thermal island as a causal `inputs:motor_heat_*` boundary wire (a runtime
+  `SimConnection`). The acausal `connectors:port` edges stay inside the thermal
+  collection (heat balance per bank). This compiles and publishes
+  `motor_temp_left`/`motor_temp_right` (K) REGARDLESS of the `power` variant —
+  thermal is decoupled from electrical. See
+  `docs/architecture/reviews/2026-07-30-rover-domain-layering.md`. Exemplar:
+  rocker_bogie (6 motors), skid_rover (4), six_wheel_rover (6).
 
 ## Looks
 

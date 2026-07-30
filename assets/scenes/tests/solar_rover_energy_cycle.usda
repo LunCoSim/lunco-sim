@@ -47,7 +47,11 @@ def Xform "SolarRoverTest" (
 
     over "Scenario"
     {
-        over "Mission"
+        custom string lunco:scenario = "solar-rover-energy-cycle"
+
+        over "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/solar_rover_energy_cycle.rhai@
         }
