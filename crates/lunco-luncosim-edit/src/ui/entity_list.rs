@@ -80,7 +80,7 @@ pub struct EntityTreeView {
     /// Shown children per parent, sorted by leaf label. A parent with no shown
     /// children has no entry (so the panel treats it as a leaf).
     pub kids: HashMap<Entity, Vec<Entity>>,
-    /// Leaf display label per named entity.
+    /// Leaf display label per visible named entity.
     pub labels: HashMap<Entity, String>,
     /// Set once the first build runs, so the change-gate forces an initial fill.
     built: bool,
@@ -219,7 +219,13 @@ pub(crate) fn populate_entity_tree_view(
 
     view.roots = roots;
     view.kids = pruned;
-    view.labels = labels;
+    // The gate below uses this as the exact visible-node set.  Keeping labels
+    // only for nodes paint can reach prevents unnamed/internal or visibility-
+    // pruned runtime churn from invalidating the tree.
+    view.labels = labels
+        .into_iter()
+        .filter(|(entity, _)| shown.get(entity).copied().unwrap_or(false))
+        .collect();
     view.built = true;
 }
 
@@ -243,7 +249,7 @@ pub(crate) fn scene_topology_changed(
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
     changed: Query<
-        (),
+        Entity,
         (
             With<Name>,
             Or<(Changed<Name>, Changed<ChildOf>)>,
@@ -251,7 +257,7 @@ pub(crate) fn scene_topology_changed(
         ),
     >,
     changed_system: Query<
-        (),
+        Entity,
         (
             With<Name>,
             Or<(Changed<Name>, Changed<ChildOf>)>,
@@ -259,7 +265,7 @@ pub(crate) fn scene_topology_changed(
         ),
     >,
     added: Query<
-        (),
+        Entity,
         (
             With<Name>,
             Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
@@ -267,7 +273,7 @@ pub(crate) fn scene_topology_changed(
         ),
     >,
     added_system: Query<
-        (),
+        Entity,
         (
             With<Name>,
             Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
@@ -292,12 +298,24 @@ pub(crate) fn scene_topology_changed(
         | drained(&mut rm_child.read())
         | drained(&mut rm_mesh.read())
         | drained(&mut rm_sel.read());
-    let system_churn =
-        settings.show_system && (!changed_system.is_empty() || !added_system.is_empty());
+    // The raw ECS graph contains many named but visibility-pruned implementation
+    // entities (telemetry channel holders, transform wrappers, etc.).  They are
+    // not inputs to this view. A change to a node the current view does not show
+    // therefore cannot justify rebuilding the entire tree. New mesh/selectable
+    // nodes still enter through `added`, then become visible on this rebuild.
+    let visible_changed = changed
+        .iter()
+        .any(|entity| view.labels.contains_key(&entity));
+    let visible_added = !added.is_empty();
+    let system_churn = settings.show_system
+        && (changed_system
+            .iter()
+            .any(|entity| view.labels.contains_key(&entity))
+            || !added_system.is_empty());
     let run = !*first
         || settings.is_changed()
-        || !changed.is_empty()
-        || !added.is_empty()
+        || visible_changed
+        || visible_added
         || system_churn
         || removed;
     *first = true;

@@ -659,13 +659,12 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Build mode — Entities + Spawn left, 3D centre, Inspector right, Telemetry below.
+/// Build mode — structure + telemetry left, 3D centre, Inspector/spawn right,
+/// and graph instances below.
 ///
-/// Entity list and Spawn palette live on the left side dock;
-/// Inspector is on the right dock. The bottom dock carries the Telemetry browser:
-/// selecting a rover and watching its channels is a BUILD-time question ("did that
-/// motor actually turn?"), and the browser scopes itself to the selection, so it is
-/// only useful where a selection exists.
+/// Telemetry is a singleton, therefore it has exactly one dock location. Graph
+/// instances own the bottom dock; placing Telemetry in both used the same egui
+/// widget ids twice and produced the red collision diagnostics.
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
@@ -679,9 +678,7 @@ impl Perspective for BuildPerspective {
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Build is the simulation workbench: keep the mission-oriented
-        // telemetry catalog visible while editing and running the scene.
-        layout.set_side_browser(Some(PanelId("telemetry_browser")));
+        layout.set_side_browser_tabs(vec![PanelId("entity_list"), PanelId("telemetry_browser")]);
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),
@@ -690,12 +687,12 @@ impl Perspective for BuildPerspective {
             // panel with this id (the rover binary does, modelica
             // workbench doesn't). The workbench filters unknown ids.
             PanelId("rover_code"),
+            PanelId("spawn_palette"),
         ]);
-        // Registered by `lunco-viz`'s `LuncoVizPlugin` (which the Modelica
-        // workbench plugin installs). Unknown ids are filtered by the workbench,
-        // so an app that doesn't link viz simply gets an empty bottom dock — no
-        // dependency from this crate to the panel's.
-        layout.set_bottom(Some(PanelId("telemetry_browser")));
+        // The default Graphs instance is opened by the host after this
+        // perspective activates. Its own `PanelSlot::Bottom` creates the sole
+        // bottom dock without duplicating a singleton panel.
+        layout.set_bottom(None);
     }
 }
 

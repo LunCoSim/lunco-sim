@@ -1638,8 +1638,17 @@ impl WorkbenchLayout {
         // keeps its stale id and renders empty, which is strictly better than
         // collapsing its leaf and losing the saved split sizes (and the
         // codec's own `OpenTab` re-adds the live tab alongside it).
+        // A singleton panel is one renderer with one egui identity. A stale
+        // layout may contain it in more than one leaf (older Build layouts put
+        // Telemetry in both side and bottom), which makes egui render the same
+        // widget tree twice and report ID collisions. Keep the first occurrence
+        // in dock order; the current perspective then supplies its canonical
+        // position on the next normal layout rebuild.
+        let mut seen_singletons = HashSet::new();
         new_dock.retain_tabs(|tab| match tab {
-            TabId::Singleton(pid) => valid_singletons.contains(pid.0),
+            TabId::Singleton(pid) => {
+                valid_singletons.contains(pid.0) && seen_singletons.insert(*pid)
+            }
             TabId::Instance { kind, instance } => {
                 if !valid_kinds.contains(kind.0) {
                     return false;

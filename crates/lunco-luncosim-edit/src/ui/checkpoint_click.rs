@@ -1602,7 +1602,7 @@ fn route_signature(
 /// Build a flat ground-hugging ribbon through `points`, with vertices expressed
 /// relative to `anchor` (the entity's own origin) so f32 vertex precision stays
 /// tight regardless of how far the route sits from the world origin.
-fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
+fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3, first_height_offset: f32) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
     let n = points.len();
@@ -1629,7 +1629,15 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
             right = DVec3::X;
         }
         let right = right.normalize() * PATH_HALF_WIDTH as f64;
-        let base = (points[i] - anchor).as_vec3() + Vec3::Y * WAYPOINT_CONNECTION_HEIGHT;
+        // The live leg starts at the rover body's authored root (its centre),
+        // while waypoint pins meet at their visible dome centres. Applying the
+        // waypoint lift to point zero made the line appear to leave the mast.
+        let height_offset = if i == 0 {
+            first_height_offset
+        } else {
+            WAYPOINT_CONNECTION_HEIGHT
+        };
+        let base = (points[i] - anchor).as_vec3() + Vec3::Y * height_offset;
         let r = right.as_vec3();
         pos.push((base - r).to_array());
         pos.push((base + r).to_array());
@@ -1892,19 +1900,26 @@ pub fn sync_waypoint_path_mesh(
             follow_surface(&mut path, &surface);
 
             let anchor = path[0];
-            let Some(mesh) = build_ribbon_mesh(&path, anchor) else {
+            let first_height_offset = if part == PathPart::Remaining {
+                0.0
+            } else {
+                WAYPOINT_CONNECTION_HEIGHT
+            };
+            let Some(mesh) = build_ribbon_mesh(&path, anchor, first_height_offset) else {
                 continue;
             };
             // Driven stays VISIBLE, just dimmed — the mission reads as a whole and you
             // can see where the rover has been; only the colour says "done".
             let (base_color, emissive) = match part {
                 PathPart::Driven => (
-                    LinearRgba::new(0.40, 0.42, 0.40, 0.30),
-                    LinearRgba::new(0.22, 0.24, 0.22, 1.0),
+                    // Green = a confirmed/reached leg.
+                    LinearRgba::new(0.18, 0.72, 0.38, 0.38),
+                    LinearRgba::new(0.08, 0.55, 0.24, 1.0),
                 ),
                 PathPart::Remaining => (
-                    LinearRgba::new(0.15, 0.85, 0.45, 0.55),
-                    LinearRgba::new(0.10, 0.70, 0.35, 1.0),
+                    // Blue = the live commanded leg from the rover centre.
+                    LinearRgba::new(0.12, 0.45, 0.95, 0.62),
+                    LinearRgba::new(0.06, 0.30, 0.85, 1.0),
                 ),
             };
             // Unfocused vessel: same ribbon, held back — visible enough to right-click
