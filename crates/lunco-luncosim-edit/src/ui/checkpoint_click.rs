@@ -825,12 +825,18 @@ pub fn draw_waypoint_context_menu(
     }
 
     // Deactivate the pin itself, AFTER the mission no longer references it. A
-    // route waypoint is normally authored in the scene/variant layer, while
-    // interactive edits target the runtime overlay; `RemovePrim` can only
-    // remove a spec authored by that same layer and therefore left the original
-    // marker composed. `active = false` is the authoritative stronger opinion:
-    // it hides the authored prim and its subtree, is undoable, and does not
-    // mutate the source scene merely to satisfy a runtime delete.
+    // marker is a purely-visual prim (a non-colliding translucent dome + an
+    // overlap-only Sensor — never a rigid body), so this `SetActive` reconciles
+    // INCREMENTALLY: `op_needs_rebuild` carves marker paths (`/<vessel>/Route/
+    // W<n>`) out of the rebuild set, and the live `author_active` +
+    // `refresh_prim_subtree` drops the pin's visual subtree. No scene reload.
+    // `RemovePrim` is still NOT used: a route waypoint is normally authored in
+    // the scene/variant layer while interactive edits target the runtime
+    // overlay, so `RemovePrim` (which can only remove a spec authored by that
+    // same layer) left the original marker composed. `active = false` is the
+    // authoritative stronger opinion: it hides the authored prim and its
+    // subtree, is undoable, and does not mutate the source scene merely to
+    // satisfy a runtime delete.
     if let Some(marker_path) = deleted_marker {
         info!("[waypoint] deactivating marker prim {marker_path}");
         commands.trigger(ApplyUsdOp {
