@@ -25,10 +25,13 @@
 
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
+use lunco_core::telemetry::{ChannelSource, Parameter};
 use lunco_core::{
     on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid,
 };
-use lunco_cosim::{SimComponent, SimConnection, SimStatus};
+use lunco_cosim::{
+    CosimOutputDescriptor, CosimOutputMetadata, SimComponent, SimConnection, SimStatus,
+};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel};
@@ -46,6 +49,7 @@ use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
+use crate::domain_projection::GeneratedModelicaSource;
 use crate::UsdSimProcessed;
 
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,6 +58,12 @@ enum CosimUpdateSet {
     Projection,
     Wiring,
 }
+
+/// Marks a USD prim after its authored telemetry declaration has been projected
+/// into the runtime sampling plan. The marker is scene-lifetime state: a scene
+/// reload despawns the prim and therefore naturally re-projects its channels.
+#[derive(Component)]
+struct UsdTelemetryProjected;
 
 /// Telemetry event published when a USD-declared model could not be handed to
 /// the solver at all — the worker channel was closed, so the compile that
@@ -434,6 +444,63 @@ pub fn process_usd_cosim_prims(
     }
 }
 
+/// Project the standard LunCo telemetry declaration attributes into the shared
+/// telemetry sampler. The declaration stays in USD; this is only the runtime
+/// projection, so descriptions and units remain authored data all the way to
+/// the signal registry.
+fn project_usd_telemetry(
+    mut commands: Commands,
+    query: Query<(Entity, &UsdPrimPath), Without<UsdTelemetryProjected>>,
+    stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
+) {
+    for (entity, prim_path) in &query {
+        let Some(recipe) = stages
+            .get(&prim_path.stage_handle)
+            .and_then(|asset| asset.recipe.clone())
+        else {
+            continue;
+        };
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            canonical.get_or_build(id, &recipe);
+        }
+        let Some(stage) = canonical.get(id) else {
+            continue;
+        };
+        let Ok(path) = SdfPath::new(&prim_path.path) else {
+            commands.entity(entity).try_insert(UsdTelemetryProjected);
+            continue;
+        };
+        let view = stage.view();
+        let authored = view
+            .scalar::<bool>(&path, "lunco:telemetry")
+            .unwrap_or(false);
+        if authored {
+            let port = view.text(&path, "lunco:telemetry:port");
+            let name = view.text(&path, "lunco:telemetry:name");
+            if let (Some(port), Some(name)) = (
+                port.filter(|p| !p.is_empty()),
+                name.filter(|n| !n.is_empty()),
+            ) {
+                commands.spawn((
+                    Name::new(format!("telemetry:{name}")),
+                    ChildOf(entity),
+                    Parameter {
+                        name,
+                        unit: view.text(&path, "lunco:telemetry:unit").unwrap_or_default(),
+                        description: view.text(&path, "lunco:telemetry:description"),
+                        source: ChannelSource::Port(port),
+                        target: Some(entity),
+                        ..default()
+                    },
+                ));
+            }
+        }
+        commands.entity(entity).try_insert(UsdTelemetryProjected);
+    }
+}
+
 /// Reads one cosim prim's attributes and dispatches its model + wires + events,
 /// generic over the read source ([`UsdRead`]) — drives off either the live
 /// canonical `StageView` or the flattened `sdf::Data`, identically.
@@ -784,6 +851,7 @@ pub fn dispatch_loaded_modelica_sources(
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
+    canonical: NonSend<CanonicalStages>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
     // Half of the solver-selection input, and the half only the ECS knows: the
@@ -807,7 +875,7 @@ pub fn dispatch_loaded_modelica_sources(
     let mut pending: Vec<_> = q.iter_mut().collect();
     pending.sort_unstable_by(|(_, _, a, _), (_, _, b, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, _, mut component) in pending {
+    for (entity, pending, prim_path, mut component) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -837,6 +905,35 @@ pub fn dispatch_loaded_modelica_sources(
         let model_name = interface.model_name.unwrap_or_else(|| "Model".into());
         let parameters = interface.parameters;
         let inputs = interface.inputs;
+        let usd_documentation = canonical
+            .get(prim_path.stage_handle.id())
+            .and_then(|stage| {
+                let path = SdfPath::new(&prim_path.path).ok()?;
+                stage.view().documentation(&path)
+            });
+        let outputs = interface
+            .variable_metadata
+            .into_iter()
+            .map(|(name, metadata)| {
+                let provenance = if metadata.description.is_some() {
+                    "modelica"
+                } else if usd_documentation.is_some() {
+                    "usd"
+                } else {
+                    "modelica"
+                };
+                (
+                    name,
+                    CosimOutputDescriptor {
+                        description: metadata.description.or_else(|| usd_documentation.clone()),
+                        unit: metadata.unit,
+                        provenance: provenance.to_string(),
+                        canonical_name: None,
+                        group_path: None,
+                    },
+                )
+            })
+            .collect();
 
         // DISPATCH FIRST, then stub. NOT `let _ = send(..)`: a closed worker
         // channel means the compile is never attempted, and a `ModelicaModel`
@@ -875,6 +972,9 @@ pub fn dispatch_loaded_modelica_sources(
                 )
             });
 
+        commands
+            .entity(entity)
+            .try_insert(CosimOutputMetadata { outputs });
         commands.entity(entity).try_insert(ModelicaModel {
             model_path: PathBuf::from(&pending.asset_path),
             model_name: model_name.clone(),
@@ -1088,12 +1188,47 @@ fn upsert_ports<'a>(
 /// Per-tick: ModelicaModel.variables → SimComponent.outputs.
 /// Lets `propagate_connections` see fresh Modelica outputs each step.
 pub fn sync_modelica_outputs(
-    mut q: Query<(&ModelicaModel, &mut SimComponent), With<UsdSourcedCosim>>,
+    mut q: Query<
+        (
+            &ModelicaModel,
+            &mut SimComponent,
+            Option<&GeneratedModelicaSource>,
+            Option<&mut CosimOutputMetadata>,
+        ),
+        With<UsdSourcedCosim>,
+    >,
 ) {
-    for (model, mut comp) in &mut q {
+    for (model, mut comp, generated, mut metadata) in &mut q {
         upsert_ports(&mut comp.outputs, model.variables.iter());
         for (k, v) in &model.inputs {
             comp.inputs.entry(k.clone()).or_insert(*v);
+        }
+        if let (Some(source), Some(metadata)) = (generated, metadata.as_deref_mut()) {
+            for name in model.variables.keys() {
+                let descriptor =
+                    metadata
+                        .outputs
+                        .entry(name.clone())
+                        .or_insert_with(|| CosimOutputDescriptor {
+                            description: None,
+                            unit: None,
+                            provenance: "modelica".to_string(),
+                            canonical_name: None,
+                            group_path: None,
+                        });
+                // The wrapper topology is immutable between projection
+                // revisions. Resolve each newly observed solver variable once;
+                // steady-state ticks only copy values into SimComponent.
+                if descriptor.group_path.is_none() {
+                    descriptor.group_path =
+                        crate::domain_projection::generated_signal_group(source, name);
+                }
+                if descriptor.canonical_name.is_some() {
+                    continue;
+                }
+                descriptor.canonical_name =
+                    crate::domain_projection::canonical_generated_signal(source, name);
+            }
         }
         comp.status = modelica_status(model);
     }
@@ -2926,6 +3061,10 @@ pub(crate) fn install(app: &mut App) {
             // after scene-load is complete. Same archetype-check
             // pattern used for `process_usd_sim_prims`.
             process_usd_cosim_prims.run_if(any_unprocessed_usd_cosim),
+            // Project authored `lunco:telemetry:*` declarations once the live
+            // composed stage is available. This is independent of co-sim model
+            // discovery so physical/avian and Modelica channels use one sampler.
+            project_usd_telemetry,
             // Source-load drain runs every Update; cheap when no
             // `PendingModelicaSource` / `PendingPythonSource` entities
             // exist. Splitting it from `process_usd_cosim_prims` is

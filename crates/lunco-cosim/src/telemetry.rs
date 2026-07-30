@@ -22,13 +22,11 @@
 //!
 //! # It cannot clobber an authored channel
 //!
-//! Auto-published variables live under the [`VARIABLE_NAMESPACE`] prefix
-//! (`sim.soc`, `sim.omega`). Authored channels use their own mnemonic
-//! (`soc`), so the two never land on the same `SignalRef` even when a motor prim
-//! carries both a `lunco:telemetry` channel named `torque` and a model variable
-//! called `torque`. Without the namespace those two producers — at different
-//! rates, with different deadbands — would interleave into one buffer and the plot
-//! would show a signal that never existed.
+//! Auto-published variables use the [`VARIABLE_NAMESPACE`] prefix as a safe
+//! fallback (`sim.soc`, `sim.omega`). Generated USD networks replace that
+//! fallback with a canonical authored component path (for example
+//! `Battery.soc_out`) using the synthesis mapping. Authored channels retain
+//! their own mnemonic, so independent producers never silently interleave.
 //!
 //! # Rate, retention, and what it costs
 //!
@@ -64,7 +62,7 @@
 use bevy::prelude::*;
 use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 
-use crate::component::SimComponent;
+use crate::component::{CosimOutputMetadata, SimComponent};
 
 /// Prefix every auto-published co-sim variable carries in the registry. See the
 /// module docs: it is what keeps this producer out of the authored channels'
@@ -130,7 +128,7 @@ pub fn publish_cosim_variables(
     settings: Res<CosimTelemetrySettings>,
     mut clock: ResMut<CosimTelemetryClock>,
     mut signals: ResMut<SignalRegistry>,
-    q: Query<(Entity, &SimComponent)>,
+    q: Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_unmarked: Query<(), Without<SignalSource>>,
     mut commands: Commands,
 ) {
@@ -152,18 +150,26 @@ pub fn publish_cosim_variables(
     // instead of firing a burst of back-dated samples.
     clock.next_due = (clock.next_due + period).max(now + period);
 
-    for (entity, comp) in &q {
+    for (entity, comp, output_metadata) in &q {
         if comp.outputs.is_empty() {
             continue;
         }
         // Tag the owner ONCE so `drop_signals_of_removed_source` frees these
         // buffers when the vessel despawns — this producer must not be the reason
         // a dead rover's history lingers.
-        if q_unmarked.get(entity).is_ok() {
-            commands.entity(entity).try_insert(SignalSource);
-        }
         for (name, value) in &comp.outputs {
-            let sig = SignalRef::new(entity, format!("{VARIABLE_NAMESPACE}{name}"));
+            if q_unmarked.get(entity).is_ok() {
+                commands.entity(entity).try_insert(SignalSource);
+            }
+            let metadata = output_metadata.and_then(|metadata| metadata.outputs.get(name));
+            let signal_name = metadata
+                .and_then(|entry| entry.canonical_name.clone())
+                .unwrap_or_else(|| format!("{VARIABLE_NAMESPACE}{name}"));
+            // The runtime projection owns the signal lifecycle.  Its metadata
+            // carries the composed USD presentation path, which the browser
+            // uses to place it under the authored part without rebinding the
+            // signal to a potentially duplicated instance entity.
+            let sig = SignalRef::new(entity, signal_name);
             let known = signals.scalar_history(&sig).is_some();
             if !known {
                 // `admitted` is a RATCHET, and the buffers it counts are not:
@@ -203,11 +209,14 @@ pub fn publish_cosim_variables(
                 signals.update_meta(
                     sig.clone(),
                     SignalMeta {
-                        description: Some(name.clone()),
-                        // A co-sim port carries no unit. An authored
-                        // `lunco:telemetry` channel is where a unit gets stated.
-                        unit: None,
-                        provenance: Some("cosim".into()),
+                        description: metadata.and_then(|entry| entry.description.clone()),
+                        unit: metadata.and_then(|entry| entry.unit.clone()),
+                        provenance: Some(
+                            metadata
+                                .map(|entry| entry.provenance.clone())
+                                .unwrap_or_else(|| "cosim".into()),
+                        ),
+                        group_path: metadata.and_then(|entry| entry.group_path.clone()),
                     },
                 );
             }
@@ -276,6 +285,45 @@ mod tests {
         assert!(
             reg.scalar_history(&SignalRef::new(e, "soc")).is_none(),
             "the bare name belongs to authored channels — this producer must not take it"
+        );
+    }
+
+    #[test]
+    fn publisher_uses_authored_output_metadata_without_inventing_a_description() {
+        let mut app = app();
+        let entity = with_outputs(&mut app, &[("temperature", 280.0), ("undocumented", 1.0)]);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(CosimOutputMetadata {
+                outputs: std::collections::HashMap::from([(
+                    "temperature".to_string(),
+                    crate::component::CosimOutputDescriptor {
+                        description: Some("Motor case temperature".to_string()),
+                        unit: Some("K".to_string()),
+                        provenance: "modelica".to_string(),
+                        canonical_name: None,
+                        group_path: None,
+                    },
+                )]),
+            });
+        step_fixed(&mut app, 2);
+
+        let registry = app.world().resource::<SignalRegistry>();
+        assert_eq!(
+            registry.meta(&SignalRef::new(entity, "sim.temperature")),
+            Some(&SignalMeta {
+                description: Some("Motor case temperature".to_string()),
+                unit: Some("K".to_string()),
+                provenance: Some("modelica".to_string()),
+                group_path: None,
+            })
+        );
+        assert_eq!(
+            registry
+                .meta(&SignalRef::new(entity, "sim.undocumented"))
+                .and_then(|meta| meta.description.as_deref()),
+            None,
+            "an undocumented model output must remain undocumented"
         );
     }
 

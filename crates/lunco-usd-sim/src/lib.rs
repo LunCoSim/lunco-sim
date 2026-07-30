@@ -70,7 +70,7 @@ use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{ports::PORT_NAME, SimConnection};
-use lunco_hardware::{MotorActuator, SteeringActuator};
+use lunco_hardware::{MotorActuator, MotorReadback, MotorReadbackTarget, SteeringActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
@@ -508,6 +508,7 @@ fn process_usd_sim_prims(
         ),
         Without<UsdSimProcessed>,
     >,
+    all_prims: Query<(Entity, &UsdPrimPath)>,
     q_grids: Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
@@ -627,6 +628,7 @@ fn process_usd_sim_prims(
             maybe_child_of,
             wait_for_visuals,
             topology,
+            &all_prims,
             &q_existing_floating_origins,
             &q_provisional_cameras,
             &q_grids,
@@ -703,6 +705,7 @@ fn process_usd_sim_prim_read(
     maybe_child_of: Option<&ChildOf>,
     wait_for_visuals: bool,
     topology: &StageJointTopology,
+    all_prims: &Query<(Entity, &UsdPrimPath)>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
@@ -1384,12 +1387,21 @@ fn process_usd_sim_prim_read(
             &prim_path.path,
             &topology.wheel_attachment_targets,
         );
-        let powertrain = powertrain::find_for_wheel(reader, &sdf_path);
+        let powertrain = powertrain::find_binding_for_wheel(reader, &sdf_path);
+        let motor_entity = powertrain.as_ref().and_then(|binding| {
+            all_prims
+                .iter()
+                .find(|(_, candidate)| {
+                    candidate.stage_handle == prim_path.stage_handle
+                        && candidate.path == binding.motor.as_str()
+                })
+                .map(|(entity, _)| entity)
+        });
         let params = match WheelParams::read(
             reader,
             &sdf_path,
             attachment_susp.as_ref(),
-            powertrain.as_ref(),
+            powertrain.as_ref().map(|binding| &binding.params),
         ) {
             Ok(p) => p,
             Err(missing) => {
@@ -1405,6 +1417,18 @@ fn process_usd_sim_prim_read(
                 return;
             }
         };
+        if powertrain.is_some() && motor_entity.is_none() {
+            // The motor is an authored USD peer. Retry after its visual projection
+            // arrives; silently falling back to the wheel would lose the composed
+            // topology and split one drivetrain across two UI branches.
+            return;
+        }
+        if let Some(motor) = motor_entity {
+            // Native drivetrain state is a port on the authored motor. The
+            // wheel/joint only holds this resolved handle, so runtime discovery
+            // exposes torque and axle speed without an authored telemetry relay.
+            commands.entity(motor).try_insert(MotorReadback::default());
+        }
 
         // Create the actuator-side ports for drive and steering. Owned by the wheel via
         // `ChildOf` so the single recursive scene-clear reclaims them with the
@@ -1504,6 +1528,7 @@ fn process_usd_sim_prim_read(
                 maybe_shader_mat,
                 maybe_child_of,
                 &params,
+                motor_entity,
                 p_drive,
                 steer_for_wheel,
                 max_steer_angle,
@@ -1538,6 +1563,7 @@ fn process_usd_sim_prim_read(
                 maybe_shader_mat,
                 maybe_child_of,
                 &params,
+                motor_entity,
                 &suspension,
                 p_drive,
                 p_steer,
@@ -1737,6 +1763,7 @@ fn setup_raycast_wheel(
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     params: &WheelParams,
+    motor_entity: Option<Entity>,
     susp: &SuspensionParams,
     p_drive: Entity,
     p_steer: Entity,
@@ -1860,6 +1887,11 @@ fn setup_raycast_wheel(
         avian3d::prelude::Position::default(),
         avian3d::prelude::Rotation::default(),
     ));
+    if let Some(motor) = motor_entity {
+        commands
+            .entity(entity)
+            .try_insert(MotorReadbackTarget(motor));
+    }
 
     // Front Ackermann wheel: attach the SHARED steering servo. The same
     // `SteeringActuator` + system the physical joint uses computes this wheel's
@@ -1908,6 +1940,7 @@ fn setup_physical_wheel(
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     params: &WheelParams,
+    motor_entity: Option<Entity>,
     p_drive: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
@@ -2190,6 +2223,9 @@ fn setup_physical_wheel(
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
+    if let Some(motor) = motor_entity {
+        joint_cmd.try_insert(MotorReadbackTarget(motor));
+    }
     let joint_entity = joint_cmd.id();
     // Front wheels of an Ackermann rover also steer (frame rotation about Y).
     if let Some(steer_port) = steer {

@@ -11,8 +11,12 @@ model DataBuffer
   Real buffer_mb(start = buffer_init_mb) "Current buffer storage fill, MB";
   output Real buffer_fill_pct "Buffer fill percentage, 0..100 %";
   output Real buffer_full "Buffer overflow flag (1.0 = full, 0.0 = space available)";
+  output Real stored_data_mb(unit="MB") "Current buffered data volume";
+  output Real free_capacity_mb(unit="MB") "Remaining available buffer capacity";
 equation
   der(buffer_mb) = max(-buffer_mb, (rate_in_kbps - rate_out_kbps) / 8000.0);
   buffer_fill_pct = (buffer_mb / capacity_mb) * 100.0;
   buffer_full = max(0.0, min(1.0, (buffer_mb - capacity_mb + 1.0)));
+  stored_data_mb = buffer_mb;
+  free_capacity_mb = max(0.0, capacity_mb - buffer_mb);
 end DataBuffer;

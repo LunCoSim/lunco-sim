@@ -111,10 +111,31 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
 }
 
 fn binding_label(wb: &PanelCtx, binding: &SignalBinding) -> String {
-    binding
+    let label = binding
         .label
         .clone()
-        .unwrap_or_else(|| component_parameter_label(wb, &binding.source))
+        .unwrap_or_else(|| component_parameter_label(wb, &binding.source));
+    let unit = wb
+        .resource::<SignalRegistry>()
+        .and_then(|registry| registry.meta(&binding.source))
+        .and_then(|meta| meta.unit.as_deref())
+        .filter(|unit| !unit.is_empty() && *unit != "1");
+    unit.map_or(label.clone(), |unit| format!("{label} [{unit}]"))
+}
+
+/// Human-facing metadata shown wherever a signal can be selected.  Keep the
+/// signal identity in the label and put authored documentation in the hint so
+/// long Modelica/USD prose does not make the graph toolbar unusable.
+fn signal_hint(wb: &PanelCtx, signal: &SignalRef) -> Option<String> {
+    let meta = wb.resource::<SignalRegistry>()?.meta(signal)?;
+    let mut parts = Vec::new();
+    if let Some(unit) = meta.unit.as_deref().filter(|u| !u.is_empty()) {
+        parts.push(format!("unit: {unit}"));
+    }
+    if let Some(description) = meta.description.as_deref().filter(|d| !d.is_empty()) {
+        parts.push(description.to_owned());
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
 /// Keep the optional phase-space X axis on the same stable-identity lifecycle
@@ -550,7 +571,8 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         .unwrap_or(egui::Color32::DARK_GRAY);
 
     let mut edit: Option<Edit> = None;
-    ctx.ui.horizontal_wrapped(|ui| {
+    let mut removed: Option<SignalRef> = None;
+    ctx.ui.horizontal(|ui| {
         // X picker.
         ui.label(egui::RichText::new("X:").size(11.0));
         let x_current = style
@@ -576,24 +598,38 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                     }
                 }
             });
-        ui.separator();
+    });
 
-        // Y chips.
-        ui.label(egui::RichText::new("Y:").size(11.0));
-        let mut removed: Option<SignalRef> = None;
-        for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
-            let chip = ui
-                .small_button(format!("{} ✕", binding_label(&ctx.wb, b)))
-                .on_hover_text("Remove from this plot");
-            if chip.clicked() {
-                removed = Some(b.source.clone());
-            }
-        }
-        if let Some(r) = removed {
-            edit = Some(Edit::RemoveY(r));
-        }
+    // Y bindings are independent from the plot body. Keep the toolbar at a
+    // bounded height and give a large telemetry set its own scroll surface;
+    // horizontal_wrapped() used to grow the header until it pushed the graph
+    // completely out of the dock.
+    ctx.ui.horizontal(|ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(("lp_y_bindings", config.id.raw()))
+            .max_height(74.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
+                        let chip = ui
+                            .small_button(format!("{} ✕", binding_label(&ctx.wb, b)))
+                            .on_hover_text("Remove from this plot");
+                        let chip = if let Some(hint) = signal_hint(&ctx.wb, &b.source) {
+                            chip.on_hover_text(hint)
+                        } else {
+                            chip
+                        };
+                        if chip.clicked() {
+                            removed = Some(b.source.clone());
+                        }
+                    }
+                });
+            });
+    });
 
-        // Y add.
+    ctx.ui.horizontal(|ui| {
+        // Add remains outside the scrolling list so it is always reachable.
         let addables: Vec<&SignalRef> = available
             .iter()
             .filter(|s| !current_y_paths.contains(s))
@@ -604,7 +640,13 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 .width(120.0)
                 .show_ui(ui, |ui| {
                     for sig in addables {
-                        if ui.button(component_parameter_label(&ctx.wb, sig)).clicked() {
+                        let button = ui.button(component_parameter_label(&ctx.wb, sig));
+                        let button = if let Some(hint) = signal_hint(&ctx.wb, sig) {
+                            button.on_hover_text(hint)
+                        } else {
+                            button
+                        };
+                        if button.clicked() {
                             edit = Some(Edit::AddY(sig.clone()));
                         }
                     }
@@ -629,6 +671,9 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
             edit = Some(Edit::SetLogY(log_y));
         }
     });
+    if let Some(r) = removed {
+        edit = Some(Edit::RemoveY(r));
+    }
     ctx.ui.separator();
     edit
 }

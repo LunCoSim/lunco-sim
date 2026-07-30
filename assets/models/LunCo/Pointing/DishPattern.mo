@@ -19,9 +19,11 @@ model DishPattern "Parabolic dish main lobe: what pointing error costs the link.
   output Real beamwidth "half-power (-3 dB) full angle (rad)";
   output Real gain_frac "fraction of peak gain on the link, 0..1";
   output Real locked "1 while the target is inside the half-power beam";
+  output Real wavelength_m(unit="m") "Carrier wavelength derived from link frequency";
 equation
   wavelength = c / frequency;
   beamwidth = 1.22 * wavelength / diameter;
+  wavelength_m = wavelength;
   // 4·ln2 = 2.7726 is the constant that puts gain_frac = 0.5 exactly at
   // ±beamwidth/2 — the definition of the half-power beamwidth.
   gain_frac = exp(-2.7726 * (point_error / beamwidth)^2);

@@ -10,6 +10,8 @@ model ThermostatHeater
 
   output Real heater_active "Heater status (1.0 = active heating, 0.0 = off)";
   output Real heat_out_w "Thermal heat flow into component, W";
+  output Real electrical_power_w(unit="W") "Electrical power currently drawn by the heater";
+  output Real sensed_temperature_k(unit="K") "Temperature used by the thermostat decision";
 
   HeatPort thermal_port "Thermal heat output port";
   LunCo.Electrical.Pin elec_port "Electrical power supply pin";
@@ -18,4 +20,6 @@ equation
   heat_out_w = p_heater_w * eta_heat * heater_active;
   thermal_port.Q = -heat_out_w;
   elec_port.i = (p_heater_w * heater_active) / max(1.0, elec_port.v);
+  electrical_power_w = elec_port.i * elec_port.v;
+  sensed_temperature_k = thermal_port.T;
 end ThermostatHeater;

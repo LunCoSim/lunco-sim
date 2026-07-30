@@ -64,6 +64,56 @@ pub struct ModelInterface {
     /// subset that authored a numeric binding — seeding from defaults alone
     /// gives an unbound `input Real drive_left` no port at all.
     pub inputs: HashMap<String, f64>,
+    /// Documentation projected from the same parsed declarations as this
+    /// interface. Solver adapters use it for observable telemetry metadata.
+    pub variable_metadata: HashMap<String, ModelicaVariableMetadata>,
+}
+
+/// Documentation authored for one Modelica variable declaration.
+///
+/// The declaration string and `unit` modifier are Modelica source facts. This
+/// projection lets solver adapters expose those facts without importing UI
+/// document state into the simulation path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelicaVariableMetadata {
+    pub description: Option<String>,
+    pub unit: Option<String>,
+}
+
+/// Extract authored descriptions and units for variables in a Modelica source.
+///
+/// An undocumented declaration produces no entry. Consumers therefore preserve
+/// the absence of documentation instead of manufacturing prose from a variable
+/// identifier.
+pub fn variable_metadata(
+    source: &str,
+    file_label: &str,
+) -> HashMap<String, ModelicaVariableMetadata> {
+    let ast = parse_recovered(source, file_label);
+    let mut index = crate::index::ModelicaIndex::new();
+    index.rebuild_from_ast(&ast, source);
+    variable_metadata_from_index(index)
+}
+
+fn variable_metadata_from_index(
+    index: crate::index::ModelicaIndex,
+) -> HashMap<String, ModelicaVariableMetadata> {
+    index
+        .components
+        .into_iter()
+        .filter_map(|component| {
+            let description = (!component.description.is_empty()).then_some(component.description);
+            let unit = component
+                .modifications
+                .get("unit")
+                .map(|unit| unit.trim_matches('"').to_string())
+                .filter(|unit| !unit.is_empty());
+            (description.is_some() || unit.is_some()).then_some((
+                component.name,
+                ModelicaVariableMetadata { description, unit },
+            ))
+        })
+        .collect()
 }
 
 /// Read a model's interface from source, in one lenient parse.
@@ -80,6 +130,8 @@ pub struct ModelInterface {
 pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
     let ast = parse_recovered(source, file_label);
     let defaults = extract_inputs_with_defaults_from_ast(&ast);
+    let mut index = crate::index::ModelicaIndex::new();
+    index.rebuild_from_ast(&ast, source);
     ModelInterface {
         model_name: extract_model_name_from_ast(&ast),
         within: within_package(&ast),
@@ -91,6 +143,7 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
                 (name, seed)
             })
             .collect(),
+        variable_metadata: variable_metadata_from_index(index),
     }
 }
 
@@ -1458,6 +1511,45 @@ end Test;
         let inputs = extract_inputs_with_defaults(source);
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs.get("g"), Some(&9.81));
+    }
+
+    #[test]
+    fn variable_metadata_preserves_authored_description_and_unit() {
+        let source = r#"
+model Thermal
+  Real case_temperature(unit="K") "Motor case temperature";
+  Real undocumented;
+end Thermal;
+"#;
+        let metadata = variable_metadata(source, "Thermal.mo");
+        assert_eq!(
+            metadata.get("case_temperature"),
+            Some(&ModelicaVariableMetadata {
+                description: Some("Motor case temperature".to_string()),
+                unit: Some("K".to_string()),
+            })
+        );
+        assert!(
+            !metadata.contains_key("undocumented"),
+            "missing authoring must remain missing"
+        );
+    }
+
+    #[test]
+    fn variable_metadata_preserves_public_diagnostic_explanations() {
+        let source = r#"
+model Battery
+  output Real charge_remaining_ah(unit="Ah") "Charge currently available";
+end Battery;
+"#;
+        let metadata = variable_metadata(source, "Battery.mo");
+        assert_eq!(
+            metadata.get("charge_remaining_ah"),
+            Some(&ModelicaVariableMetadata {
+                description: Some("Charge currently available".to_string()),
+                unit: Some("Ah".to_string()),
+            })
+        );
     }
 
     // --- strip_input_defaults ---

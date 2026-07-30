@@ -202,6 +202,10 @@ struct RefSpawn {
     asset_path: String,
     /// In-flight load of the referenced asset (its loader fetches the closure).
     ref_handle: Handle<UsdStageAsset>,
+    /// A SetTranslate may follow AddPrim in the same edit burst. Keep it until
+    /// the reference closure is installed; otherwise the edit arrives before
+    /// the prim exists on the live stage and the new waypoint stays at origin.
+    translate: Option<[f64; 3]>,
     /// Frames this spawn has waited for its closure. Bounded by
     /// [`MAX_REF_SPAWN_ATTEMPTS`] so an asset that never loads fails LOUDLY
     /// instead of being retried forever in silence — see `drain_ref_spawns`.
@@ -625,6 +629,18 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
+            // Referenced prims are authored only after their asset closure is
+            // ready. Capture a transform that arrives before that point so a
+            // newly inserted waypoint is born at its requested location.
+            if let Some(pending) = world
+                .resource_mut::<PendingRefSpawns>()
+                .items
+                .iter_mut()
+                .find(|pending| pending.scene_id == scene_id && pending.prim_path == *path)
+            {
+                pending.translate = Some(*value);
+                return;
+            }
             if let Some(cs) = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
@@ -1026,6 +1042,7 @@ fn spawn_prim_op(
                     type_name,
                     asset_path,
                     ref_handle,
+                    translate: None,
                     attempts: 0,
                 });
         }
@@ -1339,15 +1356,24 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         };
         // Inject the closure bytes so PCP can resolve the reference, then author.
         cs.add_layer_bytes(recipe.bytes.clone());
-        if let Err(e) = cs
+        let result = cs
             .projector()
             .author_prim(&sp, item.type_name.as_deref())
-            .and_then(|_| cs.projector().author_reference(&sp, &item.asset_path))
-        {
+            .and_then(|_| cs.projector().author_reference(&sp, &item.asset_path));
+        if let Err(e) = result {
             warn!(
                 "[twin] referenced spawn {} (post-fetch): {e}",
                 item.prim_path
             );
+            continue;
+        }
+        // Apply the transform after the prim/reference exists. This is the
+        // ordering guarantee for first-use referenced markers and spawned
+        // vehicles alike.
+        if let Some(translate) = item.translate {
+            if let Err(e) = cs.projector().author_translate(&sp, translate) {
+                warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
+            }
         }
     }
     world.resource_mut::<PendingRefSpawns>().items.extend(still);

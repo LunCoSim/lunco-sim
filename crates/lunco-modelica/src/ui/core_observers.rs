@@ -137,6 +137,7 @@ pub fn drain_sim_samples_to_viz(
     mut signals: Option<ResMut<SignalRegistry>>,
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
     doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
+    mut last_catalog_revision: Local<u64>,
 ) {
     if stream.batches.is_empty() {
         return;
@@ -176,6 +177,7 @@ pub fn drain_sim_samples_to_viz(
                             description: Some(entry.description.clone()),
                             unit: None,
                             provenance: Some("modelica".to_string()),
+                            group_path: None,
                         },
                     );
                 }
@@ -190,6 +192,34 @@ pub fn drain_sim_samples_to_viz(
                 }
             }
         }
+    }
+
+    // Co-simulation and authored telemetry publishers feed the same registry,
+    // but do not produce `SimSampleBatch` values.  Bind their documented
+    // channels when they first appear so the default graph is useful on a fresh
+    // scene, while leaving raw physics/debug ports available through the picker.
+    let revision = sigs.catalog_revision();
+    if revision != *last_catalog_revision {
+        if let Some(reg) = viz_registry.as_deref_mut() {
+            let cfg = crate::ui::viz::ensure_default_modelica_graph(reg);
+            for (sig, ty) in sigs.iter_signals() {
+                if ty != lunco_viz::SignalType::Scalar
+                    || cfg.inputs.iter().any(|b| b.source == *sig)
+                {
+                    continue;
+                }
+                let Some(meta) = sigs.meta(sig) else { continue };
+                let documented = matches!(
+                    meta.provenance.as_deref(),
+                    Some("modelica" | "cosim" | "telemetry")
+                );
+                if documented {
+                    cfg.inputs
+                        .push(lunco_viz::SignalBinding::live(sig.clone(), "y"));
+                }
+            }
+        }
+        *last_catalog_revision = revision;
     }
 }
 

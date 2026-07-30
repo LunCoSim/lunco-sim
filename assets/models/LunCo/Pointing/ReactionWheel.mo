@@ -15,6 +15,7 @@ model ReactionWheel
   output Real momentum_nms "Stored angular momentum, N.m.s";
   output Real torque_out_nm "Reaction torque applied to vehicle, N.m";
   output Real power_draw_w "Electrical power draw, W";
+  output Real spin_rate_rad_s(unit="rad/s") "Reaction-wheel rotor angular speed";
 
   LunCo.Electrical.Pin p "Electrical bus pin";
 equation
@@ -22,5 +23,6 @@ equation
   der(omega) = torque_out_nm / i_wheel;
   momentum_nms = i_wheel * omega;
   power_draw_w = p_idle_w + abs(torque_out_nm * omega) / max(0.1, eta_motor);
+  spin_rate_rad_s = omega;
   p.i = power_draw_w / max(1.0, p.v);
 end ReactionWheel;

@@ -29,6 +29,16 @@ use std::collections::{HashMap, VecDeque};
 /// Mirrors `WorkbenchState.max_history`.
 pub const DEFAULT_CAPACITY: usize = 2000;
 
+/// Marks an entity whose complete output surface is retained directly by its
+/// owning signal producer. Generic port discovery must not create a second
+/// sampler for these outputs: it would duplicate histories and discard the
+/// producer's authored provenance and USD presentation path.
+///
+/// This is lifecycle metadata only. It does not publish, sample, or classify a
+/// signal; the owning producer remains the single source of samples.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct WholesaleSignalSource;
+
 /// Stable identity for a signal across frames **within one session**.
 ///
 /// The `entity` half is not decoration: signal *names collide*. Two rovers both report
@@ -154,6 +164,8 @@ pub struct SignalMeta {
     /// Free-form tag naming who created the signal: `"modelica"`, `"avian"`, `"script"`,
     /// `"telemetry"`. Lets the inspector group signals by provenance.
     pub provenance: Option<String>,
+    /// Runtime visual ownership path supplied by the producing model.
+    pub group_path: Option<String>,
 }
 
 /// One (time, value) pair for a [`SignalType::Scalar`] signal.

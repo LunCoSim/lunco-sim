@@ -401,7 +401,15 @@ fn discover_runtime_port_channels(world: &mut World) {
         // user telemetry and turns LOD churn into a growing sampling plan. An
         // authored or explicitly-created `Parameter` remains available when a
         // caller genuinely wants to observe a system-owned entity.
-        if world.get::<lunco_core::SystemManaged>(entity).is_some() {
+        if world.get::<lunco_core::SystemManaged>(entity).is_some()
+            // Model outputs are already retained by `lunco-cosim`, which is the
+            // producer that holds their composed USD metadata. Sampling them
+            // again through the generic port surface would produce an ungrouped
+            // duplicate, not another observable.
+            || world
+                .get::<lunco_signal::WholesaleSignalSource>(entity)
+                .is_some()
+        {
             continue;
         }
         for port in ports.entity_ports(world, entity) {
@@ -570,6 +578,7 @@ fn retain_sample(
                 description: expected_meta.description.clone(),
                 unit: (!expected_meta.unit.is_empty()).then_some(expected_meta.unit.clone()),
                 provenance: Some("telemetry".to_string()),
+                group_path: None,
             },
         );
         commands.entity(s.channel).try_insert(expected_meta);

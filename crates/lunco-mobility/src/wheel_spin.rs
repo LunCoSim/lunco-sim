@@ -72,10 +72,10 @@ pub(crate) fn update_wheel_spin(
         With<crate::kernels::DriveMix>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
-    // The drivetrain readback slot on this wheel — the SAME component the jointed
-    // realization publishes (`lunco_hardware::MotorReadback`), so one authored
-    // telemetry channel reads either kind. Disjoint from `q_wheels` by component,
-    // so both can be `&mut` over the same entity.
+    // The USD-projected motor target for each raycast wheel. The native readback
+    // lives on the authored motor entity, not the wheel proxy, so every motor's
+    // electrical, thermal, and Avian/raycast drivetrain values share one owner.
+    q_targets: Query<&lunco_hardware::MotorReadbackTarget>,
     mut q_readback: Query<&mut lunco_hardware::MotorReadback>,
     q_child_of: Query<&ChildOf>,
     q_inputs: Query<&InputPorts>,
@@ -308,9 +308,11 @@ pub(crate) fn update_wheel_spin(
         // Drive plus brake, because both are the drivetrain acting on the axle;
         // traction and bearing drag are the ground and the bearing, not the
         // machine.
-        if let Ok(mut r) = q_readback.get_mut(entity) {
-            r.torque = tau_drive + tau_brake;
-            r.axle_speed = w;
+        if let Ok(target) = q_targets.get(entity) {
+            if let Ok(mut r) = q_readback.get_mut(target.0) {
+                r.torque = tau_drive + tau_brake;
+                r.axle_speed = w;
+            }
         }
 
         // ── THE TIRE FORCE — ONE number, for the axle AND the chassis ──────────

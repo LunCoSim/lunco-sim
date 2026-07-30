@@ -423,7 +423,15 @@ pub fn on_scene_click_checkpoint(
     // one marker implementation for scene-authored and click-dropped waypoints
     // alike — the two used to be different objects that only looked alike, and
     // the Rust one drew itself in the vessel's hull colour.
-    let marker_path = author_marker_prim(&mut commands, doc, &root, hit, &canonical, vessel_prim);
+    let marker_path = author_marker_prim(
+        &mut commands,
+        doc,
+        host,
+        &root,
+        hit,
+        &canonical,
+        vessel_prim,
+    );
 
     // ── The mission's topology ────────────────────────────────────────────────
     // Append the leaf FIRST: if the tree is a shape the editor must not restructure,
@@ -604,11 +612,19 @@ pub fn on_scene_click_place_waypoint(
         .nth(1)
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
-    if doc_ctx.usd_registry.host(doc).is_none() {
+    let Some(host) = doc_ctx.usd_registry.host(doc) else {
         warn!("[waypoint] placement failed: no USD host for document {doc:?}");
         return;
-    }
-    let new_target = author_marker_prim(&mut commands, doc, &root, world, &canonical, vessel_prim);
+    };
+    let new_target = author_marker_prim(
+        &mut commands,
+        doc,
+        host,
+        &root,
+        world,
+        &canonical,
+        vessel_prim,
+    );
     let edited = insert_waypoint_after(&xml.0, &pending.coord_key, &new_target);
     match edited {
         Ok(new_xml) => {
@@ -1133,6 +1149,7 @@ fn vessel_for_target<'a>(
 fn author_marker_prim(
     commands: &mut Commands,
     doc: lunco_doc::DocumentId,
+    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
     root: &str,
     at: DVec3,
     canonical: &CanonicalStages,
@@ -1155,7 +1172,13 @@ fn author_marker_prim(
     // First free `W<n>` — the name a scene author would have written by hand.
     let marker_name = (0..)
         .map(|n| format!("W{n}"))
-        .find(|name| !composed_prim_exists(canonical, vessel_prim, &join_prim(&route_scope, name)))
+        .find(|name| {
+            let path = join_prim(&route_scope, name);
+            // The composed stage can lag while a referenced marker's asset
+            // closure is loading. The document is authoritative for names
+            // already reserved by an earlier click, so consult both sources.
+            !composed_prim_exists(canonical, vessel_prim, &path) && !prim_exists(host, &path)
+        })
         .expect("an unbounded search always finds a free name");
     let marker_path = join_prim(&route_scope, &marker_name);
     commands.trigger(ApplyUsdOp {

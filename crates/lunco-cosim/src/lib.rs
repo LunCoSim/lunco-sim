@@ -151,6 +151,14 @@ impl Plugin for CoSimPlugin {
         app.init_resource::<connection::ControlWriteFence>();
         app.add_systems(FixedFirst, connection::clear_control_write_fence);
         app.add_observer(binding::on_add_connection)
+            // Co-sim retains every `SimComponent` output itself, with source
+            // metadata. Mark it at lifecycle time so generic port telemetry does
+            // not create a second, ungrouped history for the same values.
+            .add_observer(|trigger: On<Add, SimComponent>, mut commands: Commands| {
+                commands
+                    .entity(trigger.entity)
+                    .try_insert(lunco_signal::WholesaleSignalSource);
+            })
             .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
             .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)

@@ -30,7 +30,7 @@
 def Xform "MotorHeatLoad" (
     doc = "Bridges a motor's electrical loss (W) into the acausal heat-port network."
     kind = "component"
-    prepend apiSchemas = ["LunCoProgramAPI"]
+    prepend apiSchemas = ["LunCoProgramAPI", "LunCoTelemetryAPI"]
 )
 {
     uniform token info:implementationSource = "sourceAsset"

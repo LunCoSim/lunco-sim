@@ -6,6 +6,37 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+/// Authored documentation for the observable outputs of a co-simulation model.
+///
+/// This is a projection cache, not a second authoring surface: the solver
+/// adapter builds it from its source document (for example Modelica declaration
+/// descriptions and `unit` modifiers). The common telemetry publisher consumes
+/// it without knowing which solver produced a value.
+#[derive(Component, Debug, Clone, Default)]
+pub struct CosimOutputMetadata {
+    /// Metadata keyed by the solver's output name.
+    pub outputs: HashMap<String, CosimOutputDescriptor>,
+}
+
+/// Human-facing metadata for one observable co-simulation output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosimOutputDescriptor {
+    /// Authored explanation of the value. `None` means the model did not state
+    /// one; consumers must not synthesize an explanation from its identifier.
+    pub description: Option<String>,
+    /// Authored engineering unit, if the model declares one.
+    pub unit: Option<String>,
+    /// Origin of this authored metadata, such as `"modelica"`.
+    pub provenance: String,
+    /// Canonical user-facing signal path. `None` keeps the generic `sim.*`
+    /// namespace for non-generated co-simulation models; generated USD
+    /// networks fill this from their source-to-wrapper map.
+    pub canonical_name: Option<String>,
+    /// Authored component path that owns this value, when the solver wrapper
+    /// publishes several model domains through one runtime entity.
+    pub group_path: Option<String>,
+}
+
 /// A co-simulation model on an entity.
 ///
 /// Created by engine plugins (e.g., `lunco-modelica`) when a model is loaded/compiled.

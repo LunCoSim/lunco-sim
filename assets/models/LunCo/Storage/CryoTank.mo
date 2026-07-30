@@ -13,6 +13,7 @@ model CryoTank
   output Real mass_kg "Current total component mass for CoM & inertia shift, kg";
   output Real boiloff_rate_kgs "Boil-off venting rate, kg/s";
   output Real fill_pct "Tank propellant mass percentage, 0..100 %";
+  output Real heat_ingress_w(unit="W") "Thermal power entering the cryogenic tank";
 
   LunCo.Thermal.HeatPort port "Thermal heat ingress port";
 equation
@@ -20,4 +21,5 @@ equation
   der(m_prop_kg) = max(-m_prop_kg, -(mass_out_flow + boiloff_rate_kgs));
   mass_kg = m_prop_kg;
   fill_pct = (m_prop_kg / m_init_kg) * 100.0;
+  heat_ingress_w = port.Q;
 end CryoTank;

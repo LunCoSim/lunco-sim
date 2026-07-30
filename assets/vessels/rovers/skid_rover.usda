@@ -539,6 +539,7 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_FL>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FL>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -546,6 +547,7 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_RL>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RL>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -566,6 +568,7 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_FR>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FR>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }
@@ -573,6 +576,7 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_RR>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RR>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }

@@ -18,6 +18,8 @@ model LanderPID
 
   output Real f_cmd_z "Commanded vertical thrust force, N";
   output Real tau_cmd_pitch "Commanded pitch control torque, N.m";
+  output Real altitude_error_m(unit="m") "Target altitude minus current altitude";
+  output Real pitch_error_deg(unit="deg") "Target pitch minus current pitch";
 
   Real err_z "Altitude error, m";
   Real err_pitch "Pitch attitude error, deg";
@@ -27,4 +29,6 @@ equation
 
   f_cmd_z = max(0.0, kp_z * err_z - kd_z * vel_z);
   tau_cmd_pitch = kp_pitch * err_pitch - kd_pitch * pitch_rate_deg_s;
+  altitude_error_m = err_z;
+  pitch_error_deg = err_pitch;
 end LanderPID;

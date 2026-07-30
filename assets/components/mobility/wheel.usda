@@ -131,26 +131,12 @@ def Cylinder "Wheel" (
     #
     double lunco:wheel:driveDamping = 30.0          # axle motor damping
 
-    # --- Telemetry: what the drivetrain is DELIVERING here ---
-    # `torque` is a LIVE port on this wheel — `lunco_hardware::MotorReadback`,
-    # written every tick by whichever realization is driving it (the joint motor's
-    # `motor_actuator_system`, or the raycast integrator's own torque term). Both
-    # publish the same name in the same sense, so this one channel plots either
-    # kind of rover; `axle_speed` (rad/s) rides the same component for anything
-    # that wants the other axis of the curve.
-    #
-    # Authored HERE and not on `motor.usda` because the motor prim has no live
-    # value at all: its numbers are folded into `WheelParams` at parse time, and
-    # its `outputs:torque` attribute is written by nothing. Delivered torque is a
-    # property of the axle, which is this prim.
-    #
-    # ONE channel per prim (`Parameter` is a Component), so this names the one
-    # number a drivetrain argument is had over.
     # A driven wheel has a motor behind it, but the motor is not IN here: it is its own
     # part (`components/mobility/motor.usda`) with its own mass, torque curve, efficiency
-    # and waste heat, and its own arc onto the vessel. Its electrical draw is a load on
-    # the vehicle's circuit, which is one Modelica model, not one per wheel. This prim
-    # keeps only what a hub is, and stays one rigid body.
+    # and waste heat, and its own arc onto the vessel. The composed
+    # `lunco:motor:drivenWheel` relationship binds this wheel's native axle torque and
+    # speed readback to that motor at projection time. This prim keeps only what a hub
+    # is, and stays one rigid body.
 
     # --- Tires ---
     # Which rubber this wheel runs. Each variant is nothing but a reference to a tire

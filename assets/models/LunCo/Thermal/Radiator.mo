@@ -9,7 +9,11 @@ model Radiator
 
   HeatPort port;
   Real Q_rad "Radiated thermal power, W";
+  output Real temperature_k(unit="K") "Radiator surface temperature";
+  output Real heat_rejection_w(unit="W") "Thermal power rejected to deep space";
 equation
   Q_rad = emissivity * area * sigma * (port.T^4 - T_sink^4);
   port.Q = max(0.0, Q_rad);
+  temperature_k = port.T;
+  heat_rejection_w = port.Q;
 end Radiator;

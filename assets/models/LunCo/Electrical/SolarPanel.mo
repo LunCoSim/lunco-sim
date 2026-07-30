@@ -23,6 +23,8 @@ model SolarPanel
   Pin p;
   output Real power_out "Electrical power delivered to the bus, W";
   output Real cos_incidence "Live clamped cosine of solar incidence, 0..1";
+  output Real terminal_voltage_v(unit="V") "Electrical bus voltage at the solar-panel terminals";
+  output Real generated_current_a(unit="A") "Current delivered from the panel to the electrical bus";
 
   Real sun_norm "Magnitude of the supplied Sun vector";
   Real panel_normal_norm "Magnitude of the authored panel normal";
@@ -49,6 +51,8 @@ equation
   // Delivered power FOLLOWS from the current and the bus voltage it actually
   // meets, so droop still shows up here — it is an output, not a driver.
   power_out = -p.i * p.v;
+  terminal_voltage_v = p.v;
+  generated_current_a = -p.i;
 
   // WHY THE DIRECTION MATTERS. This used to read `p.i = -power_out / p.v`, i.e.
   // a constant-POWER source. Every device on the node metered itself that way,

@@ -1426,6 +1426,9 @@ class "LunCoTelemetryAPI" (
     int64 lunco:telemetry:retention = 0 (
         doc = "Ring-buffer sample count to retain. 0/unauthored = engine default."
     )
+    rel lunco:telemetry:owner (
+        doc = "Composed USD part that presents this component's generated telemetry. Absent means this prim itself."
+    )
 }
 
 class "LunCoAnchorAPI" (

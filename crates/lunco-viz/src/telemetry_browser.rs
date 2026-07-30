@@ -289,7 +289,7 @@ fn build_tree(
             active: reg.is_active(sig),
         };
 
-        let lineage: Vec<(String, String)> = if let Some(path) = usd_path_of(sig.entity) {
+        let mut lineage: Vec<(String, String)> = if let Some(path) = usd_path_of(sig.entity) {
             let mut key = String::new();
             path.trim_matches('/')
                 .split('/')
@@ -331,6 +331,42 @@ fn build_tree(
                 })
                 .collect()
         };
+        // Extend the authored entity lineage with every structural segment in
+        // the signal path. A generated model publishes on its domain wrapper
+        // entity, so replace that wrapper's leaf with the output's authored
+        // component path. The user sees the model that owns the value rather
+        // than an implementation container. This remains producer-neutral:
+        // every hierarchical model path gets the same treatment.
+        let mut structure = signal_structure(
+            meta.and_then(|metadata| {
+                metadata
+                    .group_path
+                    .as_deref()
+                    .filter(|path| !path.is_empty())
+            })
+            .unwrap_or(&sig.path),
+        );
+        // Canonical paths may repeat the USD ancestry already represented by
+        // the entity lineage (for example `SandboxScene/Rover/Battery`). Drop
+        // that shared prefix so the visual tree does not duplicate the vessel.
+        while structure
+            .first()
+            .is_some_and(|(id, _)| lineage.iter().any(|(parent_id, _)| parent_id == id))
+        {
+            structure.remove(0);
+        }
+        // A resolved group path means the projection supplied an authored
+        // ownership target. Replace the runtime wrapper leaf regardless of
+        // whether that projection entity currently has a USD path component.
+        if meta
+            .and_then(|metadata| metadata.group_path.as_ref())
+            .is_some_and(|path| !path.is_empty())
+            && !structure.is_empty()
+            && !lineage.is_empty()
+        {
+            lineage.pop();
+        }
+        lineage.extend(structure);
         let mut node = &mut root;
         for (id, label) in lineage {
             node = node
@@ -340,8 +376,30 @@ fn build_tree(
         }
         node.rows.push(row);
     }
+    collapse_singleton_leaves(&mut root);
     sort_tree(&mut root);
     root
+}
+
+/// Keep the visual tree useful at narrow widths: a structural node that owns
+/// exactly one scalar has no grouping value to communicate, so its row is
+/// promoted to the parent. Nodes with multiple values or descendants remain
+/// intact.
+fn collapse_singleton_leaves(node: &mut TreeNode) {
+    for child in node.children.values_mut() {
+        collapse_singleton_leaves(child);
+    }
+    let singleton_ids: Vec<String> = node
+        .children
+        .iter()
+        .filter(|(_, child)| child.children.is_empty() && child.rows.len() == 1)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in singleton_ids {
+        if let Some(mut child) = node.children.remove(&id) {
+            node.rows.append(&mut child.rows);
+        }
+    }
 }
 
 fn sort_tree(node: &mut TreeNode) {
@@ -395,17 +453,45 @@ fn filter_match(filter: &str, label: &str, path: &str, description: Option<&str>
 /// the stable identity and is always available in the row tooltip; this is only
 /// the operator-facing presentation of it.
 fn compact_channel_label(path: &str) -> String {
-    let trimmed = path.trim_matches('/');
-    let mut parts: Vec<&str> = trimmed.split('/').filter(|part| !part.is_empty()).collect();
-    if parts.len() > 2 {
-        parts.drain(..parts.len() - 2);
+    let decoded = path.replace("_x2f_", "/");
+    let readable = decoded.trim_matches('/').rsplit('/').next().unwrap_or(path);
+    readable.replace('_', " ")
+}
+
+/// Convert a signal identity into structural display nodes. Generated USD
+/// namespaces may encode separators as `_x2f_`; decoding is presentation-only,
+/// so registry identities and persistence remain untouched. The final dotted
+/// token is the value name and is intentionally not made into another node.
+fn signal_structure(path: &str) -> Vec<(String, String)> {
+    let decoded = path.replace("_x2f_", "/");
+    let absolute = decoded.starts_with('/');
+    let mut segments: Vec<String> = decoded
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if let Some(last) = segments.last_mut() {
+        if let Some((component, _value)) = last.rsplit_once('.') {
+            *last = component.to_owned();
+        }
     }
-    let readable = parts.join(" › ");
-    if readable.is_empty() {
-        path.replace('_', " ")
-    } else {
-        readable.replace('_', " ")
-    }
+    let mut authored_path = String::new();
+    segments
+        .into_iter()
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let label = segment.replace('_', " ");
+            let id = if absolute {
+                authored_path.push('/');
+                authored_path.push_str(&segment);
+                authored_path.clone()
+            } else {
+                format!("signal-structure:{segment}")
+            };
+            (id, label)
+        })
+        .collect()
 }
 
 fn row_visible(row: &Row, scoped: bool, show_internals: bool, filter: &str, label: &str) -> bool {
@@ -516,30 +602,38 @@ fn render_tree_node(
                         },
                     );
                     let response = inner.inner;
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                latest.map(fmt_value).unwrap_or_else(|| "—".into()),
+                    let value_response = ui
+                        .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    latest.map(fmt_value).unwrap_or_else(|| "—".into()),
+                                )
+                                .monospace()
+                                .color(if latest.is_some() {
+                                    theme.tokens.text
+                                } else {
+                                    theme.tokens.text_subdued
+                                }),
                             )
-                            .monospace()
-                            .color(if latest.is_some() {
-                                theme.tokens.text
-                            } else {
-                                theme.tokens.text_subdued
-                            }),
-                        );
-                    });
-                    let unit_label = ui.label(
+                        })
+                        .inner;
+                    let unit_response = ui.label(
                         egui::RichText::new(pretty_unit(row.unit.as_deref()))
                             .small()
                             .color(theme.tokens.text_subdued),
                     );
                     let tip = unit_tooltip(row.unit.as_deref());
-                    if !tip.is_empty() {
-                        unit_label.on_hover_text(tip);
-                    }
+                    let unit_response = if !tip.is_empty() {
+                        unit_response.on_hover_text(tip)
+                    } else {
+                        unit_response
+                    };
                     ui.end_row();
-                    if response.double_clicked() {
+                    // The signal's explanation belongs to the whole row, not only the
+                    // narrow draggable label. Values and units are normally where a user
+                    // pauses to ask "what does this mean?".
+                    let row_response = response.union(value_response).union(unit_response);
+                    if row_response.double_clicked() {
                         queue_plot_drop(
                             ui.ctx(),
                             PlotDropRequest {
@@ -548,13 +642,22 @@ fn render_tree_node(
                             },
                         );
                         *clicked = Some(row.sig.clone());
-                    } else if response.clicked() {
+                    } else if row_response.clicked() {
                         *clicked = Some(row.sig.clone());
                     }
-                    response.on_hover_ui(|ui| {
+                    row_response.on_hover_ui(|ui| {
                         ui.label(egui::RichText::new(&row.sig.path).strong().monospace());
                         if let Some(description) = &row.description {
                             ui.label(description);
+                        } else {
+                            ui.label(
+                                egui::RichText::new("No description is authored for this value.")
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                        if let Some(unit) = &row.unit {
+                            ui.label(egui::RichText::new(format!("Unit: {unit}")).small().weak());
                         }
                         if let Some(provenance) = &row.provenance {
                             ui.label(
@@ -1037,11 +1140,13 @@ mod tests {
         let unnamed = tree.children.get(&entity_key(ent(2))).unwrap();
         assert_eq!(alpha.label, "Alpha Rover");
         assert_eq!(alpha.rows.len(), 1);
-        assert_eq!(unnamed.rows.len(), 2);
+        assert!(unnamed.rows.is_empty());
+        let a = unnamed.children.get("signal-structure:a").unwrap();
+        let z = unnamed.children.get("signal-structure:z").unwrap();
         // Rows sorted by path within the group.
-        assert_eq!(unnamed.rows[0].sig.path, "a.torque");
-        assert_eq!(unnamed.rows[1].sig.path, "z.speed");
-        assert_eq!(unnamed.rows[1].unit.as_deref(), Some("m/s"));
+        assert_eq!(a.rows[0].sig.path, "a.torque");
+        assert_eq!(z.rows[0].sig.path, "z.speed");
+        assert_eq!(z.rows[0].unit.as_deref(), Some("m/s"));
     }
 
     #[test]
@@ -1165,6 +1270,43 @@ mod tests {
         let wheel = &rover.children["/SandboxScene/Skid_Rover/Wheel_FL"];
         assert_eq!(wheel.label, "Wheel FL");
         assert_eq!(wheel.rows[0].sig.path, "axle_torque");
+    }
+
+    #[test]
+    fn generated_signal_uses_composed_presentation_path_not_solver_scope() {
+        let mut reg = SignalRegistry::default();
+        let electrical_scope = ent(1);
+        let signal = SignalRef::new(electrical_scope, "Motor__FL.p.v");
+        reg.push_scalar(signal.clone(), 0.0, 24.0);
+        reg.update_meta(
+            signal,
+            crate::signal::SignalMeta {
+                group_path: Some("/SandboxScene/Rover/Motor_FL".into()),
+                ..Default::default()
+            },
+        );
+
+        let tree = build_tree(
+            &reg,
+            |_| None,
+            |_| None,
+            |entity| {
+                (entity == electrical_scope).then(|| "/SandboxScene/Rover/Electrical".to_string())
+            },
+            |_| false,
+            |_| false,
+        );
+
+        let rover = &tree.children["/SandboxScene"].children["/SandboxScene/Rover"];
+        assert!(
+            !rover
+                .children
+                .contains_key("/SandboxScene/Rover/Electrical"),
+            "the generated solver scope is an implementation detail"
+        );
+        let motor = &rover.children["signal-structure:Motor_FL"];
+        assert_eq!(motor.label, "Motor FL");
+        assert_eq!(motor.rows[0].sig.path, "Motor__FL.p.v");
     }
 
     #[test]
