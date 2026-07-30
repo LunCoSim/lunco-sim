@@ -691,8 +691,8 @@ pub struct TelemetryBrowserPanel {
     /// checkbox disabled) while nothing is selected, so the panel never goes blank
     /// just because the user hasn't clicked anything yet.
     focus_only: bool,
-    /// Generated co-simulation variables are useful when diagnosing a model but
-    /// normally duplicate an authored channel. Keep them opt-in.
+    /// Generated model variables are part of the vessel's observable state.
+    /// Keep them visible by default; users can hide them for a mission-only view.
     show_model_internals: bool,
 }
 
@@ -704,7 +704,7 @@ impl Default for TelemetryBrowserPanel {
             selected: None,
             preview: None,
             focus_only: true,
-            show_model_internals: false,
+            show_model_internals: true,
         }
     }
 }
@@ -773,9 +773,9 @@ impl Panel for TelemetryBrowserPanel {
                         .color(subdued),
                 );
             }
-            ui.checkbox(&mut self.show_model_internals, "Model internals")
+            ui.checkbox(&mut self.show_model_internals, "Model variables")
                 .on_hover_text(
-                    "Show generated co-simulation variables. Authored USD telemetry \n                     is the canonical mission view; internals remain here for diagnosis.");
+                    "Show state published by Modelica and other co-simulation models. \n                     Turn this off for an explicitly authored mission-only view.");
         });
         ui.separator();
 
