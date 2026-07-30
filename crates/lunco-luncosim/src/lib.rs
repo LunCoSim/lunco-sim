@@ -2691,6 +2691,15 @@ impl Plugin for SandboxCorePlugin {
                 .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
                 .before(lunco_usd_sim::UsdSimSet::ActivateDynamicBodies),
         );
+        // A just-promoted Dynamic body is not visible to the terrain ring until
+        // deferred commands flush. Keep physics held across that fixed-loop
+        // boundary, then let the terrain's own liveness gate take sole ownership.
+        app.add_systems(
+            Update,
+            release_ground_activation_hold
+                .after(lunco_usd_sim::UsdSimSet::ActivateDynamicBodies)
+                .after(lunco_terrain_surface::collider_ring::hold_physics_until_dem_ready),
+        );
         // Bind authored terrain layer maps (albedo/mineral/surface/normal) onto
         // the terrain's `ShaderMaterial`. GUI-only (materials are an `ui`-feature
         // concern; the headless server has no render materials and needs only the
@@ -2848,6 +2857,26 @@ fn track_ground_collider_pending(
     }
     if pending.0 != now {
         pending.0 = now;
+    }
+}
+
+/// Close the activation bridge only after two update boundaries: the first
+/// flushes the Dynamic insert; the second lets terrain see the promoted body and
+/// raise its own collider-liveness hold if needed.
+fn release_ground_activation_hold(
+    mut activation: ResMut<lunco_usd_sim::GroundActivationInFlight>,
+    mut holds: ResMut<lunco_physics::PhysicsHolds>,
+) {
+    match activation.0 {
+        2 => {
+            activation.0 = 1;
+            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
+        }
+        1 => {
+            activation.0 = 0;
+            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, false);
+        }
+        _ => {}
     }
 }
 

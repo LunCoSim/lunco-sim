@@ -242,21 +242,11 @@ impl Default for Catalog {
     }
 }
 
-/// Order-independent fingerprint of the channel *set*. Sample pushes
-/// don't move it (contents aren't hashed); channels appearing or
-/// disappearing do. O(#channels) hashing per frame, no allocation.
+/// Monotonic revision of the channel catalog. The signal registry owns this
+/// change detection because it is the sole owner of the channel set and its
+/// metadata; sampling must not make the UI scan and hash every channel.
 fn catalog_key(reg: &SignalRegistry) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut acc: u64 = 0;
-    let mut n: u64 = 0;
-    for (sig, _hist) in reg.iter_scalar() {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        sig.hash(&mut h);
-        reg.is_active(sig).hash(&mut h);
-        acc ^= h.finish();
-        n += 1;
-    }
-    acc ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    reg.catalog_revision()
 }
 
 /// Reduce an authored USD prim path to the prim's display name.  Its complete
@@ -1001,7 +991,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_key_ignores_pushes_but_sees_membership() {
+    fn catalog_key_ignores_pushes_but_sees_catalog_changes() {
         let mut reg = SignalRegistry::default();
         reg.push_scalar(SignalRef::new(ent(1), "a"), 0.0, 1.0);
         let k1 = catalog_key(&reg);
@@ -1015,9 +1005,9 @@ mod tests {
         let k2 = catalog_key(&reg);
         assert_ne!(k1, k2, "a new channel must invalidate the list");
 
-        // Channel removed: key moves back to the original set's key.
+        // Channel removal changes the monotonic catalog revision too.
         reg.remove_signal(&SignalRef::new(ent(2), "b"));
-        assert_eq!(k1, catalog_key(&reg), "key is a pure set fingerprint");
+        assert_ne!(k2, catalog_key(&reg), "removal must invalidate the list");
     }
 
     #[test]

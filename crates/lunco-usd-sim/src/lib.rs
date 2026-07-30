@@ -252,6 +252,7 @@ impl Plugin for UsdSimPlugin {
             // skips the system entirely on frames with no unprocessed
             // USD prim (archetype-level check, near-zero cost).
             .init_resource::<GroundColliderPending>()
+            .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
             .add_systems(
                 Update,
@@ -2828,9 +2829,17 @@ fn resolve_differential_coupling(
 #[derive(Resource, Default)]
 pub struct GroundColliderPending(pub bool);
 
+/// Raised for the frame boundary in which authored bodies become dynamic after
+/// terrain loading. Terrain observes dynamic bodies in `Update`, while physics
+/// can run in the fixed loop between updates; the application assembly clears
+/// this only after the terrain gate has evaluated that promoted set.
+#[derive(Resource, Default)]
+pub struct GroundActivationInFlight(pub u8);
+
 fn activate_dynamic_bodies(
     mut commands: Commands,
     ground_pending: Res<GroundColliderPending>,
+    mut activation: ResMut<GroundActivationInFlight>,
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
@@ -2847,6 +2856,7 @@ fn activate_dynamic_bodies(
     if ground_pending.0 {
         return;
     }
+    let mut promoted = false;
     for (entity, path) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints
             .iter()
@@ -2875,7 +2885,14 @@ fn activate_dynamic_bodies(
                 "Activated RigidBody::Dynamic for stage: {:?}",
                 path.stage_handle
             );
+            promoted = true;
         }
+    }
+    if promoted {
+        // Two Update passes: this one spans deferred insertion of Dynamic, the
+        // next lets the terrain ring observe that inserted body before its
+        // dedicated hold becomes the only gate.
+        activation.0 = 2;
     }
 }
 

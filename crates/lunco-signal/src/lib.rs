@@ -146,7 +146,7 @@ pub enum SignalType {
 
 /// Descriptive metadata. Optional and non-load-bearing — viz kinds render without it,
 /// but tooltips, legends, and axis labels get better when it's populated.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignalMeta {
     pub description: Option<String>,
     /// Physical unit, e.g. `"kg"`, `"N"`, `"m/s"`.
@@ -225,6 +225,10 @@ pub struct SignalRegistry {
     /// records the live/inactive boundary without deleting samples or metadata.
     inactive: std::collections::HashSet<SignalRef>,
     default_capacity: usize,
+    /// Monotonic revision of the channel catalog. Sample values deliberately do
+    /// not change it: UI surfaces use this to rebuild their hierarchy only when
+    /// a channel's identity, metadata, or live/archive state changes.
+    catalog_revision: u64,
 }
 
 impl SignalRegistry {
@@ -250,13 +254,17 @@ impl SignalRegistry {
             return;
         }
         let cap = self.capacity_default();
+        let was_known = self.types.contains_key(&sig);
+        let was_inactive = self.inactive.remove(&sig);
         let history = self
             .scalar_history
             .entry(sig.clone())
             .or_insert_with(|| ScalarHistory::new(cap));
         history.push(ScalarSample { time, value });
-        self.inactive.remove(&sig);
         self.types.entry(sig).or_insert(SignalType::Scalar);
+        if !was_known || was_inactive {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     /// Push a sample into a signal with an explicit retention depth — **this is how a
@@ -273,6 +281,8 @@ impl SignalRegistry {
         if !value.is_finite() {
             return;
         }
+        let was_known = self.types.contains_key(&sig);
+        let was_inactive = self.inactive.remove(&sig);
         let history = self
             .scalar_history
             .entry(sig.clone())
@@ -281,12 +291,23 @@ impl SignalRegistry {
             history.set_capacity(capacity);
         }
         history.push(ScalarSample { time, value });
-        self.inactive.remove(&sig);
         self.types.entry(sig).or_insert(SignalType::Scalar);
+        if !was_known || was_inactive {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
-        self.meta.insert(sig, meta);
+        if self.meta.get(&sig) != Some(&meta) {
+            self.meta.insert(sig, meta);
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+    }
+
+    /// Revision for UI catalogs. It changes only when their rendered channel
+    /// descriptors can change, never while ordinary samples stream in.
+    pub fn catalog_revision(&self) -> u64 {
+        self.catalog_revision
     }
 
     pub fn scalar_history(&self, sig: &SignalRef) -> Option<&ScalarHistory> {
@@ -313,19 +334,20 @@ impl SignalRegistry {
 
     /// Keep all samples and metadata but mark one channel's live publisher gone.
     pub fn deactivate_signal(&mut self, sig: &SignalRef) {
-        if self.types.contains_key(sig) {
-            self.inactive.insert(sig.clone());
+        if self.types.contains_key(sig) && self.inactive.insert(sig.clone()) {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
     }
 
     /// Keep all samples and metadata but mark every channel from this source inactive.
     pub fn deactivate_entity(&mut self, entity: Entity) {
-        self.inactive.extend(
-            self.types
-                .keys()
-                .filter(|sig| sig.entity == entity)
-                .cloned(),
-        );
+        let mut changed = false;
+        for sig in self.types.keys().filter(|sig| sig.entity == entity) {
+            changed |= self.inactive.insert(sig.clone());
+        }
+        if changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     pub fn iter_signals(&self) -> impl Iterator<Item = (&SignalRef, SignalType)> {
@@ -335,10 +357,14 @@ impl SignalRegistry {
     /// Drop every signal owned by `entity`. Called when an entity despawns so stale
     /// references don't linger.
     pub fn drop_entity(&mut self, entity: Entity) {
+        let changed = self.types.keys().any(|r| r.entity == entity);
         self.scalar_history.retain(|r, _| r.entity != entity);
         self.types.retain(|r, _| r.entity != entity);
         self.meta.retain(|r, _| r.entity != entity);
         self.inactive.retain(|r| r.entity != entity);
+        if changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     /// Forget a signal entirely — history, type, and metadata.
@@ -347,10 +373,12 @@ impl SignalRegistry {
     /// its own entity, so when the CHANNEL dies the rover does not, and only that one signal
     /// should go.
     pub fn remove_signal(&mut self, sig: &SignalRef) {
-        self.scalar_history.remove(sig);
-        self.types.remove(sig);
+        let changed = self.scalar_history.remove(sig).is_some() | self.types.remove(sig).is_some();
         self.meta.remove(sig);
         self.inactive.remove(sig);
+        if changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     /// Clear one signal's history without dropping its type / meta entry.

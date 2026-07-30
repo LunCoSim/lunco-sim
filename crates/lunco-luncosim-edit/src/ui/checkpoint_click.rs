@@ -408,7 +408,7 @@ pub fn on_scene_click_checkpoint(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 parent_path: root.clone(),
                 name: BEHAVIORS_SCOPE.to_string(),
                 type_name: Some("Scope".to_string()),
@@ -460,7 +460,7 @@ pub fn on_scene_click_checkpoint(
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetAttribute {
-            edit_target: LayerId::runtime(),
+            edit_target: LayerId::root(),
             path: mission,
             name: "info:sourceCode".to_string(),
             type_name: "string".to_string(),
@@ -580,7 +580,7 @@ pub fn on_scene_click_place_waypoint(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetTranslate {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 path: pending.coord_key.clone(),
                 value: [world.x, world.y, world.z],
             },
@@ -616,7 +616,7 @@ pub fn on_scene_click_place_waypoint(
             commands.trigger(ApplyUsdOp {
                 doc,
                 op: UsdOp::SetAttribute {
-                    edit_target: LayerId::runtime(),
+                    edit_target: LayerId::root(),
                     // Editing an EXISTING tree, so the program prim is already there —
                     // the XML above was read back off it.
                     path: join_prim(&vessel_prim.path, MISSION_PROGRAM),
@@ -799,7 +799,7 @@ pub fn draw_waypoint_context_menu(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetAttribute {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 path: join_prim(&vessel_prim.path, MISSION_PROGRAM),
                 name: "info:sourceCode".to_string(),
                 type_name: "string".to_string(),
@@ -820,7 +820,7 @@ pub fn draw_waypoint_context_menu(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetActive {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 path: marker_path,
                 active: false,
             },
@@ -1144,7 +1144,7 @@ fn author_marker_prim(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 parent_path: root.to_string(),
                 name: ROUTE_SCOPE.to_string(),
                 type_name: Some("Scope".to_string()),
@@ -1161,7 +1161,7 @@ fn author_marker_prim(
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::AddPrim {
-            edit_target: LayerId::runtime(),
+            edit_target: LayerId::root(),
             parent_path: route_scope,
             name: marker_name,
             type_name: Some("Xform".to_string()),
@@ -1174,7 +1174,7 @@ fn author_marker_prim(
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetTranslate {
-            edit_target: LayerId::runtime(),
+            edit_target: LayerId::root(),
             path: marker_path.clone(),
             value: [at.x, at.y, at.z],
         },
@@ -1219,7 +1219,7 @@ fn ensure_mission_program(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 parent_path: vessel_path.to_string(),
                 name: MISSION_PROGRAM.to_string(),
                 type_name: Some("Scope".to_string()),
@@ -1229,7 +1229,7 @@ fn ensure_mission_program(
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetApiSchemas {
-                edit_target: LayerId::runtime(),
+                edit_target: LayerId::root(),
                 path: path.clone(),
                 schemas: vec!["LunCoProgramAPI".to_string()],
             },
@@ -1250,7 +1250,7 @@ fn prim_exists(
         || host.document().runtime_data().spec(&sdf).is_some()
 }
 
-/// Runtime waypoint creation targets the selected USD variant, so its existence
+/// Waypoint creation targets the selected USD variant, so its existence
 /// decisions must read the live composed stage. The document's authored layers
 /// deliberately retain the variant opinions unflattened and therefore cannot
 /// answer whether `/Traverse/Route` or `/Traverse/Route/W0` already exists.

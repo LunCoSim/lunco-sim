@@ -207,6 +207,33 @@ def Xform "CommsAntenna" (
                 bool physics:collisionEnabled = false
                     }
 
+            # Dedicated communications indicator — intentionally separate from
+            # navigation/route colours and from the green/red link beams. This
+            # is the physical "radio powered" LED at the feed assembly, so an
+            # operator can identify the communications hardware at a glance.
+                    def Material "CommsIndicatorMaterial"
+                    {
+                token outputs:surface.connect = <PreviewSurface.outputs:surface>
+                        def Shader "PreviewSurface"
+                        {
+                    uniform token info:id = "UsdPreviewSurface"
+                    color3f inputs:diffuseColor = (0.005, 0.05, 0.012)
+                    color3f inputs:emissiveColor = (0.04, 2.6, 0.30)
+                    float inputs:metallic = 0.0
+                    float inputs:roughness = 0.26
+                    token outputs:surface
+                        }
+                    }
+
+                    def Sphere "CommsIndicator"
+                    {
+                double radius = 0.055
+                double3 xformOp:translate = (0.0, 0.085, 0.035)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                rel material:binding = <CommsIndicatorMaterial>
+                bool physics:collisionEnabled = false
+                    }
+
             # The beam is a child of the physical endpoint, so its generic driver
             # resolves this LinkState rather than the antenna mount.
                     def "LinkBeam" (
