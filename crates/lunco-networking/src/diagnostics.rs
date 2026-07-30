@@ -3,7 +3,7 @@
 //! These are **read-only observers of public ECS state** (no instrumentation of the
 //! hot netcode systems): they query rendered `GlobalTransform`, avian velocities,
 //! and `PendingCorrection` residuals, and report anomalies via `tracing`. The
-//! prediction SYSTEMS live in `lunco-sandbox-edit`, but every type they publish is
+//! prediction SYSTEMS live in `lunco-luncosim-edit`, but every type they publish is
 //! substrate in `lunco-core` — so this module observes the prediction without this
 //! crate depending on the editor at all (review A6).
 //!
@@ -12,7 +12,7 @@
 //! chasing jitter:
 //!
 //! ```text
-//! cargo run -p lunco-sandbox --bin sandbox --features networking,net-diag \
+//! cargo run -p lunco-luncosim --bin luncosim --features networking,net-diag \
 //!     -- --connect 127.0.0.1:5888 --api 4002 --no-throttle
 //! ```
 //!

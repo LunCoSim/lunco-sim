@@ -1,0 +1,173 @@
+//! In-memory `ar::Resolver` for openusd composition over our asset pipeline.
+//!
+//! openusd 0.5.0 composes a stage by calling a **synchronous** [`ar::Resolver`]
+//! to resolve + open every `@asset@` arc. `ar::DefaultResolver` uses `std::fs`
+//! unconditionally — wrong on wasm and wrong for our `lunco://` scheme. We
+//! supply [`LuncoUsdResolver`], a pure in-memory byte-map: the loader pre-fetches
+//! every transitively-referenced `.usda` through Bevy's `AssetServer`
+//! (`LoadContext::read_asset_bytes`, native + wasm) and hands the bytes here. The
+//! composition core never touches the filesystem (confirmed: all production
+//! `std::fs` in openusd lives in `ar::DefaultResolver`, which we don't use, and
+//! the `get_modification_timestamp` default, which we override).
+//!
+//! Identifiers (`create_identifier`) and the loader's pre-fetch BFS share ONE
+//! [`canonicalize`] so the id a layer is fetched under is byte-identical to the
+//! id openusd's collector later passes to `resolve` — a mismatch would surface
+//! as a spurious "failed to resolve asset path" error.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::io::{self, Cursor};
+use std::rc::Rc;
+use std::time::SystemTime;
+
+use openusd::ar::{self, Asset, ResolvedPath};
+
+use lunco_assets::asset_path::{canonicalize, canonicalize_root};
+
+/// The layer-byte map a [`LuncoUsdResolver`] resolves against, wrapped for
+/// **shared interior mutability**. openusd captures the resolver at stage-build
+/// time with no API to swap it, but composition is demand-driven (lazy): a
+/// reference authored onto a live stage isn't resolved until the referencing
+/// prim is (re)indexed. So a resolver backed by this shared map can gain new
+/// layer bytes at runtime — inject the closure of a spawned asset here, then
+/// author the `references` arc, and PCP composes it on the next read. `Rc`
+/// (not `Arc`) because the composed `Stage` is `!Send` and lives on the main
+/// thread; the resolver shares its thread.
+pub type SharedLayerBytes = Rc<RefCell<HashMap<String, Vec<u8>>>>;
+
+/// File extensions openusd cannot parse as USD layers — non-USD binary assets
+/// referenced through `payload`/`references` (glTF, OBJ, STL). Pixar handles
+/// these via `SdfFileFormat` plugins (`UsdGltf`, …); openusd-rs has no plugin
+/// system, so we route them to an empty stub layer during composition and
+/// surface the resolved URI as a `lunco:resolvedAsset` attribute for the Bevy
+/// side to load through `AssetServer`. Matched case-insensitively.
+pub(crate) const BINARY_ASSET_EXTENSIONS: &[&str] = &["glb", "gltf", "obj", "stl"];
+
+/// Identifier every binary asset is mapped to. Ends in `.usda` so openusd's
+/// `open_layer` parses it as text; [`LuncoUsdResolver::open_asset`] returns an
+/// empty USD layer for it, so the binary arc composes to nothing (its URI is
+/// recovered separately from the prim's authored `payload`/`references`).
+pub(crate) const BINARY_STUB_ID: &str = "__lunco_binary_stub__.usda";
+
+const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
+
+/// True if `asset_path` names a non-USD binary asset (see
+/// [`BINARY_ASSET_EXTENSIONS`]). Strips URL query (`?…`) / fragment (`#…`)
+/// first — the NASA Perseverance URL carries an `?emrc=…` query.
+pub fn is_binary_asset(asset_path: &str) -> bool {
+    let stem = asset_path
+        .split('?')
+        .next()
+        .unwrap_or(asset_path)
+        .split('#')
+        .next()
+        .unwrap_or(asset_path);
+    if let Some(dot) = stem.rfind('.') {
+        let ext = &stem[dot + 1..];
+        BINARY_ASSET_EXTENSIONS
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(ext))
+    } else {
+        false
+    }
+}
+
+/// [`canonicalize`] against an openusd `ResolvedPath` anchor.
+///
+/// The canonicalization RULE lives in `lunco-assets`, which owns every asset-path
+/// operation, so USD composition, texture lookup, terrain, the scene loader and the
+/// rhai module resolver cannot drift apart on what a reference means. All this
+/// crate contributes is the openusd-specific type conversion.
+///
+/// openusd hands the anchor as an `Option` (absent when it is resolving a ROOT
+/// layer), so this is where that absence is mapped onto the explicit
+/// [`canonicalize_root`] rather than smuggled through as an empty anchor.
+pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
+    match anchor.and_then(|a| a.to_str()) {
+        Some(a) => canonicalize(asset_path, a),
+        None => canonicalize_root(asset_path),
+    }
+}
+
+// TODO(glb-composability): binary assets (`.glb`/`.gltf`/…) are currently a
+// side-channel — stubbed out of USD composition and surfaced via
+// `lunco:resolvedAsset` for Bevy's glTF loader. The *proper* USD way is a
+// glTF `SdfFileFormat` (dynamic file format) that composes the glb into the
+// stage as real `Mesh` geometry — no special-case, no `resolvedAsset`.
+//   * External tools (Blender/usdview): adopt Adobe's open-source
+//     `USD-Fileformat-plugins` (glTF/FBX/OBJ/STL/PLY SdfFileFormat plugins)
+//     via `PXR_PLUGINPATH` — config only, no engine code. See
+//     `docs/architecture/21-domain-usd.md` (interop note).
+//   * Our engine (pure-Rust `openusd`, no C++ plugin system): mirror it with a
+//     small glTF→USD-layer shim in `compose.rs` (points/indices/normals/uvs →
+//     `Mesh` specs) fed to the composer instead of `discover_arcs` stubbing.
+// Until then the binary side-channel is retained — it works native + web.
+
+/// In-memory resolver over pre-fetched layer bytes, keyed by [`canonicalize`]d
+/// identifier. Binary assets resolve to an empty stub (see [`BINARY_STUB_ID`]).
+/// The byte map is [`SharedLayerBytes`] so the owning [`CanonicalStage`] can
+/// inject a spawned asset's layer closure at runtime and have a
+/// subsequently-authored reference compose (demand-driven resolution).
+pub struct LuncoUsdResolver {
+    bytes: SharedLayerBytes,
+}
+
+impl LuncoUsdResolver {
+    /// Build a resolver owning a fresh shared map seeded with `bytes`.
+    pub fn new(bytes: HashMap<String, Vec<u8>>) -> Self {
+        Self {
+            bytes: Rc::new(RefCell::new(bytes)),
+        }
+    }
+
+    /// A clone of the shared byte-map handle, so the caller (the
+    /// [`CanonicalStage`] that installs this resolver into a live stage) can
+    /// keep injecting layer bytes after the stage is built.
+    pub fn shared(&self) -> SharedLayerBytes {
+        self.bytes.clone()
+    }
+}
+
+impl ar::Resolver for LuncoUsdResolver {
+    fn create_identifier(&self, asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
+        if is_binary_asset(asset_path) {
+            return BINARY_STUB_ID.to_string();
+        }
+        canonicalize_at(asset_path, anchor)
+    }
+
+    fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {
+        if asset_path == BINARY_STUB_ID || self.bytes.borrow().contains_key(asset_path) {
+            Some(ResolvedPath::new(asset_path))
+        } else {
+            None
+        }
+    }
+
+    fn resolve_for_new_asset(&self, asset_path: &str) -> Option<ResolvedPath> {
+        Some(ResolvedPath::new(asset_path))
+    }
+
+    fn open_asset(&self, resolved_path: &ResolvedPath) -> io::Result<Box<dyn Asset>> {
+        let key = resolved_path.to_str().unwrap_or_default();
+        if key == BINARY_STUB_ID {
+            return Ok(Box::new(Cursor::new(EMPTY_USDA.to_vec())));
+        }
+        self.bytes
+            .borrow()
+            .get(key)
+            .map(|b| Box::new(Cursor::new(b.clone())) as Box<dyn Asset>)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.to_string()))
+    }
+
+    /// Override the one fs-touching default (`fs::metadata`) so composition is
+    /// 100% filesystem-free.
+    fn get_modification_timestamp(
+        &self,
+        _asset_path: &str,
+        _resolved_path: &ResolvedPath,
+    ) -> Option<SystemTime> {
+        None
+    }
+}

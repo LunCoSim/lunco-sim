@@ -1,5 +1,6 @@
 within LunCo.Pointing;
 model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
+  extends LunCo.Icons.Pointing;
   // An ASSEMBLY, not a new law: two `ServoAxis` instances (the same component
   // the solar tracker uses) plus one `DishPattern`. The only equations written
   // here are the wiring and the geometry that connects them — which is the

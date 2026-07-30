@@ -1,8 +1,8 @@
 within LunCo.Electrical;
-import LunCo.Electrical.Pin;
 
 // On-Board Computer (OBC / Flight Computer) baseline power draw & processing load.
 model OnboardComputer
+  extends LunCo.Icons.ElectricalControl;
   parameter Real p_baseline_w = 12.0 "Flight computer baseline power draw, W";
   parameter Real p_gnc_w = 8.0 "Active GNC / hazard avoidance processing power draw, W";
 

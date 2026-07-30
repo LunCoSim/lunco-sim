@@ -39,8 +39,8 @@ use lunco_time::{AnimationPreview, Playback, ResolvedDomains, TimeBinding, World
 
 use crate::camera_switch::ActivateCamera;
 use crate::{
-    CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset, attr_has_time_samples,
-    read_token_timesamples, stage_time_codes_per_second,
+    attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second, CanonicalStages,
+    SdfPath, UsdPrimPath, UsdStageAsset,
 };
 
 /// The token channel a camera track keys: which camera is live over time.

@@ -162,7 +162,7 @@ pub(crate) fn crater_placements(
 /// A request to build a DEM tile **onto the entity carrying this component**.
 /// [`start_dem_builds`] kicks the off-thread bake; [`finish_dem_builds`] inserts
 /// `Mesh3d` + `Collider` onto the same entity. Public so the USD→DEM bridge (in
-/// `lunco-sandbox`) can place it on an authored terrain prim.
+/// `lunco-luncosim`) can place it on an authored terrain prim.
 #[derive(Component)]
 pub struct DemTerrainRequest {
     /// DEM site directory (contains `materials/textures/heightmap.tif`).
@@ -1448,6 +1448,14 @@ fn assemble_dem_build(
                 ));
             }
             if collider_ring {
+                // A USD terrain prim may already have received its authored
+                // placeholder/static collider from lunco-usd-avian. The ring is
+                // the authoritative physics surface in streaming mode; keeping
+                // the older shape would make the rover rest on one surface while
+                // the eye sees another (the classic rover-buried-in-terrain
+                // failure). Remove that competing collider before the ring tiles
+                // become live.
+                e.try_remove::<Collider>();
                 // Construct the ring's contact band from the SAME viz config the
                 // visual tiles use (`TerrainLodViz::default()`), so the collider's
                 // gate is floored at the visual leaf's gate — what the rover
@@ -1509,6 +1517,25 @@ fn assemble_dem_build(
             "[dem-terrain] built '{}' ({}² resampled from {}² native, ±{:.0} m){}",
             built.site, built.res, built.native_res, h, mode
         );
+    }
+}
+
+/// Remove a USD mesh/placeholder collider that arrives after a streaming DEM
+/// ring was installed. The ring's tiles are the sole authoritative collider in
+/// this mode; a second collider on the terrain owner would support bodies at a
+/// different height than the rendered DEM.
+pub(crate) fn remove_late_ring_owner_colliders(
+    mut commands: Commands,
+    owners: Query<
+        Entity,
+        (
+            With<crate::collider_ring::TerrainColliderRing>,
+            Added<Collider>,
+        ),
+    >,
+) {
+    for entity in &owners {
+        commands.entity(entity).remove::<Collider>();
     }
 }
 
@@ -2471,6 +2498,7 @@ pub(crate) fn register(app: &mut App) {
                 finish_dem_restamp,
                 start_dem_collider,
                 finish_dem_collider,
+                remove_late_ring_owner_colliders,
                 update_terrain_gen_status,
             ),
         );

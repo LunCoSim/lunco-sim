@@ -8,7 +8,7 @@
 //!   parameters are shader **uniforms**, so re-tuning a critical angle is a uniform
 //!   write — no rebuild, no pipeline permutation) — `assets/shaders/transfer.wgsl`;
 //! - the Inspector **legend** builds its swatches by sampling [`TransferFn::sample`]
-//!   at the tick values (`lunco-sandbox-edit::ui::inspector::draw_slope_legend`);
+//!   at the tick values (`lunco-luncosim-edit::ui::inspector::draw_slope_legend`);
 //! - a **headless PNG / GeoTIFF export** colours a materialised field raster with it.
 //!
 //! Because the parameters are a few floats + colours, the whole function travels as

@@ -87,6 +87,74 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
     }
 }
 
+/// Read bytes for a canonical asset identity through the native asset-location
+/// policy. USD composition deliberately calls this instead of touching the
+/// filesystem: asset-root selection and diagnostic paths stay owned here.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result<Vec<u8>> {
+    let path = id_to_disk_path(id, assets_root).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("asset `{id}` has no resolvable native root"),
+        )
+    })?;
+    std::fs::read(path)
+}
+
+/// Read a canonical asset identity when the composing document belongs to an
+/// open Twin.  The synchronous USD composer cannot call Bevy's async reader,
+/// so it uses this asset-owned equivalent of the registered `twin://` source.
+/// Library assets keep the ordinary `assets_root` policy; Twin assets are
+/// resolved inside the explicitly supplied Twin root and its cache.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_bytes_with_twin_root(
+    id: &str,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+) -> std::io::Result<Vec<u8>> {
+    if let Some((_name, rel)) = crate::parse_twin_uri(id) {
+        let root = twin_root.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Twin asset `{id}` has no composing Twin root"),
+            )
+        })?;
+        let mut relative = PathBuf::new();
+        for component in Path::new(rel).components() {
+            match component {
+                std::path::Component::Normal(part) => relative.push(part),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Twin asset `{id}` escapes its root"),
+                    ));
+                }
+            }
+        }
+        let authored = root.join(&relative);
+        if authored.is_file() {
+            return std::fs::read(authored);
+        }
+        let cached = crate::twin_cache_dir(root).join(relative);
+        return std::fs::read(cached);
+    }
+    read_asset_bytes(id, assets_root)
+}
+
+/// Native read for a caller-selected root document. Kept in `lunco-assets` so
+/// USD consumers never perform their own filesystem access.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_file_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path)
+}
+
+/// Read authored UTF-8 text through the asset boundary.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
+    String::from_utf8(read_asset_file_bytes(path)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
 /// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then each cache root
 /// in [`cache_roots`](crate::cache_roots) order.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
@@ -121,7 +189,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
 /// the one returned, so a miss reports the deepest place we looked.
 ///
 /// That last part is a trap for whoever reads the log, which is why [`read`]
-/// also names every root. A miss on `lunco://environment/lunar_surface.usda`
+/// also names every root. A miss on `lunco://components/cameras/lunar_surface_camera.usda`
 /// surfaced as `Path not found: C:\Users\…\AppData\Local\lunco\environment/…`,
 /// and a bug report reasonably concluded that `lunco://` resolved *into the
 /// AppData cache and never into the install's own `assets/`* — the exact

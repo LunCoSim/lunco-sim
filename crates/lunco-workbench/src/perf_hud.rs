@@ -14,7 +14,7 @@
 //! and from `PerfHudSettings.enabled` for visibility.
 //!
 //! Workbench itself stays physics-agnostic: `physics_ms` is a plain
-//! `Option<f32>` that another crate (e.g. `lunco-sandbox-edit`)
+//! `Option<f32>` that another crate (e.g. `lunco-luncosim-edit`)
 //! populates when avian is in the build.
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};

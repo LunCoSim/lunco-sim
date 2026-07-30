@@ -18,7 +18,7 @@
 //! `fn(&dyn LayerAttrSource)` parser, and register it under a `lunco:layer` type with
 //! [`TerrainLayerAppExt::add_terrain_layer`]. One layer = one file.
 //!
-//! Parsing is USD-free here (the USD bridge in `lunco-sandbox` wraps a prim reader as
+//! Parsing is USD-free here (the USD bridge in `lunco-luncosim` wraps a prim reader as
 //! a [`LayerAttrSource`]), so this crate stays composition-engine-only. Layers are
 //! deterministic from a seed and held as `Arc<dyn TerrainLayer>` (`Send + Sync`) so a
 //! stamp layer can be moved into the off-thread bake task.

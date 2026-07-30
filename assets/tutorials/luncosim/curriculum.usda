@@ -4,8 +4,10 @@
     Flagship curriculum. See `../sandbox/curriculum.usda` for what a track and a
     lesson are made of.
 
-    Neither lesson carries a payload: the flagship opens on its own solar system
-    and these lessons teach how to move around the world that is already there.
+    Both lessons declare the default LunCoSim world. This is intentionally
+    explicit: first-run boot hands scene ownership to the selected tutorial and
+    therefore skips the ordinary startup load. A world-less onboarding lesson
+    would otherwise open over an empty viewport.
     """
     defaultPrim = "LunCoSim"
     metersPerUnit = 1
@@ -19,6 +21,7 @@ def Scope "LunCoSim" (
 
     def Scope "Welcome" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://scenes/luncosim/sandbox_scene.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/welcome.rhai@
@@ -31,6 +34,7 @@ def Scope "LunCoSim" (
 
     def Scope "Controls" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://scenes/luncosim/sandbox_scene.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/controls.rhai@

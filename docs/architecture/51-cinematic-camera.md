@@ -23,12 +23,12 @@ The substrate is largely built. This design mostly *composes* it.
 | `UsdGeomCamera` → ECS (`focalLength`, `clippingRange`, `projection`) | `lunco-usd-bevy/src/camera.rs` | Real; `focusDistance` unread (no DOF) |
 | Data-driven cuts (`token lunco:activeCamera.timeSamples`) | `lunco-usd-bevy/src/camera_track.rs` | Real (doc 35 step 1) |
 | Transport (`ControlAnimation`, `Playback`, `AnimationPreview` domain) | `lunco-time/src/domain.rs:86,584,608` | Real |
-| Transport UI (play/pause/scrub/rate) | `lunco-sandbox-edit/src/ui/inspector.rs:820` | Real, ~45 lines |
+| Transport UI (play/pause/scrub/rate) | `lunco-luncosim-edit/src/ui/inspector.rs:820` | Real, ~45 lines |
 | `SetActiveCamera { name }` + `reconcile_scene_viewport` | `lunco-usd-bevy/src/camera_switch.rs` | Real, sole viewport authority |
-| Ground pick (DEM oracle + collider, render→world) | `lunco-sandbox-edit/src/ui/checkpoint_click.rs:216` (`pick_ground_world`) | Real, directly reusable |
+| Ground pick (DEM oracle + collider, render→world) | `lunco-luncosim-edit/src/ui/checkpoint_click.rs:216` (`pick_ground_world`) | Real, directly reusable |
 | `catmull_rom_path` (shared by autopilot + ribbon) | `lunco-autopilot` | Real, has `closed` flag |
 | Cursor-mode gating, `CancelIntent` → `#[Command]` | `lunco-core/src/lib.rs:~440-512` | Real |
-| Working precedent scene | `assets/scenes/sandbox/lander_cinematic.usda` | Real, runs today |
+| Working precedent scene | `assets/scenes/luncosim/lander_cinematic.usda` | Real, runs today |
 
 **Gaps** that bear on this work:
 
@@ -79,7 +79,7 @@ scene that breaks silently when the seed changes.
 
 Moonbase is **a separate repo**, not this one: `/home/rod/Documents/lunco/moonbase`
 (twin folder `twin/`, manifest `twin.toml` → `default_scene = "moonbase_scene.usda"`).
-The copy under `main/dist/sandbox/assets/twins/moonbase/` is a stale deploy — do not edit it.
+The copy under `main/dist/luncosim/assets/twins/moonbase/` is a stale deploy — do not edit it.
 
 Derive exactly as `lander_cinematic.usda` derives from `lander_ops.usda`:
 
@@ -110,7 +110,7 @@ the first one. And `timeCodesPerSecond` defaults to 24 — set it to 1 as the pr
 so keys read as seconds and line up with transport.
 
 To surface it in the web UI: `LC_TWIN_EXTRA="moonbase_cine=moonbase_cinematic.usda=/home/rod/Documents/lunco/moonbase/twin"`
-at build, or edit `dist/sandbox/scenes.json` post-deploy. Desktop picks it up via `--scene`.
+at build, or edit `dist/luncosim/scenes.json` post-deploy. Desktop picks it up via `--scene`.
 
 ## 4. Core decision — knot prims, baked to timeSamples
 
@@ -295,7 +295,7 @@ delete / dwell / focal length). Re-bake on change, signature-gated.
 
 - **Crater centre** — hero crater (recommended) vs eyeballed point? Blocks Phase 0. §2.
 - **Where does the scene live** — moonbase twin repo (recommended, it's a moonbase scene) or
-  `usd/assets/scenes/sandbox/`? Cross-repo edits mean two commits.
+  `usd/assets/scenes/luncosim/`? Cross-repo edits mean two commits.
 - **Undo** — camera-path edits go through `ApplyUsdOp` so document undo works, but editor
   Ctrl+Z is wired to the ECS-only `UndoStack`. Same split that leaves waypoint edits
   un-undoable. Fix here or leave consistent-but-wrong?
@@ -306,7 +306,7 @@ delete / dwell / focal length). Re-bake on change, signature-gated.
 
 ## 8a. VERIFIED — Phase 0 run, and the bug it found
 
-Ran `sandbox --scene /home/rod/Documents/lunco/moonbase/twin/moonbase_cinematic.usda --api 3001`.
+Ran `luncosim --scene /home/rod/Documents/lunco/moonbase/twin/moonbase_cinematic.usda --api 3001`.
 
 **Works:**
 - Composition. `twin://moonbase/moonbase_cinematic.usda` mounts doc-backed, sublayers the base,
@@ -377,7 +377,7 @@ data source is sound.
 
 Built (all reachable from rhai/API/MCP, not just buttons):
 
-- **`AddCameraHere`** (`lunco-sandbox-edit/src/ui/cinematic.rs`) — capture the live view as a
+- **`AddCameraHere`** (`lunco-luncosim-edit/src/ui/cinematic.rs`) — capture the live view as a
   `def Camera` via `ApplyUsdOp` into `LayerId::root()`. Names itself `View_N`, skipping taken
   names (`AddPrim` rejects rather than merges).
 - **`ControlAnimation.looping`** (`lunco-time/src/domain.rs`) — the field was honoured by

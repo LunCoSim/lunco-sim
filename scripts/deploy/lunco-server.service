@@ -1,6 +1,6 @@
 [Unit]
 # LunCo headless sim server (WebTransport host) for sandbox.lunco.space.
-# Runs the `sandbox` binary with --no-ui: no window/GPU/egui, just the
+# Runs the `luncosim-server` binary: no window/GPU/egui, just the
 # server-authoritative sim + the WebTransport host on UDP :5888.
 Description=LunCo headless sim server (WebTransport host)
 Documentation=file:/opt/lunco/deploy/DEPLOY.md
@@ -25,7 +25,7 @@ Group=lunco
 # The native binary loads assets from `<WorkingDirectory>/assets`, so the
 # working directory MUST contain the `assets/` tree shipped next to the binary.
 WorkingDirectory=/opt/lunco
-ExecStart=/opt/lunco/sandbox --no-ui --host 5888 --api 4101
+ExecStart=/opt/lunco/luncosim-server --no-ui --host 5888 --api 4101
 
 # --- Configuration -----------------------------------------------------------
 # TLS cert paths + tunables live in this env file (see lunco-server.env).

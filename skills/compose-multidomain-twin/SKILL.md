@@ -94,7 +94,7 @@ This skill is the *assembly* layer over the single-domain skills:
 A **Twin** = a folder + a `twin.toml` manifest that owns a default USD scene:
 
 ```toml
-name = "sandbox"
+name = "luncosim"
 version = "0.1.0"
 description = "…"
 [usd]
@@ -214,3 +214,8 @@ def Scope "Scenario" ( kind = "component" )
 - **A vehicle is a USD file** — spawn/param it in USD; if you're writing a Rust struct for a specific rover, stop.
 - **Unwired algebraic Modelica inputs fold to their default** — see [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) for the `der`-feed / wiring fix.
 - **Per-domain identity is the point** — one `LunCoProgramAPI` prim per subsystem gives clean per-domain telemetry; don't collapse them onto the body.
+- **Do not add a Rhai sleep after wiring a generated domain island.** USD composition
+  defers its boundary edges until the island's `ModelicaModel` publishes the
+  runtime contract. Use the readiness query/policy to wait for that stage; a
+  compiler-pending endpoint is assembly progress, while an unknown port after the
+  contract is terminal is a real authoring failure.

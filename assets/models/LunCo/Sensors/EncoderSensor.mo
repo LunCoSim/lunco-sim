@@ -4,6 +4,7 @@ within LunCo.Sensors;
 // Measures mechanical joint angle and angular velocity, modeling encoder pulses per revolution (PPR)
 // quantization and digital angle telemetry for servo position feedback loops.
 model EncoderSensor
+  extends LunCo.Icons.Sensor;
   parameter Real ppr = 4096.0 "Encoder resolution, pulses per revolution (PPR)";
   parameter Real angle_bias_deg = 0.05 "Zero-point calibration offset, deg";
 

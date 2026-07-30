@@ -532,7 +532,7 @@ the tab label without remounting the document.
 
 The setting lives in the `modelica.naming` section of
 `settings.json` (see `11-workbench.md` § 9b.2). Per-twin overrides
-let library projects pin `Always` while sandbox twins keep `Never`.
+let library projects pin `Always` while luncosim twins keep `Never`.
 
 ### 7a.3 Save-As default
 

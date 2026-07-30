@@ -77,6 +77,11 @@ pub trait UsdRead {
     /// The default-time composed value of attribute `name` on `prim`, owned.
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
 
+    /// The composed USD `doc` metadata for `prim`, or `None` when no authored
+    /// opinion exists. Implementations must resolve the prim's authored stack
+    /// in strength order; this is metadata, not a custom attribute namespace.
+    fn documentation(&self, prim: &SdfPath) -> Option<String>;
+
     /// Typed default-time read of attribute `name` on `prim`, via the SAME
     /// `TryFrom<Value>` conversion the flattened reader uses. Provided.
     fn scalar<T>(&self, prim: &SdfPath, name: &str) -> Option<T>
@@ -436,6 +441,27 @@ impl UsdRead for StageView<'_> {
             .get::<Value>()
             .ok()
             .flatten()
+    }
+
+    fn documentation(&self, prim: &SdfPath) -> Option<String> {
+        // `prim_stack` is already the composed, strongest-first opinion stack,
+        // including referenced and instanced layers. Reading each layer's
+        // standard `documentation` field here keeps the USD composition
+        // algorithm in OpenUSD while avoiding a second parser or a bespoke
+        // `lunco:*description` field.
+        self.stage()
+            .prim(prim.clone())
+            .prim_stack()
+            .ok()?
+            .into_iter()
+            .find_map(|(layer_id, authored_path)| {
+                let layer = self.stage().layer(&layer_id)?;
+                let value = layer
+                    .data()
+                    .try_field(&authored_path, "documentation")
+                    .ok()??;
+                value.as_ref().as_str().map(str::to_owned)
+            })
     }
 
     fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {

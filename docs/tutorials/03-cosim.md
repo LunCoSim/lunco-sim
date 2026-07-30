@@ -1,6 +1,6 @@
 # 03 — Cosim: when a Model flies physics
 
-> **Pair with:** the *Cosim — Model meets Physics* in-app lesson (sandbox 🎓 menu).
+> **Pair with:** the *Cosim — Model meets Physics* in-app lesson (luncosim 🎓 menu).
 > **Reference:** [Co-Simulation Domain](../architecture/22-domain-cosim.md) ·
 > [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) ·
 > [inspect-simulation](../../skills/inspect-simulation/SKILL.md)
@@ -10,7 +10,7 @@ A rover that drives, a lander that descends, a balloon that rises — when the
 lives in the physics engine, the two run side by side and talk every step. That
 is **co-simulation** (cosim). This walkthrough uses the lander asset
 `vessels/landers/descent_lander.usda` — a real, working cosim vessel, referenced by
-`scenes/sandbox/lander_ops.usda` — to show the whole loop, then points at how to
+`scenes/luncosim/lander_ops.usda` — to show the whole loop, then points at how to
 wire your own.
 
 ## The pattern in one paragraph
@@ -137,10 +137,10 @@ To cosim it onto a rover:
 
 ## Where models live and how to edit them
 
-The full Modelica IDE is embedded in the sandbox as the **Design workspace** —
+The full Modelica IDE is embedded in the luncosim as the **Design workspace** —
 open `Lander.mo`, `LunCo/Electrical/Battery.mo`, or any [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary)
 class, edit the source or the diagram, compile, and run with live plots. That is
-the same workbench the standalone *lunica* app provides; in the sandbox it sits
+the same workbench the standalone *lunica* app provides; in the luncosim it sits
 alongside the 3D scene so a model and the physics it drives can be open at once.
 
 See [`../architecture/22-domain-cosim.md`](../architecture/22-domain-cosim.md)

@@ -7152,6 +7152,125 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-luncosim"
+version = "0.6.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevy_egui",
+ "bevy_winit",
+ "big_space",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "js-sys",
+ "leafwing-input-manager",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-autopilot",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-celestial-ephemeris",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-environment",
+ "lunco-experiments",
+ "lunco-hardware",
+ "lunco-luncosim-edit",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-modelica",
+ "lunco-networking",
+ "lunco-obstacle-field",
+ "lunco-physics",
+ "lunco-render",
+ "lunco-render-bevy",
+ "lunco-scene-commands",
+ "lunco-scripting",
+ "lunco-settings",
+ "lunco-storage",
+ "lunco-telemetry",
+ "lunco-terrain-globe",
+ "lunco-terrain-surface",
+ "lunco-theme",
+ "lunco-time",
+ "lunco-tutorial",
+ "lunco-twin",
+ "lunco-twin-journal",
+ "lunco-usd",
+ "lunco-usd-bevy",
+ "lunco-usd-sim",
+ "lunco-usd-terrain",
+ "lunco-web",
+ "lunco-workbench",
+ "lunco-workspace",
+ "mimalloc",
+ "openusd",
+ "resvg 0.47.0",
+ "serde",
+ "serde_json",
+ "usvg 0.47.0",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "winit",
+]
+
+[[package]]
+name = "lunco-luncosim-edit"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevy_egui",
+ "big_space",
+ "leafwing-input-manager",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-autopilot",
+ "lunco-avatar",
+ "lunco-canvas",
+ "lunco-celestial",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-environment",
+ "lunco-hardware",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-modelica",
+ "lunco-obstacle-field",
+ "lunco-physics",
+ "lunco-render",
+ "lunco-scene-commands",
+ "lunco-scripting",
+ "lunco-settings",
+ "lunco-terrain-surface",
+ "lunco-theme",
+ "lunco-time",
+ "lunco-tools",
+ "lunco-usd",
+ "lunco-usd-bevy",
+ "lunco-usd-sim",
+ "lunco-workbench",
+ "lunco-workspace",
+ "serde",
+ "serde_json",
+ "transform-gizmo-bevy",
+]
+
+[[package]]
+name = "lunco-luncosim-server"
+version = "0.6.0-dev"
+dependencies = [
+ "lunco-luncosim",
+]
+
+[[package]]
 name = "lunco-materials"
 version = "0.1.0"
 dependencies = [
@@ -7273,6 +7392,7 @@ dependencies = [
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-bevy",
+ "lunco-usd-compose",
  "lunco-workbench",
  "lunco-workspace",
  "rustls-pemfile",
@@ -7327,6 +7447,8 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-hooks",
+ "lunco-settings",
+ "serde",
 ]
 
 [[package]]
@@ -7349,121 +7471,6 @@ dependencies = [
  "lunco-materials",
  "lunco-render",
  "lunco-terrain-surface",
-]
-
-[[package]]
-name = "lunco-sandbox"
-version = "0.6.0-dev"
-dependencies = [
- "avian3d",
- "bevy",
- "bevy_egui",
- "big_space",
- "console_error_panic_hook",
- "getrandom 0.3.4",
- "js-sys",
- "leafwing-input-manager",
- "lunco-api",
- "lunco-assets",
- "lunco-autopilot",
- "lunco-avatar",
- "lunco-celestial",
- "lunco-celestial-ephemeris",
- "lunco-controller",
- "lunco-core",
- "lunco-cosim",
- "lunco-doc",
- "lunco-doc-bevy",
- "lunco-environment",
- "lunco-experiments",
- "lunco-hardware",
- "lunco-materials",
- "lunco-mobility",
- "lunco-modelica",
- "lunco-networking",
- "lunco-obstacle-field",
- "lunco-physics",
- "lunco-render",
- "lunco-render-bevy",
- "lunco-sandbox-edit",
- "lunco-scene-commands",
- "lunco-scripting",
- "lunco-settings",
- "lunco-storage",
- "lunco-telemetry",
- "lunco-terrain-globe",
- "lunco-terrain-surface",
- "lunco-theme",
- "lunco-time",
- "lunco-tutorial",
- "lunco-twin",
- "lunco-twin-journal",
- "lunco-usd",
- "lunco-usd-bevy",
- "lunco-usd-sim",
- "lunco-usd-terrain",
- "lunco-web",
- "lunco-workbench",
- "lunco-workspace",
- "mimalloc",
- "openusd",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "lunco-sandbox-edit"
-version = "0.1.0"
-dependencies = [
- "avian3d",
- "bevy",
- "bevy_egui",
- "big_space",
- "leafwing-input-manager",
- "lunco-api",
- "lunco-assets",
- "lunco-autopilot",
- "lunco-avatar",
- "lunco-canvas",
- "lunco-celestial",
- "lunco-controller",
- "lunco-core",
- "lunco-cosim",
- "lunco-doc",
- "lunco-doc-bevy",
- "lunco-environment",
- "lunco-hardware",
- "lunco-materials",
- "lunco-mobility",
- "lunco-modelica",
- "lunco-obstacle-field",
- "lunco-physics",
- "lunco-render",
- "lunco-scene-commands",
- "lunco-scripting",
- "lunco-settings",
- "lunco-terrain-surface",
- "lunco-theme",
- "lunco-time",
- "lunco-tools",
- "lunco-usd",
- "lunco-usd-bevy",
- "lunco-usd-sim",
- "lunco-workbench",
- "lunco-workspace",
- "serde",
- "serde_json",
- "transform-gizmo-bevy",
-]
-
-[[package]]
-name = "lunco-sandbox-server"
-version = "0.6.0-dev"
-dependencies = [
- "lunco-sandbox",
 ]
 
 [[package]]
@@ -7710,6 +7717,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-usd-compose",
  "lunco-workbench",
  "lunco-workspace",
  "openusd",
@@ -7786,6 +7794,7 @@ dependencies = [
  "lunco-ui",
  "lunco-usd-avian",
  "lunco-usd-bevy",
+ "lunco-usd-compose",
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
@@ -7825,11 +7834,22 @@ dependencies = [
  "lunco-core",
  "lunco-render",
  "lunco-time",
+ "lunco-usd-compose",
  "openusd",
  "spade",
  "tempfile",
  "truck-geometry",
  "wgpu-types",
+]
+
+[[package]]
+name = "lunco-usd-compose"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lunco-assets",
+ "openusd",
+ "tempfile",
 ]
 
 [[package]]
@@ -7891,8 +7911,10 @@ dependencies = [
  "bevy_egui",
  "egui_plot",
  "lunco-canvas",
+ "lunco-core",
  "lunco-signal",
  "lunco-theme",
+ "lunco-usd-bevy",
  "lunco-workbench",
  "serde",
  "serde_json",
@@ -7963,37 +7985,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "luncosim"
-version = "0.6.0-dev"
-dependencies = [
- "avian3d",
- "bevy",
- "big_space",
- "console_error_panic_hook",
- "getrandom 0.3.4",
- "js-sys",
- "lunco-api",
- "lunco-assets",
- "lunco-autopilot",
- "lunco-avatar",
- "lunco-celestial",
- "lunco-celestial-ephemeris",
- "lunco-controller",
- "lunco-core",
- "lunco-environment",
- "lunco-hardware",
- "lunco-materials",
- "lunco-mobility",
- "lunco-render-bevy",
- "lunco-time",
- "lunco-ui",
- "lunco-web",
- "lunco-workbench",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

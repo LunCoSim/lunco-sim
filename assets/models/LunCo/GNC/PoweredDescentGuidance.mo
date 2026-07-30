@@ -4,6 +4,7 @@ within LunCo.GNC;
 // Calculates required thrust acceleration vector to guide a fast-moving lander to a target landing point.
 // Acceleration law: a_cmd = (6/t_go²) * (p_target - p - v*t_go) - (2/t_go) * (v_target - v) + g_lunar
 model PoweredDescentGuidance
+  extends LunCo.Icons.Guidance;
   parameter Real g_lunar = 1.62 "Lunar gravity acceleration, m/s²";
   parameter Real a_max = 12.0 "Maximum engine thrust acceleration capacity, m/s²";
 
@@ -26,6 +27,8 @@ model PoweredDescentGuidance
   output Real a_req_z "Required vertical acceleration, m/s²";
   output Real throttle_cmd "Main engine throttle command, 0..1";
   output Real pitch_cmd_deg "Commanded pitch attitude angle, deg";
+  output Real target_distance_m(unit="m") "Distance from the lander to the target site";
+  output Real vehicle_speed_m_s(unit="m/s") "Current magnitude of the lander velocity";
 
   Real dist_to_target "Distance to target site, m";
   Real speed "Current lander speed, m/s";
@@ -44,4 +47,6 @@ equation
 
   // Pitch angle for lateral velocity vector cancellation
   pitch_cmd_deg = max(-45.0, min(45.0, (vel_x / max(1.0, abs(vel_z))) * 57.2958));
+  target_distance_m = dist_to_target;
+  vehicle_speed_m_s = speed;
 end PoweredDescentGuidance;

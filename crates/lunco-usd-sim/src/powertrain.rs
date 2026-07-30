@@ -57,6 +57,15 @@ pub struct PowertrainParams {
     pub max_output_torque: f64,
 }
 
+/// The composed motor part and its immutable drivetrain parameters for one wheel.
+/// Keeping the path beside the numbers lets the USD projector bind native runtime
+/// readback to the actual motor entity without re-scanning the vessel.
+#[derive(Clone, Debug)]
+pub struct PowertrainBinding {
+    pub motor: SdfPath,
+    pub params: PowertrainParams,
+}
+
 impl PowertrainParams {
     /// Peak torque delivered AT THE AXLE, N·m — what the wheel dynamics see.
     ///
@@ -154,6 +163,16 @@ pub fn find_for_wheel(
     reader: &lunco_usd_bevy::StageView<'_>,
     wheel: &SdfPath,
 ) -> Option<PowertrainParams> {
+    find_binding_for_wheel(reader, wheel).map(|binding| binding.params)
+}
+
+/// Resolve the composed motor that drives `wheel` and its immutable parameters.
+/// The relationship is the sole identity source; the motor and wheel need not be
+/// siblings, and their display names play no part in the resolution.
+pub fn find_binding_for_wheel(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    wheel: &SdfPath,
+) -> Option<PowertrainBinding> {
     let root = vessel_root(wheel)?;
     let mut motors = Vec::new();
     collect_by_api(reader, &root, "LunCoMotorAPI", &mut motors);
@@ -178,7 +197,10 @@ pub fn find_for_wheel(
     });
 
     match read_powertrain(reader, motor, gearbox) {
-        Ok(p) => Some(p),
+        Ok(params) => Some(PowertrainBinding {
+            motor: motor.clone(),
+            params,
+        }),
         Err(missing) => {
             bevy::log::error!(
                 "motor {} is missing required attributes {:?} — the wheel it drives \

@@ -1,39 +1,77 @@
-# luncosim
+# LunCoSim
 
-The **flagship lunar-mission simulator** — the full-stack windowed app.
+> **Try it live:** [**sandbox.lunco.space**](https://sandbox.lunco.space) — runs in the browser. Early preview build; expect rough edges.
 
-## What it is
+**LunCoSim** is the LunCo ground-mobility application for testing physics interactions and scene composition. It is the primary tool for validating rover chassis, suspension behavior, and environment collision.
 
-`luncosim` assembles every simulation plugin into one cohesive Bevy app:
+## What it does
 
-- Celestial bodies + ephemeris, solar-system-scale `big_space`, and an orbital
-  camera that auto-focuses Earth on boot.
-- The whole **FSW / Hardware / Mobility / Robotics / Avatar** stack, running
-  under the workbench UI.
-- Global coordinate propagation via `big_space` (high-precision grid entities +
-  low-precision children) — no custom transform propagation.
+- **Physics Validation**: Test Avian3D physics in a controlled environment.
+- **Mobility Testing**: Drive rovers with different wheel types (raycast vs. physical).
+- **Scene Preview**: Load and inspect USD scenes synchronously.
+- **Modeling & Cosim**: The full Modelica IDE — the same workbench the standalone
+  *lunica* app provides — is embedded as the **Design workspace**. Open, edit,
+  compile, and run `.mo` models with live plots. Models can be co-simulated with
+  the physics: a Modelica model holds the control law, a `SimConnection` pipes its
+  outputs to a physics body, and state flows back in. The bundled lander flies
+  this way; see the [Cosim walkthrough](../../tutorials/03-cosim.md).
+- **Networked Play**: Can act as a listen-server or client for multiplayer testing.
 
-Unlike `sandbox` (which gates its render/windowing stack behind the `ui`
-feature for its headless server), `luncosim` is **always windowed** — the full
-render + windowing stack is unconditional and `bevy_egui` drives the workbench
-chrome.
+## Workspaces
+
+The luncosim has two workspaces, switched via the tabs at the top of the window:
+
+- **View** (default) — the 3D scene: viewport, spawn palette, inspector, rover
+  driving, telemetry. Covered by the *Sandbox Intro → First Drive → Lander & Rover
+  Mission* tutorials and the *Build a Scene → Script a Rover → Inspect the
+  Simulation → Cosim* authoring track.
+- **Design** — the embedded Modelica IDE: source / diagram / icon / docs views,
+  a component palette, compile & run (interactive and fast), live inputs, and
+  plots. Backed by the [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary)
+  plus the bundled models in `assets/models/` (`Lander.mo`, `Battery.mo`,
+  `QuarterCar.mo`, …). Open `Lander.mo` here to see the law the lander flies.
 
 ## CLI Usage
 
 ```bash
-cargo run -p luncosim
+target/debug/luncosim [FLAGS]
 ```
 
-Single source for desktop + web: the wasm build uses `lunco-web`'s
-`WebReadyPlugin` to dismiss the HTML loader once the first frame paints (no-op
-on native). Build the web bundle with `scripts/build_web.sh build luncosim`.
+### Flags
 
-## Cf. the other top-level binaries
+`luncosim --help` prints this same list — it is generated from the flags the binary
+actually parses, so prefer it if this table and the binary ever disagree.
 
-- [`sandbox`](../sandbox/README.md) (`lunco-sandbox`) — ground-physics test bed.
-- [`lunica`](../lunica/README.md) (`lunco-modelica`) — Modelica workbench.
+| Flag | Description |
+|---|---|
+| `-h`, `--help` | Print usage and exit, without launching the simulator. |
+| `--no-ui` | Run headless — no window, no GPU. Also via `LUNCO_NO_UI=1`. |
+| `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
+| `--scene <PATH>` | Load a specific USD scene. Path is relative to `assets/`. Default: `scenes/luncosim/sandbox_scene.usda`. |
+| `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |
+| `--no-throttle` | Disable background throttling. The window will update at full rate even when unfocused. |
+| `--log-diag` | Enable Bevy's `LogDiagnosticsPlugin` to print FPS, FrameTime, and physics stats to the console. |
+| `--window-pos <SPEC>` | Force the OS window to a specific screen region (e.g., `1920x1080+0+0`). |
+| `--host [PORT]` | Start a networked listen-server. Default port is 5888. |
+| `--connect <ADDR>` | Connect to a networked server via WebTransport. An `ADDR` with no port implies `:5888`; a bare IP skips TLS validation (LAN/dev). |
+| `--cert <PATH>` | TLS certificate for `--host`: a certbot live dir, or a cert file (then pair with `--key`). Omit both for a dev self-signed cert. See [OPS](OPS.md). |
+| `--key <PATH>` | TLS private key, when `--cert` names a file rather than a directory. |
+
+Measuring FPS? Always pass `--no-vsync --no-throttle` — otherwise you are timing
+the compositor and the unfocused power-save throttle, not the renderer.
+
+## Interactive Controls
+
+- **WASD / Arrow Keys**: Drive the possessed rover.
+- **Space**: Brake.
+- **G key**: Translate mode (3-axis arrows) for selected objects.
+- **R key**: Rotate mode (3-axis rings) for selected objects.
+- **Ctrl+Z**: Undo spawns and transform changes.
+- **Escape**: Cancel current operation / Deselect.
 
 ## See also
 
-- [Applications index](../README.md) — every binary at a glance.
-- [`architecture/00-overview.md`](../../architecture/00-overview.md) — how the stack fits together.
+- [**USD Domain Architecture**](../../architecture/21-domain-usd.md) — how scenes are loaded and mapped to physics.
+- [**Co-Simulation Domain**](../../architecture/22-domain-cosim.md) — how Modelica models and physics share a timestep.
+- [**Cosim walkthrough**](../../tutorials/03-cosim.md) — build and observe a Modelica↔physics vessel.
+- [**View & Intent Architecture**](../../architecture/17-view-and-intent.md) — how camera control and possession work.

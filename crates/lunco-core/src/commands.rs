@@ -464,7 +464,7 @@ impl MarkClientLocalExt for bevy::app::App {
 /// is a *wire* command: `lunco-networking` declares its channel
 /// (`declare_channel::<SpawnEntity>`), which needs nothing but the type. The
 /// handler (`on_spawn_entity_command`) lives with the catalog it spawns from, in
-/// `lunco-sandbox-edit`, and that crate re-exports this type so existing call sites
+/// `lunco-luncosim-edit`, and that crate re-exports this type so existing call sites
 /// are unchanged. Keeping the *definition* here is what lets the networking crate
 /// drop its dependency on the 13.4k-LOC editor — an edge that used to drag the
 /// whole editor closure (→ modelica → workspace → doc-bevy) into every networking

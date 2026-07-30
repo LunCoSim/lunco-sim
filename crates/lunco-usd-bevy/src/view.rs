@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{Collection, PrimPredicate, Stage, compute_included_paths};
+use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
@@ -154,8 +154,8 @@ mod compose_tests {
     //! consumes must land on the vessel after full PCP composition.
 
     use super::StageView;
-    use crate::UsdRead;
     use crate::compose::compose_file_to_stage;
+    use crate::UsdRead;
     use openusd::sdf::Path as SdfPath;
 
     fn asset(rel: &str) -> std::path::PathBuf {
@@ -237,7 +237,7 @@ mod compose_tests {
         let dir = std::env::temp_dir().join("lunco_over_ref_test");
         std::fs::create_dir_all(&dir).expect("scratch dir");
 
-        // The base: the shape of `assets/scenes/sandbox/lander_ops.usda`.
+        // The base: the shape of `assets/scenes/luncosim/lander_ops.usda`.
         std::fs::write(
             dir.join("base.usda"),
             "#usda 1.0\n\
@@ -300,7 +300,7 @@ mod compose_tests {
     //     output source component `…/SolarPanel` is outside collection `…/Electrical`
     //
     // on `scenes/tests/solar_domain_nested_ref.usda` AND on the shipped
-    // `scenes/sandbox/solar_rover_demo.usda`, which has one reference arc and
+    // `scenes/luncosim/solar_rover_demo.usda`, which has one reference arc and
     // authors the membership in the scene itself. The panel prim composes, the
     // connection to it composes, and the collection that must contain it does not.
     //
@@ -354,7 +354,7 @@ mod compose_tests {
 
     /// A `prepend` in a STRONGER layer must MERGE with the referenced base's list.
     ///
-    /// This is the exact shape `scenes/sandbox/solar_rover_demo.usda` uses: the
+    /// This is the exact shape `scenes/luncosim/solar_rover_demo.usda` uses: the
     /// rover asset's `power` variant declares the bus members, and the SCENE adds
     /// the panel it mounted with
     ///
@@ -522,7 +522,7 @@ mod compose_tests {
     ///     }
     ///
     /// Two prim specs, one path, one layer. MEASURED on the shipped
-    /// `scenes/sandbox/solar_rover_demo.usda`: the composed panel has NO children,
+    /// `scenes/luncosim/solar_rover_demo.usda`: the composed panel has NO children,
     /// NO `LunCoProgramAPI`, NO `info:sourceAsset`, and exactly one attribute —
     /// `connectors:p`, the one the `over` authored. The `over` won and the `def`,
     /// with its reference to the whole component, was dropped.
@@ -625,7 +625,7 @@ mod compose_tests {
     /// error naming the collection, which was never the thing that was wrong.
     #[test]
     fn shipped_solar_panel_composes_its_component_reference() {
-        let stage = compose_file_to_stage(&asset("scenes/sandbox/solar_rover_demo.usda"))
+        let stage = compose_file_to_stage(&asset("scenes/luncosim/solar_rover_demo.usda"))
             .expect("compose solar rover demo");
         let view = StageView::new(&stage);
         let panel = SdfPath::new("/SolarRoverTest/SolarRover/YawHead/SolarPanel").unwrap();

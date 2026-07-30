@@ -148,7 +148,7 @@ Representative commands already covering the user's surface:
 | Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); `DriveMix` allocates them to actuators (`lunco-cosim/src/lib.rs`, `lunco-mobility::apply_drive_mix`) |
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
-| Scene editing | `SpawnEntity`, `MoveEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-sandbox-edit/src/commands.rs`) |
+| Scene editing | `SpawnEntity`, `MoveEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-luncosim-edit/src/commands.rs`) |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
@@ -235,7 +235,7 @@ fn set_prop(id, k, v)   { cmd("SetObjectProperty", #{ target: id, key: k, value:
 ### 3.4 Security (must-have)
 `cmd()` MUST pass through the same authz/RBAC gate as the API
 (`#[authz_target]`, `SessionRegistry`, sender identity). A shared/untrusted
-scenario script then can't exceed its owner's authority. The sandbox caps
+scenario script then can't exceed its owner's authority. The luncosim caps
 (ops/depth/size) already bound runaway scripts. The exposed verb set = the
 entire capability surface — nothing reachable that isn't a vetted command.
 

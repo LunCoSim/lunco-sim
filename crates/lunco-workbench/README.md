@@ -100,7 +100,7 @@ fn main() {
 The workbench is embedded by the apps that use it — run one of them to see it live:
 
 ```bash
-cargo run --bin sandbox     # ground-physics sandbox
+cargo run --bin luncosim     # ground-physics luncosim
 cargo run --bin lunica      # Modelica workbench
 ```
 
@@ -167,5 +167,5 @@ bevy + bevy_egui
    └── lunco-workbench   ← this crate (editor shell + WorkspaceResource)
           ▲
           │ panels plug into (via Panel trait)
-          └── lunco-modelica, lunco-sandbox-edit, lunco-cosim, …
+          └── lunco-modelica, lunco-luncosim-edit, lunco-cosim, …
 ```

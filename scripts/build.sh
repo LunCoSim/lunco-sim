@@ -8,12 +8,12 @@
 #     ./scripts/build.sh <target> [--release] [extra cargo/build_web args]
 #
 # Targets:
-#     sandbox          WASM client bundle  -> dist/sandbox/   (browser)
+#     luncosim          WASM client bundle  -> dist/luncosim/   (browser)
 #     lunica           WASM client bundle  -> dist/lunica/    (browser IDE)
-#     sandbox-server   NATIVE headless server binary -> target/<profile>/sandbox
+#     luncosim-server   NATIVE headless server binary -> target/<profile>/luncosim
 #                      (run with `--no-ui --host`; see crates/lunco-networking/DEPLOY.md)
 #     lunica-desktop   NATIVE desktop GUI  -> dist/lunica-<platform>-<arch>/
-#     sandbox-desktop  NATIVE desktop GUI  -> dist/sandbox-<platform>-<arch>/
+#     luncosim-desktop  NATIVE desktop GUI  -> dist/luncosim-<platform>-<arch>/
 #                      (Linux, macOS, Windows; see scripts/build_native.sh)
 #
 # Profile:
@@ -21,11 +21,11 @@
 #     --release        optimized build (web: fat LTO + wasm-opt; native: release)
 #
 # Examples:
-#     ./scripts/build.sh sandbox --release          # optimized web client
-#     ./scripts/build.sh sandbox-server --release   # optimized native server
-#     ./scripts/build.sh sandbox-server             # quick dev server build
+#     ./scripts/build.sh luncosim --release          # optimized web client
+#     ./scripts/build.sh luncosim-server --release   # optimized native server
+#     ./scripts/build.sh luncosim-server             # quick dev server build
 #     ./scripts/build.sh lunica-desktop --release --package  # native desktop
-#     ./scripts/build.sh sandbox-desktop --release --package
+#     ./scripts/build.sh luncosim-desktop --release --package
 #
 # The web targets delegate to build_web.sh (the wasm pipeline); the server
 # target is a plain native cargo build with the headless feature set; the
@@ -63,7 +63,7 @@ for a in "$@"; do
 done
 
 case "$TARGET" in
-    sandbox|lunica)
+    luncosim|lunica)
         # WASM client — hand off to the web pipeline (it owns wasm-bindgen,
         # asset staging, the MSL bundle, the worker, and the optional wasm-opt
         # size pass under --release).
@@ -74,24 +74,24 @@ case "$TARGET" in
         exec "$SCRIPT_DIR/build_web.sh" "${args[@]}"
         ;;
 
-    sandbox-server)
-        # NATIVE headless server: the `sandbox-server` bin from `lunco-sandbox-server`.
+    luncosim-server)
+        # NATIVE headless server: the `luncosim-server` bin from `lunco-luncosim-server`.
         # default features are dropped to omit the GUI stack, and the `server` feature
         # enables the HTTP API + networking host. No winit, no display.
         cd "$PROJECT_DIR"
         profile_args=()
-        out="target/debug/sandbox-server"
+        out="target/debug/luncosim-server"
         label="dev"
         rel_flag=""
         if [ "$RELEASE" -eq 1 ]; then
             profile_args=(--release)
-            out="target/release/sandbox-server"
+            out="target/release/luncosim-server"
             label="release"
             rel_flag=" --release"
         fi
         info "native server build ($label)…"
         cargo build "${profile_args[@]}" \
-            --bin sandbox-server -p lunco-sandbox-server \
+            --bin luncosim-server -p lunco-luncosim-server \
             "${PASS[@]+"${PASS[@]}"}"
         success "server binary: $PROJECT_DIR/$out"
 
@@ -100,12 +100,12 @@ case "$TARGET" in
         DIST="$PROJECT_DIR/dist/server"
         info "staging bundle → dist/server/"
         rm -rf "$DIST"; mkdir -p "$DIST/deploy"
-        cp -f "$PROJECT_DIR/$out" "$DIST/sandbox"
+        cp -f "$PROJECT_DIR/$out" "$DIST/luncosim"
         # Strip the SHIPPED copy. A dev binary carries ~3+ GB of `.debug_*`
         # (loadable code is only ~200 MB); the `[profile.release]` already sets
         # `strip = true`, so this is the dev-build equivalent. The original
         # target/ binary keeps its symbols for local debugging.
-        if command -v strip >/dev/null 2>&1; then strip "$DIST/sandbox" 2>/dev/null || true; fi
+        if command -v strip >/dev/null 2>&1; then strip "$DIST/luncosim" 2>/dev/null || true; fi
         cp -a "$PROJECT_DIR/assets" "$DIST/assets"          # ~330 KB, trivial copy
         # `cp` cannot exclude, so prune afterwards: `.lunco/` (runtime overlay)
         # and `history/` (edit journal) are per-session state a dev run writes
@@ -115,7 +115,7 @@ case "$TARGET" in
         find "$DIST/assets" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
         cp -f "$SCRIPT_DIR/deploy/"* "$DIST/deploy/"
         cp -f "$PROJECT_DIR/crates/lunco-networking/DEPLOY.md" "$DIST/DEPLOY.md"
-        success "server bundle: $DIST ($(du -sh "$DIST/sandbox" | cut -f1) binary + assets + deploy kit)"
+        success "server bundle: $DIST ($(du -sh "$DIST/luncosim" | cut -f1) binary + assets + deploy kit)"
         [ "$RELEASE" -eq 0 ] && warn "dev build (opt-level 1). For deploy use --release (faster + smaller)."
         info "run:    $out --host 5888 --api 4101   (5888/4101 are the defaults; numbers optional)"
         info "deploy: ./scripts/deploy_server.sh user@host --server <remote-path> [--web <remote-path>]"
@@ -123,7 +123,7 @@ case "$TARGET" in
 
     -h|--help)
         usage 0 ;;
-    lunica-desktop|sandbox-desktop)
+    lunica-desktop|luncosim-desktop)
         # NATIVE desktop GUI — hand off to the native build pipeline (it
         # owns platform detection, asset/cache bundling, launcher scripts,
         # and optional archive creation). Pass --release and any extra
@@ -137,6 +137,6 @@ case "$TARGET" in
         ;;
     *)
         error "Unknown target: $TARGET"
-        error "Targets: sandbox, lunica (web)  |  sandbox-server (native server)  |  lunica-desktop, sandbox-desktop (native desktop)"
+        error "Targets: luncosim, lunica (web)  |  luncosim-server (native server)  |  lunica-desktop, luncosim-desktop (native desktop)"
         exit 2 ;;
 esac

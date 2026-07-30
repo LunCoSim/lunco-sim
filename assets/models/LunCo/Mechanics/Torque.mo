@@ -17,6 +17,7 @@ within LunCo.Mechanics;
 // Avian already integrates — the reaction is carried by the rigid body, not by this
 // equation set. A free-floating machine would need a two-flange source instead.
 model Torque
+  extends LunCo.Icons.Mechanics;
   input Real tau_ref "Commanded torque, N.m";
 
   Flange flange;

@@ -1173,15 +1173,19 @@ fn collect_scenario_input(
         Some(ds) => vec![twin.root.join(ds)],
         None => by_abs
             .keys()
-            .filter(|p| lunco_usd_bevy::closure::is_usd_layer(p))
+            .filter(|p| lunco_usd_compose::is_usd_layer(p))
             .cloned()
             .collect(),
     };
     // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. The host ships whatever the unconfined closure walker
-    // reached (see `closure::reference_closure`). Revisit before multiplayer
-    // hardening (REVIEW-2026-07-19.md finding #5).
-    for f in lunco_usd_bevy::closure::reference_closure(&roots) {
+    // ease of debugging. The host ships whatever the unconfined asset closure
+    // walker reached. Revisit before multiplayer hardening
+    // (REVIEW-2026-07-19.md finding #5).
+    for f in lunco_assets::transitive_file_closure(
+        &roots,
+        lunco_usd_compose::is_usd_layer,
+        lunco_usd_compose::layer_dependency_arcs,
+    ) {
         if f.starts_with(&twin.root) {
             continue; // in-tree — already enumerated by the folder walk
         }

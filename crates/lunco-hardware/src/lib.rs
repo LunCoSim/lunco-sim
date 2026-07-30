@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use lunco_core::architecture::Port;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
 
-/// What the drivetrain is ACTUALLY delivering at one wheel's axle, published as
-/// ports so a plot, a model, or a wire can read it.
+/// What the drivetrain is ACTUALLY delivering at a motor's driven axle, exposed
+/// as native output ports so a plot, a model, or a wire can read it.
 ///
 /// # Why this exists
 ///
@@ -24,17 +24,13 @@ use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
 /// channel or a wire pointed at it read an authored zero forever and looked like
 /// a dead drivetrain.
 ///
-/// # Why it lands on the WHEEL, not on the joint
+/// # Why it lands on the MOTOR, not on the synthesized joint or wheel
 ///
-/// The joint entity is SYNTHESIZED by the USD build — it has no prim, so nothing
-/// can address it from a `.usda`. The wheel is a real authored prim, and the axle
-/// is physically where this torque is delivered, so `lunco:telemetry` on
-/// `components/mobility/wheel.usda` reaches it with no new addressing concept.
-///
-/// Both realizations publish it: the jointed wheel from
-/// [`motor_actuator_system`], the raycast wheel from
-/// `lunco_mobility::update_wheel_spin`. Same quantity, same units, same name —
-/// which is what makes a drivetrain-parity plot possible at all.
+/// The joint is synthesized and therefore has no USD identity. The wheel is a
+/// physical contact part, but the value is the operating point of the motor that
+/// drives it. `MotorReadbackTarget` is projected once from the composed
+/// `lunco:motor:drivenWheel` relationship, so both Avian and raycast realizations
+/// update the authored motor entity without a name convention or telemetry relay.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component, Default, Debug)]
 pub struct MotorReadback {
@@ -45,6 +41,13 @@ pub struct MotorReadback {
     /// Measured axle speed, **rad/s**, in the same drive-positive sense.
     pub axle_speed: f64,
 }
+
+/// The authored motor entity that presents a wheel/joint's native drivetrain
+/// readback. This is a topology binding, resolved once during USD projection;
+/// fixed-step physics only follows the entity handle.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component, Debug)]
+pub struct MotorReadbackTarget(pub Entity);
 
 /// The port names [`MotorReadback`] publishes, in `list` order.
 const READBACK_PORTS: [&str; 2] = ["torque", "axle_speed"];
@@ -86,42 +89,24 @@ const MOTOR_READBACK_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
-/// Give the wheel its readback slot the moment its drive actuator appears.
-///
-/// Stamped from an observer rather than written by the per-tick system so the
-/// hot path only ever mutates an existing component — no per-tick `Commands`, no
-/// archetype churn at 64 Hz.
-fn stamp_motor_readback_on_wheel(
-    trigger: On<Add, MotorActuator>,
-    q_joints: Query<&RevoluteJoint>,
-    mut commands: Commands,
-) {
-    let Ok(joint) = q_joints.get(trigger.entity) else {
-        return;
-    };
-    commands
-        .entity(joint.body2)
-        .try_insert(MotorReadback::default());
-}
-
 /// Plugin for managing physical hardware components (motors, sensors, etc.).
 pub struct LunCoHardwarePlugin;
 
 impl Plugin for LunCoHardwarePlugin {
     fn build(&self, app: &mut App) {
         // The drivetrain's own instrumentation: delivered torque + axle speed as
-        // ports on the wheel. Registered here because the backend belongs to the
-        // crate that OWNS the value — the same rule that moved the sun's angles
-        // into `lunco-environment`.
+        // ports on the authored motor. Registered here because the backend owns
+        // the value — the same rule that moved the sun's angles into
+        // `lunco-environment`.
         app.init_resource::<PortRegistry>();
         app.world_mut()
             .resource_mut::<PortRegistry>()
             .register(MOTOR_READBACK_BACKEND);
         app.register_type::<MotorActuator>()
             .register_type::<MotorReadback>()
+            .register_type::<MotorReadbackTarget>()
             .register_type::<SteeringActuator>()
             .register_type::<AngularVelocitySensor>()
-            .add_observer(stamp_motor_readback_on_wheel)
             // A wheel joint driven by an actuator owns its own `motor`; mark it
             // so the cosim joint backend (`apply_joint_drives`) doesn't also
             // position-hold it and freeze the wheel. See `ActuatorDrivenJoint`.
@@ -262,22 +247,31 @@ fn motor_actuator_system(
     q_bodies: Query<(&AngularVelocity, &Rotation)>,
     q_inputs: Query<&lunco_core::InputPorts>,
     q_child_of: Query<&ChildOf>,
-    mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
-    // The wheel's readback slot (stamped by `stamp_motor_readback_on_wheel`).
-    // Disjoint from `q_joints`: the readback lives on `body2`, never on the joint.
+    mut q_joints: Query<(Entity, &MotorActuator, &mut RevoluteJoint)>,
+    // The authored motor target is projected once from USD. It keeps native Avian
+    // readback on the motor users inspect, while the joint remains implementation
+    // detail.
+    q_targets: Query<&MotorReadbackTarget>,
     mut q_readback: Query<&mut MotorReadback>,
 ) {
-    // Publish what this wheel is delivering. Every early-return branch below
+    // Update the motor operating point. Every early-return branch below
     // reports too — a released motor delivering 0 N·m is a MEASUREMENT, and
     // leaving the last non-zero value standing would read as a wheel still
     // pulling after the throttle came off.
-    let publish = |q: &mut Query<&mut MotorReadback>, wheel: Entity, torque: f64, omega: f64| {
-        if let Ok(mut r) = q.get_mut(wheel) {
+    let publish = |q: &mut Query<&mut MotorReadback>,
+                   targets: &Query<&MotorReadbackTarget>,
+                   joint: Entity,
+                   torque: f64,
+                   omega: f64| {
+        let Ok(target) = targets.get(joint) else {
+            return;
+        };
+        if let Ok(mut r) = q.get_mut(target.0) {
             r.torque = torque;
             r.axle_speed = omega;
         }
     };
-    for (motor, mut joint) in q_joints.iter_mut() {
+    for (joint_entity, motor, mut joint) in q_joints.iter_mut() {
         // Measured axle speed, in the motor's own drive-positive sense — the same
         // number the curve is evaluated at below, so the published pair is always
         // one consistent operating point on the torque–speed line.
@@ -288,9 +282,14 @@ fn motor_actuator_system(
             }
             _ => 0.0,
         };
-        let wheel = joint.body2;
         let Ok(port) = q_ports.get(motor.port_entity) else {
-            publish(&mut q_readback, wheel, 0.0, measured_omega);
+            publish(
+                &mut q_readback,
+                &q_targets,
+                joint_entity,
+                0.0,
+                measured_omega,
+            );
             continue;
         };
         // THE BRAKE, which this realization did not have at all. The wheel
@@ -325,7 +324,8 @@ fn motor_actuator_system(
             let sign = if measured_omega > 0.0 { -1.0 } else { 1.0 };
             publish(
                 &mut q_readback,
-                wheel,
+                &q_targets,
+                joint_entity,
                 sign * motor.brake_torque,
                 measured_omega,
             );
@@ -342,7 +342,13 @@ fn motor_actuator_system(
             // a source of airborne wheel spin; bearing drag remains the wheel's
             // own physical loss.
             joint.motor.enabled = false;
-            publish(&mut q_readback, wheel, 0.0, measured_omega);
+            publish(
+                &mut q_readback,
+                &q_targets,
+                joint_entity,
+                0.0,
+                measured_omega,
+            );
             continue;
         }
 
@@ -350,7 +356,13 @@ fn motor_actuator_system(
         // means the joint is half-built this tick and the curve has no operating
         // point to evaluate at.
         if q_bodies.get(joint.body1).is_err() || q_bodies.get(joint.body2).is_err() {
-            publish(&mut q_readback, wheel, 0.0, measured_omega);
+            publish(
+                &mut q_readback,
+                &q_targets,
+                joint_entity,
+                0.0,
+                measured_omega,
+            );
             continue;
         }
         let omega_signed = measured_omega;
@@ -365,7 +377,13 @@ fn motor_actuator_system(
         // the sentinel and injecting an unbounded impulse.
         if available_torque.abs() <= f64::EPSILON {
             joint.motor.enabled = false;
-            publish(&mut q_readback, wheel, 0.0, measured_omega);
+            publish(
+                &mut q_readback,
+                &q_targets,
+                joint_entity,
+                0.0,
+                measured_omega,
+            );
             continue;
         }
 
@@ -375,7 +393,13 @@ fn motor_actuator_system(
         // SIGNED, unlike the joint's `max_torque`: the solver wants a magnitude
         // and supplies the sign by servoing, but a reader wants to know which way
         // the machine is pushing — the negative branch is the motor regenerating.
-        publish(&mut q_readback, wheel, available_torque, measured_omega);
+        publish(
+            &mut q_readback,
+            &q_targets,
+            joint_entity,
+            available_torque,
+            measured_omega,
+        );
     }
 }
 
@@ -522,10 +546,9 @@ mod readback_tests {
     use super::*;
 
     /// The whole point of the component: the delivered torque is READABLE, by
-    /// name, through the port registry — which is what a `lunco:telemetry`
-    /// channel on `wheel.usda` resolves through. A wheel that has no readback is
-    /// not claimed (the membership test is the gate), so this backend can never
-    /// answer for some other prim that happens to be asked for "torque".
+    /// name, through the port registry. A component without a readback is not
+    /// claimed (the membership test is the gate), so this backend can never
+    /// answer for some unrelated prim that happens to be asked for "torque".
     #[test]
     fn delivered_torque_and_axle_speed_read_through_the_registry() {
         let mut app = App::new();
@@ -535,7 +558,7 @@ mod readback_tests {
             .register(MOTOR_READBACK_BACKEND);
         let reg = app.world().resource::<PortRegistry>().clone();
 
-        let wheel = app
+        let motor = app
             .world_mut()
             .spawn(MotorReadback {
                 torque: -12.5,
@@ -545,12 +568,12 @@ mod readback_tests {
         let bare = app.world_mut().spawn_empty().id();
 
         assert_eq!(
-            reg.read_output_port(app.world(), wheel, "torque"),
+            reg.read_output_port(app.world(), motor, "torque"),
             Some(-12.5),
             "signed: negative is the motor regenerating, not an error"
         );
         assert_eq!(
-            reg.read_output_port(app.world(), wheel, "axle_speed"),
+            reg.read_output_port(app.world(), motor, "axle_speed"),
             Some(3.25)
         );
         assert_eq!(

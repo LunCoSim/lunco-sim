@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 fn compose_battery_skid() -> lunco_usd_bevy::CanonicalStage {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/scenes/sandbox/sandbox_scene.usda");
+        .join("../../assets/scenes/luncosim/sandbox_scene.usda");
     let stage =
         lunco_usd_bevy::compose_file_to_stage(&path).expect("compose battery-enabled skid rover");
     lunco_usd_bevy::CanonicalStage::from_stage(stage, path.to_string_lossy().to_string())

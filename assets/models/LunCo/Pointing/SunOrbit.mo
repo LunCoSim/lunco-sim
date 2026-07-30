@@ -1,5 +1,6 @@
 within LunCo.Pointing;
 model SunOrbit "Continuous solar orbit dynamics: drives sun azimuth at rate omega."
+  extends LunCo.Icons.Pointing;
   parameter Real omega = 0.3 "Sun orbital angular velocity (rad/s)";
   parameter Real sun_azimuth_init = 0.3 "Initial sun azimuth (rad)";
 

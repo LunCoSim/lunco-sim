@@ -85,7 +85,7 @@ in one of them and is missing from the other.
 
 **This is already "USD is source of truth → project to ECS."**
 
-### Asset world — sandbox `--scene` (where editing actually happens)
+### Asset world — luncosim `--scene` (where editing actually happens)
 
 - `--scene` is loaded via `LoadScene` → `asset_server` → `spawn_scene_root_with_stage`
   (`lunco-usd-sim/src/cosim.rs`). The scene becomes a **flattened `UsdStageAsset`**
@@ -94,19 +94,19 @@ in one of them and is missing from the other.
   no undo.**
 - `SetObjectProperty` lives here and mutates ECS directly.
 - The only re-projection is **hand-written per domain** (`refresh_layered_terrain_layers`,
-  `lunco-sandbox/src/lib.rs:621`) reacting to `AssetEvent::Modified`.
+  `lunco-luncosim/src/lib.rs:621`) reacting to `AssetEvent::Modified`.
 
 The two worlds never meet: `persist_property_to_runtime_layer`
-(`lunco-sandbox-edit/src/commands.rs:1656`) tries to bridge by authoring
+(`lunco-luncosim-edit/src/commands.rs:1656`) tries to bridge by authoring
 `UsdOp::SetAttribute` on `LayerId::runtime()`, **but** it only fires for scalar shader
-params on prims an **open document owns** — in the pure sandbox there is no document,
+params on prims an **open document owns** — in the pure luncosim there is no document,
 so it is a no-op.
 
 ---
 
 ## 2. What `SetObjectProperty` does today (review)
 
-`on_set_object_property` (`lunco-sandbox-edit/src/commands.rs:1933`) — resolves
+`on_set_object_property` (`lunco-luncosim-edit/src/commands.rs:1933`) — resolves
 `entity_id → Entity` via `ApiEntityRegistry`, then branches on `property`:
 
 | Property | Mutation | Authors USD? |
@@ -175,10 +175,10 @@ USD.
 
 ### Step 0 (foundational): make the scene a document
 
-Route the sandbox `--scene` through `UsdDocumentRegistry` and mount it as a
+Route the luncosim `--scene` through `UsdDocumentRegistry` and mount it as a
 `LiveDocScene` (the `PendingLiveImports` path, registered in
 `lunco-usd/src/commands.rs:115`) instead of the raw-asset `spawn_scene_root_with_stage`.
-This gives the sandbox the editable base/runtime layers, `generation`, journal/undo, and
+This gives the luncosim the editable base/runtime layers, `generation`, journal/undo, and
 the entire E1/E2 reprojection loop the workbench already has. **Everything below then
 works in both worlds.** This is the largest and riskiest change (it touches scene
 loading); Steps 1–4 are mechanical once it lands.
@@ -271,7 +271,7 @@ prim→entity.
    (the projection is idempotent, so this is safe).
 2. **Attributes with no natural USD home** (pure runtime markers, editor-only state) —
    keep ECS-only via the `UsdPrimPath`-absent fallback. Don't force everything into USD.
-3. **Step 0 is the big one.** Unifying the sandbox onto the document path is where the
+3. **Step 0 is the big one.** Unifying the luncosim onto the document path is where the
    real work and risk sit; the rest is mechanical.
 
 ---
@@ -295,14 +295,14 @@ fold in):
 
 ## 7. Key references
 
-- `lunco-sandbox-edit/src/commands.rs` — `SetObjectProperty` struct
-- `lunco-sandbox-edit/src/commands.rs` — `on_set_object_property`
-- `lunco-sandbox-edit/src/commands.rs` — `persist_property_to_runtime_layer`
+- `lunco-luncosim-edit/src/commands.rs` — `SetObjectProperty` struct
+- `lunco-luncosim-edit/src/commands.rs` — `on_set_object_property`
+- `lunco-luncosim-edit/src/commands.rs` — `persist_property_to_runtime_layer`
 - `lunco-usd/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd/src/live_projection.rs` — `refresh_live_doc_scenes` (E1/E2 template)
 - `lunco-usd/src/commands.rs` — `PendingLiveImports` / projection registration
 - `lunco-usd-bevy/src/lib.rs` — `UsdStageAsset`, `UsdPrimPath`
 - `lunco-usd-bevy/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
-- `lunco-sandbox/src/lib.rs:621` — `refresh_layered_terrain_layers` (per-domain
+- `lunco-luncosim/src/lib.rs:621` — `refresh_layered_terrain_layers` (per-domain
   projection-on-`Modified` precedent)

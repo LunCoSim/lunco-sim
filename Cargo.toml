@@ -9,9 +9,8 @@ members = [
     "crates/lunco-controller",
     "crates/lunco-autopilot",
     "crates/lunco-avatar",
-    "crates/luncosim",
-    "crates/lunco-sandbox",
-    "crates/lunco-sandbox-server",
+    "crates/lunco-luncosim",
+    "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
     "crates/lunco-celestial-ephemeris",
@@ -20,10 +19,11 @@ members = [
     "crates/lunco-modelica",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
+    "crates/lunco-usd-compose",
     "crates/lunco-usd-sim",
     "crates/lunco-usd-terrain",
     "crates/lunco-usd",
-    "crates/lunco-sandbox-edit",
+    "crates/lunco-luncosim-edit",
     "crates/lunco-scene-commands",
     "crates/lunco-ui",
     "crates/lunco-assets",
@@ -75,18 +75,17 @@ members = [
 # no binary reaches — the feature-gated lunco-networking — so default builds don't
 # compile dead weight. Use `--workspace` to include everything (e.g. CI lint/test
 # sweeps). (`lunco-telemetry` used to be listed here as unreached; it is now wired into
-# lunco-sandbox, which is what made `SubscribeTelemetry` able to deliver at all.)
+# lunco-luncosim, which is what made `SubscribeTelemetry` able to deliver at all.)
 #
-# `lunco-sandbox-server` is intentionally NOT here — for LEANNESS, not
-# correctness: built via `-p lunco-sandbox-server`, Cargo resolves
-# `lunco-sandbox` WITHOUT `ui`, so the GUI/winit/egui stack isn't linked. (A
+# `lunco-luncosim-server` is intentionally NOT here — for LEANNESS, not
+# correctness: built via `-p lunco-luncosim-server`, Cargo resolves
+# `lunco-luncosim` WITHOUT `ui`, so the GUI/winit/egui stack isn't linked. (A
 # bare/`--workspace` build unifies `ui` on via the GUI `sandbox` bin, making the
 # server binary heavier — but it STILL runs headless: the bin calls
-# `lunco_sandbox::run_headless()`, which forces the windowless path regardless of
-# the linked `ui` feature.) `cargo run -p lunco-sandbox-server`.
+# `lunco_luncosim::run_headless()`, which forces the windowless path regardless of
+# the linked `ui` feature.) `cargo run -p lunco-luncosim-server`.
 default-members = [
-    "crates/luncosim",
-    "crates/lunco-sandbox",
+    "crates/lunco-luncosim",
     "crates/lunco-modelica",
 ]
 resolver = "2"
@@ -166,7 +165,7 @@ bevy = { version = "0.19.0", default-features = false, features = [
     # meshes, post-processing, mesh picking) is *not* in this list —
     # crates that need 3D opt in via their own Cargo.toml so the
     # Lunica (LunCoSim Modelica Workbench) web binary doesn't carry them. See
-    # `crates/lunco-sandbox/Cargo.toml` for the opt-in pattern.
+    # `crates/lunco-luncosim/Cargo.toml` for the opt-in pattern.
     # SUBSTRATE ONLY (ECS / app / log / state / color — no GPU, window, winit,
     # egui). This baseline reaches every `bevy = { workspace = true }` crate, so
     # render-free crates (lunco-core, lunco-cosim, lunco-networking, …) and the

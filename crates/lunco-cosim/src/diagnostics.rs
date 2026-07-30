@@ -7,16 +7,17 @@
 //! propagation tick so a poller always sees the current fabric, not a stale
 //! snapshot.
 //!
-//! It reports exactly what the propagation step already knows and no more — the
-//! target that didn't take a write, and whether that target exposes any port
-//! surface at all:
+//! It distinguishes work which is still waiting for an endpoint contract from a
+//! terminal wiring failure. A generated Modelica island deliberately exists while
+//! it is compiling; its port interface is not final until that lifecycle stage
+//! completes. Treating an early partial surface as a typo made load order look
+//! like an authoring fault.
 //!
-//! * `has_port_surface = true` — the entity has ports but not *this* one: a
-//!   genuine fault (typo'd or stale wire, or a model that never published the
-//!   output). This is the actionable case.
-//! * `has_port_surface = false` — the entity exposes no ports yet: a structural
-//!   endpoint (folded into `WheelParams` at parse) or a model still loading.
-//!   Expected transiently; informative, not a fault.
+//! * [`CosimDiagnostics::pending`] holds structural endpoints and endpoints
+//!   whose [`crate::SimComponent`] is still compiling. It is an observation, not
+//!   a warning or a test failure.
+//! * [`CosimDiagnostics::broken`] holds only terminal failures: a ready (or
+//!   failed) endpoint that still cannot accept the named input.
 //!
 //! It does NOT invent a finer "pending vs structural vs type-mismatch"
 //! classification the substrate can't yet vouch for — that needs the typed
@@ -60,15 +61,18 @@ pub struct BrokenConnection {
 /// not depend on when it is asked.
 #[derive(Resource, Debug, Default)]
 pub struct CosimDiagnostics {
-    /// Targets that dropped their write on the most recent tick.
+    /// Targets waiting for their endpoint contract. Rebuilt each propagation
+    /// tick; never logged as a wiring fault.
+    pub pending: Vec<BrokenConnection>,
+    /// Targets that dropped their write after their endpoint contract became
+    /// terminal. Rebuilt each propagation tick.
     pub broken: Vec<BrokenConnection>,
     /// Wires that have NEVER successfully written, keyed by `(entity, port)` so a
     /// wire that drops on a thousand ticks is one entry.
     ///
-    /// Only `has_port_surface` targets are recorded: an endpoint that exposes no
-    /// ports at all is a structural or still-loading target, and admitting those
-    /// would make this a load-order report instead of a fault log — the same
-    /// distinction the `warn!`/`debug!` split at the write site already draws.
+    /// Only terminal targets are recorded. A compiling model, or an endpoint
+    /// with no runtime port surface, remains pending rather than manufacturing a
+    /// failure during scene assembly.
     ///
     /// **A wire that later lands RETRACTS its entry**, and once landed it can
     /// never be re-reported (see [`landed`](Self::landed)). Dropping a write

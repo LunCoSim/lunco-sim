@@ -8,10 +8,9 @@
 //! through a plain output→input wire — the ontology's
 //! `RadiationProvider → LocalRadiation → solar models` pipeline.
 //!
-//! This is the data-driven replacement for the earlier ad-hoc sun-injection
-//! prototype (which pushed straight into model *inputs*, bypassing wires). Here
-//! the value flows like any other signal: cosim stays domain-agnostic, and the
-//! USD wiring is explicit (`sun_mount_x/y/z` out → matching inputs).
+//! Values are published on explicit [`crate::EnvironmentProbe`] source prims.
+//! Models consume them through ordinary USD connections, so provider and
+//! consumer remain distinct graph nodes.
 //!
 //! ## Provider note
 //!
@@ -46,16 +45,15 @@ pub struct LocalSolar {
     pub direction: Vec3,
 }
 
-/// Computes [`LocalSolar`] for every co-sim model entity from the scene sun.
+/// Computes [`LocalSolar`] for every explicit environment probe from the scene sun.
 ///
 /// The sun is the brightest `DirectionalLight` without a [`RenderLayers`]
 /// scope (preview/RTT suns carry one; max-illuminance also skips the dim
 /// earthshine fill). Writes `LocalSolar` only when the angles actually change,
 /// to avoid a per-frame change-detection storm — mirrors `compute_local_gravity`.
 ///
-/// Targets entities that carry a [`lunco_cosim::SimComponent`] (the co-sim
-/// models) so the cache lands exactly where [`inject_local_solar_into_cosim`]
-/// will publish it.
+/// Targets entities that carry [`crate::EnvironmentProbe`] so the cache lands
+/// exactly where [`inject_local_solar_into_cosim`] will publish it.
 pub fn compute_local_solar(
     mut commands: Commands,
     // Structural, not a brightness guess: the scene's sun is the top-level
@@ -67,7 +65,7 @@ pub fn compute_local_solar(
     >,
     q_targets: Query<
         (Entity, Option<&LocalSolar>, Option<&GlobalTransform>),
-        With<lunco_cosim::SimComponent>,
+        With<crate::EnvironmentProbe>,
     >,
 ) {
     if q_targets.is_empty() {
@@ -101,7 +99,9 @@ pub fn compute_local_solar(
 /// fresh outputs are read the same tick. Writes every tick because a model's
 /// own output sync may rewrite its outputs map (same reasoning as the gravity
 /// bridge).
-pub fn inject_local_solar_into_cosim(mut q: Query<(&LocalSolar, &mut lunco_cosim::SimComponent)>) {
+pub fn inject_local_solar_into_cosim(
+    mut q: Query<(&LocalSolar, &mut lunco_cosim::SimComponent), With<crate::EnvironmentProbe>>,
+) {
     for (solar, mut comp) in &mut q {
         comp.outputs
             .insert(SUN_MOUNT_X_CONNECTOR.to_string(), solar.direction.x as f64);
@@ -110,9 +110,4 @@ pub fn inject_local_solar_into_cosim(mut q: Query<(&LocalSolar, &mut lunco_cosim
         comp.outputs
             .insert(SUN_MOUNT_Z_CONNECTOR.to_string(), solar.direction.z as f64);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }

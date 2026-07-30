@@ -3,7 +3,7 @@
 //! ```sh
 //! # 1. dump the schema from a running app — and let it SETTLE first, or the
 //! #    dump is a partial command list (see `--help`):
-//! cargo run -p lunco-sandbox --bin sandbox -- --api 4101 &
+//! cargo run -p lunco-luncosim --bin luncosim -- --api 4101 &
 //! until curl -sf -m 2 http://127.0.0.1:4101/api/commands/schema -o /dev/null; do sleep 2; done
 //! sleep 10
 //! curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema.json
@@ -260,7 +260,7 @@ fn crate_of(rel: &Path) -> String {
 /// Friendly domain title per crate, with a stable display order.
 fn domain_title(crate_name: &str) -> (&'static str, u32) {
     match crate_name {
-        "lunco-scene-commands" | "lunco-sandbox-edit" => ("Scene editing & authoring", 10),
+        "lunco-scene-commands" | "lunco-luncosim-edit" => ("Scene editing & authoring", 10),
         "lunco-usd" => ("USD / scenes", 11),
         "lunco-usd-bevy" | "lunco-usd-sim" | "lunco-usd-avian" => ("USD / scenes", 12),
         "lunco-modelica" => ("Modelica modeling & simulation", 20),
@@ -309,7 +309,7 @@ usage: cargo run -p gen-command-docs -- --schema <a.json> [--schema <b.json> ...
   WHICH commands a dump contains is decided by WHICH PLUGINS THE HOST ADDS, so
   dump from the widest host and union anything it misses. Today the GUI sandbox
   is a strict superset (it registers the Modelica/workbench verbs too); a
-  `--no-ui` host drops every UI command, and `lunco-sandbox-server` serves no
+  `--no-ui` host drops every UI command, and `lunco-luncosim-server` serves no
   HTTP API at all, so neither can be the source on its own. Generating from a
   narrow dump silently DELETES the rest from the reference.
 
@@ -319,7 +319,7 @@ usage: cargo run -p gen-command-docs -- --schema <a.json> [--schema <b.json> ...
   like a regression. Poll until it answers, then sleep ~10s and dump again.
 
       # GUI (needs a display)
-      cargo run -p lunco-sandbox --bin sandbox -- --api 4101 &
+      cargo run -p lunco-luncosim --bin luncosim -- --api 4101 &
       until curl -sf -m 2 http://127.0.0.1:4101/api/commands/schema -o /dev/null; do sleep 2; done
       sleep 10
       curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-gui.json

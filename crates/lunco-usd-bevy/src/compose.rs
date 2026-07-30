@@ -25,17 +25,18 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{Data, Path as SdfPath, Value};
+use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
-use openusd::usda;
 
 use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
-use crate::resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
+use lunco_usd_compose::{
+    canonicalize_at, child_layer_ids, is_binary_asset, LuncoUsdResolver, SharedLayerBytes,
+};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
@@ -105,47 +106,6 @@ pub(crate) async fn fetch_layer_closure(
     }
 
     Ok(StageRecipe { root_id, bytes })
-}
-
-/// The closure ids a layer's bytes reference, canonicalized against that layer as
-/// anchor — the discovery half of the pre-fetch BFS, shared by both fetchers
-/// ([`fetch_layer_closure`] over Bevy's `AssetServer`, [`compose_file_to_stage`]
-/// over the filesystem). Only they differ in how bytes arrive; *which* layers a
-/// closure needs is one rule, so it lives in one place.
-///
-/// Only the non-binary `.usda` closure is walked: binary-asset arcs (glTF/…) are
-/// discovered post-composition by [`discover_binary_sites`] so an arc authored
-/// inside a referenced `.usda` wrapper anchors on its COMPOSED prim.
-fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
-    let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-    // `usda::parse` drops the parser's source span. Keep the parser alive so a
-    // malformed authored layer reports the actual line, column and source text,
-    // rather than the unhelpful bare "attribute type expected".
-    let mut parser = usda::parser::Parser::new(text);
-    let specs = parser.parse().map_err(|e| {
-        let where_ = parser
-            .last_error_highlight()
-            .map(|highlight| format!("\n{}", highlight.render()))
-            .unwrap_or_default();
-        anyhow!("USD parse error in {id}: {e}{where_}")
-    })?;
-    let data = Data::from_specs(specs);
-    let anchor = ResolvedPath::new(id);
-    // Composition arcs come from openusd (`SdfLayer::GetCompositionAssetDependencies`),
-    // not from matching raw spec fields here. Binary leaves are dropped because
-    // this is the PRE-FETCH: everything it returns will be parsed as a layer,
-    // and a `.glb` is stubbed by the resolver instead.
-    //
-    // TODO(web): this exists because a stage cannot be opened until its layers'
-    // bytes are local — on wasm they arrive over HTTP. The native path asks the
-    // library for the dependency set instead (see `closure::reference_closure`);
-    // fold this into that once the resolver can drive an async fetch.
-    Ok(data
-        .composition_asset_dependencies()
-        .into_iter()
-        .filter(|arc| !is_binary_asset(arc))
-        .map(|child| canonicalize_at(&child, Some(&anchor)))
-        .collect())
 }
 
 /// Test-only convenience: the composed [`Stage`] alone, discarding the resolver
@@ -245,8 +205,7 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
 /// directory, so the on-disk reference tree resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
-    let assets_root = lunco_assets::shipped_asset_root(path);
-    compose_file_to_stage_with_assets(path, assets_root)
+    lunco_usd_compose::compose_file_to_stage(path)
 }
 
 /// Compose an on-disk USD layer while resolving `lunco://` references against
@@ -260,57 +219,7 @@ pub fn compose_file_to_stage_with_assets(
     path: &std::path::Path,
     assets_root: Option<&std::path::Path>,
 ) -> Result<Stage> {
-    // Anchor the root at `lunco://` when the file lives under a shipped-asset
-    // root. `canonicalize` passes `scheme://` ids through and PRESERVES the scheme
-    // when anchoring a relative child, so one `lunco://` root makes every id in the
-    // closure uniformly `lunco://` — a single resolution rule for the whole walk.
-    let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
-        Some(rel) => lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel)),
-        // NOT the raw path: every id in the map must be keyed by `canonicalize`,
-        // the same function the resolver's `create_identifier` applies, or the
-        // lookup misses and composition fails to resolve its own root layer.
-        None => canonicalize_root(&path.to_string_lossy()),
-    };
-
-    let root_bytes =
-        std::fs::read(path).map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
-    let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
-    bytes.insert(root_id.clone(), root_bytes);
-    let mut queue = vec![root_id.clone()];
-
-    while let Some(id) = queue.pop() {
-        let raw = bytes
-            .get(&id)
-            .cloned()
-            .expect("queued id is present in map");
-        for child_id in child_layer_ids(&id, &raw)? {
-            if bytes.contains_key(&child_id) {
-                continue;
-            }
-            let file = id_to_disk_path(&child_id, assets_root)?;
-            let fetched = std::fs::read(&file).map_err(|e| {
-                anyhow!(
-                    "failed to fetch sublayer {child_id} from {}: {e}",
-                    file.display()
-                )
-            })?;
-            bytes.insert(child_id.clone(), fetched);
-            queue.push(child_id);
-        }
-    }
-
-    Ok(build_stage_with_resolver(&StageRecipe { root_id, bytes })?.0)
-}
-
-/// Where an id's bytes live on disk, as an error rather than an `Option` — the
-/// mapping itself belongs to `lunco-assets` (it is asset-location knowledge, not
-/// USD composition); this only supplies the composition-side diagnostic.
-fn id_to_disk_path(id: &str, assets_root: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
-    lunco_assets::id_to_disk_path(id, assets_root).ok_or_else(|| {
-        anyhow!(
-            "`{id}` is a shipped-asset ref, but the composed file is outside any `assets/` root"
-        )
-    })
+    lunco_usd_compose::compose_file_to_stage_with_assets(path, assets_root)
 }
 
 // Writes USDA fixtures to a temp dir and composes them from disk. Native-only
@@ -401,7 +310,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     #[test]
     fn lander_scene_composes_nested_and_referenced_control_profiles() {
         let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/scenes/sandbox/lander_ops.usda");
+            .join("../../assets/scenes/luncosim/lander_ops.usda");
         let stage = compose_file_to_stage(&scene).expect("compose lander_ops.usda");
         let view = StageView::new(&stage);
 

@@ -16,14 +16,14 @@ Edit a file, reload the scene, watch it change. That's the whole loop. Let's go.
 
 Everything you create is prefixed `my_` so it sits alongside the shipped assets
 rather than on top of them. The finished article is already in the repo — peek at
-`assets/vessels/landers/descent_lander.usda` and `assets/scenes/sandbox/lander_ops.usda`
+`assets/vessels/landers/descent_lander.usda` and `assets/scenes/luncosim/lander_ops.usda`
 whenever you want to see where this is heading, or play it from the 🎓 Tutorials
-menu in the sandbox.
+menu in the luncosim.
 
 You can run your work at any point with:
 
 ```
-cargo run -p lunco-sandbox --bin sandbox -- --api 4101 --scene scenes/sandbox/my_mission.usda
+target/debug/luncosim --api 4101 --scene scenes/luncosim/my_mission.usda
 ```
 
 ---
@@ -56,7 +56,7 @@ Keep them straight and the rest is easy.
 
 Start with the stage: a floor to land on, a camera to watch from, and a sun.
 
-Create `assets/scenes/sandbox/my_mission.usda`:
+Create `assets/scenes/luncosim/my_mission.usda`:
 
 ```usda
 #usda 1.0
@@ -1048,7 +1048,7 @@ behind how scenarios are put together, see
 ## Related
 
 - **Play the interactive version**: the in-app *Lander & Rover Mission* lesson
-  (🎓 Tutorials menu in the sandbox) walks the same mission with on-screen coaching.
+  (🎓 Tutorials menu in the luncosim) walks the same mission with on-screen coaching.
   It watches the very events you emitted in Step 9 and turns them into a checklist.
 - **Next walkthrough**: [02 — Author your own controller](02-authoring-a-controller.md) — build the lander's GNC yourself.
 - **Then**: [03 — Cosim: when a model flies physics](03-cosim.md) — the wiring from Step 4, in depth.

@@ -4,7 +4,7 @@
 # scene test and report a summary table.
 #
 # Each scene is an authored USD file whose attached rhai scenario ends in
-# `emit("<CHANNEL>", "PASS"|"FAIL")`. `sandbox test` runs it headless and
+# `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
 # deterministically (manual clock, no window, no GPU, no realtime pacing) and
 # exits 0 = PASS, 1 = FAIL, 2 = no verdict. This script aggregates those.
 #
@@ -122,9 +122,9 @@ fi
 # the ONLY cargo invocation in the script — the runs below execute the built
 # binary directly. Two concurrent cargo processes would contend for the same
 # target-dir lock and serialise anyway, so the scene runs are sequential too.
-BIN="target/debug/sandbox"
-echo "==> building sandbox test runner (one cargo invocation, -j 4)"
-if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-sandbox --bin sandbox -j 4; then
+BIN="target/debug/luncosim"
+echo "==> building luncosim test runner (one cargo invocation, -j 4)"
+if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 8; then
     echo "BUILD FAILED — no scenes run" >&2
     exit 2
 fi
@@ -164,8 +164,8 @@ for scene in "${SCENES[@]}"; do
         "$BIN" test --scene "$scene" --threads 1 --jitter 0 >"$log" 2>&1
     code=$?
 
-    # The one-line summary `sandbox test` prints last; falls back to the exit code.
-    summary="$(grep -E '^sandbox test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
+    # The one-line summary `luncosim test` prints last; falls back to the exit code.
+    summary="$(grep -E '^luncosim test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
 
     case $code in
         0) status="PASS" ;;
@@ -221,7 +221,7 @@ if [[ $STRESS -eq 1 ]]; then
             --seed "$STRESS_SEED" >"$log" 2>&1
         code=$?
 
-        summary="$(grep -E '^sandbox test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
+        summary="$(grep -E '^luncosim test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
         case $code in
             0) status="PASS" ;;
             1) status="FAIL" ;;

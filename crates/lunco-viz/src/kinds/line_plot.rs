@@ -20,11 +20,16 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
-use crate::signal::{ScalarSample, SignalRef, SignalRegistry, SignalType};
+use crate::signal::{
+    PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
+};
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
+use lunco_core::GlobalEntityId;
+use lunco_workbench::PanelCtx;
 
 /// LinePlot-specific options stashed in
 /// [`VisualizationConfig::style`]. Serialised as JSON for on-disk
@@ -38,6 +43,10 @@ pub struct LinePlotStyle {
     /// time, producing a phase-space trajectory.
     #[serde(default)]
     pub x_signal: Option<SignalRef>,
+    /// Stable counterpart of `x_signal`, maintained by the viz lifecycle so a
+    /// phase-space plot survives the same scene reload as its Y bindings.
+    #[serde(default)]
+    pub x_persisted_signal: Option<PersistedSignalRef>,
     /// Optional axis labels. If `None`, labels are auto-derived
     /// from the X-signal path (or `"time (s)"`) and the first Y
     /// binding's path.
@@ -80,6 +89,90 @@ impl LinePlotStyle {
     }
     fn save(&self, config: &mut VisualizationConfig) {
         config.style = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+    }
+}
+
+/// Operator-facing identity for an entity-scoped signal.  `SignalRef::path`
+/// alone is intentionally not unique — four wheels can all publish
+/// `axle_torque` — so every graph surface shows the owning USD prim as well.
+/// The full path remains available in telemetry tooltips and persistence keeps
+/// the entity identity; this is solely the concise plot presentation.
+fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
+    let owner = wb
+        .get::<Name>(signal.entity)
+        .map(|name| {
+            name.as_str()
+                .trim_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(name.as_str())
+                .replace('_', " ")
+        })
+        .unwrap_or_else(|| format!("Entity {}", signal.entity));
+    format!("[{owner}.{}]", signal.path)
+}
+
+/// Operator-facing label for a binding, with its unit appended when the
+/// registry carries one. `meta` is the already-resolved registry metadata for
+/// `binding.source`; callers that render many chips per frame resolve it once
+/// instead of asking `binding_label` to re-query the registry on every call.
+fn binding_label(wb: &PanelCtx, binding: &SignalBinding, meta: Option<&SignalMeta>) -> String {
+    let label = binding
+        .label
+        .clone()
+        .unwrap_or_else(|| component_parameter_label(wb, &binding.source));
+    let unit = meta
+        .and_then(|m| m.unit.as_deref())
+        .filter(|unit| !unit.is_empty() && *unit != "1");
+    unit.map_or(label.clone(), |unit| format!("{label} [{unit}]"))
+}
+
+/// Human-facing metadata shown wherever a signal can be selected.  Keep the
+/// signal identity in the label and put authored documentation in the hint so
+/// long Modelica/USD prose does not make the graph toolbar unusable.
+/// `meta` is the already-resolved registry metadata for `signal`.
+fn signal_hint(meta: Option<&SignalMeta>) -> Option<String> {
+    let meta = meta?;
+    let mut parts = Vec::new();
+    if let Some(unit) = meta.unit.as_deref().filter(|u| !u.is_empty()) {
+        parts.push(format!("unit: {unit}"));
+    }
+    if let Some(description) = meta.description.as_deref().filter(|d| !d.is_empty()) {
+        parts.push(description.to_owned());
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
+/// Keep the optional phase-space X axis on the same stable-identity lifecycle
+/// as normal `SignalBinding`s. A missing source remains absent until a matching
+/// content entity returns; it is never rebound by mnemonic alone.
+pub(crate) fn reconcile_persisted_x_source(
+    config: &mut VisualizationConfig,
+    gid_of: &HashMap<Entity, GlobalEntityId>,
+    entity_of: &HashMap<GlobalEntityId, Entity>,
+) {
+    let mut style = LinePlotStyle::load(config);
+    let Some(x) = style.x_signal.clone() else {
+        return;
+    };
+    let mut changed = false;
+    if style.x_persisted_signal.is_none() {
+        let persisted = x.to_persisted(|entity| gid_of.get(&entity).copied());
+        if persisted.is_some() {
+            style.x_persisted_signal = persisted;
+            changed = true;
+        }
+    }
+    if let Some(persisted) = &style.x_persisted_signal {
+        if let Some(source) = persisted.resolve(|gid| entity_of.get(&gid).copied()) {
+            if style.x_signal.as_ref() != Some(&source) {
+                style.x_signal = Some(source);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        style.save(config);
     }
 }
 
@@ -196,6 +289,26 @@ impl Visualization for LinePlot {
             return;
         }
 
+        // A scene replacement removes the previous entity-scoped histories
+        // before the replacement source has emitted. Do not render that as a
+        // blank chart: tell the participant exactly what is happening and keep
+        // the binding alive for the lifecycle reconciler to restore.
+        let unavailable: Vec<String> = y_bindings
+            .iter()
+            .filter(|b| {
+                registry
+                    .scalar_history(&b.source)
+                    .is_none_or(|history| history.is_empty())
+            })
+            .map(|b| {
+                let meta = ctx
+                    .wb
+                    .resource::<SignalRegistry>()
+                    .and_then(|r| r.meta(&b.source));
+                binding_label(&ctx.wb, b, meta)
+            })
+            .collect();
+
         // Plot pixel width — needed *before* tessellation because the
         // decimation depth (and thus the cache key) depends on it.
         // Taken after the toolbar so it matches the space `plot.show`
@@ -288,30 +401,59 @@ impl Visualization for LinePlot {
                 if series.1.is_empty() {
                     return None;
                 }
-                // Legend label: explicit binding label wins; otherwise
-                // start with the signal path and, when
-                // `SignalRegistry` has a human description for the
-                // variable, append it in parens so the legend
-                // doubles as documentation. (egui_plot's `Legend`
-                // has no per-item hover hook — inlining the
-                // description text is the only way to surface it.)
-                let label = b.label.clone().unwrap_or_else(|| {
-                    match registry
-                        .meta(&b.source)
-                        .and_then(|m| m.description.as_deref())
-                    {
-                        Some(desc) if !desc.trim().is_empty() => {
-                            format!("{} ({})", b.source.path, desc.trim())
-                        }
-                        _ => b.source.path.clone(),
-                    }
-                });
+                // Entity identity is part of the visible label: four physical
+                // wheels may all expose `axle_torque` at once.
+                let meta = registry.meta(&b.source);
+                let label = binding_label(&ctx.wb, b, meta);
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
                 Some(Line::new(label, PlotPoints::new(series.1.clone())).color(color))
             })
             .collect();
+
+        if lines.is_empty() {
+            let muted = ctx
+                .wb
+                .resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.text_subdued)
+                .unwrap_or(egui::Color32::DARK_GRAY);
+            let names = unavailable.join(", ");
+            ctx.ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label(egui::RichText::new("Waiting for telemetry.").color(muted));
+                ui.label(
+                    egui::RichText::new(if names.is_empty() {
+                        "The bound source has not emitted a sample yet.".to_string()
+                    } else {
+                        format!("Awaiting: {names}")
+                    })
+                    .size(10.0)
+                    .color(muted),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "The plot will reconnect automatically when this scene publishes it.",
+                    )
+                    .size(10.0)
+                    .color(muted),
+                );
+            });
+            return;
+        }
+
+        if !unavailable.is_empty() {
+            ctx.ui.label(
+                egui::RichText::new(format!("Waiting for: {}", unavailable.join(", ")))
+                    .size(10.0)
+                    .color(
+                        ctx.wb
+                            .resource::<lunco_theme::Theme>()
+                            .map(|t| t.tokens.text_subdued)
+                            .unwrap_or(egui::Color32::DARK_GRAY),
+                    ),
+            );
+        }
 
         // Consume any pending Fit request for this viz. `auto_bounds`
         // alone only controls the *initial* policy — once the user
@@ -349,7 +491,14 @@ impl Visualization for LinePlot {
             });
         let mut y_label = style.y_label.unwrap_or_else(|| {
             if y_bindings.len() == 1 {
-                y_bindings[0].source.path.clone()
+                // Resolve meta via a short-lived borrow so the long-lived
+                // `registry` (held since the top of the body) is not captured
+                // across the `ctx.wb.defer` for fit requests below.
+                let meta = ctx
+                    .wb
+                    .resource::<SignalRegistry>()
+                    .and_then(|r| r.meta(&y_bindings[0].source));
+                binding_label(&ctx.wb, y_bindings[0], meta)
             } else {
                 "(see legend)".to_string()
             }
@@ -416,8 +565,8 @@ enum Edit {
 fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<Edit> {
     // Snapshot available signals + current style so we can render
     // without holding a long-lived registry borrow.
+    let registry = ctx.wb.resource::<SignalRegistry>();
     let (available, current_y_paths): (Vec<SignalRef>, std::collections::HashSet<SignalRef>) = {
-        let registry = ctx.wb.resource::<SignalRegistry>();
         let available: Vec<SignalRef> = registry
             .map(|r| {
                 r.iter_signals()
@@ -440,8 +589,24 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         .map(|t| t.tokens.text_subdued)
         .unwrap_or(egui::Color32::DARK_GRAY);
 
+    // Resolve registry metadata for a signal at most once per toolbar render.
+    // The previous version asked the registry for `meta(&source)` twice per Y
+    // chip (once inside `binding_label`, again inside `signal_hint`) and once
+    // more per addable — a steady stream of HashMap probes and string
+    // allocations every frame. Resolving once and passing the borrow down keeps
+    // each chip to a single lookup.
+    let meta_of = |sig: &SignalRef| registry.and_then(|r| r.meta(sig));
+
     let mut edit: Option<Edit> = None;
-    ctx.ui.horizontal_wrapped(|ui| {
+    let mut removed: Option<SignalRef> = None;
+
+    // One control row: X picker, Y chips (in a bounded scroll surface), add
+    // combo, and the log-Y toggle. The chips live inside a single bounded
+    // `ScrollArea` so a large telemetry set cannot grow the header past the
+    // dock (the original `horizontal_wrapped` bug), but unlike the previous
+    // three-`horizontal`-block layout this opens one child UI per region
+    // instead of three per frame.
+    ctx.ui.horizontal(|ui| {
         // X picker.
         ui.label(egui::RichText::new("X:").size(11.0));
         let x_current = style
@@ -467,24 +632,36 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                     }
                 }
             });
-        ui.separator();
+    });
 
-        // Y chips.
-        ui.label(egui::RichText::new("Y:").size(11.0));
-        let mut removed: Option<SignalRef> = None;
-        for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
-            let chip = ui
-                .small_button(format!("{} ✕", b.source.path))
-                .on_hover_text("Remove from this plot");
-            if chip.clicked() {
-                removed = Some(b.source.clone());
-            }
-        }
-        if let Some(r) = removed {
-            edit = Some(Edit::RemoveY(r));
-        }
+    // Y chips: a bounded vertical scroll surface wraps the wrapped row, so the
+    // header stays usable with many bindings without spawning a second child UI
+    // just to host the list.
+    egui::ScrollArea::vertical()
+        .id_salt(("lp_y_bindings", config.id.raw()))
+        .max_height(74.0)
+        .auto_shrink([false, true])
+        .show(ctx.ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
+                    let meta = meta_of(&b.source);
+                    let chip = ui
+                        .small_button(format!("{} ✕", binding_label(&ctx.wb, b, meta)))
+                        .on_hover_text("Remove from this plot");
+                    let chip = if let Some(hint) = signal_hint(meta) {
+                        chip.on_hover_text(hint)
+                    } else {
+                        chip
+                    };
+                    if chip.clicked() {
+                        removed = Some(b.source.clone());
+                    }
+                }
+            });
+        });
 
-        // Y add.
+    ctx.ui.horizontal(|ui| {
+        // Add remains outside the scrolling list so it is always reachable.
         let addables: Vec<&SignalRef> = available
             .iter()
             .filter(|s| !current_y_paths.contains(s))
@@ -495,7 +672,14 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 .width(120.0)
                 .show_ui(ui, |ui| {
                     for sig in addables {
-                        if ui.button(&sig.path).clicked() {
+                        let meta = meta_of(sig);
+                        let button = ui.button(component_parameter_label(&ctx.wb, sig));
+                        let button = if let Some(hint) = signal_hint(meta) {
+                            button.on_hover_text(hint)
+                        } else {
+                            button
+                        };
+                        if button.clicked() {
                             edit = Some(Edit::AddY(sig.clone()));
                         }
                     }
@@ -520,6 +704,9 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
             edit = Some(Edit::SetLogY(log_y));
         }
     });
+    if let Some(r) = removed {
+        edit = Some(Edit::RemoveY(r));
+    }
     ctx.ui.separator();
     edit
 }
@@ -539,13 +726,7 @@ fn apply_edit(world: &mut World, viz: crate::viz::VizId, edit: Edit) {
         }
         Edit::AddY(sig) => {
             if !cfg.inputs.iter().any(|b| b.source == sig) {
-                cfg.inputs.push(SignalBinding {
-                    source: sig,
-                    role: ROLE_Y.role.to_string(),
-                    label: None,
-                    color: None,
-                    visible: true,
-                });
+                cfg.inputs.push(SignalBinding::live(sig, ROLE_Y.role));
             }
         }
         Edit::RemoveY(sig) => {
@@ -643,6 +824,7 @@ mod tests {
         };
         let style = LinePlotStyle {
             x_signal: Some(SignalRef::new(bevy::prelude::Entity::PLACEHOLDER, "phi")),
+            x_persisted_signal: None,
             x_label: Some("phi [rad]".into()),
             y_label: Some("w [rad/s]".into()),
             log_y: true,

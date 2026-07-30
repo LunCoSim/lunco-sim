@@ -6,7 +6,7 @@
 #
 # Tests the API against a running LunCoSim instance.
 # Make sure the sim is running with `--api` flag first:
-#   cargo run --bin sandbox -- --api 4101
+#   cargo run --bin luncosim -- --api 4101
 
 set -e
 
@@ -26,7 +26,7 @@ for i in {1..10}; do
     fi
     if [ $i -eq 10 ]; then
         echo "❌ API not responding on port ${PORT}"
-        echo "   Make sure the sim is running with: cargo run --bin sandbox -- --api ${PORT}"
+        echo "   Make sure the sim is running with: cargo run --bin luncosim -- --api ${PORT}"
         exit 1
     fi
     sleep 1

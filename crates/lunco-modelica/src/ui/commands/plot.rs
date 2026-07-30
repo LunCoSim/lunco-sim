@@ -38,7 +38,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
             kinds::line_plot::LINE_PLOT_KIND, view::ViewTarget, viz::SignalBinding,
             viz::VisualizationConfig, viz::VizId, SignalRef, VisualizationRegistry,
         };
-        let id = VizId::next();
+        let id = world.resource::<VisualizationRegistry>().allocate_id();
         let source_viz = (ev.source != 0).then_some(VizId(ev.source));
         let cloned_inputs: Vec<SignalBinding> = source_viz
             .and_then(|src| {
@@ -84,13 +84,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
             {
                 continue;
             }
-            inputs.push(SignalBinding {
-                source: SignalRef::new(entity, s.clone()),
-                role: "y".into(),
-                label: None,
-                color: None,
-                visible: true,
-            });
+            inputs.push(SignalBinding::live(SignalRef::new(entity, s.clone()), "y"));
         }
         let mut registry = world.resource_mut::<VisualizationRegistry>();
         registry.insert(VisualizationConfig {
@@ -108,10 +102,20 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
                 states.entry(id).picked_vars = cloned_picked;
             }
         }
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND,
-            instance: id.0,
-        });
+        let restore = world
+            .get_resource::<crate::ui::panels::experiments::ActivePlot>()
+            .and_then(|active| active.0)
+            .map(|active| lunco_workbench::TabId::Instance {
+                kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND,
+                instance: active.0,
+            });
+        world
+            .commands()
+            .trigger(lunco_workbench::OpenTabPreserveFocus {
+                kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND,
+                instance: id.0,
+                restore,
+            });
         bevy::log::info!("[NewPlotPanel] opened `{}` (id={})", title, id.0);
     });
 }
@@ -141,12 +145,6 @@ pub fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Command
         if cfg.inputs.iter().any(|b| b.source == signal_ref) {
             return;
         }
-        cfg.inputs.push(SignalBinding {
-            source: signal_ref,
-            role: "y".into(),
-            label: None,
-            color: None,
-            visible: true,
-        });
+        cfg.inputs.push(SignalBinding::live(signal_ref, "y"));
     });
 }

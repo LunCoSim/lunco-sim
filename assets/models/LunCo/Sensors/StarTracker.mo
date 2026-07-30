@@ -4,6 +4,7 @@ within LunCo.Sensors;
 // Determines vehicle orientation quaternion from star field imagery.
 // Models sun/earth blinding exclusion angles, high-angular-rate tracking loss, and lock status flags.
 model StarTracker
+  extends LunCo.Icons.Sensor;
   parameter Real sun_exclusion_angle_deg = 30.0 "Sun-in-field-of-view exclusion mask angle, deg";
   parameter Real max_rate_deg_s = 2.5 "Maximum angular rate tracking limit, deg/s";
 

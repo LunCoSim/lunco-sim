@@ -118,7 +118,10 @@ pub use workspace_state::{
     WorkspaceStatePlugin,
 };
 
-pub use panel::{InstancePanel, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, TabId};
+pub use panel::{
+    InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot,
+    TabId,
+};
 
 /// SystemSet that runs the main workbench egui pass. Use
 /// `.after(WorkbenchRenderSet)` for systems that need to read
@@ -232,6 +235,19 @@ pub struct OpenTab {
     pub instance: u64,
 }
 
+/// Request opening a multi-instance tab while preserving the currently
+/// focused tab. Used when creating a secondary view from an active editor or
+/// graph; ordinary navigation continues to use [`OpenTab`].
+#[derive(Event, Clone, Copy, Debug)]
+pub struct OpenTabPreserveFocus {
+    /// The [`InstancePanel::kind`] to open.
+    pub kind: PanelId,
+    /// The tab's instance discriminant.
+    pub instance: u64,
+    /// Explicit tab to restore when the caller has a more precise focus source.
+    pub restore: Option<TabId>,
+}
+
 /// Request the workbench close a multi-instance tab, if open.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct CloseTab {
@@ -243,11 +259,11 @@ pub struct CloseTab {
 
 /// Name of the binary actually running, for the Help menu's build line.
 ///
-/// This crate is a LIBRARY shared by every workbench app (`sandbox`, `lunica`,
+/// This crate is a LIBRARY shared by every workbench app (`luncosim`, `lunica`,
 /// …), so it cannot know at compile time which one linked it — `CARGO_BIN_NAME`
 /// is set for bin targets and would be wrong (or absent) here. The running
 /// executable's own file stem is the one answer that is true in every app, so
-/// the sandbox stops introducing itself as Lunica.
+/// the luncosim stops introducing itself as Lunica.
 ///
 /// Resolved once: the path cannot change while the process lives.
 fn running_app_name() -> &'static str {
@@ -261,12 +277,13 @@ fn running_app_name() -> &'static str {
                 // A stripped/unreadable `/proc/self/exe` is possible; the crate
                 // name is a truthful fallback, unlike a hardcoded app name.
                 .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string())
+                .replace("luncosim", "LunCoSim")
         }
         // On the web there is no executable path; the bundle name is the
         // closest true answer and is set by the build script per app.
         #[cfg(target_arch = "wasm32")]
         {
-            env!("CARGO_PKG_NAME").to_string()
+            "LunCoSim".to_string()
         }
     })
 }
@@ -274,6 +291,14 @@ fn running_app_name() -> &'static str {
 fn on_open_tab(trigger: On<OpenTab>, mut layout: ResMut<WorkbenchLayout>) {
     let ev = *trigger.event();
     layout.open_instance(ev.kind, ev.instance);
+}
+
+fn on_open_tab_preserve_focus(
+    trigger: On<OpenTabPreserveFocus>,
+    mut layout: ResMut<WorkbenchLayout>,
+) {
+    let ev = *trigger.event();
+    layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore);
 }
 
 fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
@@ -406,6 +431,15 @@ pub struct OpenSourceView {
     /// Registered `AssetFile::asset_path`; arbitrary filesystem paths are not
     /// accepted by this library-only command.
     pub asset_path: String,
+}
+
+/// Open an ephemeral generated document in the read-only source viewer.
+#[Command(default)]
+pub struct OpenEphemeralSource {
+    /// URI shown as the document identity.
+    pub uri: String,
+    /// Complete generated source text.
+    pub text: String,
 }
 
 /// Open one file belonging to an open Twin in the editable source panel.
@@ -604,6 +638,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
             .add_observer(on_open_tab)
+            .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
             .add_systems(
                 Update,
@@ -618,6 +653,7 @@ impl Plugin for WorkbenchPlugin {
         register_all_commands(app);
         source_viewer::__register_on_open_file_for_text(app);
         source_viewer::__register_on_open_source_view(app);
+        source_viewer::__register_on_open_ephemeral_source(app);
         source_viewer::__register_on_open_twin_source(app);
         source_viewer::__register_on_save_source_text(app);
         app.register_instance_panel(source_viewer::SourceEditorPanel);
@@ -1013,6 +1049,30 @@ impl WorkbenchLayout {
         }
     }
 
+    /// Open an instance tab without changing the user's current tab.
+    pub fn open_instance_without_focus(
+        &mut self,
+        kind: PanelId,
+        instance: u64,
+        restore: Option<TabId>,
+    ) {
+        let previous = restore.or_else(|| {
+            self.dock.main_surface().focused_leaf().and_then(|node| {
+                match &self.dock.main_surface()[node] {
+                    egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0).cloned(),
+                    _ => None,
+                }
+            })
+        });
+        self.open_instance(kind, instance);
+        if let Some(previous) = previous {
+            if let Some(path) = self.dock.find_tab(&previous) {
+                self.dock.set_focused_node_and_surface(path.node_path());
+                let _ = self.dock.set_active_tab(path);
+            }
+        }
+    }
+
     /// Move an already-open instance tab to position 0 in its leaf so
     /// it renders as the leftmost tab. No-op if the tab isn't open.
     pub fn move_instance_to_front(&mut self, kind: PanelId, instance: u64) {
@@ -1346,6 +1406,11 @@ impl WorkbenchLayout {
         if !self.perspectives.iter().any(|w| w.id() == id) {
             return;
         }
+        let restores_cached_layout = self
+            .perspectives
+            .iter()
+            .find(|w| w.id() == id)
+            .is_some_and(|w| w.restores_cached_layout());
         let prev = self.active_perspective;
         let switching = prev != Some(id);
 
@@ -1356,10 +1421,15 @@ impl WorkbenchLayout {
             }
             // Restore a visited perspective's cached layout verbatim — its
             // tabs and splits come back exactly as left, no preset rebuild.
-            if let Some(slot) = self.dock_cache.remove(&id) {
-                self.restore_perspective(slot);
-                self.active_perspective = Some(id);
-                return;
+            if restores_cached_layout {
+                if let Some(slot) = self.dock_cache.remove(&id) {
+                    self.restore_perspective(slot);
+                    self.active_perspective = Some(id);
+                    return;
+                }
+            } else {
+                // A presentation workspace must never revive stale document tabs.
+                self.dock_cache.remove(&id);
             }
             // First visit: drop the live dock so the incoming preset's
             // rebuild seeds an empty skeleton instead of merging the
@@ -1521,7 +1591,7 @@ impl WorkbenchLayout {
     /// dock:
     ///
     /// - **Singleton** tabs whose `PanelId` isn't registered here are
-    ///   dropped (e.g. a `sandbox`-only panel loaded into `lunica`).
+    ///   dropped (e.g. a `luncosim`-only panel loaded into `lunica`).
     /// - **Instance** tabs are remapped: each carries the *old* session's
     ///   instance id; `id_map` translates it to the freshly-restored id.
     ///   A tab whose kind isn't registered is dropped; one whose document
@@ -1568,8 +1638,17 @@ impl WorkbenchLayout {
         // keeps its stale id and renders empty, which is strictly better than
         // collapsing its leaf and losing the saved split sizes (and the
         // codec's own `OpenTab` re-adds the live tab alongside it).
+        // A singleton panel is one renderer with one egui identity. A stale
+        // layout may contain it in more than one leaf (older Build layouts put
+        // Telemetry in both side and bottom), which makes egui render the same
+        // widget tree twice and report ID collisions. Keep the first occurrence
+        // in dock order; the current perspective then supplies its canonical
+        // position on the next normal layout rebuild.
+        let mut seen_singletons = HashSet::new();
         new_dock.retain_tabs(|tab| match tab {
-            TabId::Singleton(pid) => valid_singletons.contains(pid.0),
+            TabId::Singleton(pid) => {
+                valid_singletons.contains(pid.0) && seen_singletons.insert(*pid)
+            }
             TabId::Instance { kind, instance } => {
                 if !valid_kinds.contains(kind.0) {
                     return false;
@@ -1605,7 +1684,7 @@ impl WorkbenchLayout {
     /// The registered singleton panel that IS the full-window 3D scene
     /// (`Panel::scene_target() == Some(SceneTarget::MainViewport)`), if any.
     /// App-agnostic — every workbench app that hosts a 3D scene registers exactly
-    /// one such panel (the sandbox's `ViewportPanel`); tooling apps register none.
+    /// one such panel (the luncosim's `ViewportPanel`); tooling apps register none.
     /// Used to keep that panel foregrounded so a co-tenant tab can never blank the
     /// viewport controls (see [`reconcile_dock`](Self::reconcile_dock)).
     fn scene_viewport_panel_id(&self) -> Option<PanelId> {
@@ -1741,7 +1820,7 @@ impl WorkbenchLayout {
     /// tabs instead of a fresh preset. `id_map` remaps saved instance ids
     /// onto live tabs across ALL trees (instance ids are global — the doc
     /// set is opened once). Perspectives not registered in this app are
-    /// skipped (a `sandbox`-only perspective loaded into `lunica`).
+    /// skipped (a `luncosim`-only perspective loaded into `lunica`).
     pub(crate) fn seed_perspective_docks(
         &mut self,
         docks: &std::collections::HashMap<String, crate::workspace_state::PerspectiveDockSnapshot>,
@@ -1812,7 +1891,7 @@ impl WorkbenchLayout {
     /// holds a `&'static str` and can't be rebuilt from a runtime
     /// `String`, so restore looks the string up here and drops ids that
     /// aren't registered in the current binary (e.g. a perspective only
-    /// `sandbox` ships, loaded into `lunica`).
+    /// `luncosim` ships, loaded into `lunica`).
     pub fn activate_perspective_by_str(&mut self, id: &str) -> bool {
         let found = self
             .perspectives
@@ -2055,7 +2134,7 @@ impl WorkbenchLayout {
         // `render_layout` — so a non-empty dock here is *not* shown).
         //
         // A pure 3D app keeps no instance tabs at all, but a hybrid app
-        // (the rover sandbox embeds the Modelica workbench) can have
+        // (the rover luncosim embeds the Modelica workbench) can have
         // document/model tabs open while a viewport-only perspective is
         // active. Park those instance tabs in the dock rather than dropping
         // them — wiping would lose the open documents on every viewport
@@ -2150,7 +2229,7 @@ impl WorkbenchLayout {
     /// [`Self::rebuild_dock`] re-attaches the open document/instance
     /// tabs, so only the saved split *sizes* are lost — not the open
     /// documents or the chrome. Viewport-only perspectives (no
-    /// registered centre singleton — the sandbox's `View`) are left
+    /// registered centre singleton — the luncosim's `View`) are left
     /// untouched: their chrome lives outside the dock by design.
     pub(crate) fn ensure_chrome_present(&mut self) {
         if !self.perspective_chrome_complete() {
@@ -3254,10 +3333,15 @@ fn render_layout(
                 // in the dock; clicking a closed one re-docks it in its default
                 // slot. `Hidden` panels never appear (fixtures like the
                 // viewport, legacy entries, instance-tab facets).
-                let panels_meta: Vec<(PanelMenuGroup, PanelId, String, PanelSlot, bool)> = {
-                    // Only track singleton tabs for the "Panels" menu —
-                    // instance tabs (one per open doc) aren't a menu
-                    // concept.
+                struct ViewPanelEntry {
+                    group: PanelMenuGroup,
+                    title: String,
+                    slot: PanelSlot,
+                    open: bool,
+                    singleton: Option<PanelId>,
+                    instance: Option<(PanelId, u64)>,
+                }
+                let panels_meta: Vec<ViewPanelEntry> = {
                     let docked: std::collections::HashSet<PanelId> = layout
                         .dock
                         .iter_all_tabs()
@@ -3266,22 +3350,44 @@ fn render_layout(
                             TabId::Instance { .. } => None,
                         })
                         .collect();
-                    let mut sorted: Vec<(PanelMenuGroup, PanelId, String, PanelSlot, bool)> =
+                    let mut sorted: Vec<ViewPanelEntry> =
                         layout
                             .panels
                             .values()
                             .filter(|p| p.menu_group() != PanelMenuGroup::Hidden)
                             .map(|p| {
                                 let id = p.id();
-                                (
-                                    p.menu_group(),
-                                    id,
-                                    p.title(),
-                                    p.default_slot(),
-                                    docked.contains(&id),
-                                )
+                                ViewPanelEntry {
+                                    group: p.menu_group(),
+                                    title: p.title(),
+                                    slot: p.default_slot(),
+                                    open: docked.contains(&id),
+                                    singleton: Some(id),
+                                    instance: None,
+                                }
                             })
                             .collect();
+                    // Instance panels normally have no global menu entry.
+                    // Include only the canonical instance explicitly exposed
+                    // by the panel, so document tabs remain discoverable by
+                    // their owning workflow rather than becoming noise here.
+                    for (kind, panel) in &layout.instance_panels {
+                        let Some(entry) = panel.menu_entry() else {
+                            continue;
+                        };
+                        let tab = TabId::Instance {
+                            kind: *kind,
+                            instance: entry.instance,
+                        };
+                        sorted.push(ViewPanelEntry {
+                            group: entry.group,
+                            title: entry.title.to_owned(),
+                            slot: panel.default_slot(),
+                            open: layout.dock.find_tab(&tab).is_some(),
+                            singleton: None,
+                            instance: Some((*kind, entry.instance)),
+                        });
+                    }
                     // Group first, then title — but sort titles on their FIRST
                     // ALPHANUMERIC char: sorting on the raw string put every
                     // emoji-prefixed title ("🛠 Tools") in a block after every
@@ -3293,12 +3399,22 @@ fn render_layout(
                             .to_lowercase()
                     };
                     sorted.sort_by(|a, b| {
-                        a.0.cmp(&b.0).then_with(|| sort_key(&a.2).cmp(&sort_key(&b.2)))
+                        a.group
+                            .cmp(&b.group)
+                            .then_with(|| sort_key(&a.title).cmp(&sort_key(&b.title)))
                     });
                     sorted
                 };
                 let mut last_group: Option<PanelMenuGroup> = None;
-                for (group, id, title, slot, is_open) in panels_meta {
+                for entry in panels_meta {
+                    let ViewPanelEntry {
+                        group,
+                        title,
+                        slot,
+                        open: is_open,
+                        singleton,
+                        instance,
+                    } = entry;
                     if last_group != Some(group) {
                         if last_group.is_some() {
                             ui.separator();
@@ -3316,6 +3432,15 @@ fn render_layout(
                     let mut checked = is_open;
                     if ui.checkbox(&mut checked, title).clicked() {
                         if checked && !is_open {
+                            if let Some((kind, instance)) = instance {
+                                layout.open_instance(kind, instance);
+                                ui.close();
+                                continue;
+                            }
+                            let Some(id) = singleton else {
+                                ui.close();
+                                continue;
+                            };
                             // Track in the slot list so persistence /
                             // perspective queries see it. Insert into
                             // the *live* dock without a full rebuild
@@ -3356,6 +3481,15 @@ fn render_layout(
                             }
                             layout.insert_panel_into_dock(id, slot);
                         } else if !checked && is_open {
+                            if let Some((kind, instance)) = instance {
+                                layout.close_instance(kind, instance);
+                                ui.close();
+                                continue;
+                            }
+                            let Some(id) = singleton else {
+                                ui.close();
+                                continue;
+                            };
                             // Untrack from slot lists.
                             layout.side_browser.retain(|p| *p != id);
                             layout.center.retain(|p| *p != id);
@@ -3859,12 +3993,12 @@ fn render_layout(
     //   1. If the active perspective is centre-driven (non-empty centre
     //      intent, e.g. the modelica workbench's Code/Diagram), render the
     //      full DockArea.
-    //   2. Otherwise (viewport-only perspective like the sandbox's `View`),
+    //   2. Otherwise (viewport-only perspective like the luncosim's `View`),
     //      render the side panels with plain SidePanel / TopBottomPanel and
     //      leave the central area transparent for the 3D viewport.
     //
     // The gate is the centre *intent* (`layout.center`), not merely "does
-    // the dock hold any tab". A hybrid app (the rover sandbox embeds the
+    // the dock hold any tab". A hybrid app (the rover luncosim embeds the
     // Modelica workbench) can have document/model instance tabs parked in
     // the dock while a viewport-only perspective is active — e.g. restored
     // on boot before the user switches to a doc-capable perspective.
@@ -3902,7 +4036,7 @@ fn render_layout(
         // Tab body fill is set further below alongside the
         // per-state tab colours so the body matches the active tab.
         // Always opaque, in every app. Transparency on the bar made
-        // the Modelica workbench look broken, and the sandbox's
+        // the Modelica workbench look broken, and the luncosim's
         // centre is a transparent `ViewportPanel` anyway — a dark
         // strip above its invisible header just looks like the top
         // edge of the viewport tile, which is fine.
@@ -4018,7 +4152,7 @@ fn render_layout(
         // looks right whether the user runs in 1280×720 or 4K. Targets
         // mirror a 10/80/10 split: side panels 10% of window width each;
         // bottom dock 20% of window height. egui then owns the live width
-        // in its own memory for the session (not persisted — sandbox-style
+        // in its own memory for the session (not persisted — luncosim-style
         // perspectives keep their sizes in the dock tree via 5a instead).
         let side_default = (screen.width() * 0.10).max(140.0);
         let right_default = (screen.width() * 0.10).max(140.0);

@@ -37,6 +37,22 @@
 use bevy::camera::Exposure;
 use bevy::prelude::*;
 
+/// Projection used by the interactive camera when no authored USD camera
+/// supplies a film back. These are the `UsdGeomCamera` specification defaults,
+/// expressed as Bevy's vertical perspective FOV; the render pipeline never
+/// owns or replaces this component, so Inspector edits remain authoritative.
+pub fn usd_default_perspective_projection() -> Projection {
+    const FOCAL_LENGTH_MM: f32 = 50.0;
+    const VERTICAL_APERTURE_MM: f32 = 15.2908;
+    let fov = 2.0 * (VERTICAL_APERTURE_MM / (2.0 * FOCAL_LENGTH_MM)).atan();
+    Projection::Perspective(PerspectiveProjection {
+        fov,
+        near: 0.1,
+        far: 1.0e6,
+        ..default()
+    })
+}
+
 /// A world-space text label — stated as data, so a domain crate can say "this thing
 /// is labelled X" without linking a text/sprite render pipeline.
 ///

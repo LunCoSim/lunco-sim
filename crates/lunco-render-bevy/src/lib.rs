@@ -143,7 +143,7 @@ impl Plugin for LuncoRenderPlugin {
         } else {
             shader_look::build(app);
             // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
-            // to be added by hand in `lunco-sandbox`'s UI plugin and `luncosim`'s main;
+            // to be added by hand in `lunco-luncosim`'s UI plugin and `luncosim`'s main;
             // both were deleted when the material moved into this crate, because Bevy
             // panics on a duplicate plugin.
             app.add_plugins(shader_material::ShaderMaterialPlugin);

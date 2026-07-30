@@ -334,6 +334,16 @@ pub trait InstancePanel: Send + Sync + 'static {
     /// Default dock slot for newly-opened tabs of this kind.
     fn default_slot(&self) -> PanelSlot;
 
+    /// Optional discoverable entry in View ▸ Panels.
+    ///
+    /// Most instance panels are opened by a document or an explicit domain
+    /// action and should not appear in the global panel list. A panel with a
+    /// canonical first instance (for example the live Graphs view) can opt in
+    /// without pretending that every instance is a singleton panel.
+    fn menu_entry(&self) -> Option<InstancePanelMenuEntry> {
+        None
+    }
+
     /// Title shown in the tab header for `instance`.
     ///
     /// Runs each frame with world access so titles can follow live
@@ -362,6 +372,17 @@ pub trait InstancePanel: Send + Sync + 'static {
     /// view, Close Others, …) override this to draw their own menu
     /// items.
     fn tab_context_menu(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx, _instance: u64) {}
+}
+
+/// The canonical instance exposed by an [`InstancePanel`] in View ▸ Panels.
+#[derive(Clone, Copy, Debug)]
+pub struct InstancePanelMenuEntry {
+    /// View-menu workflow group.
+    pub group: PanelMenuGroup,
+    /// Human-readable label shown in View ▸ Panels.
+    pub title: &'static str,
+    /// Canonical instance opened by the menu entry.
+    pub instance: u64,
 }
 
 /// Identity of a tab in the dock.

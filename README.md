@@ -48,7 +48,7 @@ Most simulators focus on isolated physics. **LunCo** focuses on the **System-of-
 Both windowed apps also run in your browser. These are **early preview builds — expect rough edges and missing features**:
 
 - **[lunica.lunco.space](https://lunica.lunco.space)** — the Modelica engineering workbench
-- **[sandbox.lunco.space](https://sandbox.lunco.space)** — the physics sandbox
+- **[sandbox.lunco.space](https://sandbox.lunco.space)** — the LunCoSim web client
 
 ### 💻 Run locally
 
@@ -60,20 +60,18 @@ cd lunco-sim
 Then launch the entry point that fits your goal (each also builds for the browser via `scripts/build_web.sh`):
 
 ### 1. LunCoSim — the Full Mission Simulator
-The flagship: celestial bodies, ephemeris, solar-system-scale precision, and the complete flight-software / robotics / avatar stack.
+The flagship mission simulator includes celestial bodies, ephemeris, robotics,
+physics, avatar tooling, and the collaborative USD scene.
 
 ```bash
-cargo run --release -p luncosim
+cargo build -p lunco-luncosim --bin luncosim
+target/debug/luncosim
 ```
 
-### 2. The Physics Sandbox
-Validate robotics, suspension, and environment interactions in a collaborative 3D scene (windowed, or headless with `--no-ui`).
+After building, use `target/debug/luncosim` directly for launches, validation,
+and scene tests. The former sandbox executable name is retired.
 
-```bash
-cargo run --release -p lunco-sandbox --bin sandbox
-```
-
-### 3. Lunica — the Engineering Workbench
+### 2. Lunica — the Engineering Workbench
 Focus on Modelica modeling, schematic diagramming, and subsystem analysis.
 
 ```bash

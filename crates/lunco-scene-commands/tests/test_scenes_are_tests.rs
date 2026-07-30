@@ -93,9 +93,9 @@ fn every_test_scene_carries_a_scenario() {
 #[test]
 fn no_test_scene_hides_outside_the_tests_directory() {
     // `scripts/run_scene_tests.sh` discovers by DIRECTORY. A rig written into
-    // `scenes/sandbox/` runs in nobody's gate however carefully it asserts, and
+    // `scenes/luncosim/` runs in nobody's gate however carefully it asserts, and
     // its name is the only trace that it was ever meant to.
-    let stray: Vec<String> = usda_files(&assets_dir().join("scenes/sandbox"))
+    let stray: Vec<String> = usda_files(&assets_dir().join("scenes/luncosim"))
         .into_iter()
         .filter(|(stem, _)| {
             stem.contains("_test") || stem.contains("parity") || stem.contains("selftest")
@@ -105,7 +105,7 @@ fn no_test_scene_hides_outside_the_tests_directory() {
 
     assert!(
         stray.is_empty(),
-        "scene(s) named like tests but living in scenes/sandbox/ ({}):\n  {}\n\n\
+        "scene(s) named like tests but living in scenes/luncosim/ ({}):\n  {}\n\n\
          `scripts/run_scene_tests.sh` runs assets/scenes/tests/ — a rig outside it \
          gates nothing. Move it there, or rename it to what it actually is.",
         stray.len(),

@@ -1,0 +1,17 @@
+[package]
+name = "lunco-usd-compose"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Asset-backed OpenUSD stage composition for LunCoSim"
+
+[dependencies]
+openusd = { workspace = true }
+lunco-assets = { path = "../lunco-assets" }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

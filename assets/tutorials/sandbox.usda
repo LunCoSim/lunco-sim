@@ -20,7 +20,7 @@
     """
     metersPerUnit = 1
     subLayers = [
-        @./sandbox/curriculum.usda@,
-        @./basic/curriculum.usda@
+        @lunco://tutorials/sandbox/curriculum.usda@,
+        @lunco://tutorials/basic/curriculum.usda@
     ]
 )

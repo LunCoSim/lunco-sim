@@ -44,6 +44,12 @@ pub trait Perspective: Send + Sync + 'static {
     /// Implementations call the slot setters on `layout`; each setter
     /// updates the slot intent and triggers a dock rebuild.
     fn apply(&self, layout: &mut WorkbenchLayout);
+
+    /// Whether this perspective may restore its cached dock. Presentation
+    /// workspaces can opt out to guarantee that documents never cover the scene.
+    fn restores_cached_layout(&self) -> bool {
+        true
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

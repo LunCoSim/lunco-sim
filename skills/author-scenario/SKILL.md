@@ -137,7 +137,7 @@ remember:
 `scripts/run_scene_tests.sh` runs everything in `scenes/tests/`, the Scene menu
 hides it (`AssetVisibilitySettings`, one checkbox in Settings), and
 `every_test_scene_carries_a_scenario` fails on any of them that asserts nothing.
-A rig written into `scenes/sandbox/` instead gates nothing however carefully it
+A rig written into `scenes/luncosim/` instead gates nothing however carefully it
 asserts — `no_test_scene_hides_outside_the_tests_directory` is the check that
 says so. Do NOT suffix the file `_test`: the folder already said it.
 
@@ -155,7 +155,7 @@ fn verdict(s) {
 ```
 
 `report_verdict(fails, title, channel)` prints the greppable `<title>: PASS|FAIL`
-line, emits the verdict on `channel` — which is what sets `sandbox test`'s exit
+line, emits the verdict on `channel` — which is what sets `luncosim test`'s exit
 code — and raises a toast. Call it once, last. Use `fail_fast` for setup
 failures (a `find` that returned -1, the wrong scene) so a broken run stops on
 tick one instead of ticking silently to the limit.
@@ -169,9 +169,29 @@ per-sample table — a run with no sample rows proves nothing.
 Run it headlessly:
 
 ```
-cargo run -q -p lunco-sandbox --bin sandbox -j 4 -- \
-    test --scene scenes/tests/landing_legs.usda --max-ticks 500
+target/debug/luncosim test \
+    --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
+
+Build `target/debug/luncosim` in the current worktree before running gates. Test
+commands consume that exact build; they do not use `cargo run` or the former
+`sandbox` executable name.
+
+### Keep test hooks below Rhai's expression-complexity ceiling
+
+Treat `on_tick` as a dispatcher, not as the whole mission:
+
+- one helper per phase;
+- one sampler and one accumulator;
+- a final verdict/report helper;
+- short structured log rows instead of long concatenation expressions.
+
+Hook-bound `this` is not available inside helpers. In the production host,
+ordinary map arguments are passed by value and script-defined map helpers do not
+resolve as mutable methods. Therefore phase helpers should be reducers: accept
+an explicit state map, return the updated map, and let `on_tick` copy the
+returned keys into `this`. This both controls parser complexity and makes phase
+logic independently testable.
 
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
 
@@ -233,7 +253,7 @@ the very authoring the test exists to check.
   and count the assertions (`TESTS_OK 7`, not 5) when you expect a guard to fire.
 - **Never do arithmetic on a possibly-absent reading.** `()` divided by 1000
   THROWS, the scenario dies between its last print and `report_verdict`, and
-  `sandbox test` reports NO-VERDICT — the failure looks like a hang, not like the
+  `luncosim test` reports NO-VERDICT — the failure looks like a hang, not like the
   assertion that was about to fail. Route every logged number through a formatter
   that answers `"(none)"`.
 - **A control must vary the thing that actually gates.** Chasing a missing link,
@@ -340,7 +360,7 @@ libraries → `<twin>/tools/*.rhai`.
 
 ## The gate set — what the shipped scene tests guard
 
-`./scripts/run_scene_tests.sh` builds `sandbox` once and runs every gate scene through `sandbox test`
+`./scripts/run_scene_tests.sh` builds `luncosim` once and runs every gate scene through `luncosim test`
 headless and deterministically (`--threads 1 --jitter 0`), exit 0=PASS / 1=FAIL /
 2=no verdict. The set, and what each one is FOR:
 
@@ -386,7 +406,7 @@ rovers being wrong together.
 
 **How to run.**
 ```bash
-cargo run -j2 --bin sandbox -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+target/debug/luncosim --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
 ```
 The `LunCoProgramAPI` prim in the scene auto-runs the script on load; the run takes
 ~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:

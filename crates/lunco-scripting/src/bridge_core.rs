@@ -35,7 +35,10 @@ use bevy::ecs::system::SystemState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+};
 
 use lunco_api::executor::{authz_target_gid, ApiCommandEvent};
 use lunco_api::queries::ApiQueryRegistry;
@@ -70,6 +73,28 @@ pub trait ValueBuilder {
     fn array(&self, items: Vec<Self::Value>) -> Self::Value;
     /// A string-keyed map (object).
     fn map(&self, entries: Vec<(String, Self::Value)>) -> Self::Value;
+}
+
+/// Commands a particular host intentionally accepts from scenarios without
+/// executing. This is for presentation intents on a windowless host: the same
+/// scenario can update a GUI HUD when one exists, while a headless acceptance
+/// run acknowledges the intent without inventing UI state or warning that a
+/// command is misspelled.
+///
+/// The host owns the explicit list. Unknown commands remain real failures.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct IgnoredScenarioCommands(HashSet<String>);
+
+impl IgnoredScenarioCommands {
+    /// Build a policy from the presentation command names that this host omits.
+    pub fn new(names: impl IntoIterator<Item = &'static str>) -> Self {
+        Self(names.into_iter().map(str::to_owned).collect())
+    }
+
+    /// Whether this host intentionally ignores this scenario command.
+    pub fn accepts(&self, name: &str) -> bool {
+        self.0.contains(name)
+    }
 }
 
 /// Convert a reflected value to a backend-native value in one pass.
@@ -455,6 +480,12 @@ pub fn controller_role(gid: u64) -> Option<String> {
 pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
+        if world
+            .get_resource::<IgnoredScenarioCommands>()
+            .is_some_and(|commands| commands.accepts(name))
+        {
+            return serde_json::json!({ "id": id, "ok": true });
+        }
         // Client-scoped scenario on a predicting client: allow ONLY the
         // client-local surface (HUD / notifications / camera). Anything else is
         // an authoritative mutation the host owns — running it here would

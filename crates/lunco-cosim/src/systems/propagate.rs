@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
 
-use crate::SimConnection;
+use crate::{BoundConnection, SimConnection};
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -158,7 +158,7 @@ impl CompiledWiring {
         // Registry is `Copy` fn-pointers; clone it out so resolution below borrows
         // `world` immutably alongside the collected connections.
         let registry = world.resource::<PortRegistry>().clone();
-        let mut q = world.query::<&SimConnection>();
+        let mut q = world.query_filtered::<&SimConnection, With<BoundConnection>>();
         let conns: Vec<SimConnection> = q.iter(world).cloned().collect();
 
         for c in &conns {
@@ -396,7 +396,7 @@ impl CompiledWiring {
 /// standalone propagate into everything.
 pub fn propagate_connections(
     world: &mut World,
-    mut wiring: Local<RebuildOnChange<SimConnection, CompiledWiring>>,
+    mut wiring: Local<RebuildOnChange<BoundConnection, CompiledWiring>>,
     mut acc: Local<Vec<f64>>,
     // Dangling-wire names already reported. Dedup is per PORT NAME, not per
     // call site: a `warn_once!` here reported only the FIRST dangling wire in
@@ -503,8 +503,9 @@ pub fn propagate_connections(
     if compiled.targets.is_empty() {
         // No wires ⇒ nothing broken. Clear any report left from a prior fabric.
         let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
-        if !diag.broken.is_empty() {
+        if !diag.broken.is_empty() || !diag.pending.is_empty() {
             diag.broken.clear();
+            diag.pending.clear();
         }
         return;
     }
@@ -546,9 +547,13 @@ pub fn propagate_connections(
         world.get_resource::<lunco_core::NetworkRole>().copied(),
         Some(lunco_core::NetworkRole::Client)
     );
-    // Machine-readable mirror of the dangling-wire log lines below, rebuilt every
-    // tick so `GET /api/diagnostics` polls the current fabric (see `CosimDiagnostics`).
+    // Terminal failures, rebuilt every tick so `GET /api/diagnostics` polls the
+    // current fabric (see `CosimDiagnostics`).
     let mut broken: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
+    // A scene may wire an endpoint before its runtime contract is published.
+    // Generated Modelica islands are the important case: their interface is
+    // provisional while compiling, not an authoring error.
+    let mut pending: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
     // Targets that DID take their write this tick — the proof a wire is real, and
     // the only thing that can retract a fault (see below).
     let mut landed: Vec<(Entity, String)> = Vec::new();
@@ -602,47 +607,61 @@ pub fn propagate_connections(
         //   or the control binding lands. Warning during that window described a
         //   load order, not a fault.
         //
-        // An entity that exposes ports but not THIS name is the genuine case — a
-        // typo'd or stale wire — and still warns.
-        //
-        // DOWNGRADED, not silenced. `sun_tracker` fails today with exactly this
-        // shape — a model that never publishes `sun_azimuth` — and dropping the
-        // line entirely would have taken the only evidence with it.
+        // An entity that exposes ports but not THIS name is a genuine case only
+        // once its interface is terminal. A compiling model may expose a partial
+        // surface while its generated contract is still landing.
         if written {
             landed.push((t.entity, t.name.clone()));
             continue;
         }
         let has_port_surface = !registry.entity_ports(world, t.entity).is_empty();
-        {
-            // Diagnostics carry EVERY unresolved target this tick (a poller wants
-            // the live set), whereas the log is deduped per name to stay readable.
-            broken.push(crate::diagnostics::BrokenConnection {
-                entity: t.entity,
-                global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
-                port: t.name.clone(),
-                has_port_surface,
-                dropped_value: acc[i],
-            });
-            if reported.insert(t.name.clone()) {
-                // `Name` carries the USD prim path. An entity id — `1732v0` — is
-                // unactionable in a tester's log; the path names the wire's end.
+        let unresolved = crate::diagnostics::BrokenConnection {
+            entity: t.entity,
+            global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
+            port: t.name.clone(),
+            has_port_surface,
+            dropped_value: acc[i],
+        };
+        let compiling = matches!(
+            world
+                .get::<crate::SimComponent>(t.entity)
+                .map(|component| &component.status),
+            Some(crate::SimStatus::Compiling)
+        );
+        if !has_port_surface || compiling {
+            pending.push(unresolved);
+            continue;
+        }
+
+        broken.push(unresolved.clone());
+        // Insertions are the failure event. They occur once per endpoint, not on
+        // every propagation tick, and are what produces the warning.
+        let key = (unresolved.entity, unresolved.port.clone());
+        let already_landed = world
+            .resource::<crate::diagnostics::CosimDiagnostics>()
+            .landed
+            .contains(&key);
+        if !already_landed {
+            let inserted = {
+                let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+                match diag.faults.entry(key) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(unresolved.clone());
+                        true
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => false,
+                }
+            };
+            if inserted && reported.insert(t.name.clone()) {
                 let label = world
                     .get::<Name>(t.entity)
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| format!("{:?}", t.entity));
-                if has_port_surface {
-                    warn!(
-                        "[cosim] connection targets unknown input port '{}' on {} ({:?}) — value dropped \
-                         (declare the port or fix the wire)",
-                        t.name, label, t.entity
-                    );
-                } else {
-                    debug!(
-                        "[cosim] connection targets '{}' on {} ({:?}), which exposes no ports yet — \
-                         value dropped (structural endpoint, or a model still loading)",
-                        t.name, label, t.entity
-                    );
-                }
+                warn!(
+                    "[cosim] connection targets unknown input port '{}' on {} ({:?}) — value dropped \
+                     (declare the port or fix the wire)",
+                    t.name, label, t.entity
+                );
             }
         }
     }
@@ -665,12 +684,7 @@ pub fn propagate_connections(
         diag.faults.remove(&key);
         diag.landed.insert(key);
     }
-    for b in &broken {
-        let key = (b.entity, b.port.clone());
-        if b.has_port_surface && !diag.landed.contains(&key) {
-            diag.faults.entry(key).or_insert_with(|| b.clone());
-        }
-    }
+    diag.pending = pending;
     diag.broken = broken;
 }
 
@@ -751,8 +765,6 @@ mod wire_order_tests {
     #[test]
     fn a_hold_outranks_its_wire_until_it_expires() {
         use bevy::ecs::system::RunSystemOnce;
-        use lunco_core::ports::PortDirection;
-
         let mut world = World::new();
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
         world.init_resource::<crate::PortHolds>();
@@ -819,11 +831,8 @@ mod wire_order_tests {
         );
     }
 
-    /// A wire whose target accepts no write must land in [`CosimDiagnostics`] —
-    /// the machine-readable form behind `GET /api/diagnostics`. Empty registry ⇒
-    /// the sink exposes no port surface, so it reports as a structural/loading
-    /// endpoint (`has_port_surface == false`), not a genuine fault, but it is
-    /// still reported (a poller wants the full unresolved set).
+    /// A target without a runtime port surface is assembly progress, not a
+    /// broken wire. It stays observable in `pending`, never in the fault gate.
     #[test]
     fn broken_wire_populates_diagnostics() {
         use bevy::ecs::system::RunSystemOnce;
@@ -849,11 +858,11 @@ mod wire_order_tests {
 
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
         assert_eq!(
-            diag.broken.len(),
+            diag.pending.len(),
             1,
             "the one unresolved target is reported"
         );
-        let b = &diag.broken[0];
+        let b = &diag.pending[0];
         assert_eq!(b.port, "nonexistent_port");
         assert_eq!(b.global_id, Some(GlobalEntityId::from_raw(20)));
         assert!(
@@ -877,6 +886,13 @@ mod wire_order_tests {
                 .broken
                 .is_empty(),
             "no wires ⇒ report clears"
+        );
+        assert!(
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .pending
+                .is_empty(),
+            "no wires also clears assembly progress"
         );
     }
 
@@ -905,11 +921,59 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
-        assert_eq!(diag.broken.len(), 1, "still visible to a poller");
+        assert_eq!(diag.pending.len(), 1, "still visible as assembly progress");
         assert!(
             diag.faults.is_empty(),
             "a target exposing no ports at all is still loading, not misauthored"
         );
+    }
+
+    /// A generated model's partial interface is expected while it compiles. Once
+    /// the same contract reaches `Running`, a missing declared input is terminal
+    /// and enters the fault ledger exactly once.
+    #[test]
+    fn compiling_model_waits_before_unknown_port_becomes_a_fault() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        let mut registry = PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(registry);
+
+        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let sink = world
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                crate::SimComponent {
+                    model_name: "GeneratedElectricalIsland".into(),
+                    status: crate::SimStatus::Compiling,
+                    ..Default::default()
+                },
+            ))
+            .id();
+        world.spawn(SimConnection {
+            start_element: src,
+            start_connector: "out".into(),
+            start_is_input: false,
+            end_element: sink,
+            end_connector: "drive_left".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+
+        world.run_system_once(propagate_connections).unwrap();
+        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        assert_eq!(diag.pending.len(), 1);
+        assert!(diag.broken.is_empty());
+        assert!(diag.faults.is_empty());
+
+        world.get_mut::<crate::SimComponent>(sink).unwrap().status = crate::SimStatus::Running;
+        world.run_system_once(propagate_connections).unwrap();
+        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        assert!(diag.pending.is_empty());
+        assert_eq!(diag.broken.len(), 1);
+        assert_eq!(diag.faults.len(), 1);
     }
 
     /// A wire proven to have carried a value can never be re-reported as a fault.

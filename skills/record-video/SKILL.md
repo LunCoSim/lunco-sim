@@ -1,7 +1,7 @@
 ---
 name: record-video
 description: >
-  How to record deterministic video or PNG sequences from the sandbox —
+  How to record deterministic video or PNG sequences from the luncosim —
   windowed or fully windowless. Trigger whenever the user asks to "record a
   video", "capture an episode", "render a cinematic", "make a recording of the
   scene/tutorial", to record without opening a window / on a headless box, or
@@ -21,11 +21,11 @@ is a function of frame index, never machine speed. Full design:
 
 ```sh
 # Windowless: no window/egui, renders offscreen, EXITS BY ITSELF when done
-cargo run -p lunco-sandbox --bin sandbox -- --api 4101 \
+target/debug/luncosim --api 4101 \
   --offscreen --record-offline ~/.cache/take.mp4 --record-fps 30 --record-frames 300
 
 # Windowed variant (records the live window; you stop it, or pass --record-frames)
-cargo run -p lunco-sandbox --bin sandbox -- --api 4101 --record-offline ~/.cache/take.mp4 --record-fps 30
+target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps 30
 ```
 
 - Recording starts **after the scene-visuals readiness gate**, not at process
@@ -43,7 +43,7 @@ cargo run -p lunco-sandbox --bin sandbox -- --api 4101 --record-offline ~/.cache
 - `--offscreen` is GPU-full windowless — NOT `--no-ui` (which drops the GPU and
   cannot capture anything).
 - No workbench exists, so the recorder activates the scene's first **authored**
-  `SceneCamera` (e.g. the sandbox `WideShot`). A scene with no authored camera
+  `SceneCamera` (e.g. the luncosim `WideShot`). A scene with no authored camera
   records black and logs a warning — author a camera, don't fight the picker.
 - `--offscreen --api PORT` (without `--record-offline`) gives a windowless
   interactive instance: `StartOfflineRecording` / `CaptureScreenshot` work over

@@ -24,14 +24,14 @@ do under the hood.
 
 ```bash
 # Build both artifacts (server binary + wasm client):
-./scripts/build.sh sandbox-server --release
-./scripts/build_web.sh build sandbox --release
+./scripts/build.sh luncosim-server --release
+./scripts/build_web.sh build luncosim --release
 
 # Redeploy (certs already managed by Let's Encrypt — the common case):
 # 1. Deploy native server (binary + assets):
-./scripts/deploy_sandbox_server.sh deploy@sandbox.lunco.space
+./scripts/deploy_luncosim_server.sh deploy@sandbox.lunco.space
 # 2. Deploy web client (WASM):
-./scripts/deploy_sandbox_web.sh deploy@sandbox.lunco.space
+./scripts/deploy_luncosim_web.sh deploy@sandbox.lunco.space
 
 # First-time provisioning only (installs apt deps, systemd unit, nginx, certbot):
 ./scripts/deploy_server.sh deploy@sandbox.lunco.space --provision --email you@lunco.space
@@ -74,12 +74,12 @@ From a checkout of this repo (`networking` branch):
 
 ```bash
 # (a) headless server binary — native release. Runs headless by default (no winit/egui).
-cargo build --release --bin sandbox-server -p lunco-sandbox-server
-#   -> target/release/sandbox-server
+cargo build --release --bin luncosim-server -p lunco-luncosim-server
+#   -> target/release/luncosim-server
 
 # (b) wasm client bundle.
-./scripts/build_web.sh build sandbox
-#   -> dist/sandbox/   (index.html + *_bg.wasm + js + worker + assets)
+./scripts/build_web.sh build luncosim
+#   -> dist/luncosim/  (index.html + *_bg.wasm + js + worker + assets)
 ```
 
 > The native binary loads assets from `<workdir>/assets`, so the `assets/` tree
@@ -98,12 +98,12 @@ Target layout on the box:
 
 ```
 /opt/lunco/
-├── sandbox                 # the release binary
+├── luncosim-server        # the release headless server binary
 ├── assets/                 # asset tree (scenes/, shaders/, models cache, …)
 ├── certs/                  # deploy-hook-copied fullchain.pem + privkey.pem
 ├── .cache/                 # rumoca/MSL/model cache (service-writable)
 ├── lunco-server.env        # config (TLS paths, RUST_LOG)
-└── web/sandbox/            # the wasm bundle nginx serves
+└── web/luncosim/           # the wasm bundle nginx serves
 ```
 
 ---
@@ -112,15 +112,15 @@ Target layout on the box:
 
 ```bash
 DEST=root@sandbox.lunco.space         # or your ssh alias
-rsync -av target/release/sandbox        $DEST:/opt/lunco/sandbox
+rsync -av target/release/luncosim-server $DEST:/opt/lunco/luncosim-server
 rsync -av --delete assets/              $DEST:/opt/lunco/assets/
-rsync -av --delete dist/sandbox/        $DEST:/opt/lunco/web/sandbox/
+rsync -av --delete dist/luncosim/       $DEST:/opt/lunco/web/luncosim/
 rsync -av scripts/deploy/               $DEST:/opt/lunco/deploy/   # unit, env, hook, nginx conf
 rsync -av crates/lunco-networking/DEPLOY.md $DEST:/opt/lunco/deploy/DEPLOY.md  # this runbook, on-box
 
 # Fix ownership on the box:
-sudo chown -R lunco:lunco /opt/lunco/sandbox /opt/lunco/assets
-sudo chmod 0755 /opt/lunco/sandbox
+sudo chown -R lunco:lunco /opt/lunco/luncosim-server /opt/lunco/assets
+sudo chmod 0755 /opt/lunco/luncosim-server
 ```
 
 ---
@@ -206,8 +206,8 @@ journalctl -u lunco-server -f
 # Expect:
 #   🔐 WebTransport using cert from /opt/lunco/certs/fullchain.pem
 #   [net] host listening on 0.0.0.0:5888
-#   [net] sandbox running HEADLESS (--no-ui): ...
-#   Loading sandbox scene ... via LoadScene
+#   [net] luncosim running HEADLESS (--no-ui): ...
+#   Loading luncosim scene ... via LoadScene
 ```
 
 If the cert env is set but the PEM is bad, the service **panics on boot by
@@ -259,8 +259,8 @@ with it, and pass its SHA-256 digest to the browser client via the connect URL h
 
 ```bash
 # rebuild (step 1), then:
-rsync -av target/release/sandbox $DEST:/opt/lunco/sandbox && sudo systemctl restart lunco-server
-rsync -av --delete dist/sandbox/ $DEST:/opt/lunco/web/sandbox/   # no restart needed
+rsync -av target/release/luncosim-server $DEST:/opt/lunco/luncosim-server && sudo systemctl restart lunco-server
+rsync -av --delete dist/luncosim/ $DEST:/opt/lunco/web/luncosim/   # no restart needed
 ```
 
 ## Troubleshooting
@@ -271,8 +271,8 @@ rsync -av --delete dist/sandbox/ $DEST:/opt/lunco/web/sandbox/   # no restart ne
 | Browser connects to the page but Network → Connect hangs / `WebTransport` error | UDP 5888 not open (`ufw allow 5888/udp`), or a NAT/cloud security-group UDP rule missing. |
 | `host listening` but baseline is `0-entity` | scene loaded but no dynamic bodies tagged — check the scene actually spawns rovers/props. |
 | Cert renewed but browser still sees the old expiry | deploy hook didn't run/restart — check `/etc/letsencrypt/renewal-hooks/deploy/lunco-server.sh` is executable and `journalctl -u lunco-server` shows a restart at renew time. |
-| `wasm` 404 / wrong MIME | nginx `types { application/wasm wasm; }` missing or bundle not under `/opt/lunco/web/sandbox`. |
+| `wasm` 404 / wrong MIME | nginx `types { application/wasm wasm; }` missing or bundle not under `/opt/lunco/web/luncosim`. |
 
 See also: `src/server.rs` (cert handling),
-`../lunco-sandbox/src/bin/sandbox.rs` (`--no-ui` headless wiring).
+`../lunco-luncosim/src/bin/luncosim.rs` (`--no-ui` headless wiring).
 The deploy config files live in `../../scripts/deploy/`.

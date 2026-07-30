@@ -4,6 +4,16 @@ The **high-level orchestrator** for LunCoSim's USD (Universal Scene Description)
 system. It loads rover/scene definitions from USD files and maps them to Bevy
 entities with Avian3D physics and LunCoSim simulation components.
 
+## Assembly boundary
+
+`lunco-usd-compose` is the render-free composition leaf. It asks
+`lunco-assets` for canonical asset identities and bytes, then lets OpenUSD
+assemble sublayers, references, payloads, and variants into an inert stage.
+`lunco-usd` re-exports that entrypoint for top-level applications.
+
+Composition does **not** start Modelica, Rhai, behavior trees, physics, or
+rendering. Those are independent projections after a stage is available.
+
 ## `UsdPlugins`
 
 A convenience bundle (`app.add_plugins(UsdPlugins)`) that wires the real,

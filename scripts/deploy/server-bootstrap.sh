@@ -11,7 +11,7 @@
 #     sudo bash server-bootstrap.sh --src <staging-dir> --domain <d> [options]
 #
 # Options:
-#     --src <dir>      staging dir holding `sandbox`, `assets/`, `deploy/`,
+#     --src <dir>      staging dir holding `luncosim`, `assets/`, `deploy/`,
 #                      `DEPLOY.md` (rsync'd by deploy_server.sh). Required.
 #     --domain <d>     TLS / vhost domain         (default: sandbox.lunco.space)
 #     --prefix <dir>   install root               (default: /opt/lunco)
@@ -47,7 +47,7 @@ done
 
 [ "$(id -u)" -eq 0 ] || { error "run as root (sudo)"; exit 1; }
 [ -n "$SRC" ] && [ -d "$SRC" ] || { error "--src <staging-dir> required and must exist"; exit 1; }
-[ -x "$SRC/sandbox" ] || { error "no executable 'sandbox' binary in $SRC"; exit 1; }
+[ -x "$SRC/luncosim" ] || { error "no executable 'luncosim' binary in $SRC"; exit 1; }
 [ -d "$SRC/assets" ]  || { error "no 'assets/' dir in $SRC"; exit 1; }
 [ -d "$SRC/deploy" ]  || { error "no 'deploy/' kit in $SRC"; exit 1; }
 
@@ -72,7 +72,7 @@ install -d -o lunco -g lunco -m 0750 "$PREFIX/certs"
 
 # ── 3. Binary + assets + deploy kit ──────────────────────────────────────
 info "installing binary + assets → $PREFIX"
-install -o lunco -g lunco -m 0755 "$SRC/sandbox" "$PREFIX/sandbox"
+install -o lunco -g lunco -m 0755 "$SRC/luncosim" "$PREFIX/luncosim-server"
 rsync -a --delete "$SRC/assets/" "$PREFIX/assets/"
 cp -f "$SRC/deploy/"* "$PREFIX/deploy/" 2>/dev/null || true
 [ -f "$SRC/DEPLOY.md" ] && cp -f "$SRC/DEPLOY.md" "$PREFIX/deploy/DEPLOY.md"
@@ -142,9 +142,9 @@ fi
 # ── 7. nginx vhost (optional web tier) ───────────────────────────────────
 if [ "$WEB" -eq 1 ]; then
     if [ -d "$SRC/web" ]; then
-        info "installing wasm bundle → $PREFIX/web/sandbox + nginx vhost"
-        install -d -o lunco -g lunco "$PREFIX/web/sandbox"
-        rsync -a --delete "$SRC/web/" "$PREFIX/web/sandbox/"; chown -R lunco:lunco "$PREFIX/web"
+        info "installing wasm bundle → $PREFIX/web/luncosim + nginx vhost"
+        install -d -o lunco -g lunco "$PREFIX/web/luncosim"
+        rsync -a --delete "$SRC/web/" "$PREFIX/web/luncosim/"; chown -R lunco:lunco "$PREFIX/web"
         install -m 0644 "$PREFIX/deploy/nginx-sandbox.lunco.space.conf" \
             /etc/nginx/sites-available/"$DOMAIN"
         ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/"$DOMAIN"

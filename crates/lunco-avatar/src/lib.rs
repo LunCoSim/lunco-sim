@@ -606,11 +606,11 @@ impl Plugin for LunCoAvatarPlugin {
         //
         // The observer reads two click-arbitration resources — `DragModeActive`
         // (gizmo drag in progress) and `SpawnToolActive` (click-to-place armed).
-        // Both are normally owned by the editor (`lunco-sandbox-edit`), but the
+        // Both are normally owned by the editor (`lunco-luncosim-edit`), but the
         // observer lives here and fires on the FIRST pointer event, so a binary
         // that uses the avatar without the editor (luncosim) would panic on the
         // missing `Res`. Guarantee them here — `init_resource` is idempotent, so
-        // a host that inserts its own (sandbox) keeps that value.
+        // a host that inserts its own (luncosim) keeps that value.
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
         app.init_resource::<lunco_core::TerrainToolActive>();
@@ -742,7 +742,7 @@ impl Plugin for LunCoAvatarPlugin {
 
         // Possessed-rover name tags: an egui screen-space overlay (the scene has
         // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
-        // here — not in `AvatarUiPlugin` — because the sandbox adds only
+        // here — not in `AvatarUiPlugin` — because the luncosim adds only
         // `LunCoAvatarPlugin`; `AvatarUiPlugin` is luncosim-only.
         #[cfg(feature = "ui")]
         app.add_systems(
@@ -881,7 +881,7 @@ fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
 /// Spawns a fully-configured avatar camera entity.
 ///
 /// Call this from setup code instead of manually assembling the avatar entity.
-/// Ensures consistency between the main client and the sandbox binary.
+/// Ensures consistency between the main client and the luncosim binary.
 ///
 /// # Arguments
 /// * `commands` — Bevy commands for entity spawning.
@@ -915,7 +915,11 @@ pub fn spawn_avatar_camera(
             // Bevy's EV 9.7 against the 131 klx lunar sun (~5 stops open, every
             // surface white) and, because `project_env_settings` only writes
             // cameras that already have the component, permanently uncorrectable.
-            (Camera::default(), lunco_render::scene_camera_look(None)),
+            (
+                Camera::default(),
+                lunco_render::scene_camera_look(None),
+                lunco_render::usd_default_perspective_projection(),
+            ),
             FreeFlightCamera {
                 yaw,
                 pitch,
@@ -1111,7 +1115,7 @@ fn site_body_center(
 }
 
 /// Radial "up" for a camera at `pos` in ITS parent grid's frame. In the old
-/// rover sandbox the grid origin IS the body centre, so `pos` normalized is
+/// rover luncosim the grid origin IS the body centre, so `pos` normalized is
 /// the surface normal. A site-anchored scene parents free cameras to the
 /// WorldGrid, whose origin is the SITE point on the sphere — there the body
 /// centre sits `radius + height` straight down (`site_center`), and ignoring
@@ -1364,7 +1368,7 @@ fn spring_arm_system(
         q_avatar.iter_mut()
     {
         // Skip follow while the target is being dragged by the editor gizmo
-        // (marker set by sandbox-edit; never present on a headless server).
+        // (marker set by luncosim-edit; never present on a headless server).
         if q_dragging.get(arm.target).is_ok() {
             continue;
         }
@@ -1804,7 +1808,7 @@ fn orbit_system(
     for (avatar_ent, mut tf, mut cell, mut orbit, child_of, mut zoom, sample) in q_avatar.iter_mut()
     {
         // Skip follow while the target is being dragged by the editor gizmo
-        // (marker set by sandbox-edit; never present on a headless server).
+        // (marker set by luncosim-edit; never present on a headless server).
         if q_dragging.get(orbit.target).is_ok() {
             continue;
         }
@@ -2151,7 +2155,7 @@ fn orbit_system(
         *last_pose.0 = orbit.yaw;
         *last_pose.1 = orbit.pitch;
 
-        // NOTE: below the grid's switching threshold (1e10 m in the sandbox)
+        // NOTE: below the grid's switching threshold (1e10 m in the luncosim)
         // this keeps the camera in cell (0,0,0) with the full translation in
         // f32 — the SAME single-cell convention every other entity in the app
         // uses. An experiment splitting the camera into real 2000 m cells
@@ -2882,7 +2886,7 @@ pub fn avatar_raycast_possession(
         return;
     }
     // Shift+click is reserved for entity selection / gizmo multi-select in
-    // lunco-sandbox-edit (`on_scene_click_select`, the other global
+    // lunco-luncosim-edit (`on_scene_click_select`, the other global
     // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
     // a Shift+click never does. This modifier split is what keeps the two
     // observers from both acting on a single click.
@@ -3632,6 +3636,8 @@ fn on_focus_command(
     mut commands: Commands,
     q_avatar: Query<(Entity, &Transform, Option<&Camera>, Option<&OrbitCamera>), With<Avatar>>,
     q_bodies: Query<&CelestialBody>,
+    q_body_decls: Query<&lunco_celestial::CelestialBodyDecl>,
+    q_body_entities: Query<(Entity, &CelestialBody)>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
 ) {
@@ -3655,15 +3661,19 @@ fn on_focus_command(
 
     // Compute distance based on target type.
     let mut distance = 20.0;
-    let physical_target = get_physical_body(cmd.target, &q_children, &q_bodies);
-    let is_body = q_bodies.contains(physical_target);
+    let physical_target = resolve_declared_body(cmd.target, &q_body_decls, &q_body_entities)
+        .unwrap_or_else(|| get_physical_body(cmd.target, &q_children, &q_bodies));
+    let is_body = q_bodies.get(physical_target).is_ok();
 
     // Already orbiting this very body (clicking the focused globe, re-clicking
     // its view pill): a repeat focus must be a NO-OP. Re-running the swap
     // re-arms `SunlitArrival`, which snaps the camera back to the arrival
     // pose — "I jump to the original position".
     if let Some(orbit) = current_orbit {
-        if get_physical_body(orbit.target, &q_children, &q_bodies) == physical_target {
+        if resolve_declared_body(orbit.target, &q_body_decls, &q_body_entities)
+            .unwrap_or_else(|| get_physical_body(orbit.target, &q_children, &q_bodies))
+            == physical_target
+        {
             return;
         }
     }
@@ -3690,7 +3700,7 @@ fn on_focus_command(
         // orbit_system idles until `sample_orbit_frame` refreshes it.
         .remove::<OrbitFrameSample>()
         .try_insert(OrbitCamera {
-            target: cmd.target,
+            target: physical_target,
             distance,
             yaw,
             pitch,
@@ -3802,7 +3812,7 @@ fn update_avatar_clip_planes_system(
                 }
             }
             let (near, far) = if max_far <= 0.0 {
-                // No `CelestialBody` contributed (flat sandbox scene, or the
+                // No `CelestialBody` contributed (flat luncosim scene, or the
                 // offscreen USD preview camera). The body-derived `min_dist` is
                 // still its 1e15 sentinel here — feeding it to the clamp below
                 // pins `near` to the 100 m ceiling, which clips away the ENTIRE
@@ -4193,16 +4203,42 @@ fn get_physical_body(
         return target;
     }
 
-    // Search children (one level deep is enough for our current Grid -> Body setup).
-    if let Ok(children) = q_children.get(target) {
-        for child in children.iter() {
-            if bodies.contains(child) {
-                return child;
+    // Body projections may be wrapped by a scene grid, a body frame, and a
+    // render/physics holder. Walk the composed hierarchy rather than assuming
+    // the body is an immediate child; API focus targets are stable USD prims,
+    // while the physical CelestialBody component is projected deeper.
+    let mut pending = vec![target];
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for parent in pending.drain(..) {
+            if let Ok(children) = q_children.get(parent) {
+                for child in children.iter() {
+                    if bodies.contains(child) {
+                        return child;
+                    }
+                    next.push(child);
+                }
             }
         }
+        if next.is_empty() {
+            break;
+        }
+        pending = next;
     }
 
     target // Fallback
+}
+
+fn resolve_declared_body(
+    target: Entity,
+    declarations: &Query<&lunco_celestial::CelestialBodyDecl>,
+    bodies: &Query<(Entity, &CelestialBody)>,
+) -> Option<Entity> {
+    let decl = declarations.get(target).ok()?;
+    bodies
+        .iter()
+        .find(|(_, body)| body.ephemeris_id == decl.naif)
+        .map(|(entity, _)| entity)
 }
 
 /// Global visual settings for floating rover name tags.

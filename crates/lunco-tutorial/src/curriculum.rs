@@ -12,17 +12,9 @@
 //! with it; a twin contributes by composing its own layer and withdraws by
 //! being removed. Re-parsing layers by hand would mean reimplementing that.
 //!
-//! PAYLOADS ARE NEVER LOADED HERE. The stage opens with
-//! [`InitialLoadSet::LoadNone`], so a lesson's world is READ as an arc — a
-//! declaration — and never composed into the curriculum stage. Loading it would
-//! pull whole terrain scenes into a catalogue read, and would make the
-//! curriculum stage become the world, which is the one thing it must not do.
-//! Mounting stays the existing `LoadScene` path.
-//!
-//! This module deliberately depends on `openusd` DIRECTLY and never on
-//! `lunco-usd-bevy`: that crate pulls `lunco-render`, and cargo unifies features
-//! across the graph, so depending on it would relink the GPU stack into the
-//! headless server. See docs/architecture/render-decoupling.md.
+//! PAYLOADS ARE NEVER LOADED HERE. The USD composition service supplies a stage
+//! whose payload arcs are declarations; this module only reads those arcs, so a
+//! curriculum never becomes the simulation world. Mounting stays `LoadScene`.
 
 use bevy::prelude::*;
 use openusd::{sdf, usd};
@@ -101,28 +93,16 @@ fn payload_asset(prim: &usd::Prim) -> Option<String> {
     prim.payload_asset_paths().ok()?.into_iter().next()
 }
 
-/// Compose `layer` and read every track and lesson it contributes.
+/// Project tutorial metadata from an already-composed USD stage.
 ///
-/// Errors are logged and skipped rather than propagated: a malformed curriculum
-/// must cost its own lessons, never every other track in the composition.
-pub fn read(layer: &str) -> Curriculum {
-    let stage = match usd::Stage::builder()
-        .initial_load_set(usd::InitialLoadSet::LoadNone)
-        .open(layer)
-    {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[tutorial] curriculum layer '{layer}' did not open: {e}");
-            return Curriculum {
-                failures: vec![format!("curriculum layer '{layer}' did not open: {e}")],
-                ..Default::default()
-            };
-        }
-    };
+/// Assembly belongs to `lunco-usd`; this function deliberately has no path,
+/// resolver, asset reader, or layer-opening responsibility.
+pub fn project(stage: &usd::Stage) -> Curriculum {
     let mut out = Curriculum::default();
     for err in stage.composition_errors() {
-        warn!("[tutorial] curriculum '{layer}': {err:?}");
-        out.failures.push(format!("curriculum '{layer}': {err:?}"));
+        warn!("[tutorial] composed curriculum stage: {err:?}");
+        out.failures
+            .push(format!("composed curriculum stage: {err:?}"));
     }
     let root = stage.prim(sdf::Path::abs_root());
     let Ok(top) = root.children() else {

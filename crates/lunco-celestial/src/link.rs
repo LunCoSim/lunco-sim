@@ -418,6 +418,12 @@ pub(crate) fn update_links(
     for i in 0..nodes.len() {
         for j in (i + 1)..nodes.len() {
             let (a, b) = (&nodes[i], &nodes[j]);
+            // A nested endpoint is a duplicate declaration inside one physical
+            // assembly (for example an antenna root plus its feed aperture),
+            // never a second radio. Do not let it become a self-link.
+            if nested_link_nodes(a.entity, b.entity, &q_parents) {
+                continue;
+            }
             let d = b.pose.pos - a.pose.pos;
             let range_m = d.length();
             let dir = if range_m > 1e-6 {
@@ -457,7 +463,11 @@ pub(crate) fn update_links(
             // the hook reads the first cause, not every cause.
             let occluder_blocked = cheap_ok
                 && !terrain_blocked
-                && occluder_blocks(a.pose.local, b.pose.local, &occluders);
+                // `world_pose` above produces grid-absolute coordinates, which
+                // match `SolarFramePose::pos`. `local` is intentionally only
+                // for the site-local DEM oracle; mixing it here made authored
+                // occluders miss every link away from the floating origin.
+                && occluder_blocks(a.pose.pos, b.pose.pos, &occluders);
 
             let ctx = HookValue::map([
                 // Identity first (the ids `find()` speaks), labels alongside for a
@@ -578,6 +588,23 @@ pub(crate) fn update_links(
             commands.entity(node.entity).try_insert(LinkState { peers });
         }
     }
+}
+
+/// True when one endpoint is authored inside the other endpoint's subtree.
+/// Such a pair describes one physical assembly twice, not a usable path.
+fn nested_link_nodes(a: Entity, b: Entity, parents: &Query<&ChildOf>) -> bool {
+    fn contains(ancestor: Entity, descendant: Entity, parents: &Query<&ChildOf>) -> bool {
+        let mut current = descendant;
+        while let Ok(child_of) = parents.get(current) {
+            current = child_of.parent();
+            if current == ancestor {
+                return true;
+            }
+        }
+        false
+    }
+
+    contains(a, b, parents) || contains(b, a, parents)
 }
 
 /// A node's human LABEL — prim `Name`, else authored `class`, else the entity

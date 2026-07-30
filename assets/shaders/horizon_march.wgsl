@@ -74,7 +74,12 @@ fn sun_visibility(
         // almost everywhere — the physical width is centimetres) even FLAT ground came
         // back ~32% lit. The floor softens the shadow EDGE; it must not dim open ground.
         let rise = (h - (h0 + slope * t)) / width;
-        vis = min(vis, 1.0 - rise);
+        // Smooth the visibility ramp at the heightfield sampling scale. A hard
+        // linear min makes every one-texel crater rim a pixel-wide tooth in a
+        // grazing shadow; the physical penumbra is continuous, so use the same
+        // monotonic cubic edge on both CPU and GPU mirrors.
+        let edge = smoothstep(0.0, 1.0, clamp(rise, 0.0, 1.0));
+        vis = min(vis, 1.0 - edge);
         if (vis <= 0.0) { return 0.0; }
         t = t * 1.18 + texel * 0.5;
         if (t > max_t) { break; }

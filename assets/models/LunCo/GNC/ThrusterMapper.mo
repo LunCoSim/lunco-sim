@@ -4,6 +4,7 @@ within LunCo.GNC;
 // Translates 3D force (F_x, F_y, F_z) and torque (tau_x, tau_y, tau_z) control demands
 // into individual RCS thruster nozzle pulse commands (u_1..u_4) based on 3D mount vectors.
 model ThrusterMapper
+  extends LunCo.Icons.Guidance;
   parameter Real f_nom_n = 22.0 "Nominal RCS thruster force, N";
   parameter Real arm_r_m = 0.8 "Thruster mount moment arm distance from CoM, m";
 

@@ -64,13 +64,7 @@ pub fn set_signal_plotted(
     let cfg = registry.get_mut(viz_id).unwrap();
     if plotted {
         if !cfg.inputs.iter().any(|b| b.source == signal) {
-            cfg.inputs.push(SignalBinding {
-                source: signal,
-                role: "y".into(),
-                label: None,
-                color: None,
-                visible: true,
-            });
+            cfg.inputs.push(SignalBinding::live(signal, "y"));
         }
     } else {
         cfg.inputs.retain(|b| b.source != signal);
@@ -117,13 +111,7 @@ pub fn auto_bind_observables(
         }
         let sig = SignalRef::new(entity, name.clone());
         if !cfg.inputs.iter().any(|b| b.source == sig) {
-            cfg.inputs.push(SignalBinding {
-                source: sig,
-                role: "y".into(),
-                label: None,
-                color: None,
-                visible: true,
-            });
+            cfg.inputs.push(SignalBinding::live(sig, "y"));
         }
     }
 }

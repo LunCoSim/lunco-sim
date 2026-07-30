@@ -39,11 +39,11 @@ commands below — never a parallel implementation:
 
 ```sh
 # Windowed: record the live window once the scene's visuals are ready
-sandbox --record-offline take.mp4 --record-fps 30
+luncosim --record-offline take.mp4 --record-fps 30
 
 # Windowless (offscreen): full GPU render stack, NO window/egui; renders into an
 # offscreen target and EXITS BY ITSELF when the take drains
-sandbox --offscreen --record-offline take.mp4 --record-fps 30 --record-frames 300
+luncosim --offscreen --record-offline take.mp4 --record-fps 30 --record-frames 300
 ```
 
 | Flag | Meaning |
@@ -355,7 +355,7 @@ A capture is reproducible only if every source of wall-clock dependence is pinne
   free-running beat is not frame-reproducible.
 - **Shot length** — driven off `shot_frame()`, never a tick counter (§5).
 - **Terrain** — LOD streaming runs in **lockstep** while a recording is active
-  (`TerrainStreamLockstep`, set by `lunco-sandbox` off `OfflineRecordingState::active`).
+  (`TerrainStreamLockstep`, set by `lunco-luncosim` off `OfflineRecordingState::active`).
   Normally a tile bake lands whenever its async task finishes, so the frame a given
   tile pops in is wall-clock dependent; in lockstep the frame blocks on the bake
   instead. Selection stays live — the shot still refines as the camera moves — only

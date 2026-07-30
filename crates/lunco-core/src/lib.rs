@@ -74,9 +74,10 @@ pub use invariants::BigSpaceInvariantsPlugin;
 pub use log::*;
 pub use markers::{
     ActuatorDrivenJoint, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
-    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, ScenarioProgramPrim,
-    ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, CELESTIAL_COLLISION_LAYER,
-    NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
+    GridAnchor, GroundSettleContact, GroundSettleFootprint, HorizonShadowTerrain,
+    NeedsGroundSettle, NextScene, ScenarioProgramPrim, ScriptParams, SoiMigrant,
+    SunAngularDiameter, TriggerZone, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS,
+    TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
@@ -789,12 +790,12 @@ pub fn not_rolling_back(rb: Option<Res<RollbackInProgress>>) -> bool {
 }
 
 /// Ordering anchor for the client-netcode `Update` pipeline, which now **spans two
-/// crates**: the spawn half (`apply_replicated_spawns`, in `lunco-sandbox-edit`,
+/// crates**: the spawn half (`apply_replicated_spawns`, in `lunco-luncosim-edit`,
 /// because it instantiates from the spawn catalog) must run before the prediction
 /// half (interp / kinematic-pin / reconcile / rollback, in `lunco-networking`).
 /// The two used to sit in one `.chain()` in a single file; a plain `.chain()` can't
 /// express the ordering across the crate boundary, and neither crate may depend on
-/// the other (`lunco-networking` must never gain a `lunco-sandbox-edit` edge — see
+/// the other (`lunco-networking` must never gain a `lunco-luncosim-edit` edge — see
 /// its Cargo.toml, review A6). `lunco-core` is the one crate both already depend on,
 /// so the shared set lives here.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -817,6 +818,8 @@ impl Plugin for LunCoCorePlugin {
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
             .register_type::<NeedsGroundSettle>()
+            .register_type::<GroundSettleFootprint>()
+            .register_type::<GroundSettleContact>()
             .register_type::<SoiMigrant>()
             .register_type::<ActuatorDrivenJoint>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`

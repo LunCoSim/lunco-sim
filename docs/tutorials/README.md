@@ -19,7 +19,7 @@ scene-vs-script split**. The coach card / spotlight / objectives come from the
 shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
 
 - **Where they live**: `assets/tutorials/<app>/<name>.rhai` (`lunica/…`,
-  `sandbox/…`). Native reads them fresh from disk each launch (edit → replay, no
+  `luncosim/…`). Native reads them fresh from disk each launch (edit → replay, no
   rebuild); wasm serves an embedded copy. Loader:
   `lunco_assets::tutorials::tutorial_source`.
 - **Launch**: every entry point (🎓 menu, F1 via `EditorIntent::ShowTutorial`, the
@@ -28,7 +28,7 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   (`assets/scripting/policy/boot.rhai`, id `boot.entry`) decides to show the
   onboarding tutorial instead of loading the default — one load, no race. Rewrite
   it (or hot-replace by id) to change startup behavior with no rebuild.
-- **Shipped lessons**: *sandbox* — Sandbox Intro (teaching WASD, camera cycling, Shift+click selection, ESC/Backspace clear, and Backspace release) → First Drive → Script a Rover → Rhai Editor & REPL → Lander & Rover Mission; *lunica* — a 7-lesson workbench course + the Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json).
+- **Shipped lessons**: *luncosim* — Sandbox Intro (teaching WASD, camera cycling, Shift+click selection, ESC/Backspace clear, and Backspace release) → First Drive → Script a Rover → Rhai Editor & REPL → Lander & Rover Mission; *lunica* — a 7-lesson workbench course + the Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json).
 - **The catalog is a USD layer**: a TRACK is a prim applying `LunCoTutorialTrackAPI` in `assets/tutorials/<track>/curriculum.usda`; each child applying `LunCoTutorialAPI` is a LESSON, whose script is `info:sourceAsset` and whose world is a `payload` arc. An APP offers tracks by sublayering them from `assets/tutorials/<app>.usda` — that layer stack is the whole answer to "which tracks, in what order".
 - **A lesson's world is DECLARED, not opened**: the launcher mounts the `payload` through `LoadScene` before running the script. No lesson calls `load_scene`, and a lesson with no payload deliberately leaves the viewport alone — absent is a statement, not a missing value.
 - **Dynamic Twin-scoped lessons**: a Twin contributes on exactly the same terms — one `sim/tutorials/curriculum.usda` (the *Space School Seminar* track, SS1–SS4), composed when the Twin opens and dropped when it closes. No twin-specific manifest, no second parse.
@@ -46,9 +46,9 @@ Each walkthrough pairs with an in-app lesson and the reference **[skills](../../
 
 | Walkthrough | In-app lesson | Reference skills |
 |---|---|---|
-| 01 — Lander → Rover mission | *Lander & Rover Mission* (sandbox) | [build-usd-scene](../../skills/build-usd-scene/SKILL.md) · [author-scenario](../../skills/author-scenario/SKILL.md) · [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) |
-| 02 — Author your own controller | *Script a Rover* (sandbox) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
-| 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (sandbox) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
+| 01 — Lander → Rover mission | *Lander & Rover Mission* (luncosim) | [build-usd-scene](../../skills/build-usd-scene/SKILL.md) · [author-scenario](../../skills/author-scenario/SKILL.md) · [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) |
+| 02 — Author your own controller | *Script a Rover* (luncosim) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
+| 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (luncosim) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
 
 Looking for a reference rather than a walkthrough? The full script verb list is
 in [`../scripting-guide.md`](../scripting-guide.md), the design behind scenarios is

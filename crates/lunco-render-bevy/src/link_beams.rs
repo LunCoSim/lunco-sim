@@ -84,6 +84,10 @@ type Look = (Mesh3d, MeshMaterial3d<StandardMaterial>);
 /// The authored templates + tuning gathered for one node.
 #[derive(Default)]
 struct NodeBeams {
+    /// Authored phase-centre transform that owns the template geometry. This
+    /// can differ from the entity carrying the link state (for example a
+    /// radio wrapper around an antenna).
+    origin: Option<Entity>,
     up: Option<Look>,
     down: Option<Look>,
     width: f32,
@@ -226,11 +230,15 @@ fn beam_transform(dir_local: Vec3, len: f32, half_width: f32) -> Transform {
 fn node_of(
     start: Entity,
     q_parents: &Query<&ChildOf>,
-    q_state: &Query<&LinkState>,
+    q_nodes: &Query<&lunco_celestial::link::LinkNode>,
 ) -> Option<Entity> {
     let mut e = start;
     loop {
-        if q_state.get(e).is_ok() {
+        // The authored LinkNode is the endpoint geometry's ownership fact.
+        // LinkState is published later by the cadence-gated solver and may be
+        // attached to a wrapper; using it here made a cloned beam originate at
+        // the wrapper/chassis instead of at the antenna phase centre.
+        if q_nodes.get(e).is_ok() {
             return Some(e);
         }
         e = q_parents.get(e).ok()?.parent();
@@ -249,8 +257,10 @@ fn reconcile_link_beams(
         &MeshMaterial3d<StandardMaterial>,
         Option<&ScriptParams>,
         &Visibility,
+        &ChildOf,
     )>,
     q_state: Query<&LinkState>,
+    q_nodes: Query<&lunco_celestial::link::LinkNode>,
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_beams: Query<(Entity, &ChildOf, &LinkBeamInstance)>,
     q_parents: Query<&ChildOf>,
@@ -264,7 +274,7 @@ fn reconcile_link_beams(
 
     // Pass 1: gather the Up/Down templates + tuning per node.
     let mut nodes: HashMap<Entity, NodeBeams> = HashMap::new();
-    for (tmpl, id, mesh, mat, params, vis) in &q_templates {
+    for (tmpl, id, mesh, mat, params, vis, parent) in &q_templates {
         if id.0 != DRIVER_ID {
             continue;
         }
@@ -289,11 +299,16 @@ fn reconcile_link_beams(
         if *vis != Visibility::Hidden {
             commands.entity(tmpl).try_insert(Visibility::Hidden);
         }
-        let Some(node) = node_of(tmpl, &q_parents, &q_state) else {
+        let Some(node) = node_of(tmpl, &q_parents, &q_nodes) else {
             continue;
         };
+        let origin = q_parents
+            .get(parent.parent())
+            .map(ChildOf::parent)
+            .unwrap_or(parent.parent());
         let get = |k: &str, d: f64| params.and_then(|p| p.0.get(k).copied()).unwrap_or(d);
         let nb = nodes.entry(node).or_default();
+        nb.origin = Some(origin);
         if get("state", 0.0) >= 0.5 {
             nb.down = Some((mesh.clone(), mat.clone()));
         } else {
@@ -314,6 +329,7 @@ fn reconcile_link_beams(
             continue;
         };
         let Some(up) = nb.up.as_ref() else { continue };
+        let source = nb.origin.unwrap_or(node);
         let show_down = nb.show_down && nb.down.is_some();
 
         // Which (peer, is_up) pairs to draw. `off` draws nothing; `active` keeps only the
@@ -342,7 +358,7 @@ fn reconcile_link_beams(
         }
         let wanted_ids: HashSet<u64> = wanted.iter().map(|(g, _)| *g).collect();
 
-        let Some((npos, nrot)) = world_pose(node, &q_parents, &q_grids, &q_spatial) else {
+        let Some((npos, nrot)) = world_pose(source, &q_parents, &q_grids, &q_spatial) else {
             continue;
         };
         let nrot_inv = nrot.0.inverse();
@@ -351,7 +367,7 @@ fn reconcile_link_beams(
         // Beams already spawned for this node, by peer.
         let existing: HashMap<u64, (Entity, bool)> = q_beams
             .iter()
-            .filter(|(_, co, _)| co.parent() == node)
+            .filter(|(_, co, _)| co.parent() == source)
             .map(|(e, _, inst)| (inst.peer, (e, inst.up)))
             .collect();
 
@@ -445,7 +461,7 @@ fn reconcile_link_beams(
                         // never appears in it. `NoSelectionBounds` alone does not say this:
                         // that marker is about picking, this one is about ownership.
                         lunco_core::SystemManaged,
-                        ChildOf(node),
+                        ChildOf(source),
                     ));
                 }
             }

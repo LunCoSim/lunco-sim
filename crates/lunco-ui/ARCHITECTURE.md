@@ -20,7 +20,7 @@
                        │ Panel trait
          ┌─────────────┼─────────────┐
   ┌──────▼──────┐ ┌───▼──────┐ ┌───▼──────────┐
-  │lunco-sandbox│ │sandbox-  │ │lunco-        │
+  │lunco-luncosim│ │sandbox-  │ │lunco-        │
   │  panels     │ │edit      │ │modelica      │
   │             │ │panels    │ │panels        │
   │ MissionCtl  │ │ SpawnPal │ │ Workbench    │
@@ -138,7 +138,7 @@ UI Panel (read-only query) ──Typed Command──▶ Observer (domain crate)
 ### 1. Organize files
 
 ```
-crates/lunco-sandbox-edit/
+crates/lunco-luncosim-edit/
 ├── src/
 │   ├── lib.rs              # SandboxEditPlugin (logic only)
 │   ├── spawn.rs
@@ -249,7 +249,7 @@ register_commands!(on_delete_entity);
 | `TELEPORT_SURFACE` | lunco-avatar | Teleport avatar to surface |
 | `LEAVE_SURFACE` | lunco-avatar | Return to orbit |
 | `DRIVE_ROVER` | lunco-mobility | Set wheel intents |
-| `SPAWN_ENTITY` | lunco-sandbox-edit | Spawn catalog item |
+| `SPAWN_ENTITY` | lunco-luncosim-edit | Spawn catalog item |
 
 ## Headless
 
@@ -312,12 +312,12 @@ crates/lunco-ui/
 Domain crate UI layout (panels implement `lunco-workbench`'s `Panel` trait):
 
 ```
-crates/lunco-sandbox/src/ui/
+crates/lunco-luncosim/src/ui/
 ├── mod.rs                   # sandbox UI plugin
 ├── code_panel.rs            # Panel impl
 └── models_palette.rs        # Panel impl
 
-crates/lunco-sandbox-edit/src/ui/
+crates/lunco-luncosim-edit/src/ui/
 ├── mod.rs                   # SandboxEditUiPlugin
 ├── spawn_palette.rs         # Panel impl
 ├── inspector.rs             # Panel impl

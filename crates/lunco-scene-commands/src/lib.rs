@@ -23,7 +23,7 @@
 //! ## Render-free, UI-free
 //!
 //! This crate names no material type and no egui/winit/picking/gizmo crate, so the
-//! headless server links it **without** linking the editor (`lunco-sandbox-edit`,
+//! headless server links it **without** linking the editor (`lunco-luncosim-edit`,
 //! which now depends on *this* crate rather than containing it). The one GUI-shaped
 //! concession is the optional `ui` feature, which only re-enables
 //! `doc_resolve`'s fallback to the viewport's active document — see that module.
@@ -71,7 +71,7 @@ use bevy::prelude::*;
 ///
 /// Lives here, not in the editor: `commands` both mutates it (a deleted entity leaves
 /// the selection) and `init_resource`s it, so it is part of the command layer's own
-/// state. `lunco-sandbox-edit` re-exports it for its panels.
+/// state. `lunco-luncosim-edit` re-exports it for its panels.
 #[derive(Resource, Default, Clone)]
 pub struct SelectedEntities {
     /// The selected entities. The last one added is the "primary" selection.
@@ -93,7 +93,7 @@ impl SelectedEntities {
 /// selection is command-layer state, and any host that links the command layer —
 /// the sandbox, the Modelica workbench, a headless server driven by
 /// `SelectEntity` over HTTP — should get the same scoping without re-implementing
-/// this. It was in `lunco-sandbox-edit` first, which meant every other host's
+/// this. It was in `lunco-luncosim-edit` first, which meant every other host's
 /// telemetry panel silently had its "Selected only" toggle disabled forever.
 ///
 /// Change-driven: writes only when the selection actually moved AND the mirror

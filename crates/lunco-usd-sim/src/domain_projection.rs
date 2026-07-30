@@ -4,13 +4,13 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
 use lunco_modelica::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, NoticeLevel,
-    parse_model_interface,
+    parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice,
+    NoticeLevel,
 };
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -57,6 +57,10 @@ pub struct GeneratedModelicaSource {
     /// `(prim path, source asset, instantiated class)` per member — the
     /// attribution a `generated://` compile error needs.
     pub members: Vec<(String, String, String)>,
+    /// Projection-time ownership groups resolved through authored USD wires.
+    pub member_groups: Vec<(String, String)>,
+    /// Public wrapper outputs mapped to their authored producer groups.
+    pub output_groups: Vec<(String, String)>,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -490,6 +494,107 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
     }
 }
 
+/// Place generated components by network topology, not by source-file order.
+///
+/// Causal edges flow from an output to a consumer; acausal connector edges are
+/// bidirectional. We start at sources (or graph roots), breadth-first layer the
+/// graph, then sort each layer by stable composed path. The emitted Modelica
+/// `Placement` annotations let every regular Modelica diagram consumer render
+/// the same legible energy/thermal flow without a generated-network-only UI.
+fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
+    let paths: BTreeSet<_> = network.components.iter().map(|c| c.path.clone()).collect();
+    let mut neighbours: BTreeMap<String, BTreeSet<String>> = paths
+        .iter()
+        .map(|path| (path.clone(), BTreeSet::new()))
+        .collect();
+    let mut incoming: BTreeMap<String, usize> =
+        paths.iter().map(|path| (path.clone(), 0)).collect();
+    for component in &network.components {
+        for target in component.connectors.values().flatten() {
+            if let Some((target, _)) = target.split_once(".connectors:") {
+                if paths.contains(target) {
+                    neighbours
+                        .get_mut(&component.path)
+                        .expect("component path indexed")
+                        .insert(target.to_string());
+                    neighbours
+                        .get_mut(target)
+                        .expect("component path indexed")
+                        .insert(component.path.clone());
+                }
+            }
+        }
+        for target in component.inputs.values() {
+            if let Some((source, _)) = target.split_once(".outputs:") {
+                if paths.contains(source) {
+                    neighbours
+                        .get_mut(source)
+                        .expect("component path indexed")
+                        .insert(component.path.clone());
+                    *incoming
+                        .get_mut(&component.path)
+                        .expect("component path indexed") += 1;
+                }
+            }
+        }
+    }
+    let mut roots: Vec<_> = network
+        .components
+        .iter()
+        .filter(|component| {
+            incoming[&component.path] == 0
+                && (component.model_class.contains("Battery")
+                    || component.model_class.contains("Solar")
+                    || component.model_class.contains("Source"))
+        })
+        .map(|component| component.path.clone())
+        .collect();
+    if roots.is_empty() {
+        roots = network
+            .components
+            .iter()
+            .filter(|component| incoming[&component.path] == 0)
+            .map(|component| component.path.clone())
+            .collect();
+    }
+    if roots.is_empty() {
+        roots.extend(paths.iter().take(1).cloned());
+    }
+    roots.sort();
+    let mut rank = BTreeMap::new();
+    let mut queue: VecDeque<_> = roots.into_iter().map(|path| (path, 0usize)).collect();
+    while let Some((path, layer)) = queue.pop_front() {
+        if rank.contains_key(&path) {
+            continue;
+        }
+        rank.insert(path.clone(), layer);
+        for neighbour in &neighbours[&path] {
+            if !rank.contains_key(neighbour) {
+                queue.push_back((neighbour.clone(), layer + 1));
+            }
+        }
+    }
+    let fallback = rank.values().copied().max().unwrap_or(0) + 1;
+    for path in paths {
+        rank.entry(path).or_insert(fallback);
+    }
+    let mut layers: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for (path, layer) in rank {
+        layers.entry(layer).or_default().push(path);
+    }
+    let mut placements = BTreeMap::new();
+    for (layer, paths) in layers {
+        let count = paths.len() as i32;
+        for (row, path) in paths.into_iter().enumerate() {
+            placements.insert(
+                path,
+                (-100 + layer as i32 * 55, (count - 1 - row as i32 * 2) * 22),
+            );
+        }
+    }
+    placements
+}
+
 /// Emit one deterministic Modelica wrapper for a composed network scope.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
     let model_name = modelica_identifier(model_name);
@@ -509,6 +614,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         .iter()
         .map(|(boundary, source)| (source.as_str(), boundary.as_str()))
         .collect();
+    let placements = network_layout(network);
 
     for input in &network.inputs {
         source.push_str(&format!("  input Real {};\n", modelica_identifier(input)));
@@ -535,7 +641,10 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             }
             source.push(')');
         }
-        source.push_str(";\n");
+        let (x, y) = placements[&component.path];
+        source.push_str(&format!(
+            " annotation(Placement(transformation(origin = {{{x}, {y}}}, extent = {{{{-10, -10}}, {{10, 10}}}})));\n"
+        ));
     }
 
     source.push_str("equation\n");
@@ -641,8 +750,12 @@ pub fn project_domain_islands(
     }
     projection_dirty.0 = false;
     let Some(channels) = channels else { return };
-
     for (entity, prim, previous, installed_model) in &prims {
+        // Scope every authored path to the same USD instance as the generated
+        // network. Runtime-spawned copies intentionally share stage-relative
+        // paths; the instance root identity is the structural disambiguator.
+        let instance_id =
+            lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
         // Identity still pending — wait for it rather than compile under a name
         // that is neither stable nor unique. The upgrade lands a
         // `GlobalEntityId`, which re-triggers this system through
@@ -653,8 +766,6 @@ pub fn project_domain_islands(
         // Runtime-spawned copies may have byte-identical stage-relative paths.
         // Use the same stable instance-root identity as the USD wiring resolver;
         // scene-owned prims need no suffix because their composed paths are unique.
-        let instance_id =
-            lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
         let id = prim.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -731,6 +842,8 @@ pub fn project_domain_islands(
                         source: String::new(),
                         component_paths: Vec::new(),
                         members: Vec::new(),
+                        member_groups: Vec::new(),
+                        output_groups: Vec::new(),
                     },
                 ));
                 continue;
@@ -815,6 +928,24 @@ pub fn project_domain_islands(
                 text: format!("[{}] Compile error: {message}", model.model_name),
             });
         }
+        let generated_source = GeneratedModelicaSource {
+            network_root: prim.path.clone(),
+            source: source_for_diagnostics,
+            component_paths: synthesized.component_paths,
+            members: synthesized.members,
+            member_groups: Vec::new(),
+            output_groups: wrapper_output_groups(&view, &prim.path),
+        };
+        let member_groups = generated_source
+            .members
+            .iter()
+            .map(|(path, _, _)| (path.clone(), telemetry_presentation_path(&view, path)))
+            .collect();
+        let generated_source = GeneratedModelicaSource {
+            member_groups,
+            ..generated_source
+        };
+        let output_metadata = generated_output_metadata(&generated_source, &classes, &view);
         // A changed wrapper may expose a different port interface. Rebuild the
         // derived co-sim projection instead of retaining values and port names
         // from the previous compiled topology.
@@ -822,6 +953,11 @@ pub fn project_domain_islands(
         commands.entity(entity).try_insert((
             model,
             UsdSourcedCosim,
+            // The generated wrapper owns execution and signal lifecycle; this
+            // metadata preserves the composed USD presentation topology.
+            lunco_cosim::CosimOutputMetadata {
+                outputs: output_metadata,
+            },
             // The same USD-declares / compiler-confirms contract the per-prim
             // program path has carried all along: the network's boundary is an
             // authored promise, and `validate_usd_modelica_port_contracts` is
@@ -833,14 +969,72 @@ pub fn project_domain_islands(
                 synthesized.outputs.iter().cloned(),
             ),
             DomainProjectionState { fingerprint },
-            GeneratedModelicaSource {
-                network_root: prim.path.clone(),
-                source: source_for_diagnostics,
-                component_paths: synthesized.component_paths,
-                members: synthesized.members,
-            },
+            generated_source,
         ));
     }
+}
+
+/// Give every successful generated network a normal, read-only Modelica
+/// document. This is intentionally a separate system: the compiler projection
+/// owns synthesis, while the document registry owns inspectable source and the
+/// scene-to-document link used by the standard Modelica UI and API.
+pub fn sync_generated_network_documents(
+    mut generated: Query<
+        (Entity, &GeneratedModelicaSource, &mut ModelicaModel),
+        Or<(
+            Added<GeneratedModelicaSource>,
+            Changed<GeneratedModelicaSource>,
+        )>,
+    >,
+    mut documents: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
+) {
+    for (entity, source, mut model) in &mut generated {
+        // Projection errors are represented by an empty diagnostic source and
+        // must not create a misleading editable-looking blank document.
+        if source.source.is_empty() {
+            continue;
+        }
+        let document =
+            if !model.document.is_unassigned() && documents.host(model.document).is_some() {
+                model.document
+            } else {
+                documents.allocate_with_origin(
+                    source.source.clone(),
+                    lunco_doc::DocumentOrigin::Bundled {
+                        filename: format!("generated/{}.mo", model.model_name),
+                    },
+                )
+            };
+        documents.checkpoint_source(document, source.source.clone());
+        documents.link(entity, document);
+        model.document = document;
+    }
+}
+
+/// Publish the current generated sources to the UI-facing derived registry.
+pub fn publish_generated_sources(
+    q_generated: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
+    mut generated: ResMut<lunco_modelica::state::GeneratedModelicaSources>,
+) {
+    generated.entries = q_generated
+        .iter()
+        .map(
+            |(source, model)| lunco_modelica::state::GeneratedModelicaSourceEntry {
+                document: model.map(|m| m.document).unwrap_or_default(),
+                uri: model
+                    .map(|m| format!("generated://{}.mo", m.model_name))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "generated://{}.mo",
+                            source.network_root.trim_matches('/').replace('/', "_")
+                        )
+                    }),
+                network_root: source.network_root.clone(),
+                source: source.source.clone(),
+                error: model.and_then(|m| m.last_error.clone()),
+            },
+        )
+        .collect();
 }
 
 /// `GeneratedModelicaSource` — read back the exact Modelica text a projected
@@ -885,6 +1079,8 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                             "prim": prim, "source_asset": asset, "class": class,
                         }))
                         .collect::<Vec<_>>(),
+                    "member_groups": generated.member_groups,
+                    "output_groups": generated.output_groups,
                     "source": generated.source,
                 })
             })
@@ -1387,6 +1583,111 @@ fn instance_identifier(root: &str, path: &str) -> String {
     modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
 }
 
+/// Map a variable emitted by a generated wrapper back to its authored USD
+/// component. Wrapper instance names are deterministic, so this is an
+/// identity transform, not a heuristic over model or variable spelling.
+pub(crate) fn canonical_generated_signal(
+    source: &GeneratedModelicaSource,
+    emitted: &str,
+) -> Option<String> {
+    // Wrapper boundary outputs already use authored USD names (`soc`,
+    // `motor_temp_left`, ...), so they need no member lookup.
+    let Some((instance, variable)) = emitted.split_once('.') else {
+        return Some(emitted.to_string());
+    };
+    source.members.iter().find_map(|(path, _, _)| {
+        (instance_identifier(&source.network_root, path) == instance).then(|| {
+            let relative = path
+                .strip_prefix(&source.network_root)
+                .unwrap_or(path)
+                .trim_matches('/');
+            format!("{relative}.{variable}")
+        })
+    })
+}
+
+pub(crate) fn generated_signal_group(
+    source: &GeneratedModelicaSource,
+    emitted: &str,
+) -> Option<String> {
+    if let Some((instance, _)) = emitted.split_once('.') {
+        if let Some(group) = source.member_groups.iter().find_map(|(path, group)| {
+            (instance_identifier(&source.network_root, path) == instance).then(|| group.clone())
+        }) {
+            return Some(group);
+        }
+    }
+    source
+        .output_groups
+        .iter()
+        .find_map(|(name, group)| (name == emitted).then(|| group.clone()))
+}
+
+/// Build authored metadata for variables in generated member instances. This
+/// runs when the wrapper is projected, not in the fixed-step hot path.
+pub(crate) fn generated_output_metadata(
+    source: &GeneratedModelicaSource,
+    classes: &MemberClasses,
+    view: &impl UsdRead,
+) -> HashMap<String, lunco_cosim::CosimOutputDescriptor> {
+    let mut outputs = HashMap::new();
+    for (path, asset, _) in &source.members {
+        let Some(metadata) = classes.variable_metadata(asset) else {
+            continue;
+        };
+        let instance = instance_identifier(&source.network_root, path);
+        let relative = path
+            .strip_prefix(&source.network_root)
+            .unwrap_or(path)
+            .trim_matches('/');
+        let group_path = telemetry_presentation_path(view, path);
+        for (variable, value) in metadata {
+            outputs.insert(
+                format!("{instance}.{variable}"),
+                lunco_cosim::CosimOutputDescriptor {
+                    description: value.description.clone(),
+                    unit: value.unit.clone(),
+                    provenance: "modelica".to_string(),
+                    canonical_name: Some(format!("{relative}.{variable}")),
+                    group_path: Some(group_path.clone()),
+                },
+            );
+        }
+    }
+    outputs
+}
+
+/// The composed USD object that presents a generated component's telemetry.
+///
+/// A component owns its own variables by default.  A bridge whose variables
+/// describe another physical object authors `lunco:telemetry:owner` as a USD
+/// relationship.  This preserves the scene's explicit topology; following an
+/// arbitrary input edge would reparent a motor to its command source.
+fn telemetry_presentation_path(view: &impl UsdRead, member: &str) -> String {
+    SdfPath::new(member)
+        .ok()
+        .and_then(|prim| view.rel_target(&prim, "lunco:telemetry:owner"))
+        .unwrap_or_else(|| member.to_string())
+}
+
+fn wrapper_output_groups(view: &impl UsdRead, root: &str) -> Vec<(String, String)> {
+    let Ok(prim) = SdfPath::new(root) else {
+        return Vec::new();
+    };
+    view.attr_names(&prim)
+        .into_iter()
+        .filter_map(|attr| {
+            let name = attr.strip_prefix("outputs:")?;
+            let source = view.connection_source(&prim, &attr)?;
+            let owner = source
+                .rsplit_once('.')
+                .map(|(path, _)| path)
+                .unwrap_or(&source);
+            Some((name.to_string(), telemetry_presentation_path(view, owner)))
+        })
+        .collect()
+}
+
 /// What class a member's source asset actually declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberClass {
@@ -1425,6 +1726,8 @@ const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 #[derive(Resource, Default)]
 pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
+    metadata:
+        HashMap<String, HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
     path_only: bool,
 }
@@ -1445,6 +1748,13 @@ impl MemberClasses {
     pub fn declare(&mut self, asset: impl Into<String>, class: impl Into<String>) {
         self.known
             .insert(asset.into(), MemberClass::Declared(class.into()));
+    }
+
+    pub fn variable_metadata(
+        &self,
+        asset: &str,
+    ) -> Option<&HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>> {
+        self.metadata.get(asset)
     }
 
     /// The class to instantiate for `asset`, given the name derived from its
@@ -1537,7 +1847,8 @@ pub fn resolve_member_classes(
                 if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
                     continue;
                 }
-                let handle = asset_server.load(asset.clone());
+                let handle: Handle<lunco_modelica::source_asset::ModelicaSource> =
+                    asset_server.load(asset.clone());
                 classes
                     .pending
                     .insert(asset, (handle, now + CLASS_RESOLVE_MAX_SECS));
@@ -1548,7 +1859,11 @@ pub fn resolve_member_classes(
     if classes.pending.is_empty() {
         return;
     }
-    let settled: Vec<(String, Option<String>)> = classes
+    let settled: Vec<(
+        String,
+        Option<String>,
+        Option<HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
+    )> = classes
         .pending
         .iter()
         .filter_map(|(asset, (handle, expires))| {
@@ -1558,18 +1873,21 @@ pub fn resolve_member_classes(
                     Some(within) => format!("{within}.{declared}"),
                     None => declared,
                 });
-                return Some((asset.clone(), class));
+                return Some((asset.clone(), class, Some(interface.variable_metadata)));
             }
             if asset_server.load_state(handle).is_failed() || now >= *expires {
-                return Some((asset.clone(), None));
+                return Some((asset.clone(), None, None));
             }
             None
         })
         .collect();
-    for (asset, class) in settled {
+    for (asset, class, metadata) in settled {
         classes.pending.remove(&asset);
         match class {
             Some(class) => {
+                if let Some(metadata) = metadata {
+                    classes.metadata.insert(asset.clone(), metadata);
+                }
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
             None => {
@@ -1672,16 +1990,12 @@ mod tests {
             pending_sources: false,
         };
         let errors = validate_network(&network);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.message.contains("outside collection"))
-        );
-        assert!(
-            errors
-                .iter()
-                .all(|error| !error.message.contains("multiple disconnected"))
-        );
+        assert!(errors
+            .iter()
+            .any(|error| error.message.contains("outside collection")));
+        assert!(errors
+            .iter()
+            .all(|error| !error.message.contains("multiple disconnected")));
     }
 
     #[test]
@@ -1748,11 +2062,9 @@ mod tests {
             outputs: BTreeMap::new(),
             pending_sources: false,
         };
-        assert!(
-            validate_network(&network)
-                .iter()
-                .any(|error| error.message.contains("boundary identity is ambiguous"))
-        );
+        assert!(validate_network(&network)
+            .iter()
+            .any(|error| error.message.contains("boundary identity is ambiguous")));
     }
 
     #[test]
@@ -1768,11 +2080,9 @@ mod tests {
             outputs: BTreeMap::new(),
             pending_sources: false,
         };
-        assert!(
-            validate_network(&network)
-                .iter()
-                .any(|error| error.message.contains("not a valid Modelica identifier"))
-        );
+        assert!(validate_network(&network)
+            .iter()
+            .any(|error| error.message.contains("not a valid Modelica identifier")));
     }
 
     #[test]
@@ -1793,6 +2103,8 @@ mod tests {
                     source: "model Electrical end Electrical;".into(),
                     component_paths: vec!["/Battery".into()],
                     members: Vec::new(),
+                    member_groups: Vec::new(),
+                    output_groups: Vec::new(),
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
@@ -1808,6 +2120,26 @@ mod tests {
                 .get::<lunco_cosim::SimComponent>(entity)
                 .is_none(),
             "a changed or rejected projection must not retain solved values from its previous topology"
+        );
+    }
+
+    #[test]
+    fn generated_variable_maps_back_to_authored_component_path() {
+        let source = GeneratedModelicaSource {
+            network_root: "/Rover/Electrical".into(),
+            source: String::new(),
+            component_paths: vec!["/Rover/Electrical/Battery".into()],
+            members: vec![(
+                "/Rover/Electrical/Battery".into(),
+                "battery.usda".into(),
+                "LunCo.Electrical.Battery".into(),
+            )],
+            member_groups: Vec::new(),
+            output_groups: Vec::new(),
+        };
+        assert_eq!(
+            canonical_generated_signal(&source, "Battery.soc_out"),
+            Some("Battery.soc_out".into())
         );
     }
 }

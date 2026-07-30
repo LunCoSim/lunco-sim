@@ -3,6 +3,7 @@ within LunCo.Propulsion;
 // Reaction Control System (RCS / RKS) Attitude Control Thruster.
 // Converts pulsed attitude control command u_rcs into thrust force F_rcs and propellant mass flow rate.
 model RCSThruster
+  extends LunCo.Icons.Propulsion;
   parameter Real f_nom_n = 22.0 "Nominal RCS thruster output force, N";
   parameter Real isp_sec = 220.0 "Specific impulse, s";
   parameter Real g0 = 9.80665 "Standard gravity acceleration, m/s²";

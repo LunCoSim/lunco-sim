@@ -310,7 +310,7 @@ Read by `lunco-usd-avian::filtered_pairs`, which resolves each end to the entity
 that actually owns the collider — a collider under a body folds into that body's
 compound shape, so naming either resolves to the body — and hands the pair to
 avian's one `CollisionHooks` slot (`UsdCollisionFilter`, installed by
-`PhysicsPlugins::with_collision_hooks` in `lunco-sandbox`). Filtering is
+`PhysicsPlugins::with_collision_hooks` in `lunco-luncosim`). Filtering is
 symmetric: one opinion is the whole pair.
 
 Two properties worth knowing:
@@ -474,7 +474,7 @@ author, and why a relative `../` escape fails (silently, for `LunCoProgramAPI` s
 > composed asset.
 
 ### Sandbox Editing Tools (UX Bridge)
-The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, inspector).
+The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, inspector).
 - **Spawning**: `SpawnEntity` command is wired to `UsdOp::AddReference` against the active stage.
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete

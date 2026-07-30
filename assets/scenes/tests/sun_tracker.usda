@@ -9,9 +9,7 @@
 # (Phase 5). No actuator hack — the chain is entirely the unified wiring
 # fabric:
 #
-#   solar bridge  ──(out sun_mount_x/y/z)──┐
-#                                      │  self-wire  sun_mount_* -> sun_mount_*
-#   Controller (SunTracker.mo) ◄───────┘
+#   Environment probe ──(out sun_mount_x/y/z)──► Controller (SunTracker.mo)
 #        │  output `yaw` (first-order servo onto sun_az)
 #        │  cross-prim wire  yaw -> angle
 #        ▼
@@ -98,10 +96,10 @@ def Xform "SunTrackerTest" (
         double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        # Mast — the FIXED base body. A disabled rigid body is a USD static
-        # anchor: it cannot acquire angular velocity from the revolute joint.
-        # Its own cylinder is the
-        # collider; the Pad is a visual-only child.
+        # Mast — the fixed base body. USD makes a disabled rigid body a static
+        # joint endpoint: it participates in the constraint but cannot receive
+        # the motor's pose. Its own cylinder is the collider; the Pad is a
+        # visual-only child.
         def Cylinder "Mast" (
             prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
         )
@@ -158,8 +156,9 @@ def Xform "SunTrackerTest" (
         }
 
         # Yaw hinge — vertical axis. body0 = fixed Mast, body1 = YawHead.
-        # Anchors coincide at world (0, 5.3, 0): the Mast-local point (0,2.6,0)
-        # (2.6 above the mast centre at y=2.7 → y=5.3) and the YawHead origin.
+        # Anchors coincide at world (0, 5.3, 0): the Mast-local point
+        # (0,2.6,0) (2.6 above the mast centre at y=2.7 → y=5.3) and the
+        # YawHead origin.
         # Auto-exposes the `angle` port (lunco-cosim `JointSim`); the YawWire
         # drives it.
         def PhysicsRevoluteJoint "Hinge"
@@ -177,16 +176,22 @@ def Xform "SunTrackerTest" (
             float inputs:angle.connect = </SunTrackerTest/SolarTower/Controller.outputs:yaw>
         }
 
-        # Controller — the SunTracker.mo co-sim model. Self-loop connections feed
-        # the solar bridge's explicit mount-frame direction into the model.
+        def Xform "Environment" (
+            prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+        )
+        {
+        }
+
+        # Controller — the SunTracker.mo co-sim model consumes the probe's
+        # explicit mount-frame direction.
         def Xform "Controller" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
-            float inputs:sun_mount_x.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_x>
-            float inputs:sun_mount_y.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_y>
-            float inputs:sun_mount_z.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_z>
+            float inputs:sun_mount_x.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_z>
         }
     }
 

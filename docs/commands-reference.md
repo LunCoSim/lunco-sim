@@ -23,7 +23,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Scene editing & authoring**
 
-- [`lunco-sandbox-edit`](#lunco-sandbox-edit) (8 commands)
+- [`lunco-luncosim-edit`](#lunco-luncosim-edit) (8 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (16 commands)
 
 **USD / scenes**
@@ -89,7 +89,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Other (source location unknown)**
 
 - [`?`](#?) (1 command)
-- [`lunco-sandbox`](#lunco-sandbox) (2 commands)
+- [`lunco-luncosim`](#lunco-luncosim) (2 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-workspace`](#lunco-workspace) (4 commands)
 
@@ -97,7 +97,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ## Scene editing & authoring
 
-### `lunco-sandbox-edit` <a id="lunco-sandbox-edit"></a>
+### `lunco-luncosim-edit` <a id="lunco-luncosim-edit"></a>
 
 #### `AddCameraHere`
 
@@ -107,7 +107,7 @@ actually call, with the fields the deserializer actually accepts. See the
  captured shot is a durable edit to the twin, unlike the gizmo/waypoint
  interactions that write the ephemeral `runtime` overlay and vanish.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/ui/cinematic.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/cinematic.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -122,7 +122,7 @@ actually call, with the fields the deserializer actually accepts. See the
  case bolted onto Move) and is reachable from rhai/the API like anything else —
  rather than each mode sniffing a raw key for itself.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/ui/checkpoint_click.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/checkpoint_click.rs`
 - *fields:* none — call with `CancelWaypointEdit` (no params)
 
 #### `SelectEntity`
@@ -137,7 +137,7 @@ actually call, with the fields the deserializer actually accepts. See the
  command lives in the `ui`-gated selection module — a headless server exposes
  no selection.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/selection.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/selection.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -149,7 +149,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Enable or disable the Spawn Ghost pipeline trace.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/spawn.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/spawn.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -159,7 +159,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Command to engage autopilot on a vessel.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/ui/checkpoint_click.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/checkpoint_click.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -169,7 +169,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Command to toggle autopilot on/off on a vessel.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/ui/checkpoint_click.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/checkpoint_click.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -182,7 +182,7 @@ actually call, with the fields the deserializer actually accepts. See the
  `#[Command(default)]` → all-false. Pass only the flags you want on.
  Rhai: `cmd("ToggleJointViz", #{show_joints: true, show_wheel_forces: true})`.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/joint_viz.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/joint_viz.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -199,7 +199,7 @@ actually call, with the fields the deserializer actually accepts. See the
  who want "only velocity" pass `{"velocity": true}` and the rest
  stays as supplied (or defaults to false). Idempotent.
 
-- *defined in:* `crates/lunco-sandbox-edit/src/physics_viz.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/physics_viz.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -335,7 +335,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`),  resolved to a Bevy `Entity` in the observer via `ApiEntityRegistry`.   Deliberately `u64`, not `Entity` — this is "**Pattern B**". The  type-driven id codec (`crates/lunco-networking/PH2_ID_CODEC.md`)  auto-converts only `Entity`-typed fields, so a `u64` field opts out and  is resolved here instead. NOT migrated to `Entity` because this command  is `#[Command(default)]`, which derives `Default`, and `Entity` has no  `Default`. Leaving it `u64` is a cleanliness leftover, not a  names/correctness issue — the codec no longer keys off field names at  all, so this `u64` is simply ignored by it. (An earlier comment here  blamed the resolver "dropping the generation"; that was stale — the  codec preserves index+generation via `Entity::to_bits()`.) |
-| `translation` | `Vec3` |  Target translation, **grid-absolute** — the frame USD authors  `xformOp:translate` in, NOT the entity's raw `Transform.translation`.   The two are the same thing only for an entity in cell 0, which is why  this went unnoticed in the sandbox: everything there sits in the origin  cell. At the moonbase (cells 2 km wide) a caller that passed  `Transform.translation` was short by `cell × edge`, and the move  teleported the object a whole cell — see `lunco_core::coords::grid_absolute`. |
+| `translation` | `Vec3` |  Target translation, **grid-absolute** — the frame USD authors  `xformOp:translate` in, NOT the entity's raw `Transform.translation`.   The two are the same thing only for an entity in cell 0, which is why  this went unnoticed in the luncosim: everything there sits in the origin  cell. At the moonbase (cells 2 km wide) a caller that passed  `Transform.translation` was short by `cell × edge`, and the move  teleported the object a whole cell — see `lunco_core::coords::grid_absolute`. |
 
 #### `ReloadShader`
 
@@ -577,7 +577,7 @@ actually call, with the fields the deserializer actually accepts. See the
  by the path prim's USD path (full path or its leaf, like [`SetActiveCamera`]).
 
  Exists because path release is otherwise owned entirely by the offline recorder
- (`start_camera_paths_when_recording_starts` in `lunco-sandbox`), and in an
+ (`start_camera_paths_when_recording_starts` in `lunco-luncosim`), and in an
  ordinary interactive session no recorder ever runs — so an authored path would
  sit held at its first frame forever. This is the deliberate, *explicit* answer to
  that: one verb the user (or a script, or the HTTP API) invokes. It is NOT a
@@ -645,7 +645,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Reload (or load) a USD scene at runtime via the API.
 
- `curl … {"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda"}}`
+ `curl … {"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
 
  - `path`: USD asset path relative to the asset root.
  - `root_prim`: optional override for the SDF path of the prim to
@@ -1504,7 +1504,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `ActivatePerspective`
 
  Activate a registered [`Perspective`](crate::Perspective) by its
- `PerspectiveId` string. The sandbox ships `sandbox_view`, `rover_build`,
+ `PerspectiveId` string. The luncosim ships `sandbox_view`, `rover_build`,
  and `modelica_analyze`. Unknown ids are a logged no-op.
 
 - *defined in:* `crates/lunco-workbench/src/perspective_command.rs`
@@ -2137,7 +2137,7 @@ actually call, with the fields the deserializer actually accepts. See the
  and create the actual document. The workbench's default observer only
  handles the empty-kind resolution.
 
- Lives here (not in the egui workbench) so headless / sandbox / server
+ Lives here (not in the egui workbench) so headless / luncosim / server
  binaries can dispatch document creation by `kind` without the UI
  shell — the picker-driven path is a workbench concern, the typed verb
  is a document-lifecycle concern.
@@ -2162,7 +2162,7 @@ actually call, with the fields the deserializer actually accepts. See the
  and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
  domain's observer ignores paths it doesn't own, so they coexist.
 
- Lives here (not in the egui workbench) so headless / sandbox / server
+ Lives here (not in the egui workbench) so headless / luncosim / server
  binaries can open files by path; only the empty-path picker dispatch
  stays in the workbench.
 
@@ -2267,7 +2267,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `LeaveServer`
 
- Leave the current session and return to single-player (local sandbox).
+ Leave the current session and return to single-player (local luncosim).
 
 - *defined in:* `crates/lunco-networking/src/client.rs`
 - *fields:* none — call with `LeaveServer` (no params)
@@ -2536,7 +2536,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  - **`sun_yaw` / `sun_pitch`** — direction of the single `DirectionalLight`
    in radians, using the same `EulerRot::YXZ` (yaw-then-pitch) convention as
-   the sandbox settings panel. A small negative `sun_pitch` (e.g. `-0.15`,
+   the luncosim settings panel. A small negative `sun_pitch` (e.g. `-0.15`,
    ~8.5° above the horizon) gives long, raking lunar shadows; `-0.8` is a
    high ~46° sun with short shadows.
  - **`ambient_brightness`** — the [`GlobalAmbientLight`] level (the *real*
@@ -2769,7 +2769,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `position` | `Vec3` |   |
 | `rotation` | `Quat>` |   |
 
-### `lunco-sandbox` <a id="lunco-sandbox"></a>
+### `lunco-luncosim` <a id="lunco-luncosim"></a>
 
 #### `SaveScenario`
 
@@ -2792,7 +2792,7 @@ actually call, with the fields the deserializer actually accepts. See the
  **refused** (logged, not silently dropped) — matching the rule that the builder
  must only edit doc-backed scenes or it eats work on the next reload.
 
-- *defined in:* `crates/lunco-sandbox/src/lib.rs`
+- *defined in:* `crates/lunco-luncosim/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2817,7 +2817,7 @@ actually call, with the fields the deserializer actually accepts. See the
  raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
  journal drivers).
 
-- *defined in:* `crates/lunco-sandbox/src/lib.rs`
+- *defined in:* `crates/lunco-luncosim/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

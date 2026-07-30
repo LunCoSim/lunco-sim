@@ -1,10 +1,10 @@
 within LunCo.Electrical;
-import LunCo.Electrical.Pin;
 
 // Electrical Power Subsystem (EPS) Power Distribution Unit (PDU).
 // Regulates 28V main bus voltage, manages solar generation & battery charge/discharge balance,
 // and enforces under-voltage load shedding when battery SOC drops below critical threshold.
 model PDU
+  extends LunCo.Icons.ElectricalControl;
   parameter Real v_bus_target = 28.0 "Regulated EPS main bus voltage, V";
   parameter Real p_max_w = 1200.0 "Maximum continuous PDU power rating, W";
   parameter Real soc_cutoff = 0.10 "Low-charge cutoff threshold for non-essential loads, 0..1";

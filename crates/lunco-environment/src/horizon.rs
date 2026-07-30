@@ -85,7 +85,7 @@ use std::sync::Arc;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
-use bevy::light::CascadeShadowConfig;
+use bevy::light::{CascadeShadowConfig, NotShadowReceiver};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -200,7 +200,10 @@ impl HeightField {
             // for the shadow's soft EDGE; it must never dim ground that has no occluder.
             // Keep in sync with `horizon_march.wgsl`, which marches the same formula.
             let rise = (h - (h0 + slope * t)) / width;
-            vis = vis.min(1.0 - rise);
+            // Match horizon_march.wgsl: a continuous cubic edge prevents each
+            // one-texel crater rim from becoming a saw-toothed shadow boundary.
+            let edge = smoothstep01(rise.clamp(0.0, 1.0));
+            vis = vis.min(1.0 - edge);
             if vis <= 0.0 {
                 return Some(0.0);
             }
@@ -296,6 +299,11 @@ impl HeightField {
         }
         bytes
     }
+}
+
+#[inline]
+fn smoothstep01(x: f32) -> f32 {
+    x * x * (3.0 - 2.0 * x)
 }
 
 /// Baked heightfield living on the terrain entity: CPU copy for entity
@@ -572,9 +580,11 @@ fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) ->
 
 /// Collects finished bakes: installs the `HorizonMap` (CPU field + R32Float
 /// GPU texture) and gives the mesh planar UVs (how shaders address the
-/// heightfield). The terrain deliberately STAYS a CSM caster — cascades
-/// supply the mesh-accurate near-field self-shadow; the march covers the
-/// range beyond them. Material wiring happens render-side
+/// heightfield). The terrain deliberately STAYS a CSM caster, so it continues
+/// to occlude dynamic PBR objects such as the rover. It is not a CSM receiver:
+/// its material owns the authoritative heightfield self-shadow. Combining the
+/// two double-darkens grazing-sun terrain and exposes the cascade mesh's
+/// saw-tooth terminator. Material wiring happens render-side
 /// (`lunco-render-bevy::horizon_shade::wire_terrain_materials`).
 pub fn finish_horizon_bakes(
     mut commands: Commands,
@@ -634,6 +644,10 @@ fn install_horizon_map(
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         }
     }
+    // The heightfield shader is the single terrain self-shadow authority. The
+    // terrain remains a CSM caster, but must not receive the coarse cascade
+    // before its own visibility factor is applied.
+    commands.entity(entity).try_insert(NotShadowReceiver);
     install_horizon_map_from_field(commands, images, entity, field, millis);
 }
 

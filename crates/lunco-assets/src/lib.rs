@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 pub mod asset_path;
 pub mod asset_read;
 pub mod asset_sources;
+pub mod closure;
 pub mod datasets;
 pub mod discovery;
 pub mod download;
@@ -73,8 +74,12 @@ pub mod twin_source;
 pub mod web_fetch;
 
 pub use asset_sources::register_lunco_asset_sources;
+#[cfg(not(target_arch = "wasm32"))]
+pub use closure::{transitive_file_closure, transitive_file_closure_with};
 pub use lunco_source::{
-    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
+    id_to_disk_path, parse_lunco_uri, read_asset_bytes, read_asset_bytes_with_twin_root,
+    read_asset_file_bytes, read_asset_file_string, shipped_asset_root, ASSETS_DIR_NAME,
+    LUNCO_SCHEME,
 };
 pub use scheme_registry::SchemeRegistry;
 pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_SCHEME};

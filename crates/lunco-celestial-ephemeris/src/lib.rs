@@ -322,6 +322,13 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 Some(p_m_geo_au + p_earth_rel_emb)
             }
             other_id => {
+                // Mission fixtures use NAIF -1024 as an authored "trajectory
+                // data not supplied" sentinel. It is intentionally absent, not
+                // a failed lookup, so do not turn that opt-in fixture into a
+                // runtime warning on every scene load.
+                if other_id == -1024 {
+                    return None;
+                }
                 // Uncontended read lock; the background fetch only takes a
                 // write lock briefly when a CSV finishes downloading.
                 let guard = self.custom_data.read().unwrap_or_else(|e| e.into_inner());

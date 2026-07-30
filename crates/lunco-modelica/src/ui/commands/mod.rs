@@ -16,7 +16,7 @@ pub mod sim;
 pub mod status;
 // The `Exit` COMMAND lives in `lunco_api::session`, so this module can only
 // compile when that dependency is in the build. Without the gate, any consumer
-// that selects `ui` WITHOUT `lunco-api` (e.g. `cargo test -p lunco-sandbox-edit`,
+// that selects `ui` WITHOUT `lunco-api` (e.g. `cargo test -p lunco-luncosim-edit`,
 // which reaches this crate through the dependency graph) failed to compile on an
 // unresolved `lunco_api` import.
 #[cfg(feature = "lunco-api")]

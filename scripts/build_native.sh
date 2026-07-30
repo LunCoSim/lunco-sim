@@ -2,7 +2,7 @@
 # ============================================================================
 # LunCoSim — native desktop build + package assembler
 # ============================================================================
-# Builds a LunCoSim desktop binary (lunica or sandbox) for the
+# Builds a LunCoSim desktop binary (lunica or luncosim) for the
 # host platform (Linux, macOS, Windows) and assembles a self-contained
 # distributable directory containing the binary, the assets/ tree with the
 # relevant cache subdirs (fonts, MSL, models, …) packed INSIDE it, and a
@@ -19,7 +19,7 @@
 #
 # Binaries:
 #     lunica      — Modelica Workbench IDE (desktop GUI)
-#     sandbox     — Rover Physics Sandbox (desktop GUI)
+#     luncosim    — LunCoSim desktop GUI
 #
 # Options:
 #     --release          Optimized release build (default: dev)
@@ -34,9 +34,9 @@
 #
 # Examples:
 #     ./scripts/build_native.sh lunica --release --package
-#     ./scripts/build_native.sh sandbox --release --package
+#     ./scripts/build_native.sh luncosim --release --package
 #     ./scripts/build_native.sh lunica                    # quick dev build
-#     ./scripts/build_native.sh sandbox --target aarch64-unknown-linux-gnu
+#     ./scripts/build_native.sh luncosim --target aarch64-unknown-linux-gnu
 #
 # Platform detection is automatic. The script works on:
 #   Linux   (x86_64 / aarch64)  — needs libasound2, libudev, libwayland, libxkbcommon
@@ -47,7 +47,7 @@
 #   cargo run -p lunco-assets -- download -g fonts        # UI font
 #   cargo run -p lunco-assets -- download -g modelica     # MSL (for lunica)
 #   cargo run -p lunco-assets -- download -g models && \
-#     cargo run -p lunco-assets -- process -g models      # rover model (for sandbox)
+#     cargo run -p lunco-assets -- process -g models      # rover model (for luncosim)
 #
 # The package layout:
 #   dist/<binary>-<platform>-<arch>/
@@ -78,8 +78,8 @@ usage() {
 get_crate() {
     case "$1" in
         lunica)   echo "lunco-modelica" ;;
-        sandbox)  echo "lunco-sandbox" ;;
-        *) error "Unknown binary: $1"; error "Available: lunica, sandbox"; exit 1 ;;
+        luncosim) echo "lunco-luncosim" ;;
+        *) error "Unknown binary: $1"; error "Available: lunica, luncosim"; exit 1 ;;
     esac
 }
 
@@ -134,11 +134,11 @@ is_windows() { [[ "$1" == *windows* ]]; }
 # ── Per-binary cache subdirs ──────────────────────────────────────────────
 # Each binary needs a different subset of the .cache/ tree at runtime.
 #   lunica:   fonts (UI fallback) + msl (Modelica Standard Library) + thermofluidstream
-#   sandbox:  fonts (UI rendering) + Earth/Moon imagery
+#   luncosim:  fonts (UI rendering) + Earth/Moon imagery
 cache_subdirs_for() {
     case "$1" in
         lunica)   echo "fonts msl thermofluidstream" ;;
-        sandbox)  echo "fonts textures" ;;
+        luncosim) echo "fonts textures" ;;
     esac
 }
 
@@ -163,10 +163,10 @@ resolve_cache_dir() {
 }
 
 # ── Portable directory sync ───────────────────────────────────────────────
-# rsync isn't on Windows runners (Git Bash has no rsync). This wrapper
-# uses rsync when available (fast, incremental, --delete) and falls back
-# to cp -r + rm -rf for the same semantics. `--delete` is emulated by
-# wiping the dest before copying.
+# Desktop bundles must be reproducible on Linux, macOS and Git Bash. Git
+# Bash's `cp` rejects the POSIX `source/.` spelling used by the former unified
+# branch (it exits with `Invalid Parameter - none` on the Windows runner), so
+# retain the native rsync path and use a Bash glob fallback there instead.
 #
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash>
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash> no-delete
@@ -183,43 +183,37 @@ resolve_cache_dir() {
 # `lunco_twin::is_runtime_state`; keep the two in step.
 sync_dir() {
     local src="$1" dest="$2" no_delete="${3:-}"
-    if command -v rsync &>/dev/null; then
+    if command -v rsync >/dev/null 2>&1; then
         if [ "$no_delete" = "no-delete" ]; then
             rsync -a --exclude='.lunco/' --exclude='history/' "$src" "$dest"
         else
             rsync -a --delete --exclude='.lunco/' --exclude='history/' "$src" "$dest"
         fi
-    else
-        # cp -r fallback (Windows Git Bash). No trailing slash semantics —
-        # cp copies the dir itself, so we mirror "contents-of" by wiping
-        # dest and copying the src's children.
-        mkdir -p "$dest"
-        if [ "$no_delete" != "no-delete" ]; then
-            rm -rf "${dest:?}"/* 2>/dev/null || true
-        fi
-        # cp -r "$src"* "$dest" — the glob handles visible files; dotfiles
-        # need a separate pass (shopt -s dotglob would be cleaner but bash
-        # 3.2 on macOS handles it; Git Bash on Windows also supports it).
-        #
-        # `2>/dev/null` used to sit on this cp, with `||` falling through to the
-        # `"$src".` spelling. That combination could not distinguish "this shell
-        # doesn't do dotglob" (the case the fallback is FOR) from "the copy
-        # half-failed" — a partial tree, on Windows most plausibly a path over
-        # MAX_PATH — and it discarded the message that would have said which.
-        # A package that ships an incomplete assets/ tree looks identical at
-        # runtime to one whose asset resolution is broken, and that is exactly
-        # the wrong place to start debugging. Let cp speak, and fail the build.
-        if ! ( shopt -s dotglob nullglob 2>/dev/null; cp -r "$src"* "$dest" ); then
-            cp -r "$src". "$dest" || {
-                echo "ERROR: failed to copy '$src' → '$dest'." >&2
-                echo "       The package would ship an incomplete assets/ tree." >&2
-                return 1
-            }
-        fi
-        # `cp` has no --exclude, so the copy is pruned after the fact. Same rule
-        # as the rsync branch above; a bundle must not carry session state.
-        find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
+        return
     fi
+
+    if [ "$no_delete" != "no-delete" ]; then
+        rm -rf "${dest:?}"
+    fi
+    mkdir -p "$dest"
+
+    # `dotglob` makes `"$src"*` mean the contents of src, including hidden
+    # files, without the Windows-hostile `source/.` argument. Keep it scoped to
+    # a subshell so callers do not inherit a changed globbing policy.
+    if ! (
+        shopt -s dotglob nullglob
+        entries=("${src%/}"/*)
+        ((${#entries[@]}))
+        cp -R "${entries[@]}" "$dest"
+    ); then
+        echo "ERROR: failed to copy '$src' → '$dest'." >&2
+        echo "       The package would ship an incomplete assets/ tree." >&2
+        return 1
+    fi
+
+    # The fallback cannot exclude source paths; prune session state after its
+    # successful copy, exactly matching rsync's exclusion rule.
+    find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
 # ── Download cache assets for a binary ────────────────────────────────────
@@ -242,7 +236,7 @@ download_cache_for() {
     fi
     info "Downloading cache assets for $binary → $cache_dir"
 
-    # Every binary needs the UI font; lunica also needs MSL, while sandbox
+    # Every binary needs the UI font; lunica also needs MSL, while luncosim
     # ships its declared Earth/Moon imagery for an offline launch.
     local groups_to_download=""
     local groups_to_process=""
@@ -250,7 +244,7 @@ download_cache_for() {
         lunica)
             groups_to_download="fonts modelica"
             ;;
-        sandbox)
+        luncosim)
             groups_to_download="fonts celestial"
             groups_to_process="celestial"
             ;;
@@ -283,7 +277,7 @@ download_cache_for() {
 # payload it promises to ship was actually materialised.
 required_cache_files_for() {
     case "$1" in
-        sandbox) echo "fonts/DejaVuSans.ttf textures/earth.png textures/moon.png" ;;
+        luncosim) echo "fonts/DejaVuSans.ttf textures/earth.png textures/moon.png" ;;
     esac
 }
 
@@ -326,6 +320,46 @@ $binary.exe %*
 EOF
 }
 
+# Stage the tracked, canonical SVG icons into the distributable package and
+# emit the Linux desktop entry from the same canonical LunCoSim name. Raster
+# PNG, ICO, and ICNS files are developer-generated outputs and intentionally
+# ignored, so a clean CI checkout must never require them. Linux follows the
+# Freedesktop hicolor scalable-app layout; downstream installers can place this
+# directory under their icon root without rasterising the source artwork.
+stage_app_icons() {
+    local dir="$1" binary="$2" platform="$3"
+    [ "$binary" = "luncosim" ] || return 0
+    local source="$PROJECT_DIR/assets/icons"
+    if [ ! -d "$source" ]; then
+        warn "No luncosim icon source at $source"
+        return 0
+    fi
+    if [ ! -f "$source/svg/lcs-night-linux.svg" ]; then
+        warn "No canonical Linux LunCoSim SVG at $source/svg/lcs-night-linux.svg"
+        return 0
+    fi
+    mkdir -p "$dir/icons/svg"
+    sync_dir "$source/svg/" "$dir/icons/svg/"
+    case "$platform" in
+        *linux*)
+            mkdir -p "$dir/icons/hicolor/scalable/apps"
+            cp -f "$source/svg/lcs-night-linux.svg" \
+                "$dir/icons/hicolor/scalable/apps/luncosim.svg"
+            cat > "$dir/LunCoSim.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=LunCoSim
+Comment=LunCoSim lunar simulation
+Exec=./run.sh
+Icon=luncosim
+Terminal=false
+Categories=Science;Education;
+EOF
+            ;;
+    esac
+    info "LunCoSim app identity/icons staged for $platform"
+}
+
 # The Quadro K2100M on the reported Windows laptop loses its Vulkan device,
 # while its DX12 backend completes the same scene load. Keep this launcher
 # separate from run.bat: Vulkan remains the default for machines where it is
@@ -333,13 +367,13 @@ EOF
 #
 # `.sh` deliberately targets Git Bash, which is already the shell used to run
 # this packager on Windows. PowerShell users can apply the same one-line
-# `WGPU_BACKEND=dx12` setting before invoking sandbox.exe.
+# `WGPU_BACKEND=dx12` setting before invoking luncosim.exe.
 write_dx12_compat_launcher() {
     local dir="$1" binary="$2"
     local launcher="$dir/${binary}_dx12.sh"
     cat > "$launcher" <<EOF
 #!/usr/bin/env bash
-# DX12 compatibility launcher for the Windows sandbox package.
+# DX12 compatibility launcher for the Windows luncosim package.
 #
 # Use this on legacy NVIDIA laptops where Vulkan reports Device(Lost) during
 # the first rendered scene. This changes only the wgpu backend; simulation,
@@ -358,10 +392,10 @@ EOF
 
 # Fast is the deliberately simple visual profile for old/integrated GPUs. It
 # keeps the caller's selected backend: use it when the normal backend works but
-# the scene is too slow. `sandbox_dx12_fast.sh` combines it with the K2100M
+# the scene is too slow. `luncosim_dx12_fast.sh` combines it with the K2100M
 # DX12 workaround above when Vulkan itself is unreliable.
 #
-# These are Git-Bash launchers. The quoted `"$@"` preserves normal sandbox CLI
+# These are Git-Bash launchers. The quoted `"$@"` preserves normal luncosim CLI
 # arguments, so a tester can still add `--scene` or `--no-vsync` after the script.
 write_fast_compat_launchers() {
     local dir="$1" binary="$2"
@@ -370,9 +404,9 @@ write_fast_compat_launchers() {
 
     cat > "$fast" <<EOF
 #!/usr/bin/env bash
-# Fast-renderer launcher for the Windows sandbox package.
+# Fast-renderer launcher for the Windows luncosim package.
 #
-# Keeps the current wgpu backend, but starts sandbox with the fast visual
+# Keeps the current wgpu backend, but starts luncosim with the fast visual
 # profile: unlit texture-free PBR plus HDR, bloom and MSAA disabled. It also
 # opens a smaller 960x540 window, which reduces the framebuffer work on old GPUs.
 set -euo pipefail
@@ -383,7 +417,7 @@ EOF
 
     cat > "$dx12_fast" <<EOF
 #!/usr/bin/env bash
-# DX12 + fast-renderer compatibility launcher for the Windows sandbox package.
+# DX12 + fast-renderer compatibility launcher for the Windows luncosim package.
 #
 # Use this on legacy NVIDIA laptops when Vulkan loses the GPU device and the
 # normal DX12 renderer is still too slow. It changes only renderer startup
@@ -445,18 +479,18 @@ API testing, etc.). See \`skills/README.md\` for the index.
 \`AGENTS.md\` documents the project conventions for AI agents (Bevy 0.18,
 plugin layering, tunability mandate, TDD-first).
 EOF
-    if is_windows "$platform" && [ "$binary" = "sandbox" ]; then
+    if is_windows "$platform" && [ "$binary" = "luncosim" ]; then
         cat >> "$readme" <<'EOF'
 ## Legacy GPU launchers (Git Bash)
 
-- `sandbox_dx12.sh` — use when Vulkan fails with `Device(Lost)`.
-- `sandbox_fast.sh` — keeps the normal backend but uses the fast visual
+- `luncosim_dx12.sh` — use when Vulkan fails with `Device(Lost)`.
+- `luncosim_fast.sh` — keeps the normal backend but uses the fast visual
   profile for slow GPUs.
-- `sandbox_dx12_fast.sh` — combines DX12 with the fast visual profile.
+- `luncosim_dx12_fast.sh` — combines DX12 with the fast visual profile.
 
 The fast profile is also available directly as:
 
-    .\sandbox.exe --render-profile fast
+    .\luncosim.exe --render-profile fast
 
 EOF
     fi
@@ -561,8 +595,8 @@ done
 
 # Validate binary
 case "$BINARY" in
-    lunica|sandbox) ;;
-    *) error "Unknown binary: $BINARY"; error "Available: lunica, sandbox"; exit 1 ;;
+    lunica|luncosim) ;;
+    *) error "Unknown binary: $BINARY"; error "Available: lunica, luncosim"; exit 1 ;;
 esac
 
 CRATE="$(get_crate "$BINARY")"
@@ -614,7 +648,7 @@ fi
 info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
 cd "$PROJECT_DIR"
 
-cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" \
+    cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 8 \
     --bin "$BINARY" -p "$CRATE" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
@@ -636,8 +670,8 @@ fi
 
 # `download_cache_for` can continue after an individual download failure to
 # preserve useful diagnostics. Packaging cannot: it must contain every
-# runtime-required file, including sandbox's processed Earth/Moon textures.
-if [ "$NO_CACHE" -eq 0 ] && [ "$BINARY" = "sandbox" ]; then
+# runtime-required file, including luncosim's processed Earth/Moon textures.
+if [ "$NO_CACHE" -eq 0 ] && [ "$BINARY" = "luncosim" ]; then
     CACHE_SRC="$(resolve_cache_dir)"
     verify_required_cache_files "$BINARY" "$CACHE_SRC"
 fi
@@ -676,6 +710,8 @@ if [ "$NO_ASSETS" -eq 0 ] && [ -d "$PROJECT_DIR/assets" ]; then
 else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
+
+stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE"
 
 # Copy docs/, skills/, + AGENTS.md so end users have the architecture docs,
 # tutorials, skills (project-level agent skills), and agent guidelines
@@ -732,11 +768,11 @@ fi
 # Write launcher script
 if is_windows "$TRIPLE"; then
     write_launcher_windows "$OUT_DIR" "$BINARY"
-    if [ "$BINARY" = "sandbox" ]; then
+    if [ "$BINARY" = "luncosim" ]; then
         write_dx12_compat_launcher "$OUT_DIR" "$BINARY"
         write_fast_compat_launchers "$OUT_DIR" "$BINARY"
-        info "DX12 compatibility launcher: $OUT_DIR/sandbox_dx12.sh"
-        info "Fast-renderer launchers: $OUT_DIR/sandbox_fast.sh and $OUT_DIR/sandbox_dx12_fast.sh"
+        info "DX12 compatibility launcher: $OUT_DIR/luncosim_dx12.sh"
+        info "Fast-renderer launchers: $OUT_DIR/luncosim_fast.sh and $OUT_DIR/luncosim_dx12_fast.sh"
     fi
 else
     write_launcher_unix "$OUT_DIR" "$BINARY"

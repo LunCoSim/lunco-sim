@@ -19,7 +19,7 @@
 //! pipeline) and constructs entities + wires directly, mirroring what
 //! `lunco_usd_sim::cosim::process_usd_cosim_wires` would emit at
 //! runtime. The USD reader path is exercised live by the
-//! sandbox scene's CosimChain demo.
+//! luncosim scene's CosimChain demo.
 
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;

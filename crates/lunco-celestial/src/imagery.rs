@@ -28,6 +28,7 @@
 //! grey). That is a complete appearance, not a degraded one — see
 //! `big_space_setup`'s note on why the untextured state is the default.
 
+use bevy::image::{ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use lunco_materials::{ParamValue, TextureLayer};
 use serde::Deserialize;
@@ -94,6 +95,25 @@ pub(crate) struct PendingBodyImagery {
 /// behaviour — re-issue plus a `warn!` every frame, forever — is exactly what
 /// this bounds.
 const MAX_IMAGERY_ATTEMPTS: u8 = 3;
+
+/// Load an equirectangular body map with longitude wrapping at the sampler.
+/// Globe tile UVs are intentionally unwrapped across the anti-meridian; keeping
+/// that continuity until texture sampling prevents a diagonal seam in the
+/// interpolated triangle.
+fn load_body_image(
+    asset_server: &AssetServer,
+    path: impl Into<bevy::asset::AssetPath<'static>>,
+) -> Handle<Image> {
+    asset_server
+        .load_builder()
+        .with_settings(|settings: &mut ImageLoaderSettings| {
+            let mut sampler = ImageSamplerDescriptor::linear();
+            sampler.address_mode_u = bevy::image::ImageAddressMode::Repeat;
+            sampler.address_mode_v = bevy::image::ImageAddressMode::ClampToEdge;
+            settings.sampler = ImageSampler::Descriptor(sampler);
+        })
+        .load::<Image>(path)
+}
 
 /// Telemetry event published when a body's imagery is given up on.
 ///
@@ -173,7 +193,7 @@ pub(crate) fn adopt_authored_body_albedo(
             continue; // globe not built yet; reconcile again on the next frame
         }
         if !pending.authored.iter().any(|r| r.naif_id == decl.naif) {
-            let image = asset_server.load(albedo.asset.clone());
+            let image = load_body_image(&asset_server, albedo.asset.clone());
             // If the globe appeared after the asset event, capture the already
             // resident asset once; steady state is driven by AssetEvent<Image].
             if images.get(image.id()).is_some() {
@@ -322,7 +342,7 @@ pub(crate) fn bind_dataset_body_imagery(
         pending.inflight.push(PendingBodyImage {
             naif_id,
             dataset_key: entry.key.clone(),
-            image: asset_server.load(entry.artifact_uri()),
+            image: load_body_image(&asset_server, entry.artifact_uri()),
         });
     }
 

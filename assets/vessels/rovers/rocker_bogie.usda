@@ -32,6 +32,7 @@ def Xform "RockerBogie" (
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
     # this rover accepts no commands at all. See `skid_rover.usda`.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = {
         string power = "infinite"
@@ -129,17 +130,27 @@ def Xform "RockerBogie" (
     # from a single port beats plotting `velocity_x/y/z` and doing the arithmetic by
     # eye — those are world-frame, so a rover that turns hands its speed from one
     # trace to another.
-    uniform bool lunco:telemetry = true
-    uniform token lunco:telemetry:port = "speed"
-    uniform token lunco:telemetry:name = "ground_speed"
-    uniform token lunco:telemetry:unit = "m/s"
-
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
     def "Controls" (
         prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
+    }
+
+    # A spawned rover owns an empty mission program from the start. Adding its
+    # first waypoint then updates `info:sourceCode` in place instead of adding
+    # `LunCoProgramAPI` at runtime, which would require a whole-scene rebuild
+    # and reboot every already-spawned rover.
+    def Scope "Mission" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence/>
+  </BehaviorTree>
+</root>"""
     }
 
     # --- CHASSIS GEOMETRY & VISUALS ---
@@ -248,6 +259,7 @@ def Xform "RockerBogie" (
                 over "DishHead"
                 {
                     double3 xformOp:scale = (0.45, 0.45, 0.45)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                     over "LinkAperture"
                     {
                         string lunco:link:class = "rover"
@@ -1210,8 +1222,18 @@ def Xform "RockerBogie" (
             )
             {
                 float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
-                float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+                float inputs:drive_right.connect = </RockerBogie/outputs:drive_right>
                 float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+                # Forward each motor's solved `heat` to the electrical boundary so
+                # the thermal island can source it as a cross-domain SimConnection.
+                # A member's `output` is only readable on its island scope under a
+                # mangled name; forwarding it here makes it a named boundary port.
+                float outputs:motor_heat_FL.connect = </RockerBogie/RockerL/Motor_FL.outputs:heat>
+                float outputs:motor_heat_ML.connect = </RockerBogie/BogieL/Motor_ML.outputs:heat>
+                float outputs:motor_heat_RL.connect = </RockerBogie/BogieL/Motor_RL.outputs:heat>
+                float outputs:motor_heat_FR.connect = </RockerBogie/RockerR/Motor_FR.outputs:heat>
+                float outputs:motor_heat_MR.connect = </RockerBogie/BogieR/Motor_MR.outputs:heat>
+                float outputs:motor_heat_RR.connect = </RockerBogie/BogieR/Motor_RR.outputs:heat>
                 uniform token collection:components:expansionRule = "explicitOnly"
                 prepend rel collection:components:includes = [
                     </RockerBogie/Battery>,
@@ -1255,6 +1277,7 @@ def Xform "RockerBogie" (
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
             }
+
         }
     }
 
@@ -1285,27 +1308,155 @@ def Xform "RockerBogie" (
                 # authoring the same opinion twice and relying on the merge; state it
                 # once, where the prim is declared.
                 custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                float inputs:sun_mount_x.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>
+
+                def Xform "Environment" (
+                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+                )
+                {
+                }
             }
             over "Electrical"
             {
                 float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
+                float outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
                 prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
             }
         }
     }
 
-    # --- Thermal: do the motors have temperatures ---------------------------
-    # `none` is EMPTY. `basic` composes the RoverMotorThermal.mo per-side heat
-    # balance onto the root: pure telemetry (`temp_left`/`temp_right`, kelvin,
-    # readable/watchable ports), nothing acts on it — same choose-a-component
-    # shape as `power`.
+    # --- Thermal: a SEPARATE domain layer, not a graft onto Electrical ------
+    # `none` is EMPTY. `basic` composes a self-contained `Scope "Thermal"` — its
+    # OWN `CollectionAPI:components`, compiled to its OWN generated DAE — and
+    # couples to the electrical island by CAUSAL cross-domain wires only:
+    # each motor's `outputs:heat` (solved by the electrical DAE) feeds a
+    # `MotorHeatLoad.inputs:heat_w` here as a runtime SimConnection. The acausal
+    # `connectors:port` edges stay INSIDE this thermal collection (heat balance
+    # per bank), which is the rule that lets thermal compile independently of
+    # electrical — including when `power != "battery"` (no electrical island at
+    # all). All six motors get a heat-load bridge; `ML`/`MR` are no longer
+    # silently dropped.
     variantSet "thermal" = {
         "none" {
         }
 
-        "basic" (
-            prepend references = @lunco://components/thermal/motor_thermal.usda@</Thermal>
-        ) {
+        "basic" {
+            def Scope "Thermal" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+                doc = "Rover thermal control network: motor dissipation → masses → radiators."
+            )
+            {
+                # ── Causal boundary IN: one heat wire per driven wheel ──
+                # Solved by the electrical island and routed here at runtime.
+                # With `power="infinite"` these resolve to the motors' authored
+                # `outputs:heat` directly (still 0 for an uncommanded motor); the
+                # thermal island compiles and runs regardless.
+                # Source heat from the Electrical island's forwarded boundary outputs,
+                # not from the motor entities directly: a member's `output` is only
+                # readable on its island scope, so the Electrical scope forwards each
+                # motor's `heat` as a named boundary port (see the power="battery"
+                # variant). This is the cross-domain causal wire.
+                float inputs:motor_heat_FL.connect = </RockerBogie/Electrical.outputs:motor_heat_FL>
+                float inputs:motor_heat_ML.connect = </RockerBogie/Electrical.outputs:motor_heat_ML>
+                float inputs:motor_heat_RL.connect = </RockerBogie/Electrical.outputs:motor_heat_RL>
+                float inputs:motor_heat_FR.connect = </RockerBogie/Electrical.outputs:motor_heat_FR>
+                float inputs:motor_heat_MR.connect = </RockerBogie/Electrical.outputs:motor_heat_MR>
+                float inputs:motor_heat_RR.connect = </RockerBogie/Electrical.outputs:motor_heat_RR>
+
+                # ── Causal boundary OUT: bank temperatures published HERE ──
+                float outputs:motor_temp_left.connect  = </RockerBogie/Thermal/MotorThermalLeft.outputs:temp_k>
+                float outputs:motor_temp_right.connect = </RockerBogie/Thermal/MotorThermalRight.outputs:temp_k>
+
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </RockerBogie/Thermal/MotorHeat_FL>,
+                    </RockerBogie/Thermal/MotorHeat_ML>,
+                    </RockerBogie/Thermal/MotorHeat_RL>,
+                    </RockerBogie/Thermal/MotorHeat_FR>,
+                    </RockerBogie/Thermal/MotorHeat_MR>,
+                    </RockerBogie/Thermal/MotorHeat_RR>,
+                    </RockerBogie/Thermal/MotorThermalLeft>,
+                    </RockerBogie/Thermal/MotorThermalRight>,
+                    </RockerBogie/Thermal/MotorRadiatorLeft>,
+                    </RockerBogie/Thermal/MotorRadiatorRight>,
+                ]
+
+                # ── Left bank: three heat loads into one mass/radiator node ──
+                def Xform "MotorHeat_FL" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    prepend rel lunco:telemetry:owner = </RockerBogie/RockerL/Motor_FL>
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FL>
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorHeat_ML" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieL/Motor_ML>
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_ML>
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorHeat_RL" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieL/Motor_RL>
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RL>
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorThermalLeft" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
+                )
+                {
+                }
+                def Xform "MotorRadiatorLeft" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
+                )
+                {
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+
+                # ── Right bank: three heat loads into one mass/radiator node ──
+                def Xform "MotorHeat_FR" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    prepend rel lunco:telemetry:owner = </RockerBogie/RockerR/Motor_FR>
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FR>
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorHeat_MR" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieR/Motor_MR>
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_MR>
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorHeat_RR" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieR/Motor_RR>
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RR>
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorThermalRight" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
+                )
+                {
+                }
+                def Xform "MotorRadiatorRight" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
+                )
+                {
+                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+            }
         }
     }
 }

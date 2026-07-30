@@ -171,7 +171,7 @@ pub fn scene_document_for(
     scene: AssetId<UsdStageAsset>,
 ) -> Option<DocumentId> {
     // `AssetPath::path()` is the path WITHOUT the `twin://` source scheme, i.e.
-    // `<name>/<rel>`. `rel` may contain slashes (`scenes/sandbox/scene.usda`), so
+    // `<name>/<rel>`. `rel` may contain slashes (`scenes/luncosim/scene.usda`), so
     // split only on the FIRST one. (Same idiom as `cache_terrain_document`.)
     let asset_path = asset_server.get_path(scene)?;
     let rel_path = asset_path.path().to_string_lossy();
@@ -202,6 +202,10 @@ struct RefSpawn {
     asset_path: String,
     /// In-flight load of the referenced asset (its loader fetches the closure).
     ref_handle: Handle<UsdStageAsset>,
+    /// A SetTranslate may follow AddPrim in the same edit burst. Keep it until
+    /// the reference closure is installed; otherwise the edit arrives before
+    /// the prim exists on the live stage and the new waypoint stays at origin.
+    translate: Option<[f64; 3]>,
     /// Frames this spawn has waited for its closure. Bounded by
     /// [`MAX_REF_SPAWN_ATTEMPTS`] so an asset that never loads fails LOUDLY
     /// instead of being retried forever in silence — see `drain_ref_spawns`.
@@ -589,7 +593,27 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// physics extraction or its presence. So they rebuild, which re-derives both
 /// correctly. This is not the hot path: `AttachComponent` emits neither, so
 /// building a vehicle from parts stays rebuild-free.
+///
+/// `SetActive` has ONE carve-out: a waypoint marker prim (authored at
+/// `/<vessel>/Route/W<n>`, see `author_marker_prim`). A marker is purely visual —
+/// a translucent dome (`physics:collisionEnabled = false`) plus an overlap-only
+/// non-solid Sensor, never a rigid body — so deactivating it only needs its visual
+/// subtree gone, which `refresh_prim_subtree` reconciles. Every other `SetActive`
+/// (a rover part, a joint) still rebuilds, since hiding a physics prim must drop
+/// its body/collider, which the visual-only refresh cannot express.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
+    // A mission program API only changes how the owning vessel's existing mission
+    // metadata is interpreted; unlike physics APIs it does not add/remove bodies,
+    // colliders or entities. It has a live-stage author below and is refreshed at
+    // the vessel boundary, so never restart the scene merely to create a program.
+    if let UsdOp::SetApiSchemas { schemas, .. } = op {
+        return !schemas.iter().all(|schema| schema == "LunCoProgramAPI");
+    }
+    // A waypoint-marker hide reconciles incrementally (see the doc comment); any
+    // other `SetActive` is a physics-presence change and must rebuild.
+    if let UsdOp::SetActive { path, .. } = op {
+        return !is_waypoint_marker_path(path);
+    }
     matches!(
         op,
         UsdOp::ReplaceSource { .. }
@@ -599,11 +623,26 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
             // subtree wholesale, which the incremental sink can't express.
             | UsdOp::SetVariantSelection { .. }
             | UsdOp::SetPayload { .. }
-            // ECS-structural changes the visual-only subtree refresh can't reconcile
-            // (physics component set / entity presence). A rebuild re-derives both.
-            | UsdOp::SetApiSchemas { .. }
-            | UsdOp::SetActive { .. }
     )
+}
+
+/// Whether `path` is a waypoint marker prim — the visual-only pin authored at
+/// `/<vessel>/Route/W<n>` (`ROUTE_SCOPE = "Route"`, leaf name `W<n>`). This is the
+/// marker identity contract from `author_marker_prim`, and the signal that a
+/// `SetActive` op may reconcile incrementally instead of rebuilding. Purely a
+/// path-shape check: no stage access, so it stays safe to call from
+/// [`op_needs_rebuild`]. A non-conforming path (anything not ending in
+/// `/Route/W<digits>`) returns `false` and keeps the rebuild guard intact.
+fn is_waypoint_marker_path(path: &str) -> bool {
+    // `W<n>` is the authored leaf name (the first free `W0`, `W1`, … a scene
+    // author would have written by hand); `Route` is the fixed scope under the
+    // vessel root that holds them.
+    let leaf = path.rsplit('/').next().unwrap_or("");
+    let rest = path.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
+    leaf.starts_with('W')
+        && leaf[1..].chars().all(|c| c.is_ascii_digit())
+        && !leaf[1..].is_empty()
+        && rest.ends_with("/Route")
 }
 
 /// Replay one **incremental** op's typed delta onto the scene's live
@@ -619,6 +658,18 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
+            // Referenced prims are authored only after their asset closure is
+            // ready. Capture a transform that arrives before that point so a
+            // newly inserted waypoint is born at its requested location.
+            if let Some(pending) = world
+                .resource_mut::<PendingRefSpawns>()
+                .items
+                .iter_mut()
+                .find(|pending| pending.scene_id == scene_id && pending.prim_path == *path)
+            {
+                pending.translate = Some(*value);
+                return;
+            }
             if let Some(cs) = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
@@ -702,6 +753,22 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // consequence, and a refresh would hot-reload a running scenario
             // (resetting its `this`) on a mere save. So author, don't refresh.
             if is_string {
+                // A mission tree is owned by the parent vessel, not by its child
+                // `Mission` scope. Updating its XML is therefore a component
+                // replacement on that already-live vessel, NOT a subtree refresh:
+                // re-instantiating the Rover here destroys its physics/cosim state.
+                if name == "info:sourceCode" && path.ends_with("/Mission") {
+                    if let Some((owner_path, _)) = path.rsplit_once('/') {
+                        let mut q = world.query::<(Entity, &lunco_usd_bevy::UsdPrimPath)>();
+                        if let Some((owner, _)) = q.iter(world).find(|(_, prim)| {
+                            prim.stage_handle.id() == scene_id && prim.path == owner_path
+                        }) {
+                            world
+                                .entity_mut(owner)
+                                .insert(lunco_autopilot::usd_tree::BehaviorXml(value.clone()));
+                        }
+                    }
+                }
                 return;
             }
             // Refresh only what the edit can actually change: a material/shader
@@ -764,6 +831,33 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 if let Err(e) = cs.projector().remove_prim_at(&sp) {
                     warn!("[twin] remove {path}: {e}");
                 }
+            }
+        }
+        UsdOp::SetActive { path, active, .. } if is_waypoint_marker_path(path) => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = match world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                Some(cs) => match cs.projector().author_active(&sp, *active) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warn!("[twin] author active={active} {path}: {e}");
+                        false
+                    }
+                },
+                None => false,
+            };
+            // A marker carries no rigid body / collider, so toggling its `active`
+            // flag only changes whether its visual subtree is present. The live
+            // author fires the sink, but the bridge does not despawn on
+            // `active = false` the way it does on a spec removal — re-instantiate
+            // the prim's subtree so the (now inactive) marker's visual is dropped
+            // (or, on reactivation, rebuilt). Mirrors the SetConnection arm.
+            if authored {
+                refresh_prim_subtree(world, scene_id, path);
             }
         }
         UsdOp::SetTimeSample {
@@ -870,6 +964,20 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // subtree refresh re-triggers it for the owning prim.
             if authored {
                 refresh_prim_subtree(world, scene_id, path);
+            }
+        }
+        UsdOp::SetApiSchemas { path, schemas, .. }
+            if schemas.iter().all(|s| s == "LunCoProgramAPI") =>
+        {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+                .is_some_and(|cs| cs.projector().author_api_schemas(&sp, schemas).is_ok());
+            if !authored {
+                warn!("[twin] author program API {path} failed");
             }
         }
         // Coarse ops never reach here (the caller rebuilds for them) — that now
@@ -990,6 +1098,7 @@ fn spawn_prim_op(
                     type_name,
                     asset_path,
                     ref_handle,
+                    translate: None,
                     attempts: 0,
                 });
         }
@@ -1303,15 +1412,24 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         };
         // Inject the closure bytes so PCP can resolve the reference, then author.
         cs.add_layer_bytes(recipe.bytes.clone());
-        if let Err(e) = cs
+        let result = cs
             .projector()
             .author_prim(&sp, item.type_name.as_deref())
-            .and_then(|_| cs.projector().author_reference(&sp, &item.asset_path))
-        {
+            .and_then(|_| cs.projector().author_reference(&sp, &item.asset_path));
+        if let Err(e) = result {
             warn!(
                 "[twin] referenced spawn {} (post-fetch): {e}",
                 item.prim_path
             );
+            continue;
+        }
+        // Apply the transform after the prim/reference exists. This is the
+        // ordering guarantee for first-use referenced markers and spawned
+        // vehicles alike.
+        if let Some(translate) = item.translate {
+            if let Err(e) = cs.projector().author_translate(&sp, translate) {
+                warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
+            }
         }
     }
     world.resource_mut::<PendingRefSpawns>().items.extend(still);
@@ -1347,16 +1465,50 @@ mod tests {
             type_name: "float".into(),
             sources: vec![],
         }));
-        // apiSchema / active REBUILD: their effect is a prim's ECS component set /
-        // entity presence, which the visual-only subtree refresh can't reconcile.
+        // Physical apiSchema / active REBUILD: their effect is a prim's ECS
+        // component set / entity presence, which the visual-only subtree refresh
+        // can't reconcile.
         assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
             edit_target: et.clone(),
             path: "/W".into(),
-            schemas: vec![],
+            schemas: vec!["PhysicsRigidBodyAPI".into()],
         }));
+        // A program API is metadata on an existing `Mission` scope. Its consumer
+        // is the vessel's BehaviorXml projection, never the physical rover
+        // topology, so it must remain on the live incremental path.
+        assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
+            edit_target: et.clone(),
+            path: "/W/Mission".into(),
+            schemas: vec!["LunCoProgramAPI".into()],
+        }));
+        // A `SetActive` on a physics prim (a rover part) rebuilds: it changes
+        // entity presence / physics component set, which the visual-only subtree
+        // refresh can't reconcile.
         assert!(op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
-            path: "/W".into(),
+            path: "/Rover/Chassis".into(),
+            active: false,
+        }));
+        // A `SetActive` on a WAYPOINT MARKER (`/<vessel>/Route/W<n>`) reconciles
+        // incrementally: the marker is purely visual (a non-colliding dome + an
+        // overlap-only Sensor), so hiding/revealing it only needs its visual
+        // subtree dropped/rebuilt. Deactivation must NOT reload the scene.
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Rover/Route/W3".into(),
+            active: false,
+        }));
+        // Reactivation is symmetric — also incremental.
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Apollo15/Route/W0".into(),
+            active: true,
+        }));
+        // The marker carve-out is path-shaped: a prim that merely looks marker-ish
+        // but is not under `/Route` still rebuilds.
+        assert!(op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Rover/Wheels/W0".into(),
             active: false,
         }));
         // Composition-arc edits also rebuild — value resolution recomposes the
@@ -1493,5 +1645,24 @@ mod tests {
             composed.contains("@lunco://vessels/rovers/skid_rover.usda@"),
             "and its asset reference (resolved by the async loader at the twin:// anchor)"
         );
+    }
+
+    #[test]
+    fn waypoint_marker_path_shape_is_detected() {
+        // Authored marker identity: `/<vessel>/Route/W<n>`.
+        assert!(is_waypoint_marker_path("/Rover/Route/W0"));
+        assert!(is_waypoint_marker_path("/Apollo15/Route/W12"));
+        assert!(is_waypoint_marker_path("/Moonbase/Rover/Route/W3"));
+        // A non-`Route` parent is NOT a marker, even with a `W<n>` leaf — the
+        // carve-out must not swallow a wheel or any other coincidentally-named prim.
+        assert!(!is_waypoint_marker_path("/Rover/Wheels/W0"));
+        assert!(!is_waypoint_marker_path("/Rover/W0"));
+        // A `Route` scope whose leaf is not `W<n>` is not a marker.
+        assert!(!is_waypoint_marker_path("/Rover/Route/Start"));
+        assert!(!is_waypoint_marker_path("/Rover/Route/W"));
+        // Bare / edge inputs.
+        assert!(!is_waypoint_marker_path("/Route"));
+        assert!(!is_waypoint_marker_path("/"));
+        assert!(!is_waypoint_marker_path(""));
     }
 }

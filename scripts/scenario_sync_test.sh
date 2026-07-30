@@ -20,7 +20,7 @@
 #     (`scripts_run_here` is false for a client), so this uses logs + the cache.
 #   - OPTIONAL client prim check: if $SYNC_CLIENT_PRIMS is set, assert those prims
 #     appear on the client via the synchronous `ListEntities` API. (Skipped by
-#     default: the in-repo sandbox scene IS the client's baked default, so loading
+#     default: the in-repo luncosim scene IS the client's baked default, so loading
 #     it as a scenario collides and doesn't re-register prims by path — the
 #     pipeline check covers it. A DISTINCT twin like moonbase does register them.)
 #   - OPTIONAL DEM check: if $SYNC_EXPECT_DEM=1, assert the client built its DEM
@@ -30,7 +30,7 @@
 # the host on journal replay (fixed: the host bases replay on its own manifest's
 # journal_head), so a green run also guards that regression.
 #
-# Defaults are CI-ready: the in-repo `assets/scenes/sandbox/sandbox_scene.usda`
+# Defaults are CI-ready: the in-repo `assets/scenes/luncosim/sandbox_scene.usda`
 # twin, host-prim + pipeline assertions, no external assets.
 #
 # Local moonbase run (full prim + DEM coverage):
@@ -43,8 +43,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TWIN="${1:-$PWD/assets/scenes/sandbox/sandbox_scene.usda}"
-# Prims the HOST must have (rhai `find`). Default suits the sandbox scene.
+TWIN="${1:-$PWD/assets/scenes/luncosim/sandbox_scene.usda}"
+# Prims the HOST must have (rhai `find`). Default suits the luncosim scene.
 SYNC_HOST_PRIMS="${SYNC_HOST_PRIMS:-/SandboxScene/Skid_Physical_1 /SandboxScene/Ackermann_Physical_1}"
 # Prims to additionally assert on the CLIENT (ListEntities). Empty = pipeline only.
 SYNC_CLIENT_PRIMS="${SYNC_CLIENT_PRIMS:-}"
@@ -54,16 +54,16 @@ HOST_API=4101
 CLIENT_API=4102
 HOST_LOG=/tmp/scenario_sync_host.log
 CLIENT_LOG=/tmp/scenario_sync_client.log
-BIN=target/debug/sandbox
+BIN=target/debug/luncosim
 
 if [ ! -f "$TWIN" ]; then
   echo "twin scene not found: $TWIN" >&2
-  echo "pass a twin's <scene>.usda as \$1 (default: in-repo sandbox scene)" >&2
+  echo "pass a twin's <scene>.usda as \$1 (default: in-repo luncosim scene)" >&2
   exit 2
 fi
 
-echo "==> building sandbox (--features networking)"
-cargo build --bin sandbox --features networking -j"${SYNC_JOBS:-6}" || exit 2
+echo "==> building luncosim (--features networking)"
+cargo build --bin luncosim --features networking -j"${SYNC_JOBS:-8}" || exit 2
 
 # Cold cache: force a full download so the HTTP bytes plane is exercised (a warm
 # cache fetches nothing). Point BOTH the harness and the launched apps at the SAME

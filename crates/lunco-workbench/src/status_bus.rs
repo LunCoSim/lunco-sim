@@ -227,7 +227,7 @@ impl StatusEvent {
 
 /// The bus source name terrain streaming publishes under.
 ///
-/// Shared rather than spelled twice. The publisher (`lunco-sandbox`'s
+/// Shared rather than spelled twice. The publisher (`lunco-luncosim`'s
 /// `report_terrain_stream_status`) and the consumer (the screenshot readiness
 /// gate's `VISUAL_BUSY_SOURCES`) were previously coupled by two independent
 /// `"terrain"` literals: renaming one silently stopped the gate from gating, with
@@ -238,7 +238,7 @@ pub const TERRAIN_SOURCE: &str = "terrain";
 /// The bus source name USD scene spawning publishes under.
 ///
 /// Shared for the same reason as [`TERRAIN_SOURCE`]: the publisher
-/// (`lunco-sandbox`'s `report_scene_spawn_status`, mirroring
+/// (`lunco-luncosim`'s `report_scene_spawn_status`, mirroring
 /// `lunco_usd_sim::cosim::SceneLoadInFlight` + `UsdAwaitingStage`) and the
 /// screenshot readiness gate must agree on the spelling, and a silent
 /// disagreement degrades into recordings that open on a half-spawned scene.

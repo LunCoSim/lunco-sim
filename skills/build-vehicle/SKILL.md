@@ -37,7 +37,7 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 | Tire | `mobility/tires/*.usda` | grip (`lunco:tire:frictionCoefficient`, `physxVehicleTire:longitudinalStiffness`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
-| Motor thermal | `thermal/motor_thermal.usda` | per-side motor heat balance (`RoverMotorThermal.mo`), telemetry-only — chosen via the rover's `thermal` variantSet |
+| Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from `Electrical` — chosen via the rover's `thermal` variantSet |
 | Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
 | Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Modelica motor-lag drivetrain, one per steering family (see below) |
@@ -148,7 +148,7 @@ see [`author-usd-component`](../author-usd-component/SKILL.md#adding-a-new-lunco
 
 To reach one wheel: select the rover, then **Alt+Shift+click** the wheel — that
 drills the Inspector to that subpart's own PRIM
-(`crates/lunco-sandbox-edit/src/selection.rs:315`). Plain **Shift+click is the
+(`crates/lunco-luncosim-edit/src/selection.rs:315`). Plain **Shift+click is the
 multi-select toggle** and explicitly *clears* the drill target; it does not drill.
 The drill also requires the rover to already be the primary selection.
 
@@ -262,12 +262,17 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   and current limiting are equations and therefore belong in the projected
   Modelica island. Production Rhai must never scale drive ports per tick.
 - `thermal` = **none | basic** — do the motors have temperatures. `none` is
-  EMPTY; `basic` references `components/thermal/motor_thermal.usda`:
-  `RoverMotorThermal.mo` per-side first-order heat balance (dissipation
-  follows command magnitude, losses follow excess over a 250 K lunar-day
-  ambient), publishing `temp_left`/`temp_right` (K) as PURE TELEMETRY ports —
-  no bridge, nothing acts on them. Exemplar: six_wheel_rover; same
-  choose-a-component shape.
+  EMPTY; `basic` authors a `Scope "Thermal"` with its own
+  `CollectionAPI:components`, compiled to a SEPARATE generated DAE from
+  `Electrical`. Each driven motor gets one `MotorHeatLoad` (from
+  `thermal/motor_thermal.usda`); the motor's solved `outputs:heat` crosses into
+  the thermal island as a causal `inputs:motor_heat_*` boundary wire (a runtime
+  `SimConnection`). The acausal `connectors:port` edges stay inside the thermal
+  collection (heat balance per bank). This compiles and publishes
+  `motor_temp_left`/`motor_temp_right` (K) REGARDLESS of the `power` variant —
+  thermal is decoupled from electrical. See
+  `docs/architecture/reviews/2026-07-30-rover-domain-layering.md`. Exemplar:
+  rocker_bogie (6 motors), skid_rover (4), six_wheel_rover (6).
 
 ## Looks
 
@@ -294,7 +299,7 @@ deliberately; that is unchanged.
 
 ## Verify
 
-For iterative modeling, keep one sandbox process running with an explicit
+For iterative modeling, keep one luncosim process running with an explicit
 `--api PORT` and use that API. Edit
 the USD, then use `OpenFile` for a file-backed asset, `RestartScene` for the
 mounted scene, or `ApplyUsdOp` for an in-place authored opinion. Re-run a Rhai
@@ -312,7 +317,7 @@ attribute is named in seconds rather than at spawn time
 ([`validate-assets`](../validate-assets/SKILL.md)):
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate assets/vessels/rovers/my_rover.usda
+target/debug/luncosim --validate assets/vessels/rovers/my_rover.usda
 ```
 
 **2. Drivetrain parity regression** — the guard that the two realizations stay
@@ -323,7 +328,7 @@ matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 12 s → throttle + steer 6 s.
 
 ```bash
-RUSTC_WRAPPER=sccache cargo run -j4 --bin sandbox -- --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
+target/debug/luncosim --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee target/parity.log
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL' target/parity.log
 ```
 

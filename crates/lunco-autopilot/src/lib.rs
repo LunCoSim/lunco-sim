@@ -44,7 +44,10 @@ pub mod btcpp_xml;
 /// Behaviour trees authored as USD prims (one prim per node) — the source of truth
 /// for a mission. `AutopilotBehaviorSpec` is derived from them, never authored.
 pub mod usd_tree;
-use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
+use lunco_core::{
+    safe_stop_control_surface, ActuatorPorts, GlobalEntityId, InputPorts, NetworkRole, Port,
+    SessionId, SessionRegistry,
+};
 use lunco_cosim::SetPorts;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,6 +109,18 @@ impl Autopilot {
     /// waypoints": engaging must claim the vessel, not launch it.
     pub fn holding(vessel: Entity, index: u64) -> Self {
         Self::forward(vessel, index, 0.0)
+    }
+
+    /// Disable this actor's control writer immediately.
+    ///
+    /// Entity despawns are deferred in Bevy. A lifecycle command can arrive
+    /// before `drive_autopilots` in the same fixed tick, so relying on the
+    /// despawn alone would let the still-present actor emit one final `SetPorts`
+    /// command after the vessel was safely stopped. Flipping this state is the
+    /// synchronous half of disengage; the deferred despawn remains the ownership
+    /// and presentation cleanup.
+    pub fn disengage(&mut self) {
+        self.engaged = false;
     }
 }
 
@@ -2047,8 +2062,12 @@ pub struct DisengageAutopilot {
 #[on_command(DisengageAutopilot)]
 fn on_disengage_autopilot(
     _trigger: On<DisengageAutopilot>,
-    q: Query<(Entity, &Autopilot)>,
+    mut q: Query<(Entity, &mut Autopilot)>,
+    mut q_control: Query<(Option<&mut InputPorts>, Option<&ActuatorPorts>)>,
+    mut q_ports: Query<&mut Port>,
     mut registry: ResMut<SessionRegistry>,
+    holds: Option<ResMut<lunco_cosim::PortHolds>>,
+    fence: Option<ResMut<lunco_cosim::ControlWriteFence>>,
     mut commands: Commands,
 ) {
     // Despawning the actor — not just braking it — is what makes "disengaged"
@@ -2057,8 +2076,33 @@ fn on_disengage_autopilot(
     // holding a Brake would pin the Command Deck on "Disengage" forever, with
     // "Engage" unreachable. The vessel's `AutopilotBehaviorSpec` mirror lives on
     // the VESSEL, not the actor, so the patrol survives for a later re-engage.
-    match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
-        Some((entity, ap)) => {
+    match q.iter_mut().find(|(_, ap)| ap.vessel == cmd.vessel) {
+        Some((entity, mut ap)) => {
+            // This must happen before any deferred cleanup. `on_tick` scenarios
+            // and the autopilot producer share FixedUpdate, so either may run
+            // first; an immediately-disabled actor cannot write a final drive
+            // command if it runs later in this same tick.
+            ap.disengage();
+            // `SetPorts` is deferred. Fence the shared port boundary now so an
+            // already-emitted autopilot trigger cannot land after this observer
+            // and recreate the drive demand or its hold.
+            if let Some(mut fence) = fence {
+                fence.block(cmd.vessel);
+            }
+            // An actor's last SetPorts is level-triggered. End its lease through
+            // the shared control boundary, which clears both logical inputs and
+            // the derived actuator ports the electrical island actually reads.
+            if let Ok((mut inputs, actuators)) = q_control.get_mut(cmd.vessel) {
+                safe_stop_control_surface(inputs.as_deref_mut(), actuators, &mut q_ports);
+            }
+            // A prior `SetPorts` may still hold one of these inputs above the
+            // wiring fabric. Release it with the actor so no stale command can
+            // overwrite the neutral-brake state on the following propagation tick.
+            if let Some(mut holds) = holds {
+                for port in ["throttle", "steer", "brake"] {
+                    holds.release(cmd.vessel, port);
+                }
+            }
             // Release the AiAgent claim, or the vessel stays owned by a session
             // whose actor is gone — `may_possess` would then deny the human the
             // very vessel the UI reports as disengaged.

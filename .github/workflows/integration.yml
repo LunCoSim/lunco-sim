@@ -21,7 +21,7 @@ on:
   # push:
   #   paths:
   #     - 'crates/lunco-networking/**'
-  #     - 'crates/lunco-sandbox/**'
+  #     - 'crates/lunco-luncosim/**'
   #     - 'crates/lunco-api/**'
   #     - 'crates/lunco-time/**'
   #     - 'crates/lunco-usd-sim/**'
@@ -33,7 +33,7 @@ on:
   # pull_request:
   #   paths:
   #     - 'crates/lunco-networking/**'
-  #     - 'crates/lunco-sandbox/**'
+  #     - 'crates/lunco-luncosim/**'
   #     - 'crates/lunco-api/**'
   #     - 'crates/lunco-time/**'
   #     - 'crates/lunco-usd-sim/**'
@@ -96,7 +96,7 @@ jobs:
         with:
           key: integration-linux-x86_64
 
-      # Builds `target/debug/sandbox` (--features networking) and runs the
+      # Builds `target/debug/luncosim` (--features networking) and runs the
       # 2-process test against the in-repo sandbox twin. Exits non-zero on FAIL,
       # so a broken sync / journal-replay panic / CID-verify failure fails CI.
       - name: Run scenario-sync integration test

@@ -195,7 +195,7 @@ pub struct ScenarioManifestMsg {
     /// default_scene` verbatim, e.g. `sandbox_scene.usda`) — as opposed to
     /// [`default_scene`](Self::default_scene), which is the *scenario-cache*
     /// path (re-rooted at the reference closure's common ancestor, e.g.
-    /// `scenes/sandbox/sandbox_scene.usda`).
+    /// `scenes/luncosim/sandbox_scene.usda`).
     ///
     /// EVERY client loads `twin://<name>/<twin_scene>` — the **same asset path
     /// the host loaded** — so every prim derives the **same `GlobalEntityId`** on
@@ -274,7 +274,7 @@ pub struct AssetOfferMsg {
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 /// Host-side: the scenario this server is currently running. Built by the app
-/// (`lunco-sandbox`'s `setup_sandbox`) after the Twin is opened — it walks the
+/// (`lunco-luncosim`'s `setup_sandbox`) after the Twin is opened — it walks the
 /// Twin's files, hashes each, and fills [`Self::manifest`]. The
 /// [`on_server_connected`](crate::server) observer sends it to each new client
 /// and [`broadcast_scenario_manifest`] pushes it to all clients when the

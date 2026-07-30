@@ -753,7 +753,7 @@ mod input_ack_tests {
     }
 
     /// The host's fixed-tick consumer, in miniature: exactly what
-    /// `apply_buffered_client_inputs` (lunco-sandbox-edit) does to the ack.
+    /// `apply_buffered_client_inputs` (lunco-luncosim-edit) does to the ack.
     fn integrate_one_fixed_tick(app: &mut App, gid: u64) {
         let owner = app.world().resource::<SessionRegistry>().owner_of(gid);
         let mut buf = app.world_mut().resource_mut::<BufferedClientInputs>();

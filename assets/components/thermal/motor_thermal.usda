@@ -1,24 +1,79 @@
 #usda 1.0
 (
-    defaultPrim = "Thermal"
     upAxis = "Y"
     metersPerUnit = 1
 )
 
-# Drive-motor THERMAL model for a rover — Thermal Domain Layer
-def Scope "Thermal" (
+# Thermal PARTS catalogue — rover-agnostic building blocks for a motor
+# dissipation network. Each part is one Modelica model with its ports declared
+# but UNCONNECTED: the vessel's `Thermal` scope composes these by reference and
+# wires them, exactly as `battery.usda`/`motor.usda` are inert parts collected
+# by a vessel's `Electrical` scope.
+#
+# This file declares no `Thermal` scope and no motor names. A rover with N
+# driven motors authors its own `Scope "Thermal"` (carrying
+# `CollectionAPI:components`) that:
+#   - includes N `MotorHeatLoad` instances (one per motor),
+#   - includes per-bank `MotorThermalMass` + `MotorRadiator` instances,
+#   - wires each `MotorHeatLoad.inputs:heat_w` to a boundary input sourced from
+#     that motor's `outputs:heat` (a causal cross-domain SimConnection), and
+#   - ties the acausal `connectors:port` of each load/mass/radiator into the
+#     shared heat-balance node for its bank.
+#
+# Cross-domain coupling is causal (electrical `heat` → thermal `heat_w`); the
+# acausal `connectors:port` edges stay INSIDE this thermal collection, which is
+# the rule that lets thermal compile to its own generated DAE separate from the
+# electrical island. See docs/architecture/reviews/2026-07-30-rover-domain-layering.md.
+
+# Causal-to-acausal bridge: a component's dissipated power injected into a heat
+# node. `heat_w` is wired by the vessel to the motor's `outputs:heat`.
+def Xform "MotorHeatLoad" (
+    doc = "Bridges a motor's electrical loss (W) into the acausal heat-port network."
     kind = "component"
-    doc = "Thermal Domain Layer for motor thermal dissipation."
+    prepend apiSchemas = ["LunCoProgramAPI", "LunCoTelemetryAPI"]
 )
 {
-    # The physics: per-side first-order heat balance, solver-clocked.
-    def Scope "MotorThermal" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
-    )
-    {
-        uniform asset info:sourceAsset = @lunco://models/RoverMotorThermal.mo@
-        uniform bool lunco:program:realtimeSafe = true
-        float inputs:drive_left.connect = </Thermal.outputs:drive_left>
-        float inputs:drive_right.connect = </Thermal.outputs:drive_right>
-    }
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/HeatLoad.mo@
+
+    # Dissipated power in, W. Unwired it is 0 (a motor that never loses heat).
+    # A vessel wires this to its motor's `outputs:heat`.
+    float inputs:heat_w = 0.0
+
+    # Acausal heat node. The vessel ties this to its bank's ThermalMass/Radiator.
+    # The attribute name `port` matches the `HeatPort port;` member in HeatLoad.mo
+    # — the synthesizer emits `connect(a.port, b.port)` verbatim from these names.
+    custom token connectors:port
+}
+
+# Lumped thermal capacitance for one thermal bank (e.g. one side of a rover).
+def Xform "MotorThermalMass" (
+    doc = "Lumped heat capacitance for a motor bank; integrates temperature from net heat flow."
+    kind = "component"
+    prepend apiSchemas = ["LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
+
+    float inputs:c_th = 4000.0
+    float inputs:T_init = 250.0
+    float outputs:temp_k
+    custom token connectors:port
+}
+
+# Stefan-Boltzmann radiative cooling of one bank to deep space.
+def Xform "MotorRadiator" (
+    doc = "Vacuum radiative cooling (Stefan-Boltzmann) for a motor bank."
+    kind = "component"
+    prepend apiSchemas = ["LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/Radiator.mo@
+
+    float inputs:area = 0.35
+    float inputs:emissivity = 0.90
+    float inputs:T_sink = 250.0
+    custom token connectors:port
 }

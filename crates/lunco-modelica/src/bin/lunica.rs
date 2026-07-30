@@ -19,7 +19,7 @@
 //! frame-pacing fix that cured the "UI vanishes on zoom" bug on native,
 //! and the embedded-in-sandbox copy lacked clipboard + autosave. They are
 //! now one `fn main()` with `#[cfg(target_arch = "wasm32")]` branches —
-//! the same unification `crates/lunco-sandbox/src/bin/sandbox.rs` already
+//! the same unification `crates/lunco-luncosim/src/bin/luncosim.rs` already
 //! uses for its desktop+web entry. wasm-bindgen (`--target web`) runs
 //! `main` automatically when the module loads, so there is no separate
 //! `#[wasm_bindgen(start)]` entry point.
@@ -167,7 +167,7 @@ fn main() {
     // `default_plugins`; then we layer the egui workbench OR the headless
     // compile core on top — lunica's "UI plugin" is the modelica crate's
     // `ModelicaWorkbenchPlugin`, its "core plugin" the crate's
-    // `ModelicaCorePlugin`. Mirrors `lunco_sandbox`'s Core/Ui/Headless split.
+    // `ModelicaCorePlugin`. Mirrors `lunco_luncosim`'s Core/Ui/Headless split.
     app.add_plugins(default_plugins(headless));
 
     // GUI (native windowed, or wasm — always windowed). The whole workbench:
@@ -246,7 +246,7 @@ fn main() {
 /// Base [`DefaultPlugins`] for the chosen mode. The window / render / winit
 /// backend must be decided at `PluginGroup` build time, so this is the one place
 /// the GUI/headless split touches plugin configuration — mirrors
-/// `lunco_sandbox::default_plugins`. The egui workbench vs. the compile core is
+/// `lunco_luncosim::default_plugins`. The egui workbench vs. the compile core is
 /// layered on top by `main` (the composition root).
 fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     // A no-`ui` build is always headless, so the param is unused there.

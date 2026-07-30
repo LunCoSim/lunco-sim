@@ -283,7 +283,7 @@ const STATIC_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'USD asset path relative to `assets/` (e.g. "scenes/sandbox/sandbox_scene.usda").' },
+        path: { type: 'string', description: 'USD asset path relative to `assets/` (e.g. "scenes/luncosim/sandbox_scene.usda").' },
         root_prim: { type: 'string', description: 'SDF path of the root prim to spawn. Empty = auto-derive from filename.', default: '' },
       },
       required: ['path'],

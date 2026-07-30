@@ -12,13 +12,13 @@ required-features = ["networking"]
 
 [features]
 # Default = headless-clean: no egui, no workbench, no networking wire. The
-# GUI-free `lunco-sandbox-server` depends on this crate (transitively) WITHOUT
+# GUI-free `lunco-luncosim-server` depends on this crate (transitively) WITHOUT
 # the `ui` feature, so default MUST NOT pull egui/workbench (CQ-601). The GUI
-# `lunco-sandbox` opts into `ui` explicitly.
+# `lunco-luncosim` opts into `ui` explicitly.
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-usd-bevy"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-usd-bevy", "dep:lunco-usd-compose"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -45,7 +45,7 @@ lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-core = { path = "../lunco-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
-# Native builds still get transport-http via lunco-sandbox's own default features.
+# Native builds still get transport-http via lunco-luncosim's own default features.
 lunco-api = { path = "../lunco-api", default-features = false }
 # The ONE generic vessel-control command `SetPorts` lives here; the wire declares
 # a channel for it (replacing the old rover drive/brake command pair).
@@ -58,7 +58,7 @@ lunco-avatar = { path = "../lunco-avatar", default-features = false }
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-# NO `lunco-sandbox-edit` EDGE (review A6). The wire needs exactly two symbols the
+# NO `lunco-luncosim-edit` EDGE (review A6). The wire needs exactly two symbols the
 # editor used to own — `SpawnEntity` (channel declaration) and `PendingCorrection`
 # (prediction diagnostics) — and both now live in `lunco-core`, where the wire and
 # the editor can share them. That one edge used to drag the whole editor closure
@@ -88,16 +88,13 @@ lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
 lunco-assets = { path = "../lunco-assets" }
-# Host-side scenario **reference closure** (`lunco_usd_bevy::closure`): a scene's
-# rovers/components live outside its own folder (`@../../vessels/…@`), so the
-# manifest must walk the `subLayers`/`references`/`payload` graph to ship them.
-# This crate used to depend on `openusd` directly and carry its own copy of that
-# walk, whose comment admitted it mirrored usd-bevy's. Networking is not a USD
-# crate: the walk is USD domain knowledge and lives there once, with an
-# `ArcFilter` for the single axis the two copies disagreed on (whether binary
-# leaves survive — a manifest needs them, a composition pre-fetch does not).
+# Host-side scenario closure: `lunco-assets` owns filesystem traversal; this
+# leaf supplies only USD's document test and dependency extraction. A scene's
+# rovers/components can live outside its own folder (`@../../vessels/…@`), so
+# the manifest must include its `subLayers`/`references`/`payload` graph.
 # Networking-only.
 lunco-usd-bevy = { path = "../lunco-usd-bevy", optional = true }
+lunco-usd-compose = { path = "../lunco-usd-compose", optional = true }
 # Cross-platform asset persistence: native `FileStorage` (std::fs) + wasm
 # `OpfsStorage` (OPFS). Shared (not native-only) — the web client caches assets
 # through it too. Also serves the host's TLS cert file reads on native.

@@ -29,7 +29,7 @@ The composed source is the **single source of truth**. Both consumers sample it:
   the camera, coarse far away;
 - the **avian collider ring** (`collider_ring`) samples the *same* oracle at the
   collider resolution around each dynamic body;
-- **spawn placement** (`lunco-sandbox-edit`) samples the oracle (`dem_ground_height`)
+- **spawn placement** (`lunco-luncosim-edit`) samples the oracle (`dem_ground_height`)
   to drop a rover onto the surface. Because the oracle is analytic — not a collider
   raycast — it answers **before** the collider tile under the drop point has
   streamed/baked, so a spawn over un-baked terrain rests on the ground instead of
@@ -307,7 +307,7 @@ carried to its conclusion.
 **Two hard couplings this forces (do them when terrain rebases onto networking):**
 
 - **Migrate terrain's USD read off flatten.** `bridge_usd_dem_terrain` and
-  `refresh_layered_terrain_layers` (`lunco-sandbox/lib.rs`) still read
+  `refresh_layered_terrain_layers` (`lunco-luncosim/lib.rs`) still read
   `Res<Assets<UsdStageAsset>>` via `UsdDataExt` — the flatten path being deleted.
   The read swap is mechanical (`reader.prim_attribute_value → view.value`, over the
   `UsdRead` surface the other extractors already use), but it also **retires

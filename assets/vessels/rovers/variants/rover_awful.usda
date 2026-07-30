@@ -7,12 +7,8 @@
 
 # ── Rover variant: AWFUL ("Overloaded Hauler") ───────────────────────────────
 # The deliberately punishing tier-3 rover the brief explicitly asks for (task §5:
-# "ровер «высокой сложности» можно сделать намеренно очень неудобным — чтобы и
-# опрокидывался, и слабые моторы имел"). It tips easily and climbs poorly.
-#
-# The tip-over is driven by a HIGH centre of mass (mass sitting well above the axles)
-# plus light damping, so any across-slope steering rolls it. Weak torque + low grip
-# make it struggle up the borderline wall.
+# "ровер «высокой сложности» можно сделать намеренно очень неудобным"). It keeps
+# the shared chassis and becomes difficult through weak motors and poor grip alone.
 #
 # See `rover_easy.usda` for the tier ladder, and for why grip and torque are authored
 # per wheel rather than on this prim.
@@ -23,12 +19,6 @@ def Xform "RoverAwful" (
 )
 {
     uniform bool lunco:spawnable = true
-
-    # Top-heavy: CoM ABOVE the axles + heavier + under-damped → rolls easily.
-    float3 physics:centerOfMass = (0.0, 0.45, 0.0)
-    float physics:mass = 1900.0
-    float3 physics:diagonalInertia = (1600.0, 2000.0, 900.0)
-    float physxRigidBody:angularDamping = 0.8
 
     # Handling, per wheel. `bald` tires: μ=0.40 ⇒ slip limit 21.8°, against a SURVEYED
     # site (real Apollo 15 crater) whose ways in run 19.8° on the ДЗЗ route / 25.5°

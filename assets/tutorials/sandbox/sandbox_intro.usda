@@ -51,7 +51,7 @@ def Xform "SandboxIntro" (
 
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
-        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

@@ -5,12 +5,12 @@
 The `--no-ui` server links no GPU stack:
 
 ```
-$ cargo tree -e normal -p lunco-sandbox-server -i wgpu               # warning: nothing to print.
-$ cargo tree -e normal -p lunco-sandbox-server -i bevy_render        # warning: nothing to print.
-$ cargo tree -e normal -p lunco-sandbox-server -i bevy_pbr           # warning: nothing to print.
-$ cargo tree -e normal -p lunco-sandbox-server -i bevy_core_pipeline # warning: nothing to print.
-$ cargo tree -e normal -p lunco-sandbox-server -i egui               # warning: nothing to print.
-$ cargo tree -e normal -p lunco-sandbox-server -i winit              # warning: nothing to print.
+$ cargo tree -e normal -p lunco-luncosim-server -i wgpu               # warning: nothing to print.
+$ cargo tree -e normal -p lunco-luncosim-server -i bevy_render        # warning: nothing to print.
+$ cargo tree -e normal -p lunco-luncosim-server -i bevy_pbr           # warning: nothing to print.
+$ cargo tree -e normal -p lunco-luncosim-server -i bevy_core_pipeline # warning: nothing to print.
+$ cargo tree -e normal -p lunco-luncosim-server -i egui               # warning: nothing to print.
+$ cargo tree -e normal -p lunco-luncosim-server -i winit              # warning: nothing to print.
 ```
 
 Both flags are load-bearing. Absence is reported as `warning: nothing to print.` on
@@ -138,7 +138,7 @@ Not everything visual is *appearance*. Three things had no honest intent represe
 
 - **`horizon_shade`** — a per-frame heightfield/sun **uniform feed** into the terrain shader (from
   `lunco-environment`). Not a look; a data pump. The horizon **maths** stayed behind — it was already
-  render-free, and `lunco-sandbox` imports exactly that half.
+  render-free, and `lunco-luncosim` imports exactly that half.
 - **`env_light`** — the `bloom` arm of `SetEnvironmentLight`.
 - **`terrain_maps`** — the derived-layer bind onto the terrain material that `lunco-usd-sim` authors
   asynchronously (no component to restate).

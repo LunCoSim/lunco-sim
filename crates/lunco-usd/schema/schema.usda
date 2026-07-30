@@ -662,6 +662,45 @@ class "LunCoProgramAPI" (
     )
 }
 
+class "LunCoEnvironmentProbeAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a transform as an explicit source of local environmental
+    signals. The prim's transform is the mount frame: environment systems
+    publish gravity and Sun/Earth directions as ordinary outputs, and authored
+    USD connections select which programs consume them.
+
+    A probe is a source, never a solver and never a consumer. Keeping it on a
+    distinct prim avoids the old consumer self-wire pattern, makes the provider
+    visible in the scene graph, and prevents ordinary wiring diagnostics from
+    mistaking environmental injection for algebraic feedback."""
+)
+{
+    float outputs:gravity_accel = 0 (
+        doc = "Local gravitational acceleration magnitude, m/s2."
+    )
+    float outputs:sun_mount_x = 0 (
+        doc = "Unit direction toward the Sun in the probe frame, +X right."
+    )
+    float outputs:sun_mount_y = 0 (
+        doc = "Unit direction toward the Sun in the probe frame, +Y up."
+    )
+    float outputs:sun_mount_z = 0 (
+        doc = "Unit direction toward the Sun in the probe frame, -Z forward."
+    )
+    float outputs:earth_mount_x = 0 (
+        doc = "Unit direction toward Earth in the probe frame, +X right."
+    )
+    float outputs:earth_mount_y = 0 (
+        doc = "Unit direction toward Earth in the probe frame, +Y up."
+    )
+    float outputs:earth_mount_z = 0 (
+        doc = "Unit direction toward Earth in the probe frame, -Z forward."
+    )
+}
+
 class LunCoEvent "LunCoEvent" (
     inherits = </Typed>
     doc = """A connected discrete signal projected onto the engine's TelemetryEvent
@@ -1386,6 +1425,9 @@ class "LunCoTelemetryAPI" (
     )
     int64 lunco:telemetry:retention = 0 (
         doc = "Ring-buffer sample count to retain. 0/unauthored = engine default."
+    )
+    rel lunco:telemetry:owner (
+        doc = "Composed USD part that presents this component's generated telemetry. Absent means this prim itself."
     )
 }
 

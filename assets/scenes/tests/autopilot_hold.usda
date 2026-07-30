@@ -15,7 +15,7 @@
 # whole drive path is dead, so the routed rover is the CONTROL that proves this
 # rig can move a rover at all — without it the headline assertion is vacuous.
 #
-#   cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
+#   cargo run -q -p lunco-luncosim --bin luncosim -j 2 -- test \
 #       --scene scenes/tests/autopilot_hold.usda
 
 def Xform "AutopilotHoldTest" (

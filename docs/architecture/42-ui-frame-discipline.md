@@ -8,7 +8,7 @@ Push heavy work off-thread or behind a cache; profile before optimizing.
 > **Frame *count* is fixed at vsync by design — the lever is per-frame *cost*, not
 > redraw frequency.** While focused, both binaries run
 > `WinitSettings { focused_mode: UpdateMode::Continuous }`
-> (`lunco-sandbox/src/ui/mod.rs:55`, `lunco-modelica/src/bin/lunica.rs:177`), so
+> (`lunco-luncosim/src/ui/mod.rs:55`, `lunco-modelica/src/bin/lunica.rs:177`), so
 > the app redraws *every* vsync interval and never idles while focused — this is
 > deliberate (vsync = Fifo present / `requestAnimationFrame` acts as the frame
 > timer; see the comment at `ui/mod.rs:41-49`). Reactive/low-power kicks in only
@@ -140,7 +140,7 @@ detail; the shape is the lesson.
 when it runs — the gate is a required argument, not something the author
 remembers to add. A producer that genuinely must run every frame passes
 `every_frame`, which puts the claim at the call site next to its reason, where
-review can see it. (`lunco-sandbox-edit/src/ui/mod.rs`)
+review can see it. (`lunco-luncosim-edit/src/ui/mod.rs`)
 
 **Never gate on a hash of the thing you were deciding whether to build.**
 `produce_usd_canvas` spent 11 ms/frame building a graph and hashing it only to

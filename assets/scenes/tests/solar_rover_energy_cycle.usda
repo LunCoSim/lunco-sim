@@ -1,0 +1,59 @@
+#usda 1.0
+(
+    defaultPrim = "SolarRoverTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Deterministic integration test for the authored solar-rover stack.
+#
+# It reuses the playable demo intact: USD owns the assembled rover, panel,
+# electrical membership and wires; Modelica owns the sun tracker and synthesized
+# electrical island; the rover's BT.CPP patrol owns navigation; Rhai below owns
+# only the bounded test phases and verdict. No test-only Rust mechanism or
+# authored Sun-vector bypass is involved.
+#
+# The production scene's root name is retained deliberately. Its patrol XML and
+# its component connections use absolute authored targets below `/SolarRoverTest`.
+# Renaming the referenced root would test broken targets instead of the rover.
+#
+# The reduced capacity and panel area are test parameters, not a second power
+# topology: they make one loaded/idle energy cycle observable in seconds while
+# retaining the same battery, panel, bus, and environment-probe components.
+#
+# Run after building this worktree's production binary:
+#   target/debug/luncosim test --scene assets/scenes/tests/solar_rover_energy_cycle.usda
+
+def Xform "SolarRoverTest" (
+    prepend references = @lunco://scenes/luncosim/solar_rover_demo.usda@</SolarRoverTest>
+)
+{
+    over "SolarRover"
+    {
+        over "Battery"
+        {
+            float inputs:capacity = 0.02
+            float inputs:soc_init = 0.55
+        }
+
+        over "YawHead"
+        {
+            over "SolarPanel"
+            {
+                float inputs:area = 0.10
+            }
+        }
+    }
+
+    over "Scenario"
+    {
+        custom string lunco:scenario = "solar-rover-energy-cycle"
+
+        over "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/solar_rover_energy_cycle.rhai@
+        }
+    }
+}

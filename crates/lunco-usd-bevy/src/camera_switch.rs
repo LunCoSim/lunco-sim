@@ -24,7 +24,7 @@
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{FloatingOrigin, Grid};
-use lunco_core::{Command, LocalAvatar, SceneViewport, on_command};
+use lunco_core::{on_command, Command, LocalAvatar, SceneViewport};
 use lunco_render::SceneCamera;
 
 use crate::UsdPrimPath;

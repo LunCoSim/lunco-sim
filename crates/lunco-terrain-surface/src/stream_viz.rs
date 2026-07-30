@@ -1609,14 +1609,13 @@ fn spawn_tile(
     // keeps the tile in the SAME big_space cell as the content standing on it, and its
     // rebased geometry local to that origin. On flat terrain this is ≈0 (unchanged).
     origin_y: f64,
-    native_shadow_casters: bool,
 ) -> Entity {
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
     let (ms, me, _bucket) = snap_band(morph_end);
-    let mut tile = commands.spawn((
+    let tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(
             mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
@@ -1633,16 +1632,13 @@ fn spawn_tile(
         // list unless the user opts in.
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
-        #[cfg(target_arch = "wasm32")]
-        bevy::light::NotShadowReceiver,
+        // Streamed ground must never participate in Bevy's directional-shadow
+        // atlas as a caster. At lunar grazing angles the atlas produces
+        // saw-toothed terrain self-shadows and each cascade redraws the entire
+        // active tile set. It remains a receiver, so rover and structure
+        // shadows still land on the ground at normal CSM cost.
+        bevy::light::NotShadowCaster,
     ));
-    // The native Bevy shadow pass is the authoritative way for terrain to
-    // occlude dynamic PBR objects (wheels, hulls, instruments). The terrain
-    // shader's horizon march remains its far-field self-shadow detail; it is
-    // not a substitute for a caster in the light's shadow map.
-    if !native_shadow_casters {
-        tile.insert(bevy::light::NotShadowCaster);
-    }
     tile.id()
 }
 
@@ -1810,10 +1806,10 @@ fn bootstrap_cover_is_ready(
 ///
 /// # Who sets it
 ///
-/// `lunco-sandbox`, mirroring `OfflineRecordingState::active` — the same inversion
+/// `lunco-luncosim`, mirroring `OfflineRecordingState::active` — the same inversion
 /// as `report_terrain_status`/`report_scene_spawn_status`, for the same reason.
 /// `lunco-workbench` (which owns the recorder) is a UI-shell crate and cannot name
-/// terrain; `lunco-terrain-surface` must not know what a recorder is. `lunco-sandbox`
+/// terrain; `lunco-terrain-surface` must not know what a recorder is. `lunco-luncosim`
 /// is the assembly point that sees both.
 ///
 /// Distinct from [`LodFrozen`], which is an authored per-terrain opt-in that stops
@@ -1924,10 +1920,6 @@ pub fn update_lod_tiles(
         cover_scratch,
     } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    let native_shadow_casters = settings
-        .as_ref()
-        .map(|s| s.native_shadow_casters)
-        .unwrap_or(true);
     if demands.visual.is_empty() {
         return;
     }
@@ -2500,7 +2492,6 @@ pub fn update_lod_tiles(
                 shadow,
                 overlay,
                 oy,
-                native_shadow_casters,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -2593,7 +2584,6 @@ pub fn update_lod_tiles(
                     shadow,
                     overlay,
                     oy,
-                    native_shadow_casters,
                 );
                 if let Some(old) = tiles.tiles.insert(
                     s.coord,
@@ -2920,6 +2910,7 @@ pub(crate) fn bind_authored_maps_to_tiles(
 /// every sun-driven re-bake) lands long after tiles exist — restate it on the
 /// resident Lit tiles' looks.
 pub(crate) fn bind_shadow_cache_to_tiles(
+    mut commands: Commands,
     changed: Query<(&TileShadowCache, &LodTiles), (Changed<TileShadowCache>, With<TerrainLodViz>)>,
     mut looks: Query<&mut ShaderLook>,
 ) {
@@ -2928,6 +2919,8 @@ pub(crate) fn bind_shadow_cache_to_tiles(
             continue;
         }
         for entity in tiles.tile_entities() {
+            let mut tile = commands.entity(entity);
+            tile.try_insert(bevy::light::NotShadowCaster);
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
             }
@@ -3594,8 +3587,8 @@ mod draw_partition_tests {
             .first()
             .copied()
             .expect("active nested camera contributes a terrain-detail demand");
-        let expected_position = DVec3::new(400.0, 0.0, -400.0)
-            + rover_rotation.as_dquat() * DVec3::new(0.0, 2.0, 5.0);
+        let expected_position =
+            DVec3::new(400.0, 0.0, -400.0) + rover_rotation.as_dquat() * DVec3::new(0.0, 2.0, 5.0);
         let expected_forward = rover_rotation.as_dquat() * DVec3::NEG_Z;
         assert!(
             (demand.position - expected_position).length() < 1e-9,

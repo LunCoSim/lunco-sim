@@ -297,6 +297,31 @@ remains is the Storage-API migration, which needs a dependency line from
 
 **Scope:** small.
 
+### Event-driven USD connection binding transaction — implemented
+
+USD composition publishes inert `SimConnection` specifications. The runtime
+marks every executable endpoint `Pending`, `Ready`, or `Failed`, and the
+`lunco-cosim` binder is the only path that adds `BoundConnection`. Fixed-step
+propagation sees bound edges only; it neither discovers topology nor diagnoses
+ports.
+
+`BindingRevision` makes the transaction reactive: prim, Modelica, joint, wheel,
+and differential projection changes request an epoch; USD holds readiness while
+that epoch is unsettled and seals it after its pending projectors reach a
+terminal state. A sealed exact-port miss becomes one `CosimDiagnostics` fault
+at binding time. It is never re-emitted by the per-tick exchange loop.
+
+Modelica lifecycle publication and binding run in one Update transaction. This
+is important: a `Compiling → Ready` transition is visible to the binder before
+its revision is consumed, so a generated boundary cannot need an incidental
+later tick to become live. The regression in `lunco-cosim` covers that exact
+transition; binding-unit coverage also pins the one-shot terminal-miss rule.
+
+Ownership remains strict: `lunco-usd-compose` composes USD facts,
+`lunco-usd-sim` projects them and owns scene readiness, and `PortRegistry`
+resolves already-live values. No layer polls files, retries a connection each
+physics tick, or uses a delay as a substitute for endpoint readiness.
+
 ## 7. Dependencies & supply chain
 
 - **pyo3 0.23 (SUP-3)** — carries two unpatched RustSec advisories, and it is
@@ -310,7 +335,7 @@ remains is the Storage-API migration, which needs a dependency line from
 ## 8. Testing debt
 
 - **Zero-test crates:** `lunco-worker-transport` (the wire handshake — the
-  exact place silent corruption lives, see §4), `lunco-sandbox-server`, and
+  exact place silent corruption lives, see §4), `lunco-luncosim-server`, and
   the `luncosim` binary itself. The review's meta-finding: the bimodal
   coverage map matches the bug map.
 - **`lunco-command-macro` is structurally untestable** — the logic lives

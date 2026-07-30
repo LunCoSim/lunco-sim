@@ -34,10 +34,9 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 # The boot-entry hook: `consult_boot` invokes the `BOOT_HOOK` rhai policy to
 # decide startup (onboard / load / nothing) — no onboarding logic in Rust.
 lunco-hooks = { path = "../lunco-hooks" }
-# The curriculum IS a USD layer, so reading it is composition, not parsing.
-# DIRECTLY, never via `lunco-usd-bevy`: that crate pulls `lunco-render`, and
-# cargo unifies features across the graph, so depending on it would relink the
-# GPU stack into the `--no-ui` server. See docs/architecture/render-decoupling.md.
+# Curriculum projection reads an already-composed USD stage from the public
+# USD boundary; it does not own asset traversal or stage assembly.
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 openusd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

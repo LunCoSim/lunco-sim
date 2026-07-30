@@ -68,6 +68,8 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use lunco_hooks::HookValue as H;
+use lunco_settings::{AppSettingsExt, SettingsSection};
+use serde::{Deserialize, Serialize};
 
 /// Hook id for the readiness policy: `(context) -> action name`.
 ///
@@ -89,6 +91,33 @@ pub mod kinds {
     /// A subject's simulation participant is being initialised — solver
     /// allocated, ports bound, first step not yet taken.
     pub const PARTICIPANT_INIT: &str = "participant_init";
+    /// A required scene program failed after it was dispatched. This is distinct
+    /// from a slow compile: the policy may fail closed indefinitely, or an
+    /// operator may explicitly choose best-effort continuation.
+    pub const PROGRAM_FAILED: &str = "program_failed";
+}
+
+/// Default behavior for failed required Modelica programs.
+///
+/// This is a default, not the final authority: the Rhai readiness policy sees
+/// both this choice and its resulting action and may override it for a scene.
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ReadinessSettings {
+    /// Continue physics after a Modelica failure. Off by default: a failed
+    /// controller or generated island makes the assembly invalid.
+    pub ignore_failed_models: bool,
+}
+
+impl Default for ReadinessSettings {
+    fn default() -> Self {
+        Self {
+            ignore_failed_models: false,
+        }
+    }
+}
+
+impl SettingsSection for ReadinessSettings {
+    const KEY: &'static str = "readiness";
 }
 
 /// Who is not ready.
@@ -322,10 +351,24 @@ pub struct HeldForReadiness;
 /// Consults [`READINESS_HOOK`] and falls back to [`Action::builtin`] when no hook
 /// is registered, when it faults, or when it answers with something outside the
 /// closed action set.
-fn decide(kind: &str, subject: Subject, label: &str, elapsed_ticks: u64, elapsed_s: f64) -> Action {
+fn decide(
+    kind: &str,
+    subject: Subject,
+    label: &str,
+    elapsed_ticks: u64,
+    elapsed_s: f64,
+    settings: &ReadinessSettings,
+) -> Action {
     let entity_bits = match subject {
         Subject::Entity(e) => e.to_bits() as i64,
         Subject::World => -1,
+    };
+    let default_action = if kind == kinds::PROGRAM_FAILED && settings.ignore_failed_models {
+        Action::Proceed
+    } else if kind == kinds::PROGRAM_FAILED {
+        Action::HoldWorld
+    } else {
+        Action::builtin(kind, subject, elapsed_s)
     };
     let ctx = H::map([
         ("kind", H::str(kind)),
@@ -344,9 +387,14 @@ fn decide(kind: &str, subject: Subject, label: &str, elapsed_ticks: u64, elapsed
         // may branch on either; seconds are derived from ticks, so they agree.
         ("elapsed_ticks", H::Int(elapsed_ticks as i64)),
         ("deadline_ticks", H::Int(Action::DEADLINE_TICKS as i64)),
+        ("default_action", H::str(default_action.name())),
+        (
+            "ignore_failed_models",
+            H::Bool(settings.ignore_failed_models),
+        ),
     ]);
 
-    let fallback = || Action::builtin(kind, subject, elapsed_s);
+    let fallback = || default_action;
     let Some(result) = lunco_hooks::invoke(READINESS_HOOK, &[ctx]) else {
         return fallback();
     };
@@ -392,6 +440,7 @@ pub fn evaluate_readiness(
     entities: &bevy::ecs::entity::Entities,
     mut registry: ResMut<ReadinessRegistry>,
     mut state: ResMut<ReadinessState>,
+    settings: Res<ReadinessSettings>,
     // Fixed-clock elapsed at the previous run. `Time<Fixed>::delta` is one step's
     // duration whatever happened this frame, so the number of steps has to come
     // from the difference in elapsed time.
@@ -427,6 +476,7 @@ pub fn evaluate_readiness(
             &item.label,
             item.elapsed_ticks,
             item.elapsed_s,
+            &settings,
         );
 
         if !item.warned && item.elapsed_s >= Action::DEADLINE_S {
@@ -499,7 +549,8 @@ pub struct ReadinessSet;
 
 impl Plugin for ReadinessPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ReadinessRegistry>()
+        app.register_settings_section::<ReadinessSettings>()
+            .init_resource::<ReadinessRegistry>()
             .init_resource::<ReadinessState>()
             .add_systems(
                 PreUpdate,

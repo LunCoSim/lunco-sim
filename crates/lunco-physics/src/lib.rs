@@ -54,6 +54,11 @@ pub struct PhysicsHolds {
 impl PhysicsHolds {
     /// Terrain DEM build / collider-ring warm-up (`lunco-terrain-surface`).
     pub const TERRAIN_READY: &'static str = "terrain-ready";
+    /// A body was promoted from its authored kinematic loading pose to Dynamic.
+    /// This one-frame bridge prevents a freshly promoted rover from stepping in
+    /// the fixed loop before the terrain ring has observed the new body and made
+    /// its collider live beneath it.
+    pub const GROUND_ACTIVATION: &'static str = "ground-activation";
     /// Something the world needs is not ready yet — a scene still composing, a
     /// program still compiling. Raised from [`lunco_readiness`] by
     /// [`readiness::apply_world_readiness_hold`]; the *scope* of a wait (world vs

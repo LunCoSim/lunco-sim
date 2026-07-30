@@ -207,6 +207,33 @@ def Xform "CommsAntenna" (
                 bool physics:collisionEnabled = false
                     }
 
+            # Dedicated communications indicator — intentionally separate from
+            # navigation/route colours and from the green/red link beams. This
+            # is the physical "radio powered" LED at the feed assembly, so an
+            # operator can identify the communications hardware at a glance.
+                    def Material "CommsIndicatorMaterial"
+                    {
+                token outputs:surface.connect = <PreviewSurface.outputs:surface>
+                        def Shader "PreviewSurface"
+                        {
+                    uniform token info:id = "UsdPreviewSurface"
+                    color3f inputs:diffuseColor = (0.005, 0.05, 0.012)
+                    color3f inputs:emissiveColor = (0.04, 2.6, 0.30)
+                    float inputs:metallic = 0.0
+                    float inputs:roughness = 0.26
+                    token outputs:surface
+                        }
+                    }
+
+                    def Sphere "CommsIndicator"
+                    {
+                double radius = 0.055
+                double3 xformOp:translate = (0.0, 0.085, 0.035)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                rel material:binding = <CommsIndicatorMaterial>
+                bool physics:collisionEnabled = false
+                    }
+
             # The beam is a child of the physical endpoint, so its generic driver
             # resolves this LinkState rather than the antenna mount.
                     def "LinkBeam" (
@@ -219,18 +246,24 @@ def Xform "CommsAntenna" (
         }
     }
 
-    # Pointing mathematics is Modelica, not a scenario script. The environment
-    # bridge supplies the self-looped unit direction in THIS root's mount frame:
+    # Pointing mathematics is Modelica, not a scenario script. A distinct
+    # environment source supplies the unit direction in THIS root's mount frame:
     # +X right, +Y up, -Z forward. EarthTracker is the sole vector→joint-angle
     # conversion; hosts never copy an axis or sign convention.
+    def Xform "Environment" (
+        prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+    )
+    {
+    }
+
     def Xform "EarthTrackerController" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
-        float inputs:earth_mount_x.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_x>
-        float inputs:earth_mount_y.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_y>
-        float inputs:earth_mount_z.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_z>
+        float inputs:earth_mount_x.connect = </CommsAntenna/Environment.outputs:earth_mount_x>
+        float inputs:earth_mount_y.connect = </CommsAntenna/Environment.outputs:earth_mount_y>
+        float inputs:earth_mount_z.connect = </CommsAntenna/Environment.outputs:earth_mount_z>
     }
 
     # ── The two hinges. BOTH live here, and nowhere else. ────────────────────

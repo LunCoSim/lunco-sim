@@ -1,4 +1,4 @@
-// Cinematic director for the lunar-descent demo (scenes/sandbox/lander_cinematic.usda).
+// Cinematic director for the lunar-descent demo (scenes/luncosim/lander_cinematic.usda).
 //
 // ONE example that shows BOTH animation and planning as a scripted cut-scene:
 //   • ANIMATION — starts the keyframed-camera transport (`play_animation()`),

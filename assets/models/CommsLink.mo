@@ -66,6 +66,8 @@ model CommsLink
   // ── Traffic + buffer ────────────────────────────────────────────────────────
   input Real data_in_bps = 5.0e5 "Payload generated on board, bits/s";
   input Real buffer_capacity_bits = 8.0e7 "Onboard store, bits (10 MB)";
+  parameter Real buffer_release_time_s = 1.0
+    "Time scale used to convert queued bits into an available drain rate";
 
   // ── Solver hygiene ──────────────────────────────────────────────────────────
   // Same reasoning as Battery.mo: raw inputs jump (a peer switch teleports `range`,
@@ -100,6 +102,8 @@ model CommsLink
   output Real lost_bits "Cumulative data dropped to overflow, bits";
   output Real up
     "Link availability, 0..1 — 1 when the link both closes geometrically AND has SNR margin";
+  output Real tx_active
+    "Transmitter demand, 0..1 — link is usable and buffered/live traffic exists";
 
   // ── Internals ───────────────────────────────────────────────────────────────
   Real range_f(start = 1.0e6) "Filtered range, m";
@@ -117,6 +121,7 @@ model CommsLink
   Real drain_bps "What we actually get off the vehicle";
   Real conn_gate "Geometry verdict as a 0..1 gate";
   Real margin_gate "Demod-lock verdict as a 0..1 gate";
+  Real traffic_gate "Buffered or live traffic is available to transmit, 0..1";
   Real fill_gate "Buffer-full verdict as a 0..1 gate";
   Real inflow_net_bps "Net rate into the buffer before the ceiling, bits/s";
   Real overflow_bps "Rate shed because the buffer is full, bits/s";
@@ -164,7 +169,14 @@ equation
   //    The ceiling is a gate on fill: below capacity nothing is shed, at capacity the
   //    positive part of the net inflow is shed and the buffer holds flat, and a buffer
   //    that is full but draining (drain > data_in) still empties normally.
-  drain_bps = min(rate_bps, max(data_in_bps + q, 0.0));
+  drain_bps = min(rate_bps, max(
+    data_in_bps + q / max(1.0e-3, buffer_release_time_s),
+    0.0));
+  // Electrical transmit demand follows actual modem utilization. This naturally
+  // tapers the final fraction of a queue instead of charging full RF power for
+  // every asymptotically nonzero bit.
+  traffic_gate = min(max(drain_bps / max(1.0, rate_bps), 0.0), 1.0);
+  tx_active = up * traffic_gate;
   inflow_net_bps = data_in_bps - drain_bps;
   fill_gate = min(max((q - buffer_capacity_bits * (1.0 - overflow_band_frac))
                       / (buffer_capacity_bits * overflow_band_frac), 0.0), 1.0);

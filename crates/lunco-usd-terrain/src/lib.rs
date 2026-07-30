@@ -37,12 +37,24 @@ use lunco_usd_bevy::{StageView, UsdRead};
 /// physics comes out of this projection.
 pub struct UsdTerrainPlugin;
 
+/// Ordered phases of the USD terrain projection.
+///
+/// Consumers that admit dynamic bodies must run after [`UsdTerrainSet::Bridge`]:
+/// before that point a just-spawned terrain prim has not yet declared whether it
+/// needs a DEM collider, so admitting a rover is a one-frame free-fall race.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UsdTerrainSet {
+    /// Examines every USD prim and starts any authored DEM terrain request.
+    Bridge,
+}
+
 impl Plugin for UsdTerrainPlugin {
     fn build(&self, app: &mut App) {
+        app.configure_sets(Update, UsdTerrainSet::Bridge);
         app.add_systems(
             Update,
             (
-                bridge_usd_dem_terrain,
+                bridge_usd_dem_terrain.in_set(UsdTerrainSet::Bridge),
                 refresh_layered_terrain_layers,
                 cache_terrain_document,
                 refresh_docbacked_terrain_from_doc,

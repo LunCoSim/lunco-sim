@@ -3,6 +3,7 @@ within LunCo.Sensors;
 // Altimeter Radar / Laser Sensor model for lander GNC.
 // Measures altitude above terrain, accounting for sensor mount offset, max range mask, and noise.
 model Altimeter
+  extends LunCo.Icons.Sensor;
   parameter Real range_max_m = 2500.0 "Maximum operating range limit, m";
   parameter Real mount_offset_m = 1.2 "Sensor mount offset above landing foot datum, m";
 

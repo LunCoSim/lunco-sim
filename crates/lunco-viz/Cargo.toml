@@ -18,6 +18,8 @@ ui = [
     "dep:lunco-workbench",
     "dep:lunco-theme",
     "dep:lunco-canvas",
+    "dep:lunco-core",
+    "dep:lunco-usd-bevy",
     "dep:serde",
     "dep:serde_json",
 ]
@@ -33,6 +35,10 @@ lunco-theme = { path = "../lunco-theme", optional = true }
 # unaffected. It lives outside this crate so `lunco-telemetry` can push samples into the
 # ring buffer without linking bevy_egui → bevy_render (this crate's `ui` feature does).
 lunco-signal = { path = "../lunco-signal" }
+# Plot bindings persist a source through scene reload using the content-derived
+# GlobalEntityId on the USD entity that owns it.
+lunco-core = { path = "../lunco-core", optional = true }
+lunco-usd-bevy = { path = "../lunco-usd-bevy", optional = true }
 # Used by `kinds::canvas_plot_node` to implement
 # `lunco_canvas::NodeVisual` so plots can live as first-class nodes
 # inside any `lunco_canvas::Scene` (Simulink-style scope blocks,

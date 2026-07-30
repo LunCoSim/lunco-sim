@@ -5,16 +5,15 @@ is the index — each primary app has its own page under `docs/apps/<app>/` with
 full CLI flags, controls, and workflows.
 
 > **`cargo run` needs a target.** The workspace `default-members` are
-> `luncosim`, `lunco-sandbox`, and `lunco-modelica`, so a bare `cargo run` is
+> `lunco-luncosim` and `lunco-modelica`, so a bare `cargo run` is
 > ambiguous. Always pass `-p <crate>` and/or `--bin <name>`.
 
 ## Primary apps
 
 | Binary | Crate | Launch | What it is |
 |---|---|---|---|
-| `luncosim` | `luncosim` | `cargo run -p luncosim` | **Flagship simulator.** Full lunar mission: celestial bodies + ephemeris, solar-system-scale `big_space`, orbital camera, and the whole FSW / Hardware / Mobility / Robotics / Avatar stack under the workbench. Always windowed (native) or web (wasm). |
-| `sandbox` | `lunco-sandbox` | `cargo run --release -p lunco-sandbox --bin sandbox` | **Physics Sandbox.** Ground mobility + physics test bed — collaborative 3D scene (USD + Avian3D). Windowed, headless (`--no-ui`), or web. See [sandbox](sandbox/README.md). |
-| `sandbox-server` | `lunco-sandbox-server` | `cargo run -p lunco-sandbox-server` | **Headless server.** Same sim as `sandbox` via `run_headless()`, but the GUI stack (winit/egui) is never linked — for multiplayer hosting and automation. Deploy guide: [sandbox/OPS.md](sandbox/OPS.md). |
+| `luncosim` | `lunco-luncosim` | `cargo build -p lunco-luncosim --bin luncosim`, then `target/debug/luncosim` | **Mission simulator.** Collaborative USD scene with celestial, robotics, physics, and engineering tools. Windowed, headless (`--no-ui`), or web. See [luncosim](luncosim/README.md). |
+| `luncosim-server` | `lunco-luncosim-server` | `cargo run -p lunco-luncosim-server` | **Headless server.** Same sim as `luncosim` via `run_headless()`, but the GUI stack (winit/egui) is never linked — for multiplayer hosting and automation. Deploy guide: [luncosim/OPS.md](luncosim/OPS.md). |
 | `lunica` | `lunco-modelica` | `cargo run --bin lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; MSL browser. Windowed, headless (`--no-ui`), or web. See [lunica](lunica/README.md). |
 | `lunco-assets` | `lunco-assets` | `cargo run -p lunco-assets --bin lunco-assets -- <download\|list\|process>` | **Assets Manager.** Download / verify (SHA-256) / process external assets (textures, MSL, models). See [assets-manager](assets-manager/README.md). |
 
@@ -32,11 +31,11 @@ full CLI flags, controls, and workflows.
 
 ## Web (wasm) builds
 
-The windowed apps (`luncosim`, `sandbox`, `lunica`) share one desktop+web
+The windowed apps (`luncosim`, `luncosim`, `lunica`) share one desktop+web
 source. Build the web bundle with:
 
 ```bash
-scripts/build_web.sh build sandbox   # or: lunica
+scripts/build_web.sh build luncosim   # or: lunica
 ```
 
 `lunco-web`'s `WebReadyPlugin` dismisses the HTML loader once the first frame
@@ -45,13 +44,13 @@ paints (no-op on native).
 ## Common CLI flags
 
 These are honored by the windowed apps that embed the HTTP API bridge
-(`sandbox`, `lunica`, and any app that installs `LunCoApiPlugin`):
+(`luncosim`, `lunica`, and any app that installs `LunCoApiPlugin`):
 
 | Flag | Effect |
 |---|---|
 | `--api [PORT]` | Enable the HTTP automation API. Omit `PORT` to use the default **4101** (`lunco_core::session::DEFAULT_API_PORT`). Without `--api`, no network surface is exposed. |
 | `--no-ui` | Run headless — skip the winit window / egui chrome, run the shared sim/physics loop only. |
-| `--scene <path>` | (`sandbox`) Load a USD scene on boot. Path is relative to the `assets/` source root — do **not** prefix with `assets/`. |
+| `--scene <path>` | (`luncosim`) Load a USD scene on boot. Path is relative to the `assets/` source root — do **not** prefix with `assets/`. |
 
 ## Talking to a running app — HTTP API & MCP
 

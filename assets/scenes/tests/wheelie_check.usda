@@ -8,7 +8,7 @@
 # Does the rover LAUNCH FLAT? Flat ground, no step, no slope — full throttle from
 # a standstill on the tier the summer school actually drives (`rover_medium`).
 #
-#   cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
+#   cargo run -q -p lunco-luncosim --bin luncosim -j 2 -- test \
 #       --scene scenes/tests/wheelie_check.usda
 #
 # WHAT IT GUARDS. A wheel motor's torque lands on the wheel and its REACTION on

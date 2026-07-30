@@ -15,7 +15,7 @@
 //! - `query::TerrainHeightProvider` — got it right, after a fix.
 //! - `stream_viz::dem_ground_height` — got it right, after a fix, but kept an
 //!   ignored `&GlobalTransform` parameter that still advertised the wrong idea.
-//! - `lunco-sandbox-edit`'s spawn ghost — kept a private copy that inverted the
+//! - `lunco-luncosim-edit`'s spawn ghost — kept a private copy that inverted the
 //!   terrain's **render** `GlobalTransform` and marched the oracle in that frame.
 //!
 //! The third one is why a rover placed at Apollo 15 (a real site ~1.9 km below

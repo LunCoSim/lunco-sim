@@ -29,6 +29,16 @@ use std::collections::{HashMap, VecDeque};
 /// Mirrors `WorkbenchState.max_history`.
 pub const DEFAULT_CAPACITY: usize = 2000;
 
+/// Marks an entity whose complete output surface is retained directly by its
+/// owning signal producer. Generic port discovery must not create a second
+/// sampler for these outputs: it would duplicate histories and discard the
+/// producer's authored provenance and USD presentation path.
+///
+/// This is lifecycle metadata only. It does not publish, sample, or classify a
+/// signal; the owning producer remains the single source of samples.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct WholesaleSignalSource;
+
 /// Stable identity for a signal across frames **within one session**.
 ///
 /// The `entity` half is not decoration: signal *names collide*. Two rovers both report
@@ -146,7 +156,7 @@ pub enum SignalType {
 
 /// Descriptive metadata. Optional and non-load-bearing — viz kinds render without it,
 /// but tooltips, legends, and axis labels get better when it's populated.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignalMeta {
     pub description: Option<String>,
     /// Physical unit, e.g. `"kg"`, `"N"`, `"m/s"`.
@@ -154,6 +164,8 @@ pub struct SignalMeta {
     /// Free-form tag naming who created the signal: `"modelica"`, `"avian"`, `"script"`,
     /// `"telemetry"`. Lets the inspector group signals by provenance.
     pub provenance: Option<String>,
+    /// Runtime visual ownership path supplied by the producing model.
+    pub group_path: Option<String>,
 }
 
 /// One (time, value) pair for a [`SignalType::Scalar`] signal.
@@ -221,7 +233,14 @@ pub struct SignalRegistry {
     scalar_history: HashMap<SignalRef, ScalarHistory>,
     types: HashMap<SignalRef, SignalType>,
     meta: HashMap<SignalRef, SignalMeta>,
+    /// Sources may disappear while their mission history remains useful.  This
+    /// records the live/inactive boundary without deleting samples or metadata.
+    inactive: std::collections::HashSet<SignalRef>,
     default_capacity: usize,
+    /// Monotonic revision of the channel catalog. Sample values deliberately do
+    /// not change it: UI surfaces use this to rebuild their hierarchy only when
+    /// a channel's identity, metadata, or live/archive state changes.
+    catalog_revision: u64,
 }
 
 impl SignalRegistry {
@@ -247,12 +266,17 @@ impl SignalRegistry {
             return;
         }
         let cap = self.capacity_default();
+        let was_known = self.types.contains_key(&sig);
+        let was_inactive = self.inactive.remove(&sig);
         let history = self
             .scalar_history
             .entry(sig.clone())
             .or_insert_with(|| ScalarHistory::new(cap));
         history.push(ScalarSample { time, value });
         self.types.entry(sig).or_insert(SignalType::Scalar);
+        if !was_known || was_inactive {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     /// Push a sample into a signal with an explicit retention depth — **this is how a
@@ -269,6 +293,8 @@ impl SignalRegistry {
         if !value.is_finite() {
             return;
         }
+        let was_known = self.types.contains_key(&sig);
+        let was_inactive = self.inactive.remove(&sig);
         let history = self
             .scalar_history
             .entry(sig.clone())
@@ -278,10 +304,22 @@ impl SignalRegistry {
         }
         history.push(ScalarSample { time, value });
         self.types.entry(sig).or_insert(SignalType::Scalar);
+        if !was_known || was_inactive {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
-        self.meta.insert(sig, meta);
+        if self.meta.get(&sig) != Some(&meta) {
+            self.meta.insert(sig, meta);
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+    }
+
+    /// Revision for UI catalogs. It changes only when their rendered channel
+    /// descriptors can change, never while ordinary samples stream in.
+    pub fn catalog_revision(&self) -> u64 {
+        self.catalog_revision
     }
 
     pub fn scalar_history(&self, sig: &SignalRef) -> Option<&ScalarHistory> {
@@ -300,6 +338,30 @@ impl SignalRegistry {
         self.meta.get(sig)
     }
 
+    /// Whether this channel has a currently live publisher.  Inactive channels
+    /// deliberately retain their history for plots, export, and post-run review.
+    pub fn is_active(&self, sig: &SignalRef) -> bool {
+        !self.inactive.contains(sig)
+    }
+
+    /// Keep all samples and metadata but mark one channel's live publisher gone.
+    pub fn deactivate_signal(&mut self, sig: &SignalRef) {
+        if self.types.contains_key(sig) && self.inactive.insert(sig.clone()) {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+    }
+
+    /// Keep all samples and metadata but mark every channel from this source inactive.
+    pub fn deactivate_entity(&mut self, entity: Entity) {
+        let mut changed = false;
+        for sig in self.types.keys().filter(|sig| sig.entity == entity) {
+            changed |= self.inactive.insert(sig.clone());
+        }
+        if changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+    }
+
     pub fn iter_signals(&self) -> impl Iterator<Item = (&SignalRef, SignalType)> {
         self.types.iter().map(|(r, t)| (r, *t))
     }
@@ -307,9 +369,14 @@ impl SignalRegistry {
     /// Drop every signal owned by `entity`. Called when an entity despawns so stale
     /// references don't linger.
     pub fn drop_entity(&mut self, entity: Entity) {
+        let changed = self.types.keys().any(|r| r.entity == entity);
         self.scalar_history.retain(|r, _| r.entity != entity);
         self.types.retain(|r, _| r.entity != entity);
         self.meta.retain(|r, _| r.entity != entity);
+        self.inactive.retain(|r| r.entity != entity);
+        if changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     /// Forget a signal entirely — history, type, and metadata.
@@ -318,9 +385,12 @@ impl SignalRegistry {
     /// its own entity, so when the CHANNEL dies the rover does not, and only that one signal
     /// should go.
     pub fn remove_signal(&mut self, sig: &SignalRef) {
-        self.scalar_history.remove(sig);
-        self.types.remove(sig);
+        let changed = self.scalar_history.remove(sig).is_some() | self.types.remove(sig).is_some();
         self.meta.remove(sig);
+        self.inactive.remove(sig);
+        if changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
     }
 
     /// Clear one signal's history without dropping its type / meta entry.
@@ -339,7 +409,7 @@ impl SignalRegistry {
 /// [`SignalRegistry`] does: the surfaces that read it (`lunco-viz`'s telemetry
 /// browser today, a HUD or a recorder tomorrow) must not depend on whichever app
 /// crate owns the selection UX, and the app crate that WRITES it
-/// (`lunco-sandbox-edit`'s `SelectedEntities` mirror) must not depend on a GPU
+/// (`lunco-luncosim-edit`'s `SelectedEntities` mirror) must not depend on a GPU
 /// stack. Empty ⇒ no focus; every consumer shows everything.
 ///
 /// Roots, not channel owners: a channel sits on the prim it measures (a motor, a
@@ -371,21 +441,21 @@ impl TelemetryFocus {
 
 /// Marker for an entity that owns [`SignalRegistry`] entries. Producers tag the
 /// owning entity when they start pushing entity-scoped signals for it;
-/// [`drop_signals_of_removed_source`] then frees the registry slots when the entity
-/// dies, so no despawn path has to remember to call
-/// [`SignalRegistry::drop_entity`] by hand.
+/// [`drop_signals_of_removed_source`] then marks their retained histories inactive
+/// when the source dies.
 #[derive(Component, Debug, Default, Clone, Copy)]
 pub struct SignalSource;
 
 /// Observer: a [`SignalSource`] entity despawned (or lost the marker) — drop every
-/// signal it owned so dead entities' history and metadata don't accumulate.
+/// signal it owned inactive.  Telemetry is mission record, not a live-widget
+/// cache: a despawned model must remain graphable and exportable.
 /// Registered once by `LunCoTelemetryPlugin`, which owns the registry resource in
 /// both headless and GUI builds.
 pub fn drop_signals_of_removed_source(
     trigger: On<Remove, SignalSource>,
     mut signals: ResMut<SignalRegistry>,
 ) {
-    signals.drop_entity(trigger.entity);
+    signals.deactivate_entity(trigger.entity);
 }
 
 #[cfg(test)]

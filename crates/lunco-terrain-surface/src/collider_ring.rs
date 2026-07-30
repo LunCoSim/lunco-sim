@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use avian3d::prelude::{Collider, RigidBody};
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
@@ -479,6 +479,11 @@ pub fn update_collider_ring(
                     Transform::from_translation(local),
                     ColliderTileOf(terrain),
                     Name::new(format!("ColliderTile {},{}", coord.x, coord.z)),
+                    // A collider tile is streamed runtime implementation detail,
+                    // just like its visual LOD counterpart.  Marking it closes
+                    // the ownership boundary for entity-tree invalidation and
+                    // automatic port telemetry discovery.
+                    lunco_core::SystemManaged,
                     ChildOf(grid_entity),
                 ))
                 .id();
@@ -709,6 +714,13 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
 /// ABOVE (a body already below a one-sided heightfield never recovers).
 const SETTLE_CLEARANCE: f64 = 0.6;
 
+// A raycast contact is the *wheel axle*, not a rigid tyre volume. Its cast
+// starts at the suspension strut top and only supports the chassis once it is
+// slightly compressed, so placing the tyre a large distance above the terrain
+// leaves the ground outside the spring's rest-length window. Keep the contact
+// just below the datum to establish a real normal force on the first step.
+const RAYCAST_SETTLE_CLEARANCE: f64 = -0.02;
+
 /// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
 /// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).
 ///
@@ -724,17 +736,29 @@ const SETTLE_CLEARANCE: f64 = 0.6;
 pub fn settle_grounded_assemblies(
     terrains: Query<&crate::stream_viz::DemHeightField, With<TerrainColliderRing>>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
+    footprints: Query<Option<&lunco_core::GroundSettleFootprint>>,
     mut bodies: Query<(
         Entity,
         &mut avian3d::prelude::Position,
         Option<&mut avian3d::prelude::LinearVelocity>,
         Option<&mut avian3d::prelude::AngularVelocity>,
     )>,
+    rotations: Query<&avian3d::prelude::Rotation>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
+    holds: Option<Res<lunco_physics::PhysicsHolds>>,
     mut commands: Commands,
 ) {
     if q_needs.is_empty() {
+        return;
+    }
+    // The marker is an initial-placement request, not an estimate.  The DEM
+    // height oracle and its collider ring become usable in different frames;
+    // consuming it while the terrain-ready hold is active samples the
+    // pre-residency pose and leaves raycast wheels outside their cast range.
+    // Keep it armed until the same readiness gate that releases physics has
+    // confirmed a live surface under every dynamic body.
+    if holds.is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY)) {
         return;
     }
     // Query the oracle in the SAME grid-absolute frame as avian `Position` (terrain
@@ -763,27 +787,74 @@ pub fn settle_grounded_assemblies(
         }
         let members = joint_component(seed, &adj);
         done.extend(members.iter().copied());
-        // Lift = how far the deepest member sits below (surface + clearance). The
-        // chassis (high) never drives it; the low wheels do.
         let mut lift = 0.0_f64;
         let mut over_terrain = false;
-        for &m in &members {
-            let Some(p) = pos_of.get(&m) else { continue };
-            if p.0.x.abs() > half || p.0.z.abs() > half {
-                continue; // this member is off the terrain footprint
+        // Probe-only contact geometry (raycast wheels) belongs to the same
+        // placement pass as rigid members. It is authored in the vehicle frame,
+        // transformed once by the solved root pose, and sampled from the same
+        // oracle as every other terrain consumer.
+        // A dynamic physical wheel can be the first `NeedsGroundSettle` seed
+        // encountered for a jointed vehicle. The raycast contact footprint,
+        // however, belongs to its DriveMix root. Resolve it from the seed and
+        // then across the whole assembly instead of assuming the arbitrary
+        // dynamic member owns it. Raycast vehicles MUST use only this geometry:
+        // their high chassis has no terrain contact, and its near-zero generic
+        // lift used to consume the request before a wheel probe could settle it.
+        let raycast_footprint = footprints
+            .get(seed)
+            .ok()
+            .flatten()
+            .map(|footprint| (seed, footprint))
+            .or_else(|| {
+                members.iter().find_map(|member| {
+                    footprints
+                        .get(*member)
+                        .ok()
+                        .flatten()
+                        .map(|footprint| (*member, footprint))
+                })
+            });
+        if let Some((footprint_owner, footprint)) = raycast_footprint {
+            let Some(root_pos) = pos_of.get(&footprint_owner) else {
+                continue;
+            };
+            let root_rot = rotations
+                .get(footprint_owner)
+                .map(|rotation| rotation.0)
+                .unwrap_or(DQuat::IDENTITY);
+            for contact in &footprint.0 {
+                let point = root_pos.0 + root_rot * contact.local_offset;
+                if point.x.abs() > half || point.z.abs() > half {
+                    continue;
+                }
+                let surface = hf.0.height_at(point.x, point.z);
+                lift = lift.max(surface + RAYCAST_SETTLE_CLEARANCE - (point.y - contact.radius));
+                over_terrain = true;
             }
-            over_terrain = true;
-            let surface = hf.0.height_at(p.0.x, p.0.z);
-            lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
+        } else {
+            // Physical wheels are real bodies, so lift from the deepest dynamic
+            // member. The chassis (high) never drives it; the low wheels do.
+            for &m in &members {
+                let Some(p) = pos_of.get(&m) else { continue };
+                if p.0.x.abs() > half || p.0.z.abs() > half {
+                    continue; // this member is off the terrain footprint
+                }
+                over_terrain = true;
+                let surface = hf.0.height_at(p.0.x, p.0.z);
+                lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
+            }
         }
-        // One-shot: consume the marker on the whole assembly regardless.
+        if !over_terrain || lift <= 0.0 {
+            continue;
+        }
+        // Consume only after an actual placement.  During terrain/celestial
+        // startup the same assembly can be observed before its final
+        // grid-absolute pose exists; treating that zero-lift observation as a
+        // completed settle loses the sole chance to lift its wheel probes.
         for &m in &members {
             commands
                 .entity(m)
                 .try_remove::<lunco_core::NeedsGroundSettle>();
-        }
-        if !over_terrain || lift <= 0.0 {
-            continue;
         }
         for &m in &members {
             if let Ok((_, mut pos, lin, ang)) = bodies.get_mut(m) {

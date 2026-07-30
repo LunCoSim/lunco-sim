@@ -19,7 +19,7 @@
 //! ```
 //!
 //! It lives in `lunco-core` for the same reason [`crate::pacing`] does: the
-//! subsystems that own these gates (`lunco-celestial`, `lunco-sandbox-edit`, …)
+//! subsystems that own these gates (`lunco-celestial`, `lunco-luncosim-edit`, …)
 //! all depend on core and none depends on another.
 //!
 //! This measures *effectiveness*, not correctness. A gate that legitimately fires

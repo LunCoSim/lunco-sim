@@ -77,7 +77,7 @@ def Xform "BuildBase" (
     # student sees the whole build area and can fly in to place each part.
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
-        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

@@ -9,11 +9,16 @@ within LunCo.Mechanics;
 //
 // `physxVehicleWheel:dampingRate` is the authored spelling of `d`.
 model BearingFriction
+  extends LunCo.Icons.Mechanics;
   parameter Real d = 0.0 "Viscous damping coefficient, N.m per rad/s";
 
   Flange flange;
   Real w "Angular velocity, rad/s";
+  output Real speed_rad_s(unit="rad/s") "Bearing shaft angular velocity";
+  output Real resisting_torque_nm(unit="N.m") "Viscous resisting torque applied by the bearing";
 equation
   w = der(flange.phi);
   flange.tau = d * w;
+  speed_rad_s = w;
+  resisting_torque_nm = flange.tau;
 end BearingFriction;

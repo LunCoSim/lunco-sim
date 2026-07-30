@@ -55,7 +55,7 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::ports::{PortRegistry, ResolvedPort};
+use lunco_core::ports::{PortDirection, PortRegistry, ResolvedPort};
 use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
@@ -170,6 +170,7 @@ fn on_control_telemetry(
             let param = Parameter {
                 name,
                 unit: cmd.unit.clone().unwrap_or_default(),
+                description: None,
                 source,
                 target: Some(entity),
                 rate_hz: cmd.rate_hz,
@@ -282,6 +283,7 @@ fn spawn_engine_health_channels(
             Parameter {
                 name: name.to_string(),
                 unit: unit.to_string(),
+                description: None,
                 source: ChannelSource::Diagnostic(path.to_string()),
                 rate_hz: Some(2.0),
                 target: None,
@@ -324,6 +326,125 @@ struct SamplingPlan {
     dirty: bool,
 }
 
+/// Marks a channel generated from a live public output.  It carries no authored
+/// data: the port backend remains the source for existence and value, while the
+/// normal [`Parameter`] sampler supplies cadence, retention, API, and history.
+#[derive(Component, Debug, Clone)]
+struct RuntimePortChannel;
+
+/// Last metadata applied to a retained signal by a telemetry channel.
+///
+/// Channel policy changes are rare while samples are continuous. Keeping this
+/// tiny cache on the channel means [`retain_sample`] can update plot metadata
+/// exactly when that policy changes, rather than allocating and replacing the
+/// same strings for every sample.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct RetainedSignalMeta {
+    description: Option<String>,
+    unit: String,
+}
+
+/// Bounded discovery cadence. Port values sample at the fixed telemetry rate;
+/// topology need only be rediscovered shortly after a spawn/despawn, not every
+/// fixed step. At 64 Hz this is a quarter-second maximum attach delay.
+#[derive(Resource)]
+struct RuntimePortDiscovery {
+    ticks_until_scan: u8,
+}
+
+impl Default for RuntimePortDiscovery {
+    fn default() -> Self {
+        Self {
+            ticks_until_scan: 0,
+        }
+    }
+}
+
+/// Discover every currently readable public output and materialize its sampling
+/// channel.  This is deliberately runtime-only: spawned systems begin exposing
+/// telemetry on the next fixed step and no USD scene needs a telemetry tag.
+///
+/// A dedicated channel entity lets one physical component expose every output
+/// despite `Parameter` itself being a one-per-entity component.  Existing
+/// explicitly-created channels win by `(target, port)` so API users retain a
+/// deliberate rate/retention override without duplicated samples.
+fn discover_runtime_port_channels(world: &mut World) {
+    let due = {
+        let mut discovery = world.resource_mut::<RuntimePortDiscovery>();
+        if discovery.ticks_until_scan > 0 {
+            discovery.ticks_until_scan -= 1;
+            false
+        } else {
+            discovery.ticks_until_scan = 15;
+            true
+        }
+    };
+    if !due {
+        return;
+    }
+    let Some(ports) = world.get_resource::<PortRegistry>().cloned() else {
+        return;
+    };
+    let existing: std::collections::HashSet<(Entity, String)> = world
+        .query::<&Parameter>()
+        .iter(world)
+        .filter_map(|p| match (&p.target, &p.source) {
+            (Some(target), ChannelSource::Port(port)) => Some((*target, port.clone())),
+            _ => None,
+        })
+        .collect();
+    let entities: Vec<Entity> = world.query::<Entity>().iter(world).collect();
+    let mut discovered = Vec::new();
+    for entity in entities {
+        // Streamed terrain tiles, collider rings, and scatter are implementation
+        // detail. Publishing every internal output makes their lifecycle look like
+        // user telemetry and turns LOD churn into a growing sampling plan. An
+        // authored or explicitly-created `Parameter` remains available when a
+        // caller genuinely wants to observe a system-owned entity.
+        if world.get::<lunco_core::SystemManaged>(entity).is_some()
+            // Model outputs are already retained by `lunco-cosim`, which is the
+            // producer that holds their composed USD metadata. Sampling them
+            // again through the generic port surface would produce an ungrouped
+            // duplicate, not another observable.
+            || world
+                .get::<lunco_signal::WholesaleSignalSource>(entity)
+                .is_some()
+        {
+            continue;
+        }
+        for port in ports.entity_ports(world, entity) {
+            if !matches!(port.direction, PortDirection::Out | PortDirection::InOut)
+                || existing.contains(&(entity, port.name.clone()))
+            {
+                continue;
+            }
+            discovered.push((entity, port.name));
+        }
+    }
+    for (target, port) in discovered {
+        // Source lifecycle owns the telemetry lifecycle, regardless of where
+        // this dedicated sampling entity lives.
+        if let Ok(mut source) = world.get_entity_mut(target) {
+            source.insert(lunco_signal::SignalSource);
+        }
+        world.spawn((
+            RuntimePortChannel,
+            Name::new(format!("telemetry:{port}")),
+            Parameter {
+                name: port.clone(),
+                unit: String::new(),
+                description: None,
+                source: ChannelSource::Port(port),
+                target: Some(target),
+                rate_hz: None,
+                enabled: true,
+                deadband: None,
+                retention: None,
+            },
+        ));
+    }
+}
+
 /// Cheap change detector in front of the exclusive sampler: any added/changed/
 /// removed `Parameter` or `TimeBinding` invalidates the plan. Runs on normal
 /// (parallel) system params — the archetype-level `Changed` check and the
@@ -360,6 +481,7 @@ impl Plugin for LunCoTelemetryPlugin {
         // render-free intent, written by whichever app owns selection and read by
         // whatever displays channels. Empty here in a headless run — nothing selects.
         app.init_resource::<lunco_signal::TelemetryFocus>();
+        app.init_resource::<RuntimePortDiscovery>();
         app.add_observer(retain_sample);
         app.add_observer(drop_signal_of_removed_channel);
         app.add_observer(lunco_signal::drop_signals_of_removed_source);
@@ -383,6 +505,7 @@ impl Plugin for LunCoTelemetryPlugin {
             // machine, a flood on an uncapped headless loop) and replay would diverge.
             FixedUpdate,
             (
+                discover_runtime_port_channels,
                 // Change-driven plan maintenance — the sampler itself never scans
                 // the channel set; it walks the cached plan.
                 mark_sampling_plan_dirty,
@@ -413,23 +536,29 @@ fn sample_parameters_system(world: &mut World) {
 fn retain_sample(
     trigger: On<SampledParameter>,
     settings: Res<TelemetrySettings>,
-    channels: Query<&Parameter>,
+    channels: Query<(&Parameter, Option<&RetainedSignalMeta>)>,
+    mut commands: Commands,
     mut signals: ResMut<lunco_signal::SignalRegistry>,
 ) {
     let s = trigger.event();
     let Some(value) = numeric_of(&s.value) else {
         return;
     };
-    // The channel may live on its own entity, so find it by (target, name) rather than by
-    // looking on the measured entity.
-    let retention = channels
-        .iter()
-        .find(|p| p.name == s.name && p.target.unwrap_or(s.source) == s.source)
-        .and_then(|p| p.retention)
-        .unwrap_or(settings.default_retention);
+    // `SampledParameter` carries the producer's entity.  Looking it up directly
+    // keeps the continuous retention path O(1); the old `(source, name)` scan
+    // was O(samples × channels), and terrain-created channels made it dominate
+    // Traverse's frame time.
+    let Ok((channel, applied_meta)) = channels.get(s.channel) else {
+        // A channel can be removed between collection and observer dispatch.
+        // Its sample is no longer authoritative, so retain neither data nor
+        // stale metadata.
+        return;
+    };
+    let retention = channel.retention.unwrap_or(settings.default_retention);
+    let signal = lunco_signal::SignalRef::new(s.source, s.name.clone());
 
     signals.push_scalar_with_capacity(
-        lunco_signal::SignalRef::new(s.source, s.name.clone()),
+        signal.clone(),
         // `sim_secs`, NOT `timestamp`. The Julian-Date epoch has ~86 µs of f64 resolution
         // left, so a plot axis built from it would quantise into visible stair-steps and
         // any Δt would be garbage.
@@ -438,23 +567,26 @@ fn retain_sample(
         retention,
     );
 
-    signals.update_meta(
-        lunco_signal::SignalRef::new(s.source, s.name.clone()),
-        lunco_signal::SignalMeta {
-            description: None,
-            unit: (!s.unit.is_empty()).then(|| s.unit.clone()),
-            provenance: Some("telemetry".to_string()),
-        },
-    );
+    let expected_meta = RetainedSignalMeta {
+        description: channel.description.clone(),
+        unit: channel.unit.clone(),
+    };
+    if applied_meta != Some(&expected_meta) {
+        signals.update_meta(
+            signal,
+            lunco_signal::SignalMeta {
+                description: expected_meta.description.clone(),
+                unit: (!expected_meta.unit.is_empty()).then_some(expected_meta.unit.clone()),
+                provenance: Some("telemetry".to_string()),
+                group_path: None,
+            },
+        );
+        commands.entity(s.channel).try_insert(expected_meta);
+    }
 }
 
-/// A channel's history dies with the channel — otherwise a removed watch leaves its trace in
-/// every plot pick-list forever, and its ring buffer keeps its memory.
-///
-/// Removes exactly THIS channel's signal, keyed by `(measured entity, name)`. It must not
-/// `drop_entity`: a channel created through the API is its own entity, so dropping "everything
-/// owned by the channel entity" would delete nothing — and dropping everything owned by the
-/// MEASURED entity would take out that rover's other channels too.
+/// A channel declaration may disappear while its sampled history is still a
+/// mission artifact. Mark only this channel inactive; do not erase the trace.
 fn drop_signal_of_removed_channel(
     trigger: On<Remove, Parameter>,
     channels: Query<&Parameter>,
@@ -465,7 +597,7 @@ fn drop_signal_of_removed_channel(
         return;
     };
     let measured = param.target.unwrap_or(channel_entity);
-    signals.remove_signal(&lunco_signal::SignalRef::new(measured, param.name.clone()));
+    signals.deactivate_signal(&lunco_signal::SignalRef::new(measured, param.name.clone()));
 }
 
 /// One sampling pass. Public so a host can drive it directly (tests, a batch runner).
@@ -604,6 +736,7 @@ pub fn sample_parameters(world: &mut World) {
                 clock.last_emitted = Some(v);
             }
             samples.push(SampledParameter {
+                channel: entity,
                 name: param.name.clone(),
                 value,
                 unit: param.unit.clone(),
@@ -810,6 +943,34 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    #[derive(Component)]
+    struct TestOutput(f64);
+
+    fn list_test_output(world: &World, entity: Entity, out: &mut Vec<lunco_core::ports::PortRef>) {
+        if let Some(source) = world.get::<TestOutput>(entity) {
+            out.push(lunco_core::ports::PortRef {
+                name: "value".to_string(),
+                direction: PortDirection::Out,
+                value: source.0,
+            });
+        }
+    }
+
+    fn read_test_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
+        (name == "value").then(|| world.get::<TestOutput>(entity).map(|source| source.0))?
+    }
+
+    const TEST_OUTPUT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
+        list: list_test_output,
+        read_output: read_test_output,
+        read_input: |_, _, _| None,
+        write_input: |_, _, _, _| false,
+        resolve_output: None,
+        resolve_input: None,
+        read_slot: None,
+        write_slot: None,
+    };
+
     /// 20 ms per update against the 64 Hz default fixed step (~15.6 ms).
     const UPDATE_MS: u64 = 20;
 
@@ -899,6 +1060,80 @@ mod tests {
     #[test]
     fn a_channel_is_enabled_by_default() {
         assert!(Parameter::default().enabled);
+    }
+
+    #[test]
+    fn a_live_port_is_discovered_without_a_usd_channel_declaration() {
+        let mut app = app();
+        app.init_resource::<PortRegistry>();
+        app.world_mut()
+            .resource_mut::<PortRegistry>()
+            .register(TEST_OUTPUT_BACKEND);
+        let source = app.world_mut().spawn(TestOutput(7.5)).id();
+        // Discovery runs before the normal cached sampler in the same fixed
+        // schedule; a plain runtime port becomes observable without Parameter
+        // or USD telemetry data on the source entity.
+        step_fixed(&mut app, 2);
+        let signal = lunco_signal::SignalRef::new(source, "value".to_string());
+        let history = app
+            .world()
+            .resource::<lunco_signal::SignalRegistry>()
+            .scalar_history(&signal)
+            .expect("runtime port telemetry must exist");
+        assert_eq!(history.samples.back().unwrap().value, 7.5);
+    }
+
+    /// Runtime discovery is for the user-facing simulation surface, not the
+    /// thousands of transient terrain/collider implementation entities. Those
+    /// entities remain observable when an author deliberately adds a
+    /// `Parameter`, but must not silently grow the global sampling plan.
+    #[test]
+    fn system_managed_ports_are_not_auto_discovered_as_telemetry() {
+        let mut app = app();
+        app.init_resource::<PortRegistry>();
+        app.world_mut()
+            .resource_mut::<PortRegistry>()
+            .register(TEST_OUTPUT_BACKEND);
+        app.world_mut()
+            .spawn((TestOutput(7.5), lunco_core::SystemManaged));
+
+        step_fixed(&mut app, 2);
+
+        let mut channels = app.world_mut().query::<&RuntimePortChannel>();
+        assert_eq!(
+            channels.iter(app.world()).count(),
+            0,
+            "system-managed entities must not become implicit telemetry channels"
+        );
+    }
+
+    /// A sample distinguishes the measured source from the channel that chose
+    /// its cadence and retention. The latter lets retention use direct lookup
+    /// even when many channel entities target the same rover.
+    #[test]
+    fn samples_carry_their_producing_channel_entity() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let rover = app.world_mut().spawn(Port { value: 3.0 }).id();
+        let channel = app
+            .world_mut()
+            .spawn(Parameter {
+                rate_hz: Some(lunco_core::FIXED_HZ),
+                target: Some(rover),
+                ..reflect_channel("direct")
+            })
+            .id();
+
+        step_fixed(&mut app, 1);
+
+        let sample = seen
+            .lock()
+            .unwrap()
+            .first()
+            .cloned()
+            .expect("the channel must sample its target");
+        assert_eq!(sample.source, rover);
+        assert_eq!(sample.channel, channel);
     }
 
     #[test]
@@ -1133,10 +1368,10 @@ mod tests {
         );
     }
 
-    /// A channel's history must die with it — otherwise a despawned rover's traces linger
-    /// in every plot pick-list and keep their memory forever.
+    /// A despawn turns a channel inactive; mission history remains available for
+    /// graphing and export after the live source is gone.
     #[test]
-    fn despawning_a_channel_drops_its_history() {
+    fn despawning_a_channel_retains_inactive_history() {
         let mut app = app();
         let e = app
             .world_mut()
@@ -1163,8 +1398,14 @@ mod tests {
             app.world()
                 .resource::<lunco_signal::SignalRegistry>()
                 .scalar_history(&sig)
-                .is_none(),
-            "a despawned channel must not leave its ring buffer behind"
+                .is_some(),
+            "a despawned channel retains its mission history"
+        );
+        assert!(
+            !app.world()
+                .resource::<lunco_signal::SignalRegistry>()
+                .is_active(&sig),
+            "the source must be marked inactive"
         );
     }
 
@@ -1383,7 +1624,8 @@ mod tests {
         }
     }
 
-    /// Removing one channel must not take out the others on the same rover.
+    /// Removing one channel keeps its own history inactive and does not affect
+    /// siblings on the same rover.
     #[test]
     fn removing_one_channel_leaves_its_siblings_alone() {
         let mut app = app();
@@ -1417,8 +1659,12 @@ mod tests {
         assert!(
             signals
                 .scalar_history(&lunco_signal::SignalRef::new(rover, "drop".to_string()))
-                .is_none(),
-            "the removed channel's history must go"
+                .is_some(),
+            "the removed channel's history remains available"
+        );
+        assert!(
+            !signals.is_active(&lunco_signal::SignalRef::new(rover, "drop".to_string())),
+            "the removed channel is inactive rather than erased"
         );
     }
 

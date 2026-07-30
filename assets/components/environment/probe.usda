@@ -1,0 +1,19 @@
+#usda 1.0
+(
+    defaultPrim = "EnvironmentProbe"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Explicit source of local environment signals.
+#
+# The probe's transform defines the mount frame. LunCoSim publishes gravity and
+# Sun/Earth directions onto the schema-declared outputs; consumers select those
+# facts with ordinary USD connections. The probe has no solver and no policy.
+def Xform "EnvironmentProbe" (
+    doc = "Mount-frame source for local gravity and Sun/Earth direction signals."
+    kind = "component"
+    prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
+)
+{
+}

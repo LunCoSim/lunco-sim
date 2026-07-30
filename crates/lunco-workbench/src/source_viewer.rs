@@ -9,12 +9,15 @@ use lunco_core::on_command;
 use lunco_doc_bevy::OpenFile;
 
 use crate::{
-    CloseTab, EditorTabId, EditorTabs, InstancePanel, OpenSourceView, OpenTab, OpenTwinSource,
-    PanelCtx, PanelId, PanelSlot, PendingTabCloses, SaveSourceText, TabId,
+    CloseTab, EditorTabId, EditorTabs, InstancePanel, OpenEphemeralSource, OpenSourceView, OpenTab,
+    OpenTwinSource, PanelCtx, PanelId, PanelSlot, PendingTabCloses, SaveSourceText, TabId,
 };
 
 const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
-const TEXT_VIEW_EXTS: &[&str] = &["rhai", "btxml", "wgsl"];
+// Rich editors own `.mo`; every other authored text asset uses this one
+// source viewer, including USD layers. Keeping the USD extensions here also
+// makes scene-closure rows and raw Twin files follow the same OpenFile path.
+const TEXT_VIEW_EXTS: &[&str] = &["rhai", "btxml", "wgsl", "usda", "usd", "usdc"];
 
 pub(crate) struct SourceEditorPanel;
 
@@ -59,7 +62,18 @@ impl InstancePanel for SourceEditorPanel {
                 };
                 let source = &mut tab.state;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(source.path.display().to_string()).weak());
+                    let display_path = source
+                        .origin
+                        .as_ref()
+                        .and_then(|origin| {
+                            source
+                                .path
+                                .strip_prefix(&origin.twin_root)
+                                .ok()
+                                .map(|path| path.display().to_string())
+                        })
+                        .unwrap_or_else(|| source.path.display().to_string());
+                    ui.label(egui::RichText::new(display_path).weak());
                     if let Some(origin) = &source.origin {
                         for (label, update) in [("Save", false), ("Save & Update", true)] {
                             if ui
@@ -159,6 +173,10 @@ pub(crate) struct PendingSourceRequests {
 enum SourceOpenRequest {
     Path(String),
     Asset(String),
+    Inline {
+        uri: String,
+        text: String,
+    },
     Twin {
         root: PathBuf,
         relative: PathBuf,
@@ -222,6 +240,17 @@ pub(crate) fn on_open_source_view(
         .push(SourceOpenRequest::Asset(trigger.event().asset_path.clone()));
 }
 
+#[on_command(OpenEphemeralSource)]
+pub(crate) fn on_open_ephemeral_source(
+    trigger: On<OpenEphemeralSource>,
+    mut pending: ResMut<PendingSourceRequests>,
+) {
+    pending.opens.push(SourceOpenRequest::Inline {
+        uri: trigger.event().uri.clone(),
+        text: trigger.event().text.clone(),
+    });
+}
+
 #[on_command(OpenTwinSource)]
 pub(crate) fn on_open_twin_source(
     trigger: On<OpenTwinSource>,
@@ -277,6 +306,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
                     warn!("[SourceEditor] rejected unregistered asset path: {asset_path}");
                 }
             }
+            SourceOpenRequest::Inline { uri, text } => open_inline(world, uri, text),
             SourceOpenRequest::Twin {
                 root,
                 relative,
@@ -307,6 +337,33 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
     for command in saves {
         start_write(world, command);
     }
+}
+
+fn open_inline(world: &mut World, uri: String, text: String) {
+    let path = PathBuf::from(&uri);
+    let existing = world
+        .resource::<EditorTabs<SourceTabState>>()
+        .find(|state| state.path == path);
+    let state = || SourceTabState {
+        path: path.clone(),
+        text: text.clone(),
+        origin: None,
+        dirty: false,
+        loading: false,
+        saving: false,
+        error: None,
+        request: 0,
+    };
+    let tab = existing.unwrap_or_else(|| {
+        world
+            .resource_mut::<EditorTabs<SourceTabState>>()
+            .ensure_preview(|state| state.path == path, state)
+            .0
+    });
+    world.trigger(OpenTab {
+        kind: SOURCE_EDITOR_KIND,
+        instance: tab,
+    });
 }
 
 fn open_path(

@@ -1856,7 +1856,7 @@ impl Document for UsdDocument {
                 // can't reproduce, falls back to the snapshot.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, openusd::sdf::FieldKey::ApiSchemas.as_str())
+                    .field(&prim_sdf, sdf::FieldKey::ApiSchemas.as_str())
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::TokenListOp(op))
@@ -1885,7 +1885,7 @@ impl Document for UsdDocument {
                 stage
                     .prim(path.as_str())
                     .set_metadata(
-                        openusd::sdf::FieldKey::ApiSchemas.as_str(),
+                        sdf::FieldKey::ApiSchemas.as_str(),
                         openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(
                             tokens,
                         )),
@@ -1911,7 +1911,7 @@ impl Document for UsdDocument {
                 // snapshot, the only way to express "unselected" on undo.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, openusd::sdf::FieldKey::VariantSelection.as_str())
+                    .field(&prim_sdf, sdf::FieldKey::VariantSelection.as_str())
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::VariantSelectionMap(ref m))
@@ -1932,7 +1932,7 @@ impl Document for UsdDocument {
                 stage
                     .prim(path.as_str())
                     .update_metadata(
-                        openusd::sdf::FieldKey::VariantSelection.as_str(),
+                        sdf::FieldKey::VariantSelection.as_str(),
                         |current| {
                             let mut map = match current {
                                 Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
@@ -1958,7 +1958,7 @@ impl Document for UsdDocument {
                 // list op falls back to the snapshot rather than restore lossily.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, openusd::sdf::FieldKey::Payload.as_str())
+                    .field(&prim_sdf, sdf::FieldKey::Payload.as_str())
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::PayloadListOp(op))
@@ -1991,7 +1991,7 @@ impl Document for UsdDocument {
                 stage
                     .prim(path.as_str())
                     .set_metadata(
-                        openusd::sdf::FieldKey::Payload.as_str(),
+                        sdf::FieldKey::Payload.as_str(),
                         openusd::sdf::Value::PayloadListOp(openusd::sdf::PayloadListOp::explicit(
                             payloads,
                         )),
@@ -2010,6 +2010,17 @@ impl Document for UsdDocument {
                 // target layer's real prior opinion, including *unauthored*.
                 let inverse = self.coarse_inverse(target, &id);
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // A `SetActive` must be authorable onto a layer that does not yet
+                // carry a spec for the prim — most importantly the runtime overlay,
+                // which is how a scene-authored marker (`/Traverse/Route/W1`, lives
+                // in the scene/variant layer) gets an `active = false` opinion from
+                // a delete. `Prim::set_active` requires a spec to exist on this
+                // layer (it is not an upsert), so define it first — idempotent, and
+                // the same pattern `SetTranslate`/`AddPrim` use to author a stronger
+                // opinion over a referenced prim. Without this the op was rejected
+                // with "no prim spec at path on the edit target layer" and the
+                // marker could not be hidden at all.
+                stage.define_prim(path.as_str()).map_err(author_err)?;
                 stage
                     .prim(path.as_str())
                     .set_active(active)
@@ -4040,6 +4051,56 @@ mod tests {
             !host.document().source().contains("active"),
             "undo restores the unauthored (neither true nor false) opinion: {}",
             host.document().source()
+        );
+    }
+
+    #[test]
+    fn set_active_on_runtime_overlay_authors_over_a_base_layer_prim() {
+        // The delete-marker fix: a waypoint marker is authored in the base/scene
+        // layer (`/Traverse/Route/W1`), and the editor's runtime delete must hide
+        // it by authoring `active = false` onto the RUNTIME overlay. Before the
+        // fix `Prim::set_active` rejected this with "no prim spec at path on the
+        // edit target layer" — the marker could not be hidden at all. `define_prim`
+        // first (the same upsert `SetTranslate`/`AddPrim` use) lets the overlay
+        // carry the stronger opinion.
+        // The marker is authored in the BASE/scene layer (where a route's pins
+        // live), so the runtime overlay has no spec for it.
+        let scene = "#usda 1.0\ndef Xform \"Traverse\"\n{\n    def Xform \"Route\"\n    {\n        def Xform \"W1\"\n        {\n        }\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(67),
+            scene,
+            DocumentOrigin::writable_file("/tmp/active_overlay.usda"),
+        );
+        // The runtime overlay carries no spec at /Traverse/Route/W1, yet the op
+        // must land there to hide the marker without mutating the scene.
+        doc.apply(UsdOp::SetActive {
+            edit_target: LayerId::runtime(),
+            path: "/Traverse/Route/W1".into(),
+            active: false,
+        })
+        .unwrap();
+
+        // The runtime overlay now carries a spec for the marker with active=false.
+        let marker = SdfPath::new("/Traverse/Route/W1").unwrap();
+        let runtime_active = doc
+            .runtime_data()
+            .spec(&marker)
+            .and_then(|spec| spec.get(sdf::FieldKey::Active.as_str()))
+            .and_then(|v| match v {
+                sdf::Value::Bool(b) => Some(*b),
+                _ => None,
+            });
+        assert_eq!(
+            runtime_active,
+            Some(false),
+            "runtime overlay carries the deactivation opinion"
+        );
+        // The base layer is untouched (Save serializes base only): a runtime hide
+        // must not mutate the source scene.
+        assert!(
+            !doc.source().contains("/Traverse/Route/W1"),
+            "runtime overlay must not rewrite the base layer: {}",
+            doc.source()
         );
     }
 

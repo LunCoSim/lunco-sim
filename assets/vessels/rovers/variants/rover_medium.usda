@@ -7,9 +7,9 @@
 
 # ── Rover variant: MEDIUM ("Standard") ───────────────────────────────────────
 # The baseline rover for tier 2. Close to the shared six-wheel base's own tuning:
-# a neutral centre of mass and moderate power. It WILL tip if driven carelessly
-# across the fall-line, and needs a deliberate line up the borderline wall — the
-# honest middle between the forgiving Explorer LT and the punishing Hauler.
+# moderate power and worn tires. It shares the exact same physical chassis as
+# the other tiers, so differences on the course are attributable to drive and
+# grip rather than hidden body tuning.
 #
 # See `rover_easy.usda` for the tier ladder, and for why grip and torque are
 # authored per wheel rather than on this prim.
@@ -20,12 +20,6 @@ def Xform "RoverMedium" (
 )
 {
     uniform bool lunco:spawnable = true
-
-    # Neutral — matches the base's authored mass properties.
-    float3 physics:centerOfMass = (0.0, -0.05, 0.0)
-    float physics:mass = 1400.0
-    float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
-    float physxRigidBody:angularDamping = 2.0
 
     # Handling, per wheel. `worn` tires: μ=0.50 ⇒ slip limit 26.6°. Tuned against the
     # SURVEYED site (summer_space_school, real Apollo 15 crater), whose ways in run

@@ -25,7 +25,7 @@ license.workspace = true
 # NO `mesh_picking`: this crate contains no picking code (it builds scene data),
 # and the feature pulls the raycast BACKEND — cursor-driven hit-testing that a
 # `--no-ui` server has no cursor for. A GUI build still gets it, from the crates
-# that actually pick (`lunco-sandbox`, `lunco-sandbox-edit`, `luncosim`).
+# that actually pick (`lunco-luncosim`, `lunco-luncosim-edit`, `luncosim`).
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "zstd_rust", "hdr", "ktx2"] }
 # `Mesh`, `Mesh3d`, `Indices`, `PrimitiveTopology` — render-FREE (depends only on
 # `wgpu-types`). Named directly so mesh building never reaches for
@@ -75,6 +75,7 @@ anyhow = { workspace = true }
 # native-read / web-fetch procedure).
 ab_glyph = "0.2"
 lunco-assets = { workspace = true }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -8,7 +8,7 @@
 //! | Wait | Open while | Scope |
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage is still spawning prims | world |
-//! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | that entity |
+//! | [`kinds::PROGRAM_COMPILE`] | any scene Modelica model has not compiled | world |
 //!
 //! # Why reconcile systems rather than events
 //!
@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 use lunco_modelica::ModelicaModel;
-use lunco_readiness::{ReadinessRegistry, ReadinessTicket, Subject, kinds};
+use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
 use lunco_cosim::SimComponent;
@@ -37,7 +37,7 @@ struct SceneLoadWait {
     ticket: ReadinessTicket,
 }
 
-/// The open per-entity compile wait for this entity's Modelica model.
+/// The open scene compile wait contributed by this Modelica entity.
 ///
 /// On the entity rather than in a side table so it dies with the entity; the
 /// registry drops waits whose subject was despawned, so a scene reload
@@ -45,6 +45,7 @@ struct SceneLoadWait {
 #[derive(Component)]
 struct ModelCompileWait {
     ticket: ReadinessTicket,
+    kind: &'static str,
 }
 
 /// Hold the world while a scene is spawning, and release when it has finished.
@@ -78,8 +79,8 @@ fn track_scene_load(
     }
 }
 
-/// Freeze an object whose Modelica model has not compiled yet, and release it
-/// the moment the model is live.
+/// Freeze physics while any scene Modelica model has not compiled yet, and
+/// release it only after every live program is runnable (or terminally failed).
 ///
 /// This is the descent-lander race, closed: the entity exists and has mass and a
 /// collider long before the model that is supposed to fly it has been through the
@@ -90,6 +91,13 @@ fn track_scene_load(
 /// USD-declared ports. The early interface prevents false dangling-wire errors;
 /// its status, rather than component existence, keeps the physics hold until a
 /// compiler result has made the model runnable or visibly failed.
+///
+/// This must be a world hold, not an entity hold. A Modelica controller or a
+/// generated domain island is a signal/assembly prim, while the dynamic bodies
+/// it governs live elsewhere in the USD hierarchy. Holding only that prim
+/// allows the rover to fall and its joints to settle before the controller or
+/// island has a first solution. A load is atomic from physics' point of view:
+/// no body advances until every required Modelica participant is live.
 fn track_model_compiles(
     models: Query<(Entity, &ModelicaModel, Option<&SimComponent>), With<UsdSourcedCosim>>,
     waits: Query<(Entity, &ModelCompileWait)>,
@@ -97,22 +105,25 @@ fn track_model_compiles(
     mut commands: Commands,
 ) {
     for (entity, model, component) in &models {
-        let compiling = model_compile_pending(component);
+        let kind = modelica_wait_kind(component);
         let wait = waits.get(entity).ok();
-        match (compiling, wait) {
-            (true, None) => {
-                let ticket = registry.begin(
-                    Subject::Entity(entity),
-                    kinds::PROGRAM_COMPILE,
-                    model.model_name.clone(),
-                );
+        match (kind, wait) {
+            (Some(kind), None) => {
+                let ticket = registry.begin(Subject::World, kind, model.model_name.clone());
                 commands
                     .entity(entity)
-                    .try_insert(ModelCompileWait { ticket });
+                    .try_insert(ModelCompileWait { ticket, kind });
             }
-            (false, Some((_, wait))) => {
+            (None, Some((_, wait))) => {
                 registry.finish(wait.ticket);
                 commands.entity(entity).try_remove::<ModelCompileWait>();
+            }
+            (Some(kind), Some((_, wait))) if kind != wait.kind => {
+                registry.finish(wait.ticket);
+                let ticket = registry.begin(Subject::World, kind, model.model_name.clone());
+                commands
+                    .entity(entity)
+                    .try_insert(ModelCompileWait { ticket, kind });
             }
             _ => {}
         }
@@ -122,10 +133,14 @@ fn track_model_compiles(
 /// Whether the simulation must remain frozen for this model's compiler.
 ///
 /// No component means the source has parsed but its public interface has not
-/// been projected yet. `Error` is deliberately terminal rather than pending:
-/// the user needs an actionable failure, not an indefinite frozen world.
-fn model_compile_pending(component: Option<&SimComponent>) -> bool {
-    component.is_none_or(|component| component.status == lunco_cosim::SimStatus::Compiling)
+/// been projected yet. An error becomes its own readiness fact so policy can
+/// fail closed or deliberately choose best-effort continuation.
+fn modelica_wait_kind(component: Option<&SimComponent>) -> Option<&'static str> {
+    match component.map(|component| &component.status) {
+        None | Some(lunco_cosim::SimStatus::Compiling) => Some(kinds::PROGRAM_COMPILE),
+        Some(lunco_cosim::SimStatus::Error(_)) => Some(kinds::PROGRAM_FAILED),
+        Some(_) => None,
+    }
 }
 
 /// Registers the USD scene's readiness producers.
@@ -166,16 +181,20 @@ mod tests {
             status: lunco_cosim::SimStatus::Compiling,
             ..default()
         };
-        assert!(model_compile_pending(None));
-        assert!(model_compile_pending(Some(&compiling)));
+        assert_eq!(modelica_wait_kind(None), Some(kinds::PROGRAM_COMPILE));
+        assert_eq!(
+            modelica_wait_kind(Some(&compiling)),
+            Some(kinds::PROGRAM_COMPILE)
+        );
 
         let failed = SimComponent {
             status: lunco_cosim::SimStatus::Error("bad model".into()),
             ..default()
         };
-        assert!(
-            !model_compile_pending(Some(&failed)),
-            "a failed model reports its error instead of freezing the world forever"
+        assert_eq!(
+            modelica_wait_kind(Some(&failed)),
+            Some(kinds::PROGRAM_FAILED),
+            "a failed model remains a named policy fact"
         );
     }
 }

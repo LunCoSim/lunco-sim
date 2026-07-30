@@ -1,5 +1,6 @@
 within LunCo.Pointing;
 model SunTracker "Azimuth sun-tracker: yaw a panel to face the sun."
+  extends LunCo.Icons.Pointing;
   // Unit sun direction in the panel mount frame: +X right, +Y up, -Z forward.
   // The environment bridge owns world→mount conversion; this model owns the
   // one right-handed mount-vector→yaw conversion.

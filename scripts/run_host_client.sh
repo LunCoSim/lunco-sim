@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch two sandbox instances side by side: a networking HOST on the left
+# Launch two luncosim instances side by side: a networking HOST on the left
 # half of the screen and a CLIENT (joined over WebTransport) on the right —
 # the exact layout used to eyeball host/client rover sync.
 #
@@ -31,8 +31,8 @@ else
 fi
 
 # Build once up front so the two launches don't race the build lock.
-echo "building sandbox (networking)…"
-cargo build --bin sandbox --features networking -j2
+echo "building luncosim (networking)…"
+cargo build --bin luncosim --features networking -j8
 
 # Politely ask any prior instances on these API ports to exit.
 for p in "$HOST_API" "$CLIENT_API"; do
@@ -41,7 +41,7 @@ for p in "$HOST_API" "$CLIENT_API"; do
 done
 sleep 1
 
-BIN=target/debug/sandbox
+BIN=target/debug/luncosim
 RL='info,wgpu=error,naga=warn'
 
 echo "launching HOST  ($HOST_POS, api $HOST_API)…"

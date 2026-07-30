@@ -1,0 +1,28 @@
+[package]
+name = "lunco-luncosim-server"
+version = "0.6.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Headless launcher for the LunCo luncosim — the same app as `luncosim`, built without the GUI (no winit/egui) and with the API + networking host. Exists as its own crate purely so it can default to headless: Cargo default features are per-package, so a bin that's headless-by-default needs its own package."
+
+[[bin]]
+name = "luncosim-server"
+path = "src/main.rs"
+
+[dependencies]
+# The entire app (and the global allocator) lives in `lunco-luncosim`'s library;
+# this crate is a 3-line launcher. `default-features = false` drops `ui`
+# (winit/egui/workbench); `server` compiles in the HTTP API + networking host.
+# So `cargo run -p lunco-luncosim-server` is headless with NO flags — the whole
+# reason this crate exists. The API is compiled in but not LISTENING until you
+# pass `-- --api [PORT]`.
+lunco-luncosim = { path = "../lunco-luncosim", default-features = false, features = ["server"] }
+
+[features]
+default = []
+# Optional: a windowed build of this same bin. Normally you'd just run
+# `-p lunco-luncosim` for the GUI; this is here for symmetry / debugging.
+ui = ["lunco-luncosim/ui"]
+
+[lints]
+workspace = true

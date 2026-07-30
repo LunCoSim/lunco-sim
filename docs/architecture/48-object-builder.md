@@ -49,7 +49,7 @@ and merges across peers. USD ops already journal automatically — any `Document
 `JournalOpRecorder` attached records on `apply`. **Nothing needs to be done to make Object
 Builder edits journal.** They will journal because they are `UsdOp`s.
 
-**A derivation-based Inspector.** `crates/lunco-sandbox-edit/src/ui/inspector.rs` already
+**A derivation-based Inspector.** `crates/lunco-luncosim-edit/src/ui/inspector.rs` already
 discovers what is editable from which components an entity carries, and writes back through
 the correct layer per domain — Modelica params via `ModelicaOp` + recompile, USD attrs into
 the runtime layer, joint setpoints via port writes.
@@ -288,7 +288,7 @@ built by the twin-projection work: `DocBackedTwinScenes` maps a running scene's
   asset↔document bridge. A runtime entity carries a `UsdPrimPath { stage_handle, path }`; this
   maps that stage handle to the editable `DocumentId` (or `None` for a raw-file scene, which has
   no savable document — so it is refused, never silently dropped).
-- **`SaveScenario { target }`** (in `lunco-sandbox`, the only crate that depends on both
+- **`SaveScenario { target }`** (in `lunco-luncosim`, the only crate that depends on both
   `lunco-usd` and `lunco-scripting` — `lunco-usd-sim` can't, it would be circular). It resolves
   the entity's live source (`ScriptRegistry`), its prim path, and the backing document, then
   authors `info:sourceCode` on the program prim, onto the root layer via `ApplyUsdOp` — so it journals, and
@@ -353,9 +353,9 @@ question is now **decided** (2026-07-11 — see below): `DocumentHost` stays aut
 cleared. Refuse-to-open a non-doc-backed scene lands with the builder's open path.
 
 **Phase 1 — see and tune.** ⏳ mostly done. The **Object Builder perspective**
-(`lunco-sandbox-edit/src/ui/mod.rs`, `ObjectBuilderPerspective`) composes tree + palette + viewport +
+(`lunco-luncosim-edit/src/ui/mod.rs`, `ObjectBuilderPerspective`) composes tree + palette + viewport +
 Inspector + the two new projectors. The **USD prim tree** landed ✅ (2026-07-11):
-`lunco-sandbox-edit/src/ui/usd_prim_tree.rs` (`UsdPrimTreePanel` + `UsdPrimTreeView` +
+`lunco-luncosim-edit/src/ui/usd_prim_tree.rs` (`UsdPrimTreePanel` + `UsdPrimTreeView` +
 `produce_usd_prim_tree`). It reconstructs the full USD hierarchy from every spawned prim's
 `UsdPrimPath` (synthesizing intermediate xforms that carry no entity), reading each prim's type + body
 flag off the composed stage via the same main-thread `CanonicalStages` producer the connection canvas
@@ -371,13 +371,13 @@ op the slider defers) re-runs the checker shader in the renderer (24×16 fine �
 Inspector-*derives*-never-hardcodes rule (§3.5).
 
 **Phase 2 — wire.** ✅ **DONE** (2026-07-11). Connection canvas landed as a second `lunco-canvas`
-projector: `crates/lunco-sandbox-edit/src/ui/connection_canvas/` (`projection.rs` pure `collect_graph`
+projector: `crates/lunco-luncosim-edit/src/ui/connection_canvas/` (`projection.rs` pure `collect_graph`
 + `build_scene`, unit-tested; `visuals.rs`; `mod.rs` panel + main-thread producer + write-back).
 Registered in `SandboxEditUiPlugin`, docked as a `🔗 Connections` centre tab in the Object Builder
 perspective. Reads every wiring-relevant prim (connectors or `PhysicsRigidBodyAPI` body) as a node,
 `inputs:*.connect` as dataflow edges and `physics:body0/1` as joint edges; wire-drag →
 `SetConnection`, delete → clear / `RemovePrim`, all via the journaled `ApplyUsdOp`. Boot-verified in
-the sandbox (`142 prim entities → 25 nodes, 10 edges`). **Note:** enumerate prims from the ECS
+the luncosim (`142 prim entities → 25 nodes, 10 edges`). **Note:** enumerate prims from the ECS
 `UsdPrimPath` entities, *not* `StageView::prim_paths()` — the live traversal misses composed children
 (fixed in `93a2bfed`). **Open (polish):** initial fit uses a nominal rect (press `F` to fit precisely);
 node positions are session-only (persisting `lunco:canvasPos` is a follow-up).
@@ -422,7 +422,7 @@ plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not th
 
 - **`read_asset_plug_frame(fs_path)`** (`mount.rs`) composes the asset's full closure off disk
   (`compose_file_to_stage`, resolving its references) and reads the plug frame off its `defaultPrim` — the
-  part every `AttachSpec` references in. Tested against the shipped demo component (`mount_probe.usda`,
+  part every `AttachSpec` references in. Tested against the shipped demo component (`mounting/demo_probe.usda`,
   plug 0.4 m above the part origin). Native-only (composition does file I/O).
 - **Socket schema** gained `lunco:mount:asset` (the raw component path a socket is designed to hold), read
   into `MountSocket.asset`. An **empty** socket (no `rel :part`) that names an asset offers `⊕ Attach` in
@@ -430,8 +430,8 @@ plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not th
   `read_asset_plug_frame`s it, `AttachSpec::from_mount`s it onto the socket frame, and dispatches the
   journaled `AttachComponent` (references + places + joints the part). Socket joint token → typed
   `AttachJoint` via `attach_joint_from`.
-- **Demo:** `components/mount_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on
-  `Base` (`sandbox_scene.usda`) naming it. Select `Base` → `🔩 Mount` → `⊕ Attach mount_probe.usda`.
+- **Demo:** `components/mounting/demo_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on
+  `Base` (`sandbox_scene.usda`) naming it. Select `Base` → `🔩 Mount` → `⊕ Attach demo_probe.usda`.
 - **Verified:** the reader/compose piece by the disk-compose test above; `from_mount` by its matrix tests;
   `AttachComponent` was already API-verified (JSON contract above) with 5 op tests. Not run: the literal
   egui click-through (no egui MCP automation; a live GUI instance was unavailable — the user's own
@@ -478,10 +478,10 @@ authored one did → **byte-identical**, physics unchanged.
 > celestial space.
 
 **Phase 4 — behaviour.** ✅ **DONE** (2026-07-11). Save-back-to-prim was already closed (§3.7); the
-rhai **editor panel** now landed: `crates/lunco-sandbox/src/ui/rhai_editor_panel.rs` (`RhaiEditorPanel`
-+ `RhaiEditorVm` view-model + `produce_rhai_editor_vm` producer). It lives in **lunco-sandbox** (not
-sandbox-edit — it needs `ScriptRegistry`/`RunScenario` from lunco-scripting and `SaveScenario` from
-lunco-sandbox), registered in `crates/lunco-sandbox/src/ui/mod.rs`, docked as a `📜 Behaviour` centre
+rhai **editor panel** now landed: `crates/lunco-luncosim/src/ui/rhai_editor_panel.rs` (`RhaiEditorPanel`
++ `RhaiEditorVm` view-model + `produce_rhai_editor_vm` producer). It lives in **lunco-luncosim** (not
+luncosim-edit — it needs `ScriptRegistry`/`RunScenario` from lunco-scripting and `SaveScenario` from
+lunco-luncosim), registered in `crates/lunco-luncosim/src/ui/mod.rs`, docked as a `📜 Behaviour` centre
 tab in the Object Builder perspective (referenced by string id, filtered in apps that don't register
 it). Follows `SelectedEntities`, resolves `ScriptedModel → ScriptRegistry` source into an editable
 buffer (re-synced only on a doc/generation change with no unsaved edits, so typing is never clobbered),

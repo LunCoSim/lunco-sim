@@ -31,7 +31,7 @@ impl Plugin for TerrainSurfacePlugin {
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
         app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
         // Off by default: interactive play wants real-time-paced streaming. Set by
-        // `lunco-sandbox` for the duration of an offline recording so the captured
+        // `lunco-luncosim` for the duration of an offline recording so the captured
         // tile set is a function of the frame index rather than of thread
         // scheduling. See `stream_viz::TerrainStreamLockstep`.
         app.init_resource::<crate::stream_viz::TerrainStreamLockstep>();

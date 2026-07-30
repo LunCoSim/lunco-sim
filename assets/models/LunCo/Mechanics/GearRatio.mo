@@ -21,6 +21,7 @@ within LunCo.Mechanics;
 // composed thermally; until then it is dropped, which is the honest approximation and is
 // noted here so it is not mistaken for a closed energy balance.
 model GearRatio
+  extends LunCo.Icons.Mechanics;
   parameter Real ratio = 1200.0 "Reduction ratio, driving:driven (>1 reduces speed)";
   parameter Real eta = 0.85 "Mechanical efficiency, 0..1";
 

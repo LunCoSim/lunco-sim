@@ -88,7 +88,7 @@ External communication, ECS replication, telemetry extraction, and distributed a
 ---
 
 ## 6. Workbench & UI Tools
-The editor shell, visualization framework, generic 2D canvas, in-scene/sandbox editing tools, render look, and web boot.
+The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim editing tools, render look, and web boot.
 
 | Crate | Responsibility |
 | :--- | :--- |
@@ -96,7 +96,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/sandbox e
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
-| **`lunco-sandbox-edit`** | In-scene editing tools: spawn systems, transform gizmos, and inspector panels. |
+| **`lunco-luncosim-edit`** | In-scene editing tools: spawn systems, transform gizmos, and inspector panels. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web-frontend boot library for wasm apps: streaming loader + `WebReadyPlugin` (signals the HTML loader on first paint). |
@@ -127,8 +127,8 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`luncosim`** | `luncosim` | The flagship windowed simulator: celestial bodies + ephemeris, solar-system-scale `big_space`, orbital camera, and the full FSW/hardware/mobility/robotics/avatar stack under the workbench. |
-| **`lunco-sandbox`** | `sandbox` | Ground-physics test bed (ground mobility + physics, loaded from USD): USD scene + Avian physics and sandbox edit tools. The production `sandbox test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
-| **`lunco-sandbox-server`** | `sandbox-server` | Headless launcher for the sandbox (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
+| **`lunco-luncosim`** | `luncosim` | Ground-physics test bed (ground mobility + physics, loaded from USD): USD scene + Avian physics and luncosim edit tools. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
+| **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
 | **`lunco-modelica`** | `lunica`, `lunica_worker`, `msl_indexer` | The Modelica workbench app + its wasm worker and MSL index builder. |
 
 > Other binaries: `build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
@@ -276,7 +276,7 @@ Domain-agnostic visualization framework. Collects simulation data into a `Signal
 **`lunco-canvas`**
 2D scene editor substrate. Provides the stateful viewport and tool foundation for diagramming and node-based editing, powering the Modelica diagram editor and other schematic-based tools.
 
-**`lunco-sandbox-edit`**
+**`lunco-luncosim-edit`**
 In-scene editing toolkit for the 3D viewport. Implements click-to-place spawning, transform gizmos for manipulation, and inspector panels for real-time property editing during simulation assembly.
 
 **`lunco-render`**
@@ -312,10 +312,10 @@ Bevy dispatch adapter for `lunco-tools` — the **behaviour-tree execution** hal
 ### Applications
 
 **`luncosim`**
-The flagship windowed application and full lunar-mission simulator. Assembles celestial bodies + ephemeris, solar-system-scale `big_space`, an orbital camera (auto-focus Earth), and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. (cf. `sandbox` = ground-physics test bed, `lunica` = Modelica workbench.)
+The flagship windowed application and full lunar-mission simulator. Assembles celestial bodies + ephemeris, solar-system-scale `big_space`, an orbital camera (auto-focus Earth), and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. (cf. `luncosim` = ground-physics test bed, `lunica` = Modelica workbench.)
 
-**`lunco-sandbox`**
-The LunCo sandbox application — ground mobility + physics, loaded from USD (binary `sandbox`). A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `sandbox` GUI and `sandbox-server` headless binaries. (Historically this crate's README mis-titled it "lunco-client"; the package name is `lunco-sandbox`.) The full mission simulator is the separate `luncosim` crate.
+**`lunco-luncosim`**
+The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries. (Historically this crate's README mis-titled it "lunco-client"; the package name is `lunco-luncosim`.)
 
-**`lunco-sandbox-server`**
-Headless launcher for the sandbox — the same app as `sandbox`, built without the GUI (no winit/egui) and with the API + networking host enabled. Exists as its own crate purely so it can default to headless (Cargo default features are per-package).
+**`lunco-luncosim-server`**
+Headless launcher for the luncosim — the same app as `luncosim`, built without the GUI (no winit/egui) and with the API + networking host enabled. Exists as its own crate purely so it can default to headless (Cargo default features are per-package).

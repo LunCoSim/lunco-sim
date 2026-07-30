@@ -34,11 +34,11 @@
 use bevy::prelude::*;
 use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
-    AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer, to_snake_case,
+    to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::{
-    CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced, get_attribute_as_vec3,
+    get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
@@ -119,7 +119,7 @@ fn apply_usd_shader_material_read(
     // TERRAIN prims are excluded: a DEM terrain's material is authored by the
     // terrain pipeline (engine-filled height/shadow params, derived maps), and
     // its bound Material network is consumed by the terrain layer binder
-    // (`lunco-sandbox::bind_terrain_layers`) instead. Minting a ShaderLook
+    // (`lunco-luncosim::bind_terrain_layers`) instead. Minting a ShaderLook
     // here would hand the terrain entity a SECOND material that replaces the
     // engine-authored one — losing the heightfield binding and every engine
     // param the moment a scene binds a Material to its Terrain prim.

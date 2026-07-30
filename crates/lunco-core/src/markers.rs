@@ -88,13 +88,25 @@ pub struct CinematicCameraLock;
 /// **Why**: authored physical rovers put their chassis at the surface with the
 /// wheels hanging BELOW it. avian terrain colliders are one-sided parry
 /// heightfields — a body that starts even slightly below the surface gets no
-/// upward contact and sinks forever. Command-spawned rovers avoid this via a
-/// collision-AABB rest-depth lift; raycast rovers avoid it because their ray finds
-/// the surface regardless. Authored physical rovers get neither, so they need this
-/// one-time settle. This is correct initial PLACEMENT — not a per-frame rescue.
+/// upward contact and sinks forever. This is correct initial PLACEMENT — not a
+/// per-frame rescue. The optional [`GroundSettleFootprint`] supplies contact
+/// geometry for non-body probes such as raycast wheels.
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct NeedsGroundSettle;
+
+/// Authored local contact geometry used by the shared one-shot ground placement
+/// pass. A raycast wheel is not an Avian body, so its lowest point must be
+/// described explicitly instead of being rediscovered by a second settle path.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct GroundSettleFootprint(pub Vec<GroundSettleContact>);
+
+#[derive(Debug, Clone, Copy, Reflect)]
+pub struct GroundSettleContact {
+    pub local_offset: DVec3,
+    pub radius: f64,
+}
 
 /// Marker: this revolute joint's **motor is owned by an external actuator**
 /// (a velocity drive or a frame-steer), not by the cosim joint backend.
@@ -307,3 +319,5 @@ pub struct ScriptParams(pub std::collections::HashMap<String, f64>);
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct NextScene(pub String);
+use bevy::math::DVec3;
+use bevy::prelude::Component;

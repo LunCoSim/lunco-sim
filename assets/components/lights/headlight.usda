@@ -37,7 +37,10 @@ def Xform "Headlight"
         # 20 klm only made the emissive lens visible while leaving the ground
         # black; use a useful close-range work light while retaining the
         # authored range and standard UsdLux photometric inputs.
-        float inputs:intensity = 150000.0
+        # One authored photometric value for every rover that references this
+        # component.  Scene assemblies do not override it; the summer-school
+        # rover therefore composes the same 120 klx headlight as the sandbox.
+        float inputs:intensity = 120000.0
         float inputs:exposure = 0.0
         # Match the 9 cm visible lens: the UsdLux schema default is 0.5 m, which
         # made this a one-metre emitter with an implausibly soft, wheel-filling

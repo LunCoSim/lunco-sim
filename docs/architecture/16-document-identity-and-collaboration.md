@@ -307,30 +307,23 @@ sim is running must **badge, never auto-reload** — a silent reload would resta
 world. `badge_externally_changed_usd_docs` polls on a throttle, dedupes so a
 persistently-stale file nags once, and re-arms when the file re-syncs.
 
-### The dependency closure is USD domain knowledge, and lives once
+### Dependency closure separates asset traversal from USD interpretation
 
-A document's dependencies are found by walking `subLayers` / `references` /
-`payload`. That walk had **two** implementations — the composition pre-fetch in
-`lunco-usd-bevy`, and a near-identical copy in `lunco-networking` for scenario
-manifests, whose own comment conceded it "mirrors" the first. The copy existed
-because there was no shared home, and it is why a *networking* crate depended on
-`openusd` directly.
-
-It now lives once, in `lunco_usd_bevy::closure`, with the single axis the two
-copies actually disagreed on turned into a parameter:
+A document's dependencies are found by walking `subLayers`, `references`,
+`payload`, and asset-valued attributes. There must be one filesystem traversal:
+`lunco_assets::transitive_file_closure*` owns its queue, canonical paths, and
+native reads. `lunco-usd-compose` supplies the format facts:
 
 ```rust
-discover_arcs(data, ArcFilter::LayersOnly | ArcFilter::All)
-reference_closure(roots) -> BTreeSet<PathBuf>
+is_usd_layer(path)
+layer_dependency_arcs(text)
 ```
 
-`LayersOnly` for the composition pre-fetch (a `.glb` is not a layer to fetch —
-the resolver stubs it); `All` for manifests and staleness (a client must receive
-the `.glb`, and swapping a DEM must invalidate the scene pointing at it). The BFS
-*drivers* differ legitimately — async-`AssetServer` versus synchronous filesystem
-— and stay separate; only the per-layer extraction is shared.
-
-`lunco-networking` no longer talks to `openusd`. Networking is not a USD crate.
+The scenario manifest and live scene browser call those APIs directly. Thus
+networking does not read or parse USD files, `lunco-usd-bevy` has no closure
+shim, and a `.glb`, Modelica model, policy, or texture reaches the closure as a
+leaf once USD declares it. Stage pre-fetch remains its own async AssetServer
+operation; it reuses `child_layer_ids` because it needs only parseable layers.
 
 ## 10a. Remaining gaps
 

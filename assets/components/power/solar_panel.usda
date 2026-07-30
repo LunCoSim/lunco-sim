@@ -39,10 +39,17 @@ def Xform "SolarPanel" (
     float inputs:area = 18.0
     float inputs:efficiency = 0.30
     float inputs:irradiance = 1361.0
-    # A fixed panel's incidence is authored by its mounting assembly or a tracker.
-    # No battery dependency belongs in this component.
-    float inputs:cos_incidence = 1.0
+    # The environment supplies the Sun vector in the enclosing electrical
+    # assembly's mount frame. The mounting assembly owns the illuminated-face
+    # normal in that same frame; fixed horizontal panels use +Y.
+    float inputs:sun_mount_x = 0.0
+    float inputs:sun_mount_y = 1.0
+    float inputs:sun_mount_z = 0.0
+    float inputs:panel_normal_x = 0.0
+    float inputs:panel_normal_y = 1.0
+    float inputs:panel_normal_z = 0.0
     float outputs:power_out
+    float outputs:cos_incidence
     custom token connectors:p
 
     float physics:mass = 15.0

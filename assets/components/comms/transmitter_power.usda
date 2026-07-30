@@ -1,0 +1,30 @@
+#usda 1.0
+(
+    defaultPrim = "TransmitterPower"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Electrical facet of a radio transmitter.
+#
+# RF/link math remains on the feed aperture in `radio.usda`; this component
+# converts its authored transmit demand into a real load on an assembly's EPS
+# bus. Keeping the facet independent lets a radio remain valid without assuming
+# a particular battery, while a powered assembly connects `connectors:p`.
+def Scope "TransmitterPower" (
+    doc = "RF transmitter electrical load driven by a radio link's transmit-active output."
+    kind = "component"
+    prepend apiSchemas = ["LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Comms/Transmitter.mo@
+
+    float inputs:p_rf_w = 5.0
+    float inputs:eta_tx = 0.40
+    float inputs:p_idle_w = 1.5
+    float inputs:tx_active = 0.0
+    float outputs:power_draw_w
+    float outputs:rf_power_out_w
+    custom token connectors:p
+}

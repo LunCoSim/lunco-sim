@@ -1,7 +1,7 @@
 //! Shell-level file-workflow commands.
 //!
 //! Verbs that span every domain — Open, Save All, Save as Twin — live
-//! here so all three apps (`lunica`, `sandbox`,
+//! here so all three apps (`lunica`, `luncosim`,
 //! `luncosim`) get the same File menu, keybinds, and HTTP API
 //! shape from one place. Domain-specific commands (`SaveDocument`,
 //! `SaveAsDocument`, `CloseDocument`) stay in `lunco-doc-bevy`; their
@@ -68,7 +68,7 @@ pub struct ShowOpenFolderPicker {}
 
 // `NewDocument` and `OpenFile` are document-lifecycle verbs, not UI: they
 // moved to `lunco-doc-bevy` (the non-egui document layer) so headless /
-// sandbox / server binaries can dispatch them by `kind` / `path` without
+// luncosim / server binaries can dispatch them by `kind` / `path` without
 // pulling the workbench shell. Re-exported here so the workbench's picker
 // resolver + the File menu keep referring to them as `file_ops::{…}`, and
 // existing `lunco_workbench::file_ops::OpenFile` paths stay valid. Only the

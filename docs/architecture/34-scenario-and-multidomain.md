@@ -81,6 +81,41 @@ express.
 whose flight-control system is its airframe — its `inputs:` are the control surface the
 stick writes.)
 
+### Domain coupling: causal across, acausal within
+
+**One `Scope` per physics domain; cross-domain coupling is causal; acausal
+(`connectors:`) stays inside a domain.**
+
+A `Scope` with `CollectionAPI:components` compiles to ONE generated Modelica DAE.
+Acausal `connectors:<name>.connect` edges become `connect(a.<name>, b.<name>)`
+*inside that one DAE* — they cannot span two generated models. So a wire between
+an electrical `Pin` and a thermal `HeatPort` must never be acausal: it would
+either fail to compose (different names) or compile to an invalid
+`connect(Pin, HeatPort)`. Cross-domain coupling is therefore always a causal
+`inputs:`/`outputs:` wire, routed at runtime as a `SimConnection` — exactly the
+FMI/SSP scalar-exchange contract.
+
+This is why the rover's thermal and electrical domains are separate scopes:
+- `Scope "Electrical"` — Battery + motors, acausal `connectors:p` (Kirchhoff
+  current) solved together; forwards each motor's `outputs:heat` to its boundary.
+- `Scope "Thermal"` — heat loads + masses + radiators, acausal `connectors:port`
+  (heat balance) solved together; consumes `inputs:motor_heat_*`.
+- **The rover root is the bus** between them: it declares `outputs:motor_heat_*`
+  ports, forwards the Electrical boundary output onto them, and the Thermal scope
+  reads from the root. Neither scope names the other — the root (common ancestor)
+  is the only composer. This required a small Rust change (a pass-through
+  `SimComponent` for non-program prims that forward `outputs:*.connect`).
+
+The `mixed-connector-domains` lint rule (`assets/scripting/policy/lint_usd.rhai`)
+flags any single scope that mixes acausal connector names — the signature of a
+domain that was not split. See
+`docs/architecture/reviews/2026-07-30-rover-domain-layering.md`.
+
+The one exception is a model that genuinely couples two domains in one DAE
+(`ThermostatHeater`, with both `Pin elec_port` and `HeatPort thermal_port`): it
+lives in the domain that owns its switching state (electrical — it is a bus load)
+and publishes the result causally into the other.
+
 ## Decision 2 — One canonical input-write path (collapse API onto ports)
 
 Today there are **two** ways to set a model input, and they fight:

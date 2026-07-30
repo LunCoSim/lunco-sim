@@ -342,7 +342,7 @@ shader mode.
 >   `{"cliff_deg": 25}` **silently switched the overlay off** while appearing to tune
 >   it. A partial-update command whose fields are not optional cannot express "change
 >   only this" — it can only express "set everything, defaulting what you didn't say."
-> - **Inspector legend + sliders** (`lunco-sandbox-edit::ui::inspector`) — enable +
+> - **Inspector legend + sliders** (`lunco-luncosim-edit::ui::inspector`) — enable +
 >   Safe/Cliff/Opacity sliders + a gradient legend coloured by the same
 >   `hazard_from_slope` + `hazard_color`, so the legend matches the terrain exactly.
 >
@@ -358,7 +358,7 @@ shader mode.
    addressable / headless-queryable by other tools, and region/tile materialisation.
    *Then* the view: Threshold transfer (live **critical-angle** uniform defaulting to
    `hazard_from_slope`'s safe/cliff angles) → Blend, inspector slider + legend. The
-   render is the last step; the field is usable headless first. Terrain crates + sandbox-edit.
+   render is the last step; the field is usable headless first. Terrain crates + luncosim-edit.
 2. **Lat/lon grid.** `TerrainGeoref` forward/inverse (equirectangular first) + gizmo
    graticule + toggle.
 3. **Tiled overlay stack.** The per-tile pyramid + residency (reusing terrain tile

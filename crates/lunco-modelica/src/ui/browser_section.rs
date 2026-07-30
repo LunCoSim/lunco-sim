@@ -163,6 +163,47 @@ impl BrowserSection for ModelicaSection {
         for (doc_id, doc_name) in workspace_docs {
             render_workspace_doc_row(ui, ctx, doc_id, &doc_name);
         }
+
+        // Generated USD-owned islands are ordinary read-only Modelica documents
+        // linked to their scene-network entity. They use the same class/view
+        // path as every other model — source editor, diagram, and telemetry —
+        // rather than opening in the generic text viewer.
+        let generated = ctx
+            .resource::<crate::state::GeneratedModelicaSources>()
+            .map(|sources| sources.entries.clone())
+            .unwrap_or_default();
+        if !generated.is_empty() {
+            ui.separator();
+            let header = egui::CollapsingHeader::new("⚡ Scene networks")
+                .id_salt("twin.modelica.generated")
+                .default_open(false);
+            header.show(ui, |ui| {
+                for entry in generated {
+                    ui.horizontal(|ui| {
+                        let label = entry.uri.strip_prefix("generated://").unwrap_or(&entry.uri);
+                        let response = ui.selectable_label(false, label);
+                        if response.clicked() {
+                            let qualified = entry
+                                .uri
+                                .strip_prefix("generated://")
+                                .and_then(|uri| uri.strip_suffix(".mo"))
+                                .unwrap_or(&entry.uri)
+                                .to_string();
+                            ctx.actions.push(BrowserAction::OpenLoadedClass {
+                                doc_id: entry.document.raw(),
+                                qualified_path: qualified,
+                            });
+                        }
+                        if let Some(error) = &entry.error {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 140, 70),
+                                format!("⚠ {error}"),
+                            );
+                        }
+                    });
+                }
+            });
+        }
     }
 }
 

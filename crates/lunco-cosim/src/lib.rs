@@ -40,6 +40,7 @@
 use bevy::prelude::*;
 
 pub mod avian;
+pub mod binding;
 pub mod component;
 pub mod connection;
 pub mod diagnostics;
@@ -51,6 +52,7 @@ pub mod systems;
 pub mod telemetry;
 
 pub use avian::*;
+pub use binding::*;
 pub use component::*;
 pub use connection::*;
 pub use diagnostics::{BrokenConnection, CosimDiagnostics};
@@ -63,6 +65,47 @@ pub use suggestion::*;
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
 use lunco_core::{on_command, register_commands, Command};
+
+fn endpoint_ready_on_add<T: Component>(
+    trigger: On<Add, T>,
+    mut commands: Commands,
+    mut revision: ResMut<BindingRevision>,
+) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(EndpointLifecycle::Ready);
+    revision.request();
+}
+
+/// Publish Modelica endpoint transitions before the end-of-frame binding
+/// transaction. This is exclusive so a terminal compiler result is visible in
+/// the same frame; binding itself runs in `PostUpdate`, after every USD, asset,
+/// and generated-domain projection path has had a chance to publish its ports.
+fn sync_model_endpoint_lifecycle(world: &mut World) {
+    let transitions: Vec<(Entity, EndpointLifecycle)> = world
+        .query_filtered::<(Entity, &SimComponent), Changed<SimComponent>>()
+        .iter(world)
+        .map(|(entity, component)| {
+            let state = match &component.status {
+                SimStatus::Compiling => EndpointLifecycle::Pending,
+                SimStatus::Error(message) => EndpointLifecycle::Failed(message.clone()),
+                _ => EndpointLifecycle::Ready,
+            };
+            (entity, state)
+        })
+        .collect();
+
+    let mut changed = false;
+    for (entity, state) in transitions {
+        if world.get::<EndpointLifecycle>(entity) != Some(&state) {
+            world.entity_mut(entity).insert(state);
+            changed = true;
+        }
+    }
+    if changed {
+        world.resource_mut::<BindingRevision>().request();
+    }
+}
 
 /// Plugin for co-simulation orchestration.
 ///
@@ -94,13 +137,46 @@ impl Plugin for CoSimPlugin {
         // registers them here; wires, the API, the inspector, and scripts all
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
-        app.init_resource::<lunco_core::ports::PortRegistry>();
+        app.init_resource::<lunco_core::ports::PortRegistry>()
+            .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
         app.init_resource::<diagnostics::CosimDiagnostics>();
         // Manual setpoints that outrank the wiring fabric until they expire —
         // without it, a `SetPort` on a WIRED input lives less than one tick.
         app.init_resource::<connection::PortHolds>();
+        // A lifecycle command may retire a producer after its SetPorts trigger
+        // was emitted but before its deferred write lands. Keep that stale write
+        // outside the shared control boundary until next tick.
+        app.init_resource::<connection::ControlWriteFence>();
+        app.add_systems(FixedFirst, connection::clear_control_write_fence);
+        app.add_observer(binding::on_add_connection)
+            // Co-sim retains every `SimComponent` output itself, with source
+            // metadata. Mark it at lifecycle time so generic port telemetry does
+            // not create a second, ungrouped history for the same values.
+            .add_observer(|trigger: On<Add, SimComponent>, mut commands: Commands| {
+                commands
+                    .entity(trigger.entity)
+                    .try_insert(lunco_signal::WholesaleSignalSource);
+            })
+            .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
+            .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
+        app.add_systems(
+            Update,
+            sync_model_endpoint_lifecycle
+                .run_if(|q: Query<(), Changed<SimComponent>>| !q.is_empty()),
+        );
+        // One authoritative binding boundary per frame. Observers and async
+        // projections only request a reconciliation; running it after `Update`
+        // means a first-load connection cannot be sealed between a deferred USD
+        // port spawn and its generated Modelica contract.
+        app.add_systems(
+            PostUpdate,
+            binding::bind_connections.run_if(binding::binding_requested),
+        );
         {
             let mut registry = app
                 .world_mut()
@@ -264,6 +340,127 @@ impl Plugin for CoSimPlugin {
     }
 }
 
+#[cfg(test)]
+mod binding_lifecycle_tests {
+    use super::*;
+    use avian3d::prelude::RevoluteJoint;
+
+    #[test]
+    fn model_ready_transition_binds_waiting_edge_in_the_same_update() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let mut source_component = SimComponent::default();
+        source_component.inputs.insert("sun_mount_x".into(), 0.0);
+        let source = app.world_mut().spawn(source_component).id();
+
+        let mut target_component = SimComponent::default();
+        target_component.status = SimStatus::Compiling;
+        target_component.inputs.insert("sun_mount_x".into(), 0.0);
+        let target = app.world_mut().spawn(target_component).id();
+
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "sun_mount_x".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "sun_mount_x".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+
+        app.update();
+        assert!(app.world().get::<BoundConnection>(edge).is_none());
+
+        app.world_mut()
+            .get_mut::<SimComponent>(target)
+            .unwrap()
+            .status = SimStatus::Idle;
+        app.update();
+
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+
+    #[test]
+    fn admitted_revolute_joint_binds_waiting_angle_edge() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let mut controller = SimComponent::default();
+        controller.outputs.insert("yaw".into(), 0.0);
+        let controller = app.world_mut().spawn(controller).id();
+        let body0 = app.world_mut().spawn_empty().id();
+        let body1 = app.world_mut().spawn_empty().id();
+        let hinge = app.world_mut().spawn(RevoluteJoint::new(body0, body1)).id();
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: controller,
+                start_connector: "yaw".into(),
+                start_is_input: false,
+                end_element: hinge,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+
+        // The joint's Add observer publishes its lifecycle through Commands;
+        // the subsequent Update is the reactive binding transaction, not a
+        // fixed-step retry.
+        app.update();
+        app.update();
+
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+
+    #[test]
+    fn late_joint_admission_rebinds_an_edge_after_its_epoch_sealed() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let mut controller = SimComponent::default();
+        controller.outputs.insert("yaw".into(), 0.0);
+        let controller = app.world_mut().spawn(controller).id();
+        let hinge = app.world_mut().spawn_empty().id();
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: controller,
+                start_connector: "yaw".into(),
+                start_is_input: false,
+                end_element: hinge,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<BindingRevision>()
+            .seal_epoch();
+        binding::bind_connections(app.world_mut());
+        assert_eq!(
+            app.world().get::<ConnectionBinding>(edge),
+            Some(&ConnectionBinding::Failed)
+        );
+
+        let body0 = app.world_mut().spawn_empty().id();
+        let body1 = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .entity_mut(hinge)
+            .insert(RevoluteJoint::new(body0, body1));
+        app.update();
+        app.update();
+
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+}
+
 // ── Typed Command: generic port actuation ─────────────────────────────────────
 
 /// The ONE generic control command: write a batch of named input ports on
@@ -339,6 +536,12 @@ fn on_set_ports(
     let target = cmd.target;
     let writes = cmd.writes.clone();
     commands.queue(move |world: &mut World| {
+        if world
+            .get_resource::<connection::ControlWriteFence>()
+            .is_some_and(|fence| fence.blocks(target))
+        {
+            return;
+        }
         // A setpoint on a WIRED input has to outrank the wire, or the next
         // propagation tick overwrites it and the caller sees a write that
         // "succeeded" and did nothing. The hold expires on its own

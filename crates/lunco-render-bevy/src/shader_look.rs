@@ -410,7 +410,7 @@ fn rebind_changed_shader_look(
 ///
 /// NOTE: this does **not** add [`ShaderMaterialPlugin`](crate::ShaderMaterialPlugin)
 /// — [`LuncoRenderPlugin`](crate::LuncoRenderPlugin) does, right after calling this,
-/// and exactly once (the hand-rolled adds in `lunco-sandbox` and `luncosim` were
+/// and exactly once (the hand-rolled adds in `lunco-luncosim` and `luncosim` were
 /// deleted; Bevy panics on a duplicate plugin). Keeping the two separate lets this
 /// binder be unit-tested on a bare `MinimalPlugins` app, with no render pipeline.
 pub(crate) fn build(app: &mut App) {

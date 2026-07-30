@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn test_every_sandbox_scene_has_description() {
         let scenes_dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/sandbox");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/luncosim");
         let mut count = 0;
         for e in std::fs::read_dir(&scenes_dir).expect("sandbox scenes dir exists") {
             let p = e.unwrap().path();
@@ -738,17 +738,17 @@ mod tests {
     #[test]
     fn test_meta_store_absent_vs_authored_nothing() {
         let mut store = AssetMetaStore::default();
-        assert!(store.get("scenes/sandbox/x.usda").is_none());
+        assert!(store.get("scenes/luncosim/x.usda").is_none());
         store.by_path.insert(
-            "scenes/sandbox/x.usda".into(),
+            "scenes/luncosim/x.usda".into(),
             SpawnMeta {
                 spawnable: false,
                 lift: 0.0,
                 description: None,
             },
         );
-        assert!(store.get("scenes/sandbox/x.usda").is_some());
-        assert_eq!(store.description("scenes/sandbox/x.usda"), None);
+        assert!(store.get("scenes/luncosim/x.usda").is_some());
+        assert_eq!(store.description("scenes/luncosim/x.usda"), None);
     }
 
     /// A rescan must re-read files it has already seen — that is what it is FOR

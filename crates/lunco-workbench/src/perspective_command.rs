@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
 
 /// Activate a registered [`Perspective`](crate::Perspective) by its
-/// `PerspectiveId` string. The sandbox ships `sandbox_view`, `rover_build`,
+/// `PerspectiveId` string. The luncosim ships `sandbox_view`, `rover_build`,
 /// and `modelica_analyze`. Unknown ids are a logged no-op.
 #[Command(default)]
 pub struct ActivatePerspective {

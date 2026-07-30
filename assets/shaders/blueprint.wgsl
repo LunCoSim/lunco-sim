@@ -79,16 +79,24 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (mat.transition < 0.5) {
         // --- Lat/Long grid (spherical bodies) — needs UVs.
 #ifdef VERTEX_UVS_A
-        // POLES: equirect longitude degenerates toward |lat| 90° — the
-        // pole-cap tiles compress the whole texture width into a small
-        // vertex fan, which renders as a smeared radial stripe down the
-        // polar meridian. Real polar imagery is nearly longitude-invariant,
-        // so cross-fade to a fixed-longitude sample there. (Both samples are
-        // unconditional: textureSample is illegal in non-uniform flow.)
-        let img = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
-        let img_pole = textureSample(albedo_tex, albedo_smp, vec2(0.5, in.uv.y)).rgb;
-        let pole = smoothstep(0.95, 0.995, abs(in.uv.y * 2.0 - 1.0));
-        base *= mix(img, img_pole, pole);
+        // Globe tiles deliberately unwrap a tile that crosses the equirectangular
+        // anti-meridian (its mesh UV can be just below 0 or just above 1). The
+        // imagery sampler uses repeat addressing, so keep that unwrapped value
+        // through interpolation and let the sampler perform the wrap. Applying
+        // `fract` here would reintroduce a discontinuity at x=1 inside a triangle,
+        // which is the diagonal imagery strip seen on Earth.
+        let globe_uv = in.uv;
+        // The longitude coordinate is singular at both poles. A cube-sphere
+        // triangle fan therefore interpolates several unrelated equirectangular
+        // columns into a visible radial wedge. Collapse only the polar caps to
+        // one longitude; below the cap the authored imagery remains untouched.
+        let img = textureSample(albedo_tex, albedo_smp, globe_uv).rgb;
+        let north_cap = 1.0 - smoothstep(0.0, 0.18, globe_uv.y);
+        let south_cap = smoothstep(0.82, 1.0, globe_uv.y);
+        let pole_img = textureSample(albedo_tex, albedo_smp, vec2(0.5, globe_uv.y)).rgb;
+        let cap_weight = max(north_cap, south_cap);
+        let stable_img = mix(img, pole_img, cap_weight);
+        base *= stable_img;
         let ll_coords = in.uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
         let ll_line = min(ll_f.x, ll_f.y);

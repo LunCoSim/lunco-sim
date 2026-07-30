@@ -12,17 +12,18 @@ use lunco_api::schema::ApiResponse;
 use lunco_cosim::CosimDiagnostics;
 
 /// `GetBrokenConnections` — backs `GET /api/diagnostics`. Reports the co-sim
-/// connection targets that dropped their write on the most recent propagation
-/// tick, so a caller can poll wiring health instead of scraping the log.
+/// connection targets after their interface lifecycle has reached a terminal
+/// state, plus endpoints still waiting for their runtime contract. A caller can
+/// therefore distinguish assembly progress from a wiring failure without
+/// scraping logs.
 ///
-/// Truthful by construction: it reports exactly the targets propagation could not
-/// write and whether each exposes a port surface (`fault: true` = has ports but
-/// not this one, the actionable case; `fault: false` = structural/still-loading
-/// endpoint). When the cosim engine isn't installed it degrades to
+/// `broken` contains only terminal failures. `pending` contains structural or
+/// compiling endpoints, which are expected during assembly and never emit a
+/// warning. When the cosim engine isn't installed it degrades to
 /// `cosim_tracked: false` rather than a hopeful empty "all clear".
 ///
 /// params: none · returns:
-/// `{ cosim_tracked, broken_count, fault_count, broken: [{port, entity_bits, global_id, has_port_surface, fault, dropped_value}] }`
+/// `{ cosim_tracked, broken_count, pending_count, fault_count, broken: [...], pending: [...] }`
 pub struct BrokenConnectionsProvider;
 
 impl ApiQueryProvider for BrokenConnectionsProvider {
@@ -32,34 +33,29 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
 
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         let diag = world.get_resource::<CosimDiagnostics>();
-        let broken: Vec<serde_json::Value> = diag
-            .map(|d| {
-                d.broken
-                    .iter()
-                    .map(|b| {
-                        serde_json::json!({
-                            "port": b.port,
-                            "entity_bits": b.entity.to_bits(),
-                            "global_id": b.global_id.map(|g| g.get()),
-                            "has_port_surface": b.has_port_surface,
-                            // A genuine wiring fault (declare/fix the wire) vs a
-                            // structural or still-loading endpoint (expected).
-                            "fault": b.has_port_surface,
-                            "dropped_value": b.dropped_value,
-                        })
+        let encode = |items: &[lunco_cosim::BrokenConnection]| {
+            items
+                .iter()
+                .map(|b| {
+                    serde_json::json!({
+                        "port": b.port,
+                        "entity_bits": b.entity.to_bits(),
+                        "global_id": b.global_id.map(|g| g.get()),
+                        "has_port_surface": b.has_port_surface,
+                        "dropped_value": b.dropped_value,
                     })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let fault_count = broken
-            .iter()
-            .filter(|b| b["fault"].as_bool().unwrap_or(false))
-            .count();
+                })
+                .collect::<Vec<_>>()
+        };
+        let broken = diag.map(|d| encode(&d.broken)).unwrap_or_default();
+        let pending = diag.map(|d| encode(&d.pending)).unwrap_or_default();
         ApiResponse::ok(serde_json::json!({
             "cosim_tracked": diag.is_some(),
             "broken_count": broken.len(),
-            "fault_count": fault_count,
+            "pending_count": pending.len(),
+            "fault_count": broken.len(),
             "broken": broken,
+            "pending": pending,
         }))
     }
 }

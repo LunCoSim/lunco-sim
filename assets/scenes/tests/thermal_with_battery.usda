@@ -1,0 +1,89 @@
+#usda 1.0
+(
+    defaultPrim = "ThermalWithBatteryTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# THE COUPLED PATH: thermal AND electrical islands coexist and the heat wire
+# flows from the solved electrical DAE into the solved thermal DAE.
+#
+# With `power = "battery"` AND `thermal = "basic"` selected, the rover carries
+# BOTH a `Scope "Electrical"` (Battery + motors) and a `Scope "Thermal"` (heat
+# loads + masses + radiators). They compile to TWO separate generated models.
+# The motors' solved `outputs:heat` (from the electrical DAE) crosses into the
+# thermal DAE as a causal SimConnection. This scene proves both islands compile
+# independently and the cross-domain wire still lands.
+#
+#   target/debug/luncosim test --scene scenes/tests/thermal_with_battery.usda
+
+def Xform "ThermalWithBatteryTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Thermal and electrical islands coexist; cross-domain heat wire flows."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </ThermalWithBatteryTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    over "Sun"
+    {
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.6, 0.0)
+        double3 xformOp:translate = (7.0, 5.0, 8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string power = "battery"
+            string thermal = "basic"
+        }
+    )
+    {
+        double3 xformOp:translate = (0, 1.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # A small battery so the electrical island has a real source to solve.
+        over "Battery"
+        {
+            float inputs:capacity = 5.0
+            float inputs:soc_init = 0.9
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "thermal-with-battery"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/thermal_with_battery.rhai@
+        }
+    }
+}

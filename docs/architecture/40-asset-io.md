@@ -13,7 +13,7 @@ catches anything that slips through (transitive deps, std API drift).
 ## Why the policy exists
 
 The codebase targets two platforms: native (server / desktop binary) and
-wasm32 (browser sandbox). Bevy abstracts rendering and ECS scheduling
+wasm32 (browser luncosim). Bevy abstracts rendering and ECS scheduling
 across both, but the **standard library does not** — several blocking
 APIs return errors or panic on `wasm32-unknown-unknown`. Among them:
 

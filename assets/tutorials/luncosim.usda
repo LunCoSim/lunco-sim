@@ -1,11 +1,17 @@
 #usda 1.0
 (
     """
-    The curriculum the LUNCOSIM flagship offers. See `./sandbox.usda` for why
-    this layer exists rather than a `hosts` attribute on each track.
+    The curriculum the unified LunCoSim app offers. Track selection and order
+    live here as USD composition, never in Rust or per-lesson host flags.
+
+    The flagship tour is first, followed by the reusable sandbox-authoring and
+    rover-driving tracks inherited when the old sandbox app was merged into
+    LunCoSim.
     """
     metersPerUnit = 1
     subLayers = [
-        @./luncosim/curriculum.usda@
+        @lunco://tutorials/luncosim/curriculum.usda@,
+        @lunco://tutorials/sandbox/curriculum.usda@,
+        @lunco://tutorials/basic/curriculum.usda@
     ]
 )

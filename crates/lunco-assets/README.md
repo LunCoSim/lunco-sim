@@ -8,6 +8,9 @@ Unified asset management for LunCoSim — the single source of truth for cache d
 - **Downloads external assets** from `Assets.toml` declarations with SHA-256 verification
 - **Processes textures** — resize/convert source images (JPEG, PNG, TIFF, SVG → PNG)
 - **Eliminates hardcoded paths** — no more scattered `.cache/` and `assets/` strings
+- **Traverses transitive asset files** — `transitive_file_closure*` owns native
+  queueing, canonical paths, and reads; format crates supply only document and
+  dependency interpretation
 
 ## CLI Usage
 

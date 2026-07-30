@@ -163,7 +163,7 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
         let ws = world.resource::<WorkspaceResource>();
         let active = ws.active_document;
 
-        let items: Vec<serde_json::Value> = ws
+        let mut items: Vec<serde_json::Value> = ws
             .documents()
             .iter()
             .map(|entry| {
@@ -177,6 +177,33 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
                 })
             })
             .collect();
+
+        // Generated scene networks have no file-system workspace entry, but
+        // they are normal read-only Modelica documents. Include every such
+        // registry document here so an API client discovers it through the
+        // same listing as authored files before fetching its source.
+        let workspace_docs: std::collections::HashSet<_> =
+            ws.documents().iter().map(|entry| entry.id).collect();
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let mut generated: Vec<_> = registry
+            .docs()
+            .filter(|(id, host)| {
+                !workspace_docs.contains(id)
+                    && matches!(host.document().origin(), DocumentOrigin::Bundled { filename } if filename.starts_with("generated/"))
+            })
+            .collect();
+        generated.sort_by_key(|(id, _)| id.raw());
+        items.extend(generated.into_iter().map(|(id, host)| {
+            let document = host.document();
+            serde_json::json!({
+                "doc_id": id.raw(),
+                "title": document.origin().display_name(),
+                "kind": "modelica",
+                "origin": origin_to_json(document.origin()),
+                "active": Some(id) == active,
+                "context_twin": serde_json::Value::Null,
+            })
+        }));
 
         ApiResponse::ok(serde_json::json!({
             "open_documents": items,
@@ -1102,9 +1129,27 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
         // dispatch is centralised.
         let ws = world.resource::<WorkspaceResource>();
         let entry = ws.document(doc_id).cloned();
-        let Some(entry) = entry else {
-            return err_doc_not_found(doc_id);
-        };
+        if entry.is_none() {
+            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let Some(host) = registry.host(doc_id) else {
+                return err_doc_not_found(doc_id);
+            };
+            let document = host.document();
+            if !matches!(document.origin(), DocumentOrigin::Bundled { filename } if filename.starts_with("generated/"))
+            {
+                return err_doc_not_found(doc_id);
+            }
+            return ApiResponse::ok(serde_json::json!({
+                "doc_id": doc_id.raw(),
+                "kind": "modelica",
+                "source": document.source(),
+                "generation": document.generation(),
+                "dirty": document.is_dirty(),
+                "origin": origin_to_json(document.origin()),
+                "title": document.origin().display_name(),
+            }));
+        }
+        let entry = entry.expect("checked above");
 
         match entry.kind {
             DocumentKind::Modelica => {

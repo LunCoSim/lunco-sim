@@ -15,7 +15,7 @@
 //! screenshot-taking binary — and that is this crate:
 //!
 //! - `lunco-workbench` already links `bevy_render` (it is the egui shell);
-//! - **both** GUI binaries add it (`lunco-sandbox` and `lunica`);
+//! - **both** GUI binaries add it (`lunco-luncosim` and `lunica`);
 //! - the headless server does **not** link it at all;
 //! - it already owns app-level capabilities of exactly this kind (see `perf_hud`).
 //!
@@ -890,7 +890,7 @@ const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500)
 /// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
 /// minutes to an episode and burying the timeout `warn!` under false positives.
 ///
-/// Both entries are published by `lunco-sandbox`, which mirrors state this crate
+/// Both entries are published by `lunco-luncosim`, which mirrors state this crate
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
 /// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
 /// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +
@@ -913,7 +913,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 ///    without ever setting the `SceneLoadInFlight` guard clause (3) reads: with no
 ///    meshes, clause (2) is vacuously true and the gate would fire on an empty
 ///    viewport. This mirrors the guard in `start_camera_paths_when_terrain_ready`
-///    (`crates/lunco-sandbox/src/lib.rs:2264`), which likewise refuses to read an
+///    (`crates/lunco-luncosim/src/lib.rs:2264`), which likewise refuses to read an
 ///    empty query as "nothing to wait for".
 /// 2. **Every mesh handle is loaded *with its dependencies*.** This is the direct
 ///    read for "meshes and the materials/textures hanging off them have resolved",
@@ -929,7 +929,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 ///    Going through the bus rather than the resources keeps `lunco-workbench` a
 ///    UI-shell crate: it cannot name `TerrainStreamStatus` or `SceneLoadInFlight`
 ///    without a terrain/USD dependency, and the established pattern is that
-///    `lunco-sandbox` mirrors such state onto the bus. A future visual subsystem
+///    `lunco-luncosim` mirrors such state onto the bus. A future visual subsystem
 ///    joins by publishing progress and being listed in [`VISUAL_BUSY_SOURCES`].
 fn scene_visuals_ready(
     meshes: &Query<&bevy::mesh::Mesh3d>,

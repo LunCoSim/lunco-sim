@@ -1,6 +1,6 @@
 //! **Weight must survive a rollback replay.**
 //!
-//! The shipped app sets avian's own `Gravity::ZERO` (`lunco-sandbox`); gravity
+//! The shipped app sets avian's own `Gravity::ZERO` (`lunco-luncosim`); gravity
 //! reaches a rigid body ONLY through `apply_gravity_to_rigid_bodies`, which
 //! writes it into avian's force accumulator every `FixedUpdate`.
 //!

@@ -25,7 +25,7 @@ pub mod connect_link;
 
 /// Client-side netcode over avian bodies: snapshot interpolation, prediction,
 /// rollback, reconciliation and correction smoothing (`NetcodePredictionPlugin`).
-/// Split out of `lunco-sandbox-edit::commands`, which had fused it with the
+/// Split out of `lunco-luncosim-edit::commands`, which had fused it with the
 /// scene/document command layer. Always compiled — it names no lightyear type, only
 /// the always-on `lunco-core` session substrate, so it costs nothing in a build
 /// without the `networking` feature (every system self-guards on `NetworkRole`).
@@ -74,10 +74,9 @@ mod shared;
 /// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
 #[cfg(feature = "networking")]
 pub mod sync;
-// The scenario manifest needs USD's reference closure (native only — it reads
-// scene files off the host filesystem). That walk is USD domain knowledge and
-// lives once, in `lunco_usd_bevy::closure`; this crate used to carry a
-// near-identical copy, which is why it talked to `openusd` directly.
+// The scenario manifest uses `lunco-assets` for native closure traversal and
+// `lunco-usd-compose` for USD dependency interpretation. This crate neither
+// reads USD files itself nor carries a second closure walker.
 #[cfg(feature = "networking")]
 mod client;
 /// Client-prediction diagnostics (render-jitter / velocity / correction census).
@@ -89,7 +88,7 @@ mod diagnostics;
 /// Native single-instance deep-link forwarding: route a clicked `luncosim://`
 /// link into the already-running app over a local socket (else become primary).
 /// (OS *scheme registration* is a desktop-integration concern and lives in the
-/// app crate `lunco-sandbox`, not here — this crate only parses + dials.)
+/// app crate `lunco-luncosim`, not here — this crate only parses + dials.)
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 pub mod single_instance;
 /// Layer-4 UI: the in-sim *Connect* panel (address field + Connect/Disconnect),
@@ -162,7 +161,7 @@ impl NetworkMode {
                     || std::env::current_exe()
                         .ok()
                         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                        .is_some_and(|n| n.contains("sandbox-server"));
+                        .is_some_and(|n| n.contains("luncosim-server"));
                 if is_headless {
                     return Some(NetworkMode::Host {
                         port: lunco_core::session::DEFAULT_HOST_PORT,

@@ -4,7 +4,7 @@ Reusable UI mechanisms for LunCoSim domain crates.
 
 ## What This Crate Does
 
-`lunco-ui` provides the **infrastructure** that domain crates use to build panels. It does **not** contain panel implementations — those live in `src/ui/` of each domain crate (`lunco-modelica`, `lunco-sandbox-edit`, etc.).
+`lunco-ui` provides the **infrastructure** that domain crates use to build panels. It does **not** contain panel implementations — those live in `src/ui/` of each domain crate (`lunco-modelica`, `lunco-luncosim-edit`, etc.).
 
 ### Architecture: Entity Viewers
 

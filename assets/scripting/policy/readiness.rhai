@@ -5,7 +5,7 @@
 //
 // Called once per pending item per frame with:
 //
-//   kind        "scene_load" | "program_compile" | "participant_init"
+//   kind        "scene_load" | "program_compile" | "program_failed" | "participant_init"
 //   subject     "world" | "entity"
 //   entity      the entity id, or -1 when subject is "world"
 //   label       a model name / scene path, for rules that care about one thing
@@ -17,6 +17,8 @@
 //   elapsed_s      elapsed_ticks x the fixed timestep, for rules that prefer
 //                  seconds. Derived, so it is always a whole number of ticks
 //   deadline_s     deadline_ticks x the fixed timestep
+//   default_action  the persisted default selected by the engine
+//   ignore_failed_models explicit best-effort setting for failed Modelica
 //
 // and must return exactly one of:
 //
@@ -44,6 +46,13 @@
 /// an app with no scripting runs the Rust rule, and a scene should not behave
 /// differently just because scripting is loaded.
 fn readiness_action(ctx) {
+    // A failure is not a slow compile. The default is fail-closed: no physics
+    // runs against a vehicle whose controller or generated island failed. The
+    // persisted best-effort setting deliberately changes the default to
+    // `proceed`; scenes may still override it here for an authored exercise.
+    if ctx.kind == "program_failed" {
+        return ctx.default_action;
+    }
     // Nothing waits forever. Past the deadline the world runs and the engine
     // logs the overdue item — a frozen app hides the bug, a moving one shows it.
     if ctx.elapsed_s >= ctx.deadline_s {

@@ -18,14 +18,14 @@ description: >
 # Test the workbench via API
 
 The lunica exposes a reflect-registered Event API on
-`--api PORT` (default 4101). Always pass this flag when launching the sandbox, including
+`--api PORT` (default 4101). Always pass this flag when launching the luncosim, including
 visual checks; use another explicit free port if 4101 is occupied. UI verification — diagrams rendering,
 drill-ins, simulations, file ops — should be driven from this API
 rather than asking the user to click.
 
 ## Live shader iteration
 
-Shader source edits are a live-test path. Keep the production sandbox running, edit the
+Shader source edits are a live-test path. Keep the production luncosim running, edit the
 WGSL under `assets/shaders/`, then dispatch `ReloadShader` through the same API (an empty
 path reloads the standard shader set; pass `shaders/starfield.wgsl` to limit the reload).
 Confirm the command result and inspect the unchanged window. Do not relaunch the app just
@@ -33,7 +33,7 @@ to pick up a starfield or material edit.
 
 ## Session lifecycle
 
-Before launching another sandbox, send `Exit` to the previous API session and verify that
+Before launching another luncosim, send `Exit` to the previous API session and verify that
 its process and port are gone. Never overlap GUI/API sessions or reuse a port while the old
 session is alive. Keep the current process for live shader/Rhai edits; restart only when a
 rebuilt binary or an explicit clean session is required.
@@ -137,7 +137,7 @@ yourself rather than relying on `save_to_file`.
 ### Validate an asset without loading it
 
 `ValidateAsset` is the parse-only pre-flight ("does this file compile?"):
-no cosim, no scene load, no GPU — safe against any running sandbox, even
+no cosim, no scene load, no GPU — safe against any running luncosim, even
 mid-simulation. Unlike the commands below it is a **query provider**, so the
 report comes back in the response body; no `QueryCommandResult` poll.
 
@@ -147,13 +147,13 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
-**Answered by sandbox binaries only** — it lives in `lunco-scene-commands`,
+**Answered by luncosim binaries only** — it lives in `lunco-scene-commands`,
 which lunica does not link, so lunica returns `CommandNotFound`. With no
 instance (or only lunica) up, the same checks run as a one-shot CLI that builds
 no app at all:
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate assets/models/LunCo/Electrical/Battery.mo
+target/debug/luncosim --validate assets/models/LunCo/Electrical/Battery.mo
 ```
 
 Full runbook — per-extension checks, exit codes, and the CWD path-resolution
@@ -209,14 +209,14 @@ measured joint angle, and rendered boresight. Do not accept a controller's
 internal `locked` state alone; it can be self-consistent with an incorrect axis
 or boresight convention.
 
-Keep one sandbox process running while iterating on a rover. Edit the USD, then
+Keep one luncosim process running while iterating on a rover. Edit the USD, then
 use `OpenFile` for a file-backed asset, `RestartScene` for the mounted scene, or
 `ApplyUsdOp` for an in-place authored opinion. Reattach a diagnostic script with
 `RunScenario`; this hot-reloads only that script. Read `ScriptInspect`,
 `QueryEntity`, `rover_status`, and relevant ports while the simulation is live.
 
 A rover test must report measured telemetry and movement, not merely compile or
-compare two values at rest. Use `sandbox test` for deterministic CI verdicts,
+compare two values at rest. Use `luncosim test` for deterministic CI verdicts,
 but keep the live API check because it exercises the production reload and
 command paths. Do not add a second reload command or a standalone rover test
 binary.

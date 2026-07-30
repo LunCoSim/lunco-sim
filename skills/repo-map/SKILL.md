@@ -11,7 +11,7 @@ description: >
   needs a target), confusing `lunica` with the main simulator, reaching for
   `pkill`, or guessing an API port. It's project-specific: there is NO `apps/`
   dir (binaries live inside crates), `lunica` is the *Modelica* workbench (not
-  the flagship sim), `sandbox` / `luncosim` / `sandbox-server` are three
+  the flagship sim), `luncosim` / `luncosim` / `luncosim-server` are three
   different entry points into overlapping stacks, and the canonical API port is
   4101. Authoritative indexes: docs/apps/README.md (every binary) and
   docs/crates-index.md (every library crate, grouped by domain).
@@ -47,17 +47,18 @@ When those disagree with anything here, they win.
 | I want to… | Run | Why |
 |---|---|---|
 | Full lunar mission (celestial + ephemeris + solar-scale + full vehicle stack) | **`luncosim`** | The flagship windowed simulator. |
-| Ground physics / rovers / USD scenes / edit tools | **`sandbox`** | Physics test bed — windowed, or headless with `--no-ui`. |
-| Multiplayer host / CI automation (no GUI ever linked) | **`sandbox-server`** | Same sim as `sandbox` via `run_headless()`, GUI stack never compiled in. |
+| Ground physics / rovers / USD scenes / edit tools | **`luncosim`** | Physics test bed — windowed, or headless with `--no-ui`. |
+| Multiplayer host / CI automation (no GUI ever linked) | **`luncosim-server`** | Same sim as `luncosim` via `run_headless()`, GUI stack never compiled in. |
 | Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets`** | `-- download\|list\|process`. |
 
 Launch (workspace `default-members` make a bare `cargo run` ambiguous — **always pass a target**):
 
 ```bash
-cargo run -p luncosim
-cargo run --release -p lunco-sandbox --bin sandbox -- --api 4101
-cargo run -p lunco-sandbox-server
+cargo build -p lunco-luncosim --bin luncosim
+target/debug/luncosim
+target/debug/luncosim --api 4101
+cargo run -p lunco-luncosim-server
 cargo run --bin lunica
 ```
 
@@ -65,21 +66,21 @@ cargo run --bin lunica
 (headless Modelica CLI → CSV), `msl_indexer` (rebuild the MSL search index — re-run
 after an MSL change), `lunica_worker` (wasm compile worker, bundled not run),
 `build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`, transport smoke
-test). Authored sandbox behavior tests run through `sandbox test` plus their Rhai scenarios.
+test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:
 [`docs/apps/README.md`](../../docs/apps/README.md).
 
 ## Talking to a running app (agents)
 
-The windowed apps that embed the API bridge (`sandbox`, `lunica`, and anything with
+The windowed apps that embed the API bridge (`luncosim`, `lunica`, and anything with
 `LunCoApiPlugin`) honor:
 
 - `--api [PORT]` — enable the HTTP automation API. Default port **4101**. This is
-  mandatory for sandbox visual/runtime validation; use an explicit free port.
+  mandatory for luncosim visual/runtime validation; use an explicit free port.
   (`lunco_core::session::DEFAULT_API_PORT`); the MCP config points here via
   `LUNCO_API_PORT`. Without `--api`, no network surface.
 - `--no-ui` — headless (skip winit/egui, run the shared sim loop).
-- `--scene <path>` — (`sandbox`) load a USD scene on boot; path is relative to the
+- `--scene <path>` — (`luncosim`) load a USD scene on boot; path is relative to the
   `assets/` root (do **not** prefix with `assets/`).
 
 Drive it: `POST /api/commands` with `{"command":"<Name>","params":{...}}`; discover
@@ -98,9 +99,9 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **Vessel control & hardware** | mobility, robotics, avatar, FSW/OBC/hardware, controller, autopilot | `lunco-mobility`, `lunco-autopilot`, `lunco-controller` |
 | **USD integration** | OpenUSD↔Bevy: visuals, physics, sim schemas, materials | `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
-| **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-sandbox-edit` |
+| **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit` |
 | **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, tutorials | `lunco-modelica`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-tutorial` |
-| **Applications** | the entry-point binaries above | `luncosim`, `lunco-sandbox`, `lunco-sandbox-server`, `lunco-modelica` |
+| **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunco-modelica` |
 
 ## Where does X live? (routing)
 
@@ -119,9 +120,11 @@ Use this to jump to the right one; read the index for the full responsibility.
 ## Gotchas / naming traps
 
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
-- **`lunica` ≠ the main sim.** It's the Modelica workbench (crate `lunco-modelica`). The flagship is `luncosim`; the physics bed is `sandbox`.
-- **`cargo run` alone is ambiguous** — `default-members` are `luncosim`, `lunco-sandbox`, `lunco-modelica`. Always `-p <crate>` and/or `--bin <name>`.
-- **`lunco-sandbox` produces the `sandbox` binary** (crate name ≠ binary name); `sandbox-server` is a *separate crate* (`lunco-sandbox-server`) that exists only to default to headless.
+- **`lunica` ≠ the main sim.** It's the Modelica workbench (crate `lunco-modelica`). The flagship is `luncosim`; the physics bed is `luncosim`.
+- **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
+  then execute `target/debug/luncosim` directly. Bare `cargo run` is also
+  ambiguous because the default members are `lunco-luncosim` and `lunco-modelica`.
+- **`lunco-luncosim` produces the `luncosim` binary** (crate name ≠ binary name); `luncosim-server` is a *separate crate* (`lunco-luncosim-server`) that exists only to default to headless.
 - **API port is 4101** everywhere — not 3000 (a stale MCP default) and not 3001.
 - **Don't `pkill`** a running app to restart — use the API `Exit` command (see `test-via-api`).
-- Composition roots: `lunco-sandbox` = `SandboxCorePlugin` (+ optional UI/headless plugin), shared by both `sandbox` and `sandbox-server`. There is **no** `lunco-usd-composer` crate — composition lives in `lunco-usd-bevy` (`flatten_stage`).
+- Composition roots: `lunco-luncosim` = `SandboxCorePlugin` (+ optional UI/headless plugin), shared by both `luncosim` and `luncosim-server`. There is **no** `lunco-usd-composer` crate — composition lives in `lunco-usd-bevy` (`flatten_stage`).
