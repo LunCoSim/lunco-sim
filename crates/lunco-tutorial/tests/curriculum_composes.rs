@@ -47,8 +47,10 @@ fn the_app_layer_composes_the_tracks_it_offers() {
 #[test]
 fn every_lesson_resolves_its_script() {
     for app in ["luncosim", "lunica", "sandbox"] {
-        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
-            .expect("compose curriculum");
+        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!(
+            "assets/tutorials/{app}.usda"
+        )))
+        .expect("compose curriculum");
         let c = curriculum::project(&stage);
         for lesson in &c.lessons {
             let path = resolve(&lesson.script).unwrap_or_else(|| {
@@ -74,8 +76,10 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
     let mut with = 0;
     let mut without = 0;
     for app in ["luncosim", "lunica", "sandbox"] {
-        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
-            .expect("compose curriculum");
+        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!(
+            "assets/tutorials/{app}.usda"
+        )))
+        .expect("compose curriculum");
         let c = curriculum::project(&stage);
         for lesson in &c.lessons {
             match &lesson.world {
@@ -103,8 +107,10 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
 #[test]
 fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
     for app in ["luncosim", "lunica", "sandbox"] {
-        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
-            .expect("compose curriculum");
+        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!(
+            "assets/tutorials/{app}.usda"
+        )))
+        .expect("compose curriculum");
         let c = curriculum::project(&stage);
         let known: std::collections::HashSet<&str> =
             c.lessons.iter().map(|l| l.path.as_str()).collect();

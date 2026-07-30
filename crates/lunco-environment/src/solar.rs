@@ -100,10 +100,7 @@ pub fn compute_local_solar(
 /// own output sync may rewrite its outputs map (same reasoning as the gravity
 /// bridge).
 pub fn inject_local_solar_into_cosim(
-    mut q: Query<
-        (&LocalSolar, &mut lunco_cosim::SimComponent),
-        With<crate::EnvironmentProbe>,
-    >,
+    mut q: Query<(&LocalSolar, &mut lunco_cosim::SimComponent), With<crate::EnvironmentProbe>>,
 ) {
     for (solar, mut comp) in &mut q {
         comp.outputs

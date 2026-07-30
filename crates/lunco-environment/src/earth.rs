@@ -163,10 +163,7 @@ pub fn compute_local_earth(
 /// Writes every tick rather than on change, because a model's own output sync
 /// rewrites its outputs map — same reasoning as the gravity and solar bridges.
 pub fn inject_local_earth_into_cosim(
-    mut q: Query<
-        (&LocalEarth, &mut lunco_cosim::SimComponent),
-        With<crate::EnvironmentProbe>,
-    >,
+    mut q: Query<(&LocalEarth, &mut lunco_cosim::SimComponent), With<crate::EnvironmentProbe>>,
 ) {
     for (earth, mut comp) in &mut q {
         comp.outputs.insert(

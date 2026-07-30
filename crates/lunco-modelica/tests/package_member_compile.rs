@@ -117,9 +117,15 @@ fn sun_tracker_reacts_to_a_runtime_sun_vector() {
         );
     }
 
-    stepper.set_input("sun_mount_x", 0.0).expect("set initial x");
-    stepper.set_input("sun_mount_y", 0.0).expect("set initial y");
-    stepper.set_input("sun_mount_z", -1.0).expect("set initial z");
+    stepper
+        .set_input("sun_mount_x", 0.0)
+        .expect("set initial x");
+    stepper
+        .set_input("sun_mount_y", 0.0)
+        .expect("set initial y");
+    stepper
+        .set_input("sun_mount_z", -1.0)
+        .expect("set initial z");
     for _ in 0..240 {
         stepper.step(1.0 / 60.0).expect("settle initial yaw");
     }

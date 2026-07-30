@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{Collection, PrimPredicate, Stage, compute_included_paths};
+use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
@@ -154,8 +154,8 @@ mod compose_tests {
     //! consumes must land on the vessel after full PCP composition.
 
     use super::StageView;
-    use crate::UsdRead;
     use crate::compose::compose_file_to_stage;
+    use crate::UsdRead;
     use openusd::sdf::Path as SdfPath;
 
     fn asset(rel: &str) -> std::path::PathBuf {

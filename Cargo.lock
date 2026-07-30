@@ -7914,6 +7914,7 @@ dependencies = [
  "lunco-core",
  "lunco-signal",
  "lunco-theme",
+ "lunco-usd-bevy",
  "lunco-workbench",
  "serde",
  "serde_json",

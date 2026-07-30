@@ -146,11 +146,6 @@ def Cylinder "Wheel" (
     #
     # ONE channel per prim (`Parameter` is a Component), so this names the one
     # number a drivetrain argument is had over.
-    uniform bool lunco:telemetry = true
-    uniform token lunco:telemetry:port = "torque"
-    uniform token lunco:telemetry:name = "axle_torque"
-    uniform token lunco:telemetry:unit = "N*m"
-
     # A driven wheel has a motor behind it, but the motor is not IN here: it is its own
     # part (`components/mobility/motor.usda`) with its own mass, torque curve, efficiency
     # and waste heat, and its own arc onto the vessel. Its electrical draw is a load on

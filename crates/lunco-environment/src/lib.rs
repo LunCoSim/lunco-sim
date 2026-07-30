@@ -278,10 +278,7 @@ pub fn feed_gravity_into_imu_sensors(
 /// tick. Writes every tick because a model's own output sync may rewrite its
 /// outputs map.
 pub fn inject_local_gravity_into_cosim(
-    mut q: Query<
-        (&LocalGravity, &mut lunco_cosim::SimComponent),
-        With<EnvironmentProbe>,
-    >,
+    mut q: Query<(&LocalGravity, &mut lunco_cosim::SimComponent), With<EnvironmentProbe>>,
 ) {
     for (gravity, mut comp) in &mut q {
         comp.outputs.insert(

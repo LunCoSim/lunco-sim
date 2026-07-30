@@ -134,9 +134,8 @@ pub fn follow_mounted_cameras(
 
         // Compose the camera's root-world pose before its canonical grid write-back.
         let cam_world = mount_world + mount_rotation.0 * mounted.offset.translation.as_dvec3();
-        let cam_rotation = lunco_core::coords::GridRot(
-            mount_rotation.0 * mounted.offset.rotation.as_dquat(),
-        );
+        let cam_rotation =
+            lunco_core::coords::GridRot(mount_rotation.0 * mounted.offset.rotation.as_dquat());
 
         // Camera world pose = mount · offset.
         let Some((new_cell, new_tf)) = lunco_core::coords::world_pose_to_live_grid_local(
@@ -253,13 +252,11 @@ mod tests {
             .world_mut()
             .spawn((
                 CellCoord::default(),
-                Transform::from_xyz(400.0, 0.0, -400.0)
-                    .with_rotation(Quat::from_rotation_y(0.8)),
+                Transform::from_xyz(400.0, 0.0, -400.0).with_rotation(Quat::from_rotation_y(0.8)),
                 ChildOf(grid),
             ))
             .id();
-        let offset = Transform::from_xyz(0.0, 2.0, 5.0)
-            .with_rotation(Quat::from_rotation_x(-0.2));
+        let offset = Transform::from_xyz(0.0, 2.0, 5.0).with_rotation(Quat::from_rotation_x(-0.2));
         let camera = app
             .world_mut()
             .spawn((

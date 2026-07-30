@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use lunco_core::architecture::Port;
+use lunco_core::architecture::{InputPorts, Port};
 use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry};
 
 use crate::SimComponent;
@@ -297,7 +297,14 @@ const PORT_BACKEND: PortBackend = PortBackend {
 /// the whole session layer.
 const PILOTED_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
-        if w.get::<lunco_core::GlobalEntityId>(e).is_some() {
+        // `GlobalEntityId` names every composed USD prim, not just a vehicle.
+        // The `InputPorts` surface is the architecture's already-authoritative
+        // command and possession boundary (see `lunco_core::InputPorts`).
+        // `ControlBinding` is merely an input-device adapter and `ActuatorPorts`
+        // are mechanical output plumbing, so neither defines this port's owner.
+        // Never manufacture `piloted` on meshes, joints, sensors, or arbitrary
+        // Modelica children merely because they happen to have a stable id.
+        if w.get::<InputPorts>(e).is_some() {
             out.push(PortRef {
                 name: "piloted".to_string(),
                 direction: PortDirection::Out,
@@ -339,4 +346,32 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
     registry.register(AVIAN_BACKEND);
     registry.register(PORT_BACKEND);
     registry.register(PILOTED_BACKEND);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn piloted_is_exposed_only_at_a_control_boundary() {
+        let mut world = World::new();
+        let mesh = world.spawn(lunco_core::GlobalEntityId::from_raw(1)).id();
+        let vessel = world
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(2),
+                InputPorts::new(&["throttle"]),
+            ))
+            .id();
+        let mut ports = PortRegistry::default();
+        register_builtin_port_backends(&mut ports);
+
+        assert!(ports
+            .entity_ports(&world, mesh)
+            .iter()
+            .all(|port| port.name != "piloted"));
+        assert!(ports
+            .entity_ports(&world, vessel)
+            .iter()
+            .any(|port| port.name == "piloted"));
+    }
 }

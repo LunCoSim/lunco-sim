@@ -39,11 +39,6 @@ def Xform "Battery" (
     # a power budget is argued about. The model's other variables (current, terminal
     # voltage, every internal `Real`) are published wholesale under the `sim.`
     # namespace by `lunco_cosim::telemetry`, so nothing here has to enumerate them.
-    uniform bool lunco:telemetry = true
-    uniform token lunco:telemetry:port = "soc_out"
-    uniform token lunco:telemetry:name = "battery_soc"
-    uniform token lunco:telemetry:unit = "1"
-
     double3 xformOp:translate = (0, 0, 0)
     double3 xformOp:scale = (2.0, 0.5, 3.0)
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]

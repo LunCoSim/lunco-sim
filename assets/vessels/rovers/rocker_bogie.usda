@@ -130,11 +130,6 @@ def Xform "RockerBogie" (
     # from a single port beats plotting `velocity_x/y/z` and doing the arithmetic by
     # eye — those are world-frame, so a rover that turns hands its speed from one
     # trace to another.
-    uniform bool lunco:telemetry = true
-    uniform token lunco:telemetry:port = "speed"
-    uniform token lunco:telemetry:name = "ground_speed"
-    uniform token lunco:telemetry:unit = "m/s"
-
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
     def "Controls" (

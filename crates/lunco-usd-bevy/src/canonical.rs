@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
-use crate::UsdRead;
 use crate::view::StageView;
+use crate::UsdRead;
 
 /// A `Send` in-memory recipe for building a canonical [`Stage`]: the resolved
 /// root layer identifier + the full transitive `.usda` layer-closure bytes

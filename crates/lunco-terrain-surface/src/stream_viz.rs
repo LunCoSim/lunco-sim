@@ -3594,8 +3594,8 @@ mod draw_partition_tests {
             .first()
             .copied()
             .expect("active nested camera contributes a terrain-detail demand");
-        let expected_position = DVec3::new(400.0, 0.0, -400.0)
-            + rover_rotation.as_dquat() * DVec3::new(0.0, 2.0, 5.0);
+        let expected_position =
+            DVec3::new(400.0, 0.0, -400.0) + rover_rotation.as_dquat() * DVec3::new(0.0, 2.0, 5.0);
         let expected_forward = rover_rotation.as_dquat() * DVec3::NEG_Z;
         assert!(
             (demand.position - expected_position).length() < 1e-9,

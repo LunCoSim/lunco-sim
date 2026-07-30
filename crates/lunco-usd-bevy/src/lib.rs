@@ -34,7 +34,7 @@
 //! the `Update` schedule and retries every frame until the asset is available, then
 //! marks the entity with `UsdVisualSynced` to prevent re-processing.
 
-use bevy::asset::{AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
 // Appearance **intent**, not a material: this crate must never name
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
@@ -56,7 +56,7 @@ pub mod dome;
 mod light;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
-pub use camera::{UsdCameraPose, UsdSensorCamera, read_camera_exposure_ev100};
+pub use camera::{read_camera_exposure_ev100, UsdCameraPose, UsdSensorCamera};
 pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod camera_path;
@@ -76,9 +76,9 @@ pub mod view;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector, StageRecipe};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
-pub use light::{UsdAuthoredLight, get_attribute_as_bool};
+pub use light::{get_attribute_as_bool, UsdAuthoredLight};
 pub use read::{AttrUiHint, UsdRead};
-pub use units::{ConventionTransform, StageMetrics, UpAxis, stage_convention};
+pub use units::{stage_convention, ConventionTransform, StageMetrics, UpAxis};
 use usd_data::UsdDataExt;
 pub use view::StageView;
 // The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
@@ -87,8 +87,8 @@ pub use view::StageView;
 // because the WRITER lives in `lunco-scene-commands`, while the semantics — what
 // counts as an ambient dome, and in what units — live here with the reader.
 pub use light::{
-    DOME_TEXTURE_ATTR, ambient_fill_intensity, ambient_fill_saturates,
-    untextured_dome_intensity_sum,
+    ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum,
+    DOME_TEXTURE_ATTR,
 };
 
 /// Bevy plugin for USD visual synchronization.
@@ -2718,7 +2718,11 @@ pub fn stage_time_codes_per_second(reader: &StageView<'_>) -> f64 {
     // guard a malformed non-positive opinion (either source) so it can't freeze
     // animation (division by a zero/negative rate).
     let tcps = reader.time_codes_per_second();
-    if tcps > 0.0 { tcps } else { 24.0 }
+    if tcps > 0.0 {
+        tcps
+    } else {
+        24.0
+    }
 }
 
 /// Held-sampled `token`/`string` attribute at time code `time` (USD tokens hold,
@@ -4797,7 +4801,7 @@ fn rasterize_label(
     font: &ab_glyph::FontVec,
     cfg: &DiagnosticLabelConfig,
 ) -> Option<Image> {
-    use ab_glyph::{Font, PxScale, ScaleFont, point};
+    use ab_glyph::{point, Font, PxScale, ScaleFont};
     // The POD texture descriptors, straight from `wgpu-types` — the same types
     // `bevy_image` itself takes. NOT `bevy::render::render_resource`, which is a
     // `bevy_render` re-export and would drag wgpu + naga into this crate.
@@ -5164,7 +5168,7 @@ mod instance_identity_tests {
     //! hierarchical identity from the instance root, so two spawns of the same
     //! asset (identical composed prim paths) don't collide.
     use super::*;
-    use lunco_core::{GlobalEntityId, Provenance, identity::derive_id};
+    use lunco_core::{identity::derive_id, GlobalEntityId, Provenance};
 
     #[test]
     fn role_is_path_relative_to_root() {
@@ -5682,11 +5686,9 @@ def Xform "Matrixed"
         // A single-axis `rotateZ` time-sample marks the prim animated.
         assert!(prim_has_xform_time_samples(&reader, &hinge));
         // Held start = 0° → identity; midway (code 2) = 45° about Z.
-        assert!(
-            local_rotation_at(&reader, &hinge, 0.0)
-                .unwrap()
-                .abs_diff_eq(Quat::IDENTITY, 1e-6)
-        );
+        assert!(local_rotation_at(&reader, &hinge, 0.0)
+            .unwrap()
+            .abs_diff_eq(Quat::IDENTITY, 1e-6));
         let q = local_rotation_at(&reader, &hinge, 2.0).unwrap();
         assert!(q.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4), 1e-5));
     }
@@ -5770,10 +5772,9 @@ def Xform "Std"
         let reader = __cs.view();
         let tf = local_transform_at(&reader, &SdfPath::new("/Std").unwrap(), 0.0).unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(5.0, 6.0, 7.0), 1e-5));
-        assert!(
-            tf.rotation
-                .abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5)
-        );
+        assert!(tf
+            .rotation
+            .abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5));
         assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-5));
     }
 

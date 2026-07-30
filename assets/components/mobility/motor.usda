@@ -272,11 +272,6 @@ def Xform "Motor" (
     # Unit `1`: demand is a signed FRACTION of full command (−1..1), a ratio with
     # no dimension. The browser renders that as a blank unit cell rather than a
     # literal "1".
-    uniform bool lunco:telemetry = true
-    uniform token lunco:telemetry:port = "demand"
-    uniform token lunco:telemetry:name = "motor_demand"
-    uniform token lunco:telemetry:unit = "1"
-
     # --- Housing: RENDERS ONLY, deliberately no collider ---
     #
     # Internal machinery does not collide. A hub motor lives INSIDE the vehicle

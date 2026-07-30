@@ -50,7 +50,6 @@ pub trait Perspective: Send + Sync + 'static {
     fn restores_cached_layout(&self) -> bool {
         true
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────

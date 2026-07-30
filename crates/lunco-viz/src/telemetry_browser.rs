@@ -55,6 +55,7 @@ use std::sync::Arc;
 use bevy::prelude::{ChildOf, Entity, Name};
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
+use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
 use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
@@ -198,25 +199,47 @@ struct Row {
     unit: Option<String>,
     description: Option<String>,
     provenance: Option<String>,
-    owner: String,
     in_focus: bool,
     model_internal: bool,
+    active: bool,
 }
 
 #[derive(Clone, Debug)]
-struct Group {
+struct TreeNode {
     label: String,
+    id: String,
+    children: std::collections::BTreeMap<String, TreeNode>,
     rows: Vec<Row>,
 }
 
-#[derive(Default)]
+impl TreeNode {
+    fn new(id: String, label: String) -> Self {
+        Self {
+            label,
+            id,
+            children: Default::default(),
+            rows: Vec::new(),
+        }
+    }
+}
+
 struct Catalog {
     key: u64,
-    /// [`TelemetryFocus::fingerprint`] the groups' `in_focus` flags were built
+    /// [`TelemetryFocus::fingerprint`] the tree's `in_focus` flags were built
     /// against. Selecting a different rover changes no channel, so the channel-set
     /// key alone would leave every flag stale.
     focus_key: u64,
-    groups: Vec<Group>,
+    root: TreeNode,
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self {
+            key: 0,
+            focus_key: 0,
+            root: TreeNode::new("root".to_string(), "Telemetry".to_string()),
+        }
+    }
 }
 
 /// Order-independent fingerprint of the channel *set*. Sample pushes
@@ -229,90 +252,113 @@ fn catalog_key(reg: &SignalRegistry) -> u64 {
     for (sig, _hist) in reg.iter_scalar() {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         sig.hash(&mut h);
+        reg.is_active(sig).hash(&mut h);
         acc ^= h.finish();
         n += 1;
     }
     acc ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-/// Human-oriented subsystem name. Generated co-simulation variables remain
-/// available under **Model internals**, but are not allowed to crowd out an
-/// authored mission channel such as `power.battery_soc`.
-fn subsystem_for(path: &str, provenance: Option<&str>) -> (&'static str, bool) {
-    let internal =
-        provenance == Some("cosim") || path.starts_with("sim.") || path.contains("_x2f_");
-    if internal {
-        return ("Model internals", true);
-    }
-    let lower = path.to_ascii_lowercase();
-    let group = if lower.starts_with("power.") || lower.contains("battery") {
-        "Power"
-    } else if lower.starts_with("thermal.") || lower.contains("temp") {
-        "Thermal"
-    } else if lower.starts_with("comms.") || lower.contains("radio") || lower.contains("link") {
-        "Communications"
-    } else if lower.starts_with("mobility.")
-        || lower.starts_with("drive")
-        || lower.contains("speed")
-    {
-        "Mobility"
-    } else if lower.starts_with("pointing.") || lower.contains("mast") || lower.contains("antenna")
-    {
-        "Pointing"
-    } else if provenance == Some("modelica") {
-        "Modelica"
-    } else {
-        "Controls & status"
-    };
-    (group, false)
+/// Reduce an authored USD prim path to the prim's display name.  Its complete
+/// path remains available in the tooltip; the browser uses this label only to
+/// keep the live hierarchy readable in a narrow panel.
+fn display_entity_name(name: &str) -> String {
+    name.trim_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .replace('_', " ")
 }
 
-/// Rebuild the grouped/sorted catalog. `name_of` resolves an entity's
-/// display name (the panel passes a `PanelCtx::get::<Name>` closure —
-/// O(1) per entity, not a scan).
-fn build_groups(
+/// Rebuild the catalog from the live ownership hierarchy. This deliberately
+/// has no `wheel`, `motor`, `beam`, or other name-based classifier: the USD
+/// parent graph supplies the assembly, subsystem, and component grouping for
+/// every scene, including ones the editor has never seen before.
+fn build_tree(
     reg: &SignalRegistry,
     name_of: impl Fn(Entity) -> Option<String>,
+    parent_of: impl Fn(Entity) -> Option<Entity>,
+    usd_path_of: impl Fn(Entity) -> Option<String>,
+    is_navigation_root: impl Fn(Entity) -> bool,
     in_focus: impl Fn(Entity) -> bool,
-) -> Vec<Group> {
-    use std::collections::BTreeMap;
-    let mut by_subsystem: BTreeMap<String, Vec<Row>> = BTreeMap::new();
+) -> TreeNode {
+    let mut root = TreeNode::new("root".to_string(), "Telemetry".to_string());
     for (sig, _hist) in reg.iter_scalar() {
         let meta = reg.meta(sig);
         let provenance = meta.and_then(|m| m.provenance.clone());
-        let (subsystem, model_internal) = subsystem_for(&sig.path, provenance.as_deref());
-        let owner = if sig.entity == Entity::PLACEHOLDER {
-            "Global".to_string()
-        } else {
-            name_of(sig.entity).unwrap_or_else(|| format!("Entity {}", sig.entity))
+        let model_internal = provenance.as_deref() == Some("cosim")
+            || sig.path.starts_with("sim.")
+            || sig.path.contains("_x2f_");
+        let row = Row {
+            sig: sig.clone(),
+            unit: meta.and_then(|m| m.unit.clone()),
+            description: meta.and_then(|m| m.description.clone()),
+            provenance,
+            in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
+            model_internal,
+            active: reg.is_active(sig),
         };
-        by_subsystem
-            .entry(subsystem.to_string())
-            .or_default()
-            .push(Row {
-                sig: sig.clone(),
-                unit: meta.and_then(|m| m.unit.clone()),
-                description: meta.and_then(|m| m.description.clone()),
-                provenance,
-                owner,
-                in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
-                model_internal,
-            });
+
+        let lineage: Vec<(String, String)> = if let Some(path) = usd_path_of(sig.entity) {
+            let mut key = String::new();
+            path.trim_matches('/')
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(|segment| {
+                    key.push('/');
+                    key.push_str(segment);
+                    (key.clone(), segment.replace('_', " "))
+                })
+                .collect()
+        } else {
+            let mut entities = Vec::new();
+            let mut cursor = Some(sig.entity);
+            for _ in 0..MAX_ANCESTOR_DEPTH {
+                let Some(entity) = cursor else { break };
+                if entities.contains(&entity) {
+                    break;
+                }
+                entities.push(entity);
+                if is_navigation_root(entity) {
+                    break;
+                }
+                cursor = (entity != Entity::PLACEHOLDER)
+                    .then(|| parent_of(entity))
+                    .flatten();
+            }
+            entities.reverse();
+            entities
+                .into_iter()
+                .map(|entity| {
+                    let label = if entity == Entity::PLACEHOLDER {
+                        "Global".to_string()
+                    } else {
+                        name_of(entity)
+                            .map(|name| display_entity_name(&name))
+                            .unwrap_or_else(|| format!("Entity {entity}"))
+                    };
+                    (format!("entity:{}", entity.to_bits()), label)
+                })
+                .collect()
+        };
+        let mut node = &mut root;
+        for (id, label) in lineage {
+            node = node
+                .children
+                .entry(id.clone())
+                .or_insert_with(|| TreeNode::new(id, label));
+        }
+        node.rows.push(row);
     }
-    let mut groups: Vec<Group> = by_subsystem
-        .into_iter()
-        .map(|(label, mut rows)| {
-            rows.sort_by(|a, b| {
-                a.sig
-                    .path
-                    .cmp(&b.sig.path)
-                    .then_with(|| a.owner.cmp(&b.owner))
-            });
-            Group { label, rows }
-        })
-        .collect();
-    groups.sort_by(|a, b| a.label.cmp(&b.label));
-    groups
+    sort_tree(&mut root);
+    root
+}
+
+fn sort_tree(node: &mut TreeNode) {
+    node.rows.sort_by(|a, b| a.sig.path.cmp(&b.sig.path));
+    for child in node.children.values_mut() {
+        sort_tree(child);
+    }
 }
 
 /// Depth cap for the ancestor walk that decides focus membership. A vessel is a
@@ -343,13 +389,208 @@ fn entity_in_focus(
     false
 }
 
-/// Case-insensitive substring filter over `path` and group label.
-fn filter_match(filter: &str, group_label: &str, path: &str) -> bool {
+/// Case-insensitive substring filter over authored labels, descriptions, and
+/// stable signal paths.
+fn filter_match(filter: &str, label: &str, path: &str, description: Option<&str>) -> bool {
     if filter.is_empty() {
         return true;
     }
     let f = filter.to_lowercase();
-    path.to_lowercase().contains(&f) || group_label.to_lowercase().contains(&f)
+    path.to_lowercase().contains(&f)
+        || label.to_lowercase().contains(&f)
+        || description.is_some_and(|text| text.to_lowercase().contains(&f))
+}
+
+/// Compact channel label for a narrow telemetry pane. The registry path remains
+/// the stable identity and is always available in the row tooltip; this is only
+/// the operator-facing presentation of it.
+fn compact_channel_label(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    let mut parts: Vec<&str> = trimmed.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.len() > 2 {
+        parts.drain(..parts.len() - 2);
+    }
+    let readable = parts.join(" › ");
+    if readable.is_empty() {
+        path.replace('_', " ")
+    } else {
+        readable.replace('_', " ")
+    }
+}
+
+fn row_visible(row: &Row, scoped: bool, show_internals: bool, filter: &str, label: &str) -> bool {
+    (!scoped || row.in_focus)
+        && (show_internals || !row.model_internal)
+        && filter_match(filter, label, &row.sig.path, row.description.as_deref())
+}
+
+fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> bool {
+    node.rows.iter().any(predicate)
+        || node
+            .children
+            .values()
+            .any(|child| tree_any_row(child, predicate))
+}
+
+fn visible_count(node: &TreeNode, scoped: bool, show_internals: bool, filter: &str) -> usize {
+    node.rows
+        .iter()
+        .filter(|r| row_visible(r, scoped, show_internals, filter, &node.label))
+        .count()
+        + node
+            .children
+            .values()
+            .map(|c| visible_count(c, scoped, show_internals, filter))
+            .sum::<usize>()
+}
+
+#[cfg(test)]
+fn entity_key(entity: Entity) -> String {
+    format!("entity:{}", entity.to_bits())
+}
+
+/// The virtual catalog root is never shown.
+fn display_roots(root: &TreeNode) -> Vec<&TreeNode> {
+    root.children.values().collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_tree_node(
+    ui: &mut egui::Ui,
+    node: &TreeNode,
+    registry: &SignalRegistry,
+    theme: &lunco_theme::Theme,
+    scoped: bool,
+    show_internals: bool,
+    filter: &str,
+    selected: Option<&SignalRef>,
+    depth: usize,
+    clicked: &mut Option<SignalRef>,
+) {
+    let visible = visible_count(node, scoped, show_internals, filter);
+    if visible == 0 {
+        return;
+    }
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("{} ({visible})", node.label)).strong(),
+    )
+    .id_salt(("tb_entity", &node.id))
+    .default_open(depth < 2)
+    .show(ui, |ui| {
+        for child in node.children.values() {
+            render_tree_node(
+                ui,
+                child,
+                registry,
+                theme,
+                scoped,
+                show_internals,
+                filter,
+                selected,
+                depth + 1,
+                clicked,
+            );
+        }
+        egui::Grid::new(("tb_grid", &node.id))
+            .num_columns(3)
+            .striped(true)
+            .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
+            .show(ui, |ui| {
+                for row in node
+                    .rows
+                    .iter()
+                    .filter(|r| row_visible(r, scoped, show_internals, filter, &node.label))
+                {
+                    let latest = registry
+                        .scalar_history(&row.sig)
+                        .and_then(|h| h.samples.back())
+                        .map(|s| s.value);
+                    let payload = ChannelDragPayload::from_signal(&row.sig);
+                    let inner = ui.dnd_drag_source(
+                        ui.id().with(("tb_row", &row.sig)),
+                        payload.clone(),
+                        |ui| {
+                            ui.selectable_label(
+                                selected == Some(&row.sig),
+                                egui::RichText::new(if row.active {
+                                    compact_channel_label(&row.sig.path)
+                                } else {
+                                    format!("{} (archived)", compact_channel_label(&row.sig.path))
+                                })
+                                .color(if row.active {
+                                    theme.tokens.text
+                                } else {
+                                    theme.tokens.text_subdued
+                                }),
+                            )
+                        },
+                    );
+                    let response = inner.inner;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                latest.map(fmt_value).unwrap_or_else(|| "—".into()),
+                            )
+                            .monospace()
+                            .color(if latest.is_some() {
+                                theme.tokens.text
+                            } else {
+                                theme.tokens.text_subdued
+                            }),
+                        );
+                    });
+                    let unit_label = ui.label(
+                        egui::RichText::new(pretty_unit(row.unit.as_deref()))
+                            .small()
+                            .color(theme.tokens.text_subdued),
+                    );
+                    let tip = unit_tooltip(row.unit.as_deref());
+                    if !tip.is_empty() {
+                        unit_label.on_hover_text(tip);
+                    }
+                    ui.end_row();
+                    if response.double_clicked() {
+                        queue_plot_drop(
+                            ui.ctx(),
+                            PlotDropRequest {
+                                payload,
+                                world_pos: None,
+                            },
+                        );
+                        *clicked = Some(row.sig.clone());
+                    } else if response.clicked() {
+                        *clicked = Some(row.sig.clone());
+                    }
+                    response.on_hover_ui(|ui| {
+                        ui.label(egui::RichText::new(&row.sig.path).strong().monospace());
+                        if let Some(description) = &row.description {
+                            ui.label(description);
+                        }
+                        if let Some(provenance) = &row.provenance {
+                            ui.label(
+                                egui::RichText::new(format!("Declared by: {provenance}"))
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                        if !row.active {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Publisher despawned; samples are retained for review.",
+                                )
+                                .small()
+                                .weak(),
+                            );
+                        }
+                        ui.label(
+                            egui::RichText::new("Drag to a canvas; double-click to plot.")
+                                .small()
+                                .weak(),
+                        );
+                    });
+                }
+            });
+    });
 }
 
 // ── Preview cache ────────────────────────────────────────────────────
@@ -560,21 +801,39 @@ impl Panel for TelemetryBrowserPanel {
         let key = catalog_key(registry);
         if self.catalog.key != key
             || self.catalog.focus_key != focus_key
-            || (self.catalog.groups.is_empty() && key != 0)
+            || (self.catalog.root.children.is_empty() && key != 0)
         {
-            let groups = build_groups(
+            let root = build_tree(
                 registry,
                 |e| ctx.get::<Name>(e).map(|n| n.as_str().to_string()),
-                |e| entity_in_focus(e, &focus, |c| ctx.get::<ChildOf>(c).map(|p| p.parent())),
+                |c| ctx.get::<ChildOf>(c).map(|p| p.parent()),
+                |e| ctx.get::<UsdPrimPath>(e).map(|path| path.path.clone()),
+                |_| false,
+                |e| {
+                    let Some(path) = ctx.get::<UsdPrimPath>(e).map(|path| path.path.as_str())
+                    else {
+                        return entity_in_focus(e, &focus, |c| {
+                            ctx.get::<ChildOf>(c).map(|p| p.parent())
+                        });
+                    };
+                    focus.iter().any(|root| {
+                        ctx.get::<UsdPrimPath>(*root).is_some_and(|root_path| {
+                            path == root_path.path
+                                || path
+                                    .strip_prefix(root_path.path.as_str())
+                                    .is_some_and(|suffix| suffix.starts_with('/'))
+                        })
+                    })
+                },
             );
             self.catalog = Catalog {
                 key,
                 focus_key,
-                groups,
+                root,
             };
         }
 
-        if self.catalog.groups.is_empty() {
+        if self.catalog.root.children.is_empty() {
             ui.label(
                 egui::RichText::new(
                     "No telemetry channels yet — run a simulation to populate the registry.",
@@ -589,18 +848,11 @@ impl Panel for TelemetryBrowserPanel {
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
         let scoped = self.focus_only && !focus.is_empty();
-        if scoped
-            && !self
-                .catalog
-                .groups
-                .iter()
-                .flat_map(|g| &g.rows)
-                .any(|r| r.in_focus)
-        {
+        if scoped && !tree_any_row(&self.catalog.root, |row| row.in_focus) {
             ui.label(
                 egui::RichText::new(
-                    "The selection publishes no telemetry — author `lunco:telemetry` \
-                     on its prims, or untick “Selected only”.",
+                    "The selection publishes no telemetry yet — start its simulation or untick \
+                     “Selected only” to inspect the rest of the live scene.",
                 )
                 .color(subdued),
             );
@@ -618,169 +870,19 @@ impl Panel for TelemetryBrowserPanel {
             .auto_shrink([false, false])
             .max_height((ui.available_height() - detail_reserve).max(60.0))
             .show(ui, |ui| {
-                for group in &self.catalog.groups {
-                    let visible: Vec<&Row> = group
-                        .rows
-                        .iter()
-                        .filter(|r| {
-                            (!scoped || r.in_focus)
-                                && (self.show_model_internals || !r.model_internal)
-                                && filter_match(&self.filter, &group.label, &r.sig.path)
-                        })
-                        .collect();
-                    if visible.is_empty() {
-                        continue;
-                    }
-                    // A same-named signal on separate physical components is
-                    // not a duplicate sample (four wheels really have four
-                    // torques), but rendering four bare `axle_torque` labels
-                    // makes it indistinguishable from duplicated telemetry.
-                    // Keep every physical measurement and qualify only the
-                    // ambiguous labels with their owning prim.
-                    let mut path_count = std::collections::BTreeMap::new();
-                    for row in &visible {
-                        *path_count.entry(row.sig.path.as_str()).or_insert(0usize) += 1;
-                    }
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new(format!("{} ({})", group.label, visible.len()))
-                            .strong(),
-                    )
-                    .id_salt(("tb_group", &group.label))
-                    .default_open(group.label != "Controls & status")
-                    .show(ui, |ui| {
-                        // THREE ALIGNED COLUMNS — channel, value, unit.
-                        //
-                        // The rows used to be free `horizontal` layouts with the
-                        // value right-pushed and the unit glued onto it, so
-                        // nothing lined up: every number sat at a different x, and
-                        // `0.900 1` read as one token. A `Grid` gives the value
-                        // column a shared right edge (numbers compare by eye) and
-                        // gives the unit its own column, which is also what lets a
-                        // dimensionless channel render an EMPTY unit cell instead
-                        // of a stray `1`.
-                        egui::Grid::new(("tb_grid", &group.label))
-                            .num_columns(3)
-                            .striped(true)
-                            .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
-                            .show(ui, |ui| {
-                                for row in visible {
-                                    let latest = registry
-                                        .scalar_history(&row.sig)
-                                        .and_then(|h| h.samples.back())
-                                        .map(|s| s.value);
-                                    let is_sel = self.selected.as_ref() == Some(&row.sig);
-                                    let payload = ChannelDragPayload::from_signal(&row.sig);
-                                    let drag_id = ui.id().with(("tb_row", &row.sig));
-
-                                    // Column 1 — the channel, and the drag handle.
-                                    let label = if path_count
-                                        .get(row.sig.path.as_str())
-                                        .copied()
-                                        .unwrap_or_default()
-                                        > 1
-                                    {
-                                        format!("{} · {}", row.owner, row.sig.path)
-                                    } else {
-                                        row.sig.path.clone()
-                                    };
-                                    let inner =
-                                        ui.dnd_drag_source(drag_id, payload.clone(), |ui| {
-                                            ui.selectable_label(
-                                                is_sel,
-                                                egui::RichText::new(label)
-                                                    .color(theme.tokens.text),
-                                            )
-                                        });
-                                    let resp = inner.inner;
-
-                                    // Column 2 — the number, monospaced and
-                                    // right-aligned so digits stack by place value.
-                                    let value_text = match latest {
-                                        Some(v) => fmt_value(v),
-                                        None => "—".to_string(),
-                                    };
-                                    let stale = latest.is_none();
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(
-                                                egui::RichText::new(value_text).monospace().color(
-                                                    if stale { subdued } else { theme.tokens.text },
-                                                ),
-                                            )
-                                            .on_hover_text(match latest {
-                                                // Full precision on demand: the cell
-                                                // shows four significant digits, and
-                                                // "is that really zero" is a question
-                                                // the tooltip should answer.
-                                                Some(v) => format!("{v}"),
-                                                None => "no samples yet".to_string(),
-                                            });
-                                        },
-                                    );
-
-                                    // Column 3 — the unit, in its own column so the
-                                    // value column keeps a single right edge.
-                                    let unit_cell = pretty_unit(row.unit.as_deref());
-                                    let unit_label = ui.label(
-                                        egui::RichText::new(unit_cell).small().color(subdued),
-                                    );
-                                    let tip = unit_tooltip(row.unit.as_deref());
-                                    if !tip.is_empty() {
-                                        unit_label.on_hover_text(tip);
-                                    }
-                                    ui.end_row();
-
-                                    if resp.double_clicked() {
-                                        // Fallback door: queue a plot-node
-                                        // request; the canvas host drains it
-                                        // and places the node.
-                                        queue_plot_drop(
-                                            ui.ctx(),
-                                            PlotDropRequest {
-                                                payload: payload.clone(),
-                                                world_pos: None,
-                                            },
-                                        );
-                                        clicked = Some(row.sig.clone());
-                                    } else if resp.clicked() {
-                                        clicked = Some(row.sig.clone());
-                                    }
-                                    resp.on_hover_ui(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(&row.sig.path).strong().monospace(),
-                                        );
-                                        ui.label(egui::RichText::new(format!("Source: {}", row.owner)).small());
-                                        if let Some(description) = &row.description {
-                                            ui.label(description);
-                                        } else if row.model_internal {
-                                            ui.label(
-                                                egui::RichText::new(
-                                                    "Generated co-simulation diagnostic; use the \n                                                     authored mission channel where one is available.",
-                                                )
-                                                .small()
-                                                .weak(),
-                                            );
-                                        }
-                                        if let Some(provenance) = &row.provenance {
-                                            ui.label(
-                                                egui::RichText::new(format!("Declared by: {provenance}"))
-                                                    .small()
-                                                    .weak(),
-                                            );
-                                        }
-                                        ui.label(
-                                            egui::RichText::new(
-                                                "drag onto a canvas to plot; \
-                                                 double-click to add at a default spot",
-                                            )
-                                            .small()
-                                            .weak(),
-                                        );
-                                    });
-                                }
-                            });
-                    });
+                for node in display_roots(&self.catalog.root) {
+                    render_tree_node(
+                        ui,
+                        node,
+                        registry,
+                        &theme,
+                        scoped,
+                        self.show_model_internals,
+                        &self.filter,
+                        self.selected.as_ref(),
+                        0,
+                        &mut clicked,
+                    );
                 }
             });
 
@@ -919,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn groups_are_per_entity_sorted_and_carry_units() {
+    fn tree_follows_entity_ownership_and_carries_units() {
         let mut reg = SignalRegistry::default();
         reg.push_scalar(SignalRef::new(ent(2), "z.speed"), 0.0, 1.0);
         reg.push_scalar(SignalRef::new(ent(2), "a.torque"), 0.0, 2.0);
@@ -932,28 +1034,32 @@ mod tests {
             },
         );
 
-        let groups = build_groups(
+        let tree = build_tree(
             &reg,
             |e| (e == ent(1)).then(|| "Alpha Rover".to_string()),
+            |_| None,
+            |_| None,
+            |_| false,
             |_| false,
         );
-        assert_eq!(groups.len(), 2);
-        // Sorted by label: "Alpha Rover" < "Entity …".
-        assert_eq!(groups[0].label, "Alpha Rover");
-        assert_eq!(groups[0].rows.len(), 1);
-        assert_eq!(groups[1].rows.len(), 2);
+        assert_eq!(tree.children.len(), 2);
+        let alpha = tree.children.get(&entity_key(ent(1))).unwrap();
+        let unnamed = tree.children.get(&entity_key(ent(2))).unwrap();
+        assert_eq!(alpha.label, "Alpha Rover");
+        assert_eq!(alpha.rows.len(), 1);
+        assert_eq!(unnamed.rows.len(), 2);
         // Rows sorted by path within the group.
-        assert_eq!(groups[1].rows[0].sig.path, "a.torque");
-        assert_eq!(groups[1].rows[1].sig.path, "z.speed");
-        assert_eq!(groups[1].rows[1].unit.as_deref(), Some("m/s"));
+        assert_eq!(unnamed.rows[0].sig.path, "a.torque");
+        assert_eq!(unnamed.rows[1].sig.path, "z.speed");
+        assert_eq!(unnamed.rows[1].unit.as_deref(), Some("m/s"));
     }
 
     #[test]
     fn filter_matches_path_and_group_case_insensitively() {
-        assert!(filter_match("", "Rover", "wheel.speed"));
-        assert!(filter_match("SPEED", "Rover", "wheel.speed"));
-        assert!(filter_match("rov", "Rover", "wheel.speed"));
-        assert!(!filter_match("thrust", "Rover", "wheel.speed"));
+        assert!(filter_match("", "Rover", "wheel.speed", None));
+        assert!(filter_match("SPEED", "Rover", "wheel.speed", None));
+        assert!(filter_match("rov", "Rover", "wheel.speed", None));
+        assert!(!filter_match("thrust", "Rover", "wheel.speed", None));
     }
 
     #[test]
@@ -985,13 +1091,90 @@ mod tests {
     }
 
     #[test]
-    fn groups_carry_focus_membership() {
+    fn tree_carries_focus_membership() {
         let mut reg = SignalRegistry::default();
         reg.push_scalar(SignalRef::new(ent(1), "a"), 0.0, 1.0);
         reg.push_scalar(SignalRef::new(ent(2), "b"), 0.0, 1.0);
-        let groups = build_groups(&reg, |_| None, |e| e == ent(1));
-        let focused: Vec<bool> = groups.iter().map(|g| g.in_focus).collect();
-        assert_eq!(focused.iter().filter(|f| **f).count(), 1);
+        let tree = build_tree(
+            &reg,
+            |_| None,
+            |_| None,
+            |_| None,
+            |_| false,
+            |e| e == ent(1),
+        );
+        assert!(tree.children[&entity_key(ent(1))].rows[0].in_focus);
+        assert!(!tree.children[&entity_key(ent(2))].rows[0].in_focus);
+    }
+
+    #[test]
+    fn tree_uses_parentage_not_signal_name_to_group_subsystems() {
+        let mut reg = SignalRegistry::default();
+        let rover = ent(1);
+        let motors = ent(2);
+        let left_motor = ent(3);
+        let comms = ent(4);
+        reg.push_scalar(SignalRef::new(left_motor, "current"), 0.0, 1.0);
+        reg.push_scalar(SignalRef::new(left_motor, "temperature"), 0.0, 2.0);
+        reg.push_scalar(SignalRef::new(comms, "beam.locked"), 0.0, 1.0);
+        let parent = |e| match e {
+            e if e == motors => Some(rover),
+            e if e == left_motor => Some(motors),
+            e if e == comms => Some(rover),
+            _ => None,
+        };
+        let tree = build_tree(
+            &reg,
+            |e| match e {
+                e if e == rover => Some("Skid Rover".into()),
+                e if e == motors => Some("Motors".into()),
+                e if e == left_motor => Some("Left Motor".into()),
+                e if e == comms => Some("Comms".into()),
+                _ => None,
+            },
+            parent,
+            |_| None,
+            |_| false,
+            |_| false,
+        );
+        let rover = tree.children.get(&entity_key(rover)).unwrap();
+        assert_eq!(
+            rover.children[&entity_key(motors)].children[&entity_key(left_motor)]
+                .rows
+                .len(),
+            2
+        );
+        assert_eq!(rover.children[&entity_key(comms)].rows.len(), 1);
+    }
+
+    #[test]
+    fn usd_path_hierarchy_ignores_runtime_reparenting() {
+        let mut reg = SignalRegistry::default();
+        let physics_world = ent(1);
+        let joint = ent(2);
+        let wheel = ent(3);
+        reg.push_scalar(SignalRef::new(wheel, "axle_torque"), 0.0, 0.9);
+        let parent = |e| match e {
+            // The runtime physics backend has reparented the wheel underneath
+            // a joint. This must not leak into operator telemetry navigation.
+            e if e == wheel => Some(joint),
+            e if e == joint => Some(physics_world),
+            _ => None,
+        };
+        let tree = build_tree(
+            &reg,
+            |_| None,
+            parent,
+            |e| (e == wheel).then(|| "/SandboxScene/Skid_Rover/Wheel_FL".to_string()),
+            |_| false,
+            |_| false,
+        );
+        assert_eq!(tree.children.len(), 1);
+        let scene = tree.children.get("/SandboxScene").unwrap();
+        let rover = &scene.children["/SandboxScene/Skid_Rover"];
+        let wheel = &rover.children["/SandboxScene/Skid_Rover/Wheel_FL"];
+        assert_eq!(wheel.label, "Wheel FL");
+        assert_eq!(wheel.rows[0].sig.path, "axle_torque");
     }
 
     #[test]
@@ -1054,7 +1237,7 @@ mod tests {
     fn fmt_value_is_four_significant_digits_and_never_rescales() {
         assert_eq!(fmt_value(0.0), "0");
         // The bug this replaced: a state of charge is 0.9, NOT "900.000m".
-        assert_eq!(fmt_value(0.9), "0.900");
+        assert_eq!(fmt_value(0.9), "0.9000");
         assert_eq!(fmt_value(26_000.0), "26000");
         assert_eq!(fmt_value(-0.0042), "-0.004200");
         assert_eq!(fmt_value(1.234_5), "1.234");

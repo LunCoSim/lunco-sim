@@ -27,6 +27,7 @@ use crate::signal::{PersistedSignalRef, ScalarSample, SignalRef, SignalRegistry,
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
 use lunco_core::GlobalEntityId;
+use lunco_workbench::PanelCtx;
 
 /// LinePlot-specific options stashed in
 /// [`VisualizationConfig::style`]. Serialised as JSON for on-disk
@@ -87,6 +88,33 @@ impl LinePlotStyle {
     fn save(&self, config: &mut VisualizationConfig) {
         config.style = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
     }
+}
+
+/// Operator-facing identity for an entity-scoped signal.  `SignalRef::path`
+/// alone is intentionally not unique — four wheels can all publish
+/// `axle_torque` — so every graph surface shows the owning USD prim as well.
+/// The full path remains available in telemetry tooltips and persistence keeps
+/// the entity identity; this is solely the concise plot presentation.
+fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
+    let owner = wb
+        .get::<Name>(signal.entity)
+        .map(|name| {
+            name.as_str()
+                .trim_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(name.as_str())
+                .replace('_', " ")
+        })
+        .unwrap_or_else(|| format!("Entity {}", signal.entity));
+    format!("[{owner}.{}]", signal.path)
+}
+
+fn binding_label(wb: &PanelCtx, binding: &SignalBinding) -> String {
+    binding
+        .label
+        .clone()
+        .unwrap_or_else(|| component_parameter_label(wb, &binding.source))
 }
 
 /// Keep the optional phase-space X axis on the same stable-identity lifecycle
@@ -246,7 +274,7 @@ impl Visualization for LinePlot {
                     .scalar_history(&b.source)
                     .is_none_or(|history| history.is_empty())
             })
-            .map(|b| b.label.clone().unwrap_or_else(|| b.source.path.clone()))
+            .map(|b| binding_label(&ctx.wb, b))
             .collect();
 
         // Plot pixel width — needed *before* tessellation because the
@@ -341,24 +369,9 @@ impl Visualization for LinePlot {
                 if series.1.is_empty() {
                     return None;
                 }
-                // Legend label: explicit binding label wins; otherwise
-                // start with the signal path and, when
-                // `SignalRegistry` has a human description for the
-                // variable, append it in parens so the legend
-                // doubles as documentation. (egui_plot's `Legend`
-                // has no per-item hover hook — inlining the
-                // description text is the only way to surface it.)
-                let label = b.label.clone().unwrap_or_else(|| {
-                    match registry
-                        .meta(&b.source)
-                        .and_then(|m| m.description.as_deref())
-                    {
-                        Some(desc) if !desc.trim().is_empty() => {
-                            format!("{} ({})", b.source.path, desc.trim())
-                        }
-                        _ => b.source.path.clone(),
-                    }
-                });
+                // Entity identity is part of the visible label: four physical
+                // wheels may all expose `axle_torque` at once.
+                let label = binding_label(&ctx.wb, b);
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
@@ -445,7 +458,7 @@ impl Visualization for LinePlot {
             });
         let mut y_label = style.y_label.unwrap_or_else(|| {
             if y_bindings.len() == 1 {
-                y_bindings[0].source.path.clone()
+                binding_label(&ctx.wb, y_bindings[0])
             } else {
                 "(see legend)".to_string()
             }
@@ -570,7 +583,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         let mut removed: Option<SignalRef> = None;
         for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
             let chip = ui
-                .small_button(format!("{} ✕", b.source.path))
+                .small_button(format!("{} ✕", binding_label(&ctx.wb, b)))
                 .on_hover_text("Remove from this plot");
             if chip.clicked() {
                 removed = Some(b.source.clone());
@@ -591,7 +604,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 .width(120.0)
                 .show_ui(ui, |ui| {
                     for sig in addables {
-                        if ui.button(&sig.path).clicked() {
+                        if ui.button(component_parameter_label(&ctx.wb, sig)).clicked() {
                             edit = Some(Edit::AddY(sig.clone()));
                         }
                     }
