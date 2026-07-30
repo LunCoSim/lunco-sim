@@ -591,7 +591,7 @@ pub fn on_scene_click_place_waypoint(
     // INSERT-AFTER edits the mission, so it does need the vessel — resolved HERE,
     // from the route that names this waypoint, rather than from an entity captured
     // when the menu was open.
-    let Some((vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
+    let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
         warn!(
             "[waypoint] placement failed: no vessel's mission names '{}'",
             pending.coord_key

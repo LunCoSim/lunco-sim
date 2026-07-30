@@ -11,7 +11,8 @@
 //!   DERIVED from its BT.CPP mission + the waypoint prims it references. The route
 //!   readout is therefore strictly read-only: a waypoint is edited in the scene (drag
 //!   the pin, press Delete), not from a list here. Authoring is Ctrl+LMB in the
-//!   viewport, rhai, or the `.usda` / Groot2 directly.
+//!   viewport, Groot2, or the `.usda` directly. The full mission topology is
+//!   available in the `Autopilot graph` canvas.
 //!
 //! Buttons emit the EXISTING typed commands — `PossessVessel`, `ReleaseVessel`,
 //! `EngageAutopilot`, `DisengageAutopilot`. One input shape, every surface (§4.2):
@@ -264,14 +265,13 @@ impl Panel for CommandDeck {
             }
         });
 
-        // ── Route readout ────────────────────────────────────────────────
-        // READ-ONLY. A waypoint is a USD prim, so it is edited in the scene, not in
-        // this list: select the pin to move it with the transform gizmo, or press
-        // Delete to remove it. There is no delete button here because there is no
-        // checkpoint command to call — the prim's own Delete path is the verb.
+        // ── Builder waypoint editor ───────────────────────────────────────
+        // Waypoints remain USD prims: this panel exposes their route in Builder,
+        // while placement and transforms stay on the scene surface where their
+        // coordinates are meaningful.
         if view.is_patrol && !view.patrol.is_empty() {
             ui.separator();
-            ui.label("Route");
+            ui.label("Waypoints");
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (i, wp) in view.patrol.iter().enumerate() {
                     // Action marker: 🛰 when this waypoint fires a tool on arrival, so
@@ -294,6 +294,6 @@ impl Panel for CommandDeck {
         }
 
         ui.separator();
-        ui.small("Ctrl+Left-click ground: drop a waypoint · click a pin to select, drag to move, Delete to remove");
+        ui.small("Builder editor: Alt+Left-click ground to add · select a pin to move it · Delete to remove");
     }
 }

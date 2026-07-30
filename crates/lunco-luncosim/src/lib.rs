@@ -2685,7 +2685,12 @@ impl Plugin for SandboxCorePlugin {
         app.add_plugins(lunco_usd_terrain::UsdTerrainPlugin);
         // The activation gate stays here — it is the assembly point that sees both the
         // terrain request and `lunco-usd`'s `GroundColliderPending`.
-        app.add_systems(Update, track_ground_collider_pending);
+        app.add_systems(
+            Update,
+            track_ground_collider_pending
+                .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
+                .before(lunco_usd_sim::UsdSimSet::ActivateDynamicBodies),
+        );
         // Bind authored terrain layer maps (albedo/mineral/surface/normal) onto
         // the terrain's `ShaderMaterial`. GUI-only (materials are an `ui`-feature
         // concern; the headless server has no render materials and needs only the

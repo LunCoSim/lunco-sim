@@ -1609,19 +1609,13 @@ fn spawn_tile(
     // keeps the tile in the SAME big_space cell as the content standing on it, and its
     // rebased geometry local to that origin. On flat terrain this is ≈0 (unchanged).
     origin_y: f64,
-    native_shadow_casters: bool,
 ) -> Entity {
-    // Once the terrain's heightfield cache is available it is the authoritative
-    // terrain-to-terrain shadow path. Keeping every streamed tile in the CSM
-    // caster set then spends a full shadow pass on geometry the cache already
-    // shadows, and lets the coarse atlas flicker across the surface at low sun.
-    let heightfield_shadow_active = shadow.is_some_and(|cache| cache.on > 0.5);
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
     let (ms, me, _bucket) = snap_band(morph_end);
-    let mut tile = commands.spawn((
+    let tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(
             mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
@@ -1638,22 +1632,13 @@ fn spawn_tile(
         // list unless the user opts in.
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
-        // The tile's heightfield visibility cache is the one authority for
-        // terrain self-shadowing. Receiving the coarse directional CSM as
-        // well causes a second, saw-toothed shadow to appear when the native
-        // shadow atlas settles under a grazing lunar sun. The tile stays a
-        // caster, so it still casts correctly onto the rover and other PBR
-        // objects.
-        bevy::light::NotShadowReceiver,
+        // Streamed ground must never participate in Bevy's directional-shadow
+        // atlas as a caster. At lunar grazing angles the atlas produces
+        // saw-toothed terrain self-shadows and each cascade redraws the entire
+        // active tile set. It remains a receiver, so rover and structure
+        // shadows still land on the ground at normal CSM cost.
+        bevy::light::NotShadowCaster,
     ));
-    // Before the cache is ready, native CSM remains the fallback that lets
-    // terrain occlude dynamic PBR objects. Once it is ready, omit all streamed
-    // terrain from the atlas: terrain cannot receive CSM shadows and the cache
-    // owns its self-shadow, so keeping these casters only causes flicker and a
-    // high-cost shadow pass.
-    if !native_shadow_casters || heightfield_shadow_active {
-        tile.insert(bevy::light::NotShadowCaster);
-    }
     tile.id()
 }
 
@@ -1935,10 +1920,6 @@ pub fn update_lod_tiles(
         cover_scratch,
     } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    let native_shadow_casters = settings
-        .as_ref()
-        .map(|s| s.native_shadow_casters)
-        .unwrap_or(true);
     if demands.visual.is_empty() {
         return;
     }
@@ -2511,7 +2492,6 @@ pub fn update_lod_tiles(
                 shadow,
                 overlay,
                 oy,
-                native_shadow_casters,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -2604,7 +2584,6 @@ pub fn update_lod_tiles(
                     shadow,
                     overlay,
                     oy,
-                    native_shadow_casters,
                 );
                 if let Some(old) = tiles.tiles.insert(
                     s.coord,
@@ -2941,13 +2920,7 @@ pub(crate) fn bind_shadow_cache_to_tiles(
         }
         for entity in tiles.tile_entities() {
             let mut tile = commands.entity(entity);
-            if cache.on > 0.5 {
-                tile.try_insert(bevy::light::NotShadowCaster);
-            } else {
-                // A stale/rebuilding cache must restore the documented CSM
-                // fallback until the new heightfield visibility arrives.
-                tile.try_remove::<bevy::light::NotShadowCaster>();
-            }
+            tile.try_insert(bevy::light::NotShadowCaster);
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
             }

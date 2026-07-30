@@ -138,6 +138,21 @@ def Xform "RockerBogie" (
     {
     }
 
+    # A spawned rover owns an empty mission program from the start. Adding its
+    # first waypoint then updates `info:sourceCode` in place instead of adding
+    # `LunCoProgramAPI` at runtime, which would require a whole-scene rebuild
+    # and reboot every already-spawned rover.
+    def Scope "Mission" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence/>
+  </BehaviorTree>
+</root>"""
+    }
+
     # --- CHASSIS GEOMETRY & VISUALS ---
     # Main body — the shared box chassis component (collider + panelised hull
     # material), referenced INTO this prim so the name `Body` and every local

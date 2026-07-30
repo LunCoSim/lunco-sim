@@ -13,6 +13,8 @@ use lunco_workbench::{
 };
 
 pub mod asset_visibility;
+/// Read-only node graph of the selected vessel's authored autopilot program.
+pub mod autopilot_canvas;
 /// Screen-space labels a prim authored for itself (`lunco:billboard*`).
 pub mod billboard_overlay;
 /// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
@@ -270,6 +272,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(cinematic::CinematicPanel)
             .register_panel(connection_canvas::UsdCanvasPanel)
+            .register_panel(autopilot_canvas::AutopilotCanvasPanel)
             .register_panel(usd_prim_tree::UsdPrimTreePanel)
             .register_panel(command_deck::CommandDeck)
             .register_panel(joint_state::JointStatePanel)
@@ -422,6 +425,12 @@ impl Plugin for SandboxEditUiPlugin {
             connection_canvas::produce_usd_canvas,
             resource_changed::<lunco_usd_bevy::UsdStageRevision>,
         );
+
+        // Autopilot graph: a small O(1) read of the selected vessel's derived
+        // behaviour spec. The canvas's layout only rebuilds when that source
+        // changes, never while the simulation is ticking.
+        app.init_resource::<autopilot_canvas::AutopilotCanvasState>();
+        app.add_view_model_every_frame(autopilot_canvas::produce_autopilot_canvas);
 
         // USD prim tree: same main-thread producer pattern (the stage is
         // `!Send`), same gate for the same reason.

@@ -590,6 +590,13 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// correctly. This is not the hot path: `AttachComponent` emits neither, so
 /// building a vehicle from parts stays rebuild-free.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
+    // A mission program API only changes how the owning vessel's existing mission
+    // metadata is interpreted; unlike physics APIs it does not add/remove bodies,
+    // colliders or entities. It has a live-stage author below and is refreshed at
+    // the vessel boundary, so never restart the scene merely to create a program.
+    if let UsdOp::SetApiSchemas { schemas, .. } = op {
+        return !schemas.iter().all(|schema| schema == "LunCoProgramAPI");
+    }
     matches!(
         op,
         UsdOp::ReplaceSource { .. }
@@ -601,7 +608,6 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
             | UsdOp::SetPayload { .. }
             // ECS-structural changes the visual-only subtree refresh can't reconcile
             // (physics component set / entity presence). A rebuild re-derives both.
-            | UsdOp::SetApiSchemas { .. }
             | UsdOp::SetActive { .. }
     )
 }
@@ -702,6 +708,22 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // consequence, and a refresh would hot-reload a running scenario
             // (resetting its `this`) on a mere save. So author, don't refresh.
             if is_string {
+                // A mission tree is owned by the parent vessel, not by its child
+                // `Mission` scope. Updating its XML is therefore a component
+                // replacement on that already-live vessel, NOT a subtree refresh:
+                // re-instantiating the Rover here destroys its physics/cosim state.
+                if name == "info:sourceCode" && path.ends_with("/Mission") {
+                    if let Some((owner_path, _)) = path.rsplit_once('/') {
+                        let mut q = world.query::<(Entity, &lunco_usd_bevy::UsdPrimPath)>();
+                        if let Some((owner, _)) = q.iter(world).find(|(_, prim)| {
+                            prim.stage_handle.id() == scene_id && prim.path == owner_path
+                        }) {
+                            world
+                                .entity_mut(owner)
+                                .insert(lunco_autopilot::usd_tree::BehaviorXml(value.clone()));
+                        }
+                    }
+                }
                 return;
             }
             // Refresh only what the edit can actually change: a material/shader
@@ -870,6 +892,20 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // subtree refresh re-triggers it for the owning prim.
             if authored {
                 refresh_prim_subtree(world, scene_id, path);
+            }
+        }
+        UsdOp::SetApiSchemas { path, schemas, .. }
+            if schemas.iter().all(|s| s == "LunCoProgramAPI") =>
+        {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+                .is_some_and(|cs| cs.projector().author_api_schemas(&sp, schemas).is_ok());
+            if !authored {
+                warn!("[twin] author program API {path} failed");
             }
         }
         // Coarse ops never reach here (the caller rebuilds for them) — that now
@@ -1347,12 +1383,21 @@ mod tests {
             type_name: "float".into(),
             sources: vec![],
         }));
-        // apiSchema / active REBUILD: their effect is a prim's ECS component set /
-        // entity presence, which the visual-only subtree refresh can't reconcile.
+        // Physical apiSchema / active REBUILD: their effect is a prim's ECS
+        // component set / entity presence, which the visual-only subtree refresh
+        // can't reconcile.
         assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
             edit_target: et.clone(),
             path: "/W".into(),
             schemas: vec![],
+        }));
+        // A program API is metadata on an existing `Mission` scope. Its consumer
+        // is the vessel's BehaviorXml projection, never the physical rover
+        // topology, so it must remain on the live incremental path.
+        assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
+            edit_target: et.clone(),
+            path: "/W/Mission".into(),
+            schemas: vec!["LunCoProgramAPI".into()],
         }));
         assert!(op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),

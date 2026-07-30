@@ -128,6 +128,17 @@ pub struct NoRenderVisuals;
 
 pub struct UsdSimPlugin;
 
+/// Ordered phases of the USD-to-simulation projection.
+///
+/// The application assembly uses [`UsdSimSet::ActivateDynamicBodies`] to place
+/// terrain readiness between terrain inspection and the first dynamic physics
+/// tick. Keeping this boundary public prevents another first-load ordering race.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UsdSimSet {
+    /// Converts `ShouldBeDynamic` bodies only after their ground is known ready.
+    ActivateDynamicBodies,
+}
+
 /// Immutable USD topology facts used by the simulation projector for one
 /// composed stage revision.  This is deliberately separate from ECS entities:
 /// a wheel and its sibling joint can arrive on different frames, while their
@@ -197,6 +208,7 @@ fn retire_scene_cameras(
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         crate::shader_ports::build(app);
+        app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
             retire_scene_cameras,
@@ -255,7 +267,9 @@ impl Plugin for UsdSimPlugin {
                     remove_nested_link_nodes
                         .run_if(any_nested_link_nodes)
                         .after(project_celestial_comms_prims),
-                    activate_dynamic_bodies.run_if(any_with_component::<ShouldBeDynamic>),
+                    activate_dynamic_bodies
+                        .in_set(UsdSimSet::ActivateDynamicBodies)
+                        .run_if(any_with_component::<ShouldBeDynamic>),
                     collect_raycast_settle_footprints.after(process_usd_sim_prims),
                 ),
             );

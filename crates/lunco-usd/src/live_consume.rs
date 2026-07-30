@@ -45,6 +45,29 @@ fn find_live_entity(
         .map(|(e, _)| e)
 }
 
+/// Whether a structural notice belongs to the program-only child scope of a
+/// vessel. `Mission` is authored USD (and therefore still journalled, saved and
+/// replicated), but it has no visual or physical ECS projection of its own: its
+/// XML is projected onto the existing vessel as [`BehaviorXml`]. Spawning that
+/// scope through the generic structural bridge can cause schema readers to walk
+/// an otherwise-live vehicle subtree during a program edit.
+fn is_program_scope(path: &str) -> bool {
+    path.rsplit('/').next() == Some("Mission")
+}
+
+/// The `info:sourceCode` write of a mission is consumed synchronously by the
+/// typed op replayer: it replaces [`BehaviorXml`] on the owning vessel. The
+/// resulting stage-sink notice is therefore a duplicate. In particular,
+/// OpenUSD may include the referenced vessel's resync path in that notice;
+/// passing it into the generic structural bridge makes an XML-only edit look
+/// like a vehicle refresh.
+fn is_program_source_notice(paths: &[openusd::sdf::Path]) -> bool {
+    paths.iter().any(|path| {
+        let path = path.to_string();
+        path.ends_with("/Mission.info:sourceCode") || path.ends_with("/Mission.info:sourceAsset")
+    })
+}
+
 /// Projection bridge (Step 1): drain every live [`CanonicalStage`]'s change-sink
 /// inbox and reconcile the ECS scene off the **live composed stage** — the read
 /// counterpart to authoring onto the stage. This is what turns the openusd
@@ -74,11 +97,15 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         return;
     }
 
+    let mut projected_anything = false;
     for (id, changes) in batches {
         // Merge this stage's committed changes into one resync / info-only set.
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
+            if is_program_source_notice(&c.info_only) {
+                continue;
+            }
             resynced.extend(c.resynced.iter().map(|p| p.to_string()));
             // Keep BOTH forms the USD sink reports: the prim path lets the
             // transform/light consumers read the changed value back from its
@@ -92,6 +119,11 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         resynced.dedup();
         info_only.sort();
         info_only.dedup();
+
+        if resynced.is_empty() && info_only.is_empty() {
+            continue;
+        }
+        projected_anything = true;
 
         let prim_paths: Vec<String> = info_only
             .iter()
@@ -120,16 +152,20 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // already-spawned prim is neither — so mark the wiring dirty whenever a drain
     // occurred, letting the rewire re-derive off the live stage. This is the
     // op-driven, journaled, distributed path for live connection edits.
-    if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
-        dirty.0 = true;
+    if projected_anything {
+        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
+            dirty.0 = true;
+        }
     }
     // Same reason, one level up: a live edit to an already-spawned prim changes
     // the composed stage without spawning or despawning anything, so it raises no
     // ECS-structural signal. Every USD-derived view-model gates on this revision
     // (`lunco_usd_bevy::UsdStageRevision`), so without the bump an edit would
     // never reach the connection canvas or the prim tree.
-    if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy::UsdStageRevision>() {
-        rev.bump();
+    if projected_anything {
+        if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy::UsdStageRevision>() {
+            rev.bump();
+        }
     }
 }
 
@@ -566,6 +602,9 @@ pub(crate) fn reconcile_structural_live(
 ) {
     use lunco_usd_bevy::CanonicalStages;
     for path in resync_paths {
+        if is_program_scope(path) {
+            continue;
+        }
         let Ok(sp) = SdfPath::new(path) else { continue };
         let exists = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
@@ -636,6 +675,13 @@ mod tests {
     use super::*;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    #[test]
+    fn mission_scope_is_not_a_structural_ecs_child() {
+        assert!(is_program_scope("/Traverse/Rover/Mission"));
+        assert!(!is_program_scope("/Traverse/Rover"));
+        assert!(!is_program_scope("/Traverse/Rover/MissionTarget"));
+    }
 
     /// **Moving an ALREADY-LIVE prim must move its entity.** Authoring
     /// `xformOp:translate` onto the live stage — the exact call

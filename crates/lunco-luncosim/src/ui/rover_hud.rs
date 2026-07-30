@@ -51,6 +51,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use big_space::prelude::{CellCoord, Grid};
+use lunco_autopilot::Autopilot;
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId};
@@ -108,6 +109,7 @@ impl ThermalInfo {
 
 /// What the HUD needs about the driven vessel, resolved once per frame.
 struct DrivenVessel {
+    entity: Entity,
     label: String,
     /// Metres, root frame (site-ENU in a site-anchored scene).
     pos: DVec3,
@@ -147,6 +149,9 @@ pub(crate) struct GeodeticHud<'w, 's> {
     site:
         Query<'w, 's, &'static lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     bodies: Option<Res<'w, lunco_celestial::CelestialBodyRegistry>>,
+    /// Kept inside this aggregate system parameter so the HUD stays under
+    /// Bevy's flat system-parameter limit.
+    autopilots: Query<'w, 's, &'static Autopilot>,
 }
 
 /// The tilt bands to paint, in degrees: (amber, red).
@@ -506,6 +511,7 @@ fn resolve_driven(
     };
 
     Some(DrivenVessel {
+        entity: vessel,
         label,
         pos,
         geo: site.and_then(|site| hud_geodetic(site, bodies?, pos)),
@@ -1011,6 +1017,9 @@ pub(crate) fn draw_rover_hud(
                 .show(ui, |ui| {
                     ui.set_width(168.0);
                     ui.label(egui::RichText::new(&v.label).strong().size(15.0));
+                    if geo.autopilots.iter().any(|pilot| pilot.vessel == v.entity) {
+                        ui.colored_label(pal.ok, "AUTOPILOT");
+                    }
                     ui.label(egui::RichText::new("site frame · metres").weak().size(9.0));
                     ui.separator();
                     // ALT is the landing's hero number: what the narration and

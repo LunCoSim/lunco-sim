@@ -645,6 +645,7 @@ register_commands!(
     on_load_scene,
     on_restart_scene_refresh_active_document,
     on_apply_usd_op,
+    on_apply_usd_ops,
     // The USD half of the generic `UndoDocument`/`RedoDocument` verbs. Registering the
     // observers here (not in the editor) is what lets a headless binary undo.
     on_undo_usd_document,
@@ -1063,6 +1064,37 @@ pub struct ApplyUsdOp {
     pub doc: DocumentId,
     /// Operation to apply.
     pub op: UsdOp,
+}
+
+/// Apply one authored intent that lowers to several USD operations.
+///
+/// This is the command boundary for program construction, component assembly,
+/// and other compound edits: UI, Rhai and API callers all submit the same typed
+/// operation list, which is journalled as one undo unit and observed by the live
+/// projector only after the document reaches its complete shape.
+#[Command(default)]
+pub struct ApplyUsdOps {
+    /// Target document.
+    pub doc: DocumentId,
+    /// Human-readable undo/journal label.
+    pub label: String,
+    /// Ordered primitive USD operations comprising the one intent.
+    pub ops: Vec<UsdOp>,
+}
+
+#[on_command(ApplyUsdOps)]
+fn on_apply_usd_ops(trigger: On<ApplyUsdOps>, mut commands: Commands) {
+    let command = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let (applied, total) =
+            apply_ops_as_change_set(world, command.doc, command.label, command.ops);
+        if applied != total {
+            bevy::log::warn!(
+                "[ApplyUsdOps] {} applied {applied}/{total} operations",
+                command.doc
+            );
+        }
+    });
 }
 
 #[on_command(ApplyUsdOp)]

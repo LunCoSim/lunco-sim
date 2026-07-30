@@ -429,7 +429,29 @@ impl CanonicalStage {
         Ok(())
     }
 
-    // NOTE: no live-stage `author_api_schemas` / `author_active`. Those two ops
+    /// Author an applied-schema list on the live stage. Callers must still decide
+    /// whether the schema's ECS consequence can be reconciled incrementally.
+    pub(crate) fn author_api_schemas(
+        &self,
+        prim: &SdfPath,
+        schemas: &[String],
+    ) -> anyhow::Result<()> {
+        let tokens: Vec<openusd::tf::Token> = schemas
+            .iter()
+            .cloned()
+            .map(openusd::tf::Token::from)
+            .collect();
+        self.stage
+            .prim(prim.clone())
+            .set_metadata(
+                openusd::sdf::FieldKey::ApiSchemas.as_str(),
+                openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(tokens)),
+            )
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("author apiSchemas at {prim}: {e}"))
+    }
+
+    // NOTE: no live-stage `author_active`. It changes entity presence and remains
     // change a prim's ECS component set / entity presence, which the incremental
     // subtree refresh (visual-only) can't reconcile — they take the projector's
     // rebuild path instead, which composes from the document (already carrying the
@@ -555,6 +577,12 @@ impl StageProjector<'_> {
         sources: &[String],
     ) -> anyhow::Result<()> {
         self.0.author_connection(prim, name, type_name, sources)
+    }
+
+    /// Replay a metadata-only `SetApiSchemas` op. Callers classify whether a
+    /// schema can be reconciled without rebuilding physical ECS topology.
+    pub fn author_api_schemas(&self, prim: &SdfPath, schemas: &[String]) -> anyhow::Result<()> {
+        self.0.author_api_schemas(prim, schemas)
     }
 
     /// Replay a `SetAttribute` op — see [`CanonicalStage::author_attribute`].
