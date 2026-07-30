@@ -224,16 +224,16 @@ pub(crate) fn populate_entity_tree_view(
 }
 
 /// Run condition for [`populate_entity_tree_view`]: rebuild only when the scene
-/// topology that the tree depends on changes — names/hierarchy added or
-/// modified (`Changed` includes `Added`), the interesting marker sets
+/// topology that the tree depends on changes — a **named** node's hierarchy is
+/// added or modified (`Changed` includes `Added`), the interesting marker sets
 /// gain members, or any of those components are removed (covers despawns). The
 /// `Local` flag forces one initial build (a freshly-added system does not see
 /// pre-existing entities as `Changed`). On a quiescent scene this returns
 /// `false` and the harvest is skipped entirely.
-/// System-owned entities are excluded from the gate exactly as they are from the
-/// harvest (unless shown): terrain streaming spawns and despawns tiles every
-/// frame, and counting those as "topology changed" would rebuild the whole tree
-/// every frame to produce an identical result.
+/// The harvest renders only named nodes. Its gate must therefore ignore changes
+/// to unnamed internal wrappers as well as system-owned entities (unless shown):
+/// terrain streaming and render extraction create both continuously, and neither
+/// can change the visible tree by itself.
 /// Tracked automatically by `add_view_model` — see [`lunco_core::gate::tracked`].
 /// Measured firing on 2692 of 2694 frames while looking entirely correct,
 /// rebuilding the whole tree (a `String` per named entity) to produce an
@@ -245,6 +245,7 @@ pub(crate) fn scene_topology_changed(
     changed: Query<
         (),
         (
+            With<Name>,
             Or<(Changed<Name>, Changed<ChildOf>)>,
             Without<lunco_core::SystemManaged>,
         ),
@@ -252,6 +253,7 @@ pub(crate) fn scene_topology_changed(
     changed_system: Query<
         (),
         (
+            With<Name>,
             Or<(Changed<Name>, Changed<ChildOf>)>,
             With<lunco_core::SystemManaged>,
         ),
@@ -259,6 +261,7 @@ pub(crate) fn scene_topology_changed(
     added: Query<
         (),
         (
+            With<Name>,
             Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
             Without<lunco_core::SystemManaged>,
         ),
@@ -266,6 +269,7 @@ pub(crate) fn scene_topology_changed(
     added_system: Query<
         (),
         (
+            With<Name>,
             Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
             With<lunco_core::SystemManaged>,
         ),

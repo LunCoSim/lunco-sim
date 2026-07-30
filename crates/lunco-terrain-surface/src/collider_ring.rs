@@ -479,6 +479,11 @@ pub fn update_collider_ring(
                     Transform::from_translation(local),
                     ColliderTileOf(terrain),
                     Name::new(format!("ColliderTile {},{}", coord.x, coord.z)),
+                    // A collider tile is streamed runtime implementation detail,
+                    // just like its visual LOD counterpart.  Marking it closes
+                    // the ownership boundary for entity-tree invalidation and
+                    // automatic port telemetry discovery.
+                    lunco_core::SystemManaged,
                     ChildOf(grid_entity),
                 ))
                 .id();

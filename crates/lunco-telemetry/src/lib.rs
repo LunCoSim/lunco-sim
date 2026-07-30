@@ -332,6 +332,18 @@ struct SamplingPlan {
 #[derive(Component, Debug, Clone)]
 struct RuntimePortChannel;
 
+/// Last metadata applied to a retained signal by a telemetry channel.
+///
+/// Channel policy changes are rare while samples are continuous. Keeping this
+/// tiny cache on the channel means [`retain_sample`] can update plot metadata
+/// exactly when that policy changes, rather than allocating and replacing the
+/// same strings for every sample.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct RetainedSignalMeta {
+    description: Option<String>,
+    unit: String,
+}
+
 /// Bounded discovery cadence. Port values sample at the fixed telemetry rate;
 /// topology need only be rediscovered shortly after a spawn/despawn, not every
 /// fixed step. At 64 Hz this is a quarter-second maximum attach delay.
@@ -384,6 +396,14 @@ fn discover_runtime_port_channels(world: &mut World) {
     let entities: Vec<Entity> = world.query::<Entity>().iter(world).collect();
     let mut discovered = Vec::new();
     for entity in entities {
+        // Streamed terrain tiles, collider rings, and scatter are implementation
+        // detail. Publishing every internal output makes their lifecycle look like
+        // user telemetry and turns LOD churn into a growing sampling plan. An
+        // authored or explicitly-created `Parameter` remains available when a
+        // caller genuinely wants to observe a system-owned entity.
+        if world.get::<lunco_core::SystemManaged>(entity).is_some() {
+            continue;
+        }
         for port in ports.entity_ports(world, entity) {
             if !matches!(port.direction, PortDirection::Out | PortDirection::InOut)
                 || existing.contains(&(entity, port.name.clone()))
@@ -508,24 +528,29 @@ fn sample_parameters_system(world: &mut World) {
 fn retain_sample(
     trigger: On<SampledParameter>,
     settings: Res<TelemetrySettings>,
-    channels: Query<&Parameter>,
+    channels: Query<(&Parameter, Option<&RetainedSignalMeta>)>,
+    mut commands: Commands,
     mut signals: ResMut<lunco_signal::SignalRegistry>,
 ) {
     let s = trigger.event();
     let Some(value) = numeric_of(&s.value) else {
         return;
     };
-    // The channel may live on its own entity, so find it by (target, name) rather than by
-    // looking on the measured entity.
-    let channel = channels
-        .iter()
-        .find(|p| p.name == s.name && p.target.unwrap_or(s.source) == s.source);
-    let retention = channel
-        .and_then(|p| p.retention)
-        .unwrap_or(settings.default_retention);
+    // `SampledParameter` carries the producer's entity.  Looking it up directly
+    // keeps the continuous retention path O(1); the old `(source, name)` scan
+    // was O(samples × channels), and terrain-created channels made it dominate
+    // Traverse's frame time.
+    let Ok((channel, applied_meta)) = channels.get(s.channel) else {
+        // A channel can be removed between collection and observer dispatch.
+        // Its sample is no longer authoritative, so retain neither data nor
+        // stale metadata.
+        return;
+    };
+    let retention = channel.retention.unwrap_or(settings.default_retention);
+    let signal = lunco_signal::SignalRef::new(s.source, s.name.clone());
 
     signals.push_scalar_with_capacity(
-        lunco_signal::SignalRef::new(s.source, s.name.clone()),
+        signal.clone(),
         // `sim_secs`, NOT `timestamp`. The Julian-Date epoch has ~86 µs of f64 resolution
         // left, so a plot axis built from it would quantise into visible stair-steps and
         // any Δt would be garbage.
@@ -534,14 +559,21 @@ fn retain_sample(
         retention,
     );
 
-    signals.update_meta(
-        lunco_signal::SignalRef::new(s.source, s.name.clone()),
-        lunco_signal::SignalMeta {
-            description: channel.and_then(|p| p.description.clone()),
-            unit: (!s.unit.is_empty()).then(|| s.unit.clone()),
-            provenance: Some("telemetry".to_string()),
-        },
-    );
+    let expected_meta = RetainedSignalMeta {
+        description: channel.description.clone(),
+        unit: channel.unit.clone(),
+    };
+    if applied_meta != Some(&expected_meta) {
+        signals.update_meta(
+            signal,
+            lunco_signal::SignalMeta {
+                description: expected_meta.description.clone(),
+                unit: (!expected_meta.unit.is_empty()).then_some(expected_meta.unit.clone()),
+                provenance: Some("telemetry".to_string()),
+            },
+        );
+        commands.entity(s.channel).try_insert(expected_meta);
+    }
 }
 
 /// A channel declaration may disappear while its sampled history is still a
@@ -695,6 +727,7 @@ pub fn sample_parameters(world: &mut World) {
                 clock.last_emitted = Some(v);
             }
             samples.push(SampledParameter {
+                channel: entity,
                 name: param.name.clone(),
                 value,
                 unit: param.unit.clone(),
@@ -1039,6 +1072,59 @@ mod tests {
             .scalar_history(&signal)
             .expect("runtime port telemetry must exist");
         assert_eq!(history.samples.back().unwrap().value, 7.5);
+    }
+
+    /// Runtime discovery is for the user-facing simulation surface, not the
+    /// thousands of transient terrain/collider implementation entities. Those
+    /// entities remain observable when an author deliberately adds a
+    /// `Parameter`, but must not silently grow the global sampling plan.
+    #[test]
+    fn system_managed_ports_are_not_auto_discovered_as_telemetry() {
+        let mut app = app();
+        app.init_resource::<PortRegistry>();
+        app.world_mut()
+            .resource_mut::<PortRegistry>()
+            .register(TEST_OUTPUT_BACKEND);
+        app.world_mut()
+            .spawn((TestOutput(7.5), lunco_core::SystemManaged));
+
+        step_fixed(&mut app, 2);
+
+        let mut channels = app.world_mut().query::<&RuntimePortChannel>();
+        assert_eq!(
+            channels.iter(app.world()).count(),
+            0,
+            "system-managed entities must not become implicit telemetry channels"
+        );
+    }
+
+    /// A sample distinguishes the measured source from the channel that chose
+    /// its cadence and retention. The latter lets retention use direct lookup
+    /// even when many channel entities target the same rover.
+    #[test]
+    fn samples_carry_their_producing_channel_entity() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let rover = app.world_mut().spawn(Port { value: 3.0 }).id();
+        let channel = app
+            .world_mut()
+            .spawn(Parameter {
+                rate_hz: Some(lunco_core::FIXED_HZ),
+                target: Some(rover),
+                ..reflect_channel("direct")
+            })
+            .id();
+
+        step_fixed(&mut app, 1);
+
+        let sample = seen
+            .lock()
+            .unwrap()
+            .first()
+            .cloned()
+            .expect("the channel must sample its target");
+        assert_eq!(sample.source, rover);
+        assert_eq!(sample.channel, channel);
     }
 
     #[test]

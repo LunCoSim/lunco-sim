@@ -231,6 +231,14 @@ impl Default for Parameter {
 #[derive(Event, Debug, Clone, Reflect)]
 #[reflect(Debug)]
 pub struct SampledParameter {
+    /// The dedicated [`Parameter`] entity that produced this sample.
+    ///
+    /// This is intentionally distinct from [`source`](Self::source): a channel
+    /// can sample another entity, and several channels can sample the same
+    /// source. Consumers that need the measured object use `source`; consumers
+    /// that need channel policy (retention, description, provenance) use this
+    /// stable direct identity instead of scanning every channel by name.
+    pub channel: Entity,
     /// The mnemonic name of the parameter. **Not unique across entities** — pair it
     /// with [`source`](Self::source) to identify a channel.
     pub name: String,
@@ -248,7 +256,10 @@ pub struct SampledParameter {
     /// Seconds on the channel's own time domain — starts near zero, so it keeps full
     /// `f64` precision. **This is the timebase for Δt, plotting, and recording.**
     pub sim_secs: f64,
-    /// The entity that owns the channel. Names collide; entities don't.
+    /// The entity whose value was measured. Names collide; entities don't.
+    ///
+    /// The channel's own entity is [`channel`](Self::channel); keeping both
+    /// makes subscriber identity and channel policy unambiguous.
     pub source: Entity,
 }
 
