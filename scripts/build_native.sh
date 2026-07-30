@@ -163,10 +163,10 @@ resolve_cache_dir() {
 }
 
 # ── Portable directory sync ───────────────────────────────────────────────
-# Desktop bundles must be reproducible on Linux, macOS and Git Bash. Use the
-# same copy primitive everywhere: `source/.` means "contents including hidden
-# files" on each of those platforms, unlike a shell glob or the previous
-# rsync/cp split.
+# Desktop bundles must be reproducible on Linux, macOS and Git Bash. Git
+# Bash's `cp` rejects the POSIX `source/.` spelling used by the former unified
+# branch (it exits with `Invalid Parameter - none` on the Windows runner), so
+# retain the native rsync path and use a Bash glob fallback there instead.
 #
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash>
 #   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash> no-delete
@@ -183,18 +183,36 @@ resolve_cache_dir() {
 # `lunco_twin::is_runtime_state`; keep the two in step.
 sync_dir() {
     local src="$1" dest="$2" no_delete="${3:-}"
+    if command -v rsync >/dev/null 2>&1; then
+        if [ "$no_delete" = "no-delete" ]; then
+            rsync -a --exclude='.lunco/' --exclude='history/' "$src" "$dest"
+        else
+            rsync -a --delete --exclude='.lunco/' --exclude='history/' "$src" "$dest"
+        fi
+        return
+    fi
+
     if [ "$no_delete" != "no-delete" ]; then
         rm -rf "${dest:?}"
     fi
     mkdir -p "$dest"
-    cp -R "${src%/}/." "$dest" || {
+
+    # `dotglob` makes `"$src"*` mean the contents of src, including hidden
+    # files, without the Windows-hostile `source/.` argument. Keep it scoped to
+    # a subshell so callers do not inherit a changed globbing policy.
+    if ! (
+        shopt -s dotglob nullglob
+        entries=("${src%/}"/*)
+        ((${#entries[@]}))
+        cp -R "${entries[@]}" "$dest"
+    ); then
         echo "ERROR: failed to copy '$src' → '$dest'." >&2
         echo "       The package would ship an incomplete assets/ tree." >&2
         return 1
-    }
-    # Runtime state is never distributable, regardless of the platform doing
-    # the copy. Prune after the uniform copy rather than relying on a
-    # platform-specific exclude flag.
+    fi
+
+    # The fallback cannot exclude source paths; prune session state after its
+    # successful copy, exactly matching rsync's exclusion rule.
     find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
