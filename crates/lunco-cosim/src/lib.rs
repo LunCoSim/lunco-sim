@@ -75,15 +75,12 @@ fn endpoint_ready_on_add<T: Component>(
         .entity(trigger.entity)
         .try_insert(EndpointLifecycle::Ready);
     revision.request();
-    commands.queue(binding::bind_connections);
 }
 
-/// Publish a Modelica endpoint transition and immediately make it observable to
-/// the binder in this Update transaction.
-///
-/// This is deliberately exclusive.  A `Commands` insert here would be deferred
-/// until after `bind_connections` had consumed the revision, leaving a newly
-/// ready model with no further event to activate its waiting edges.
+/// Publish Modelica endpoint transitions before the end-of-frame binding
+/// transaction. This is exclusive so a terminal compiler result is visible in
+/// the same frame; binding itself runs in `PostUpdate`, after every USD, asset,
+/// and generated-domain projection path has had a chance to publish its ports.
 fn sync_model_endpoint_lifecycle(world: &mut World) {
     let transitions: Vec<(Entity, EndpointLifecycle)> = world
         .query_filtered::<(Entity, &SimComponent), Changed<SimComponent>>()
@@ -107,7 +104,6 @@ fn sync_model_endpoint_lifecycle(world: &mut World) {
     }
     if changed {
         world.resource_mut::<BindingRevision>().request();
-        binding::bind_connections(world);
     }
 }
 
@@ -164,6 +160,14 @@ impl Plugin for CoSimPlugin {
             Update,
             sync_model_endpoint_lifecycle
                 .run_if(|q: Query<(), Changed<SimComponent>>| !q.is_empty()),
+        );
+        // One authoritative binding boundary per frame. Observers and async
+        // projections only request a reconciliation; running it after `Update`
+        // means a first-load connection cannot be sealed between a deferred USD
+        // port spawn and its generated Modelica contract.
+        app.add_systems(
+            PostUpdate,
+            binding::bind_connections.run_if(binding::binding_requested),
         );
         {
             let mut registry = app

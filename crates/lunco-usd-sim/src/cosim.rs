@@ -1304,10 +1304,11 @@ fn settle_binding_epoch(
         dirty.0 = true;
         revision.open_epoch();
     }
-    // Seal/open is an event, not a condition the fixed-step master polls. Run
-    // the one binding transaction at this Update boundary so a terminal miss is
-    // diagnosed here and a newly settled graph becomes executable immediately.
-    commands.queue(lunco_cosim::binding::bind_connections);
+    // Seal/open is an event, not a condition the fixed-step master polls. The
+    // single binding transaction runs in `lunco_cosim`'s `PostUpdate` boundary,
+    // after every projection and endpoint-lifecycle update for this frame. Do
+    // not queue it here: doing so let first-load USD ports and generated domain
+    // contracts race each other across deferred command boundaries.
     // Binding is a participant-initialisation fact. The readiness policy owns
     // whether that fact holds the world; this producer merely reports it.
     match (!settled && !connections.is_empty(), wait) {
