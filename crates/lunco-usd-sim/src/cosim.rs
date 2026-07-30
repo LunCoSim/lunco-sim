@@ -126,28 +126,6 @@ fn declared_interface(
     (inputs, outputs)
 }
 
-/// The output port names a non-program prim FORWARDS — `outputs:X.connect = <source>`
-/// — with the `.connect` metadata stripped. These are the names a domain bus (an
-/// assembly root forwarding one scope's output for a sibling scope to read) must
-/// expose as a readable port surface even though it owns no solver.
-///
-/// An `outputs:X` with no connection is a plain declared port (not a forward); it
-/// is excluded here because nothing writes it and realising it would publish a
-/// dead zero forever. Only `.connect`-carrying outputs have a producer.
-fn forwarded_output_ports(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    sdf_path: &SdfPath,
-) -> Vec<String> {
-    let mut names = Vec::new();
-    for attr in reader.attr_names(sdf_path) {
-        let Some(rest) = attr.strip_prefix("outputs:") else { continue; };
-        let Some(name) = rest.strip_suffix(".connect") else { continue; };
-        if reader.connections(sdf_path, &attr).is_empty() { continue; }
-        names.push(name.to_string());
-    }
-    names
-}
-
 /// A compile-specific port-contract verdict already reported to the console.
 ///
 /// Keeping the session id makes validation reactive to a later recompile while
@@ -509,40 +487,6 @@ fn process_usd_cosim_prim_read(
     }
 
     if !reader.has_api_schema(sdf_path, "LunCoProgramAPI") {
-        // A non-program prim (an assembly root, a chassis) that FORWARDS outputs
-        // — `outputs:motor_heat_FL.connect = </Rover/Electrical.outputs:motor_heat_FL>`
-        // — is a domain BUS: it has no model of its own, but it must still expose
-        // the forwarded names as a readable port surface so a sibling domain scope
-        // can source from it. Without this, a wire `</Rover/outputs:motor_heat_FL>`
-        // resolves to the root entity, finds no `SimComponent`, and the binding
-        // fails ("endpoint has no required port") — the one `drive_left` dodges
-        // only because `ActuatorPorts` realises it as a child `Port`.
-        //
-        // Publishing a `SimComponent` whose `outputs` map carries exactly the
-        // forwarded names gives the forward edge (built by `rewire_usd_connections`
-        // at the `outputs:` sink) a writable target, and `SIMCOMPONENT_BACKEND`
-        // then resolves reads of those names. The values are written each tick by
-        // the forward's `SimConnection`; the prim itself owns no solver.
-        let forwarded = forwarded_output_ports(reader, sdf_path);
-        if !forwarded.is_empty() {
-            // The bus is a pass-through: each forwarded name is an INPUT (the
-            // forward edge writes into it via `SIMCOMPONENT_BACKEND.write_input`,
-            // which requires the key in `inputs`) AND an OUTPUT (a sibling scope
-            // reads it via `read_output`). The prim owns no solver — the values
-            // arrive entirely from the forward's `SimConnection` each tick.
-            let interface = forwarded
-                .into_iter()
-                .map(|name| (name, 0.0))
-                .collect::<HashMap<_, _>>();
-            commands.entity(entity).try_insert(SimComponent {
-                model_name: format!("bus:{}", prim_path.path),
-                parameters: Default::default(),
-                inputs: interface.clone(),
-                outputs: interface,
-                status: SimStatus::Idle,
-                is_stepping: false,
-            });
-        }
         return;
     }
 

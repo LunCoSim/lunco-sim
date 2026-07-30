@@ -88,15 +88,6 @@ def Xform "SkidRover" (
     float lunco:spawnLift = 1.0
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    # Cross-domain heat bus. These root ports carry each motor's solved waste heat
-    # from the Electrical island to the Thermal island. The `power="battery"`
-    # variant forwards Electrical's output onto them; the `thermal="basic"` variant
-    # sources its heat inputs from them. Neither domain scope names the other — the
-    # root is the only thing that composes them.
-    float outputs:motor_heat_FL = 0.0
-    float outputs:motor_heat_FR = 0.0
-    float outputs:motor_heat_RL = 0.0
-    float outputs:motor_heat_RR = 0.0
 
     # Ground speed as a retained channel — the avian `speed` port on this body
     # (magnitude of its linear velocity). See `rocker_bogie.usda` for why speed is
@@ -449,17 +440,6 @@ def Xform "SkidRover" (
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
 
-            # ROOT-AS-BUS for cross-domain heat. The rover root forwards each
-            # motor's solved `heat` (published by the Electrical scope) onto its OWN
-            # `outputs:motor_heat_*` bus ports. The Thermal scope sources from the
-            # ROOT, never naming its sibling Electrical scope.
-            over "SkidRover"
-            {
-                float outputs:motor_heat_FL.connect = </SkidRover/Electrical.outputs:motor_heat_FL>
-                float outputs:motor_heat_FR.connect = </SkidRover/Electrical.outputs:motor_heat_FR>
-                float outputs:motor_heat_RL.connect = </SkidRover/Electrical.outputs:motor_heat_RL>
-                float outputs:motor_heat_RR.connect = </SkidRover/Electrical.outputs:motor_heat_RR>
-            }
         }
     }
 
@@ -534,10 +514,10 @@ def Xform "SkidRover" (
                 doc = "Rover thermal control network: motor dissipation → masses → radiators."
             )
             {
-                float inputs:motor_heat_FL.connect = </SkidRover.outputs:motor_heat_FL>
-                float inputs:motor_heat_FR.connect = </SkidRover.outputs:motor_heat_FR>
-                float inputs:motor_heat_RL.connect = </SkidRover.outputs:motor_heat_RL>
-                float inputs:motor_heat_RR.connect = </SkidRover.outputs:motor_heat_RR>
+                float inputs:motor_heat_FL.connect = </SkidRover/Electrical.outputs:motor_heat_FL>
+                float inputs:motor_heat_FR.connect = </SkidRover/Electrical.outputs:motor_heat_FR>
+                float inputs:motor_heat_RL.connect = </SkidRover/Electrical.outputs:motor_heat_RL>
+                float inputs:motor_heat_RR.connect = </SkidRover/Electrical.outputs:motor_heat_RR>
 
                 float outputs:motor_temp_left.connect  = </SkidRover/Thermal/MotorThermalLeft.outputs:temp_k>
                 float outputs:motor_temp_right.connect = </SkidRover/Thermal/MotorThermalRight.outputs:temp_k>

@@ -42,6 +42,15 @@ fn on_start(me) {
     this.elec = find("/ThermalWithBatteryTest/Rover/Electrical");
     this.thermal = find("/ThermalWithBatteryTest/Rover/Thermal");
 
+    // The skid_rover's Comms/EarthTracker carries three `earth_mount_*` wires
+    // that never land — a pre-existing issue unrelated to this test (the
+    // EarthTrackerController entity doesn't expose those ports). Declare them
+    // as expected faults so the never-landed gate doesn't mask the actual
+    // verdict. See `expect_fault` in auto_tests.rhai.
+    expect_fault("earth_mount_x");
+    expect_fault("earth_mount_y");
+    expect_fault("earth_mount_z");
+
     print("[thermal-battery] ── thermal + electrical islands coexist ────");
 }
 

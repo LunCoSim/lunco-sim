@@ -260,6 +260,16 @@ fn on_tick(me) {
         "whose two batteries sit on two disconnected nodes — one source each, which " +
         "is correct. The rule is counting per scope where it must count per node"));
 
+    // mixed-connector-domains: a scope fusing `connectors:p` (Pin) and
+    // `connectors:port` (HeatPort) is the signature of a thermal/electrical domain
+    // split that was not made. A `connect()` between them is impossible (the names
+    // differ) and would be a Modelica type error if they matched.
+    let mixed = by_rule(findings, "mixed-connector-domains");
+    f.push(t_true(mentions(mixed, "/LintSelftest/MixedDomainNetwork"),
+        "mixed-connector-domains never named /LintSelftest/MixedDomainNetwork — a " +
+        "scope fusing connectors:p (Pin) and connectors:port (HeatPort) cannot author " +
+        "a connect() between them, which is the exact split this rule exists to catch"));
+
     // THE FALSE-POSITIVE GUARD, and the one that matters most: one battery plus one
     // motor, connected, both collected — the shape of every shipped rover's
     // `Electrical` scope. A rule that cannot stay silent here fires on the fleet.
