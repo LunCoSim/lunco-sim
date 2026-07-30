@@ -349,10 +349,18 @@ Categories=Science;Education;
 EOF
             ;;
         *darwin*)
-            cp -f "$source/macos/luncosim.icns" "$dir/LunCoSim.icns"
+            if [ -f "$source/macos/luncosim.icns" ]; then
+                cp -f "$source/macos/luncosim.icns" "$dir/LunCoSim.icns"
+            else
+                warn "No generated macOS .icns; package retains canonical SVG icons"
+            fi
             ;;
         *windows*)
-            cp -f "$source/windows/luncosim.ico" "$dir/LunCoSim.ico"
+            if [ -f "$source/windows/luncosim.ico" ]; then
+                cp -f "$source/windows/luncosim.ico" "$dir/LunCoSim.ico"
+            else
+                warn "No generated Windows .ico; package retains canonical SVG icons"
+            fi
             ;;
     esac
     info "LunCoSim app identity/icons staged for $platform"
@@ -709,9 +717,6 @@ else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
 
-if [ "$BINARY" = "luncosim" ]; then
-    "$PROJECT_DIR/scripts/generate_icons.sh"
-fi
 stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE"
 
 # Copy docs/, skills/, + AGENTS.md so end users have the architecture docs,
