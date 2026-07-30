@@ -120,16 +120,6 @@ def Xform "RockerBogie" (
     # `six_wheel_rover.usda` has always carried.
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    # Cross-domain heat bus. These root ports carry each motor's solved waste heat
-    # from the Electrical island to the Thermal island. The `power="battery"`
-    # variant forwards Electrical's output onto them; the `thermal="basic"` variant
-    # sources its heat inputs from them. Neither domain scope names the other.
-    float outputs:motor_heat_FL = 0.0
-    float outputs:motor_heat_ML = 0.0
-    float outputs:motor_heat_RL = 0.0
-    float outputs:motor_heat_FR = 0.0
-    float outputs:motor_heat_MR = 0.0
-    float outputs:motor_heat_RR = 0.0
 
     # --- Telemetry: the vehicle's own ground speed ---
     # `speed` is a PHYSICS port (the magnitude of this body's linear velocity, from
@@ -1288,19 +1278,6 @@ def Xform "RockerBogie" (
                 }
             }
 
-            # ROOT-AS-BUS for cross-domain heat. The rover root forwards each
-            # motor's solved `heat` (published by the Electrical scope) onto its OWN
-            # `outputs:motor_heat_*` bus ports. The Thermal scope sources from the
-            # ROOT, never naming its sibling Electrical scope.
-            over "RockerBogie"
-            {
-                float outputs:motor_heat_FL.connect = </RockerBogie/Electrical.outputs:motor_heat_FL>
-                float outputs:motor_heat_ML.connect = </RockerBogie/Electrical.outputs:motor_heat_ML>
-                float outputs:motor_heat_RL.connect = </RockerBogie/Electrical.outputs:motor_heat_RL>
-                float outputs:motor_heat_FR.connect = </RockerBogie/Electrical.outputs:motor_heat_FR>
-                float outputs:motor_heat_MR.connect = </RockerBogie/Electrical.outputs:motor_heat_MR>
-                float outputs:motor_heat_RR.connect = </RockerBogie/Electrical.outputs:motor_heat_RR>
-            }
         }
     }
 
@@ -1381,12 +1358,12 @@ def Xform "RockerBogie" (
                 # readable on its island scope, so the Electrical scope forwards each
                 # motor's `heat` as a named boundary port (see the power="battery"
                 # variant). This is the cross-domain causal wire.
-                float inputs:motor_heat_FL.connect = </RockerBogie.outputs:motor_heat_FL>
-                float inputs:motor_heat_ML.connect = </RockerBogie.outputs:motor_heat_ML>
-                float inputs:motor_heat_RL.connect = </RockerBogie.outputs:motor_heat_RL>
-                float inputs:motor_heat_FR.connect = </RockerBogie.outputs:motor_heat_FR>
-                float inputs:motor_heat_MR.connect = </RockerBogie.outputs:motor_heat_MR>
-                float inputs:motor_heat_RR.connect = </RockerBogie.outputs:motor_heat_RR>
+                float inputs:motor_heat_FL.connect = </RockerBogie/Electrical.outputs:motor_heat_FL>
+                float inputs:motor_heat_ML.connect = </RockerBogie/Electrical.outputs:motor_heat_ML>
+                float inputs:motor_heat_RL.connect = </RockerBogie/Electrical.outputs:motor_heat_RL>
+                float inputs:motor_heat_FR.connect = </RockerBogie/Electrical.outputs:motor_heat_FR>
+                float inputs:motor_heat_MR.connect = </RockerBogie/Electrical.outputs:motor_heat_MR>
+                float inputs:motor_heat_RR.connect = </RockerBogie/Electrical.outputs:motor_heat_RR>
 
                 # ── Causal boundary OUT: bank temperatures published HERE ──
                 float outputs:motor_temp_left.connect  = </RockerBogie/Thermal/MotorThermalLeft.outputs:temp_k>

@@ -493,6 +493,39 @@ def Xform "LintSelftest" (
         ]
     }
 
+    # ── mixed-connector-domains: a scope fusing Pin (connectors:p) and HeatPort
+    #    (connectors:port) — the signature of a thermal/electrical domain split that
+    #    was not made. A `connect()` between them is impossible (names differ) and
+    #    would be a type error if they matched. Both members carry LunCoProgramAPI +
+    #    a .mo source so they appear in connector_programs without tripping the
+    #    source-missing rules.
+    def Xform "MixedPinMember" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Xform "MixedHeatPortMember" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
+        custom token connectors:port
+    }
+    def Scope "MixedDomainNetwork" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </LintSelftest/MixedPinMember>,
+            </LintSelftest/MixedHeatPortMember>,
+        ]
+    }
+
     # ── THE CONTROL ─────────────────────────────────────────────────────────
     # One battery (states `p.v`) and one motor (states `p.i`), connected, both in
     # the collection: the shape every shipped rover's `Electrical` scope has. A rule

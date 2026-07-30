@@ -1227,38 +1227,6 @@ fn process_usd_sim_prim_read(
         commands
             .entity(entity)
             .try_insert(lunco_core::ActuatorPorts::new(port_map));
-
-        // A vessel root that FORWARDS outputs — `outputs:motor_heat_FL.connect =
-        // </Rover/Electrical.outputs:motor_heat_FL>` — is a domain BUS: it has no
-        // model of its own, but a sibling domain scope (Thermal) sources from it.
-        // The actuator-port scan above only accepts NUMERIC `outputs:` (it mints
-        // child `Port` entities the drive mix writes); a forwarded output has no
-        // numeric default, only a `.connect`, so it is not an actuator port. Publish
-        // a pass-through `SimComponent` whose `inputs`/`outputs` both carry the
-        // forwarded names: the forward's `SimConnection` writes the input each tick,
-        // and `SIMCOMPONENT_BACKEND.read_output` resolves the consumer's read. The
-        // prim owns no solver — values arrive entirely from the forward edge.
-        let mut forwarded = Vec::new();
-        for attr in reader.attr_names(&sdf_path) {
-            let Some(rest) = attr.strip_prefix("outputs:") else { continue; };
-            let Some(name) = rest.strip_suffix(".connect") else { continue; };
-            if reader.connections(&sdf_path, &attr).is_empty() { continue; }
-            forwarded.push(name.to_string());
-        }
-        if !forwarded.is_empty() {
-            let interface = forwarded
-                .into_iter()
-                .map(|name| (name, 0.0))
-                .collect::<HashMap<_, _>>();
-            commands.entity(entity).try_insert(lunco_cosim::SimComponent {
-                model_name: format!("bus:{}", prim_path.path),
-                parameters: Default::default(),
-                inputs: interface.clone(),
-                outputs: interface,
-                status: lunco_cosim::SimStatus::Idle,
-                is_stepping: false,
-            });
-        }
     }
 
     // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API

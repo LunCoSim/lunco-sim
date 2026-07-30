@@ -56,16 +56,6 @@ def Xform "SixWheelRover" (
     # reference arcs instead of matched by name.
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    # Cross-domain heat bus. These root ports carry each motor's solved waste heat
-    # from the Electrical island to the Thermal island. The `power="battery"`
-    # variant forwards Electrical's output onto them; the `thermal="basic"` variant
-    # sources its heat inputs from them. Neither domain scope names the other.
-    float outputs:motor_heat_L0 = 0.0
-    float outputs:motor_heat_L1 = 0.0
-    float outputs:motor_heat_L2 = 0.0
-    float outputs:motor_heat_R0 = 0.0
-    float outputs:motor_heat_R1 = 0.0
-    float outputs:motor_heat_R2 = 0.0
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
 
@@ -404,18 +394,6 @@ def Xform "SixWheelRover" (
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
             }
 
-            # ROOT-AS-BUS for cross-domain heat. The rover root forwards each
-            # motor's solved `heat` onto its own bus ports. The Thermal scope
-            # sources from the ROOT, never naming its sibling Electrical scope.
-            over "SixWheelRover"
-            {
-                float outputs:motor_heat_L0.connect = </SixWheelRover/Electrical.outputs:motor_heat_L0>
-                float outputs:motor_heat_L1.connect = </SixWheelRover/Electrical.outputs:motor_heat_L1>
-                float outputs:motor_heat_L2.connect = </SixWheelRover/Electrical.outputs:motor_heat_L2>
-                float outputs:motor_heat_R0.connect = </SixWheelRover/Electrical.outputs:motor_heat_R0>
-                float outputs:motor_heat_R1.connect = </SixWheelRover/Electrical.outputs:motor_heat_R1>
-                float outputs:motor_heat_R2.connect = </SixWheelRover/Electrical.outputs:motor_heat_R2>
-            }
 
         }
     }
@@ -478,12 +456,12 @@ def Xform "SixWheelRover" (
                 doc = "Rover thermal control network: motor dissipation → masses → radiators."
             )
             {
-                float inputs:motor_heat_L0.connect = </SixWheelRover.outputs:motor_heat_L0>
-                float inputs:motor_heat_L1.connect = </SixWheelRover.outputs:motor_heat_L1>
-                float inputs:motor_heat_L2.connect = </SixWheelRover.outputs:motor_heat_L2>
-                float inputs:motor_heat_R0.connect = </SixWheelRover.outputs:motor_heat_R0>
-                float inputs:motor_heat_R1.connect = </SixWheelRover.outputs:motor_heat_R1>
-                float inputs:motor_heat_R2.connect = </SixWheelRover.outputs:motor_heat_R2>
+                float inputs:motor_heat_L0.connect = </SixWheelRover/Electrical.outputs:motor_heat_L0>
+                float inputs:motor_heat_L1.connect = </SixWheelRover/Electrical.outputs:motor_heat_L1>
+                float inputs:motor_heat_L2.connect = </SixWheelRover/Electrical.outputs:motor_heat_L2>
+                float inputs:motor_heat_R0.connect = </SixWheelRover/Electrical.outputs:motor_heat_R0>
+                float inputs:motor_heat_R1.connect = </SixWheelRover/Electrical.outputs:motor_heat_R1>
+                float inputs:motor_heat_R2.connect = </SixWheelRover/Electrical.outputs:motor_heat_R2>
 
                 float outputs:motor_temp_left.connect  = </SixWheelRover/Thermal/MotorThermalLeft.outputs:temp_k>
                 float outputs:motor_temp_right.connect = </SixWheelRover/Thermal/MotorThermalRight.outputs:temp_k>
