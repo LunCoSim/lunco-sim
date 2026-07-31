@@ -39,27 +39,14 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
-use lunco_usd::document::{LayerId, UsdOp};
+use lunco_usd::document::{
+    LayerId, UsdOp, WAYPOINT_BEHAVIORS_SCOPE, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM,
+    WAYPOINT_ROUTE_SCOPE,
+};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
 use crate::SelectedEntities;
-
-/// Scope the authored waypoints are parented under, beneath the stage's default prim.
-/// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
-/// parented under the rover, the waypoints would ride along as it drives.
-const BEHAVIORS_SCOPE: &str = "Behaviors";
-/// Scope holding a scene's waypoint MARKER prims. Scene-authored routes already
-/// use this name (`/Traverse/Route/W0`), so a dropped waypoint joins the same
-/// scope rather than inventing a parallel one.
-const ROUTE_SCOPE: &str = "Route";
-/// The authored marker. A dropped waypoint REFERENCES this asset instead of
-/// having its geometry rebuilt in Rust: colour, opacity, emission, dome and
-/// trigger zone are authored content, and there is exactly one of them.
-const WAYPOINT_ASSET: &str = "lunco://vessels/markers/waypoint.usda";
-
-/// Name of the `LunCoProgramAPI` child that carries a vessel's mission tree.
-const MISSION_PROGRAM: &str = "Mission";
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -399,7 +386,7 @@ pub fn on_scene_click_checkpoint(
                 .map(|p| format!("/{p}"))
                 .unwrap_or_else(|| "/".to_string())
         });
-    let scope_path = join_prim(&root, BEHAVIORS_SCOPE);
+    let scope_path = join_prim(&root, WAYPOINT_BEHAVIORS_SCOPE);
 
     // Create the `Behaviors` scope on first use. `AddPrim` on an existing prim is a
     // rejection, not a merge, so only author it when it is genuinely absent.
@@ -410,7 +397,7 @@ pub fn on_scene_click_checkpoint(
             op: UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: root.clone(),
-                name: BEHAVIORS_SCOPE.to_string(),
+                name: WAYPOINT_BEHAVIORS_SCOPE.to_string(),
                 type_name: Some("Scope".to_string()),
                 reference: None,
             },
@@ -460,7 +447,7 @@ pub fn on_scene_click_checkpoint(
         &vessel_prim.path,
         canonical
             .get(vessel_prim.stage_handle.id())
-            .zip(SdfPath::new(&join_prim(&vessel_prim.path, MISSION_PROGRAM)).ok())
+            .zip(SdfPath::new(&join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM)).ok())
             .is_some_and(|(stage, mission)| stage.view().has_prim(&mission)),
     );
     info!(
@@ -637,7 +624,7 @@ pub fn on_scene_click_place_waypoint(
                     edit_target: LayerId::root(),
                     // Editing an EXISTING tree, so the program prim is already there —
                     // the XML above was read back off it.
-                    path: join_prim(&vessel_prim.path, MISSION_PROGRAM),
+                    path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
                     name: "info:sourceCode".to_string(),
                     type_name: "string".to_string(),
                     value: new_xml,
@@ -818,7 +805,7 @@ pub fn draw_waypoint_context_menu(
             doc,
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::root(),
-                path: join_prim(&vessel_prim.path, MISSION_PROGRAM),
+                path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
                 name: "info:sourceCode".to_string(),
                 type_name: "string".to_string(),
                 value,
@@ -1163,7 +1150,7 @@ fn author_marker_prim(
     canonical: &CanonicalStages,
     vessel_prim: &UsdPrimPath,
 ) -> String {
-    let route_scope = join_prim(root, ROUTE_SCOPE);
+    let route_scope = join_prim(root, WAYPOINT_ROUTE_SCOPE);
     // `AddPrim` on an existing prim is a rejection, not a merge.
     if !composed_prim_exists(canonical, vessel_prim, &route_scope) {
         commands.trigger(ApplyUsdOp {
@@ -1171,7 +1158,7 @@ fn author_marker_prim(
             op: UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: root.to_string(),
-                name: ROUTE_SCOPE.to_string(),
+                name: WAYPOINT_ROUTE_SCOPE.to_string(),
                 type_name: Some("Scope".to_string()),
                 reference: None,
             },
@@ -1196,7 +1183,7 @@ fn author_marker_prim(
             parent_path: route_scope,
             name: marker_name,
             type_name: Some("Xform".to_string()),
-            reference: Some(WAYPOINT_ASSET.to_string()),
+            reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
         },
     });
     // The picked point is grid-absolute, the frame authored translates are in
@@ -1245,14 +1232,14 @@ fn ensure_mission_program(
     vessel_path: &str,
     mission_exists: bool,
 ) -> String {
-    let path = join_prim(vessel_path, MISSION_PROGRAM);
+    let path = join_prim(vessel_path, WAYPOINT_MISSION_PROGRAM);
     if !mission_exists && !prim_exists(host, &path) {
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: vessel_path.to_string(),
-                name: MISSION_PROGRAM.to_string(),
+                name: WAYPOINT_MISSION_PROGRAM.to_string(),
                 type_name: Some("Scope".to_string()),
                 reference: None,
             },

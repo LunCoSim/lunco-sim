@@ -40,6 +40,17 @@ pub trait Node<Ctx: ?Sized> {
     fn tick(&mut self, ctx: &mut Ctx) -> Status;
     /// Return the node to its initial state (called when a parent restarts it).
     fn reset(&mut self) {}
+    /// The index of the child an ordered composite ([`Sequence`]/[`Selector`]) is
+    /// currently executing, if this node is one — so a host can preserve route
+    /// progress across a rebuild (append a waypoint without the rover U-turning
+    /// to leg 0). `None` for every other node.
+    fn cursor(&self) -> Option<usize> {
+        None
+    }
+    /// Restore a cursor reported by [`Node::cursor`]: set the executing child of
+    /// an ordered composite, so a freshly rebuilt tree resumes where the old one
+    /// left off. A no-op on any other node.
+    fn set_cursor(&mut self, _index: usize) {}
 }
 
 /// A boxed child node. `Send + Sync` so a whole tree can live in an ECS
@@ -106,6 +117,16 @@ impl<Ctx: ?Sized> Node<Ctx> for Sequence<Ctx> {
             c.reset();
         }
     }
+
+    fn cursor(&self) -> Option<usize> {
+        Some(self.current)
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        // Clamp: a cursor at/behind the end means the sequence completes
+        // immediately, which is the natural "resume after the last leg".
+        self.current = index.min(self.children.len());
+    }
 }
 
 /// Runs children in order; succeeds on the first child success, fails only when
@@ -146,6 +167,14 @@ impl<Ctx: ?Sized> Node<Ctx> for Selector<Ctx> {
         for c in &mut self.children {
             c.reset();
         }
+    }
+
+    fn cursor(&self) -> Option<usize> {
+        Some(self.current)
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        self.current = index.min(self.children.len());
     }
 }
 
@@ -286,6 +315,17 @@ impl<Ctx: ?Sized> Node<Ctx> for Repeat<Ctx> {
         self.done = 0;
         self.child.reset();
     }
+
+    // Single-child wrappers delegate cursor to their one child, so
+    // `cursor()` on a whole `forever(sequence[…])` patrol reports the
+    // sequence's progress (a host preserves it across rebuilds).
+    fn cursor(&self) -> Option<usize> {
+        self.child.cursor()
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        self.child.set_cursor(index);
+    }
 }
 
 /// Retries a child on `Failure` up to a fixed number of attempts, or forever — the
@@ -349,6 +389,14 @@ impl<Ctx: ?Sized> Node<Ctx> for Retry<Ctx> {
         self.failed = 0;
         self.child.reset();
     }
+
+    fn cursor(&self) -> Option<usize> {
+        self.child.cursor()
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        self.child.set_cursor(index);
+    }
 }
 
 // ── Decorators (single-child wrappers) ───────────────────────────────────────
@@ -378,6 +426,14 @@ impl<Ctx: ?Sized> Node<Ctx> for Invert<Ctx> {
 
     fn reset(&mut self) {
         self.child.reset();
+    }
+
+    fn cursor(&self) -> Option<usize> {
+        self.child.cursor()
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        self.child.set_cursor(index);
     }
 }
 
@@ -418,6 +474,14 @@ impl<Ctx: ?Sized> Node<Ctx> for Force<Ctx> {
 
     fn reset(&mut self) {
         self.child.reset();
+    }
+
+    fn cursor(&self) -> Option<usize> {
+        self.child.cursor()
+    }
+
+    fn set_cursor(&mut self, index: usize) {
+        self.child.set_cursor(index);
     }
 }
 
@@ -759,5 +823,71 @@ mod tests {
         assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
                                                          // Reactive: the high-priority child is re-checked and preempts the low one.
         assert_eq!(sel.tick(&mut ctx), Status::Success); // high now succeeds
+    }
+
+    #[test]
+    fn sequence_cursor_reports_and_restores_progress() {
+        // Two 2-tick children: after tick 1 the sequence is on child 0, after
+        // tick 2 it has advanced to child 1.
+        let mut s = Sequence::new(vec![
+            Countdown::new(1, Status::Success),
+            Countdown::new(1, Status::Success),
+        ]);
+        assert_eq!(s.cursor(), Some(0), "a fresh sequence starts at leg 0");
+        let mut ctx = ();
+        assert_eq!(s.tick(&mut ctx), Status::Running);
+        assert_eq!(s.cursor(), Some(0), "still on the first running child");
+        assert_eq!(s.tick(&mut ctx), Status::Running);
+        assert_eq!(s.cursor(), Some(1), "advanced to the second child");
+
+        // A rebuilt sequence resumes at the saved cursor: child 0 is skipped and
+        // child 1 (fresh) runs to completion.
+        let mut rebuilt = Sequence::new(vec![
+            Countdown::new(1, Status::Success),
+            Countdown::new(1, Status::Success),
+        ]);
+        rebuilt.set_cursor(1);
+        assert_eq!(
+            rebuilt.tick(&mut ctx),
+            Status::Running,
+            "resumed child 1 must still be driven"
+        );
+        assert_eq!(rebuilt.tick(&mut ctx), Status::Success, "child 1 completes");
+    }
+
+    #[test]
+    fn repeat_delegates_cursor_to_its_sequence_child() {
+        // The patrol shape `forever(sequence[…])` — `cursor()` on the ROOT must
+        // report the sequence's progress so a host can preserve it across a
+        // rebuild without knowing the tree's internal shape.
+        let mut root = Repeat::forever(Box::new(Sequence::new(vec![
+            Countdown::new(1, Status::Success),
+            Countdown::new(1, Status::Success),
+        ])) as BoxNode<()>);
+        let mut ctx = ();
+        assert_eq!(root.tick(&mut ctx), Status::Running);
+        assert_eq!(root.tick(&mut ctx), Status::Running);
+        assert_eq!(root.cursor(), Some(1), "root reports the inner sequence's leg");
+
+        // Restoring the cursor on the root rebuilds the same position.
+        let mut rebuilt = Repeat::forever(Box::new(Sequence::new(vec![
+            Countdown::new(1, Status::Success),
+            Countdown::new(1, Status::Success),
+        ])) as BoxNode<()>);
+        rebuilt.set_cursor(1);
+        assert_eq!(rebuilt.tick(&mut ctx), Status::Running, "child 1 runs again");
+        assert_eq!(rebuilt.tick(&mut ctx), Status::Running, "sequence completes, lap restarts");
+    }
+
+    #[test]
+    fn set_cursor_clamps_past_the_end() {
+        let mut s = Sequence::new(vec![Countdown::new(0, Status::Success)]);
+        s.set_cursor(99);
+        let mut ctx = ();
+        assert_eq!(
+            s.tick(&mut ctx),
+            Status::Success,
+            "a cursor past the last leg completes immediately"
+        );
     }
 }

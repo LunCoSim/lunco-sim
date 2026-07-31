@@ -657,6 +657,121 @@ register_commands!(
 /// confirmed intent which discards both their authored and runtime layers. The
 /// document registry owns both policies so every file-backed domain keeps the
 /// same identity and history invariants.
+/// Remove the SESSION-dropped waypoint/mission state from `doc`'s base layer —
+/// the marker prims, the `Route`/`Behaviors` scopes and the `Mission` programs
+/// the editor authored while the scene was live — leaving the on-disk file's
+/// own waypoints and every other unsaved edit untouched. Returns the number of
+/// prims removed.
+///
+/// A [`RestartScene`] deliberately retains unsaved edits (they are the user's
+/// work), so the dropped waypoints would otherwise survive the reload and the
+/// only way to clear a route would be to reboot the program. The session edits
+/// are identified by diffing the live base layer against the freshly-read file
+/// source: a prim that exists only in the live document and carries waypoint
+/// authoring (the marker reference, a waypoint scope name, or a mission
+/// `info:sourceCode`) is removed; `info:sourceCode` on a FILE-authored Mission
+/// prim is restored to the file's value.
+fn clear_session_mission_state(
+    registry: &mut DocumentRegistry<UsdDocument>,
+    doc: DocumentId,
+    file_source: &str,
+) -> usize {
+    use lunco_usd_bevy::usd_data::UsdDataExt;
+    use openusd::sdf::{Path as SdfPath, SpecType, Value};
+
+    let Ok(file_data) = lunco_usd_bevy::author::usda_to_data(file_source) else {
+        // Un-parseable file: the restart already keeps the mounted source;
+        // leave the mission state alone rather than guessing at the diff.
+        return 0;
+    };
+    let Some(host) = registry.host(doc) else {
+        return 0;
+    };
+    let base = host.document().data();
+
+    let is_waypoint_marker = |path: &SdfPath| {
+        base.field(path, "references").is_some_and(|v| {
+            matches!(
+                v,
+                Value::ReferenceListOp(op)
+                    if op.iter().any(|r| r.asset_path == crate::document::WAYPOINT_MARKER_ASSET)
+            )
+        })
+    };
+
+    let mut remove: Vec<String> = Vec::new();
+    let mut restore_source_code: Vec<(String, String)> = Vec::new();
+    for (path, spec) in base.iter() {
+        if spec.ty != SpecType::Prim {
+            continue;
+        }
+        let name = path.name().unwrap_or_default().to_string();
+        let in_file = file_data.spec(path).is_some();
+        if is_waypoint_marker(path) {
+            if !in_file {
+                remove.push(path.to_string());
+            }
+            continue;
+        }
+        // Only the session-authored scopes are removed: a scope name the FILE
+        // also carries (a scene-authored route) is left in place.
+        if matches!(
+            name.as_str(),
+            crate::document::WAYPOINT_ROUTE_SCOPE | crate::document::WAYPOINT_BEHAVIORS_SCOPE
+        ) && !in_file
+        {
+            remove.push(path.to_string());
+            continue;
+        }
+        if name == crate::document::WAYPOINT_MISSION_PROGRAM {
+            let source_code = |data: &openusd::sdf::Data| {
+                data.prim_attribute_value::<String>(path, "info:sourceCode")
+            };
+            if !in_file {
+                // The whole mission is session-authored — remove it.
+                if source_code(base).is_some() {
+                    remove.push(path.to_string());
+                }
+            } else if let (Some(session), Some(file)) = (source_code(base), source_code(&file_data))
+            {
+                // A file-authored mission the session re-pointed at dropped
+                // markers: restore the file's route.
+                if session != file {
+                    restore_source_code.push((path.to_string(), file));
+                }
+            }
+        }
+    }
+
+    let mut cleared = 0;
+    for path in &remove {
+        if registry
+            .apply(doc, UsdOp::RemovePrim {
+                edit_target: LayerId::root(),
+                path: path.clone(),
+            })
+            .is_ok()
+        {
+            cleared += 1;
+        }
+    }
+    for (path, file) in &restore_source_code {
+        if registry
+            .apply(doc, UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: path.clone(),
+                name: "info:sourceCode".to_string(),
+                type_name: "string".to_string(),
+                value: file.clone(),
+            })
+            .is_ok()
+        {
+            cleared += 1;
+        }
+    }
+    cleared
+}
+
 #[on_command(RestartScene)]
 fn on_restart_scene_refresh_active_document(
     trigger: On<RestartScene>,
@@ -714,9 +829,9 @@ fn on_restart_scene_refresh_active_document(
         return;
     };
     let (_, outcome) = if trigger.event().reset_document {
-        registry.reset_file(path, source)
+        registry.reset_file(path, source.clone())
     } else {
-        registry.open_file(path, source)
+        registry.open_file(path, source.clone())
     };
     match outcome {
         OpenOutcome::Refreshed => {
@@ -727,7 +842,21 @@ fn on_restart_scene_refresh_active_document(
             }
         }
         OpenOutcome::KeptDirty => {
-            warn!("[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk")
+            warn!("[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk");
+            // Dropped waypoints are session MISSION state, not authored content:
+            // "restart the scenario" must come back clean, so strip exactly the
+            // waypoint/mission prims the editor authored (diffed against the
+            // freshly-read file) while keeping every other unsaved edit. Runs
+            // synchronously here so the respawn (queued by the sim layer's own
+            // `RestartScene` observer, flushed after this dispatch) re-composes
+            // from the cleaned document.
+            let cleared = clear_session_mission_state(&mut registry, doc, &source);
+            if cleared > 0 {
+                info!(
+                    "[restart-scene] cleared {cleared} session waypoint/mission prim(s); \
+                     the scene restarts clean"
+                );
+            }
         }
         OpenOutcome::KeptUnparsable => {
             warn!("[restart-scene] source did not parse as USDA; retaining the mounted document")
@@ -2288,6 +2417,250 @@ mod tests {
         assert_eq!(
             empty_viewport_message(true, None).as_deref(),
             Some(GENERIC_EMPTY_HINT)
+        );
+    }
+
+    // ── Scene-restart mission cleanup ────────────────────────────────────────
+
+    use crate::document::{
+        WAYPOINT_BEHAVIORS_SCOPE, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM,
+        WAYPOINT_ROUTE_SCOPE,
+    };
+
+    /// The on-disk twin file: a scene with ONE file-authored waypoint (W0) and
+    /// a file-authored mission of its own. The session then drops a second
+    /// waypoint (W1) and re-points the mission at it — the restart must remove
+    /// exactly W1 and restore the mission sourceCode, keeping W0, the file's
+    /// route scope and every other edit.
+    #[test]
+    fn restart_cleanup_removes_only_session_waypoint_state() {
+        use lunco_doc::Document;
+
+        let file_source = r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+
+def Xform "Traverse"
+{
+    def Scope "Route"
+    {
+        def Xform "W0" (
+            prepend references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+        }
+    }
+    def Xform "Rover"
+    {
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            string info:sourceCode = "file mission"
+        }
+    }
+}
+"#;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+
+        let doc_id = {
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            reg.allocate(
+                file_source.to_string(),
+                lunco_doc::PathlessOrigin::untitled("Traverse.usda"),
+            )
+        };
+        app.update();
+
+        // The session: drop W1 next to the file's W0 and re-point the mission.
+        let ops = [
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Traverse/Route".into(),
+                name: "W1".into(),
+                type_name: Some("Xform".into()),
+                reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
+            },
+            UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Traverse/Rover/Mission".into(),
+                name: "info:sourceCode".into(),
+                type_name: "string".into(),
+                value: "session mission: /Traverse/Route/W1".into(),
+            },
+        ];
+        for op in ops {
+            app.world_mut().trigger(ApplyUsdOp { doc: doc_id, op });
+            app.update();
+        }
+        app.update();
+
+        // Restart with the file UNCHANGED: the session state must be cleared.
+        let cleared = {
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            clear_session_mission_state(&mut reg, doc_id, file_source)
+        };
+        app.update();
+        assert_eq!(cleared, 2, "W1 removed and the mission sourceCode restored");
+
+        let data = {
+            let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
+            reg.host(doc_id).unwrap().document().data().clone()
+        };
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use openusd::sdf::Path as SdfPath;
+        assert!(
+            data.spec(&SdfPath::new("/Traverse/Route/W0").unwrap())
+                .is_some(),
+            "the file's own waypoint must survive the restart"
+        );
+        assert!(
+            data.spec(&SdfPath::new("/Traverse/Route/W1").unwrap())
+                .is_none(),
+            "the session-dropped waypoint must be cleared"
+        );
+        assert_eq!(
+            data.prim_attribute_value::<String>(
+                &SdfPath::new("/Traverse/Rover/Mission").unwrap(),
+                "info:sourceCode"
+            )
+            .as_deref(),
+            Some("file mission"),
+            "the mission must fall back to the file's route"
+        );
+    }
+
+    /// The traverse workflow as the twin ships it: the file carries no route
+    /// and no mission at all (they were stripped), so EVERY waypoint the
+    /// editor dropped — markers, scopes, the mission program — is session
+    /// state and must be cleared in full, leaving the scene pristine.
+    #[test]
+    fn restart_cleanup_removes_an_entirely_session_dropped_route() {
+        use lunco_doc::Document;
+
+        let file_source = r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+
+def Xform "Traverse"
+{
+    def Xform "Rover"
+    {
+    }
+}
+"#;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+
+        let doc_id = {
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            reg.allocate(
+                file_source.to_string(),
+                lunco_doc::PathlessOrigin::untitled("Traverse.usda"),
+            )
+        };
+        app.update();
+
+        // A Ctrl+LMB session: Behaviors + Route scopes, W0/W1 markers, and the
+        // Rover's Mission program carrying the BT.CPP route.
+        let ops = [
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Traverse".into(),
+                name: WAYPOINT_BEHAVIORS_SCOPE.into(),
+                type_name: Some("Scope".into()),
+                reference: None,
+            },
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Traverse".into(),
+                name: WAYPOINT_ROUTE_SCOPE.into(),
+                type_name: Some("Scope".into()),
+                reference: None,
+            },
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Traverse/Route".into(),
+                name: "W0".into(),
+                type_name: Some("Xform".into()),
+                reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
+            },
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Traverse/Route".into(),
+                name: "W1".into(),
+                type_name: Some("Xform".into()),
+                reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
+            },
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Traverse/Rover".into(),
+                name: WAYPOINT_MISSION_PROGRAM.into(),
+                type_name: Some("Scope".into()),
+                reference: None,
+            },
+            UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Traverse/Rover/Mission".into(),
+                name: "info:sourceCode".into(),
+                type_name: "string".into(),
+                value: "<root>…/Traverse/Route/W0…W1</root>".into(),
+            },
+        ];
+        for op in ops {
+            app.world_mut().trigger(ApplyUsdOp { doc: doc_id, op });
+            app.update();
+        }
+        app.update();
+
+        let cleared = {
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            clear_session_mission_state(&mut reg, doc_id, file_source)
+        };
+        app.update();
+        assert_eq!(
+            cleared, 5,
+            "W0 + W1 markers, Route + Behaviors scopes, Mission prim (its sourceCode goes with it)"
+        );
+
+        let data = {
+            let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
+            reg.host(doc_id).unwrap().document().data().clone()
+        };
+        use openusd::sdf::Path as SdfPath;
+        for gone in [
+            "/Traverse/Route",
+            "/Traverse/Route/W0",
+            "/Traverse/Route/W1",
+            "/Traverse/Behaviors",
+            "/Traverse/Rover/Mission",
+        ] {
+            assert!(
+                data.spec(&SdfPath::new(gone).unwrap()).is_none(),
+                "{gone} must be cleared with the session route"
+            );
+        }
+        assert!(
+            data.spec(&SdfPath::new("/Traverse/Rover").unwrap())
+                .is_some(),
+            "the vessel itself is file content and must survive"
         );
     }
 }

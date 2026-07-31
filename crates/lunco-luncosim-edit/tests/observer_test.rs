@@ -71,27 +71,20 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
     // Initialize required resources and register event / types
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
-    // Provides `DocumentRegistry<UsdDocument>` — the arrival observer resolves
+    // Provides `DocumentRegistry<UsdDocument>` — the arrival system resolves
     // the marker's document to author its runtime-layer flag.
     app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
     app.init_resource::<lunco_usd::twin_projection::DocBackedTwinScenes>();
     app.init_resource::<lunco_workspace::WorkspaceResource>();
     app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
     app.register_type::<lunco_usd::commands::ApplyUsdOp>();
-    // The system under test: arrival driven by the marker's own trigger zone.
-    app.add_observer(
-        lunco_luncosim_edit::ui::checkpoint_click::mark_reached_waypoints_on_zone_enter,
-    );
-
-    // Setup a resource to store triggered ApplyUsdOp events
-    #[derive(Default, Resource)]
-    struct TriggeredOps(Vec<lunco_usd::commands::ApplyUsdOp>);
-    app.insert_resource(TriggeredOps::default());
-
-    app.add_observer(
-        |trigger: On<lunco_usd::commands::ApplyUsdOp>, mut ops: ResMut<TriggeredOps>| {
-            ops.0.push(trigger.event().clone());
-        },
+    // The arrival bus: avian hands CollisionStart to this system as a message.
+    app.init_resource::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>();
+    // The system under test: arrival driven by the marker's own trigger zone,
+    // scheduled in FixedPostUpdate (after the physics writeback).
+    app.add_systems(
+        FixedPostUpdate,
+        lunco_luncosim_edit::ui::checkpoint_click::mark_reached_waypoints_on_enter,
     );
 
     // Set active_document in the workspace
@@ -134,26 +127,32 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
     // a distance the editor measured itself.
     let zone = app
         .world_mut()
-        .spawn(lunco_usd_bevy::UsdPrimPath {
-            stage_handle: Default::default(),
-            path: format!("{MARKER}/Zone"),
-        })
+        .spawn((
+            lunco_core::TriggerZone("waypoint".to_string()),
+            lunco_usd_bevy::UsdPrimPath {
+                stage_handle: Default::default(),
+                path: format!("{MARKER}/Zone"),
+            },
+            avian3d::prelude::Sensor,
+        ))
         .id();
-    let zone_gid = lunco_core::GlobalEntityId::from_raw(7);
+
+    // The vessel's chassis enters the zone: avian's narrow phase emits this
+    // CollisionStart; the test hands the same message to the system under test.
     app.world_mut()
-        .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
-        .assign(zone, zone_gid);
+        .resource_mut::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>()
+        .write(avian3d::prelude::CollisionStart {
+            collider1: zone,
+            collider2: vessel_entity,
+            body1: None,
+            body2: Some(vessel_entity),
+        });
 
-    app.world_mut().trigger(lunco_core::TelemetryEvent {
-        name: "enter:waypoint".to_string(),
-        source: zone_gid.get(),
-        severity: lunco_core::Severity::Info,
-        data: lunco_core::TelemetryValue::I64(0),
-        timestamp: 0.0,
-    });
-
-    // The observer inserts through `Commands`, which apply at the next flush.
-    app.update();
+    // The system is scheduled in FixedPostUpdate; drive it there (the same
+    // manual-schedule pattern as lunco-autopilot/tests/authority.rs).
+    app.init_schedule(FixedUpdate);
+    app.world_mut().run_schedule(FixedUpdate);
+    app.world_mut().run_schedule(FixedPostUpdate);
 
     // "Reached" is LIVE-ONLY in the ECS: recorded in `ReachedWaypoints`, never
     // written into the XML. The mission keeps its leg — reaching a waypoint does

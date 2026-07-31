@@ -708,6 +708,40 @@ fn bake_targets(
     }
 }
 
+/// The ordered route legs of a spec, if it is a plain `sequence[…]` or a
+/// `forever(sequence[…])` patrol — the two shapes the editor and hand-authored
+/// missions use. `None` for any other tree (the cursor-preserving append path
+/// must not touch it).
+fn spec_route_legs(spec: &BehaviorSpec) -> Option<&[BehaviorSpec]> {
+    match spec {
+        BehaviorSpec::Sequence { children } => Some(children),
+        BehaviorSpec::Forever { child } => match child.as_ref() {
+            BehaviorSpec::Sequence { children } => Some(children),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns `true` when `new_spec` is a route (`sequence[…])` or
+/// `forever(sequence[…])`) whose existing legs are identical to every leg of
+/// `old_spec` and new legs were only APPENDED at the end. In this case the
+/// running `AutopilotBehavior` tree is REBUILT but resumes at its current leg —
+/// the new legs are picked up when the sequence advances past the last old leg,
+/// without the rover U-turning to the first one.
+///
+/// Any other kind of change (non-route, reordering, deletion, modification)
+/// returns `false` and the caller rebuilds from the start.
+fn new_spec_is_append_only(old: &BehaviorSpec, new: &BehaviorSpec) -> bool {
+    match (spec_route_legs(old), spec_route_legs(new)) {
+        (Some(old_legs), Some(new_legs)) => {
+            // New must be longer and its first old_legs.len() entries must be identical.
+            new_legs.len() > old_legs.len() && new_legs.starts_with(old_legs)
+        }
+        _ => false,
+    }
+}
+
 /// Compile each vessel's XML tree — resolving its prim-path targets to live world
 /// positions — into the derived [`AutopilotBehaviorSpec`], and hot-swap the running
 /// [`AutopilotBehavior`] so an edit takes effect immediately.
@@ -719,7 +753,7 @@ fn bake_targets(
 /// tree, and a moving *vessel* re-baking its own static targets is idempotent.
 pub fn compile_behavior_xml(
     q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>)>,
-    q_autopilots: Query<(Entity, &Autopilot, Has<AutopilotBehavior>)>,
+    q_autopilots: Query<(Entity, &Autopilot, Has<AutopilotBehavior>, Option<&AutopilotBehavior>)>,
     q_spec: Query<&AutopilotBehaviorSpec>,
     q_reached: Query<&ReachedWaypoints>,
     moved: Query<
@@ -811,10 +845,31 @@ pub fn compile_behavior_xml(
         // route without a disengage/re-engage cycle. Also covers an autopilot engaged
         // with no tree of its own (empty `spec_json`), which would otherwise never
         // pick up the vessel's authored route.
-        if let Some((actor, _, has_tree)) =
-            q_autopilots.iter().find(|(_, ap, _)| ap.vessel == vessel)
+        if let Some((actor, _, has_tree, old_tree)) =
+            q_autopilots.iter().find(|(_, ap, _, _)| ap.vessel == vessel)
         {
-            if spec_changed || !has_tree {
+            // A pure append must NOT be ignored (the old tree can never reach the
+            // new legs — once the sequence completes it loops back to leg 0, so the
+            // new waypoints would never be driven), and must NOT reset the cursor
+            // (that is the U-turn). Rebuild the tree and resume it at the leg the
+            // old tree was executing: the rover continues its current leg, then the
+            // appended legs run in order.
+            let is_append_only = has_tree
+                && spec_changed
+                && q_spec
+                    .get(vessel)
+                    .map(|cur| new_spec_is_append_only(&cur.0, &spec))
+                    .unwrap_or(false);
+            if is_append_only {
+                let cursor = old_tree.and_then(AutopilotBehavior::route_cursor);
+                commands
+                    .entity(actor)
+                    .try_insert(AutopilotBehavior::resume(&spec, cursor));
+                debug!(
+                    "[autopilot/usd] route extended with new waypoint(s); tree resumed at \
+                     leg {cursor:?} instead of U-turning"
+                );
+            } else if spec_changed || !has_tree {
                 commands
                     .entity(actor)
                     .try_insert(AutopilotBehavior::new(&spec));
@@ -1110,5 +1165,88 @@ mod editor_tests {
                 "missing control point {p:?}"
             );
         }
+    }
+
+    fn spec_legs(children: Vec<BehaviorSpec>) -> BehaviorSpec {
+        BehaviorSpec::Sequence { children }
+    }
+
+    fn forever_spec_legs(children: Vec<BehaviorSpec>) -> BehaviorSpec {
+        BehaviorSpec::Forever {
+            child: Box::new(BehaviorSpec::Sequence { children }),
+        }
+    }
+
+    fn drive(x: f32) -> BehaviorSpec {
+        BehaviorSpec::DriveTo {
+            target: [x, 0.0, 0.0],
+            speed: 0.5,
+            radius: 3.0,
+        }
+    }
+
+    /// Pure appends are the case the editor creates (Ctrl+LMB while the rover
+    /// runs) — the tree must rebuild and RESUME, not reset and not ignore.
+    #[test]
+    fn append_only_detects_new_legs_at_the_end() {
+        let old = spec_legs(vec![drive(1.0), drive(2.0), drive(3.0)]);
+        let new = spec_legs(vec![drive(1.0), drive(2.0), drive(3.0), drive(4.0)]);
+        assert!(new_spec_is_append_only(&old, &new));
+    }
+
+    /// The same rule inside a `forever(sequence[…])` patrol — hand-authored
+    /// missions loop, and appending a waypoint must not restart the lap.
+    #[test]
+    fn append_only_detects_inside_forever_patrols() {
+        let old = forever_spec_legs(vec![drive(1.0), drive(2.0)]);
+        let new = forever_spec_legs(vec![drive(1.0), drive(2.0), drive(3.0)]);
+        assert!(new_spec_is_append_only(&old, &new));
+    }
+
+    /// A reordering, deletion or modification of an existing leg is NOT an
+    /// append — those must rebuild from the start (a moved waypoint should be
+    /// re-driven, a deleted one must not be skipped by a stale cursor).
+    #[test]
+    fn append_only_rejects_reorder_delete_and_edit() {
+        let old = spec_legs(vec![drive(1.0), drive(2.0), drive(3.0)]);
+        assert!(
+            !new_spec_is_append_only(&old, &spec_legs(vec![
+                drive(1.0),
+                drive(3.0),
+                drive(2.0),
+                drive(4.0)
+            ])),
+            "reordering is not an append"
+        );
+        assert!(
+            !new_spec_is_append_only(&old, &spec_legs(vec![drive(1.0), drive(2.0)])),
+            "a deletion is not an append"
+        );
+        assert!(
+            !new_spec_is_append_only(&old, &spec_legs(vec![
+                drive(1.0),
+                drive(99.0),
+                drive(3.0),
+                drive(4.0)
+            ])),
+            "editing an existing leg is not an append"
+        );
+    }
+
+    /// A non-route tree (a `selector` or a bare `forever` around something that
+    /// is not a sequence) is never append-compatible — leave it alone.
+    #[test]
+    fn append_only_rejects_non_route_shapes() {
+        let old = BehaviorSpec::Selector {
+            children: vec![drive(1.0), drive(2.0)],
+        };
+        let new = spec_legs(vec![drive(1.0), drive(2.0), drive(3.0)]);
+        assert!(!new_spec_is_append_only(&old, &new));
+        let forever_bare = BehaviorSpec::Forever {
+            child: Box::new(BehaviorSpec::Selector {
+                children: vec![drive(1.0)],
+            }),
+        };
+        assert!(!new_spec_is_append_only(&forever_bare, &forever_bare));
     }
 }

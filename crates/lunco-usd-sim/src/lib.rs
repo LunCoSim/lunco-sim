@@ -213,6 +213,14 @@ impl Plugin for UsdSimPlugin {
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
             retire_scene_cameras,
         );
+        // Autopilot actors claim scene vessels and hold compiled trees of the scene's
+        // route — scene-derived state, so the shared teardown boundary retires them
+        // with the rest of the scene (despawn + release the claim, so the respawned
+        // vessel can be re-engaged and its waypoints reset cleanly).
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_autopilot::teardown_autopilot_actors,
+        );
         app.register_type::<PhysicalWheel>()
             // Client-only: reconstruct a remote rover's wheels from its chassis
             // (kinematic followers — wheels are no longer replicated), then re-derive
