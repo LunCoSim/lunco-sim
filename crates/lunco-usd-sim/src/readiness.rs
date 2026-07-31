@@ -163,8 +163,16 @@ impl Plugin for UsdReadinessPlugin {
         // clearing here costs nothing that is still true.
         app.add_systems(
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-            |mut registry: ResMut<ReadinessRegistry>, mut commands: Commands| {
+            |mut registry: ResMut<ReadinessRegistry>,
+             mut dirty: ResMut<crate::cosim::BindingEpochDirty>,
+             wait: Option<Res<crate::cosim::BindingEpochWait>>,
+             mut commands: Commands| {
                 registry.clear();
+                dirty.0 = true;
+                if let Some(w) = wait {
+                    registry.finish(w.0);
+                    commands.remove_resource::<crate::cosim::BindingEpochWait>();
+                }
                 commands.remove_resource::<SceneLoadWait>();
             },
         );

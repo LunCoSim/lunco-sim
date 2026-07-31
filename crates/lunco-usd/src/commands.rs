@@ -481,7 +481,7 @@ fn on_load_scene(
     // Accept an absolute path (Twin manifests join `default_scene` to the Twin
     // root) or an already-relative asset path; bail if an absolute path lies
     // outside the assets dir.
-    let (Some(asset_server), Some(stages)) = (asset_server, stages) else {
+    let (Some(asset_server), Some(_stages)) = (asset_server, stages) else {
         return;
     };
     let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
@@ -594,16 +594,6 @@ fn on_load_scene(
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
     clear_scene_entities(&mut commands, &scene);
-
-    // Force a fresh disk read ONLY for a genuine re-open — i.e. the asset is
-    // already RESIDENT (loaded earlier, then switched away). On a FIRST load the
-    // asset isn't in the store yet, so this `reload` is redundant AND fires a
-    // SECOND `LoadedWithDependencies` after the initial load → a duplicate
-    // instantiation pass (doubled crater-overlay meshes / rocks that z-fight).
-    // The no-op guard above already prevents reloading the *active* scene.
-    if stages.get(new_id).is_some() {
-        asset_server.reload(&path);
-    }
 
     // Spawn via shared helper, deferred so despawns flush first.
     commands.queue(move |world: &mut World| {
@@ -1871,7 +1861,7 @@ mod tests {
                 .world_mut()
                 .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
-                "#usda 1.0\n".to_string(),
+                "#usda 1.0\n(\n    metersPerUnit = 1\n)\n".to_string(),
                 lunco_doc::PathlessOrigin::untitled("UntitledRover.usda"),
             )
         };

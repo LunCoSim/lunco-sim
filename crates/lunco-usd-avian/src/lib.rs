@@ -1188,6 +1188,7 @@ fn extract_avian_prim(
         add_collider_from_usd(commands, entity, reader, sdf_path);
         commands.entity(entity).try_insert((
             Sensor,
+            CollisionEventsEnabled,
             lunco_core::TriggerZone(zone),
             CollisionLayers::new(
                 LayerMask(lunco_core::TRIGGER_COLLISION_LAYER),

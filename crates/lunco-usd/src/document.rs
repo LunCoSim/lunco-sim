@@ -99,7 +99,7 @@ const CHANGE_HISTORY_CAPACITY: usize = 256;
 
 /// Minimal valid USDA, used as the canonical-data fallback when a document's
 /// source text fails to parse (see [`UsdDocument::with_origin`]).
-const EMPTY_USDA: &str = "#usda 1.0\n";
+const EMPTY_USDA: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\n";
 
 // ─────────────────────────────────────────────────────────────────────
 // LayerId — names a layer in a stage's layer stack
@@ -2055,7 +2055,7 @@ mod tests {
     // the layer-targeting these tests exist to pin.
 
     const TINY_USDA: &str =
-        "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
 
     fn prim_type(doc: &UsdDocument, path: &str) -> Option<String> {
         doc.data().prim_type_name(&SdfPath::new(path).unwrap())
@@ -2419,7 +2419,7 @@ mod tests {
         // anchors author, and the result composes into a jointed assembly.
         use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
 
-        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(50),
             scene,
@@ -2763,7 +2763,7 @@ mod tests {
     /// restores the original value.
     #[test]
     fn set_attribute_overwrite_inverts_to_typed_op() {
-        const SCENE: &str = "#usda 1.0\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
+        const SCENE: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
         let mut doc = UsdDocument::new(DocumentId::new(40), SCENE);
         let ball = SdfPath::new("/Ball").unwrap();
 
@@ -3185,7 +3185,7 @@ mod tests {
     fn set_translate_does_not_clobber_nested_child_translate() {
         // CQ-503: nested prims with the same attribute. Editing the parent's
         // translate must leave the child's translate untouched.
-        let nested = "#usda 1.0\ndef Xform \"A\"\n{\n    double3 xformOp:translate = (5, 5, 5)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    def Xform \"B\"\n    {\n        double3 xformOp:translate = (9, 9, 9)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
+        let nested = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"A\"\n{\n    double3 xformOp:translate = (5, 5, 5)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    def Xform \"B\"\n    {\n        double3 xformOp:translate = (9, 9, 9)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(20),
             nested,
@@ -3220,7 +3220,7 @@ mod tests {
     /// though its value attribute survives.
     #[test]
     fn set_translate_then_rotate_lists_both_ops_in_author_order() {
-        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n}\n";
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(60),
             scene,
@@ -3287,7 +3287,7 @@ mod tests {
     /// rotate authored first stays first.
     #[test]
     fn xform_op_order_is_author_order_not_canonical() {
-        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n}\n";
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(61),
             scene,
@@ -3322,7 +3322,7 @@ mod tests {
     /// applied), which is exactly the silent visual regression this pins.
     #[test]
     fn set_translate_preserves_preexisting_composed_op_order() {
-        let scene = "#usda 1.0\ndef Xform \"Part\"\n{\n    double3 xformOp:rotateXYZ = (0, 45, 0)\n    double3 xformOp:scale = (2, 2, 2)\n    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n}\n";
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Part\"\n{\n    double3 xformOp:rotateXYZ = (0, 45, 0)\n    double3 xformOp:scale = (2, 2, 2)\n    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(62),
             scene,
@@ -3365,7 +3365,7 @@ mod tests {
     /// bare `[rotateXYZ]` runtime order would discard the base translate.
     #[test]
     fn runtime_layer_rotate_materialises_base_order_plus_new_op() {
-        let scene = "#usda 1.0\ndef Xform \"Part\"\n{\n    double3 xformOp:translate = (1, 2, 3)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Part\"\n{\n    double3 xformOp:translate = (1, 2, 3)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(63),
             scene,
@@ -4065,7 +4065,7 @@ mod tests {
         // carry the stronger opinion.
         // The marker is authored in the BASE/scene layer (where a route's pins
         // live), so the runtime overlay has no spec for it.
-        let scene = "#usda 1.0\ndef Xform \"Traverse\"\n{\n    def Xform \"Route\"\n    {\n        def Xform \"W1\"\n        {\n        }\n    }\n}\n";
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Traverse\"\n{\n    def Xform \"Route\"\n    {\n        def Xform \"W1\"\n        {\n        }\n    }\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(67),
             scene,
@@ -4107,7 +4107,7 @@ mod tests {
     #[test]
     fn set_variant_selection_preserves_sibling_set() {
         // A prim carrying two variant sets: selecting one must not drop the other.
-        let src = "#usda 1.0\ndef Xform \"Rover\" (\n    variants = {\n        string color = \"red\"\n    }\n)\n{\n}\n";
+        let src = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rover\" (\n    variants = {\n        string color = \"red\"\n    }\n)\n{\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(42),
             src,

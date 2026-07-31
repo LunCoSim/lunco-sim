@@ -448,9 +448,11 @@ pub fn on_scene_click_checkpoint(
     };
 
     // ── Author the one canonical mission edit ────────────────────────────────
-    // `project_stage_changes` consumes the resulting `info:sourceCode` property
-    // notice and updates the owning vessel's derived `BehaviorXml`. Writing that
-    // component here as well reset a running route before its new marker existed.
+    // Update `BehaviorXml` directly on the vessel entity FIRST so the autopilot tree
+    // picks up the new waypoint instantly without waiting for stage re-projection or
+    // resetting vessel state.
+    commands.entity(vessel).insert(BehaviorXml(xml.clone()));
+
     let mission = ensure_mission_program(
         &mut commands,
         host,
@@ -1294,16 +1296,15 @@ fn composed_prim_exists(
         .is_some_and(|(stage, prim)| stage.view().has_prim(&prim))
 }
 
-/// System that checks if a vessel is close to any of its waypoints.
+/// Mark a waypoint reached when a vessel's body ENTERS the marker's trigger zone.
 ///
-/// Arrival, driven by the marker's OWN trigger zone — never a distance poll.
-///
-/// `vessels/markers/waypoint.usda` authors a `lunco:triggerZone` sensor around
-/// every waypoint, and `lunco-mobility` fires `enter:<zone>` when a body crosses
-/// it, carrying the ZONE's gid as the event source and the entrant's as payload.
-/// That makes arrival an event about a specific pair of entities: zone names may
-/// repeat across a scene without ambiguity, because the zone is identified by
-/// entity, not by string.
+/// Arrival is read DIRECTLY from Avian's `CollisionStart` events against the
+/// marker's own `Sensor` zone — not through the `TelemetryEvent`/`enter:` string
+/// bus. The collision event carries both the zone collider and the entrant's
+/// `body` (the rover chassis `RigidBody`, reached through the wheel collider),
+/// so the (zone, vessel) pair is identified without a gid round-trip through the
+/// `ApiEntityRegistry`. The zone is matched by its `TriggerZone("waypoint")`
+/// component + `UsdPrimPath`; the marker prim path is the zone path's parent.
 ///
 /// Reaching a waypoint **deletes nothing**. Two states are written:
 ///
@@ -1313,84 +1314,188 @@ fn composed_prim_exists(
 ///    layer — session state that never reaches the saved `.usda`.
 ///
 /// The mission keeps its leg and the map keeps its pin, so a route can be
-/// reviewed, replayed and re-run. The previous implementation swept every
-/// vessel × every target every tick, measuring distances, to discover the same
-/// fact the physics engine had already reported.
-pub fn mark_reached_waypoints_on_zone_enter(
-    trigger: On<lunco_core::TelemetryEvent>,
-    registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    q_prim: Query<&UsdPrimPath>,
-    mut q_vessels: Query<(Entity, &BehaviorXml, Option<&mut ReachedWaypoints>)>,
-    doc_ctx: WaypointDocContext,
+/// reviewed, replayed and re-run.
+///
+/// Scheduled in `FixedPostUpdate` after `PhysicsSystems::Writeback` so it reads
+/// the same tick's collision events (the avian contract
+/// `bridge_collision_events` already follows).
+pub fn mark_reached_waypoints_on_enter(
+    mut starts: MessageReader<avian3d::prelude::CollisionStart>,
+    q_zones: Query<(&lunco_core::TriggerZone, &UsdPrimPath), With<avian3d::prelude::Sensor>>,
+    q_vessel_marker: Query<(), With<BehaviorXml>>,
+    q_parents: Query<&ChildOf>,
+    q_vessels: Query<(Entity, &BehaviorXml)>,
+    q_reached: Query<&ReachedWaypoints>,
     mut commands: Commands,
 ) {
-    let event = trigger.event();
-    if !event.name.starts_with("enter:") {
+    // `MessageReader::read` is a lending iterator. Do ALL identification work that
+    // needs only immutable queries inside it, collect the resolved
+    // (marker_path, vessel_entity) pairs, then mutate after the borrow ends.
+    // Duplicate arrivals (same vessel × same marker from two colliders in one
+    // tick) are de-duplicated by the `already-reached` check in the mutation pass.
+    let mut arrivals: Vec<(String, Entity)> = Vec::new();
+    let mut event_count = 0usize;
+
+    for ev in starts.read() {
+        event_count += 1;
+        // The two sides of the contact; one is the zone collider, the other the
+        // entrant collider. `body*` resolves a child collider to its chassis
+        // `RigidBody` (a wheel hits the zone, not the chassis itself).
+        for (zone_ent, other_ent, other_body) in [
+            (ev.collider1, ev.collider2, ev.body2),
+            (ev.collider2, ev.collider1, ev.body1),
+        ] {
+            let Ok((zone, zone_prim)) = q_zones.get(zone_ent) else {
+                continue;
+            };
+            // [DIAG] a Sensor zone was hit — log which kind.
+            warn!("[TWINDBG-WP] hit Sensor zone '{}' at {}", zone.0, zone_prim.path);
+            // Only waypoint trigger zones drive route arrival.
+            if zone.0 != "waypoint" {
+                continue;
+            }
+            // The marker prim path is the zone path's parent (`/<…>/Route/W0`
+            // for a zone at `/<…>/Route/W0/Zone`).
+            let Some((marker_path, _)) = zone_prim.path.rsplit_once('/') else {
+                continue;
+            };
+            // The entrant is the OTHER side's body (preferred — the chassis
+            // RigidBody reached through the wheel collider); fall back to its
+            // collider entity.
+            // Try climbing from both the collider entity and its rigid body parent to find the vessel root with BehaviorXml.
+            let mut resolved = false;
+            for candidate in [other_ent, other_body.unwrap_or(other_ent)] {
+                let mut curr = candidate;
+                for _ in 0..16 {
+                    if q_vessel_marker.get(curr).is_ok() {
+                        warn!("[TWINDBG-WP] resolved vessel {curr:?} for marker {marker_path} (from {candidate:?})");
+                        arrivals.push((marker_path.to_string(), curr));
+                        resolved = true;
+                        break;
+                    }
+                    match q_parents.get(curr) {
+                        Ok(p) => curr = p.parent(),
+                        Err(_) => break,
+                    }
+                }
+                if resolved {
+                    break;
+                }
+            }
+            if !resolved {
+                warn!("[TWINDBG-WP] marker {marker_path} hit but no vessel found from {other_ent:?} / {other_body:?}");
+            }
+        }
+    }
+
+    if arrivals.is_empty() {
+        if event_count > 0 {
+            // [DIAG] events fired but none resolved to a waypoint zone+vessel.
+            let zone_count = q_zones.iter().filter(|(z, _)| z.0 == "waypoint").count();
+            warn!("[TWINDBG-WP] {event_count} CollisionStart but 0 arrivals; waypoint zones in world={zone_count}");
+        }
         return;
     }
-    // The zone entity is the event SOURCE; its marker prim is its parent path.
-    let Some(zone) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(event.source)) else {
-        return;
-    };
-    let Ok(zone_prim) = q_prim.get(zone) else {
-        return;
-    };
-    let Some((marker_path, _)) = zone_prim.path.rsplit_once('/') else {
-        return;
-    };
-    let marker_path = marker_path.to_string();
+    {
+        let zone_count = q_zones.iter().filter(|(z, _)| z.0 == "waypoint").count();
+        warn!("[TWINDBG-WP] {event_count} CollisionStart, {zone_count} waypoint zones, {} arrivals", arrivals.len());
+    }
 
-    // Which vessel owns a leg pointing at this marker? A scene can hold several
-    // routes, and only the one that authored this target has arrived.
-    for (vessel, xml, reached) in q_vessels.iter_mut() {
+    for (marker_path, vessel) in arrivals {
+        let Ok((_, xml)) = q_vessels.get(vessel) else {
+            continue;
+        };
+        // Only the vessel whose mission names THIS marker has arrived at it.
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             continue;
         };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
-        if !targets.iter().any(|t| *t == marker_path) {
+        if !targets.iter().any(|t| t == &marker_path || t.ends_with(&marker_path) || marker_path.ends_with(t)) {
             continue;
         }
-        let known = reached
-            .as_ref()
-            .map(|r| r.0.contains(&marker_path))
-            .unwrap_or(false);
-        if known {
+        // Skip if already reached (read-only query avoids a conflicting mutable
+        // borrow; the insert below is via `commands`).
+        if q_reached
+            .get(vessel)
+            .map(|r| r.0.iter().any(|p| p == &marker_path || p.ends_with(&marker_path) || marker_path.ends_with(p)))
+            .unwrap_or(false)
+        {
             continue;
         }
         info!("[waypoint] reached {marker_path} (zone enter)");
-        // Writing the component fires `Changed<ReachedWaypoints>`, which
-        // `compile_behavior_xml` watches, so the tree re-strips the completed leg
-        // and the rover advances immediately.
-        match reached {
-            Some(mut r) => {
-                r.0.insert(marker_path.clone());
-            }
-            None => {
-                commands.entity(vessel).insert(ReachedWaypoints(
-                    std::iter::once(marker_path.clone()).collect(),
-                ));
-            }
-        }
-        // Author the same fact onto the marker, in the runtime layer only.
-        if let Ok(vessel_prim) = q_prim.get(vessel) {
-            if let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) {
-                commands.trigger(ApplyUsdOp {
-                    doc,
-                    op: UsdOp::SetAttribute {
-                        edit_target: LayerId::runtime(),
-                        path: marker_path.clone(),
-                        name: "lunco:waypoint:reached".to_string(),
-                        type_name: "bool".to_string(),
-                        value: "true".to_string(),
-                    },
-                });
-            }
-        }
+        let mut set: std::collections::HashSet<String> = q_reached
+            .get(vessel)
+            .map(|r| r.0.clone())
+            .unwrap_or_default();
+        set.insert(marker_path.clone());
+        commands.entity(vessel).insert(ReachedWaypoints(set));
     }
 }
 
-/// Grabbing the controls takes the vessel back: any manual DRIVE intent disengages
+/// [DIAG] Periodic inventory of Sensor trigger zones + waypoint markers in the
+/// world, so we can see whether the incrementally-spawned `Zone` children became
+/// avian `Sensor` colliders (the prerequisite for `CollisionStart` arrival).
+pub fn diag_log_waypoint_zone_inventory(
+    mut tick: Local<u32>,
+    q_zones: Query<
+        (
+            &lunco_core::TriggerZone,
+            &UsdPrimPath,
+            Option<&avian3d::prelude::CollisionLayers>,
+        ),
+        With<avian3d::prelude::Sensor>,
+    >,
+    q_all_sensors: Query<&UsdPrimPath, With<avian3d::prelude::Sensor>>,
+    q_markers: Query<&UsdPrimPath, With<BehaviorXml>>,
+    q_colliders: Query<
+        (
+            &UsdPrimPath,
+            Option<&avian3d::prelude::CollisionLayers>,
+            Has<avian3d::prelude::Sensor>,
+        ),
+        With<avian3d::prelude::Collider>,
+    >,
+) {
+    *tick += 1;
+    if *tick % 120 != 0 {
+        return;
+    }
+    let wp_zones: Vec<String> = q_zones
+        .iter()
+        .filter(|(z, _, _)| z.0 == "waypoint")
+        .map(|(z, p, layers)| {
+            format!(
+                "{}(zone={} layers={:?})",
+                p.path,
+                z.0,
+                layers.map(|l| (l.memberships.0, l.filters.0)),
+            )
+        })
+        .collect();
+    let all_sensors: Vec<&str> = q_all_sensors.iter().map(|p| p.path.as_str()).collect();
+    let vessels: Vec<&str> = q_markers.iter().map(|p| p.path.as_str()).collect();
+    // Sample the first few non-sensor colliders (the rover's wheels/chassis) to
+    // see their collision layers — the mask must include bit 7 to hit the zone.
+    let rover_colliders: Vec<String> = q_colliders
+        .iter()
+        .filter(|(_, _, sensor)| !sensor)
+        .take(6)
+        .map(|(p, layers, sensor)| {
+            format!(
+                "{}(layers={:?} sensor={})",
+                p.path,
+                layers.map(|l| (l.memberships.0, l.filters.0)),
+                sensor
+            )
+        })
+        .collect();
+    warn!(
+        "[TWINDBG-INV] tick={} waypoint zones={:?} | rover colliders={:?} | vessels={:?}",
+        *tick, wp_zones, rover_colliders, vessels
+    );
+    let _ = all_sensors;
+}
 /// the autopilot currently driving it and returns ownership to the local session.
 ///
 /// Without this the autopilot keeps the vessel claimed, so `drive_from_bindings`

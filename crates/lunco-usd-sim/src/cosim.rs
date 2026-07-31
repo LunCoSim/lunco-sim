@@ -1368,10 +1368,10 @@ pub struct WiringDirty(pub bool);
 /// Coalesces endpoint lifecycle events into one settlement decision. It is not
 /// a timer: observers and Modelica change detection are its only writers.
 #[derive(Resource, Default)]
-struct BindingEpochDirty(pub bool);
+pub(crate) struct BindingEpochDirty(pub bool);
 
 #[derive(Resource)]
-struct BindingEpochWait(lunco_readiness::ReadinessTicket);
+pub(crate) struct BindingEpochWait(pub(crate) lunco_readiness::ReadinessTicket);
 
 fn request_binding_epoch<T: Component>(_trigger: On<Add, T>, mut dirty: ResMut<BindingEpochDirty>) {
     dirty.0 = true;

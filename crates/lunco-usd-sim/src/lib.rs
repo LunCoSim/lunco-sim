@@ -2747,19 +2747,34 @@ fn resolve_behavior_targets(
     q_trees: Query<(
         Entity,
         &lunco_autopilot::usd_tree::BehaviorXml,
-        &UsdPrimPath,
+        Option<&UsdPrimPath>,
     )>,
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_new_prims: Query<(), Added<UsdPrimPath>>,
     q_changed_xml: Query<(), Changed<lunco_autopilot::usd_tree::BehaviorXml>>,
     q_new_ids: Query<(), Added<lunco_core::GlobalEntityId>>,
+    q_existing_bindings: Query<&lunco_autopilot::usd_tree::TargetBindings>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
+    let has_unresolved_targets = q_trees.iter().any(|(vessel, xml, _)| {
+        let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
+        if targets.is_empty() {
+            return false;
+        }
+        match q_existing_bindings.get(vessel) {
+            Ok(b) => targets.iter().any(|t| !b.0.contains_key(t)),
+            Err(_) => true,
+        }
+    });
+
     if q_trees.is_empty()
-        || (q_new_prims.is_empty() && q_changed_xml.is_empty() && q_new_ids.is_empty())
+        || (q_new_prims.is_empty()
+            && q_changed_xml.is_empty()
+            && q_new_ids.is_empty()
+            && !has_unresolved_targets)
     {
         return;
     }
@@ -2770,17 +2785,22 @@ fn resolve_behavior_targets(
         debug!(
             "[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}",
             vessel,
-            vessel_path.path,
+            vessel_path.map(|p| p.path.as_str()).unwrap_or("no-usd-path"),
             targets.len(),
             targets
         );
         for path in targets {
             let found = q_prims.iter().find(|(e, p)| {
-                let match_path = p.path == path;
-                let match_stage = p.stage_handle == vessel_path.stage_handle;
-                let is_behavior = path.contains("/Behaviors/");
+                let match_path = p.path == path || p.path.ends_with(&path) || path.ends_with(&p.path);
+                let match_stage = vessel_path
+                    .map(|vp| p.stage_handle == vp.stage_handle)
+                    .unwrap_or(true);
+                let is_behavior = path.contains("/Behaviors/") || path.contains("/Route/");
                 let inst = instance_key(*e, &q_provenance, &q_gid, &q_instance_root);
-                let match_inst = is_behavior || inst == vessel_instance;
+                let match_inst = is_behavior
+                    || inst.is_none()
+                    || vessel_instance.is_none()
+                    || inst == vessel_instance;
                 if match_path {
                     debug!("[resolve_behavior_targets] candidate {:?} ({}) match_stage={} match_inst={} (is_behavior={})", e, p.path, match_stage, match_inst, is_behavior);
                 }

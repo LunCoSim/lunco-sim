@@ -394,20 +394,12 @@ mod tests {
         );
     }
 
-    /// The brightest directional light wins — an earthshine fill must not be
-    /// mistaken for the sun. Mirrors `pick_sun`'s rule.
+    /// The single unscoped sun is picked structurally by `pick_sun`.
     #[test]
     fn the_brightest_light_is_the_sun() {
         let mut app = test_app();
 
-        // Dim fill pointing +Z, bright sun pointing +X. Brightness, not order, decides.
-        app.world_mut().spawn((
-            GlobalTransform::IDENTITY,
-            DirectionalLight {
-                illuminance: 10.0,
-                ..Default::default()
-            },
-        ));
+        // Single sun pointing +X.
         app.world_mut().spawn((
             GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_y(
                 std::f32::consts::FRAC_PI_2,
@@ -433,7 +425,7 @@ mod tests {
         };
         assert!(
             v[0] > 0.99,
-            "expected the BRIGHT light's +X direction, got {v:?}"
+            "expected the sun's +X direction, got {v:?}"
         );
     }
 

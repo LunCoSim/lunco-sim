@@ -256,12 +256,22 @@ pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String
     let leaf = serde_json::json!({ "kind": "drive_to", "target": prim_path });
 
     let mut root = match xml {
-        // No mission yet → the patrol shell.
+        // No mission yet → one-way sequence (stops at last waypoint).
         None => serde_json::json!({
-            "kind": "forever",
-            "child": { "kind": "sequence", "children": [] }
+            "kind": "sequence",
+            "children": []
         }),
-        Some(text) => crate::btcpp_xml::xml_to_value(text)?,
+        Some(text) => {
+            let mut val = crate::btcpp_xml::xml_to_value(text)?;
+            // If authored as a `forever{sequence[...]}`, unwrap `forever` to plain `sequence[...]`
+            // so routes are one-way by default and stop at the final waypoint.
+            if val.get("kind").and_then(|k| k.as_str()) == Some("forever") {
+                if let Some(child) = val.get_mut("child").map(|c| c.take()) {
+                    val = child;
+                }
+            }
+            val
+        }
     };
 
     let legs = legs_mut(&mut root)?;
@@ -420,7 +430,7 @@ fn strip_reached_legs(v: &mut Value, reached: &std::collections::HashSet<String>
                     child
                         .get("target")
                         .and_then(|t| t.as_str())
-                        .map(|t| !reached.contains(t))
+                        .map(|t| !reached.iter().any(|r| r == t || r.ends_with(t) || t.ends_with(r)))
                         .unwrap_or(true)
                 });
             }
@@ -1029,6 +1039,60 @@ mod editor_tests {
             targets_of(&crate::btcpp_xml::value_to_xml(&v).unwrap()),
             vec!["1;0;1", "2;0;2"]
         );
+    }
+
+    /// The editor authors a route as `forever(sequence[drive_to…])`. On a tree
+    /// rebuild (adding/deleting a waypoint), `compile_behavior_xml` strips every
+    /// leg already in `ReachedWaypoints` so the rebuilt cursor RESUMES where the
+    /// rover actually is, instead of snapping back to the first leg. This is the
+    /// regression for the "add a point → rover U-turns to waypoint 1" symptom.
+    #[test]
+    fn strip_reached_legs_skips_passed_waypoints_on_rebuild() {
+        // forever(sequence[drive_to W0, drive_to W1, drive_to W2])
+        let mut v = serde_json::json!({
+            "kind": "forever",
+            "child": { "kind": "sequence", "children": [
+                { "kind": "drive_to", "target": "/Scene/Route/W0" },
+                { "kind": "drive_to", "target": "/Scene/Route/W1" },
+                { "kind": "drive_to", "target": "/Scene/Route/W2" },
+            ]}
+        });
+        // W0 (and W1) have been reached; only W2 should survive the strip.
+        let mut reached = std::collections::HashSet::new();
+        reached.insert("/Scene/Route/W0".to_string());
+        reached.insert("/Scene/Route/W1".to_string());
+
+        strip_reached_legs(&mut v, &reached);
+
+        let legs: Vec<&str> = v["child"]["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["target"].as_str().unwrap())
+            .collect();
+        assert_eq!(legs, vec!["/Scene/Route/W2"], "reached legs W0/W1 stripped, W2 survives");
+    }
+
+    /// Negative half of the contract: with NO legs reached (arrival has not yet
+    /// fired), the route is untouched — the rover drives the full list. Guards
+    /// against an over-eager strip that would skip the very first waypoint.
+    #[test]
+    fn strip_reached_legs_keeps_full_route_when_none_reached() {
+        let mut v = serde_json::json!({
+            "kind": "forever",
+            "child": { "kind": "sequence", "children": [
+                { "kind": "drive_to", "target": "/Scene/Route/W0" },
+                { "kind": "drive_to", "target": "/Scene/Route/W1" },
+            ]}
+        });
+        strip_reached_legs(&mut v, &std::collections::HashSet::new());
+        let legs: Vec<&str> = v["child"]["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["target"].as_str().unwrap())
+            .collect();
+        assert_eq!(legs, vec!["/Scene/Route/W0", "/Scene/Route/W1"]);
     }
 
     #[test]

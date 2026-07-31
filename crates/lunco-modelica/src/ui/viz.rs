@@ -99,19 +99,23 @@ pub fn drop_entity_bindings(registry: &mut VisualizationRegistry, entity: Entity
 /// Called from the worker's compile-result handler. Bindings already
 /// present (from a prior compile) are not duplicated.
 pub fn auto_bind_observables(
-    registry: &mut VisualizationRegistry,
-    entity: Entity,
-    detected: &[(String, f64)],
-    skip_names: impl Fn(&str) -> bool,
+    _registry: &mut VisualizationRegistry,
+    _entity: Entity,
+    _detected: &[(String, f64)],
+    _skip_names: impl Fn(&str) -> bool,
 ) {
-    let cfg = ensure_default_modelica_graph(registry);
-    for (name, _) in detected {
-        if name.ends_with("_in") || skip_names(name) {
-            continue;
-        }
-        let sig = SignalRef::new(entity, name.clone());
-        if !cfg.inputs.iter().any(|b| b.source == sig) {
-            cfg.inputs.push(SignalBinding::live(sig, "y"));
-        }
-    }
+    // Auto-binding all observables on compile was removed: the graph was
+    // populated with every telemetry signal on startup, making it unreadable.
+    // Users now pick individual variables via the Telemetry panel checkboxes.
+    //
+    // let cfg = ensure_default_modelica_graph(registry);
+    // for (name, _) in detected {
+    //     if name.ends_with("_in") || skip_names(name) {
+    //         continue;
+    //     }
+    //     let sig = SignalRef::new(entity, name.clone());
+    //     if !cfg.inputs.iter().any(|b| b.source == sig) {
+    //         cfg.inputs.push(SignalBinding::live(sig, "y"));
+    //     }
+    // }
 }

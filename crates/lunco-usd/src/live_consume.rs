@@ -61,12 +61,7 @@ fn is_program_scope(path: &str) -> bool {
 /// OpenUSD may include the referenced vessel's resync path in that notice;
 /// passing it into the generic structural bridge makes an XML-only edit look
 /// like a vehicle refresh.
-fn is_program_source_notice(paths: &[openusd::sdf::Path]) -> bool {
-    paths.iter().any(|path| {
-        let path = path.to_string();
-        path.ends_with("/Mission.info:sourceCode") || path.ends_with("/Mission.info:sourceAsset")
-    })
-}
+
 
 /// Projection bridge (Step 1): drain every live [`CanonicalStage`]'s change-sink
 /// inbox and reconcile the ECS scene off the **live composed stage** — the read
@@ -103,17 +98,22 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
-            if is_program_source_notice(&c.info_only) {
-                continue;
-            }
-            resynced.extend(c.resynced.iter().map(|p| p.to_string()));
-            // Keep BOTH forms the USD sink reports: the prim path lets the
-            // transform/light consumers read the changed value back from its
-            // owner, while the property path names *which* attribute changed.
-            // The latter is essential for `info:sourceCode`: losing it forced
-            // the waypoint editor to mutate `BehaviorXml` directly on the rover
-            // instead of consuming the authored USD edit.
-            info_only.extend(c.info_only.iter().map(|p| p.to_string()));
+            resynced.extend(
+                c.resynced
+                    .iter()
+                    .filter(|p| !is_program_scope(&p.to_string()))
+                    .map(|p| p.to_string()),
+            );
+            info_only.extend(
+                c.info_only
+                    .iter()
+                    .filter(|p| {
+                        let s = p.to_string();
+                        !s.ends_with("/Mission.info:sourceCode")
+                            && !s.ends_with("/Mission.info:sourceAsset")
+                    })
+                    .map(|p| p.to_string()),
+            );
         }
         resynced.sort();
         resynced.dedup();
