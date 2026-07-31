@@ -31,9 +31,13 @@
 // metres). One metre sits far clear of both.
 const HOLD_TOL_M = 1.0;
 
-// The control's waypoint, 12 m along +X from where `Routed` starts. Far enough
+// The control's waypoint, 12 m along −Z from where `Routed` starts. Far enough
 // that arriving cannot be confused with drift, close enough to reach in the
-// drive window.
+// drive window. −Z is the rover's own forward at an identity spawn — "ahead" —
+// so the leg is a straight chase and the assertion tests the DRIVE path, which
+// is what the control exists to prove. (An off-heading leg would test the skid
+// yaw authority instead, which is a different property — and with the regolith
+// cornering fit it turns too slowly to reach any lateral waypoint in the window.)
 const LEG_M = 12.0;
 
 /// Distance between two samples, or `()` if either is missing. NOT `seg` from
@@ -50,6 +54,16 @@ fn on_start(me) {
     this.drive_s = 20.0;    // long enough for the control to cover 12 m
     this.phase = "settle";
     this.engaged = false;
+
+    // Both rovers carry the Comms/EarthTracker, whose `earth_mount_*` wires
+    // never land in this scene — it has no celestial content, so no Earth
+    // direction exists to publish and the antenna holds its authored pose (by
+    // design, `lunco-environment/src/earth.rs`). Declare them as expected
+    // faults so the never-landed gate doesn't mask the verdict. See
+    // `expect_fault` in auto_tests.rhai.
+    expect_fault("earth_mount_x");
+    expect_fault("earth_mount_y");
+    expect_fault("earth_mount_z");
 
     this.idle = find_or_none("/AutopilotHoldTest/Idle");
     this.routed = find_or_none("/AutopilotHoldTest/Routed");
@@ -92,8 +106,8 @@ fn on_tick(me) {
 
             // THE CONTROL: same verb, one waypoint. Authored relative to where
             // the rover actually settled, so the leg is 12 m whatever the drop
-            // did.
-            let wp = [this.routed_p0[0] + LEG_M, this.routed_p0[1], this.routed_p0[2]];
+            // did — 12 m along the rover's own heading (−Z).
+            let wp = [this.routed_p0[0], this.routed_p0[1], this.routed_p0[2] - LEG_M];
             engage_patrol(this.routed, [wp]);
 
             this.engaged = true;

@@ -210,6 +210,11 @@ fn on_tick(me) {
             line += "  " + this.names[i] + " d=" + r2(this.distance[i]);
             line += " tilt=" + r2(this.max_tilt[i]);
             line += " st=" + this.passed[i] + "/" + this.lane_stations[i].len();
+            line += " ports t=" + r2(get(this.rovers[i], "throttle")) +
+                " s=" + r2(get(this.rovers[i], "steer")) +
+                " b=" + r2(get(this.rovers[i], "brake")) +
+                " dl=" + r2(get(this.rovers[i], "drive_left")) +
+                " dr=" + r2(get(this.rovers[i], "drive_right"));
         }
         print(line);
         this.next_sample = this.t + 2.0;

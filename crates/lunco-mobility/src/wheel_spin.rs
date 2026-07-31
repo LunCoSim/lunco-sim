@@ -47,6 +47,28 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 ///
 /// The integrated angle is composed with the steer yaw to drive the mesh:
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
+#[cfg(feature = "drive-diag")]
+macro_rules! wheel_diag {
+    ($($arg:tt)*) => { bevy::log::info!($($arg)*) };
+}
+#[cfg(not(feature = "drive-diag"))]
+macro_rules! wheel_diag {
+    ($($arg:tt)*) => {};
+}
+
+/// Run `$body` only when the `drive-diag` feature is on (local twin of the
+/// crate-root block macro, which is not path-visible from this module).
+#[cfg(feature = "drive-diag")]
+macro_rules! wheel_diag_block {
+    ($body:block) => {
+        $body
+    };
+}
+#[cfg(not(feature = "drive-diag"))]
+macro_rules! wheel_diag_block {
+    ($body:block) => {};
+}
+
 pub(crate) fn update_wheel_spin(
     mut q_wheels: Query<(
         Entity,
@@ -296,6 +318,21 @@ pub(crate) fn update_wheel_spin(
 
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
+
+        wheel_diag_block!({
+            if let Ok(dbgport) = q_ports.get(wheel.drive_port) {
+                if dbgport.value.abs() > f64::EPSILON {
+                    let (vlin, vang) = q_chassis
+                        .get(parent.parent())
+                        .map(|(l, a, _, _, _, _, _)| (l.0, a.0))
+                        .unwrap_or((DVec3::ZERO, DVec3::ZERO));
+                    wheel_diag!(
+                        "[drive-diag] update_wheel_spin: wheel={:?} port={} w={:.3} tau={:.1} f_long={:.1} muN={:.1} chassis_v=({:.3},{:.3},{:.3}) yaw_rate={:.4}",
+                        entity, dbgport.value, w, tau_drive, f_long, mu_n, vlin.x, vlin.y, vlin.z, vang.y
+                    );
+                }
+            }
+        });
 
         // ── THE SAME READBACK THE JOINTED WHEEL PUBLISHES ─────────────────────
         // `lunco_hardware::MotorReadback` on the wheel entity: delivered axle

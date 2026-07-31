@@ -5,9 +5,11 @@
     metersPerUnit = 1
 )
 
-# A BALD regolith tire — the cleats are gone. μ=0.4 ⇒ a slip limit of atan(0.4) = 21.8°,
-# which clears the gentlest surveyed line into the crater (20.3° SSW) by about 1.5° and
-# nothing else. Every metre is a traction decision. That is the point.
+# A BALD regolith tire — the cleats are gone. μ=0.8 ⇒ a slip limit of atan(0.8) = 38.7°,
+# which clears the steepest SECTOR of the surveyed site (31.1° N) with margin; only the
+# single steepest line (39.9° NNW) is close. Grip is therefore NOT what punishes this
+# tier — its weak motor (68 N·m at the axle, ~1.5× its cone) is. Every metre is still a
+# traction decision: at that torque, any wheel that goes light stays light. That is the point.
 #
 # A `regolith` tire with almost no bite and nothing else changed — see `cleated.usda`
 # for why this file is three lines long.

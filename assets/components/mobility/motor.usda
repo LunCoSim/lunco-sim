@@ -100,19 +100,23 @@ def Xform "Motor" (
     # through the 200:1 harmonic drive at 0.85 efficiency.
     #
     # THIS CATALOGUE FIGURE IS A FLOOR, NOT THE FLEET'S TORQUE. Every shipped rocker-bogie
-    # tier overrides it (`variants/rover_*.usda`: awful 2.22, medium 3.84, easy 5.28), so
+    # tier overrides it (`variants/rover_*.usda`: awful 0.4, medium 0.5, easy 0.9), so
     # the difficulty ladder — not this number — sets what a vehicle actually pulls.
     #
-    # ⚠ THE AXLE TORQUE IS WELL ABOVE THE TRACTION LIMIT. For the six-wheel rocker-bogie
+    # ⚠ THE BOGIE HINGE IS THE TORQUE CEILING. For the six-wheel rocker-bogie
     # (532 kg authored: 300 chassis + 2×50 rockers + 2×30 bogies + 6×12 wheels):
     #
-    #   τ_traction = μ·N·r = 0.8 × (532 × 1.62 / 6) × 0.4 m ≈ 46 N·m per wheel
+    #   τ_traction = μ·N·r = 0.8 × (532 × 1.62 / 6) × 0.4 m ≈ 46 N·m per wheel (bald)
     #
-    # against 255 N·m here and 653 N·m on `rover_medium`. That ratio does NOT produce
-    # permanent wheelspin, because the drive is a VELOCITY SERVO — torque authority above
-    # what traction can use is only ever spent reaching the commanded speed, not exceeding
-    # it. It does mean acceleration transients are traction-limited rather than
-    # torque-limited, which is realistic. Size any NEW motor against the 46 N·m figure.
+    # A tier's axle torque is sized to ~1.5× ITS OWN cone (bald 46 → 68 N·m, worn 57 →
+    # 85, cleated 103 → 153). Above ~2× the motor reaction on the FREE bogie hinge —
+    # two motors per bogie, reacting directly into it at launch — slams the bogie
+    # into its ±20° stop and lifts the middle wheels (`scenes/tests/wheelie_check.usda`
+    # is the gate). Below ~1× the cone the rover cannot use its own grip. The drive is
+    # a VELOCITY SERVO, so torque authority above what traction can use is only ever
+    # spent reaching the commanded speed, not exceeding it; but the REACTION into the
+    # suspension is the commanded torque, so the hinge, not the tyre, decides the
+    # ceiling. Size any NEW motor against both figures.
     #
     # SPEED IS THE PAIR (WINDING, RATIO), AND ONLY THE PAIR. What the vehicle feels is
     # `noLoadSpeed / ratio` = 24 rad/s at the axle and `stallTorque · ratio · efficiency`
@@ -162,9 +166,10 @@ def Xform "Motor" (
     # motor, sets what a rover can push — so this costs no acceleration it could
     # actually deliver; it only stops paying for the difference in visible slip.
     #
-    # The `variants/rover_*.usda` tiers override this UP (2.22 … 5.28) on purpose:
-    # a deliberately over-torqued rover on a poor tyre IS the difficulty exercise.
-    # Untouched here.
+    # The `variants/rover_*.usda` tiers override this DOWN (0.4 … 0.9) on purpose:
+    # each tier is sized to ~1.5× its own traction cone, so the ladder is a torque
+    # ladder (easy 153 › medium 85 › awful 68 N·m at the axle) rather than an
+    # over-torqued wall. Untouched here.
     float lunco:motor:stallTorque = 1.0
     # FLEET SPEED — A PACING OVERRIDE, KEPT INSIDE WHAT THE TYRE CAN DELIVER.
     #

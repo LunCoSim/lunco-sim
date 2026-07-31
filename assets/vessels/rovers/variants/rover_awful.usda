@@ -20,12 +20,14 @@ def Xform "RoverAwful" (
 {
     uniform bool lunco:spawnable = true
 
-    # Handling, per wheel. `bald` tires: μ=0.40 ⇒ slip limit 21.8°, against a SURVEYED
-    # site (real Apollo 15 crater) whose ways in run 19.8° on the ДЗЗ route / 25.5°
-    # naive / 31.1° up the steepest sector (N). ONLY the ДЗЗ route is climbable, with
-    # ~2.0° of margin, and the naive line FAILS by 3.7°: this tier gets in and out
-    # solely by flying the route exactly, which is §3.2's "на грани проходимости"
-    # made literal. Weak motors to match.
+    # Handling, per wheel. `bald` tires: μ=0.8 ⇒ slip limit atan(0.8)=38.7°, against a
+    # SURVEYED site (real Apollo 15 crater) whose ways in run 19.8° on the ДЗЗ route /
+    # 25.5° naive / 31.1° up the steepest sector (N) / 39.9° on the NNW wall — so even
+    # this tier clears every surveyed route; the one genuinely steep line (NNW) is the
+    # only place grip starts to matter. Weak motors are what this tier actually punishes:
+    # 68 N·m at the axle (0.4 N·m shaft stall) is ~1.5× its traction cone
+    # (μ·N·r = 0.8·143.6·0.4 ≈ 46 N·m; N = 532 kg·g_moon/6) — enough for the grades,
+    # but the launch is slow and a wheel that loses grip stays lost.
     # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
     # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
     # and rear wheels off the bogie, so each tier's opinions are nested one level
@@ -34,21 +36,21 @@ def Xform "RoverAwful" (
     over "RockerL"
     {
         over "Wheel_FL" (variants = { string tire = "bald" }) { }
-        over "Motor_FL" { float lunco:motor:stallTorque = 2.22 }
+        over "Motor_FL" { float lunco:motor:stallTorque = 0.4 }
         over "Gearbox_FL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "RockerR"
     {
         over "Wheel_FR" (variants = { string tire = "bald" }) { }
-        over "Motor_FR" { float lunco:motor:stallTorque = 2.22 }
+        over "Motor_FR" { float lunco:motor:stallTorque = 0.4 }
         over "Gearbox_FR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "BogieL"
     {
         over "Wheel_ML" (variants = { string tire = "bald" }) { }
         over "Wheel_RL" (variants = { string tire = "bald" }) { }
-        over "Motor_ML" { float lunco:motor:stallTorque = 2.22 }
-        over "Motor_RL" { float lunco:motor:stallTorque = 2.22 }
+        over "Motor_ML" { float lunco:motor:stallTorque = 0.4 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 0.4 }
         over "Gearbox_ML" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
@@ -56,17 +58,17 @@ def Xform "RoverAwful" (
     {
         over "Wheel_MR" (variants = { string tire = "bald" }) { }
         over "Wheel_RR" (variants = { string tire = "bald" }) { }
-        over "Motor_MR" { float lunco:motor:stallTorque = 2.22 }
-        over "Motor_RR" { float lunco:motor:stallTorque = 2.22 }
+        over "Motor_MR" { float lunco:motor:stallTorque = 0.4 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 0.4 }
         over "Gearbox_MR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
 
     # TORQUE COMES FROM THE MOTOR — the bottom rung, and the one that makes this
-    # rover feel gutless on a grade. Was `physxVehicleEngine:peakTorque = 380` on
-    # each wheel; the axle torque is now derived as stallTorque · ratio ·
-    # efficiency = stallTorque · 200 · 0.85, so 0.37 N·m of shaft stall torque
-    # lands 377 N·m at the axle. Ladder preserved: easy 898 › medium 653 › awful 377.
+    # rover feel gutless on a grade. The axle torque is derived as stallTorque ·
+    # ratio · efficiency = stallTorque · 200 · 0.85, so 0.4 N·m of shaft stall
+    # torque lands 68 N·m at the axle. Ladder preserved: easy 153 › medium 85 ›
+    # awful 68.
 
     # Rated above the motor for the same reason as the other two tiers: the shipped
     # 400 N·m shaft rating must never be what decides a tier. This rung sits under

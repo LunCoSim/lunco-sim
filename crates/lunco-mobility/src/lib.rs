@@ -845,6 +845,26 @@ fn apply_wheel_drive(
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
                     // see `update_wheel_spin`. Applying it is all that is left.
                     forces.apply_force_at_point(wheel.tire_force, hub_pos_world.0);
+                    drive_diag_block!({
+                        if wheel.tire_force.length() > 1.0 {
+                            let arm = hub_pos_world.0 - forces.position().0;
+                            let moment = arm.cross(wheel.tire_force);
+                            info!(
+                                "[drive-diag] apply_wheel_drive: chassis {:?} tire_force=({:.1},{:.1},{:.1}) at=({:.2},{:.2},{:.2}) body_pos=({:.2},{:.2},{:.2}) computed_moment_y={:.1}",
+                                parent_entity,
+                                wheel.tire_force.x,
+                                wheel.tire_force.y,
+                                wheel.tire_force.z,
+                                hub_pos_world.0.x,
+                                hub_pos_world.0.y,
+                                hub_pos_world.0.z,
+                                forces.position().0.x,
+                                forces.position().0.y,
+                                forces.position().0.z,
+                                moment.y
+                            );
+                        }
+                    });
                 }
             }
         }

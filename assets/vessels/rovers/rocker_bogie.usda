@@ -80,10 +80,11 @@ def Xform "RockerBogie" (
     # Read the `Differential` prim and `RockerL` before moving any of these.
     # The wheels are the one free mass: they hang off the arms as their own bodies.
     #
-    # ⚠ Mass is NOT what sets the difficulty ladder. The tiers are traction-limited
-    # (slope limit → atan(μ), mass-free) and nowhere near the ~15 kN of axle thrust
-    # the powertrain can put down, so the μ margins in `variants/rover_*.usda`
-    # survive a mass edit. Do not "rebalance" them against this number.
+    # ⚠ Mass is NOT what sets the difficulty ladder. The tiers are torque-limited
+    # (axle torque → ~1.5× the traction cone, mass-free in ratio), and the largest
+    # tier pulls only ~2.3 kN of axle thrust, so the torque margins in
+    # `variants/rover_*.usda` survive a mass edit. Do not "rebalance" them against
+    # this number.
     float physics:mass = 300.0
     float lunco:spawnLift = 1.5
 
@@ -512,9 +513,10 @@ def Xform "RockerBogie" (
             # 2.0 km/h, which is authentic and unusable: it turned the school's
             # 2.7 km round trip into a multi-hour wait.
             #
-            # SPEED ONLY. `stallTorque` is untouched, so axle torque
-            # (stallTorque · 200 · 0.85) and with it the whole difficulty ladder in
-            # `variants/rover_*.usda` is exactly what it was.
+            # SPEED ONLY. `stallTorque` is untouched here — the axle torque
+            # (stallTorque · 200 · 0.85) is set per tier in `variants/rover_*.usda`,
+            # and it is the torque ladder (153 › 85 › 68 N·m) that now carries the
+            # difficulty, sized against each tier's traction cone.
             float lunco:motor:noLoadSpeed = 2400.0
         }
 

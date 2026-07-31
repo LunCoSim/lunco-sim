@@ -751,6 +751,14 @@ fn new_spec_is_append_only(old: &BehaviorSpec, new: &BehaviorSpec) -> bool {
 /// the rover. The move gate is deliberately coarse (`Changed<GlobalTransform>` over
 /// all entities) but cheap: it only costs a rebuild for vessels that actually carry a
 /// tree, and a moving *vessel* re-baking its own static targets is idempotent.
+///
+/// The derived spec is compared against the LAST DERIVED spec (per-vessel memory in
+/// `last_derived`), NOT the spec currently installed on the vessel. The installed
+/// spec may have been set by a runtime command (`EngageAutopilot`/`SetAutopilotBehavior`
+/// with `spec_json`, e.g. a scenario's `engage_patrol`) — that is live route data the
+/// XML system must not clobber. Only when the XML route itself changes (XML edited,
+/// waypoint prims added/removed/moved, reached legs stripped) does the derived spec
+/// differ from its previous derivation and take over the vessel again.
 pub fn compile_behavior_xml(
     q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>)>,
     q_autopilots: Query<(Entity, &Autopilot, Has<AutopilotBehavior>, Option<&AutopilotBehavior>)>,
@@ -768,6 +776,7 @@ pub fn compile_behavior_xml(
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    mut last_derived: Local<bevy::ecs::entity::EntityHashMap<BehaviorSpec>>,
     mut commands: Commands,
 ) {
     if q_vessels.is_empty() || moved.is_empty() {
@@ -826,16 +835,21 @@ pub fn compile_behavior_xml(
             }
         };
 
-        // Only touch anything when the DERIVED spec actually differs from the one
-        // already on the vessel. This system is gated on `Changed<GlobalTransform>`
-        // over ALL entities, so it re-runs every frame the rover moves; rebuilding
-        // the tree unconditionally would hand the actor a FRESH `AutopilotBehavior`
-        // each tick and reset all behaviour state with it — the sequence would snap
-        // back to leg 0 and, worse, every `WaitNode` timer would restart from zero, so
-        // a waypoint `dwell` could never elapse. Re-baking is idempotent for a static
-        // route, so an unchanged spec means there is nothing to do.
-        let spec_changed = q_spec.get(vessel).map(|cur| cur.0 != spec).unwrap_or(true);
-        if spec_changed {
+        // Only touch anything when the DERIVED spec actually differs from the last
+        // one THIS system derived for the vessel (see the doc comment above — the
+        // installed spec is not the reference, a runtime command may own it). This
+        // system is gated on `Changed<GlobalTransform>` over ALL entities, so it
+        // re-runs every frame the rover moves; rebuilding the tree unconditionally
+        // would hand the actor a FRESH `AutopilotBehavior` each tick and reset all
+        // behaviour state with it — the sequence would snap back to leg 0 and,
+        // worse, every `WaitNode` timer would restart from zero, so a waypoint
+        // `dwell` could never elapse. Re-baking is idempotent for a static route,
+        // so an unchanged derivation means there is nothing to do.
+        let derived_changed = last_derived
+            .get(&vessel)
+            .is_none_or(|prev| prev != &spec);
+        if derived_changed {
+            last_derived.insert(vessel, spec.clone());
             // The spec on the vessel is DERIVED — a projection of the XML + the prims.
             commands
                 .entity(vessel)
@@ -855,7 +869,7 @@ pub fn compile_behavior_xml(
             // old tree was executing: the rover continues its current leg, then the
             // appended legs run in order.
             let is_append_only = has_tree
-                && spec_changed
+                && derived_changed
                 && q_spec
                     .get(vessel)
                     .map(|cur| new_spec_is_append_only(&cur.0, &spec))
@@ -869,13 +883,17 @@ pub fn compile_behavior_xml(
                     "[autopilot/usd] route extended with new waypoint(s); tree resumed at \
                      leg {cursor:?} instead of U-turning"
                 );
-            } else if spec_changed || !has_tree {
+            } else if derived_changed || !has_tree {
                 commands
                     .entity(actor)
                     .try_insert(AutopilotBehavior::new(&spec));
             }
         }
     }
+    // Scene teardown: vessels despawn; drop their last-derived entries so a
+    // reloaded scene (stable entity ids across reloads) re-derives fresh instead
+    // of inheriting the previous scene's route memory.
+    last_derived.retain(|vessel, _| q_vessels.iter().any(|(e, _, _)| e == *vessel));
 }
 
 #[cfg(test)]

@@ -19,9 +19,9 @@
 # 2026-07-17) the site's ways in measure 19.8° (ДЗЗ route, worst leg — the descent
 # on the 199°/SSW radial) / 25.5° (naive straight line) / 31.1° (N, the steepest
 # SECTOR) / 39.9° (336°/NNW, the steepest individual line):
-#   easy   μ=1.3 → 52.4°  drives every line, including the NNW wall  (this file)
-#   medium μ=0.5 → 26.6°  ДЗЗ route + naive (by 1.1°); NOTHING at 28°+
-#   awful  μ=0.4 → 21.8°  ONLY the ДЗЗ route, ~2.0° of margin
+#   easy   μ=1.8 → 61.0°  drives every line, including the NNW wall  (this file)
+#   medium μ=1.0 → 45.0°  clears the steepest SECTOR (31.1° N) with margin
+#   awful  μ=0.8 → 38.7°  still clears the steepest line (39.9° is close — watch it)
 # Re-survey the site ⇒ re-check these three numbers, or the ladder is decorative.
 #
 # The steep side is N/NNW, NOT WSW. WSW (237°) is 22.2° — one of the EASIER ways
@@ -42,10 +42,16 @@ def Xform "RoverEasy" (
     uniform bool lunco:spawnable = true
 
     # Grip comes from the TIRE — μ is a property of rubber, so the tier fits
-    # `cleated` tires (μ=1.3 ⇒ slip limit 52.4°, well past the SURVEYED site's
-    # steepest line at 39.9° NNW, so this tier drives ANY line into the crater and
-    # back — the terrain never punishes you, so you learn the route before the route
-    # matters).
+    # `cleated` tires (μ=1.8 ⇒ slip limit atan(1.8)=61.0°, well past the SURVEYED
+    # site's steepest line at 39.9° NNW, so this tier drives ANY line into the
+    # crater and back — the terrain never punishes you, so you learn the route
+    # before the route matters).
+    # ⚠ Motor torque is sized AGAINST the tire: the wheelie_check gate (bogie
+    # < 10° on flat ground under full throttle) bounds stall torque to ~1.5× the
+    # traction cone — τ_cone = μ·N·r per wheel (N = 532 kg·g_moon/6 ≈ 143.6 N,
+    # r = 0.4 m ⇒ easy cone 103 N·m). Above ~2× the motor reaction on the free
+    # bogie hinge slams it into its ±20° stop and lifts the middle wheels. This
+    # tier: 153 N·m at the axle ⇒ 0.9 N·m shaft stall.
     # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
     # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
     # and rear wheels off the bogie, so each tier's opinions are nested one level
@@ -54,21 +60,21 @@ def Xform "RoverEasy" (
     over "RockerL"
     {
         over "Wheel_FL" (variants = { string tire = "cleated" }) { }
-        over "Motor_FL" { float lunco:motor:stallTorque = 5.28 }
+        over "Motor_FL" { float lunco:motor:stallTorque = 0.9 }
         over "Gearbox_FL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "RockerR"
     {
         over "Wheel_FR" (variants = { string tire = "cleated" }) { }
-        over "Motor_FR" { float lunco:motor:stallTorque = 5.28 }
+        over "Motor_FR" { float lunco:motor:stallTorque = 0.9 }
         over "Gearbox_FR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "BogieL"
     {
         over "Wheel_ML" (variants = { string tire = "cleated" }) { }
         over "Wheel_RL" (variants = { string tire = "cleated" }) { }
-        over "Motor_ML" { float lunco:motor:stallTorque = 5.28 }
-        over "Motor_RL" { float lunco:motor:stallTorque = 5.28 }
+        over "Motor_ML" { float lunco:motor:stallTorque = 0.9 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 0.9 }
         over "Gearbox_ML" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
@@ -76,20 +82,19 @@ def Xform "RoverEasy" (
     {
         over "Wheel_MR" (variants = { string tire = "cleated" }) { }
         over "Wheel_RR" (variants = { string tire = "cleated" }) { }
-        over "Motor_MR" { float lunco:motor:stallTorque = 5.28 }
-        over "Motor_RR" { float lunco:motor:stallTorque = 5.28 }
+        over "Motor_MR" { float lunco:motor:stallTorque = 0.9 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 0.9 }
         over "Gearbox_MR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
 
-    # TORQUE COMES FROM THE MOTOR. It used to be `physxVehicleEngine:peakTorque =
-    # 900` on each wheel — a vehicle-level PhysX attribute on a part, and a number
-    # that named the AXLE torque directly. The axle torque is now derived:
+    # TORQUE COMES FROM THE MOTOR. The axle torque is derived:
     #   τ_axle = stallTorque · ratio · efficiency = stallTorque · 200 · 0.85
-    # so this tier's 900 N·m becomes a 0.88 N·m shaft stall torque (0.88 · 1020 =
-    # 898 N·m at the axle — the same rover, expressed where the quantity lives). The
-    # tier is a per-instance attribute override on a real part, which is also how a
-    # single weak or overheating wheel would be expressed.
+    # This tier is sized to ~1.5× its traction cone (see the note above): 0.9 N·m
+    # of shaft stall torque lands 153 N·m at the axle — plenty to climb, not
+    # enough to slam the bogie. The tier is a per-instance attribute override on a
+    # real part, which is also how a single weak or overheating wheel would be
+    # expressed.
 
     # The shipped reduction rates its output shaft at 400 N·m, which would CLAMP
     # this tier (and medium) and flatten the ladder into "everything hits 400". A

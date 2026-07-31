@@ -21,16 +21,19 @@ def Xform "RoverMedium" (
 {
     uniform bool lunco:spawnable = true
 
-    # Handling, per wheel. `worn` tires: μ=0.50 ⇒ slip limit 26.6°. Tuned against the
-    # SURVEYED site (summer_space_school, real Apollo 15 crater), whose ways in run
-    # 19.8° on the ДЗЗ route, 25.5° on the naive straight line, and 31.1° up the
-    # steepest SECTOR (N) — so this rover holds the route comfortably, clears the naive
-    # line by just 1.1°, and CANNOT climb the steep side at all. The bearing you pick
-    # decides the run, which is the whole §3.2 exercise.
+    # Handling, per wheel. `worn` tires: μ=1.0 ⇒ slip limit atan(1.0)=45.0°. Tuned
+    # against the SURVEYED site (summer_space_school, real Apollo 15 crater), whose
+    # ways in run 19.8° on the ДЗЗ route, 25.5° on the naive straight line, and
+    # 31.1° up the steepest SECTOR (N) — so this rover holds every route with
+    # margin; the bearing you pick stops deciding survival (see the 2026-07-31
+    # brief: tiers differ by Energy/Heat/Data budgets, not slope).
     #
-    # That 1.1° margin is the design. Widen μ and the naive line stops being a gamble;
-    # narrow it and the tier collapses onto `awful`. See `worn.usda` — μ is authored on
-    # the TIRE, and rover_medium is its only consumer.
+    # Motor torque is sized against the tire: τ_cone = μ·N·r per wheel
+    # (N = 532 kg·g_moon/6 ≈ 143.6 N, r = 0.4 m ⇒ medium cone 57 N·m). This tier
+    # runs 1.5× the cone: 85 N·m at the axle ⇒ 0.5 N·m shaft stall. Above ~2× the
+    # motor reaction on the free bogie hinge slams it into its ±20° stop and lifts
+    # the middle wheels (wheelie_check gate: bogie < 10° on flat ground, full
+    # throttle).
     # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
     # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
     # and rear wheels off the bogie, so each tier's opinions are nested one level
@@ -38,9 +41,9 @@ def Xform "RoverMedium" (
     # ladder — the arm they hang from is what changed.
     #
     # TORQUE COMES FROM THE MOTOR. The axle torque is derived as
-    # stallTorque · ratio · efficiency = stallTorque · 200 · 0.85, so 0.64 N·m of
-    # shaft stall torque lands 653 N·m at the axle. The ladder is easy 898 ›
-    # medium 653 › awful 377, expressed on the part that actually makes the torque.
+    # stallTorque · ratio · efficiency = stallTorque · 200 · 0.85, so 0.5 N·m of
+    # shaft stall torque lands 85 N·m at the axle. The ladder is easy 153 ›
+    # medium 85 › awful 68, expressed on the part that actually makes the torque.
     #
     # The gearbox ships rated at 400 N·m, which would clamp this tier down onto
     # `awful` and flatten the ladder. Rated above the motor so the motor stays the
@@ -48,21 +51,21 @@ def Xform "RoverMedium" (
     over "RockerL"
     {
         over "Wheel_FL" (variants = { string tire = "worn" }) { }
-        over "Motor_FL" { float lunco:motor:stallTorque = 3.84 }
+        over "Motor_FL" { float lunco:motor:stallTorque = 0.5 }
         over "Gearbox_FL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "RockerR"
     {
         over "Wheel_FR" (variants = { string tire = "worn" }) { }
-        over "Motor_FR" { float lunco:motor:stallTorque = 3.84 }
+        over "Motor_FR" { float lunco:motor:stallTorque = 0.5 }
         over "Gearbox_FR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
     over "BogieL"
     {
         over "Wheel_ML" (variants = { string tire = "worn" }) { }
         over "Wheel_RL" (variants = { string tire = "worn" }) { }
-        over "Motor_ML" { float lunco:motor:stallTorque = 3.84 }
-        over "Motor_RL" { float lunco:motor:stallTorque = 3.84 }
+        over "Motor_ML" { float lunco:motor:stallTorque = 0.5 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 0.5 }
         over "Gearbox_ML" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
@@ -70,8 +73,8 @@ def Xform "RoverMedium" (
     {
         over "Wheel_MR" (variants = { string tire = "worn" }) { }
         over "Wheel_RR" (variants = { string tire = "worn" }) { }
-        over "Motor_MR" { float lunco:motor:stallTorque = 3.84 }
-        over "Motor_RR" { float lunco:motor:stallTorque = 3.84 }
+        over "Motor_MR" { float lunco:motor:stallTorque = 0.5 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 0.5 }
         over "Gearbox_MR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
         over "Gearbox_RR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
     }
