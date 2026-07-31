@@ -96,6 +96,7 @@ struct NodeBeams {
     stub_cam_frac: f32,
     mode: f64,
     show_down: bool,
+    earth_only: bool,
 }
 
 /// How long a beam to this peer should be.
@@ -227,10 +228,10 @@ fn beam_transform(dir_local: Vec3, len: f32, half_width: f32) -> Transform {
 
 /// Walk up from a beam template to the nearest ancestor that carries a `LinkState` — the
 /// link node. Nesting-agnostic, so the part can sit under any wrapper.
-fn node_of(
+fn node_of<F: bevy::ecs::query::QueryData>(
     start: Entity,
     q_parents: &Query<&ChildOf>,
-    q_nodes: &Query<&lunco_celestial::link::LinkNode>,
+    q_nodes: &Query<F>,
 ) -> Option<Entity> {
     let mut e = start;
     loop {
@@ -260,7 +261,8 @@ fn reconcile_link_beams(
         &ChildOf,
     )>,
     q_state: Query<&LinkState>,
-    q_nodes: Query<&lunco_celestial::link::LinkNode>,
+    q_nodes: Query<(&lunco_celestial::link::LinkNode, Option<&Name>)>,
+    q_names: Query<&Name>,
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_beams: Query<(Entity, &ChildOf, &LinkBeamInstance)>,
     q_parents: Query<&ChildOf>,
@@ -319,6 +321,7 @@ fn reconcile_link_beams(
             nb.stub_cam_frac = get("stubCamFrac", DEF_STUB_CAM_FRAC) as f32;
             nb.mode = get("mode", 0.0);
             nb.show_down = get("showDown", 0.0) >= 0.5;
+            nb.earth_only = get("earthOnly", 0.0) >= 0.5;
         }
     }
 
@@ -335,19 +338,62 @@ fn reconcile_link_beams(
         // Which (peer, is_up) pairs to draw. `off` draws nothing; `active` keeps only the
         // nearest connected peer; `all` draws every connected peer, plus severed ones as
         // red when `showDown` is on.
+        let is_earth_peer = |peer_gid: u64| -> bool {
+            let Some(&pe) = ent_of.get(&peer_gid) else {
+                return false;
+            };
+            if let Ok((node_info, name)) = q_nodes.get(pe) {
+                if let Some(ref class) = node_info.class {
+                    if class.eq_ignore_ascii_case("earth") {
+                        return true;
+                    }
+                }
+                if let Some(n) = name {
+                    if n.as_str().to_ascii_lowercase().contains("earth")
+                        || n.as_str().to_ascii_lowercase().contains("groundstation")
+                    {
+                        return true;
+                    }
+                }
+            }
+            // Also walk ancestors to check if any ancestor prim is a GroundStation or Earth node
+            let mut curr = pe;
+            while let Ok(child) = q_parents.get(curr) {
+                curr = child.parent();
+                if let Ok((node_info, _)) = q_nodes.get(curr) {
+                    if let Some(ref class) = node_info.class {
+                        if class.eq_ignore_ascii_case("earth") {
+                            return true;
+                        }
+                    }
+                }
+                if let Ok(n) = q_names.get(curr) {
+                    if n.as_str().to_ascii_lowercase().contains("earth")
+                        || n.as_str().to_ascii_lowercase().contains("groundstation")
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+
         let mut wanted: Vec<(u64, bool)> = Vec::new();
         if nb.mode < 1.5 {
             if nb.mode >= 0.5 {
                 if let Some(p) = state
                     .peers
                     .iter()
-                    .filter(|p| p.connected)
+                    .filter(|p| p.connected && (!nb.earth_only || is_earth_peer(p.peer)))
                     .min_by(|a, b| a.range_m.total_cmp(&b.range_m))
                 {
                     wanted.push((p.peer, true));
                 }
             } else {
                 for p in &state.peers {
+                    if nb.earth_only && !is_earth_peer(p.peer) {
+                        continue;
+                    }
                     if p.connected {
                         wanted.push((p.peer, true));
                     } else if show_down {

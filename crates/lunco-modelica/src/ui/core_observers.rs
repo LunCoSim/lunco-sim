@@ -194,33 +194,35 @@ pub fn drain_sim_samples_to_viz(
         }
     }
 
-    // Co-simulation and authored telemetry publishers feed the same registry,
-    // but do not produce `SimSampleBatch` values.  Bind their documented
-    // channels when they first appear so the default graph is useful on a fresh
-    // scene, while leaving raw physics/debug ports available through the picker.
-    let revision = sigs.catalog_revision();
-    if revision != *last_catalog_revision {
-        if let Some(reg) = viz_registry.as_deref_mut() {
-            let cfg = crate::ui::viz::ensure_default_modelica_graph(reg);
-            for (sig, ty) in sigs.iter_signals() {
-                if ty != lunco_viz::SignalType::Scalar
-                    || cfg.inputs.iter().any(|b| b.source == *sig)
-                {
-                    continue;
-                }
-                let Some(meta) = sigs.meta(sig) else { continue };
-                let documented = matches!(
-                    meta.provenance.as_deref(),
-                    Some("modelica" | "cosim" | "telemetry")
-                );
-                if documented {
-                    cfg.inputs
-                        .push(lunco_viz::SignalBinding::live(sig.clone(), "y"));
-                }
-            }
-        }
-        *last_catalog_revision = revision;
-    }
+    // Auto-binding all documented signals to the default graph on catalog change
+    // was removed: it caused every telemetry/cosim/modelica signal to appear in
+    // the graph on startup, making it unreadable. Users now add signals manually
+    // via the Telemetry panel checkboxes.
+    //
+    // let revision = sigs.catalog_revision();
+    // if revision != *last_catalog_revision {
+    //     if let Some(reg) = viz_registry.as_deref_mut() {
+    //         let cfg = crate::ui::viz::ensure_default_modelica_graph(reg);
+    //         for (sig, ty) in sigs.iter_signals() {
+    //             if ty != lunco_viz::SignalType::Scalar
+    //                 || cfg.inputs.iter().any(|b| b.source == *sig)
+    //             {
+    //                 continue;
+    //             }
+    //             let Some(meta) = sigs.meta(sig) else { continue };
+    //             let documented = matches!(
+    //                 meta.provenance.as_deref(),
+    //                 Some("modelica" | "cosim" | "telemetry")
+    //             );
+    //             if documented {
+    //                 cfg.inputs
+    //                     .push(lunco_viz::SignalBinding::live(sig.clone(), "y"));
+    //             }
+    //         }
+    //     }
+    //     *last_catalog_revision = revision;
+    // }
+    let _ = (viz_registry, last_catalog_revision); // suppress unused warnings
 }
 
 /// Reactive UI: project core [`crate::ModelicaNotice`] events into the Console

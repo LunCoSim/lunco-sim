@@ -240,6 +240,16 @@ def Xform "AckermannRover" (
         float inputs:torque.connect = </AckermannRover/Motor_RR.outputs:torque>
     }
 
+    # --- Comms ---------------------------------------------------------
+    # Shared Earth-tracking antenna.
+    def Xform "Comms" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
+    {
+        double3 xformOp:translate = (0, 0.15, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     # --- Drivetrain variant set (see skid_rover.usda for the contract) ---
     # HOW a wheel is simulated, and nothing else — the mounts are authored on this
     # rover, above, for both realizations. `raycast` is EMPTY: a raycast wheel is

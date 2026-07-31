@@ -68,6 +68,8 @@ def Xform "LinkBeam" (
             # 0 = do not draw down links, 1 = draw them (red). On so up/down colour is
             # visible; a node that sees nothing on a class draws that link red.
             custom float lunco:param:showDown = 1
+            # 1 = show beams ONLY to Earth ground stations (class = "earth"), 0 = show beams to all peers.
+            custom float lunco:param:earthOnly = 0
         }
     }
 

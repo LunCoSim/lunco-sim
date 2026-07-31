@@ -1373,6 +1373,31 @@ impl AutopilotBehavior {
             .map(|s| Self::new(&s))
             .map_err(|e| e.to_string())
     }
+
+    /// The index of the leg the top-level route composite (`sequence[…])` or
+    /// `forever(sequence[…])`) is currently executing, if the tree has one —
+    /// `None` for trees of any other shape. The cursor is what lets a route
+    /// REBUILD resume where the old tree was: read it before replacing the
+    /// component, then hand it to [`AutopilotBehavior::resume`].
+    ///
+    /// A completed sequence reports `0` (it resets when it finishes), which is
+    /// the correct resume point for a rebuilt tree.
+    pub fn route_cursor(&self) -> Option<usize> {
+        self.0.cursor()
+    }
+
+    /// Compile from `spec`, resuming at `cursor` as reported by
+    /// [`AutopilotBehavior::route_cursor`] of the tree being replaced — the
+    /// route continues from the leg it was on instead of snapping back to the
+    /// first one. `None` (or a shape with no cursor) builds fresh, like
+    /// [`AutopilotBehavior::new`].
+    pub fn resume(spec: &BehaviorSpec, cursor: Option<usize>) -> Self {
+        let mut tree = Self::new(spec);
+        if let Some(c) = cursor {
+            tree.0.set_cursor(c);
+        }
+        tree
+    }
 }
 
 /// The **source** [`BehaviorSpec`] an autopilot's tree was compiled from, mirrored
@@ -1529,6 +1554,32 @@ pub fn setup_autopilot_session(
                 );
             }
         }
+    }
+}
+
+/// Scene-reset lifecycle: an autopilot actor is scene-derived state — it claims a
+/// scene vessel and holds a compiled tree of that scene's route. When the scene is
+/// cleared/reloaded ([`lunco_usd_bevy::scene_lifecycle::SceneTeardown`]) the vessel
+/// it drives is despawned with the scene, so the actor must go too — a stale actor
+/// would keep its old tree (and its old cursor) aimed at a dead entity, and its
+/// session claim would block the respawned vessel (whose [`GlobalEntityId`] is
+/// stable across reloads) from ever being re-engaged.
+///
+/// Registered on `SceneTeardown` by `lunco-usd-sim` (the crate that owns that
+/// boundary) — this system itself is scene-lifecycle-free and headless-safe.
+pub fn teardown_autopilot_actors(
+    mut q: Query<(Entity, &Autopilot)>,
+    mut registry: ResMut<SessionRegistry>,
+    mut commands: Commands,
+) {
+    for (entity, ap) in q.iter_mut() {
+        let freed = registry.release_session(ap.session);
+        commands.entity(entity).try_despawn();
+        info!(
+            "[autopilot] scene teardown: despawned actor for vessel {:?} (released {} claim(s))",
+            ap.vessel,
+            freed.len()
+        );
     }
 }
 

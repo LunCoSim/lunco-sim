@@ -393,9 +393,17 @@ def Xform "SixWheelRover" (
                 float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
             }
-
-
         }
+    }
+
+    # --- Comms ---------------------------------------------------------
+    # Shared Earth-tracking antenna.
+    def Xform "Comms" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
+    {
+        double3 xformOp:translate = (0, 0.25, -0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     variantSet "generation" = {

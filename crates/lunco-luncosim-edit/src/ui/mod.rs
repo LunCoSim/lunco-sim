@@ -503,21 +503,39 @@ impl Plugin for SandboxEditUiPlugin {
             // observers standing down for it (`WaypointToolActive`).
             .add_systems(
                 lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-                |mut placement: ResMut<checkpoint_click::WaypointPlacement>,
-                 mut menu: ResMut<checkpoint_click::WaypointContextMenuState>| {
-                    if placement.0.is_some() {
-                        placement.0 = None;
-                    }
-                    *menu = checkpoint_click::WaypointContextMenuState::default();
-                },
+                (
+                    |mut placement: ResMut<checkpoint_click::WaypointPlacement>,
+                     mut menu: ResMut<checkpoint_click::WaypointContextMenuState>| {
+                        if placement.0.is_some() {
+                            placement.0 = None;
+                        }
+                        *menu = checkpoint_click::WaypointContextMenuState::default();
+                    },
+                    |q_reached: Query<Entity, With<lunco_autopilot::usd_tree::ReachedWaypoints>>,
+                     mut commands: Commands| {
+                        for entity in q_reached.iter() {
+                            commands.entity(entity).remove::<lunco_autopilot::usd_tree::ReachedWaypoints>();
+                        }
+                    },
+                ),
             )
             .add_observer(checkpoint_click::on_scene_click_checkpoint)
             .add_observer(checkpoint_click::on_scene_right_click_waypoint)
-            // Arrival is an EVENT from the marker's own trigger zone, not a
-            // per-tick distance sweep over every vessel × every waypoint.
-            .add_observer(checkpoint_click::mark_reached_waypoints_on_zone_enter)
             // Consumes the ground click that follows a Move / Insert-after.
             .add_observer(checkpoint_click::on_scene_click_place_waypoint)
+            // Arrival: read Avian's `CollisionStart` against the marker's own
+            // `Sensor` trigger zone DIRECTLY (not through the TelemetryEvent bus),
+            // after physics writeback so same-tick contacts are seen. Populates
+            // `ReachedWaypoints`, which `compile_behavior_xml` consumes to skip
+            // already-passed legs on a route rebuild.
+            .add_systems(
+                FixedPostUpdate,
+                (
+                    checkpoint_click::mark_reached_waypoints_on_enter,
+                    checkpoint_click::diag_log_waypoint_zone_inventory,
+                )
+                    .after(avian3d::prelude::PhysicsSystems::Writeback),
+            )
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
             // a context's begin/end pass here, so a widget built outside it never joins
             // egui's input pass: the context menu PAINTED but nothing in it could be
