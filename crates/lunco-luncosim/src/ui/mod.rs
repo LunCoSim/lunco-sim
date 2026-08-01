@@ -87,188 +87,198 @@ impl Plugin for SandboxUiPlugin {
             });
         }
 
-        app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
-            // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
-            // so scene selection / possession / spawn-placement run as click observers.
-            .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
-            .add_plugins(lunco_workbench::WorkbenchPlugin)
-            // Overlay visibility prefs + the Time-menu rows that drive them.
-            .add_plugins(overlays::plugin)
-            // USD Twin browser. NOTE: the USD *viewport preview*
-            // (`UsdViewportPlugin`) is intentionally NOT added here. It is an
-            // editor tool that OWNS its own scene — it parses the active USD doc
-            // into a second `UsdStageAsset` and mounts a private `scene_root`. The
-            // luncosim is a sim app: its single scene is the live `LoadScene` world,
-            // viewed by the window camera. Adding the preview built the scene a
-            // SECOND time (doubled crater meshes / rocks). A view must not own a
-            // scene — see `docs/architecture/usd-source-of-truth.md`.
-            .add_plugins(lunco_usd::ui::UsdUiPlugin)
-            .add_plugins(lunco_luncosim_edit::SandboxEditPlugin)
-            .add_plugins(lunco_luncosim_edit::ui::SandboxEditUiPlugin)
-            // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
-            // pipeline) used to be added here. It now lives inside
-            // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
-            // `bevy_pbr` — and adding it a second time panics Bevy.
-            // See docs/architecture/render-decoupling.md.
-            // The shared tutorial launcher: registry + 🎓 menu + panel +
-            // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
-            // Tutorials compose from assets/tutorials/luncosim.usda (data, not code).
-            .add_plugins(lunco_tutorial::TutorialPlugin {
-                app: "luncosim".into(),
-            })
-            // Rover panels. ONE closure: Bevy keys plugin uniqueness by type-name,
-            // and every `|app| {…}` in this `build` shares the name `{{closure}}` — a
-            // second one panics ("plugin already added"). So all app-level panel
-            // registration goes here.
-            .add_plugins(|app: &mut App| {
-                use lunco_settings::AppSettingsExt;
-                use lunco_workbench::WorkbenchAppExt;
-                app.register_settings_section::<lunco_settings::DownloadSettings>();
-                // Rover-specific panels and the attach-a-model click flow.
-                app.register_panel(code_panel::CodePanel);
-                // Rhai behaviour editor (Object Builder). Its view-model is
-                // produced each frame from the selection + ScriptRegistry.
-                app.register_panel(rhai_editor_panel::RhaiEditorPanel);
-                app.init_resource::<rhai_editor_panel::RhaiEditorVm>();
-                app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);
-                app.register_panel(models_palette::ModelsPalette);
-                // In-app rhai REPL — runs snippets against the live app through the
-                // API bridge, on web + native. Gated on bridge availability.
-                #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
-                app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
-                app.init_resource::<models_palette::AttachState>();
-                // Disarm on scene teardown — see `AttachState`.
-                app.add_systems(
-                    lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-                    |mut attach: ResMut<models_palette::AttachState>| {
-                        if *attach != models_palette::AttachState::Idle {
-                            *attach = models_palette::AttachState::Idle;
-                        }
-                    },
-                );
-                // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
-                // as selection; egui occlusion handled by the framework).
-                app.add_observer(models_palette::on_scene_click_attach);
-                app.add_systems(Update, models_palette::attach_escape_system);
-            })
-            // Build is the default simulation workbench: viewport, inspector,
-            // telemetry catalog, and the default Graphs instance are ready on
-            // launch. View remains the intentionally uncluttered observer mode.
-            .add_systems(
-                Startup,
-                |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-                    layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
-                    layout.open_instance(
-                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
-                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-                    );
-                    layout.move_instance_to_front(
-                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
-                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-                    );
-                },
-            )
-            .insert_resource(CurrentScenePath::default())
-            .add_systems(
-                Startup,
+        app.add_plugins((
+            bevy_hui::HuiPlugin,
+            bevy_flair::FlairPlugin,
+            bevy::pbr::wireframe::WireframePlugin::default(),
+        ))
+        // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
+        // so scene selection / possession / spawn-placement run as click observers.
+        .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
+        .add_plugins(lunco_workbench::WorkbenchPlugin)
+        // Overlay visibility prefs + the Time-menu rows that drive them.
+        .add_plugins(overlays::plugin)
+        // USD Twin browser. NOTE: the USD *viewport preview*
+        // (`UsdViewportPlugin`) is intentionally NOT added here. It is an
+        // editor tool that OWNS its own scene — it parses the active USD doc
+        // into a second `UsdStageAsset` and mounts a private `scene_root`. The
+        // luncosim is a sim app: its single scene is the live `LoadScene` world,
+        // viewed by the window camera. Adding the preview built the scene a
+        // SECOND time (doubled crater meshes / rocks). A view must not own a
+        // scene — see `docs/architecture/usd-source-of-truth.md`.
+        .add_plugins(lunco_usd::ui::UsdUiPlugin)
+        .add_plugins(lunco_luncosim_edit::SandboxEditPlugin)
+        .add_plugins(lunco_luncosim_edit::ui::SandboxEditUiPlugin)
+        // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
+        // pipeline) used to be added here. It now lives inside
+        // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
+        // `bevy_pbr` — and adding it a second time panics Bevy.
+        // See docs/architecture/render-decoupling.md.
+        // The shared tutorial launcher: registry + 🎓 menu + panel +
+        // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
+        // Tutorials compose from assets/tutorials/luncosim.usda (data, not code).
+        .add_plugins(lunco_tutorial::TutorialPlugin {
+            app: "luncosim".into(),
+        })
+        // Rover panels. ONE closure: Bevy keys plugin uniqueness by type-name,
+        // and every `|app| {…}` in this `build` shares the name `{{closure}}` — a
+        // second one panics ("plugin already added"). So all app-level panel
+        // registration goes here.
+        .add_plugins(|app: &mut App| {
+            use lunco_settings::AppSettingsExt;
+            use lunco_workbench::WorkbenchAppExt;
+            app.register_settings_section::<lunco_settings::DownloadSettings>();
+            app.init_resource::<rover_hud::RoverHudView>();
+            app.add_systems(Startup, rover_hud::spawn_rover_hud);
+            app.add_systems(
+                Update,
                 (
-                    init_current_scene_path,
-                    register_sandbox_scenarios_menu,
-                    register_downloadable_assets_settings,
-                ),
-            )
-            .add_observer(
-                |t: On<lunco_usd::LoadScene>,
-                 mut current: ResMut<CurrentScenePath>,
-                 current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
-                 hud: Option<ResMut<lunco_workbench::tutorial_overlay::TutorialHud>>,
-                 pending: Option<ResMut<lunco_tutorial::PendingAdvance>>| {
-                    current.0 = t.event().path.clone();
-                    if let Some(mut name) = current_name {
-                        name.0 = std::path::Path::new(&t.event().path)
-                            .file_name()
-                            .and_then(|f| f.to_str())
-                            .unwrap_or(&t.event().path)
-                            .to_string();
-                    }
-                    // The overlay belongs to the scene that was on screen. A
-                    // scene switch leaves hints, objectives, a spotlight ring or
-                    // a half-finished coach card pointing at entities that no
-                    // longer exist, and the "continue to the next lesson?" popup
-                    // floating over a world it was never about.
-                    //
-                    // Cleared HERE — synchronously, on the LoadScene TRIGGER —
-                    // rather than from a change-detection system: a lesson's
-                    // `on_start` calls `load_scene` FIRST and then publishes its
-                    // own hint/coach step, so anything that ran a frame later
-                    // would wipe the incoming lesson's overlay instead of the
-                    // outgoing one's. A still-running mission re-publishes its
-                    // objectives on the next tick, so only stale state is lost.
-                    if let Some(mut hud) = hud {
-                        hud.hint.clear();
-                        hud.objectives.clear();
-                        hud.spotlight = None;
-                        hud.tour = None;
-                    }
-                    if let Some(mut pending) = pending {
-                        pending.0 = None;
-                    }
-                },
-            )
-            // Confine window-targeting cameras to the ViewportPanel rect (prevents
-            // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
-            // Sharpest shadow filter (hard airless-Moon terminator) on each camera.
-            .add_systems(Update, force_hard_shadow_filtering)
-            // Fallback free-flight camera when the scene authors none — interactive
-            // only; a headless server has no user to control.
-            .add_systems(
-                PostUpdate,
-                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback),
-            )
-            // Centered "Generating terrain…" card during the initial DEM bake
-            // (heightmap decode + crater stamp), so the black startup viewport
-            // reads as progress. Clears itself once the bake finishes.
-            .add_systems(
-                bevy_egui::EguiPrimaryContextPass,
-                (
-                    terrain_progress::draw_terrain_progress,
-                    // Surface ⇄ Moon ⇄ Earth switcher — appears only when the
-                    // celestial hierarchy is live (the scene declared bodies).
-                    //
-                    // NOT while recording: these two are EDITOR chrome — they
-                    // exist so an operator can retarget the view and scrub the
-                    // sky clock. An offline take is film output, and a scene
-                    // that declares celestial bodies (which any scene with a
-                    // real sun now does) would otherwise burn a clock readout
-                    // and a view switcher into every frame.
-                    //
-                    // All three are window-space `egui::Area`s, so they are also
-                    // gated on the View perspective (`in_view_perspective`) —
-                    // in an authoring perspective they painted straight across
-                    // the docked panels.
-                    // Both are also OPT-IN now (`OverlaySettings`, off by default,
-                    // toggled from the Time menu). Permanent chrome over the
-                    // viewport should be something you asked for; the sky clock's
-                    // controls live in that menu regardless, so switching the pill
-                    // off costs no capability.
-                    view_mode::draw_view_mode_switcher
-                        .run_if(not(recording_offline))
-                        .run_if(in_view_perspective)
-                        .run_if(overlays::view_switcher_visible),
-                    // Sky clock: rate + couple/detach for the CELESTIAL clock only
-                    // (not the sim transport). Same visibility gate.
-                    celestial_time::draw_celestial_time
-                        .run_if(not(recording_offline))
-                        .run_if(in_view_perspective)
-                        .run_if(overlays::sky_clock_visible),
-                    // Driver cockpit: attitude/tilt (bottom-left) + nav/controls
-                    // (bottom-right). Only while possessing a vessel, and only in
-                    // View. Transport (pause + rate) lives on the workbench
-                    // toolbar, next to the pause button that already owns
-                    // `TimeTransport`.
-                    rover_hud::draw_rover_hud.run_if(in_view_perspective),
+                    rover_hud::bind_hud_to_camera,
+                    rover_hud::publish_rover_hud_view.run_if(in_view_perspective),
+                    rover_hud::attach_hui_names.before(bevy_flair::style::StyleSystems::Prepare),
+                    rover_hud::hand_hud_styling_to_flair.after(bevy_hui::HuiSystems::Style),
+                    rover_hud::apply_rover_hud_view,
                 ),
             );
+            // Rover-specific panels and the attach-a-model click flow.
+            app.register_panel(code_panel::CodePanel);
+            // Rhai behaviour editor (Object Builder). Its view-model is
+            // produced each frame from the selection + ScriptRegistry.
+            app.register_panel(rhai_editor_panel::RhaiEditorPanel);
+            app.init_resource::<rhai_editor_panel::RhaiEditorVm>();
+            app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);
+            app.register_panel(models_palette::ModelsPalette);
+            // In-app rhai REPL — runs snippets against the live app through the
+            // API bridge, on web + native. Gated on bridge availability.
+            #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
+            app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
+            app.init_resource::<models_palette::AttachState>();
+            // Disarm on scene teardown — see `AttachState`.
+            app.add_systems(
+                lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                |mut attach: ResMut<models_palette::AttachState>| {
+                    if *attach != models_palette::AttachState::Idle {
+                        *attach = models_palette::AttachState::Idle;
+                    }
+                },
+            );
+            // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
+            // as selection; egui occlusion handled by the framework).
+            app.add_observer(models_palette::on_scene_click_attach);
+            app.add_systems(Update, models_palette::attach_escape_system);
+        })
+        // Build is the default simulation workbench: viewport, inspector,
+        // telemetry catalog, and the default Graphs instance are ready on
+        // launch. View remains the intentionally uncluttered observer mode.
+        .add_systems(
+            Startup,
+            |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
+                layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
+                layout.open_instance(
+                    lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+                    lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+                );
+                layout.move_instance_to_front(
+                    lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+                    lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+                );
+            },
+        )
+        .insert_resource(CurrentScenePath::default())
+        .add_systems(
+            Startup,
+            (
+                init_current_scene_path,
+                register_sandbox_scenarios_menu,
+                register_downloadable_assets_settings,
+            ),
+        )
+        .add_observer(
+            |t: On<lunco_usd::LoadScene>,
+             mut current: ResMut<CurrentScenePath>,
+             current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
+             hud: Option<ResMut<lunco_workbench::tutorial_overlay::TutorialHud>>,
+             pending: Option<ResMut<lunco_tutorial::PendingAdvance>>| {
+                current.0 = t.event().path.clone();
+                if let Some(mut name) = current_name {
+                    name.0 = std::path::Path::new(&t.event().path)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&t.event().path)
+                        .to_string();
+                }
+                // The overlay belongs to the scene that was on screen. A
+                // scene switch leaves hints, objectives, a spotlight ring or
+                // a half-finished coach card pointing at entities that no
+                // longer exist, and the "continue to the next lesson?" popup
+                // floating over a world it was never about.
+                //
+                // Cleared HERE — synchronously, on the LoadScene TRIGGER —
+                // rather than from a change-detection system: a lesson's
+                // `on_start` calls `load_scene` FIRST and then publishes its
+                // own hint/coach step, so anything that ran a frame later
+                // would wipe the incoming lesson's overlay instead of the
+                // outgoing one's. A still-running mission re-publishes its
+                // objectives on the next tick, so only stale state is lost.
+                if let Some(mut hud) = hud {
+                    hud.hint.clear();
+                    hud.objectives.clear();
+                    hud.spotlight = None;
+                    hud.tour = None;
+                }
+                if let Some(mut pending) = pending {
+                    pending.0 = None;
+                }
+            },
+        )
+        // Confine window-targeting cameras to the ViewportPanel rect (prevents
+        // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
+        // Sharpest shadow filter (hard airless-Moon terminator) on each camera.
+        .add_systems(Update, force_hard_shadow_filtering)
+        // Fallback free-flight camera when the scene authors none — interactive
+        // only; a headless server has no user to control.
+        .add_systems(
+            PostUpdate,
+            spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback),
+        )
+        // Centered "Generating terrain…" card during the initial DEM bake
+        // (heightmap decode + crater stamp), so the black startup viewport
+        // reads as progress. Clears itself once the bake finishes.
+        .add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            (
+                terrain_progress::draw_terrain_progress,
+                // Surface ⇄ Moon ⇄ Earth switcher — appears only when the
+                // celestial hierarchy is live (the scene declared bodies).
+                //
+                // NOT while recording: these two are EDITOR chrome — they
+                // exist so an operator can retarget the view and scrub the
+                // sky clock. An offline take is film output, and a scene
+                // that declares celestial bodies (which any scene with a
+                // real sun now does) would otherwise burn a clock readout
+                // and a view switcher into every frame.
+                //
+                // Both are window-space `egui::Area`s, so they are also
+                // gated on the View perspective (`in_view_perspective`) —
+                // in an authoring perspective they painted straight across
+                // the docked panels.
+                // Both are also OPT-IN now (`OverlaySettings`, off by default,
+                // toggled from the Time menu). Permanent chrome over the
+                // viewport should be something you asked for; the sky clock's
+                // controls live in that menu regardless, so switching the pill
+                // off costs no capability.
+                view_mode::draw_view_mode_switcher
+                    .run_if(not(recording_offline))
+                    .run_if(in_view_perspective)
+                    .run_if(overlays::view_switcher_visible),
+                // Sky clock: rate + couple/detach for the CELESTIAL clock only
+                // (not the sim transport). Same visibility gate.
+                celestial_time::draw_celestial_time
+                    .run_if(not(recording_offline))
+                    .run_if(in_view_perspective)
+                    .run_if(overlays::sky_clock_visible),
+            ),
+        );
         // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.
         // Networking-only — the module is `#[cfg(feature = "networking")]`.
         #[cfg(feature = "networking")]
@@ -342,11 +352,11 @@ fn recording_offline(
 
 /// True only in the 🎬 View perspective — full-screen 3D, no dock.
 ///
-/// The floating overlays (driver HUD, view switcher, sky clock) are raw
-/// `egui::Area`s in window space: they know nothing about the dock and paint
-/// straight over whatever panels an authoring perspective has open. That reads as
-/// a broken layer while building, so they exist only where the whole window IS
-/// the viewport.
+/// The remaining floating overlays (view switcher and sky clock) are
+/// window-space `egui::Area`s. The driver HUD is a retained Bevy UI template,
+/// but follows the same perspective visibility boundary. All three know
+/// nothing about the dock and would paint over authoring panels, so they exist
+/// only where the whole window IS the viewport.
 fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) -> bool {
     layout.is_some_and(|l| {
         l.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))

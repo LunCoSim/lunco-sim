@@ -1,0 +1,244 @@
+/*
+ * The HUD's authored presentation surface. Runtime state enters through the
+ * custom properties on the template root; no Rust system writes Node,
+ * BackgroundColor, or TextColor after the template is built.
+ */
+:root {
+  --panel-background: rgba(24, 24, 37, 0.92);
+  --panel-border: rgba(127, 212, 255, 0.55);
+  --text-color: rgba(205, 214, 244, 1);
+  --muted-color: rgba(166, 173, 200, 1);
+  --accent-color: rgba(127, 212, 255, 1);
+  --ok-color: rgba(166, 227, 161, 1);
+  --caution-color: rgba(249, 226, 175, 1);
+  --danger-color: rgba(243, 139, 168, 1);
+  --tilt-color: rgba(166, 227, 161, 1);
+  --comms-color: rgba(166, 173, 200, 1);
+  --power-color: rgba(166, 227, 161, 1);
+  --thermal-color: rgba(166, 227, 161, 1);
+  --tilt-marker: 0%;
+  --caution-width: 44%;
+  --danger-start: 44%;
+  --danger-width: 22%;
+  --autopilot-display: none;
+  --geo-display: none;
+  --local-display: flex;
+  --comms-display: none;
+  --comms-los-display: none;
+  --power-display: none;
+  --thermal-display: none;
+}
+
+#rover-hud-root {
+  display: flex;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+
+#rover-hud-attitude,
+#rover-hud-nav {
+  display: flex;
+  position: absolute;
+  bottom: 32px;
+  flex-direction: column;
+  row-gap: 7px;
+  padding: 12px;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background-color: var(--panel-background);
+}
+
+#rover-hud-attitude {
+  left: 14px;
+  width: 224px;
+}
+
+#rover-hud-nav {
+  right: 14px;
+  width: 250px;
+}
+
+#rover-hud-attitude-title,
+#rover-hud-frame,
+#rover-hud-speed-label,
+#rover-hud-altitude-label,
+#rover-hud-comms-label,
+#rover-hud-power-label,
+#rover-hud-thermal-label {
+  color: var(--muted-color);
+  font-size: 9px;
+}
+
+#rover-hud-label {
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#rover-hud-nav-heading,
+#rover-hud-attitude-fine,
+#rover-hud-geo,
+#rover-hud-local,
+#rover-hud-comms-heading,
+#rover-hud-power-heading,
+#rover-hud-thermal-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#rover-hud-tilt-readout,
+#rover-hud-speed-block,
+#rover-hud-altitude-block {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  row-gap: 1px;
+}
+
+#rover-hud-tilt {
+  color: var(--tilt-color);
+  font-size: 25px;
+  font-weight: 700;
+}
+
+#rover-hud-tilt-status,
+#rover-hud-tilt-limits,
+#rover-hud-comms-status,
+#rover-hud-power-value,
+#rover-hud-thermal-value {
+  color: var(--tilt-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#rover-hud-tilt-limits,
+#rover-hud-comms-detail,
+#rover-hud-power-detail,
+#rover-hud-thermal-detail {
+  color: var(--muted-color);
+  font-size: 10px;
+}
+
+#rover-hud-tilt-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  overflow: clip;
+  border-radius: 4px;
+  background-color: var(--muted-color);
+}
+
+#rover-hud-tilt-caution,
+#rover-hud-tilt-danger,
+#rover-hud-tilt-marker {
+  position: absolute;
+  top: 0px;
+  height: 8px;
+}
+
+#rover-hud-tilt-caution {
+  width: var(--caution-width);
+  background-color: var(--ok-color);
+}
+
+#rover-hud-tilt-danger {
+  left: var(--danger-start);
+  width: var(--danger-width);
+  background-color: var(--caution-color);
+}
+
+#rover-hud-tilt-marker {
+  left: var(--tilt-marker);
+  width: 2px;
+  height: 14px;
+  top: -3px;
+  background-color: var(--tilt-color);
+}
+
+#rover-hud-speed,
+#rover-hud-altitude {
+  color: var(--accent-color);
+  font-size: 26px;
+  font-weight: 700;
+}
+
+#rover-hud-roll,
+#rover-hud-pitch,
+#rover-hud-geographic,
+#rover-hud-geo-heading,
+#rover-hud-local-position,
+#rover-hud-local-heading,
+#rover-hud-comms-peer,
+#rover-hud-comms-range,
+#rover-hud-power-detail,
+#rover-hud-thermal-detail {
+  color: var(--text-color);
+  font-size: 10px;
+}
+
+#rover-hud-autopilot {
+  display: var(--autopilot-display);
+  color: var(--ok-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#rover-hud-geo {
+  display: var(--geo-display);
+}
+
+#rover-hud-local {
+  display: var(--local-display);
+}
+
+#rover-hud-comms,
+#rover-hud-power,
+#rover-hud-thermal {
+  display: var(--comms-display);
+  flex-direction: column;
+  row-gap: 4px;
+  padding-top: 7px;
+  border-top-width: 1px;
+  border-top-color: rgba(166, 173, 200, 0.35);
+}
+
+#rover-hud-comms-heading,
+#rover-hud-comms-detail,
+#rover-hud-power,
+#rover-hud-thermal {
+  flex-direction: column;
+}
+
+#rover-hud-comms-status {
+  color: var(--comms-color);
+}
+
+#rover-hud-comms-detail {
+  display: var(--comms-los-display);
+}
+
+#rover-hud-comms-los {
+  color: var(--danger-color);
+}
+
+#rover-hud-power {
+  display: var(--power-display);
+}
+
+#rover-hud-power-value {
+  color: var(--power-color);
+}
+
+#rover-hud-thermal {
+  display: var(--thermal-display);
+}
+
+#rover-hud-thermal-value {
+  color: var(--thermal-color);
+}

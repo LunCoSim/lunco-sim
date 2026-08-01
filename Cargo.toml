@@ -205,6 +205,10 @@ leafwing-input-manager = "0.21.0"
 # egui-0.35 *release* is transform-gizmo (bevy-0.19 + egui-0.35 exists on no
 # single upstream ref), pinned to a LunCoSim fork branch in [patch.crates-io].
 bevy_egui = { version = "0.41", features = ["serde"] }
+# Runtime-authored View HUD templates. Both target Bevy 0.19; they are optional
+# so the headless luncosim server does not link Bevy UI/text presentation.
+bevy_hui = "0.7"
+bevy_flair = "0.8"
 # `mouse_interaction` (default) fires a gizmo drag on ANY left-press held over
 # the gizmo, with no handle check. Selection here is Shift+left-click and the
 # gizmo renders ON the selected object, so that driver made the selecting click

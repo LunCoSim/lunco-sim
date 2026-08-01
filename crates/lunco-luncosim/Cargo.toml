@@ -176,6 +176,8 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 bevy_egui = { workspace = true, optional = true }
+bevy_hui = { workspace = true, optional = true }
+bevy_flair = { workspace = true, optional = true }
 # `default-features = false` so the native (`lunco-api`) and web (`web`)
 # features choose the transport: `transport-http` (axum/TcpListener) vs.
 # `transport-wasm` (the `window.lunco_api` JS bridge).
@@ -245,6 +247,8 @@ ui = [
     "dep:lunco-settings",
     "dep:serde",
     "dep:bevy_egui",
+    "dep:bevy_hui",
+    "dep:bevy_flair",
     "bevy/bevy_winit",
     "bevy/x11",
     "bevy/wayland",
@@ -255,6 +259,14 @@ ui = [
     "bevy/png",
     "bevy/bevy_picking",
     "bevy/mesh_picking",
+    # Runtime-authored HUI/Flair nodes need Bevy's render-side UI extraction
+    # and pass in addition to the layout feature pulled by those crates.
+    "bevy/bevy_ui_render",
+    # HUI/Flair reload their asset handles from AssetEvent::Modified. Enable
+    # Bevy's native desktop watcher so editing the template or stylesheet
+    # takes effect in the running GUI; this remains UI-only and is absent from
+    # the headless server feature set.
+    "bevy/file_watcher",
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
     "bevy/smaa_luts",

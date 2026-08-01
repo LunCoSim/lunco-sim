@@ -1,0 +1,93 @@
+<template>
+  <property name="label">VESSEL</property>
+  <property name="tilt">—</property>
+  <property name="tilt_status">STABLE</property>
+  <property name="tilt_limits">generic limits</property>
+  <property name="speed">—</property>
+  <property name="altitude">—</property>
+  <property name="roll">—</property>
+  <property name="pitch">—</property>
+  <property name="heading">—</property>
+  <property name="geographic">—</property>
+  <property name="local_position">—</property>
+  <property name="comms_status">—</property>
+  <property name="comms_peer">—</property>
+  <property name="comms_range">—</property>
+  <property name="comms_elevation">—</property>
+  <property name="power_value">—</property>
+  <property name="power_detail">—</property>
+  <property name="thermal_value">—</property>
+  <property name="thermal_detail">—</property>
+
+  <node id="rover-hud-root">
+    <node id="rover-hud-attitude">
+      <text id="rover-hud-attitude-title">ATTITUDE</text>
+      <node id="rover-hud-tilt-readout">
+        <text id="rover-hud-tilt">{tilt}</text>
+        <text id="rover-hud-tilt-status">{tilt_status}</text>
+      </node>
+      <node id="rover-hud-tilt-track">
+        <node id="rover-hud-tilt-caution" />
+        <node id="rover-hud-tilt-danger" />
+        <node id="rover-hud-tilt-marker" />
+      </node>
+      <text id="rover-hud-tilt-limits">{tilt_limits}</text>
+      <node id="rover-hud-speed-block">
+        <text id="rover-hud-speed-label">SPEED</text>
+        <text id="rover-hud-speed">{speed} m/s</text>
+      </node>
+      <node id="rover-hud-attitude-fine">
+        <text id="rover-hud-roll">R {roll}</text>
+        <text id="rover-hud-pitch">P {pitch}</text>
+      </node>
+    </node>
+
+    <node id="rover-hud-nav">
+      <node id="rover-hud-nav-heading">
+        <text id="rover-hud-label">{label}</text>
+        <text id="rover-hud-autopilot">AUTOPILOT</text>
+      </node>
+      <text id="rover-hud-frame">site frame · metres</text>
+      <node id="rover-hud-altitude-block">
+        <text id="rover-hud-altitude-label">ALT</text>
+        <text id="rover-hud-altitude">{altitude} m</text>
+      </node>
+      <node id="rover-hud-geo">
+        <text id="rover-hud-geographic">{geographic}</text>
+        <text id="rover-hud-geo-heading">HDG {heading}</text>
+      </node>
+      <node id="rover-hud-local">
+        <text id="rover-hud-local-position">{local_position}</text>
+        <text id="rover-hud-local-heading">HDG {heading}</text>
+      </node>
+
+      <node id="rover-hud-comms">
+        <node id="rover-hud-comms-heading">
+          <text id="rover-hud-comms-label">COMMS</text>
+          <text id="rover-hud-comms-status">{comms_status}</text>
+        </node>
+        <node id="rover-hud-comms-detail">
+          <text id="rover-hud-comms-peer">peer {comms_peer}</text>
+          <text id="rover-hud-comms-range">range {comms_range} · elev {comms_elevation}</text>
+          <text id="rover-hud-comms-los">no line of sight · autonomy only</text>
+        </node>
+      </node>
+
+      <node id="rover-hud-power">
+        <node id="rover-hud-power-heading">
+          <text id="rover-hud-power-label">POWER</text>
+          <text id="rover-hud-power-value">{power_value}</text>
+        </node>
+        <text id="rover-hud-power-detail">{power_detail}</text>
+      </node>
+
+      <node id="rover-hud-thermal">
+        <node id="rover-hud-thermal-heading">
+          <text id="rover-hud-thermal-label">THERMAL</text>
+          <text id="rover-hud-thermal-value">{thermal_value}</text>
+        </node>
+        <text id="rover-hud-thermal-detail">{thermal_detail}</text>
+      </node>
+    </node>
+  </node>
+</template>
