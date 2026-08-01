@@ -17,9 +17,9 @@
 //!
 //! ```xml
 //! <Repeat><Sequence>
-//!   <Action ID="drive_to" target="/World/Behaviors/RoverPatrol/wp0"/>
+//!   <Action ID="drive_to" target="/World/Route/W0"/>
 //!   <Action ID="run_tool" tool="science::take_photo"/>
-//!   <Action ID="drive_to" target="/World/Behaviors/RoverPatrol/wp1"/>
+//!   <Action ID="drive_to" target="/World/Route/W1"/>
 //! </Sequence></Repeat>
 //! ```
 //!
@@ -29,8 +29,8 @@
 //!         uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@ # or inline info:sourceCode
 //!     }
 //! }
-//! def Scope "Behaviors" { def "RoverPatrol" {
-//!     def Xform "wp0" (prepend references = @vessels/markers/waypoint.usda@) {
+//! def Scope "Route" {
+//!     def Xform "W0" (prepend references = @vessels/markers/waypoint.usda@) {
 //!         double3 xformOp:translate = (10, 0, 3)
 //!         uniform token[] xformOpOrder = ["xformOp:translate"]
 //!     }
@@ -63,7 +63,9 @@
 //! `BehaviorSpec` therefore needs no prim-path variant: the reference exists only in
 //! the XML/JSON intermediate, and is gone by the time a tree is built.
 
-use crate::{Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, BehaviorSpec};
+use crate::{
+    Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, AutopilotExecutionState, BehaviorSpec,
+};
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
@@ -83,6 +85,13 @@ pub struct BehaviorXml(pub String);
 /// [`load_behavior_xml_assets`] swaps it for [`BehaviorXml`] once the asset lands.
 #[derive(Component, Debug, Clone)]
 pub struct BehaviorXmlPath(pub String);
+
+/// The composed USD program prim currently projected onto a vessel's
+/// [`BehaviorXml`] or [`BehaviorXmlPath`]. Runtime-only provenance lets the live
+/// USD consumer remove the correct tree when that program is cleared or
+/// deleted, without guessing from a prim name such as `Mission`.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct BehaviorProgramSource(pub String);
 
 /// Handle to the in-flight BehaviorTree.CPP XML asset for a [`BehaviorXmlPath`].
 #[derive(Component)]
@@ -210,8 +219,9 @@ fn collect_target_paths(v: &Value, out: &mut Vec<String>) {
 /// vessel's mission, returning the new BT.CPP XML.
 ///
 /// `xml` is the vessel's current tree, or `None` for a vessel with no mission yet —
-/// in which case the canonical patrol shell is created:
-/// `forever(sequence[drive_to])`.
+/// in which case a one-way `sequence[drive_to]` shell is created. Looping is an
+/// authored policy: when the existing tree is `forever(sequence[…])`, this edit
+/// preserves that decorator instead of silently changing the mission's policy.
 ///
 /// This is the ONE place that edits a mission's topology from the editor, and it is
 /// deliberately conservative: it appends only to the plain `forever → sequence`
@@ -261,17 +271,7 @@ pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String
             "kind": "sequence",
             "children": []
         }),
-        Some(text) => {
-            let mut val = crate::btcpp_xml::xml_to_value(text)?;
-            // If authored as a `forever{sequence[...]}`, unwrap `forever` to plain `sequence[...]`
-            // so routes are one-way by default and stop at the final waypoint.
-            if val.get("kind").and_then(|k| k.as_str()) == Some("forever") {
-                if let Some(child) = val.get_mut("child").map(|c| c.take()) {
-                    val = child;
-                }
-            }
-            val
-        }
+        Some(text) => crate::btcpp_xml::xml_to_value(text)?,
     };
 
     let legs = legs_mut(&mut root)?;
@@ -761,8 +761,13 @@ fn new_spec_is_append_only(old: &BehaviorSpec, new: &BehaviorSpec) -> bool {
 /// differ from its previous derivation and take over the vessel again.
 pub fn compile_behavior_xml(
     q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>)>,
-    q_autopilots: Query<(Entity, &Autopilot, Has<AutopilotBehavior>, Option<&AutopilotBehavior>)>,
-    q_spec: Query<&AutopilotBehaviorSpec>,
+    q_autopilots: Query<(
+        Entity,
+        &Autopilot,
+        Has<AutopilotBehavior>,
+        Option<&AutopilotBehavior>,
+        Option<&AutopilotExecutionState>,
+    )>,
     q_reached: Query<&ReachedWaypoints>,
     moved: Query<
         Entity,
@@ -845,8 +850,9 @@ pub fn compile_behavior_xml(
         // worse, every `WaitNode` timer would restart from zero, so a waypoint
         // `dwell` could never elapse. Re-baking is idempotent for a static route,
         // so an unchanged derivation means there is nothing to do.
-        let derived_changed = last_derived
-            .get(&vessel)
+        let previous_derived = last_derived.get(&vessel).cloned();
+        let derived_changed = previous_derived
+            .as_ref()
             .is_none_or(|prev| prev != &spec);
         if derived_changed {
             last_derived.insert(vessel, spec.clone());
@@ -859,8 +865,9 @@ pub fn compile_behavior_xml(
         // route without a disengage/re-engage cycle. Also covers an autopilot engaged
         // with no tree of its own (empty `spec_json`), which would otherwise never
         // pick up the vessel's authored route.
-        if let Some((actor, _, has_tree, old_tree)) =
-            q_autopilots.iter().find(|(_, ap, _, _)| ap.vessel == vessel)
+        if let Some((actor, _, has_tree, old_tree, old_state)) = q_autopilots
+            .iter()
+            .find(|(_, ap, _, _, _)| ap.vessel == vessel)
         {
             // A pure append must NOT be ignored (the old tree can never reach the
             // new legs — once the sequence completes it loops back to leg 0, so the
@@ -870,15 +877,30 @@ pub fn compile_behavior_xml(
             // appended legs run in order.
             let is_append_only = has_tree
                 && derived_changed
-                && q_spec
-                    .get(vessel)
-                    .map(|cur| new_spec_is_append_only(&cur.0, &spec))
+                && previous_derived
+                    .as_ref()
+                    .map(|old| new_spec_is_append_only(old, &spec))
                     .unwrap_or(false);
             if is_append_only {
-                let cursor = old_tree.and_then(AutopilotBehavior::route_cursor);
+                let cursor = if old_state.is_some_and(|state| {
+                    *state == AutopilotExecutionState::Completed
+                }) {
+                    // A completed sequence resets its internal cursor to zero.
+                    // The host latch is the authoritative indication that all
+                    // previous legs ran, so append after completion resumes at
+                    // the first newly appended leg instead of replaying leg 0.
+                    previous_derived
+                        .as_ref()
+                        .and_then(|old| spec_route_legs(old).map(<[BehaviorSpec]>::len))
+                } else {
+                    old_tree.and_then(AutopilotBehavior::route_cursor)
+                };
                 commands
                     .entity(actor)
-                    .try_insert(AutopilotBehavior::resume(&spec, cursor));
+                    .try_insert((
+                        AutopilotBehavior::resume(&spec, cursor),
+                        AutopilotExecutionState::Running,
+                    ));
                 debug!(
                     "[autopilot/usd] route extended with new waypoint(s); tree resumed at \
                      leg {cursor:?} instead of U-turning"
@@ -886,7 +908,10 @@ pub fn compile_behavior_xml(
             } else if derived_changed || !has_tree {
                 commands
                     .entity(actor)
-                    .try_insert(AutopilotBehavior::new(&spec));
+                    .try_insert((
+                        AutopilotBehavior::new(&spec),
+                        AutopilotExecutionState::Running,
+                    ));
             }
         }
     }

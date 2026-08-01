@@ -15,7 +15,7 @@ const XML: &str = r#"
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Sequence>
-      <Action ID="drive_to" target="/World/Behaviors/RoverPatrol/wp0" speed="0.6" radius="3"/>
+      <Action ID="drive_to" target="/World/Route/W0" speed="0.6" radius="3"/>
       <Action ID="run_tool" tool="science::take_photo" args=""/>
     </Sequence>
   </BehaviorTree>
@@ -41,7 +41,7 @@ fn scene(app: &mut App, pin_pos: Vec3) -> (Entity, Entity) {
     let mut bindings = TargetBindings::default();
     bindings
         .0
-        .insert("/World/Behaviors/RoverPatrol/wp0".to_string(), pin);
+        .insert("/World/Route/W0".to_string(), pin);
     let vessel = app
         .world_mut()
         .spawn((BehaviorXml(XML.to_string()), bindings))
@@ -67,13 +67,33 @@ fn drive_target(app: &App, vessel: Entity) -> [f32; 3] {
 #[test]
 fn ctrl_click_on_a_vessel_with_no_mission_creates_the_patrol_shell() {
     use lunco_autopilot::usd_tree::{append_waypoint_leaf, target_paths};
-    let xml = append_waypoint_leaf(None, "/World/Behaviors/Rover_wp1").unwrap();
+    let xml = append_waypoint_leaf(None, "/World/Route/W0").unwrap();
     assert_eq!(
         target_paths(&xml),
-        vec!["/World/Behaviors/Rover_wp1".to_string()],
-        "the first checkpoint must create a forever(sequence[drive_to]) mission that \
+        vec!["/World/Route/W0".to_string()],
+        "the first checkpoint must create a one-way sequence[drive_to] mission that \
          REFERENCES the pin prim (not bake its coordinates)"
     );
+}
+
+#[test]
+fn appending_preserves_an_authored_forever_policy() {
+    use lunco_autopilot::btcpp_xml::xml_to_value;
+    use lunco_autopilot::usd_tree::{append_waypoint_leaf, target_paths};
+
+    let looped = lunco_autopilot::btcpp_xml::value_to_xml(&serde_json::json!({
+        "kind": "forever",
+        "child": {
+            "kind": "sequence",
+            "children": [{"kind": "drive_to", "target": "/W/B/wp1"}]
+        }
+    }))
+    .unwrap();
+    let updated = append_waypoint_leaf(Some(&looped), "/W/B/wp2").unwrap();
+    let value = xml_to_value(&updated).unwrap();
+
+    assert_eq!(value["kind"].as_str(), Some("forever"));
+    assert_eq!(target_paths(&updated), vec!["/W/B/wp1", "/W/B/wp2"]);
 }
 
 #[test]

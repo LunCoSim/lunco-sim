@@ -47,7 +47,7 @@ use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSourceText, UsdStageAsset, UsdVisualSynced};
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::document::UsdOp;
@@ -595,7 +595,7 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// building a vehicle from parts stays rebuild-free.
 ///
 /// `SetActive` has ONE carve-out: a waypoint marker prim (authored at
-/// `/<vessel>/Route/W<n>`, see `author_marker_prim`). A marker is purely visual —
+/// `/<vessel>/Route/W<n>`, see `author_marker_ops`). A marker is purely visual —
 /// a translucent dome (`physics:collisionEnabled = false`) plus an overlap-only
 /// non-solid Sensor, never a rigid body — so deactivating it only needs its visual
 /// subtree gone, which `refresh_prim_subtree` reconciles. Every other `SetActive`
@@ -628,7 +628,7 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
 
 /// Whether `path` is a waypoint marker prim — the visual-only pin authored at
 /// `/<vessel>/Route/W<n>` (`ROUTE_SCOPE = "Route"`, leaf name `W<n>`). This is the
-/// marker identity contract from `author_marker_prim`, and the signal that a
+/// marker identity contract from `author_marker_ops`, and the signal that a
 /// `SetActive` op may reconcile incrementally instead of rebuilding. Purely a
 /// path-shape check: no stage access, so it stays safe to call from
 /// [`op_needs_rebuild`]. A non-conforming path (anything not ending in
@@ -643,6 +643,96 @@ fn is_waypoint_marker_path(path: &str) -> bool {
         && leaf[1..].chars().all(|c| c.is_ascii_digit())
         && !leaf[1..].is_empty()
         && rest.ends_with("/Route")
+}
+
+/// A program child is a BT program when its generic `LunCoProgramAPI` source
+/// resolves to inline BT.CPP XML or to a supported BT asset. The child name is
+/// intentionally irrelevant: `Mission`, `Safety`, `Guidance`, and user-authored
+/// names all use the same live projection contract.
+fn is_behavior_program(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &openusd::sdf::Path,
+) -> bool {
+    world
+        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .and_then(|stages| stages.get(scene_id))
+        .is_some_and(|stage| {
+            let view = stage.view();
+            view.has_api_schema(path, "LunCoProgramAPI")
+                && (view
+                    .scalar::<String>(path, "info:sourceCode")
+                    .is_some_and(|source| source.trim_start().starts_with('<'))
+                    || lunco_usd_bevy::UsdRead::asset(&view, path, "info:sourceAsset")
+                        .is_some_and(|source| {
+                            lunco_core::programs::is_behavior_tree_asset(&source)
+                        }))
+        })
+}
+
+/// Removal-side companion to [`is_behavior_program`]. Once a source attribute is
+/// cleared or changed away from BT.CPP, the composed prim no longer identifies
+/// itself as a behaviour source; the runtime provenance component still tells us
+/// whether this edit owns the currently projected tree.
+fn owns_projected_behavior(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &openusd::sdf::Path,
+) -> bool {
+    world.iter_entities().any(|entity| {
+        let Some(prim) = entity.get::<UsdPrimPath>() else {
+            return false;
+        };
+        prim.stage_handle.id() == scene_id
+            && entity
+                .get::<lunco_autopilot::usd_tree::BehaviorProgramSource>()
+                .is_some_and(|source| source.0 == path.as_str())
+    })
+}
+
+fn projected_behavior_entity(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &openusd::sdf::Path,
+) -> Option<Entity> {
+    world.iter_entities().find_map(|entity| {
+        let prim = entity.get::<UsdPrimPath>()?;
+        (prim.stage_handle.id() == scene_id
+            && entity
+                .get::<lunco_autopilot::usd_tree::BehaviorProgramSource>()
+                .is_some_and(|source| source.0 == path.as_str()))
+            .then_some(entity.id())
+    })
+}
+
+fn behavior_owner_entity(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &openusd::sdf::Path,
+) -> Option<Entity> {
+    if let Some(owner) = projected_behavior_entity(world, scene_id, path) {
+        return Some(owner);
+    }
+    let owner_path = {
+        let stage = world
+            .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+            .and_then(|stages| stages.get(scene_id))?;
+        let view = stage.view();
+        let mut current = path.parent();
+        let mut result = None;
+        while let Some(candidate) = current {
+            if view.has_api_schema(&candidate, "PhysxVehicleContextAPI") {
+                result = Some(candidate.to_string());
+                break;
+            }
+            current = candidate.parent();
+        }
+        result
+    }?;
+    world.iter_entities().find_map(|entity| {
+        let prim = entity.get::<UsdPrimPath>()?;
+        (prim.stage_handle.id() == scene_id && prim.path == owner_path).then_some(entity.id())
+    })
 }
 
 /// Replay one **incremental** op's typed delta onto the scene's live
@@ -753,19 +843,61 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // consequence, and a refresh would hot-reload a running scenario
             // (resetting its `this`) on a mere save. So author, don't refresh.
             if is_string {
-                // A mission tree is owned by the parent vessel, not by its child
-                // `Mission` scope. Updating its XML is therefore a component
+                // A BT program is owned by the parent vessel, not by its child
+                // program prim. Updating its source is therefore a component
                 // replacement on that already-live vessel, NOT a subtree refresh:
-                // re-instantiating the Rover here destroys its physics/cosim state.
-                if name == "info:sourceCode" && path.ends_with("/Mission") {
-                    if let Some((owner_path, _)) = path.rsplit_once('/') {
-                        let mut q = world.query::<(Entity, &lunco_usd_bevy::UsdPrimPath)>();
-                        if let Some((owner, _)) = q.iter(world).find(|(_, prim)| {
-                            prim.stage_handle.id() == scene_id && prim.path == owner_path
-                        }) {
-                            world
-                                .entity_mut(owner)
-                                .insert(lunco_autopilot::usd_tree::BehaviorXml(value.clone()));
+                // re-instantiating the rover here destroys its physics/cosim state.
+                if matches!(name.as_str(), "info:sourceCode" | "info:sourceAsset")
+                    && (is_behavior_program(world, scene_id, &sp)
+                        || owns_projected_behavior(world, scene_id, &sp))
+                {
+                    let source = world
+                        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                        .and_then(|stages| stages.get(scene_id))
+                        .and_then(|stage| {
+                            let view = stage.view();
+                            let xml = view
+                                .scalar::<String>(&sp, "info:sourceCode")
+                                .filter(|source| source.trim_start().starts_with('<'));
+                            let asset = lunco_usd_bevy::UsdRead::asset(
+                                &view,
+                                &sp,
+                                "info:sourceAsset",
+                            )
+                            .filter(|source| {
+                                lunco_core::programs::is_behavior_tree_asset(source)
+                            });
+                            Some((xml, asset))
+                        });
+                    if let Some(owner) = behavior_owner_entity(world, scene_id, &sp) {
+                        let mut entity = world.entity_mut(owner);
+                        match source {
+                            Some((Some(xml), _)) => {
+                                entity.insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
+                                entity.insert(
+                                    lunco_autopilot::usd_tree::BehaviorProgramSource(
+                                        sp.as_str().to_string(),
+                                    ),
+                                );
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>();
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
+                            }
+                            Some((None, Some(asset))) => {
+                                entity.insert(lunco_autopilot::usd_tree::BehaviorXmlPath(asset));
+                                entity.insert(
+                                    lunco_autopilot::usd_tree::BehaviorProgramSource(
+                                        sp.as_str().to_string(),
+                                    ),
+                                );
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXml>();
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
+                            }
+                            _ => {
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXml>();
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>();
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
+                                entity.remove::<lunco_autopilot::usd_tree::BehaviorProgramSource>();
+                            }
                         }
                     }
                 }

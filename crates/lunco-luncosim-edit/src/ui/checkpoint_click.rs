@@ -37,11 +37,10 @@ use lunco_core::session::SessionRegistry;
 use lunco_core::{Avatar, EguiFocus, GlobalEntityId, SpawnToolActive, TerrainToolActive};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{
-    LayerId, UsdOp, WAYPOINT_BEHAVIORS_SCOPE, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM,
-    WAYPOINT_ROUTE_SCOPE,
+    LayerId, UsdOp, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM, WAYPOINT_ROUTE_SCOPE,
 };
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
@@ -386,39 +385,13 @@ pub fn on_scene_click_checkpoint(
                 .map(|p| format!("/{p}"))
                 .unwrap_or_else(|| "/".to_string())
         });
-    let scope_path = join_prim(&root, WAYPOINT_BEHAVIORS_SCOPE);
-
-    // Create the `Behaviors` scope on first use. `AddPrim` on an existing prim is a
-    // rejection, not a merge, so only author it when it is genuinely absent.
-    let scope_exists = prim_exists(host, &scope_path);
-    if !scope_exists {
-        commands.trigger(ApplyUsdOp {
-            doc,
-            op: UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: root.clone(),
-                name: WAYPOINT_BEHAVIORS_SCOPE.to_string(),
-                type_name: Some("Scope".to_string()),
-                reference: None,
-            },
-        });
-    }
-
     // ── The MARKER is an authored prim ────────────────────────────────────────
     // Not a Rust-built sphere: `vessels/markers/waypoint.usda` already defines
     // the dome, its livery and its arrival trigger zone. Referencing it means
     // one marker implementation for scene-authored and click-dropped waypoints
     // alike — the two used to be different objects that only looked alike, and
     // the Rust one drew itself in the vessel's hull colour.
-    let marker_path = author_marker_prim(
-        &mut commands,
-        doc,
-        host,
-        &root,
-        hit,
-        &canonical,
-        vessel_prim,
-    );
+    let (marker_path, mut ops) = author_marker_ops(host, &root, hit, &canonical, vessel_prim);
 
     // ── The mission's topology ────────────────────────────────────────────────
     // Append the leaf FIRST: if the tree is a shape the editor must not restructure,
@@ -434,35 +407,32 @@ pub fn on_scene_click_checkpoint(
         }
     };
 
-    // ── Author the one canonical mission edit ────────────────────────────────
-    // Update `BehaviorXml` directly on the vessel entity FIRST so the autopilot tree
-    // picks up the new waypoint instantly without waiting for stage re-projection or
-    // resetting vessel state.
-    commands.entity(vessel).insert(BehaviorXml(xml.clone()));
-
-    let mission = ensure_mission_program(
-        &mut commands,
-        host,
-        doc,
-        &vessel_prim.path,
-        canonical
-            .get(vessel_prim.stage_handle.id())
-            .zip(SdfPath::new(&join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM)).ok())
-            .is_some_and(|(stage, mission)| stage.view().has_prim(&mission)),
-    );
+    // ── Author one coherent USD intent ──────────────────────────────────────
+    // The live projector owns ECS components. The editor only submits the complete
+    // authored change set, so it cannot briefly install a half-built mission or
+    // overwrite the composed BehaviorXml with a second, out-of-band value.
+    let mission = join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM);
+    let mission_exists = canonical
+        .get(vessel_prim.stage_handle.id())
+        .zip(SdfPath::new(&mission).ok())
+        .is_some_and(|(stage, mission)| stage.view().has_prim(&mission));
+    let (mission, mission_ops) = ensure_mission_program_ops(host, &vessel_prim.path, mission_exists);
+    ops.extend(mission_ops);
+    ops.push(UsdOp::SetAttribute {
+        edit_target: LayerId::root(),
+        path: mission.clone(),
+        name: "info:sourceCode".to_string(),
+        type_name: "string".to_string(),
+        value: xml,
+    });
     info!(
         "[waypoint] writing to doc {:?}, mission prim {:?}",
         doc, mission
     );
-    commands.trigger(ApplyUsdOp {
+    commands.trigger(ApplyUsdOps {
         doc,
-        op: UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
-            path: mission,
-            name: "info:sourceCode".to_string(),
-            type_name: "string".to_string(),
-            value: xml,
-        },
+        label: "Create waypoint mission edit".to_string(),
+        ops,
     });
 }
 
@@ -605,30 +575,24 @@ pub fn on_scene_click_place_waypoint(
         warn!("[waypoint] placement failed: no USD host for document {doc:?}");
         return;
     };
-    let new_target = author_marker_prim(
-        &mut commands,
-        doc,
-        host,
-        &root,
-        world,
-        &canonical,
-        vessel_prim,
-    );
+    let (new_target, mut ops) = author_marker_ops(host, &root, world, &canonical, vessel_prim);
     let edited = insert_waypoint_after(&xml.0, &pending.coord_key, &new_target);
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
-            commands.trigger(ApplyUsdOp {
+            ops.push(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                // Editing an EXISTING tree, so the program prim is already there —
+                // the XML above was read back off it.
+                path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
+                name: "info:sourceCode".to_string(),
+                type_name: "string".to_string(),
+                value: new_xml,
+            });
+            commands.trigger(ApplyUsdOps {
                 doc,
-                op: UsdOp::SetAttribute {
-                    edit_target: LayerId::root(),
-                    // Editing an EXISTING tree, so the program prim is already there —
-                    // the XML above was read back off it.
-                    path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
-                    name: "info:sourceCode".to_string(),
-                    type_name: "string".to_string(),
-                    value: new_xml,
-                },
+                label: "Insert waypoint".to_string(),
+                ops,
             });
         }
         Err(err) => warn!("[waypoint] placement failed: {err}"),
@@ -1141,27 +1105,25 @@ fn vessel_for_target<'a>(
 /// One implementation for every way a waypoint comes into being (drop,
 /// insert-after), so a marker is never half-authored: the geometry, livery and
 /// trigger zone all come from the referenced asset.
-fn author_marker_prim(
-    commands: &mut Commands,
-    doc: lunco_doc::DocumentId,
+fn author_marker_ops(
     host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
     root: &str,
     at: DVec3,
     canonical: &CanonicalStages,
     vessel_prim: &UsdPrimPath,
-) -> String {
+) -> (String, Vec<UsdOp>) {
     let route_scope = join_prim(root, WAYPOINT_ROUTE_SCOPE);
+    let mut ops = Vec::new();
     // `AddPrim` on an existing prim is a rejection, not a merge.
-    if !composed_prim_exists(canonical, vessel_prim, &route_scope) {
-        commands.trigger(ApplyUsdOp {
-            doc,
-            op: UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: root.to_string(),
-                name: WAYPOINT_ROUTE_SCOPE.to_string(),
-                type_name: Some("Scope".to_string()),
-                reference: None,
-            },
+    if !composed_prim_exists(canonical, vessel_prim, &route_scope)
+        && !prim_exists(host, &route_scope)
+    {
+        ops.push(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: root.to_string(),
+            name: WAYPOINT_ROUTE_SCOPE.to_string(),
+            type_name: Some("Scope".to_string()),
+            reference: None,
         });
     }
     // First free `W<n>` — the name a scene author would have written by hand.
@@ -1176,28 +1138,22 @@ fn author_marker_prim(
         })
         .expect("an unbounded search always finds a free name");
     let marker_path = join_prim(&route_scope, &marker_name);
-    commands.trigger(ApplyUsdOp {
-        doc,
-        op: UsdOp::AddPrim {
-            edit_target: LayerId::root(),
-            parent_path: route_scope,
-            name: marker_name,
-            type_name: Some("Xform".to_string()),
-            reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
-        },
+    ops.push(UsdOp::AddPrim {
+        edit_target: LayerId::root(),
+        parent_path: route_scope,
+        name: marker_name,
+        type_name: Some("Xform".to_string()),
+        reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
     });
     // The picked point is grid-absolute, the frame authored translates are in
     // (`persist_move_to_runtime_layer` writes a world position straight into
     // `SetTranslate`).
-    commands.trigger(ApplyUsdOp {
-        doc,
-        op: UsdOp::SetTranslate {
-            edit_target: LayerId::root(),
-            path: marker_path.clone(),
-            value: [at.x, at.y, at.z],
-        },
+    ops.push(UsdOp::SetTranslate {
+        edit_target: LayerId::root(),
+        path: marker_path.clone(),
+        value: [at.x, at.y, at.z],
     });
-    marker_path
+    (marker_path, ops)
 }
 
 /// Join a parent prim path and a child name, handling the stage root (`"/"`).
@@ -1210,7 +1166,8 @@ fn join_prim(parent: &str, name: &str) -> String {
 }
 
 /// The API-applied Scope that carries a vessel's mission tree, creating it if
-/// this is the first waypoint — returns the path to author `info:sourceCode` onto.
+/// this is the first waypoint — returns the path to author `info:sourceCode` onto
+/// and the operations needed to create it when absent.
 ///
 /// The tree is a PROGRAM, not an attribute on the vessel: a mission is bolted on,
 /// so it is a child prim that can be deleted to remove the behaviour, and the
@@ -1219,41 +1176,34 @@ fn join_prim(parent: &str, name: &str) -> String {
 /// `BehaviorXml` on the vessel that owns it.
 ///
 /// `AddPrim` on an existing prim is a rejection rather than a merge, so it is only
-/// authored when genuinely absent — the same rule the `Behaviors` scope follows.
+/// authored when genuinely absent.
 ///
 /// `mission_exists` comes from the **live composed stage**, not the document
 /// layer. Traverse authors its mission inside the selected site variant; an
 /// authored-layer lookup cannot see that composed prim and used to create a
 /// duplicate Mission on the first Alt-click, forcing a rover re-projection.
-fn ensure_mission_program(
-    commands: &mut Commands,
+fn ensure_mission_program_ops(
     host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
-    doc: lunco_doc::DocumentId,
     vessel_path: &str,
     mission_exists: bool,
-) -> String {
+) -> (String, Vec<UsdOp>) {
     let path = join_prim(vessel_path, WAYPOINT_MISSION_PROGRAM);
+    let mut ops = Vec::new();
     if !mission_exists && !prim_exists(host, &path) {
-        commands.trigger(ApplyUsdOp {
-            doc,
-            op: UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: vessel_path.to_string(),
-                name: WAYPOINT_MISSION_PROGRAM.to_string(),
-                type_name: Some("Scope".to_string()),
-                reference: None,
-            },
+        ops.push(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: vessel_path.to_string(),
+            name: WAYPOINT_MISSION_PROGRAM.to_string(),
+            type_name: Some("Scope".to_string()),
+            reference: None,
         });
-        commands.trigger(ApplyUsdOp {
-            doc,
-            op: UsdOp::SetApiSchemas {
-                edit_target: LayerId::root(),
-                path: path.clone(),
-                schemas: vec!["LunCoProgramAPI".to_string()],
-            },
+        ops.push(UsdOp::SetApiSchemas {
+            edit_target: LayerId::root(),
+            path: path.clone(),
+            schemas: vec!["LunCoProgramAPI".to_string()],
         });
     }
-    path
+    (path, ops)
 }
 
 /// Whether `path` is already authored in either layer of the document.

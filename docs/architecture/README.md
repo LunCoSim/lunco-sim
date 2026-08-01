@@ -85,6 +85,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`44-surface-orbital-spaces.md`](44-surface-orbital-spaces.md) | The surface/celestial space split |
 | [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md) · [`46-bigspace-deep-analysis.md`](46-bigspace-deep-analysis.md) | `big_space` contract and the jitter root cause. **`cell_edge_length` and `switching_threshold` are PRECISION knobs, not extent knobs** |
 | [`48-object-builder.md`](48-object-builder.md) | The object builder |
+| [`49-control-programs-and-live-rebuild.md`](49-control-programs-and-live-rebuild.md) | Generic control programs, OBC/FSW composition, and live USD rebuild boundaries |
 | [`49-connectivity-link-kernel.md`](49-connectivity-link-kernel.md) | The generic link kernel (comms is a domain over it, not a kernel) |
 | [`50-usd-driven-visuals.md`](50-usd-driven-visuals.md) | Beams, plumes, ribbons: geometry+look authored in USD, logic in Rust, bound by name (`info:id`). **`radius`/`height` bake at instantiation — live size is `xformOp:scale`**; a `lunco:*` property needs THREE files or it is inert |
 | [`51-cinematic-camera.md`](51-cinematic-camera.md) | Authored camera paths (`UsdGeomBasisCurves` + a per-object driven clock). **`Ts` splines are SCALAR-ONLY** — no `double3` translate; hold via the clock tree, never `Playback.mode` |

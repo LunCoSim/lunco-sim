@@ -701,6 +701,32 @@ fn collect_joint_scan_read(
 /// schemas to its sim/avatar/wheel components off either the live canonical
 /// `StageView` or the flattened `sdf::Data`, identically.
 #[allow(clippy::too_many_arguments)]
+/// Collect behavior-tree program children below a vehicle, including a
+/// namespace such as `OBC`. Program discovery is capability-based and recursive;
+/// the namespace's spelling and depth are authoring choices, not runtime rules.
+fn collect_behavior_sources(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    parent: &SdfPath,
+    out: &mut Vec<(String, Option<String>, Option<String>)>,
+) {
+    for child in reader.children(parent) {
+        if reader.has_api_schema(&child, "LunCoProgramAPI") {
+            if let Some(xml) = reader
+                .scalar::<String>(&child, "info:sourceCode")
+                .filter(|s| s.trim_start().starts_with('<'))
+            {
+                out.push((child.as_str().to_string(), Some(xml), None));
+            } else if let Some(path) = reader
+                .asset(&child, "info:sourceAsset")
+                .filter(|s| lunco_core::programs::is_behavior_tree_asset(s))
+            {
+                out.push((child.as_str().to_string(), None, Some(path)));
+            }
+        }
+        collect_behavior_sources(reader, &child, out);
+    }
+}
+
 fn process_usd_sim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -1251,24 +1277,55 @@ fn process_usd_sim_prim_read(
     // of its own: a declarative tree is
     // not a script, it is compiled and ticked by the behaviour engine. Extension
     // picks the engine, exactly as it does for `.mo` and `.rhai`.
-    for child in reader.children(&sdf_path) {
-        if !reader.has_api_schema(&child, "LunCoProgramAPI") {
-            continue;
-        }
-        if let Some(xml) = reader
-            .scalar::<String>(&child, "info:sourceCode")
-            .filter(|s| s.trim_start().starts_with('<'))
-        {
+    let mut behavior_sources: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    collect_behavior_sources(reader, &sdf_path, &mut behavior_sources);
+    // A BT.CPP file may contain several named BehaviorTree definitions; its
+    // `main_tree_to_execute` is the explicit selection for that file. Several
+    // sibling BT program children are different controllers, not an implicit
+    // priority list: choosing one by traversal order would make Safety/Mission
+    // arbitration a hidden last-writer race. Keep the projection fail-closed
+    // until those programs are connected through an authored port arbiter.
+    behavior_sources.sort_by(|a, b| a.0.cmp(&b.0));
+    if behavior_sources.len() > 1 {
+        warn!(
+            "USD prim {} carries {} BT program children; no tree projected until an authored port arbiter selects one",
+            prim_path.path,
+            behavior_sources.len()
+        );
+    }
+    if behavior_sources.len() != 1 {
+        commands
+            .entity(entity)
+            .remove::<lunco_autopilot::usd_tree::BehaviorXml>()
+            .remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>()
+            .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>()
+            .remove::<lunco_autopilot::usd_tree::BehaviorProgramSource>();
+    }
+    let selected_behavior = (behavior_sources.len() == 1)
+        .then(|| behavior_sources.into_iter().next().expect("length checked"));
+    if let Some((source_path, xml, asset)) = selected_behavior {
+        if let Some(xml) = xml {
             commands
                 .entity(entity)
-                .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
-        } else if let Some(path) = reader
-            .asset(&child, "info:sourceAsset")
-            .filter(|s| lunco_core::programs::is_behavior_tree_asset(s))
-        {
+                .try_insert((
+                    lunco_autopilot::usd_tree::BehaviorXml(xml),
+                    lunco_autopilot::usd_tree::BehaviorProgramSource(
+                        source_path.clone(),
+                    ),
+                ))
+                .remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>()
+                .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
+        } else if let Some(asset) = asset {
             commands
                 .entity(entity)
-                .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+                .try_insert((
+                    lunco_autopilot::usd_tree::BehaviorXmlPath(asset),
+                    lunco_autopilot::usd_tree::BehaviorProgramSource(
+                        source_path,
+                    ),
+                ))
+                .remove::<lunco_autopilot::usd_tree::BehaviorXml>()
+                .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
         }
     }
 
@@ -2483,7 +2540,7 @@ fn animate_proxy_physical_wheels(
 
 /// Marker to indicate a prim has been processed by the sim system.
 #[derive(Component)]
-struct UsdSimProcessed;
+pub struct UsdSimProcessed;
 
 /// Marker: this prim's link/celestial vocabulary has been projected to components.
 #[derive(Component)]
@@ -2739,7 +2796,7 @@ fn try_wire_wheel(
 }
 
 /// Bind the waypoint prims a vessel's behaviour tree references (`<Action ID="drive_to"
-/// target="/World/Behaviors/RoverPatrol/wp0"/>`) to their live entities, so
+/// target="/World/Route/W0"/>`) to their live entities, so
 /// `lunco_autopilot::usd_tree::compile_behavior_xml` can bake their world positions
 /// into the compiled tree.
 ///
@@ -2803,7 +2860,7 @@ fn resolve_behavior_targets(
                 let match_stage = vessel_path
                     .map(|vp| p.stage_handle == vp.stage_handle)
                     .unwrap_or(true);
-                let is_behavior = path.contains("/Behaviors/") || path.contains("/Route/");
+                let is_behavior = path.contains("/Route/");
                 let inst = instance_key(*e, &q_provenance, &q_gid, &q_instance_root);
                 let match_inst = is_behavior
                     || inst.is_none()

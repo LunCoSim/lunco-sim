@@ -51,7 +51,7 @@ def Xform "RoverEasy" (
     # traction cone — τ_cone = μ·N·r per wheel (N = 532 kg·g_moon/6 ≈ 143.6 N,
     # r = 0.4 m ⇒ easy cone 103 N·m). Above ~2× the motor reaction on the free
     # bogie hinge slams it into its ±20° stop and lifts the middle wheels. This
-    # tier: 153 N·m at the axle ⇒ 0.9 N·m shaft stall.
+    # tier: 119 N·m at the axle ⇒ 0.7 N·m shaft stall.
     # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
     # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
     # and rear wheels off the bogie, so each tier's opinions are nested one level
@@ -90,8 +90,8 @@ def Xform "RoverEasy" (
 
     # TORQUE COMES FROM THE MOTOR. The axle torque is derived:
     #   τ_axle = stallTorque · ratio · efficiency = stallTorque · 200 · 0.85
-    # This tier is sized to ~1.5× its traction cone (see the note above): 0.9 N·m
-    # of shaft stall torque lands 153 N·m at the axle — plenty to climb, not
+    # This tier is sized at ~1.2× its traction cone (see the note above): 0.7 N·m
+    # of shaft stall torque lands 119 N·m at the axle — plenty to climb, not
     # enough to slam the bogie. The tier is a per-instance attribute override on a
     # real part, which is also how a single weak or overheating wheel would be
     # expressed.

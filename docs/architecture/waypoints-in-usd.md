@@ -36,9 +36,9 @@ constants):
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat><Sequence>
-      <Action ID="drive_to" target="/World/Behaviors/Rover_wp1"/>
+      <Action ID="drive_to" target="/World/Route/W0"/>
       <Action ID="run_tool" tool="science::take_photo"/>
-      <Action ID="drive_to" target="/World/Behaviors/Rover_wp2"/>
+      <Action ID="drive_to" target="/World/Route/W1"/>
     </Sequence></Repeat>
   </BehaviorTree>
 </root>
@@ -51,8 +51,8 @@ def Xform "Rover" {
     }
 }
 
-def Scope "Behaviors" {
-    def "Rover_wp1" (prepend references = @vessels/markers/waypoint.usda@) {
+def Scope "Route" {
+    def "W0" (prepend references = @vessels/markers/waypoint.usda@) {
         double3 xformOp:translate = (10, 0, 3)      # ← drag this; the rover re-routes
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -76,8 +76,8 @@ Two things fell out of the existing codebase rather than being invented:
 ### Waypoints are not children of the vessel
 
 A route is in WORLD space. Parented under the rover, the waypoints would ride along
-as it drives — the route would chase the vehicle. They live in a sibling `Behaviors`
-scope, and the XML names them by path.
+as it drives — the route would chase the vehicle. They live in the scene root's
+`Route` scope, and the XML names them by path.
 
 ### Resolution happens at compile time
 
@@ -94,10 +94,12 @@ A tree naming a deleted waypoint **refuses to compile** and keeps its last good 
 
 ## Interaction — every edit is an existing `UsdOp`
 
-**No new command verbs.** Alt+LMB triggers `ApplyUsdOp` three times: `AddPrim` (the
-pin, referencing the marker asset), `SetTranslate` (where it landed), `SetAttribute`
-(`info:sourceCode` on the mission's `LunCoProgramAPI` prim — the tree that now
-names it).
+**No new command verbs.** Alt+LMB lowers one intent to `ApplyUsdOps`: ordered
+`AddPrim`/`SetTranslate` operations for the marker, optional mission-program
+construction (`AddPrim` + `SetApiSchemas`), and `SetAttribute` for
+`info:sourceCode`. The document journals it as one undo unit and the live projector
+sees the complete authored shape after the change set, so no ECS component is
+patched directly by the editor.
 
 Everything else about a waypoint is *already implemented*, by code that knows nothing
 about waypoints:

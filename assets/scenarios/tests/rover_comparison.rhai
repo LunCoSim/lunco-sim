@@ -141,6 +141,7 @@ fn on_start(me) {
     print("[rover-comparison] course: " + this.stations.len() +
           " obstacle prim(s) across the lanes, discovered from the scene");
     print("[rover-comparison] identical lanes at x = -10 / 0 / +10; all tiers launch together");
+    this.next_settle = 0.0;
     this.phase = "settle";
 }
 
@@ -150,6 +151,21 @@ fn on_tick(me) {
 
     if this.phase == "settle" {
         for rover in this.rovers { brake(rover); }
+        // TEMP DIAG: settle sampler — remove after nondeterminism hunt.
+        if this.t >= this.next_settle && this.t < this.settle_s {
+            let line = "[rc-settle] t=" + r4(this.t);
+            for i in 0..this.n {
+                let at = world_pos(this.rovers[i]);
+                if at == () {
+                    line += "  " + this.names[i] + " p=()";
+                } else {
+                    line += "  " + this.names[i] + " p=" + r6(at[0]) + "," + r6(at[1]) +
+                        "," + r6(at[2]) + " tilt=" + r6(tilt_deg(this.rovers[i]).abs());
+                }
+            }
+            print(line);
+            this.next_settle = this.t + 0.0167;
+        }
         if this.t >= this.settle_s {
             for i in 0..this.n {
                 let rover = this.rovers[i];
@@ -215,9 +231,24 @@ fn on_tick(me) {
                 " b=" + r2(get(this.rovers[i], "brake")) +
                 " dl=" + r2(get(this.rovers[i], "drive_left")) +
                 " dr=" + r2(get(this.rovers[i], "drive_right"));
+            // TEMP DIAG: micro-pose for Easy — remove after nondeterminism hunt.
+            if i == 0 {
+                let e = world_pos(this.rovers[i]);
+                line += "  E6=" + r6(e[0]) + "," + r6(e[1]) + "," + r6(e[2]);
+            }
         }
         print(line);
         this.next_sample = this.t + 2.0;
+    }
+    // TEMP DIAG: per-tick full-precision probe around the divergence window.
+    if this.t >= 78.0 && this.t <= 85.0 {
+        let e = world_pos(this.rovers[0]);
+        let line = "[rc-probe] t=" + this.t;
+        line += "  Easy x=" + e[0] + " y=" + e[1] + " z=" + e[2];
+        line += " tilt=" + tilt_deg(this.rovers[0]).abs();
+        line += " th=" + get(this.rovers[0], "throttle");
+        line += " s=" + get(this.rovers[0], "steer");
+        print(line);
     }
 
     if this.t >= this.settle_s + this.run_s {

@@ -33,6 +33,9 @@ fn r2(x) { if x == () { return (); } (x * 100.0).round() / 100.0 }
 /// Round to 4 dp, for values where millimetres matter (joint travel).
 fn r4(x) { if x == () { return (); } (x * 10000.0).round() / 10000.0 }
 
+/// Round to 6 dp, for values where micrometres matter (settle traces).
+fn r6(x) { if x == () { return (); } (x * 1000000.0).round() / 1000000.0 }
+
 /// `v` must sit within `[lo, hi]`.
 ///
 /// Phrased POSITIVELY (`v >= lo && v <= hi`), never as `!(v < lo || v > hi)`.

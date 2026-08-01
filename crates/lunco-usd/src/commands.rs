@@ -658,7 +658,7 @@ register_commands!(
 /// document registry owns both policies so every file-backed domain keeps the
 /// same identity and history invariants.
 /// Remove the SESSION-dropped waypoint/mission state from `doc`'s base layer —
-/// the marker prims, the `Route`/`Behaviors` scopes and the `Mission` programs
+/// the marker prims, the `Route` scopes and the `Mission` programs
 /// the editor authored while the scene was live — leaving the on-disk file's
 /// own waypoints and every other unsaved edit untouched. Returns the number of
 /// prims removed.
@@ -715,11 +715,7 @@ fn clear_session_mission_state(
         }
         // Only the session-authored scopes are removed: a scope name the FILE
         // also carries (a scene-authored route) is left in place.
-        if matches!(
-            name.as_str(),
-            crate::document::WAYPOINT_ROUTE_SCOPE | crate::document::WAYPOINT_BEHAVIORS_SCOPE
-        ) && !in_file
-        {
+        if name == crate::document::WAYPOINT_ROUTE_SCOPE && !in_file {
             remove.push(path.to_string());
             continue;
         }
@@ -743,6 +739,11 @@ fn clear_session_mission_state(
         }
     }
 
+    // Remove children before their session-created parent scopes. OpenUSD removes
+    // a subtree with one `RemovePrim`; applying the parent first would make the
+    // later marker removes reject and under-report the cleanup, even though the
+    // final stage happens to be empty.
+    remove.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
     let mut cleared = 0;
     for path in &remove {
         if registry
@@ -2423,8 +2424,7 @@ mod tests {
     // ── Scene-restart mission cleanup ────────────────────────────────────────
 
     use crate::document::{
-        WAYPOINT_BEHAVIORS_SCOPE, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM,
-        WAYPOINT_ROUTE_SCOPE,
+        WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM, WAYPOINT_ROUTE_SCOPE,
     };
 
     /// The on-disk twin file: a scene with ONE file-authored waypoint (W0) and
@@ -2576,16 +2576,9 @@ def Xform "Traverse"
         };
         app.update();
 
-        // A Ctrl+LMB session: Behaviors + Route scopes, W0/W1 markers, and the
+        // A Ctrl+LMB session: Route scope, W0/W1 markers, and the
         // Rover's Mission program carrying the BT.CPP route.
         let ops = [
-            UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: "/Traverse".into(),
-                name: WAYPOINT_BEHAVIORS_SCOPE.into(),
-                type_name: Some("Scope".into()),
-                reference: None,
-            },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: "/Traverse".into(),
@@ -2636,8 +2629,8 @@ def Xform "Traverse"
         };
         app.update();
         assert_eq!(
-            cleared, 5,
-            "W0 + W1 markers, Route + Behaviors scopes, Mission prim (its sourceCode goes with it)"
+            cleared, 4,
+            "W0 + W1 markers, Route scope, Mission prim (its sourceCode goes with it)"
         );
 
         let data = {
@@ -2649,7 +2642,6 @@ def Xform "Traverse"
             "/Traverse/Route",
             "/Traverse/Route/W0",
             "/Traverse/Route/W1",
-            "/Traverse/Behaviors",
             "/Traverse/Rover/Mission",
         ] {
             assert!(

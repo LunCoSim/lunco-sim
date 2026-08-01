@@ -1361,6 +1361,40 @@ impl Node<DriveCtx> for CooldownNode {
 #[derive(Component)]
 pub struct AutopilotBehavior(pub BoxNode<DriveCtx>);
 
+/// Latched lifecycle of the currently installed behaviour program.
+///
+/// Behaviour-tree composites reset themselves after returning a terminal status;
+/// that is correct for a tree embedded in a loop, but a top-level one-way mission
+/// needs its host to remember that it finished. This component is the host-side
+/// lifecycle, separate from the tree's internal cursor, and is reset whenever a
+/// new behaviour is installed.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutopilotExecutionState {
+    /// The tree may be ticked on the next fixed update.
+    #[default]
+    Running,
+    /// The tree returned `Success`; hold the vessel until an explicit re-arm or
+    /// compatible route update occurs.
+    Completed,
+    /// The tree returned `Failure`; hold the vessel until an explicit re-arm or
+    /// compatible route update occurs.
+    Failed,
+}
+
+impl AutopilotExecutionState {
+    fn terminal(self) -> bool {
+        !matches!(self, Self::Running)
+    }
+
+    fn from_status(status: Status) -> Option<Self> {
+        match status {
+            Status::Running => None,
+            Status::Success => Some(Self::Completed),
+            Status::Failure => Some(Self::Failed),
+        }
+    }
+}
+
 impl AutopilotBehavior {
     /// Compile from a [`BehaviorSpec`] (typically deserialized from rhai/JSON data).
     pub fn new(spec: &BehaviorSpec) -> Self {
@@ -1397,6 +1431,32 @@ impl AutopilotBehavior {
             tree.0.set_cursor(c);
         }
         tree
+    }
+
+    /// Tick the tree under the host lifecycle latch.
+    ///
+    /// BT composites are reusable and reset after a terminal result. A mission
+    /// host must therefore own the decision to stop ticking a one-way tree; this
+    /// method keeps that rule next to the tree replacement/resume machinery and
+    /// makes it testable without constructing a full physics world.
+    pub fn tick_hosted(
+        &mut self,
+        execution: &mut AutopilotExecutionState,
+        ctx: &mut DriveCtx,
+    ) -> Status {
+        if execution.terminal() {
+            ctx.out = (0.0, 0.0, 1.0);
+            return match execution {
+                AutopilotExecutionState::Completed => Status::Success,
+                AutopilotExecutionState::Failed => Status::Failure,
+                AutopilotExecutionState::Running => unreachable!(),
+            };
+        }
+        let status = self.0.tick(ctx);
+        if let Some(next) = AutopilotExecutionState::from_status(status) {
+            *execution = next;
+        }
+        status
     }
 }
 
@@ -1601,7 +1661,12 @@ pub struct PrevTargets {
 pub fn drive_autopilots(
     registry: Res<SessionRegistry>,
     world_time: Res<lunco_time::WorldTime>,
-    mut q: Query<(&Autopilot, Option<&mut AutopilotBehavior>)>,
+    mut q: Query<(
+        Entity,
+        &Autopilot,
+        Option<&mut AutopilotBehavior>,
+        Option<&mut AutopilotExecutionState>,
+    )>,
     q_gid: Query<&GlobalEntityId>,
     // ORIENTATION only. A rotation is the same in the render frame and the root
     // frame (big_space rebases the origin, it does not spin it), so `forward()`
@@ -1641,7 +1706,7 @@ pub fn drive_autopilots(
     // prove what the opaque tree reads, so stay conservative).
     let mut needed: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut need_all = false;
-    for (ap, behavior) in q.iter() {
+    for (_, ap, behavior, _) in q.iter() {
         if !ap.engaged || behavior.is_none() {
             continue; // constant-cruise autopilots never read the snapshot
         }
@@ -1675,7 +1740,7 @@ pub fn drive_autopilots(
     prev.poses = states.iter().map(|(k, s)| (*k, s.pos)).collect();
     prev.now = now;
     let targets = std::sync::Arc::new(states);
-    for (ap, behavior) in &mut q {
+    for (actor, ap, mut behavior, mut execution) in &mut q {
         if !ap.engaged {
             continue;
         }
@@ -1686,8 +1751,10 @@ pub fn drive_autopilots(
             continue; // lost the vessel → stop driving (one writer per tick)
         }
 
-        let (throttle, steer, brake, mut fired) = match (behavior, q_xf.get(ap.vessel).ok()) {
-            (Some(mut tree), Some(xf)) => {
+        let (throttle, steer, brake, mut fired) = match
+            (behavior.as_deref_mut(), q_xf.get(ap.vessel).ok())
+        {
+            (Some(tree), Some(xf)) => {
                 let clearance = clearances
                     .as_ref()
                     .and_then(|c| c.0.get(&ap.vessel).copied())
@@ -1726,7 +1793,15 @@ pub fn drive_autopilots(
                     clearance,
                     fired: Vec::new(),
                 };
-                tree.0.tick(&mut ctx);
+                if let Some(state) = execution.as_deref_mut() {
+                    tree.tick_hosted(state, &mut ctx);
+                } else {
+                    let mut state = AutopilotExecutionState::Running;
+                    tree.tick_hosted(&mut state, &mut ctx);
+                    if state.terminal() {
+                        commands.entity(actor).insert(state);
+                    }
+                }
                 (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
             }
             // No behaviour tree: the explicit constant-cruise autopilot. A zero
@@ -1951,13 +2026,17 @@ fn on_engage_autopilot(
         Some(actor) => {
             let mut ec = commands.entity(actor);
             ec.try_insert(Autopilot::forward(cmd.vessel, cmd.index, throttle));
+            ec.try_insert(AutopilotExecutionState::Running);
             // Drop any tree from the previous engage: an empty `spec_json` means
             // "constant forward throttle", which only holds if no stale
             // `AutopilotBehavior` is left attached to out-vote it.
             ec.try_remove::<AutopilotBehavior>();
             ec
         }
-        None => commands.spawn(Autopilot::forward(cmd.vessel, cmd.index, throttle)),
+        None => commands.spawn((
+            Autopilot::forward(cmd.vessel, cmd.index, throttle),
+            AutopilotExecutionState::Running,
+        )),
     };
     if !cmd.spec_json.is_empty() {
         match AutopilotBehavior::from_json(&cmd.spec_json) {
@@ -2039,7 +2118,10 @@ fn on_set_autopilot_behavior(
     };
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
-            commands.entity(entity).try_insert(behavior);
+            commands.entity(entity).try_insert((
+                behavior,
+                AutopilotExecutionState::Running,
+            ));
             // Mirror the source spec onto the vessel (read path for UI/gizmo).
             if let Ok(spec) = AutopilotBehaviorSpec::from_json(&cmd.spec_json) {
                 commands.entity(cmd.vessel).try_insert(spec);
@@ -2078,7 +2160,10 @@ fn on_clear_patrol(
     let brake = AutopilotBehavior::new(&BehaviorSpec::Brake);
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
-            commands.entity(entity).try_insert(brake);
+            commands.entity(entity).try_insert((
+                brake,
+                AutopilotExecutionState::Running,
+            ));
         }
         None => warn!(
             "[autopilot] ClearPatrol: no autopilot owns vessel {:?}",

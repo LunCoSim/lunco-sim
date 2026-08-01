@@ -184,8 +184,7 @@ struct Cli {
 /// Deliberately NOT `rand`: this needs three lines of arithmetic, and pulling a
 /// crate in would mean the dt sequence depends on a version bump. Deliberately
 /// not the system RNG or the clock either — see the module docs. The multiplier
-/// and shift triple are Vigna's; the statistical quality only has to be good
-/// enough to look like frame-pacing noise.
+/// and shift triple are Vigna's; the statistical quality only has to be good/// enough to look like frame-pacing noise.
 struct Xorshift64Star(u64);
 
 impl Xorshift64Star {
@@ -445,6 +444,60 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     verdict.result = Some((name, passed));
 }
 
+// TEMP DIAG: full-state probe for the rover_comparison divergence window.
+// Prints the Easy chassis state and every Easy wheel's spin/ray state at full
+// f64 precision each tick within the window, so the first run-to-run bit
+// divergence can be localized to a tick and a DOF. REMOVE AFTER THE HUNT.
+fn probe_divergence_state(
+    time: Res<Time<Fixed>>,
+    q_chassis: Query<(
+        &lunco_usd::UsdPrimPath,
+        &avian3d::prelude::Position,
+        &avian3d::prelude::Rotation,
+        &avian3d::prelude::LinearVelocity,
+        &avian3d::prelude::AngularVelocity,
+    )>,
+    q_wheels: Query<(
+        &lunco_usd::UsdPrimPath,
+        &avian3d::prelude::Position,
+        &avian3d::prelude::LinearVelocity,
+        &avian3d::prelude::AngularVelocity,
+    )>,
+) {
+    let t = time.elapsed_secs_f64();
+    if !(4.0..=100.0).contains(&t) {
+        return;
+    }
+    let Some((_, pos, rot, lv, av)) = q_chassis
+        .iter()
+        .find(|(p, ..)| p.path == "/RoverComparison/Easy")
+    else {
+        return;
+    };
+    let p = pos.0;
+    let q = rot.0;
+    let vl = lv.0;
+    let va = av.0;
+    let mut line = format!(
+        "[probe] t={t:.12} p={:.17},{:.17},{:.17} q={:.17},{:.17},{:.17},{:.17} lv={:.17},{:.17},{:.17} av={:.17},{:.17},{:.17}",
+        p.x, p.y, p.z, q.x, q.y, q.z, q.w, vl.x, vl.y, vl.z, va.x, va.y, va.z
+    );
+    let mut wheels_found = 0usize;
+    for (wp, pos2, _, lv2, av2) in q_chassis.iter() {
+        if !wp.path.starts_with("/RoverComparison/Easy") || wp.path == "/RoverComparison/Easy" {
+            continue;
+        }
+        wheels_found += 1;
+        let last = wp.path.rsplit('/').next().unwrap_or("?");
+        line.push_str(&format!(
+            "  {last}:p={:.17},{:.17},{:.17} lv={:.17},{:.17},{:.17} av={:.17},{:.17},{:.17}",
+            pos2.0.x, pos2.0.y, pos2.0.z, lv2.0.x, lv2.0.y, lv2.0.z, av2.0.x, av2.0.y, av2.0.z
+        ));
+    }
+    line.push_str(&format!("  [bodies={wheels_found}]"));
+    println!("{line}");
+}
+
 pub fn run() -> u8 {
     // BEFORE the `App` exists, because building it registers settings sections and
     // that is what loads (and installs the flush for) `settings.json`.
@@ -527,6 +580,83 @@ pub fn run() -> u8 {
 
     app.finish();
     app.cleanup();
+
+    // ── Scene-readiness freeze ────────────────────────────────────────────────
+    //
+    // The kinematic→dynamic activation gate (`GroundColliderPending`) clears
+    // when every USD prim has been examined by the DEM bridge, which in turn
+    // waits for each prim's stage asset to land in the asset store. The LAST
+    // asset landing is an IO-pool event on the WALL clock: it completes after
+    // a different UPDATE count on every run, so rovers begin falling at
+    // "tick 29±1" and the whole run diverges from there — the settle is a
+    // spring-drop whose landing phase is chaotically sensitive to the release
+    // tick, and a wheelie/obstacle collision later amplifies it into different
+    // verdicts (measured: same `--seed`, same binary, same 6006 ticks, Easy
+    // tier flips at a different station every run).
+    //
+    // Freeze the sim clock while the scene finishes loading: run `Update`
+    // (which pumps the asset server and the bridge) with a ZERO step so the
+    // fixed clock never advances, and start the real clock only once the whole
+    // WALL-CLOCK-CONTINGENT half of the spawn pipeline is done — the load
+    // materialized every prim (`SceneLoadInFlight` gone again) and every prim
+    // processed into sim components (`UsdSimProcessed`), and the ground gate
+    // cleared (a DEM terrain has at least requested its collider). Everything
+    // that remains — Avian body admission, joint/differential resolution, the
+    // dynamic activation and its two-update hold — is a deterministic tick
+    // count once the world is fully materialized, because none of it reads the
+    // wall clock anymore. "Sim tick 1" then always means "the spawn pipeline
+    // is done", and the release tick depends only on scene content, never on
+    // load scheduling.
+    //
+    // Bounded: a scene whose gate never clears (unbridgeable prim, DEM bake
+    // held in flight) must fall back to the pre-existing behavior — start the
+    // clock and let the engine's own time-based gates take over.
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    let load_waits = {
+        const MAX_LOAD_WAIT_UPDATES: u32 = 60 * 60;
+        let mut waits = 0u32;
+        while waits < MAX_LOAD_WAIT_UPDATES {
+            app.update();
+            waits += 1;
+            // The startup `LoadScene` runs its first step on the very first
+            // update; the stage asset and every referenced vessel stage land on
+            // the wall clock after that. Until prims exist every readiness query
+            // below is VACUOUSLY true, so the wait must first see the load
+            // actually materialize — `SceneLoadInFlight` gone again AND at least
+            // one `UsdPrimPath` in the world.
+            let load_done =
+                app.world()
+                    .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+                    .is_none();
+            let load_finished = load_done
+                && app
+                    .world_mut()
+                    .query_filtered::<(), With<lunco_usd::UsdPrimPath>>()
+                    .iter(app.world())
+                    .next()
+                    .is_some();
+            // Every USD sim prim processed into its sim components.
+            let all_processed = app
+                .world_mut()
+                .query_filtered::<(), (With<lunco_usd::UsdPrimPath>, Without<lunco_usd::UsdSimProcessed>)>()
+                .iter(app.world())
+                .next()
+                .is_none();
+            let gate_clear = !app.world().resource::<lunco_usd::GroundColliderPending>().0;
+            if load_finished && all_processed && gate_clear {
+                break;
+            }
+            if app.should_exit().is_some() {
+                break;
+            }
+        }
+        waits
+    };
+    println!("[test] scene-readiness freeze held {load_waits} updates");
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
+
+    // TEMP DIAG: full-state probe around the comparison divergence window.
+    app.add_systems(Update, probe_divergence_state);
 
     let mut ticks = 0u64;
     let mut early_exit = false;

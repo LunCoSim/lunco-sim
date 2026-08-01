@@ -5,7 +5,8 @@
 
 use bevy::math::{DVec3, Vec3};
 use lunco_autopilot::{
-    nav_setpoint, AutopilotBehavior, Clearance, DriveCtx, TargetState, TargetStates,
+    nav_setpoint, AutopilotBehavior, AutopilotExecutionState, Clearance, DriveCtx, TargetState,
+    TargetStates,
 };
 use lunco_core::coords::GridPos;
 use std::sync::Arc;
@@ -83,6 +84,37 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
 fn bad_spec_is_a_clean_error() {
     assert!(AutopilotBehavior::from_json("{not json").is_err());
     assert!(AutopilotBehavior::from_json(r#"{"kind":"nope"}"#).is_err());
+}
+
+#[test]
+fn one_way_tree_completion_is_latched_by_its_host() {
+    let mut behavior = AutopilotBehavior::from_json(r#"{"kind":"brake"}"#).unwrap();
+    let mut execution = AutopilotExecutionState::Running;
+    let mut ctx = DriveCtx {
+        pos: GridPos(DVec3::ZERO),
+        fwd: Vec3::X,
+        now: 0.0,
+        self_gid: 0,
+        out: (1.0, 0.0, 0.0),
+        targets: Default::default(),
+        clearance: Default::default(),
+        fired: Vec::new(),
+    };
+
+    assert_eq!(
+        behavior.tick_hosted(&mut execution, &mut ctx),
+        lunco_behavior::Status::Success
+    );
+    assert_eq!(execution, AutopilotExecutionState::Completed);
+
+    // A reusable Sequence/Brake node may reset internally after Success, but the
+    // host must hold the vessel and never re-enter it on the next fixed tick.
+    ctx.out = (1.0, 0.0, 0.0);
+    assert_eq!(
+        behavior.tick_hosted(&mut execution, &mut ctx),
+        lunco_behavior::Status::Success
+    );
+    assert_eq!(ctx.out, (0.0, 0.0, 1.0));
 }
 
 /// Drive a behaviour tree from `start` toward its goals for up to `max` ticks,

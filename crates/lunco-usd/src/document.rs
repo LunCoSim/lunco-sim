@@ -110,8 +110,6 @@ pub const WAYPOINT_MARKER_ASSET: &str = "lunco://vessels/markers/waypoint.usda";
 /// Scene-authored routes already use this name (`/Traverse/Route/W0`), so a
 /// dropped waypoint joins the same scope rather than inventing a parallel one.
 pub const WAYPOINT_ROUTE_SCOPE: &str = "Route";
-/// Scope (under the scene root) that carries vessels' mission programs.
-pub const WAYPOINT_BEHAVIORS_SCOPE: &str = "Behaviors";
 /// Name of the `LunCoProgramAPI` child that carries a vessel's mission tree.
 pub const WAYPOINT_MISSION_PROGRAM: &str = "Mission";
 
