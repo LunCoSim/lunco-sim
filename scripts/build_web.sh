@@ -567,6 +567,14 @@ generate_bindings() {
     else
         warn "Missing crates/lunco-web/web/lunco-boot.{js,css} — page won't boot"
     fi
+    # Optional browser tool bundles are ordinary HTML/CSS/Rhai assets. They
+    # are copied as a directory so a deploy can add or replace tools without
+    # changing the wasm bundle or the engine command surface.
+    if [ -d "$boot_src/tools" ]; then
+        mkdir -p "$dist_dir/tools"
+        cp -r "$boot_src/tools"/. "$dist_dir/tools/"
+        info "Copied browser Rhai tools → $dist_dir/tools/"
+    fi
 
     # DejaVu Sans — wasm has no filesystem, lunco-theme fetches this
     # over HTTP at startup (see crates/lunco-theme/src/fonts.rs::

@@ -869,9 +869,10 @@ fn apply_wheel_drive(
             }
             if q_ports.get(wheel.drive_port).is_ok() {
                 // Traction only exists when the ray is hitting the ground.
-                let Some(hit) = hits.iter_sorted().find(|hit| {
-                    hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12
-                }) else {
+                let Some(hit) = hits
+                    .iter_sorted()
+                    .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
+                else {
                     continue;
                 };
                 {

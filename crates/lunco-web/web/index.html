@@ -21,7 +21,7 @@
         //   __LC_NAME__      display name (capitalised bundle, e.g. Lunica)
         //   __LC_WASM_SIZE__ uncompressed wasm bytes (accurate gzip_static progress)
         import init, * as wasm from './__LC_BUNDLE__.js';
-        import { boot } from './lunco-boot.js';
+        import { boot, mountRhaiTool } from './lunco-boot.js';
 
         // NB: capping the web render resolution by overriding `devicePixelRatio`
         // does NOT work — winit's `fit_canvas_to_parent` sizes the drawing buffer
@@ -47,9 +47,12 @@
         //                  `await window.lunco_api('{"command":"Ping"}')`.
         //   lunco_rhai   — rhai one-shot convenience over lunco_api:
         //                  `await window.lunco_rhai('restart_scene(); pause()')`.
+        //   lunco_mount_rhai_tool — mount trusted HTML + CSS that dispatches
+        //                  explicit Rhai actions through lunco_rhai.
         for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile', 'lunco_api', 'lunco_rhai']) {
             if (wasm[k]) window[k] = wasm[k];
         }
+        window.lunco_mount_rhai_tool = mountRhaiTool;
 
         // Autoload the deploy's default scene once the app is live.
         //

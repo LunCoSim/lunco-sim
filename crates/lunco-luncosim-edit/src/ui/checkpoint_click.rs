@@ -416,7 +416,8 @@ pub fn on_scene_click_checkpoint(
         .get(vessel_prim.stage_handle.id())
         .zip(SdfPath::new(&mission).ok())
         .is_some_and(|(stage, mission)| stage.view().has_prim(&mission));
-    let (mission, mission_ops) = ensure_mission_program_ops(host, &vessel_prim.path, mission_exists);
+    let (mission, mission_ops) =
+        ensure_mission_program_ops(host, &vessel_prim.path, mission_exists);
     ops.extend(mission_ops);
     ops.push(UsdOp::SetAttribute {
         edit_target: LayerId::root(),
@@ -1327,14 +1328,21 @@ pub fn mark_reached_waypoints_on_enter(
         };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
-        if !targets.iter().any(|t| t == &marker_path || t.ends_with(&marker_path) || marker_path.ends_with(t)) {
+        if !targets
+            .iter()
+            .any(|t| t == &marker_path || t.ends_with(&marker_path) || marker_path.ends_with(t))
+        {
             continue;
         }
         // Skip if already reached (read-only query avoids a conflicting mutable
         // borrow; the insert below is via `commands`).
         if q_reached
             .get(vessel)
-            .map(|r| r.0.iter().any(|p| p == &marker_path || p.ends_with(&marker_path) || marker_path.ends_with(p)))
+            .map(|r| {
+                r.0.iter().any(|p| {
+                    p == &marker_path || p.ends_with(&marker_path) || marker_path.ends_with(p)
+                })
+            })
             .unwrap_or(false)
         {
             continue;

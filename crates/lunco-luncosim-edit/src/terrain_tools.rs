@@ -170,6 +170,7 @@ pub fn update_terrain_brush_ghost(
     keys: Res<ButtonInput<KeyCode>>,
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     mut q_ghost: Query<
         (
             Entity,
@@ -183,6 +184,14 @@ pub fn update_terrain_brush_ghost(
     surface: lunco_terrain_surface::GridSurfaceQuery,
 ) {
     if !state.armed() {
+        for (ghost, _, _, _) in q_ghost.iter() {
+            commands.entity(ghost).try_despawn();
+        }
+        return;
+    }
+    // A terrain brush preview is scene input too.  Never project the cursor
+    // through an egui panel onto an unseen surface behind the chrome.
+    if egui_focus.wants_pointer {
         for (ghost, _, _, _) in q_ghost.iter() {
             commands.entity(ghost).try_despawn();
         }

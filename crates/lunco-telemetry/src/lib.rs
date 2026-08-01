@@ -83,7 +83,7 @@ pub struct TelemetrySettings {
     /// silently shortens that window instead of costing memory, which is the
     /// failure mode that looks like "the plot keeps eating my history".
     ///
-    /// Costs 16 B per sample: 24 KB per channel, ~24 MB at the 1024-channel cap.
+    /// Costs 16 B per sample: 24 KB per channel, ~48 MB at the 2048-channel cap.
     pub default_retention: usize,
     /// Master switch.
     pub enabled: bool,
@@ -96,7 +96,10 @@ impl Default for TelemetrySettings {
             // keeps (`lunco_cosim::telemetry`), so an authored channel and a model
             // variable plotted side by side show the same span of history.
             default_rate_hz: 5.0,
-            max_channels: 1024,
+            // The Traverse scene currently publishes roughly 1200 channels.
+            // Keep a full scene plus headroom in the default so ordinary
+            // telemetry is not silently truncated by enumeration order.
+            max_channels: 2048,
             default_retention: 1500,
             enabled: true,
         }
@@ -324,6 +327,45 @@ struct SamplingPlan {
     /// Set by [`mark_sampling_plan_dirty`]; consumed by the sampler, which
     /// rebuilds `channels` before the pass.
     dirty: bool,
+}
+
+/// Rebuild the sampling plan from the unique signal identity `(measured entity,
+/// channel name)`.  Several projections can observe the same port, but the
+/// retained registry uses that pair as its key; sampling the same key twice
+/// only duplicates work and makes the channel cap lie about useful data.
+///
+/// Authored/API declarations win over runtime-discovered declarations.  The
+/// latter are only an automatic projection, while an explicit `Parameter` is
+/// the authoritative policy for rate, retention, metadata, and source.
+fn rebuild_sampling_plan(world: &mut World, plan: &mut SamplingPlan) -> usize {
+    let mut selected = std::collections::HashMap::<(Entity, String), (bool, u64, Entity)>::new();
+    let mut candidates = 0usize;
+
+    for (entity, parameter, runtime) in world
+        .query::<(Entity, &Parameter, Option<&RuntimePortChannel>)>()
+        .iter(world)
+    {
+        if !parameter.enabled || parameter.name.is_empty() {
+            continue;
+        }
+        candidates += 1;
+        let measured = parameter.target.unwrap_or(entity);
+        let key = (measured, parameter.name.clone());
+        let candidate = (runtime.is_some(), entity.to_bits(), entity);
+        let replace = selected
+            .get(&key)
+            .is_none_or(|current| (candidate.0, candidate.1) < (current.0, current.1));
+        if replace {
+            selected.insert(key, candidate);
+        }
+    }
+
+    plan.channels = selected
+        .into_values()
+        .map(|(_, _, entity)| entity)
+        .collect();
+    plan.channels.sort_by_key(|entity| entity.to_bits());
+    candidates.saturating_sub(plan.channels.len())
 }
 
 /// Marks a channel generated from a live public output.  It carries no authored
@@ -648,12 +690,13 @@ pub fn sample_parameters(world: &mut World) {
         dirty: true,
     });
     if plan.dirty {
-        plan.channels.clear();
-        plan.channels.extend(
-            world
-                .query_filtered::<Entity, With<Parameter>>()
-                .iter(world),
-        );
+        let duplicate_count = rebuild_sampling_plan(world, &mut plan);
+        if duplicate_count > 0 {
+            debug!(
+                duplicate_count,
+                "telemetry: collapsed duplicate channel declarations"
+            );
+        }
         plan.dirty = false;
     }
 
@@ -1063,6 +1106,14 @@ mod tests {
     }
 
     #[test]
+    fn default_channel_cap_covers_the_current_scene_budget() {
+        assert!(
+            TelemetrySettings::default().max_channels >= 2048,
+            "the default must retain a full multi-rover scene with headroom"
+        );
+    }
+
+    #[test]
     fn a_live_port_is_discovered_without_a_usd_channel_declaration() {
         let mut app = app();
         app.init_resource::<PortRegistry>();
@@ -1105,6 +1156,66 @@ mod tests {
             0,
             "system-managed entities must not become implicit telemetry channels"
         );
+    }
+
+    #[test]
+    fn duplicate_declarations_for_one_model_signal_use_the_explicit_channel() {
+        let mut world = World::new();
+        let model = world.spawn_empty().id();
+        let runtime = world
+            .spawn((
+                RuntimePortChannel,
+                Parameter {
+                    name: "soc".into(),
+                    target: Some(model),
+                    ..Default::default()
+                },
+            ))
+            .id();
+        let authored = world
+            .spawn(Parameter {
+                name: "soc".into(),
+                target: Some(model),
+                rate_hz: Some(2.0),
+                ..Default::default()
+            })
+            .id();
+        let mut plan = SamplingPlan {
+            dirty: true,
+            ..Default::default()
+        };
+
+        let duplicates = rebuild_sampling_plan(&mut world, &mut plan);
+
+        assert_eq!(duplicates, 1);
+        assert_eq!(plan.channels, vec![authored]);
+        assert_ne!(plan.channels, vec![runtime]);
+    }
+
+    #[test]
+    fn same_port_name_on_different_model_entities_remains_two_channels() {
+        let mut world = World::new();
+        let left = world.spawn_empty().id();
+        let right = world.spawn_empty().id();
+        world.spawn(Parameter {
+            name: "contact_force".into(),
+            target: Some(left),
+            ..Default::default()
+        });
+        world.spawn(Parameter {
+            name: "contact_force".into(),
+            target: Some(right),
+            ..Default::default()
+        });
+        let mut plan = SamplingPlan {
+            dirty: true,
+            ..Default::default()
+        };
+
+        let duplicates = rebuild_sampling_plan(&mut world, &mut plan);
+
+        assert_eq!(duplicates, 0);
+        assert_eq!(plan.channels.len(), 2);
     }
 
     /// A sample distinguishes the measured source from the channel that chose

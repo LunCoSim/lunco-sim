@@ -12,6 +12,104 @@
 // calls `window.__lc_app_ready()` after the first frame paints.
 
 /**
+ * Mount a trusted HTML fragment as a browser-side Rhai tool.
+ *
+ * The fragment is presentation only. A button may use `data-rhai="..."`, or
+ * the fragment may contain an explicit `<script type="application/rhai"
+ * data-target="..." data-event="click">...</script>`. Both forms execute
+ * through the wasm `lunco_rhai` export, so the page never gains a second
+ * command path or a JavaScript evaluator for engine state.
+ *
+ * @param {object} cfg
+ * @param {string} cfg.htmlUrl       URL of an HTML fragment
+ * @param {string} [cfg.cssUrl]      URL of the tool stylesheet
+ * @param {Element|string} [cfg.root] mount element or selector (defaults to body)
+ * @returns {Promise<{element:Element, dispose:()=>void}>}
+ */
+export async function mountRhaiTool({ htmlUrl, cssUrl, root = document.body } = {}) {
+    if (!htmlUrl) throw new TypeError('mountRhaiTool requires htmlUrl');
+    if (typeof window.lunco_rhai !== 'function') {
+        throw new Error('lunco_rhai is not available; wait until the wasm app is ready');
+    }
+
+    const mount = typeof root === 'string' ? document.querySelector(root) : root;
+    if (!mount) throw new Error(`Rhai tool root was not found: ${String(root)}`);
+
+    const htmlResponse = await fetch(htmlUrl, { cache: 'no-cache' });
+    if (!htmlResponse.ok) {
+        throw new Error(`Unable to load Rhai tool HTML: HTTP ${htmlResponse.status}`);
+    }
+    const template = document.createElement('template');
+    template.innerHTML = await htmlResponse.text();
+
+    const rhaiScripts = [...template.content.querySelectorAll('script[type="application/rhai"]')];
+    const scriptBindings = rhaiScripts.map((script) => {
+        const selector = script.dataset.target;
+        if (!selector) {
+            throw new Error('application/rhai scripts require data-target');
+        }
+        const code = script.textContent || '';
+        const event = script.dataset.event || 'click';
+        script.remove();
+        return { selector, code, event };
+    });
+
+    const panel = document.createElement('section');
+    panel.className = 'lc-rhai-tool';
+    panel.dataset.rhaiToolSource = htmlUrl;
+    panel.appendChild(template.content);
+
+    let stylesheet;
+    if (cssUrl) {
+        stylesheet = document.createElement('link');
+        stylesheet.rel = 'stylesheet';
+        stylesheet.href = cssUrl;
+        stylesheet.dataset.rhaiToolSource = htmlUrl;
+    }
+
+    const listeners = [];
+    const statusFor = (element) => element.closest('.lc-rhai-tool')?.querySelector('[data-rhai-status]');
+    const run = async (element, code) => {
+        const status = statusFor(element);
+        try {
+            const result = await window.lunco_rhai(code);
+            if (status) status.textContent = result == null ? '' : String(result);
+        } catch (error) {
+            if (status) status.textContent = `Rhai error: ${String(error?.message || error)}`;
+            console.error('[rhai-tool]', error);
+        }
+    };
+    const bind = (element, event, code) => {
+        const listener = () => run(element, code);
+        element.addEventListener(event, listener);
+        listeners.push(() => element.removeEventListener(event, listener));
+    };
+
+    for (const element of panel.querySelectorAll('[data-rhai]')) {
+        bind(element, 'click', element.dataset.rhai || '');
+    }
+    for (const { selector, code, event } of scriptBindings) {
+        const targets = panel.querySelectorAll(selector);
+        if (targets.length === 0) {
+            throw new Error(`Rhai tool target was not found: ${selector}`);
+        }
+        for (const element of targets) bind(element, event, code);
+    }
+
+    mount.appendChild(panel);
+    if (stylesheet) document.head.appendChild(stylesheet);
+
+    return {
+        element: panel,
+        dispose() {
+            for (const remove of listeners) remove();
+            panel.remove();
+            stylesheet?.remove();
+        },
+    };
+}
+
+/**
  * @param {object} cfg
  * @param {(opts:{module_or_path:Response})=>Promise<any>} cfg.init  wasm-bindgen init
  * @param {string} cfg.wasmUrl     origin-relative URL of the `*_bg.wasm`

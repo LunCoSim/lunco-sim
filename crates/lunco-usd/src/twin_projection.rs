@@ -664,10 +664,9 @@ fn is_behavior_program(
                 && (view
                     .scalar::<String>(path, "info:sourceCode")
                     .is_some_and(|source| source.trim_start().starts_with('<'))
-                    || lunco_usd_bevy::UsdRead::asset(&view, path, "info:sourceAsset")
-                        .is_some_and(|source| {
-                            lunco_core::programs::is_behavior_tree_asset(&source)
-                        }))
+                    || lunco_usd_bevy::UsdRead::asset(&view, path, "info:sourceAsset").is_some_and(
+                        |source| lunco_core::programs::is_behavior_tree_asset(&source),
+                    ))
         })
 }
 
@@ -702,7 +701,7 @@ fn projected_behavior_entity(
             && entity
                 .get::<lunco_autopilot::usd_tree::BehaviorProgramSource>()
                 .is_some_and(|source| source.0 == path.as_str()))
-            .then_some(entity.id())
+        .then_some(entity.id())
     })
 }
 
@@ -862,14 +861,11 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                             let xml = view
                                 .scalar::<String>(&sp, "info:sourceCode")
                                 .filter(|source| source.trim_start().starts_with('<'));
-                            let asset = lunco_usd_bevy::UsdRead::asset(
-                                &view,
-                                &sp,
-                                "info:sourceAsset",
-                            )
-                            .filter(|source| {
-                                lunco_core::programs::is_behavior_tree_asset(source)
-                            });
+                            let asset =
+                                lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
+                                    .filter(|source| {
+                                        lunco_core::programs::is_behavior_tree_asset(source)
+                                    });
                             Some((xml, asset))
                         });
                     if let Some(owner) = behavior_owner_entity(world, scene_id, &sp) {
@@ -877,21 +873,17 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                         match source {
                             Some((Some(xml), _)) => {
                                 entity.insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
-                                entity.insert(
-                                    lunco_autopilot::usd_tree::BehaviorProgramSource(
-                                        sp.as_str().to_string(),
-                                    ),
-                                );
+                                entity.insert(lunco_autopilot::usd_tree::BehaviorProgramSource(
+                                    sp.as_str().to_string(),
+                                ));
                                 entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>();
                                 entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
                             }
                             Some((None, Some(asset))) => {
                                 entity.insert(lunco_autopilot::usd_tree::BehaviorXmlPath(asset));
-                                entity.insert(
-                                    lunco_autopilot::usd_tree::BehaviorProgramSource(
-                                        sp.as_str().to_string(),
-                                    ),
-                                );
+                                entity.insert(lunco_autopilot::usd_tree::BehaviorProgramSource(
+                                    sp.as_str().to_string(),
+                                ));
                                 entity.remove::<lunco_autopilot::usd_tree::BehaviorXml>();
                                 entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
                             }

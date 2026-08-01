@@ -94,10 +94,8 @@ fn appending_waypoints_while_running_resumes_route_and_drives_the_new_legs() {
     drop(tree);
 
     // The user adds two more waypoints → the mission XML changes → recompile.
-    app.world_mut()
-        .get_mut::<BehaviorXml>(vessel)
-        .unwrap()
-        .0 = route(&["10;0;0", "20;0;0", "30;0;0", "40;0;0", "50;0;0"]);
+    app.world_mut().get_mut::<BehaviorXml>(vessel).unwrap().0 =
+        route(&["10;0;0", "20;0;0", "30;0;0", "40;0;0", "50;0;0"]);
     app.update();
 
     // The tree must be REBUILT (so the new legs exist at all) and RESUMED at
@@ -172,7 +170,11 @@ fn resume_restores_cursor_and_skips_completed_legs() {
     // Arrive at leg 2 (30,0,0) → the appended leg 3 (40,0,0) still runs.
     let mut c = ctx_at([30.0, 0.0, 0.0]);
     tree.0.tick(&mut c);
-    assert_eq!(route_cursor(&tree), 3, "the appended leg must still be driven");
+    assert_eq!(
+        route_cursor(&tree),
+        3,
+        "the appended leg must still be driven"
+    );
 
     // A cursor past the last leg clamps: the sequence completes immediately.
     let mut done = AutopilotBehavior::resume(&spec, Some(99));
@@ -199,10 +201,7 @@ fn scene_teardown_despawns_actors_and_releases_claims() {
 
     // Vessel carries the SAME api_id across a reload (GlobalEntityId derives
     // from the prim path, which the reset restores).
-    let vessel = app
-        .world_mut()
-        .spawn(GlobalEntityId::from_raw(0x77))
-        .id();
+    let vessel = app.world_mut().spawn(GlobalEntityId::from_raw(0x77)).id();
     let actor = app
         .world_mut()
         .spawn(Autopilot::forward(vessel, 0, 0.5))

@@ -2290,5 +2290,4 @@ mod tests {
             Some(GENERIC_EMPTY_HINT)
         );
     }
-
 }

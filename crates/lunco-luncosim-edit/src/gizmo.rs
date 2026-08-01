@@ -589,9 +589,7 @@ pub fn restore_gizmo_dynamic(
     }
     // A scene reload can despawn a target before the deferred restore runs. Do
     // not leave a dead entity holding the physics transaction open forever.
-    session
-        .targets
-        .retain(|entity| q_tf.get(*entity).is_ok());
+    session.targets.retain(|entity| q_tf.get(*entity).is_ok());
     let session_empty = session.targets.is_empty();
 
     // Restore the exact origin holder captured at drag start. Re-attaching to

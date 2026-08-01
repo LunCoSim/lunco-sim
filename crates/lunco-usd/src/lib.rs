@@ -48,7 +48,9 @@ pub mod ui;
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 // Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
-pub use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, ShouldBeDynamic, UsdAvianPlugin, UsdCollisionFilter};
+pub use lunco_usd_avian::{
+    BigSpacePhysicsBridgePlugin, ShouldBeDynamic, UsdAvianPlugin, UsdCollisionFilter,
+};
 pub use lunco_usd_bevy::{
     usd_data::UsdDataExt, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
 };
@@ -59,7 +61,9 @@ pub use lunco_usd_bevy::{
 pub use lunco_usd_compose::compose_file_to_stage;
 pub use lunco_usd_sim::cosim::{ClearScene, LoadScene, RestartScene};
 pub use lunco_usd_sim::UsdSimPlugin;
-pub use lunco_usd_sim::{GroundActivationInFlight, GroundColliderPending, NoRenderVisuals, UsdSimProcessed};
+pub use lunco_usd_sim::{
+    GroundActivationInFlight, GroundColliderPending, NoRenderVisuals, UsdSimProcessed,
+};
 
 /// Master plugin that bundles all USD subsystems together.
 ///

@@ -1233,7 +1233,8 @@ mod authoring_tests {
             cs.view().is_active(&chassis),
             "an authored prim starts active"
         );
-        cs.author_active(&chassis, false).expect("author active=false");
+        cs.author_active(&chassis, false)
+            .expect("author active=false");
         assert!(
             !cs.view().is_active(&chassis),
             "author_active(false) composes on the live stage"
@@ -1245,11 +1246,9 @@ mod authoring_tests {
             cs.view().has_prim(&chassis),
             "deactivation does not remove the prim spec"
         );
-        cs.author_active(&chassis, true).expect("author active=true");
-        assert!(
-            cs.view().is_active(&chassis),
-            "reactivation is symmetric"
-        );
+        cs.author_active(&chassis, true)
+            .expect("author active=true");
+        assert!(cs.view().is_active(&chassis), "reactivation is symmetric");
     }
 
     // SetApiSchemas has no incremental consumer on purpose: its ECS effect

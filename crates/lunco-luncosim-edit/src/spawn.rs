@@ -343,6 +343,7 @@ pub fn update_spawn_ghost(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     // Diagnostics only: names the collider a placement ray actually landed on.
     q_names: Query<&Name>,
     mut diagnostics: ResMut<SpawnDiagnostics>,
@@ -359,6 +360,17 @@ pub fn update_spawn_ghost(
         }
         return;
     };
+    // The palette and other workbench panels own the pointer while the cursor is
+    // over them.  Do not raycast through the panel into the scene: that produces
+    // a ghost on terrain the user cannot see and makes the spawn tool appear to
+    // stick in a canyon or behind the palette.  The committed click path uses
+    // the same scene gate via `scene_click_ray`.
+    if egui_focus.wants_pointer {
+        for (ghost, _) in q_ghost.iter() {
+            commands.entity(ghost).try_despawn();
+        }
+        return;
+    }
     // Derive the wheel footprint from the live USD geometry (cached). Until the
     // stage finishes loading the fallback default is used, then the ghost
     // snaps to the real slope-fit once available.

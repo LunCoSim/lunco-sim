@@ -228,9 +228,12 @@ can be layered on later without touching this layer.
 
 Two decisions that make that possible:
 
-- **Channel key = `"<api_id>:<name>"`, never the name alone.** Names collide — two rovers both
-  report `motor_current`. OpenMCT wants one opaque stable string per telemetry point; this is it,
-  and it round-trips back to the owning entity.
+- **Channel key = `"<owner>:<name>"`, never the name alone.** Names collide — two rovers both
+  report `motor_current`. `owner` is `api/<GlobalEntityId>` for network-addressable model
+  entities and `session/<Entity::to_bits()>` for deliberately local physics/model entities.
+  The latter is explicit session identity, never the invalid `0` placeholder. The key is
+  the wire form of the same `(SignalRef::entity, SignalRef::path)` identity rendered by
+  the native telemetry window.
 - **Times are `sim_secs`, not `epoch_jd`.** Julian Date is ~2.46e6, so an `f64` has ~86 µs of
   resolution left there: a plot axis built on it quantises into visible stair-steps and a range
   query is sloppy at its edges. Responses carry `epoch_jd` separately for wall-clock labelling.

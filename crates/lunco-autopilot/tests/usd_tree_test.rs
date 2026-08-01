@@ -39,9 +39,7 @@ fn scene(app: &mut App, pin_pos: Vec3) -> (Entity, Entity) {
         ))
         .id();
     let mut bindings = TargetBindings::default();
-    bindings
-        .0
-        .insert("/World/Route/W0".to_string(), pin);
+    bindings.0.insert("/World/Route/W0".to_string(), pin);
     let vessel = app
         .world_mut()
         .spawn((BehaviorXml(XML.to_string()), bindings))

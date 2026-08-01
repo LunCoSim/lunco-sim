@@ -120,6 +120,11 @@ impl UsdModelicaPortContract {
 /// keeps the two participant paths from drifting (Python used to ship an empty
 /// interface, so every wire into it false-warned until — or unless — the port
 /// happened to be claimed by another backend).
+fn declared_port_name(attr: &str, namespace: &str) -> Option<String> {
+    attr.strip_prefix(namespace)
+        .map(|name| name.strip_suffix(".connect").unwrap_or(name).to_owned())
+}
+
 fn declared_interface(
     reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
@@ -127,10 +132,10 @@ fn declared_interface(
     let mut inputs = HashMap::new();
     let mut outputs = HashMap::new();
     for attr in reader.attr_names(sdf_path) {
-        if let Some(name) = attr.strip_prefix("inputs:") {
-            inputs.insert(name.to_owned(), 0.0);
-        } else if let Some(name) = attr.strip_prefix("outputs:") {
-            outputs.insert(name.to_owned(), 0.0);
+        if let Some(name) = declared_port_name(&attr, "inputs:") {
+            inputs.insert(name, 0.0);
+        } else if let Some(name) = declared_port_name(&attr, "outputs:") {
+            outputs.insert(name, 0.0);
         }
     }
     (inputs, outputs)
@@ -3227,6 +3232,19 @@ mod tests {
     // The contract that killed the "dangling wire" false positive: a bound
     // model exposes its declared inputs BEFORE the worker has produced any
     // variables, so a wire into it resolves on the first propagation tick.
+
+    #[test]
+    fn usd_connection_properties_are_declared_as_scalar_ports() {
+        assert_eq!(
+            declared_port_name("inputs:earth_mount_x.connect", "inputs:"),
+            Some("earth_mount_x".to_owned())
+        );
+        assert_eq!(
+            declared_port_name("outputs:earth_mount_z", "outputs:"),
+            Some("earth_mount_z".to_owned())
+        );
+        assert_eq!(declared_port_name("physics:mass", "inputs:"), None);
+    }
 
     /// A model that has been parsed and dispatched but not yet solved:
     /// declared inputs, no variables.

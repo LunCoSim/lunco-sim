@@ -51,10 +51,7 @@ pub(crate) struct LiveTransformEditHints {
 
 impl LiveTransformEditHints {
     pub(crate) fn mark_translate(&mut self, stage: AssetId<UsdStageAsset>, path: String) {
-        self.translate_paths
-            .entry(stage)
-            .or_default()
-            .insert(path);
+        self.translate_paths.entry(stage).or_default().insert(path);
     }
 
     fn take_translate_paths(&mut self, stage: AssetId<UsdStageAsset>) -> HashSet<String> {
@@ -125,7 +122,7 @@ fn projected_behavior_owner(
             && entity
                 .get::<BehaviorProgramSource>()
                 .is_some_and(|source| source.0 == path))
-            .then_some(entity.id())
+        .then_some(entity.id())
     })
 }
 
@@ -170,7 +167,6 @@ fn behavior_owner_entity(
 /// passing it into the generic structural bridge makes an XML-only edit look
 /// like a vehicle refresh.
 
-
 /// Projection bridge (Step 1): drain every live [`CanonicalStage`]'s change-sink
 /// inbox and reconcile the ECS scene off the **live composed stage** — the read
 /// counterpart to authoring onto the stage. This is what turns the openusd
@@ -210,16 +206,8 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
-            resynced.extend(
-                c.resynced
-                    .iter()
-                    .map(|p| p.to_string()),
-            );
-            info_only.extend(
-                c.info_only
-                    .iter()
-                    .map(|p| p.to_string()),
-            );
+            resynced.extend(c.resynced.iter().map(|p| p.to_string()));
+            info_only.extend(c.info_only.iter().map(|p| p.to_string()));
         }
         resynced.sort();
         resynced.dedup();
@@ -570,12 +558,7 @@ pub(crate) fn refresh_edited_prims_live(
     // so the ones that do not split are the prim-path half of the same change and
     // are simply skipped here.
     let mut prims: Vec<String> = Vec::new();
-    let mut behavior_updates: Vec<(
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    )> = Vec::new();
+    let mut behavior_updates: Vec<(String, String, Option<String>, Option<String>)> = Vec::new();
     // Wheel/vehicle dynamics edits are claimed by the in-place resync (same
     // shape as the mission `info:sourceCode` special-case below): excluded from the
     // subtree refresh — which would corrupt a spawned wheel — and folded into
@@ -619,9 +602,8 @@ pub(crate) fn refresh_edited_prims_live(
                     let val = view
                         .scalar::<String>(&sp, "info:sourceCode")
                         .filter(|s| s.trim_start().starts_with('<'));
-                    let path_val =
-                        lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
-                            .filter(|s| lunco_core::programs::is_behavior_tree_asset(s));
+                    let path_val = lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
+                        .filter(|s| lunco_core::programs::is_behavior_tree_asset(s));
                     Some((val, path_val))
                 });
             // The tree is authored on the `LunCoProgramAPI` child, but the

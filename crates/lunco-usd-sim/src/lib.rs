@@ -1315,9 +1315,7 @@ fn process_usd_sim_prim_read(
                 .entity(entity)
                 .try_insert((
                     lunco_autopilot::usd_tree::BehaviorXml(xml),
-                    lunco_autopilot::usd_tree::BehaviorProgramSource(
-                        source_path.clone(),
-                    ),
+                    lunco_autopilot::usd_tree::BehaviorProgramSource(source_path.clone()),
                 ))
                 .remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>()
                 .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
@@ -1326,9 +1324,7 @@ fn process_usd_sim_prim_read(
                 .entity(entity)
                 .try_insert((
                     lunco_autopilot::usd_tree::BehaviorXmlPath(asset),
-                    lunco_autopilot::usd_tree::BehaviorProgramSource(
-                        source_path,
-                    ),
+                    lunco_autopilot::usd_tree::BehaviorProgramSource(source_path),
                 ))
                 .remove::<lunco_autopilot::usd_tree::BehaviorXml>()
                 .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();

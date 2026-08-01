@@ -26,6 +26,11 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
   (live `this` state, defined hooks, generation, running/paused).
 - **Authoring catalog** — `ScriptingCatalog` aggregates the full callable surface
   (verbs/hooks/prelude/tools/commands/queries).
+- **Browser tool surface** — `lunco-web` exposes `mountRhaiTool`, which mounts a
+  trusted HTML fragment and stylesheet and routes explicit `data-rhai` actions
+  or `application/rhai` script blocks through the existing `lunco_rhai` bridge.
+  HTML/CSS is presentation; Rhai remains policy and the typed command bus remains
+  the only engine mutation boundary. Native editor panels remain egui panels.
 - **Timeline storage** — `RegisterTimeline` / `RunStoredTimeline` +
   `ListTimelines` / `GetTimeline`, persisted to `<twin>/timelines/*.json`.
 - **USD-embedded scenarios (load)** — a `LunCoProgramAPI` child prim naming a `.rhai`

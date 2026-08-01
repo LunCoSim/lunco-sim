@@ -867,7 +867,11 @@ mod tests {
         let mut ctx = ();
         assert_eq!(root.tick(&mut ctx), Status::Running);
         assert_eq!(root.tick(&mut ctx), Status::Running);
-        assert_eq!(root.cursor(), Some(1), "root reports the inner sequence's leg");
+        assert_eq!(
+            root.cursor(),
+            Some(1),
+            "root reports the inner sequence's leg"
+        );
 
         // Restoring the cursor on the root rebuilds the same position.
         let mut rebuilt = Repeat::forever(Box::new(Sequence::new(vec![
@@ -875,8 +879,16 @@ mod tests {
             Countdown::new(1, Status::Success),
         ])) as BoxNode<()>);
         rebuilt.set_cursor(1);
-        assert_eq!(rebuilt.tick(&mut ctx), Status::Running, "child 1 runs again");
-        assert_eq!(rebuilt.tick(&mut ctx), Status::Running, "sequence completes, lap restarts");
+        assert_eq!(
+            rebuilt.tick(&mut ctx),
+            Status::Running,
+            "child 1 runs again"
+        );
+        assert_eq!(
+            rebuilt.tick(&mut ctx),
+            Status::Running,
+            "sequence completes, lap restarts"
+        );
     }
 
     #[test]

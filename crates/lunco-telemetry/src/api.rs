@@ -20,11 +20,12 @@
 //!
 //! # The channel key
 //!
-//! A channel is identified by `"<api_id>:<name>"` — **not** by name alone. Names are not
-//! unique: two rovers both report `"motor_current"`. OpenMCT wants one opaque, stable
-//! string per telemetry point, and this is it. `api_id` is the same `GlobalEntityId` the
-//! rest of the API speaks, so a client can go from a telemetry point back to the entity
-//! that owns it.
+//! A channel is identified by `"<owner>:<name>"` — **not** by name alone. Names are not
+//! unique: two rovers both report `"motor_current"`. The owner is typed because not every
+//! signal belongs to a network-addressable entity: `api/<GlobalEntityId>` names an API
+//! entity, while `session/<Entity::to_bits()>` names a local physics/model entity for the
+//! lifetime of this process. This is the same `(SignalRef::entity, SignalRef::path)`
+//! identity the native telemetry window uses; there is no second channel catalog.
 //!
 //! # The timebase
 //!
@@ -37,23 +38,63 @@
 use bevy::prelude::*;
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::telemetry::Parameter;
 use lunco_core::GlobalEntityId;
 use lunco_signal::{SignalRef, SignalRegistry};
 
-/// `"<api_id>:<name>"`. See the module docs on why the entity is part of the key.
-fn channel_key(gid: u64, name: &str) -> String {
-    format!("{gid}:{name}")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelOwner {
+    /// Stable entity identity shared with the command API.
+    Api(GlobalEntityId),
+    /// Session-local identity for a signal whose producer is deliberately not networked.
+    Session(Entity),
 }
 
-/// Split a `"<api_id>:<name>"` key. The name may itself contain `:`, so split ONCE.
-fn parse_channel_key(key: &str) -> Option<(u64, &str)> {
-    let (gid, name) = key.split_once(':')?;
-    Some((gid.parse().ok()?, name))
+impl ChannelOwner {
+    fn key_prefix(self) -> String {
+        match self {
+            Self::Api(id) => format!("api/{}", id.get()),
+            Self::Session(entity) => format!("session/{}", entity.to_bits()),
+        }
+    }
+
+    fn api_id(self) -> Option<u64> {
+        match self {
+            Self::Api(id) => Some(id.get()),
+            Self::Session(_) => None,
+        }
+    }
 }
 
-/// The dictionary: every telemetry channel that exists, with enough metadata for a client
-/// to build a tree and a plot axis without guessing.
+/// Resolve the same owner identity used by the shared signal registry. A missing
+/// `GlobalEntityId` is not zero: zero is an invalid placeholder that collapses all
+/// local physics/model signals with the same name into one API key.
+fn channel_owner(world: &World, entity: Entity) -> ChannelOwner {
+    world
+        .get::<GlobalEntityId>(entity)
+        .copied()
+        .map(ChannelOwner::Api)
+        .unwrap_or(ChannelOwner::Session(entity))
+}
+
+fn channel_key(owner: ChannelOwner, name: &str) -> String {
+    format!("{}:{name}", owner.key_prefix())
+}
+
+/// Split a `"<owner>:<name>"` key. The name may itself contain `:`, so split ONCE.
+fn parse_channel_key(key: &str) -> Option<(ChannelOwner, &str)> {
+    let (owner, name) = key.split_once(':')?;
+    let (kind, raw) = owner.split_once('/')?;
+    let owner = match kind {
+        "api" => ChannelOwner::Api(GlobalEntityId::from_raw(raw.parse().ok()?)),
+        "session" => ChannelOwner::Session(Entity::from_bits(raw.parse().ok()?)),
+        _ => return None,
+    };
+    Some((owner, name))
+}
+
+/// The dictionary: every retained signal in the shared [`SignalRegistry`]. The native
+/// telemetry window and this API therefore see the same channel set; raw `Parameter`
+/// declarations are policy inputs, not a second catalog.
 pub(crate) struct ListTelemetryChannelsProvider;
 
 impl ApiQueryProvider for ListTelemetryChannelsProvider {
@@ -62,51 +103,38 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
     }
 
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
-        let signals = world.get_resource::<SignalRegistry>().map(|s| {
-            s.iter_scalar()
-                .map(|(r, h)| (r.clone(), h.len(), h.capacity))
-                .collect::<Vec<_>>()
-        });
-        let sample_counts: std::collections::HashMap<SignalRef, (usize, usize)> = signals
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(r, len, cap)| (r, (len, cap)))
-            .collect();
+        let Some(signals) = world.get_resource::<SignalRegistry>() else {
+            return ApiResponse::ok(serde_json::json!({ "channels": [], "count": 0 }));
+        };
 
-        // A channel may be its own entity targeting what it measures, and only the MEASURED
-        // entity carries a `GlobalEntityId` — so resolve the id through the target, not
-        // through the entity the component happens to sit on.
-        let gids: std::collections::HashMap<Entity, u64> = world
-            .query::<(Entity, &GlobalEntityId)>()
-            .iter(world)
-            .map(|(e, g)| (e, g.get()))
-            .collect();
-
-        let raw: Vec<(Entity, Parameter)> = world
-            .query::<(Entity, &Parameter)>()
-            .iter(world)
-            .map(|(e, p)| (e, p.clone()))
-            .collect();
-
-        let mut channels: Vec<serde_json::Value> = raw
-            .into_iter()
-            .map(|(entity, p)| {
-                let measured = p.target.unwrap_or(entity);
-                let gid = gids.get(&measured).copied().unwrap_or(0);
-                let sig = SignalRef::new(measured, p.name.clone());
-                let (samples, capacity) = sample_counts.get(&sig).copied().unwrap_or((0, 0));
+        let mut channels: Vec<serde_json::Value> = signals
+            .iter_scalar()
+            .map(|(sig, history)| {
+                let owner = channel_owner(world, sig.entity);
+                let meta = signals.meta(sig);
                 serde_json::json!({
-                    "key": channel_key(gid, &p.name),
-                    "name": p.name,
-                    "source": gid,
-                    "unit": p.unit,
-                    "enabled": p.enabled,
-                    "rate_hz": p.rate_hz,
-                    "deadband": p.deadband,
+                    "key": channel_key(owner, &sig.path),
+                    "name": sig.path,
+                    "source": owner.api_id(),
+                    "owner": match owner {
+                        ChannelOwner::Api(id) => serde_json::json!({
+                            "kind": "api",
+                            "api_id": id.get(),
+                        }),
+                        ChannelOwner::Session(entity) => serde_json::json!({
+                            "kind": "session",
+                            "entity_bits": entity.to_bits(),
+                        }),
+                    },
+                    "unit": meta.and_then(|m| m.unit.clone()),
+                    "description": meta.and_then(|m| m.description.clone()),
+                    "provenance": meta.and_then(|m| m.provenance.clone()),
+                    "group_path": meta.and_then(|m| m.group_path.clone()),
+                    "active": signals.is_active(sig),
                     // What's actually retained RIGHT NOW — a client can use this to know
                     // how far back a history query can usefully reach.
-                    "samples": samples,
-                    "retention": capacity,
+                    "samples": history.len(),
+                    "retention": history.capacity,
                 })
             })
             .collect();
@@ -128,7 +156,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
 
 /// History: the retained samples of one channel, optionally windowed.
 ///
-/// Params: `{ "key": "<api_id>:<name>", "start": <sim_secs>?, "end": <sim_secs>?,
+/// Params: `{ "key": "<owner>:<name>", "start": <sim_secs>?, "end": <sim_secs>?,
 ///            "limit": <usize>? }`
 ///
 /// `start`/`end` are inclusive bounds on `sim_secs`; omit either for "unbounded on that
@@ -146,33 +174,35 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         let Some(key) = params.get("key").and_then(|v| v.as_str()) else {
             return ApiResponse::error(ApiErrorCode::DeserializationError, "missing field 'key'");
         };
-        let Some((gid, name)) = parse_channel_key(key) else {
+        let Some((owner, name)) = parse_channel_key(key) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
-                format!("malformed channel key '{key}' — expected '<api_id>:<name>'"),
+                format!("malformed channel key '{key}' — expected '<owner>:<name>'"),
             );
         };
 
-        // Resolve the key back to the MEASURED entity. A channel key is stable; the entity
-        // behind it is not (a reloaded twin re-mints entities), so this is a lookup, not a
-        // cached handle. And the channel component may live on a different entity than the one
-        // carrying the `GlobalEntityId` — match through `target`.
-        let gids: std::collections::HashMap<Entity, u64> = world
-            .query::<(Entity, &GlobalEntityId)>()
-            .iter(world)
-            .map(|(e, g)| (e, g.get()))
-            .collect();
-        let entity = world
-            .query::<(Entity, &Parameter)>()
-            .iter(world)
-            .map(|(e, p)| (p.target.unwrap_or(e), p.name.clone()))
-            .find(|(measured, n)| gids.get(measured).copied() == Some(gid) && n == name)
-            .map(|(measured, _)| measured);
-        let Some(entity) = entity else {
-            return ApiResponse::error(
-                ApiErrorCode::EntityNotFound,
-                format!("no live telemetry channel '{key}'"),
-            );
+        // Resolve the key against the same retained registry that backs the native telemetry
+        // window. A raw Parameter query would reintroduce duplicate declarations and would
+        // also miss wholesale Modelica/cosim signals that have no Parameter component.
+        let signal = {
+            let Some(signals) = world.get_resource::<SignalRegistry>() else {
+                return ApiResponse::error(
+                    ApiErrorCode::EntityNotFound,
+                    format!("no retained telemetry channel '{key}'"),
+                );
+            };
+            let Some(signal) = signals
+                .iter_scalar()
+                .map(|(signal, _)| signal)
+                .find(|signal| channel_owner(world, signal.entity) == owner && signal.path == name)
+                .cloned()
+            else {
+                return ApiResponse::error(
+                    ApiErrorCode::EntityNotFound,
+                    format!("no retained telemetry channel '{key}'"),
+                );
+            };
+            signal
         };
 
         let start = params
@@ -196,15 +226,9 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         let Some(signals) = world.get_resource::<SignalRegistry>() else {
             return ApiResponse::ok(serde_json::json!({ "key": key, "samples": [] }));
         };
-        let sig = SignalRef::new(entity, name.to_string());
-        let Some(history) = signals.scalar_history(&sig) else {
-            // The channel exists but has produced nothing yet (just authored, or
-            // deadband-suppressed). Empty is a valid answer, not an error — a client
-            // must be able to tell "no data" from "no such channel".
-            return ApiResponse::ok(serde_json::json!({
-                "key": key, "samples": [], "count": 0, "epoch_jd": epoch_jd,
-            }));
-        };
+        let history = signals
+            .scalar_history(&signal)
+            .expect("signal came from the retained registry");
 
         let mut samples: Vec<serde_json::Value> = history
             .iter()
@@ -233,7 +257,7 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
 /// Export a set of channels as a **recording** — the columnar shape experiments already
 /// produce and plots already consume.
 ///
-/// Params: `{ "keys": ["<api_id>:<name>", …]?, "start": <sim_secs>?, "end": <sim_secs>? }`
+/// Params: `{ "keys": ["<owner>:<name>", …]?, "start": <sim_secs>?, "end": <sim_secs>? }`
 /// (omit `keys` for every channel).
 ///
 /// Returns `{ times: [t…], series: { key: [v…] } }` — the same shape as
@@ -278,33 +302,23 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
                 .collect()
         });
 
-        // key -> entity, for every live channel.
-        let gids: std::collections::HashMap<Entity, u64> = world
-            .query::<(Entity, &GlobalEntityId)>()
-            .iter(world)
-            .map(|(e, g)| (e, g.get()))
-            .collect();
-        let channels: Vec<(String, Entity, String)> = world
-            .query::<(Entity, &Parameter)>()
-            .iter(world)
-            .map(|(e, p)| {
-                let measured = p.target.unwrap_or(e);
-                let gid = gids.get(&measured).copied().unwrap_or(0);
-                (channel_key(gid, &p.name), measured, p.name.clone())
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .filter(|(key, _, _)| wanted.as_ref().is_none_or(|w| w.contains(key)))
-            .collect();
-
         let Some(signals) = world.get_resource::<SignalRegistry>() else {
             return ApiResponse::ok(serde_json::json!({ "times": [], "series": {} }));
         };
+        let channels: Vec<(String, SignalRef)> = signals
+            .iter_scalar()
+            .map(|(signal, _)| {
+                (
+                    channel_key(channel_owner(world, signal.entity), &signal.path),
+                    signal.clone(),
+                )
+            })
+            .filter(|(key, _)| wanted.as_ref().is_none_or(|w| w.contains(key)))
+            .collect();
 
         // Collect each channel's (t, v) inside the window.
         let mut per_key: Vec<(String, Vec<(f64, f64)>)> = Vec::new();
-        for (key, entity, name) in channels {
-            let sig = SignalRef::new(entity, name);
+        for (key, sig) in channels {
             let pts: Vec<(f64, f64)> = signals
                 .scalar_history(&sig)
                 .map(|h| {
@@ -368,21 +382,81 @@ mod tests {
 
     #[test]
     fn a_channel_key_round_trips() {
-        let k = channel_key(42, "motor_current");
-        assert_eq!(k, "42:motor_current");
-        assert_eq!(parse_channel_key(&k), Some((42, "motor_current")));
+        let k = channel_key(
+            ChannelOwner::Api(GlobalEntityId::from_raw(42)),
+            "motor_current",
+        );
+        assert_eq!(k, "api/42:motor_current");
+        assert_eq!(
+            parse_channel_key(&k),
+            Some((
+                ChannelOwner::Api(GlobalEntityId::from_raw(42)),
+                "motor_current"
+            ))
+        );
     }
 
     /// A name containing a colon must not corrupt the key — split once, not greedily.
     #[test]
     fn a_name_with_a_colon_survives_the_key() {
-        let k = channel_key(7, "bus:voltage");
-        assert_eq!(parse_channel_key(&k), Some((7, "bus:voltage")));
+        let k = channel_key(
+            ChannelOwner::Api(GlobalEntityId::from_raw(7)),
+            "bus:voltage",
+        );
+        assert_eq!(
+            parse_channel_key(&k),
+            Some((
+                ChannelOwner::Api(GlobalEntityId::from_raw(7)),
+                "bus:voltage"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_local_owner_is_distinct_from_every_other_local_owner() {
+        let a = Entity::from_raw_u32(10).unwrap();
+        let b = Entity::from_raw_u32(11).unwrap();
+        let a_key = channel_key(ChannelOwner::Session(a), "contact");
+        let b_key = channel_key(ChannelOwner::Session(b), "contact");
+        assert_ne!(a_key, b_key);
+        assert_eq!(
+            parse_channel_key(&a_key),
+            Some((ChannelOwner::Session(a), "contact"))
+        );
+    }
+
+    #[test]
+    fn list_provider_keeps_same_named_local_signals_separate() {
+        let mut world = World::new();
+        let left = world.spawn_empty().id();
+        let right = world.spawn_empty().id();
+        let mut registry = SignalRegistry::default();
+        registry.push_scalar(SignalRef::new(left, "contact"), 0.0, 1.0);
+        registry.push_scalar(SignalRef::new(right, "contact"), 0.0, 0.0);
+        world.insert_resource(registry);
+
+        let response = ListTelemetryChannelsProvider.execute(&mut world, &serde_json::Value::Null);
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
+            panic!("list provider must return a catalog");
+        };
+        let keys: Vec<&str> = data["channels"]
+            .as_array()
+            .expect("channels array")
+            .iter()
+            .map(|channel| channel["key"].as_str().expect("channel key"))
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1]);
+        assert!(keys.iter().all(|key| key.starts_with("session/")));
     }
 
     #[test]
     fn a_malformed_key_is_rejected_not_guessed() {
         assert_eq!(parse_channel_key("motor_current"), None);
-        assert_eq!(parse_channel_key("notanumber:x"), None);
+        assert_eq!(parse_channel_key("api/notanumber:x"), None);
+        assert_eq!(parse_channel_key("0:contact"), None);
     }
 }

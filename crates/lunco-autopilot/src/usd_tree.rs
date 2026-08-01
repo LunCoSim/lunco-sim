@@ -430,7 +430,11 @@ fn strip_reached_legs(v: &mut Value, reached: &std::collections::HashSet<String>
                     child
                         .get("target")
                         .and_then(|t| t.as_str())
-                        .map(|t| !reached.iter().any(|r| r == t || r.ends_with(t) || t.ends_with(r)))
+                        .map(|t| {
+                            !reached
+                                .iter()
+                                .any(|r| r == t || r.ends_with(t) || t.ends_with(r))
+                        })
                         .unwrap_or(true)
                 });
             }
@@ -851,9 +855,7 @@ pub fn compile_behavior_xml(
         // `dwell` could never elapse. Re-baking is idempotent for a static route,
         // so an unchanged derivation means there is nothing to do.
         let previous_derived = last_derived.get(&vessel).cloned();
-        let derived_changed = previous_derived
-            .as_ref()
-            .is_none_or(|prev| prev != &spec);
+        let derived_changed = previous_derived.as_ref().is_none_or(|prev| prev != &spec);
         if derived_changed {
             last_derived.insert(vessel, spec.clone());
             // The spec on the vessel is DERIVED — a projection of the XML + the prims.
@@ -882,9 +884,9 @@ pub fn compile_behavior_xml(
                     .map(|old| new_spec_is_append_only(old, &spec))
                     .unwrap_or(false);
             if is_append_only {
-                let cursor = if old_state.is_some_and(|state| {
-                    *state == AutopilotExecutionState::Completed
-                }) {
+                let cursor = if old_state
+                    .is_some_and(|state| *state == AutopilotExecutionState::Completed)
+                {
                     // A completed sequence resets its internal cursor to zero.
                     // The host latch is the authoritative indication that all
                     // previous legs ran, so append after completion resumes at
@@ -895,23 +897,19 @@ pub fn compile_behavior_xml(
                 } else {
                     old_tree.and_then(AutopilotBehavior::route_cursor)
                 };
-                commands
-                    .entity(actor)
-                    .try_insert((
-                        AutopilotBehavior::resume(&spec, cursor),
-                        AutopilotExecutionState::Running,
-                    ));
+                commands.entity(actor).try_insert((
+                    AutopilotBehavior::resume(&spec, cursor),
+                    AutopilotExecutionState::Running,
+                ));
                 debug!(
                     "[autopilot/usd] route extended with new waypoint(s); tree resumed at \
                      leg {cursor:?} instead of U-turning"
                 );
             } else if derived_changed || !has_tree {
-                commands
-                    .entity(actor)
-                    .try_insert((
-                        AutopilotBehavior::new(&spec),
-                        AutopilotExecutionState::Running,
-                    ));
+                commands.entity(actor).try_insert((
+                    AutopilotBehavior::new(&spec),
+                    AutopilotExecutionState::Running,
+                ));
             }
         }
     }
@@ -1168,7 +1166,11 @@ mod editor_tests {
             .iter()
             .map(|c| c["target"].as_str().unwrap())
             .collect();
-        assert_eq!(legs, vec!["/Scene/Route/W2"], "reached legs W0/W1 stripped, W2 survives");
+        assert_eq!(
+            legs,
+            vec!["/Scene/Route/W2"],
+            "reached legs W0/W1 stripped, W2 survives"
+        );
     }
 
     /// Negative half of the contract: with NO legs reached (arrival has not yet
@@ -1253,12 +1255,10 @@ mod editor_tests {
     fn append_only_rejects_reorder_delete_and_edit() {
         let old = spec_legs(vec![drive(1.0), drive(2.0), drive(3.0)]);
         assert!(
-            !new_spec_is_append_only(&old, &spec_legs(vec![
-                drive(1.0),
-                drive(3.0),
-                drive(2.0),
-                drive(4.0)
-            ])),
+            !new_spec_is_append_only(
+                &old,
+                &spec_legs(vec![drive(1.0), drive(3.0), drive(2.0), drive(4.0)])
+            ),
             "reordering is not an append"
         );
         assert!(
@@ -1266,12 +1266,10 @@ mod editor_tests {
             "a deletion is not an append"
         );
         assert!(
-            !new_spec_is_append_only(&old, &spec_legs(vec![
-                drive(1.0),
-                drive(99.0),
-                drive(3.0),
-                drive(4.0)
-            ])),
+            !new_spec_is_append_only(
+                &old,
+                &spec_legs(vec![drive(1.0), drive(99.0), drive(3.0), drive(4.0)])
+            ),
             "editing an existing leg is not an append"
         );
     }

@@ -13,6 +13,8 @@
 //!     call. `lunco-boot.css` carries the loader styles, the `#bevy`
 //!     focus-ring fix, and the dark backdrop — themeable via the
 //!     `--lc-accent` / `--lc-backdrop` CSS variables.
+//!     It also exports `mountRhaiTool`, the browser-only HTML/CSS/Rhai tool
+//!     host, which routes explicit HTML actions through `lunco_rhai`.
 //!   - **Rust side** — [`WebReadyPlugin`] (this file). After Bevy paints
 //!     its first egui frame it calls `window.__lc_app_ready()`, which
 //!     fades the loader out. Hiding earlier (on `init()` resolve) would

@@ -77,10 +77,7 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<crate::collider_ring::TerrainColliderRing>();
         app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
         app.init_resource::<crate::collider_ring::PhysicsSupportCache>();
-        app.configure_sets(
-            Update,
-            TerrainSurfaceSet::PhysicsSupportCache,
-        );
+        app.configure_sets(Update, TerrainSurfaceSet::PhysicsSupportCache);
         // Physics owns the support contract; this cache turns Avian's change
         // events into a stable assembly projection. Ring selection and the
         // readiness hold both consume that projection instead of rebuilding the

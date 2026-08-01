@@ -624,10 +624,10 @@ pub fn run() -> u8 {
             // below is VACUOUSLY true, so the wait must first see the load
             // actually materialize — `SceneLoadInFlight` gone again AND at least
             // one `UsdPrimPath` in the world.
-            let load_done =
-                app.world()
-                    .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
-                    .is_none();
+            let load_done = app
+                .world()
+                .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+                .is_none();
             let load_finished = load_done
                 && app
                     .world_mut()
@@ -638,7 +638,10 @@ pub fn run() -> u8 {
             // Every USD sim prim processed into its sim components.
             let all_processed = app
                 .world_mut()
-                .query_filtered::<(), (With<lunco_usd::UsdPrimPath>, Without<lunco_usd::UsdSimProcessed>)>()
+                .query_filtered::<(), (
+                    With<lunco_usd::UsdPrimPath>,
+                    Without<lunco_usd::UsdSimProcessed>,
+                )>()
                 .iter(app.world())
                 .next()
                 .is_none();

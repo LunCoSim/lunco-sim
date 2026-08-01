@@ -423,10 +423,7 @@ mod tests {
         else {
             panic!("sun_dir_world missing or not a Vec3");
         };
-        assert!(
-            v[0] > 0.99,
-            "expected the sun's +X direction, got {v:?}"
-        );
+        assert!(v[0] > 0.99, "expected the sun's +X direction, got {v:?}");
     }
 
     /// STEADY STATE COSTS NOTHING. Running the system twice with an unmoved sun

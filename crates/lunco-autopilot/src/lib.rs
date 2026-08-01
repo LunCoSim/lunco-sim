@@ -1751,71 +1751,70 @@ pub fn drive_autopilots(
             continue; // lost the vessel → stop driving (one writer per tick)
         }
 
-        let (throttle, steer, brake, mut fired) = match
-            (behavior.as_deref_mut(), q_xf.get(ap.vessel).ok())
-        {
-            (Some(tree), Some(xf)) => {
-                let clearance = clearances
-                    .as_ref()
-                    .and_then(|c| c.0.get(&ap.vessel).copied())
-                    .unwrap_or_default();
-                let Some(self_pos) = lunco_core::coords::world_position(
-                    ap.vessel,
-                    &q_parents,
-                    &q_grids_only,
-                    &q_spatial,
-                ) else {
-                    continue; // no spatial components → nothing to navigate from
-                };
-                let mut ctx = DriveCtx {
-                    self_gid: gid.get(),
-                    // Root frame, matching `targets` above and the authored world
-                    // coordinates the leaves compare against.
-                    pos: self_pos,
-                    fwd: xf.forward().as_vec3(),
-                    now,
-                    // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
-                    // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
-                    // it every active tick, so the only ticks that keep this default are
-                    // ones where no leaf drives — an empty/completed route (every waypoint
-                    // consumed), or a `forever(sequence[])` restart. Those must STOP, not
-                    // creep forward. Seeding `ap.throttle` here made a finished patrol
-                    // drive straight ahead ("autopilot moves forward instead of following"),
-                    // because a route whose legs were all marked passed compiles to an
-                    // empty sequence that never writes the setpoint. The genuine "no tree,
-                    // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
-                    //
-                    // Brake, not merely zero throttle: neutral only removes drive, and a
-                    // rover parked on a lunar slope with no route then ROLLS. "Stop" has
-                    // to be actively held, the same triple `Hold`/`Wait` write.
-                    out: (0.0, 0.0, 1.0),
-                    targets: targets.clone(),
-                    clearance,
-                    fired: Vec::new(),
-                };
-                if let Some(state) = execution.as_deref_mut() {
-                    tree.tick_hosted(state, &mut ctx);
-                } else {
-                    let mut state = AutopilotExecutionState::Running;
-                    tree.tick_hosted(&mut state, &mut ctx);
-                    if state.terminal() {
-                        commands.entity(actor).insert(state);
+        let (throttle, steer, brake, mut fired) =
+            match (behavior.as_deref_mut(), q_xf.get(ap.vessel).ok()) {
+                (Some(tree), Some(xf)) => {
+                    let clearance = clearances
+                        .as_ref()
+                        .and_then(|c| c.0.get(&ap.vessel).copied())
+                        .unwrap_or_default();
+                    let Some(self_pos) = lunco_core::coords::world_position(
+                        ap.vessel,
+                        &q_parents,
+                        &q_grids_only,
+                        &q_spatial,
+                    ) else {
+                        continue; // no spatial components → nothing to navigate from
+                    };
+                    let mut ctx = DriveCtx {
+                        self_gid: gid.get(),
+                        // Root frame, matching `targets` above and the authored world
+                        // coordinates the leaves compare against.
+                        pos: self_pos,
+                        fwd: xf.forward().as_vec3(),
+                        now,
+                        // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
+                        // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
+                        // it every active tick, so the only ticks that keep this default are
+                        // ones where no leaf drives — an empty/completed route (every waypoint
+                        // consumed), or a `forever(sequence[])` restart. Those must STOP, not
+                        // creep forward. Seeding `ap.throttle` here made a finished patrol
+                        // drive straight ahead ("autopilot moves forward instead of following"),
+                        // because a route whose legs were all marked passed compiles to an
+                        // empty sequence that never writes the setpoint. The genuine "no tree,
+                        // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
+                        //
+                        // Brake, not merely zero throttle: neutral only removes drive, and a
+                        // rover parked on a lunar slope with no route then ROLLS. "Stop" has
+                        // to be actively held, the same triple `Hold`/`Wait` write.
+                        out: (0.0, 0.0, 1.0),
+                        targets: targets.clone(),
+                        clearance,
+                        fired: Vec::new(),
+                    };
+                    if let Some(state) = execution.as_deref_mut() {
+                        tree.tick_hosted(state, &mut ctx);
+                    } else {
+                        let mut state = AutopilotExecutionState::Running;
+                        tree.tick_hosted(&mut state, &mut ctx);
+                        if state.terminal() {
+                            commands.entity(actor).insert(state);
+                        }
                     }
+                    (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
                 }
-                (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
-            }
-            // No behaviour tree: the explicit constant-cruise autopilot. A zero
-            // throttle here is not "coast" but "hold" — an engaged autopilot with
-            // nothing to drive keeps the vessel where it is.
-            _ => {
-                let brake = if ap.throttle == 0.0 && ap.steer == 0.0 {
-                    1.0
-                } else {
-                    0.0
-                };
-                (ap.throttle, ap.steer, brake, Vec::new())
-            }
-        };
+                // No behaviour tree: the explicit constant-cruise autopilot. A zero
+                // throttle here is not "coast" but "hold" — an engaged autopilot with
+                // nothing to drive keeps the vessel where it is.
+                _ => {
+                    let brake = if ap.throttle == 0.0 && ap.steer == 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    (ap.throttle, ap.steer, brake, Vec::new())
+                }
+            };
 
         commands.trigger(SetPorts {
             target: ap.vessel,
@@ -2118,10 +2117,9 @@ fn on_set_autopilot_behavior(
     };
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
-            commands.entity(entity).try_insert((
-                behavior,
-                AutopilotExecutionState::Running,
-            ));
+            commands
+                .entity(entity)
+                .try_insert((behavior, AutopilotExecutionState::Running));
             // Mirror the source spec onto the vessel (read path for UI/gizmo).
             if let Ok(spec) = AutopilotBehaviorSpec::from_json(&cmd.spec_json) {
                 commands.entity(cmd.vessel).try_insert(spec);
@@ -2160,10 +2158,9 @@ fn on_clear_patrol(
     let brake = AutopilotBehavior::new(&BehaviorSpec::Brake);
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
-            commands.entity(entity).try_insert((
-                brake,
-                AutopilotExecutionState::Running,
-            ));
+            commands
+                .entity(entity)
+                .try_insert((brake, AutopilotExecutionState::Running));
         }
         None => warn!(
             "[autopilot] ClearPatrol: no autopilot owns vessel {:?}",

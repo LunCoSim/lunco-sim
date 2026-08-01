@@ -1941,17 +1941,14 @@ impl Document for UsdDocument {
                 // doesn't silently drop a sibling variant set's selection.
                 stage
                     .prim(path.as_str())
-                    .update_metadata(
-                        sdf::FieldKey::VariantSelection.as_str(),
-                        |current| {
-                            let mut map = match current {
-                                Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
-                                _ => Default::default(),
-                            };
-                            map.insert(variant_set.clone(), variant.clone());
-                            openusd::sdf::Value::VariantSelectionMap(map)
-                        },
-                    )
+                    .update_metadata(sdf::FieldKey::VariantSelection.as_str(), |current| {
+                        let mut map = match current {
+                            Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
+                            _ => Default::default(),
+                        };
+                        map.insert(variant_set.clone(), variant.clone());
+                        openusd::sdf::Value::VariantSelectionMap(map)
+                    })
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
