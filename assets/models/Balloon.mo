@@ -50,6 +50,8 @@ model Balloon
   parameter Real lapse = 0.0065 "Temperature lapse rate K/m";
 
   // Environment — supplied by the scene, never assumed.
+  // The default Sandbox scene is on the Moon, so it leaves `rho0` at zero:
+  // no ambient medium means no buoyancy. An Earth demo must author `rho0`.
   input Real rho0 = 0.0 "Ambient density at datum kg/m³ (0 = vacuum)";
   input Real gravity = 1.62 "Local gravity m/s² (wired from the environment)";
 
