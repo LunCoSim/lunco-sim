@@ -176,6 +176,7 @@ struct Cli {
     /// Seed for the jitter PRNG. Irrelevant when `jitter == 0.0`.
     seed: u64,
     /// Optional prim path to select and measure selection AABB bounds for.
+    #[cfg(feature = "ui")]
     select_prim: Option<String>,
 }
 
@@ -237,6 +238,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut threads: usize = 1;
     let mut jitter = 0.0f64;
     let mut seed = DEFAULT_SEED;
+    #[cfg(feature = "ui")]
     let mut select_prim: Option<String> = None;
 
     let mut i = 0;
@@ -301,6 +303,7 @@ fn parse_args() -> Result<Cli, String> {
                     .map_err(|_| format!("--seed expects an unsigned integer, got {v:?}"))?;
                 i += 2;
             }
+            #[cfg(feature = "ui")]
             "--select-prim" => {
                 select_prim = Some(need(i, "--select-prim")?);
                 i += 2;
@@ -327,6 +330,7 @@ fn parse_args() -> Result<Cli, String> {
         threads,
         jitter,
         seed,
+        #[cfg(feature = "ui")]
         select_prim,
     })
 }
@@ -508,6 +512,7 @@ pub fn run() -> u8 {
     // `CelestialCadenceSettings::EXACT` inserted below used to persist, and every
     // later run of the *luncosim* then loaded tolerance 0° and solved the whole
     // celestial tree every frame.
+    #[cfg(feature = "ui")]
     lunco_settings::use_ephemeral_settings();
 
     let cli = match parse_args() {
@@ -676,6 +681,7 @@ pub fn run() -> u8 {
         ticks += 1;
         sim_seconds += step.as_secs_f64();
 
+        #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
                 use lunco_luncosim_edit::selection::{compute_selection_aabb, Selected};

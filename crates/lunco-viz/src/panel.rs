@@ -77,7 +77,17 @@ impl InstancePanel for VizPanel {
                 }
             };
             let Some(cfg) = registry.get(id).cloned() else {
-                ui.label(format!("No visualization #{instance}."));
+                // The dock layout may persist longer than a runtime-created
+                // visualization. The registry is authoritative, so remove
+                // the stale tab after this paint rather than showing a dead
+                // panel body.
+                ctx.defer(move |world| {
+                    if let Some(mut layout) =
+                        world.get_resource_mut::<lunco_workbench::WorkbenchLayout>()
+                    {
+                        layout.close_instance(VIZ_PANEL_KIND, instance);
+                    }
+                });
                 return;
             };
             let catalog = match ctx.resource::<VizKindCatalog>() {

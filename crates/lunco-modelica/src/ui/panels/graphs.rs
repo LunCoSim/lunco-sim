@@ -138,7 +138,18 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
             return;
         }
         Some(None) => {
-            ui.label(format!("Plot #{} not found.", viz_id.0));
+            // A persisted dock can outlive a runtime-created plot. The
+            // VisualizationRegistry is authoritative for plot instances, so
+            // retire the stale tab after this paint instead of presenting a
+            // dead "not found" panel to the user.
+            let stale_instance = viz_id.0;
+            ctx.defer(move |world| {
+                if let Some(mut layout) =
+                    world.get_resource_mut::<lunco_workbench::WorkbenchLayout>()
+                {
+                    layout.close_instance(MODELICA_PLOT_KIND, stale_instance);
+                }
+            });
             return;
         }
         Some(Some(n)) => n,
