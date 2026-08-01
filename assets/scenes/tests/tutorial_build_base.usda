@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "BuildBase"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Runs the actual base-building lesson over its authored empty plot.
+def Xform "BuildBase" (
+    prepend references = @lunco://tutorials/sandbox/build_base.usda@</BuildBase>
+)
+{
+    custom string lunco:scenario = "tutorial-build-base"
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_base.rhai@
+    }
+
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_build_base.rhai@
+        }
+    }
+}

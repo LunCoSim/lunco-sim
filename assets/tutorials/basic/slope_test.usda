@@ -62,7 +62,7 @@ def Xform "SlopeTest" (
     {
         double size = 1.0
         double3 xformOp:translate = (8.0, 3.6, 0.0)
-        double3 xformOp:rotateXYZ = (0.0, 0.0, -18.0)
+        double3 xformOp:rotateXYZ = (0.0, 0.0, 18.0)
         double3 xformOp:scale = (34.0, 0.6, 40.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.40, 0.36, 0.33)]

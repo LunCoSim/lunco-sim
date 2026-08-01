@@ -12,37 +12,50 @@ fn on_start(me) {
     // No ordinal: position is the `lunco:tutorial:next` chain in the curriculum
     // layer alone. Ordinals duplicated into scripts are how this track ended up
     // titled "2 ·" while toasting "S3".
-    notify_kind("Basic · Moon Driving Basics", "info");
+    spotlight("panel.command_deck", "Use the Command Deck to verify who is driving before you move.");
+    notify_kind("Tutorial: Moon Driving Basics", "info");
     hint("Welcome, driver. Click the rover (or press F) to take control.");
 }
 
+fn b1_driving_started(me) {
+    clear_spotlight();
+    spotlight("panel.telemetry_browser", "Read speed and wheel signals here while you drive.");
+    hint("You're driving. W / S throttle forward and back, A / D steer, Space brakes. Read the telemetry while you roll onto the ramp.");
+}
+
+fn b1_at_flag(me) {
+    let d = distance(find("/DrivingBasics/Rover"), find("/DrivingBasics/Flag"));
+    d >= 0.0 && d < 6.0
+}
+
+fn b1_finished(me) {
+    clear_spotlight();
+    notify_kind("Nice climb — that's the feel of a grade under wheels.", "success");
+}
+
 fn mission(me) {
-    // Scene paths as locals so the `done` closures capture them (named fns can't
-    // see script-level consts).
-    let rover = "/DrivingBasics/Rover";
-    let flag  = "/DrivingBasics/Flag";
     [
         // 1 — take control.
         objective("possess", #{
             text: "Click the rover (or press F) to take control",
             requires_event: "cmd:PossessVessel",
-            on_complete: |m| hint("You're driving. W / S throttle forward and back, A / D steer, Space brakes. Right-drag orbits the camera, scroll zooms. Roll out onto the flat and get a feel for it, then line up on the ramp to the east."),
+            on_complete: Fn("b1_driving_started"),
         }),
         // 2 — climb the ramp to the finish flag. The drive out + the climb are one
         // objective, measured by arrival (a plain distance read, robust to path).
         objective("reach_flag", #{
             text: "Drive out, then climb the ramp and stop at the finish flag",
             requires: ["possess"],
-            done: |m| { distance(find(rover), find(flag)) < 6.0 },
+            done: Fn("b1_at_flag"),
             dwell: 0.4,
-            on_complete: |m| notify_kind("Nice climb — that's the feel of a grade under wheels.", "success"),
+            on_complete: Fn("b1_finished"),
         }),
     ]
 }
 
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
-        hint("You can drive, climb, and stop. Next: Slopes & Tip-Over — climb a borderline grade and feel exactly why a top-heavy rover rolls.");
+        hint("You can drive, climb, stop, and read the result. Next: Slopes & Tip-Over — feel why a top-heavy rover rolls.");
         notify_kind("Lesson complete 🎉 — on to Slopes & Tip-Over", "success");
     }
 }

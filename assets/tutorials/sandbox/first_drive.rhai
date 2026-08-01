@@ -18,12 +18,23 @@ fn on_start(me) {
     notify_kind("Tutorial: First Drive", "info");
 }
 
+fn first_drive_possessed(me) {
+    hint("Now use W / A / S / D to drive to the glowing flag.");
+}
+
+fn first_drive_at_flag(me) {
+    let d = distance(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"));
+    d >= 0.0 && d < 6.0
+}
+
+fn first_drive_finished(me) {
+    notify_kind("You reached the flag — nice driving!", "success");
+}
+
 fn mission(me) {
     // Scene entity paths as LOCALS (not top-level `const`): rhai closures capture
     // enclosing locals by value, but named fns can't see module consts — so the
     // `done` closure below captures these, resolving each via find() every tick.
-    let rover = "/FirstDrive/Rover";
-    let flag  = "/FirstDrive/Flag";
     [
         // Step 1 — take control. Completes when a PossessVessel command fires,
         // however the student triggers it (click the rover or press F). Works for
@@ -31,7 +42,7 @@ fn mission(me) {
         objective("possess", #{
             text: "Click the rover (or press F) to take control",
             requires_event: "cmd:PossessVessel",
-            on_complete: |m| hint("Now use W / A / S / D to drive to the glowing flag."),
+            on_complete: Fn("first_drive_possessed"),
         }),
         // Step 2 — drive to the flag. Gated on step 1, then completes on distance
         // (robust: a plain world-position read, no dependence on a trigger volume).
@@ -39,9 +50,9 @@ fn mission(me) {
         objective("reach_flag", #{
             text: "Drive to the glowing flag",
             requires: ["possess"],
-            done: |m| { let d = distance(find(rover), find(flag)); d >= 0.0 && d < 6.0 },
+            done: Fn("first_drive_at_flag"),
             dwell: 0.4,
-            on_complete: |m| notify_kind("You reached the flag — nice driving!", "success"),
+            on_complete: Fn("first_drive_finished"),
         }),
     ]
 }
@@ -74,25 +85,48 @@ fn aim_short_of(rover, flag, standoff) {
     vsub(fp, [d[0]*standoff, d[1]*standoff, d[2]*standoff])
 }
 
+fn first_drive_autopilot_possess(me) {
+    let rover = find("/FirstDrive/Rover");
+    cmd("PossessVessel", #{ target: rover });
+    notify_kind("[debug] autopilot engaged", "info");
+}
+
+fn first_drive_cruise(me) {
+    nav_to(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 1.0, 8.0)
+}
+
+fn first_drive_cruise_done(me) {
+    arrived(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 8.0)
+}
+
+fn first_drive_creep(me) {
+    nav_to(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.15, 0.6)
+}
+
+fn first_drive_creep_done(me) {
+    arrived(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.6)
+}
+
+fn first_drive_brake(me) {
+    brake(find("/FirstDrive/Rover"))
+}
+
 fn task(me) {
     if !is_unattended() { return; }   // a human is watching: they drive
     seq([
         wait(1.0),                     // let the scene settle / rover spawn
-        once(|m| { cmd("PossessVessel", #{ target: find("/FirstDrive/Rover") });
-                   notify_kind("[debug] autopilot engaged", "info"); }),
+        once(Fn("first_drive_autopilot_possess")),
         wait(0.5),
         // Phase 1: cruise toward the flag at a moderate speed until within 8 m.
-        step(|m| nav_to(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 0.6, 8.0),
-             |m| arrived(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 8.0)),
+        step(Fn("first_drive_cruise"), Fn("first_drive_cruise_done")),
         // Phase 2: creep SLOWLY to a point 1.5 m short of the flag (an offset in
         // front of it) and stop there — so the rover's centre parks a body-length
         // out with its nose AT the flag, instead of ramming through and settling
         // ~2.3 m back. Aiming short, not just braking, is what puts it on the flag.
-        step(|m| nav_to(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.15, 0.6),
-             |m| arrived(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.6)),
+        step(Fn("first_drive_creep"), Fn("first_drive_creep_done")),
         // Brake and HOLD for a couple of sim-seconds so it parks instead of coasting.
         // A raw step map: `act` re-brakes every tick while the `secs` dwell holds the
         // step, so the brake persists (a single pulse would let it roll onward).
-        #{ act: |m| brake(find("/FirstDrive/Rover")), secs: 2.0 },
+        #{ act: Fn("first_drive_brake"), secs: 2.0 },
     ])
 }

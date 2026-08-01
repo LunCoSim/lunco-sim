@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "SlopeTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Runs the actual B3 lesson and observes the real tilt + climb objectives.
+def Xform "SlopeTest" (
+    prepend references = @lunco://tutorials/basic/slope_test.usda@</SlopeTest>
+)
+{
+    custom string lunco:scenario = "tutorial-slopes-tipover"
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
+    }
+
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_slopes_tipover.rhai@
+        }
+    }
+}

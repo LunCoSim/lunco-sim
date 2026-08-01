@@ -1,13 +1,11 @@
 #usda 1.0
 (
     """
-    Flagship curriculum. See `../sandbox/curriculum.usda` for what a track and a
-    lesson are made of.
+    LunCoSim foundations curriculum. See `../sandbox/curriculum.usda` for what a
+    track and a lesson are made of.
 
-    Both lessons declare the default LunCoSim world. This is intentionally
-    explicit: first-run boot hands scene ownership to the selected tutorial and
-    therefore skips the ordinary startup load. A world-less onboarding lesson
-    would otherwise open over an empty viewport.
+    The first-run path reviews the UI and then hands the learner into the
+    authored driving and terrain mechanics tracks.
     """
     defaultPrim = "LunCoSim"
     metersPerUnit = 1
@@ -17,16 +15,16 @@ def Scope "LunCoSim" (
     prepend apiSchemas = ["LunCoTutorialTrackAPI"]
 )
 {
-    string lunco:track:label = "🌍 LunCoSim Flagship"
+    string lunco:track:label = "1️⃣ LunCoSim Foundations"
 
     def Scope "Welcome" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-        prepend payload = @lunco://scenes/luncosim/sandbox_scene.usda@
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/welcome.rhai@
-        string lunco:tutorial:title = "Welcome to LunCoSim"
-        string lunco:tutorial:blurb = "A guided tour of the flagship — the live solar system, the camera, and time-warp."
+        string lunco:tutorial:title = "01 · Read the Sim UI"
+        string lunco:tutorial:blurb = "Review the scene, entity, telemetry, inspector, command and time controls before touching the simulation."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform bool lunco:tutorial:firstStart = true
         rel lunco:tutorial:next = </LunCoSim/Controls>
@@ -34,12 +32,13 @@ def Scope "LunCoSim" (
 
     def Scope "Controls" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-        prepend payload = @lunco://scenes/luncosim/sandbox_scene.usda@
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/controls.rhai@
-        string lunco:tutorial:title = "Controls & Command"
-        string lunco:tutorial:blurb = "Focus a body, fly the camera, and possess a vessel — then hand back to the autopilot."
+        string lunco:tutorial:title = "02 · Authority Handoff"
+        string lunco:tutorial:blurb = "Take control of a rover through the Command Deck, verify the live state, then release it back to the simulation."
         uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Basic/MoonDrivingBasics>
     }
 }

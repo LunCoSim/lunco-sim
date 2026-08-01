@@ -693,6 +693,7 @@ impl Perspective for BuildPerspective {
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),
+            PanelId("command_deck"),
             PanelId("sandbox_environment"),
             // Optional — only renders if the host binary registers a
             // panel with this id (the rover binary does, modelica

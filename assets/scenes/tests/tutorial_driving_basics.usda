@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "DrivingBasics"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Runs the actual B1 lesson and observes its completion from a separate host.
+def Xform "DrivingBasics" (
+    prepend references = @lunco://tutorials/basic/driving_basics.usda@</DrivingBasics>
+)
+{
+    custom string lunco:scenario = "tutorial-driving-basics"
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/basic/b1_driving_basics.rhai@
+    }
+
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_driving_basics.rhai@
+        }
+    }
+}

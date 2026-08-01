@@ -33,6 +33,47 @@ fn has_structure(keyword) {
     false
 }
 
+fn power_present(me) {
+    has_structure("Solar") || has_structure("Fsps")
+}
+
+fn power_placed(me) {
+    clear_spotlight();
+    hint("Power down. Solar gives you daylight watts; a fission plant (FSPS) carries you through the long lunar night — and, being a reactor, it must sit well away from the crew for radiation standoff. Now the habitat.");
+}
+
+fn habitat_present(me) {
+    has_structure("Habitat")
+}
+
+fn comms_present(me) {
+    has_structure("Comms")
+}
+
+fn isru_present(me) {
+    has_structure("Isru")
+}
+
+fn pad_present(me) {
+    has_structure("Landing")
+}
+
+fn habitat_placed(me) {
+    hint("Habitat placed. Keep it central and uphill of the landing pad; its radiators want a clear sky. Next, comms — your link home.");
+}
+
+fn comms_placed(me) {
+    hint("Comms up. On a real base this goes on the highest ground you have — a ridge or crater rim — for Earth line-of-sight. Now the ISRU plant.");
+}
+
+fn isru_placed(me) {
+    hint("ISRU placed. It wants to be near the resource (the cold-trap ice on a PSR-facing slope) yet within rover range of the pad and tanks. Last piece: the landing pad.");
+}
+
+fn pad_placed(me) {
+    notify_kind("Base laid out — that's a working outpost!", "success");
+}
+
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
@@ -48,32 +89,32 @@ fn mission(me) {
         // the 350-hour lunar night.
         objective("power", #{
             text: "Place a power source — a Solar Tower or a Fission plant (FSPS)",
-            done: |m| has_structure("Solar") || has_structure("Fsps"),
-            on_complete: |m| { clear_spotlight(); hint("Power down. Solar gives you daylight watts; a fission plant (FSPS) carries you through the long lunar night — and, being a reactor, it must sit well away from the crew for radiation standoff. Now the habitat."); },
+            done: Fn("power_present"),
+            on_complete: Fn("power_placed"),
         }),
         // 2 — CREW HABITAT. Central, so everything else lays out around it.
         objective("habitat", #{
             text: "Set down the crew Habitat, central to the base",
-            done: |m| has_structure("Habitat"),
-            on_complete: |m| hint("Habitat placed. Keep it central and uphill of the landing pad; its radiators want a clear sky. Next, comms — your link home."),
+            done: Fn("habitat_present"),
+            on_complete: Fn("habitat_placed"),
         }),
         // 3 — COMMS. Highest ground for Earth line-of-sight.
         objective("comms", #{
             text: "Raise a Comms Mast for the link back to Earth",
-            done: |m| has_structure("Comms"),
-            on_complete: |m| hint("Comms up. On a real base this goes on the highest ground you have — a ridge or crater rim — for Earth line-of-sight. Now the ISRU plant."),
+            done: Fn("comms_present"),
+            on_complete: Fn("comms_placed"),
         }),
         // 4 — ISRU. By the resource, within rover reach of the pad and tanks.
         objective("isru", #{
             text: "Add an ISRU plant to mine water and propellant",
-            done: |m| has_structure("Isru"),
-            on_complete: |m| hint("ISRU placed. It wants to be near the resource (the cold-trap ice on a PSR-facing slope) yet within rover range of the pad. Last piece: the landing pad."),
+            done: Fn("isru_present"),
+            on_complete: Fn("isru_placed"),
         }),
         // 5 — LANDING PAD. Set well back — plume ejecta is the hazard.
         objective("pad", #{
             text: "Lay a Landing Pad, set well back from the base",
-            done: |m| has_structure("Landing"),
-            on_complete: |m| notify_kind("Base laid out — that's a working outpost!", "success"),
+            done: Fn("pad_present"),
+            on_complete: Fn("pad_placed"),
         }),
     ]
 }

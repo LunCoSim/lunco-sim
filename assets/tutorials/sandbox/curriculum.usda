@@ -47,10 +47,8 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/sandbox_intro.rhai@
         string lunco:tutorial:title = "Sandbox Intro"
-        string lunco:tutorial:blurb = "A guided coach-mark tour of the workspace — viewport, browser, inspector, console. Chains into First Drive."
+        string lunco:tutorial:blurb = "An optional guided coach-mark tour of the workspace — viewport, browser, inspector and console."
         uniform token lunco:tutorial:difficulty = "beginner"
-        uniform bool lunco:tutorial:firstStart = true
-        rel lunco:tutorial:next = </Sandbox/FirstDrive>
     }
 
     def Scope "FirstDrive" (
@@ -62,7 +60,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "First Drive"
         string lunco:tutorial:blurb = "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving."
         uniform token lunco:tutorial:difficulty = "beginner"
-        rel lunco:tutorial:next = </Sandbox/LanderMission>
+        rel lunco:tutorial:next = </Basic/MoonDrivingBasics>
     }
 
     def Scope "LanderMission" (
