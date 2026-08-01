@@ -2532,6 +2532,15 @@ impl Plugin for SandboxCorePlugin {
                 )
                     .chain(),
             );
+        // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
+        // The terrain support projection must observe that promotion before it
+        // decides whether physics may resume; plugin insertion order is not a
+        // valid synchronization contract for a streamed physics world.
+        app.configure_sets(
+            Update,
+            lunco_usd_sim::UsdSimSet::ActivateDynamicBodies
+                .before(lunco_terrain_surface::TerrainSurfaceSet::PhysicsSupportCache),
+        );
 
         // Experiment result-artifact persistence — CORE (not networking): a run's
         // trajectory is written to `<twin>/results/<id>.json` through the

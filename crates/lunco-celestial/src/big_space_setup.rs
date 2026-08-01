@@ -86,7 +86,7 @@ use crate::registry::{
     CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame, MOON_MEAN_RADIUS_M,
 };
 use crate::soi::SOI;
-use avian3d::prelude::{Collider, CollisionLayers, LayerMask};
+use avian3d::prelude::{Collider, CollisionLayers};
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::prelude::*;
 use big_space::prelude::*;
@@ -99,6 +99,19 @@ use lunco_render::PbrLook;
 const EARTH_BODY_COLOR: [f32; 3] = [0.13, 0.32, 0.66];
 /// The Moon with no imagery: regolith grey.
 const MOON_BODY_COLOR: [f32; 3] = [0.5, 0.5, 0.5];
+
+/// Collision membership for celestial picking geometry.
+///
+/// Celestial spheres are queryable so the picker can focus a body, but they are
+/// not physical surfaces.  An empty filter keeps them out of Avian's contact
+/// graph while preserving their membership for `SpatialQuery` masks.  Using a
+/// normal `ALL` filter here makes every streamed terrain collider that enters a
+/// planet-sized sphere a narrow-phase pair, even though the sphere has no
+/// `RigidBody` and can never contribute a physical response.
+const CELESTIAL_PICKING_LAYERS: CollisionLayers = CollisionLayers::from_bits(
+    lunco_core::CELESTIAL_COLLISION_LAYER,
+    0,
+);
 
 /// Adopt a look AUTHORED on the body's prim onto its globe tiles.
 ///
@@ -479,10 +492,7 @@ pub fn setup_big_space_hierarchy(
             // masked out of suspension/sensor rays or every raycast wheel reports a
             // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
             Collider::sphere(696_340.0e3),
-            CollisionLayers::new(
-                LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
-                LayerMask::ALL,
-            ),
+            CELESTIAL_PICKING_LAYERS,
         ))
         .set_parent_in_place(solar_grid)
         .id();
@@ -621,10 +631,7 @@ pub fn setup_big_space_hierarchy(
             // masked out of suspension/sensor rays or every raycast wheel reports a
             // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
             Collider::sphere(6371.0e3),
-            CollisionLayers::new(
-                LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
-                LayerMask::ALL,
-            ),
+            CELESTIAL_PICKING_LAYERS,
             Name::new("Earth Body (Rotating)"),
         ))
         .set_parent_in_place(earth_grid)
@@ -720,10 +727,7 @@ pub fn setup_big_space_hierarchy(
             // masked out of suspension/sensor rays or every raycast wheel reports a
             // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
             Collider::sphere(MOON_MEAN_RADIUS_M),
-            CollisionLayers::new(
-                LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
-                LayerMask::ALL,
-            ),
+            CELESTIAL_PICKING_LAYERS,
             Name::new("Moon Body (Rotating)"),
         ))
         .set_parent_in_place(moon_grid)
@@ -864,10 +868,7 @@ pub fn setup_big_space_hierarchy(
                 // masked out of suspension/sensor rays or every raycast wheel reports a
                 // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
                 Collider::sphere(body_desc.radius_m),
-                CollisionLayers::new(
-                    LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
-                    LayerMask::ALL,
-                ),
+                CELESTIAL_PICKING_LAYERS,
             ))
             .set_parent_in_place(solar_grid);
     }

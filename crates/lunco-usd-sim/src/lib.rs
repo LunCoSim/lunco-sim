@@ -1927,7 +1927,14 @@ fn setup_raycast_wheel(
             0.0,
         ),
         Dir3::NEG_Y,
-    );
+    )
+    // Suspension has no use for contacts beyond its authored travel. Avian's
+    // default is an infinite ray, which makes an airborne/out-of-world wheel
+    // traverse the entire collider tree every physics tick. The suspension
+    // solver consumes only the nearest contact, so one bounded hit is the
+    // complete physical query and keeps its cost independent of world extent.
+    .with_max_distance(susp.rest_length)
+    .with_max_hits(1);
     // Mask out the non-physical layers so suspension rays ignore trigger-zone
     // sensors (else the wheels ride up on an invisible waypoint sphere) and
     // celestial body spheres (a planet-sized collider that CONTAINS the scene
