@@ -530,10 +530,7 @@ impl Plugin for SandboxEditUiPlugin {
             // already-passed legs on a route rebuild.
             .add_systems(
                 FixedPostUpdate,
-                (
-                    checkpoint_click::mark_reached_waypoints_on_enter,
-                    checkpoint_click::diag_log_waypoint_zone_inventory,
-                )
+                checkpoint_click::mark_reached_waypoints_on_enter
                     .after(avian3d::prelude::PhysicsSystems::Writeback),
             )
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets

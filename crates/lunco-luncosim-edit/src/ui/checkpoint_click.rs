@@ -1271,10 +1271,8 @@ pub fn mark_reached_waypoints_on_enter(
     // Duplicate arrivals (same vessel × same marker from two colliders in one
     // tick) are de-duplicated by the `already-reached` check in the mutation pass.
     let mut arrivals: Vec<(String, Entity)> = Vec::new();
-    let mut event_count = 0usize;
 
     for ev in starts.read() {
-        event_count += 1;
         // The two sides of the contact; one is the zone collider, the other the
         // entrant collider. `body*` resolves a child collider to its chassis
         // `RigidBody` (a wheel hits the zone, not the chassis itself).
@@ -1285,8 +1283,6 @@ pub fn mark_reached_waypoints_on_enter(
             let Ok((zone, zone_prim)) = q_zones.get(zone_ent) else {
                 continue;
             };
-            // [DIAG] a Sensor zone was hit — log which kind.
-            warn!("[TWINDBG-WP] hit Sensor zone '{}' at {}", zone.0, zone_prim.path);
             // Only waypoint trigger zones drive route arrival.
             if zone.0 != "waypoint" {
                 continue;
@@ -1305,7 +1301,6 @@ pub fn mark_reached_waypoints_on_enter(
                 let mut curr = candidate;
                 for _ in 0..16 {
                     if q_vessel_marker.get(curr).is_ok() {
-                        warn!("[TWINDBG-WP] resolved vessel {curr:?} for marker {marker_path} (from {candidate:?})");
                         arrivals.push((marker_path.to_string(), curr));
                         resolved = true;
                         break;
@@ -1319,23 +1314,11 @@ pub fn mark_reached_waypoints_on_enter(
                     break;
                 }
             }
-            if !resolved {
-                warn!("[TWINDBG-WP] marker {marker_path} hit but no vessel found from {other_ent:?} / {other_body:?}");
-            }
         }
     }
 
     if arrivals.is_empty() {
-        if event_count > 0 {
-            // [DIAG] events fired but none resolved to a waypoint zone+vessel.
-            let zone_count = q_zones.iter().filter(|(z, _)| z.0 == "waypoint").count();
-            warn!("[TWINDBG-WP] {event_count} CollisionStart but 0 arrivals; waypoint zones in world={zone_count}");
-        }
         return;
-    }
-    {
-        let zone_count = q_zones.iter().filter(|(z, _)| z.0 == "waypoint").count();
-        warn!("[TWINDBG-WP] {event_count} CollisionStart, {zone_count} waypoint zones, {} arrivals", arrivals.len());
     }
 
     for (marker_path, vessel) in arrivals {
@@ -1368,70 +1351,6 @@ pub fn mark_reached_waypoints_on_enter(
         set.insert(marker_path.clone());
         commands.entity(vessel).insert(ReachedWaypoints(set));
     }
-}
-
-/// [DIAG] Periodic inventory of Sensor trigger zones + waypoint markers in the
-/// world, so we can see whether the incrementally-spawned `Zone` children became
-/// avian `Sensor` colliders (the prerequisite for `CollisionStart` arrival).
-pub fn diag_log_waypoint_zone_inventory(
-    mut tick: Local<u32>,
-    q_zones: Query<
-        (
-            &lunco_core::TriggerZone,
-            &UsdPrimPath,
-            Option<&avian3d::prelude::CollisionLayers>,
-        ),
-        With<avian3d::prelude::Sensor>,
-    >,
-    q_all_sensors: Query<&UsdPrimPath, With<avian3d::prelude::Sensor>>,
-    q_markers: Query<&UsdPrimPath, With<BehaviorXml>>,
-    q_colliders: Query<
-        (
-            &UsdPrimPath,
-            Option<&avian3d::prelude::CollisionLayers>,
-            Has<avian3d::prelude::Sensor>,
-        ),
-        With<avian3d::prelude::Collider>,
-    >,
-) {
-    *tick += 1;
-    if *tick % 120 != 0 {
-        return;
-    }
-    let wp_zones: Vec<String> = q_zones
-        .iter()
-        .filter(|(z, _, _)| z.0 == "waypoint")
-        .map(|(z, p, layers)| {
-            format!(
-                "{}(zone={} layers={:?})",
-                p.path,
-                z.0,
-                layers.map(|l| (l.memberships.0, l.filters.0)),
-            )
-        })
-        .collect();
-    let all_sensors: Vec<&str> = q_all_sensors.iter().map(|p| p.path.as_str()).collect();
-    let vessels: Vec<&str> = q_markers.iter().map(|p| p.path.as_str()).collect();
-    // Sample the first few non-sensor colliders (the rover's wheels/chassis) to
-    // see their collision layers — the mask must include bit 7 to hit the zone.
-    let rover_colliders: Vec<String> = q_colliders
-        .iter()
-        .filter(|(_, _, sensor)| !sensor)
-        .take(6)
-        .map(|(p, layers, sensor)| {
-            format!(
-                "{}(layers={:?} sensor={})",
-                p.path,
-                layers.map(|l| (l.memberships.0, l.filters.0)),
-                sensor
-            )
-        })
-        .collect();
-    warn!(
-        "[TWINDBG-INV] tick={} waypoint zones={:?} | rover colliders={:?} | vessels={:?}",
-        *tick, wp_zones, rover_colliders, vessels
-    );
-    let _ = all_sensors;
 }
 /// the autopilot currently driving it and returns ownership to the local session.
 ///

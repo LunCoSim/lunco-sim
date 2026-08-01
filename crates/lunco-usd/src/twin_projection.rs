@@ -34,8 +34,9 @@
 //!    spawn whose asset isn't loaded yet is fetched once through
 //!    [`drain_ref_spawns`], then authored the same way.
 //!
-//! Scope: the **default twin scene** only. Arbitrary `OpenFile` scenes stay on
-//! E1's path; `mem://` / `bundled://` keep the file-backed import.
+//! Scope: the **default twin scene** uses the document overlay. Arbitrary
+//! `OpenFile` scenes retain their additive stage mount, while scheme-qualified
+//! sources (`mem://` / `bundled://`) remain directly addressable assets.
 
 use crate::document::UsdDocument;
 use std::collections::HashMap;
