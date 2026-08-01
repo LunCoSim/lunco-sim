@@ -1393,6 +1393,17 @@ fn request_binding_epoch_on_model_change(
     }
 }
 
+fn modelica_models_terminal<'a>(
+    mut models: impl Iterator<Item = (Option<&'a ModelicaModel>, Option<&'a SimComponent>)>,
+) -> bool {
+    models.all(|(model, component)| match model {
+        None => true,
+        Some(_) => {
+            matches!(component, Some(component) if !matches!(component.status, SimStatus::Compiling))
+        }
+    })
+}
+
 /// The sole USD-side transition from a loading projection epoch to a bindable
 /// one.  Failed models are terminal: readiness policy decides whether to hold
 /// physics, while the binder must be allowed to record the failed endpoint.
@@ -1404,14 +1415,17 @@ fn settle_binding_epoch(
     // `UsdSourcedCosim` marks the USD projection domain, not a solver.  It is
     // intentionally also present on native endpoints such as a revolute joint
     // so they can expose ports through the same scene surface.  A joint has no
-    // `SimComponent` by design, and treating that absence as a compiling model
-    // leaves the whole world held forever after its physical admission.
+    // `ModelicaModel` or `SimComponent` by design, and treating that absence as
+    // a compiling model leaves the whole world held forever after its physical
+    // admission.
     //
-    // Solver readiness therefore ranges over actual `SimComponent` owners only.
-    // Native endpoints have dedicated readiness facts above (`PendingUsdJoint`,
-    // wheel wiring, and differential wiring), so omitting them here does not
-    // weaken the binding transaction.
-    models: Query<&SimComponent, With<UsdSourcedCosim>>,
+    // Solver readiness ranges over Modelica owners and their projected
+    // SimComponents.  The optional component matters: the projection frame
+    // between a ModelicaModel arriving and its SimComponent wrapper is itself
+    // not terminal. Native endpoints have dedicated readiness facts above
+    // (`PendingUsdJoint`, wheel wiring, and differential wiring), so omitting
+    // them here does not weaken the binding transaction.
+    models: Query<(Option<&ModelicaModel>, Option<&SimComponent>), With<UsdSourcedCosim>>,
     connections: Query<(), With<SimConnection>>,
     mut dirty: ResMut<BindingEpochDirty>,
     mut revision: ResMut<lunco_cosim::BindingRevision>,
@@ -1419,9 +1433,7 @@ fn settle_binding_epoch(
     mut readiness: ResMut<lunco_readiness::ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    let models_terminal = models
-        .iter()
-        .all(|model| !matches!(model.status, SimStatus::Compiling));
+    let models_terminal = modelica_models_terminal(models.iter());
     let settled = awaiting.is_empty()
         && joints.is_empty()
         && wheels.is_empty()
@@ -1444,9 +1456,13 @@ fn settle_binding_epoch(
     // after every projection and endpoint-lifecycle update for this frame. Do
     // not queue it here: doing so let first-load USD ports and generated domain
     // contracts race each other across deferred command boundaries.
-    // Binding is a participant-initialisation fact. The readiness policy owns
-    // whether that fact holds the world; this producer merely reports it.
-    match (!settled && !connections.is_empty(), wait) {
+    // Modelica compilation has its own per-entity readiness tickets. Do not
+    // turn the binding epoch into a world hold while one of those models is
+    // cold-compiling; otherwise the world ticket waits on the same compiler
+    // and defeats entity-scoped readiness. The world ticket is only for native
+    // endpoint settlement after every Modelica participant is terminal.
+    let hold_binding_epoch = !settled && models_terminal && !connections.is_empty();
+    match (hold_binding_epoch, wait) {
         (true, None) => {
             let ticket = readiness.begin(
                 lunco_readiness::Subject::World,
@@ -3266,6 +3282,34 @@ mod tests {
             modelica_status(&model),
             SimStatus::Error("singular system".into())
         );
+    }
+
+    #[test]
+    fn binding_epoch_does_not_treat_unwrapped_compile_as_terminal() {
+        let model = ModelicaModel::default();
+        assert!(!modelica_models_terminal(std::iter::once((
+            Some(&model),
+            None
+        ))));
+
+        let compiling = SimComponent {
+            status: SimStatus::Compiling,
+            ..default()
+        };
+        assert!(!modelica_models_terminal(std::iter::once((
+            Some(&model),
+            Some(&compiling),
+        ))));
+
+        let ready = SimComponent {
+            status: SimStatus::Idle,
+            ..default()
+        };
+        assert!(modelica_models_terminal(std::iter::once((
+            Some(&model),
+            Some(&ready),
+        ))));
+        assert!(modelica_models_terminal(std::iter::once((None, None))));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! | Wait | Open while | Scope |
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage is still spawning prims | world |
-//! | [`kinds::PROGRAM_COMPILE`] | any scene Modelica model has not compiled | world |
+//! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | that entity |
 //!
 //! # Why reconcile systems rather than events
 //!
@@ -37,7 +37,7 @@ struct SceneLoadWait {
     ticket: ReadinessTicket,
 }
 
-/// The open scene compile wait contributed by this Modelica entity.
+/// The open per-entity compile wait for this entity's Modelica model.
 ///
 /// On the entity rather than in a side table so it dies with the entity; the
 /// registry drops waits whose subject was despawned, so a scene reload
@@ -79,8 +79,8 @@ fn track_scene_load(
     }
 }
 
-/// Freeze physics while any scene Modelica model has not compiled yet, and
-/// release it only after every live program is runnable (or terminally failed).
+/// Freeze only the Modelica entity whose program has not compiled yet, and
+/// release its wait the moment that program is runnable (or terminally failed).
 ///
 /// This is the descent-lander race, closed: the entity exists and has mass and a
 /// collider long before the model that is supposed to fly it has been through the
@@ -92,12 +92,11 @@ fn track_scene_load(
 /// its status, rather than component existence, keeps the physics hold until a
 /// compiler result has made the model runnable or visibly failed.
 ///
-/// This must be a world hold, not an entity hold. A Modelica controller or a
-/// generated domain island is a signal/assembly prim, while the dynamic bodies
-/// it governs live elsewhere in the USD hierarchy. Holding only that prim
-/// allows the rover to fall and its joints to settle before the controller or
-/// island has a first solution. A load is atomic from physics' point of view:
-/// no body advances until every required Modelica participant is live.
+/// The wait is deliberately attached to the Modelica entity rather than the
+/// world. A cold compiler must not stop unrelated rovers, terrain streaming, or
+/// already-ready physics. The scene-load wait and terrain readiness hold still
+/// protect the world while its bodies and colliders are arriving; this wait
+/// only prevents the not-yet-projected participant from being treated as ready.
 fn track_model_compiles(
     models: Query<(Entity, &ModelicaModel, Option<&SimComponent>), With<UsdSourcedCosim>>,
     waits: Query<(Entity, &ModelCompileWait)>,
@@ -109,7 +108,8 @@ fn track_model_compiles(
         let wait = waits.get(entity).ok();
         match (kind, wait) {
             (Some(kind), None) => {
-                let ticket = registry.begin(Subject::World, kind, model.model_name.clone());
+                let ticket =
+                    registry.begin(Subject::Entity(entity), kind, model.model_name.clone());
                 commands
                     .entity(entity)
                     .try_insert(ModelCompileWait { ticket, kind });
@@ -120,7 +120,8 @@ fn track_model_compiles(
             }
             (Some(kind), Some((_, wait))) if kind != wait.kind => {
                 registry.finish(wait.ticket);
-                let ticket = registry.begin(Subject::World, kind, model.model_name.clone());
+                let ticket =
+                    registry.begin(Subject::Entity(entity), kind, model.model_name.clone());
                 commands
                     .entity(entity)
                     .try_insert(ModelCompileWait { ticket, kind });
@@ -204,5 +205,34 @@ mod tests {
             Some(kinds::PROGRAM_FAILED),
             "a failed model remains a named policy fact"
         );
+    }
+
+    #[test]
+    fn pending_model_compile_does_not_hold_the_world() {
+        let mut app = App::new();
+        app.init_resource::<ReadinessRegistry>()
+            .add_systems(Update, track_model_compiles);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                UsdSourcedCosim,
+                ModelicaModel {
+                    model_name: "ColdController".into(),
+                    ..default()
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let item = app
+            .world()
+            .resource::<ReadinessRegistry>()
+            .pending()
+            .next()
+            .expect("a compiling model must be tracked");
+        assert_eq!(item.subject, Subject::Entity(entity));
+        assert_eq!(item.kind, kinds::PROGRAM_COMPILE);
     }
 }
