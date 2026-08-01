@@ -84,7 +84,7 @@ pub use lunco_terrain_core::{
     Selected, Square, TileCoord, TileGrid, TransferFn,
 };
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
-pub use plugin::TerrainSurfacePlugin;
+pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use stream_viz::{
     DemHeightField, LodFrozen, LodTiles, SetTerrainLod, TerrainLodConfig, TerrainLodViz,

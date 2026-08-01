@@ -11,6 +11,18 @@
 
 use bevy::prelude::*;
 
+/// Update phases owned by the terrain substrate.
+///
+/// The support index is deliberately a named phase rather than relying on
+/// plugin insertion order. Physics producers can order their admission phase
+/// before this set, so a body promoted during the current update is included in
+/// the same support decision that gates its first physics step.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerrainSurfaceSet {
+    /// Project changed Avian bodies/colliders/joints into terrain support data.
+    PhysicsSupportCache,
+}
+
 /// Streamed-terrain plugin — registers the DEM build, streaming, layer, and
 /// collider-ring systems (see the module docs for the pipeline).
 pub struct TerrainSurfacePlugin;
@@ -64,6 +76,20 @@ impl Plugin for TerrainSurfacePlugin {
         // them and the reflection API can set them live.
         app.register_type::<crate::collider_ring::TerrainColliderRing>();
         app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
+        app.init_resource::<crate::collider_ring::PhysicsSupportCache>();
+        app.configure_sets(
+            Update,
+            TerrainSurfaceSet::PhysicsSupportCache,
+        );
+        // Physics owns the support contract; this cache turns Avian's change
+        // events into a stable assembly projection. Ring selection and the
+        // readiness hold both consume that projection instead of rebuilding the
+        // physics topology on every render frame.
+        app.add_systems(
+            Update,
+            crate::collider_ring::update_physics_support_cache
+                .in_set(TerrainSurfaceSet::PhysicsSupportCache),
+        );
         app.add_systems(
             Update,
             (
@@ -120,7 +146,8 @@ impl Plugin for TerrainSurfacePlugin {
                 // edit; the `.after` also inserts the sync point that makes the
                 // region visible the same frame.
                 crate::collider_ring::update_collider_ring
-                    .after(crate::terrain::finish_dem_restamp),
+                    .after(crate::terrain::finish_dem_restamp)
+                    .after(crate::collider_ring::update_physics_support_cache),
                 // Live retune (Inspector / reflection / a scene authoring the
                 // fields): marks resident tiles stale so the new lattice reaches
                 // the ground already under the wheels. Change-driven — the query

@@ -267,6 +267,280 @@ pub struct ColliderDirtyRegion {
     pub oracle_key: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CachedCollider {
+    owner: Entity,
+    bounds: Option<[f64; 4]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CachedBody {
+    support_bounds: [f64; 4],
+    bounds: [f64; 4],
+}
+
+#[derive(Debug, Clone)]
+struct CachedAssembly {
+    members: Vec<Entity>,
+    bounds: [f64; 4],
+}
+
+/// Change-driven runtime support index shared by ring selection and readiness.
+///
+/// Avian updates positions and broad-phase AABBs only when physics changes. The
+/// index consumes those change events and keeps the assembled support geometry;
+/// terrain consumers therefore never scan every body, collider, or joint on a
+/// quiet frame. This is the architectural boundary: the producers expose
+/// physics geometry, while terrain only reads the resulting assemblies.
+#[derive(Resource, Default)]
+pub struct PhysicsSupportCache {
+    bodies: HashMap<Entity, CachedBody>,
+    colliders: HashMap<Entity, CachedCollider>,
+    colliders_by_body: HashMap<Entity, HashSet<Entity>>,
+    assemblies: Vec<CachedAssembly>,
+    assembly_of: HashMap<Entity, usize>,
+    topology_dirty: bool,
+}
+
+impl PhysicsSupportCache {
+    fn remove_collider(&mut self, entity: Entity, changed_bodies: &mut HashSet<Entity>) {
+        let Some(collider) = self.colliders.remove(&entity) else {
+            return;
+        };
+        if let Some(colliders) = self.colliders_by_body.get_mut(&collider.owner) {
+            colliders.remove(&entity);
+            if colliders.is_empty() {
+                self.colliders_by_body.remove(&collider.owner);
+            }
+        }
+        changed_bodies.insert(collider.owner);
+    }
+
+    fn update_collider(
+        &mut self,
+        entity: Entity,
+        owner: Entity,
+        bounds: Option<[f64; 4]>,
+        changed_bodies: &mut HashSet<Entity>,
+    ) {
+        if let Some(previous) = self
+            .colliders
+            .insert(entity, CachedCollider { owner, bounds })
+        {
+            changed_bodies.insert(previous.owner);
+            if previous.owner != owner {
+                if let Some(colliders) = self.colliders_by_body.get_mut(&previous.owner) {
+                    colliders.remove(&entity);
+                    if colliders.is_empty() {
+                        self.colliders_by_body.remove(&previous.owner);
+                    }
+                }
+            }
+        }
+        self.colliders_by_body
+            .entry(owner)
+            .or_default()
+            .insert(entity);
+        changed_bodies.insert(owner);
+    }
+
+    fn recompute_body(&mut self, entity: Entity) {
+        let Some(body) = self.bodies.get(&entity).copied() else {
+            return;
+        };
+        let mut bounds = Some(body.support_bounds);
+        if let Some(colliders) = self.colliders_by_body.get(&entity) {
+            for collider in colliders {
+                if let Some(Some(collider_bounds)) = self.colliders.get(collider).map(|c| c.bounds)
+                {
+                    bounds = Some(union_xz_bounds(bounds, collider_bounds));
+                }
+            }
+        }
+        if let Some(body) = self.bodies.get_mut(&entity) {
+            body.bounds = bounds.unwrap_or(body.support_bounds);
+        }
+    }
+
+    fn rebuild_assemblies(&mut self, joints: &JointGraph) {
+        let adjacency = joints.adjacency(|entity| self.bodies.contains_key(&entity));
+        self.assemblies.clear();
+        self.assembly_of.clear();
+        let mut seen = HashSet::new();
+        let entities: Vec<Entity> = self.bodies.keys().copied().collect();
+        for seed in entities {
+            if !seen.insert(seed) {
+                continue;
+            }
+            let members = joint_component(seed, &adjacency);
+            seen.extend(members.iter().copied());
+            let index = self.assemblies.len();
+            let mut bounds = None;
+            for &member in &members {
+                self.assembly_of.insert(member, index);
+                if let Some(body) = self.bodies.get(&member) {
+                    bounds = Some(union_xz_bounds(bounds, body.bounds));
+                }
+            }
+            if let Some(bounds) = bounds {
+                self.assemblies.push(CachedAssembly { members, bounds });
+            }
+        }
+        self.topology_dirty = false;
+    }
+
+    fn recompute_assembly(&mut self, index: usize) {
+        let Some(assembly) = self.assemblies.get(index) else {
+            return;
+        };
+        let members = assembly.members.clone();
+        let mut bounds = None;
+        for member in members {
+            if let Some(body) = self.bodies.get(&member) {
+                bounds = Some(union_xz_bounds(bounds, body.bounds));
+            }
+        }
+        if let Some(bounds) = bounds {
+            if let Some(assembly) = self.assemblies.get_mut(index) {
+                assembly.bounds = bounds;
+            }
+        }
+    }
+}
+
+/// Maintain the physics support index from ECS change detection.
+pub fn update_physics_support_cache(
+    mut cache: ResMut<PhysicsSupportCache>,
+    bodies: Query<
+        (
+            Entity,
+            &RigidBody,
+            &avian3d::prelude::Position,
+            Option<&avian3d::prelude::Rotation>,
+            Option<&lunco_physics::PhysicsSupportFootprint>,
+        ),
+        Or<(
+            Added<RigidBody>,
+            Changed<RigidBody>,
+            Changed<avian3d::prelude::Position>,
+            Changed<avian3d::prelude::Rotation>,
+            Added<lunco_physics::PhysicsSupportFootprint>,
+            Changed<lunco_physics::PhysicsSupportFootprint>,
+        )>,
+    >,
+    colliders: Query<
+        (Entity, &ColliderAabb, Option<&ColliderOf>),
+        Or<(
+            Added<ColliderAabb>,
+            Changed<ColliderAabb>,
+            Added<ColliderOf>,
+        )>,
+    >,
+    mut removed_bodies: RemovedComponents<RigidBody>,
+    mut removed_colliders: RemovedComponents<ColliderAabb>,
+    added_revolute: Query<(), Added<avian3d::prelude::RevoluteJoint>>,
+    added_fixed: Query<(), Added<avian3d::prelude::FixedJoint>>,
+    added_prismatic: Query<(), Added<avian3d::prelude::PrismaticJoint>>,
+    added_spherical: Query<(), Added<avian3d::prelude::SphericalJoint>>,
+    added_distance: Query<(), Added<avian3d::prelude::DistanceJoint>>,
+    mut removed_revolute: RemovedComponents<avian3d::prelude::RevoluteJoint>,
+    mut removed_fixed: RemovedComponents<avian3d::prelude::FixedJoint>,
+    mut removed_prismatic: RemovedComponents<avian3d::prelude::PrismaticJoint>,
+    mut removed_spherical: RemovedComponents<avian3d::prelude::SphericalJoint>,
+    mut removed_distance: RemovedComponents<avian3d::prelude::DistanceJoint>,
+    joints: JointGraph,
+) {
+    let mut changed_bodies = HashSet::new();
+    let mut topology_dirty = cache.topology_dirty;
+
+    if added_revolute.iter().next().is_some()
+        || added_fixed.iter().next().is_some()
+        || added_prismatic.iter().next().is_some()
+        || added_spherical.iter().next().is_some()
+        || added_distance.iter().next().is_some()
+        || removed_revolute.read().count() > 0
+        || removed_fixed.read().count() > 0
+        || removed_prismatic.read().count() > 0
+        || removed_spherical.read().count() > 0
+        || removed_distance.read().count() > 0
+    {
+        topology_dirty = true;
+    }
+
+    for entity in removed_colliders.read() {
+        cache.remove_collider(entity, &mut changed_bodies);
+    }
+    for entity in removed_bodies.read() {
+        if cache.bodies.remove(&entity).is_some() {
+            topology_dirty = true;
+            if let Some(colliders) = cache.colliders_by_body.remove(&entity) {
+                for collider in colliders {
+                    cache.colliders.remove(&collider);
+                }
+            }
+        }
+    }
+
+    for (entity, rigid_body, position, rotation, footprint) in &bodies {
+        if !matches!(rigid_body, RigidBody::Dynamic) {
+            if cache.bodies.remove(&entity).is_some() {
+                topology_dirty = true;
+            }
+            continue;
+        }
+        let support_bounds =
+            runtime_support_xz_bounds(GridPos(position.0), rotation, None, footprint);
+        cache
+            .bodies
+            .entry(entity)
+            .and_modify(|body| body.support_bounds = support_bounds)
+            .or_insert(CachedBody {
+                support_bounds,
+                bounds: support_bounds,
+            });
+        cache.recompute_body(entity);
+        changed_bodies.insert(entity);
+        if !cache.assembly_of.contains_key(&entity) {
+            topology_dirty = true;
+        }
+    }
+
+    for (collider_entity, aabb, collider_of) in &colliders {
+        let owner = collider_of.map_or(collider_entity, |collider_of| collider_of.body);
+        let bounds = (aabb.min.is_finite()
+            && aabb.max.is_finite()
+            && aabb.min.x <= aabb.max.x
+            && aabb.min.z <= aabb.max.z)
+            .then_some([aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z]);
+        cache.update_collider(collider_entity, owner, bounds, &mut changed_bodies);
+    }
+
+    // A body and its first AABB are commonly added in the same frame. Rebuild
+    // body bounds after both event streams have been applied so the first
+    // assembly projection already includes its colliders.
+    for &entity in &changed_bodies {
+        cache.recompute_body(entity);
+    }
+
+    if changed_bodies.is_empty() && !topology_dirty {
+        return;
+    }
+
+    cache.topology_dirty = topology_dirty;
+    if cache.topology_dirty {
+        cache.rebuild_assemblies(&joints);
+        return;
+    }
+
+    let dirty_assemblies: HashSet<usize> = changed_bodies
+        .iter()
+        .filter_map(|entity| cache.assembly_of.get(entity).copied())
+        .collect();
+    for index in dirty_assemblies {
+        cache.recompute_assembly(index);
+    }
+}
+
 /// Whether a node's world [`Square`] overlaps an `[min_x, min_z, max_x, max_z]` box.
 fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
     s.center[0] - s.half <= a[2]
@@ -409,21 +683,7 @@ fn push_assembly_ring_nodes(
 pub fn update_collider_ring(
     mut commands: Commands,
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
-    // The ring is derived from the physics world only. Position and ColliderAabb
-    // are Avian's authoritative grid-absolute state; the joint graph below groups
-    // dynamic links without consulting USD identity or authoring metadata.
-    bodies: Query<(
-        Entity,
-        &RigidBody,
-        &avian3d::prelude::Position,
-        Option<&avian3d::prelude::Rotation>,
-        Option<&lunco_physics::PhysicsSupportFootprint>,
-    )>,
-    // Every Avian collider contributes its world-space broad-phase AABB. A
-    // child collider is attributed to its owning body through `ColliderOf`,
-    // while a collider on the body root is attributed by entity identity.
-    colliders: Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
-    joints: JointGraph,
+    cache: Res<PhysicsSupportCache>,
     mut terrains: Query<(
         Entity,
         &DemHeightField,
@@ -432,16 +692,6 @@ pub fn update_collider_ring(
         &mut PendingColliderBakes,
         Option<&ColliderDirtyRegion>,
     )>,
-    // Scratch reused across frames. The ring runs every frame even when the
-    // terrain is settled and nothing is wanted or baking, so a fresh
-    // HashSet/Vec per frame (per terrain, for `wanted`) was pure allocator
-    // traffic for zero work. Each is cleared at the point it was previously
-    // constructed, so the logic is unchanged.
-    mut positions: Local<HashMap<Entity, GridPos>>,
-    mut body_bounds: Local<HashMap<Entity, [f64; 4]>>,
-    mut dynamic_entities: Local<Vec<Entity>>,
-    mut assembly_seen: Local<HashSet<Entity>>,
-    mut assembly_bounds: Local<Vec<[f64; 4]>>,
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
@@ -463,76 +713,6 @@ pub fn update_collider_ring(
     let mut bake_budget: usize = 2;
     #[cfg(not(target_arch = "wasm32"))]
     let mut bake_budget: usize = usize::MAX;
-
-    // Snapshot the dynamic physics topology. Avian Position and every
-    // ColliderAabb are in the same canonical world frame, so the ring follows
-    // actual collision geometry (including compound child colliders and
-    // rotation) rather than an authored USD hierarchy.
-    positions.clear();
-    body_bounds.clear();
-    dynamic_entities.clear();
-    for (entity, rigid_body, position, rotation, footprint) in &bodies {
-        if !matches!(rigid_body, RigidBody::Dynamic) {
-            continue;
-        }
-        let grid_pos = GridPos(position.0);
-        positions.insert(entity, grid_pos);
-        body_bounds.insert(
-            entity,
-            runtime_support_xz_bounds(grid_pos, rotation, None, footprint),
-        );
-        dynamic_entities.push(entity);
-    }
-
-    // Start with the body's position as a conservative initialization fallback,
-    // then replace/extend it with every valid Avian AABB. This handles a body
-    // whose broad-phase has not published an AABB yet without dropping its ring,
-    // and it also handles compound colliders whose AABB lives on child entities.
-    for (collider_entity, aabb, collider_of) in &colliders {
-        let owner = collider_of
-            .map(|collider_of| collider_of.body)
-            .filter(|owner| positions.contains_key(owner))
-            .or_else(|| {
-                positions
-                    .contains_key(&collider_entity)
-                    .then_some(collider_entity)
-            });
-        let Some(owner) = owner else { continue };
-        if !(aabb.min.is_finite()
-            && aabb.max.is_finite()
-            && aabb.min.x <= aabb.max.x
-            && aabb.min.z <= aabb.max.z)
-        {
-            continue;
-        }
-        let bounds = [aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z];
-        let current = body_bounds.remove(&owner);
-        body_bounds.insert(owner, union_xz_bounds(current, bounds));
-    }
-
-    // A rover with six wheels is not special here: if it is a raycast vehicle it
-    // is one free dynamic chassis; if it uses physical wheel bodies, Avian joints
-    // connect those bodies into one component. Either form contributes one union
-    // footprint and therefore cannot multiply a 3×3 ring per wheel.
-    let adjacency = joints.adjacency(|entity| positions.contains_key(&entity));
-    assembly_seen.clear();
-    assembly_bounds.clear();
-    for &seed in dynamic_entities.iter() {
-        if !assembly_seen.insert(seed) {
-            continue;
-        }
-        let members = joint_component(seed, &adjacency);
-        assembly_seen.extend(members.iter().copied());
-        let mut bounds = None;
-        for member in members {
-            if let Some(member_bounds) = body_bounds.get(&member) {
-                bounds = Some(union_xz_bounds(bounds, *member_bounds));
-            }
-        }
-        if let Some(bounds) = bounds {
-            assembly_bounds.push(bounds);
-        }
-    }
 
     for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
         let oracle = &hf.0;
@@ -578,7 +758,8 @@ pub fn update_collider_ring(
         // The DEM frame IS the grid frame: a grid-absolute body position is
         // already DEM-local, and no render transform belongs in between.
         ring_nodes.clear();
-        for &bounds in assembly_bounds.iter() {
+        for assembly in &cache.assemblies {
+            let bounds = assembly.bounds;
             push_assembly_ring_nodes(&qt, ring.depth, h, nodes, bounds, &mut ring_nodes);
         }
         // Sorted so the comparison is order-independent (entity iteration order
@@ -784,82 +965,35 @@ pub fn hold_physics_until_dem_ready(
         &TerrainColliderRing,
         &ColliderTiles,
     )>,
+    cache: Res<PhysicsSupportCache>,
     // Same frame rule as `update_collider_ring`: avian `Position` is the
     // grid-absolute pose the DEM is sampled in. This guard exists to keep a
     // rover pinned until there is ground under it, so asking the question in the
     // WRONG frame is worse than not asking: it answered about a point ~a
     // FloatingOrigin cell away, found a resident tile there, released physics —
     // and the rover fell through the hole it was supposed to be protected from.
-    bodies: Query<(
-        Entity,
-        &RigidBody,
-        &avian3d::prelude::Position,
-        Option<&avian3d::prelude::Rotation>,
-        Option<&lunco_physics::PhysicsSupportFootprint>,
-    )>,
-    colliders: Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
     // Broad-phase liveness probe. `ColliderAabb` is a REQUIRED component of
     // `Collider`, so it exists from spawn — but initialised to `INVALID`
     // (min=+∞, max=−∞); avian fills a real AABB only AFTER its prepare/broad-phase
     // pass. Testing mere presence is a no-op; we must test VALIDITY.
     q_live: Query<&avian3d::prelude::ColliderAabb>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
-    mut positions: Local<HashMap<Entity, GridPos>>,
-    mut body_bounds: Local<HashMap<Entity, [f64; 4]>>,
     mut required_nodes: Local<Vec<QuadCoord>>,
 ) {
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
-        positions.clear();
-        body_bounds.clear();
-        for (entity, rb, pos, rotation, footprint) in &bodies {
-            if !matches!(rb, RigidBody::Dynamic) {
-                continue;
-            }
-            let grid_pos = GridPos(pos.0);
-            positions.insert(entity, grid_pos);
-            body_bounds.insert(
-                entity,
-                runtime_support_xz_bounds(grid_pos, rotation, None, footprint),
-            );
-        }
-        for (collider_entity, aabb, collider_of) in &colliders {
-            let owner = collider_of
-                .map(|collider_of| collider_of.body)
-                .filter(|owner| positions.contains_key(owner))
-                .or_else(|| {
-                    positions
-                        .contains_key(&collider_entity)
-                        .then_some(collider_entity)
-                });
-            let Some(owner) = owner else { continue };
-            if !(aabb.min.is_finite()
-                && aabb.max.is_finite()
-                && aabb.min.x <= aabb.max.x
-                && aabb.min.z <= aabb.max.z)
-            {
-                continue;
-            }
-            let current = body_bounds.remove(&owner);
-            body_bounds.insert(
-                owner,
-                union_xz_bounds(current, [aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z]),
-            );
-        }
         'terrains: for (hf, ring, tiles) in &rings {
             let half = hf.0.half_extent() as f64;
-            for (entity, _, _, _, _) in &bodies {
-                let Some(&bounds) = body_bounds.get(&entity) else {
-                    continue;
-                };
+            let qt = Quadtree::new(half, ring.depth, 1.0, half);
+            for assembly in &cache.assemblies {
                 required_nodes.clear();
                 push_assembly_ring_nodes(
-                    &Quadtree::new(half, ring.depth, 1.0, half),
+                    &qt,
                     ring.depth,
                     half,
                     1u32 << ring.depth,
-                    bounds,
+                    assembly.bounds,
                     &mut required_nodes,
                 );
                 required_nodes.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
