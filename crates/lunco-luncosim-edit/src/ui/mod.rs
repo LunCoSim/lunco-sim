@@ -17,7 +17,7 @@ pub mod asset_visibility;
 pub mod autopilot_canvas;
 /// Screen-space labels a prim authored for itself (`lunco:billboard*`).
 pub mod billboard_overlay;
-/// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
+/// Interactive checkpoint authoring — Alt+LMB append + right-click context
 /// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
 /// commands (no new journal domain).
 pub mod checkpoint_click;
@@ -526,7 +526,10 @@ impl Plugin for SandboxEditUiPlugin {
             // already-passed legs on a route rebuild.
             .add_systems(
                 FixedPostUpdate,
-                checkpoint_click::mark_reached_waypoints_on_enter
+                (
+                    checkpoint_click::mark_reached_waypoints_on_enter,
+                    checkpoint_click::mark_runtime_waypoints_reached,
+                )
                     .after(avian3d::prelude::PhysicsSystems::Writeback),
             )
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets

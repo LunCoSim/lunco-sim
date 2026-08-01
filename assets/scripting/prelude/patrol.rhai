@@ -72,7 +72,7 @@ fn patrol(vessel, points) { patrol(vessel, points, (), (), ()); }
 /// `this` for method-call syntax only: a plain `add_checkpoint(v, x, y, z)`
 /// raises "'this' not bound" and takes the calling tick down with it.
 ///
-/// Interactive (Ctrl+LMB) additions go through the Rust UI and don't call this —
+/// Interactive (Alt+LMB) additions go through the Rust UI and don't call this —
 /// that path mutates the live spec and re-emits `SetAutopilotBehavior` directly.
 /// Scenario scripts use this so their checkpoint list survives for later steps.
 fn add_checkpoint(vessel, x, y, z) {

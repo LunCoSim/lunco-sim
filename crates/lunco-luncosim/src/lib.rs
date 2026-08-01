@@ -2170,15 +2170,15 @@ pub struct SandboxCorePlugin {
 
 /// The luncosim's one physics configuration.
 ///
-/// A rigid body's `Position` is the collision pose and the bridge writes that
-/// same pose to its USD `Transform`.  Do not enable Avian's global transform
-/// interpolation here: it deliberately renders every visual between fixed
-/// poses while its collider remains at the solved pose.  That is a useful
-/// presentation technique only for an explicitly separate, non-physical
-/// visual branch; applying it to every body made a moving rover visibly leave
-/// its collision shape behind.
+/// A rigid body's `Position` is the collision pose and the bridge owns the
+/// `Position` ↔ USD `Transform` transfer. Avian's render interpolation is safe
+/// here because the bridge's READ pass runs after interpolation restores the
+/// authoritative stepped pose; the eased value is presentation-only between
+/// physics steps. The camera and billboard paths consume that same rendered
+/// pose, so omitting it makes a fast rover visibly staircase at display rate.
 fn sandbox_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default().with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
+        .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
 }
 
 #[cfg(test)]
@@ -2187,7 +2187,7 @@ mod physics_configuration_tests {
     use avian3d::prelude::{RigidBody, RotationInterpolation, TranslationInterpolation};
 
     #[test]
-    fn physical_bodies_do_not_receive_global_render_easing() {
+    fn physical_bodies_receive_bridge_safe_render_easing() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(sandbox_physics_plugins());
@@ -2195,12 +2195,12 @@ mod physics_configuration_tests {
         let body = app.world_mut().spawn(RigidBody::Dynamic).id();
 
         assert!(
-            app.world().get::<TranslationInterpolation>(body).is_none(),
-            "a physical body's visual must use its solved collider pose, not a lagged interpolation"
+            app.world().get::<TranslationInterpolation>(body).is_some(),
+            "a physical body's rendered translation must be eased between solved poses"
         );
         assert!(
-            app.world().get::<RotationInterpolation>(body).is_none(),
-            "a physical body's visual must use its solved collider pose, not a lagged interpolation"
+            app.world().get::<RotationInterpolation>(body).is_some(),
+            "a physical body's rendered rotation must be eased between solved poses"
         );
     }
 }

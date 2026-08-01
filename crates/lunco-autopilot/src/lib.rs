@@ -237,7 +237,7 @@ pub use lunco_core::tools::{ToolFired, ToolInvocation};
 ///
 /// **Backward-compat serde:** a bare `[x, y, z]` array deserializes into a
 /// waypoint at that position with no actions and no dwell, so the legacy
-/// `waypoints: [[x,y,z], ...]` shape (used by `patrol.rhai` and Ctrl+LMB)
+/// `waypoints: [[x,y,z], ...]` shape (used by `patrol.rhai` and Alt+LMB)
 /// keeps working unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PatrolWaypoint {
@@ -1204,7 +1204,7 @@ pub struct RunToolNode {
     /// the whole lap — so a patrol whose rover is already parked inside the
     /// waypoint radius completes a lap EVERY TICK (`drive_to` succeeds
     /// immediately), re-arming `fired` and queueing the tool at tick rate. A
-    /// one-waypoint patrol — exactly what a single Ctrl+LMB checkpoint builds,
+    /// one-waypoint patrol — exactly what a single Alt+LMB checkpoint builds,
     /// with the default `dwell` of 0 — would fire 60 screenshots a second.
     ///
     /// The fix is to fire on the arrival EDGE, not while parked: `drive_to` sets
@@ -1462,7 +1462,7 @@ impl AutopilotBehavior {
 
 /// The **source** [`BehaviorSpec`] an autopilot's tree was compiled from, mirrored
 /// onto the **vessel** entity (not the autopilot actor) so the UI / gizmo can
-/// read the waypoints back for visualization and interactive editing (Ctrl+LMB
+/// read the waypoints back for visualization and interactive editing (Alt+LMB
 /// append, right-click delete) without reverse-engineering the opaque compiled
 /// [`AutopilotBehavior`] tree. [` BehaviorSpec `] is `Serialize`, so the UI
 /// round-trips a spec (read → mutate → re-emit via `SetAutopilotBehavior`) with
@@ -1495,7 +1495,7 @@ impl AutopilotBehaviorSpec {
     /// Borrowed view of the patrol waypoints, if the spec's top-level node is a
     /// [`BehaviorSpec::Patrol`]. `None` for non-patrol trees (the UI hides the
     /// checkpoint list in that case). This is the read path the path-line gizmo
-    /// and the Ctrl+LMB "append" both use.
+    /// and the Alt+LMB "append" both use.
     pub fn patrol_waypoints(&self) -> Option<&[PatrolWaypoint]> {
         match &self.0 {
             BehaviorSpec::Patrol { waypoints, .. } => Some(waypoints.as_slice()),
