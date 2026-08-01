@@ -240,7 +240,9 @@ pub struct LinkPeer {
 /// (the peers' GIDs — the same ids `find()` returns), `name_a`, `name_b`,
 /// `class_a`, `class_b`, `range_m`, `light_time_s`, `elev_a`, `elev_b`,
 /// `min_elev_a`, `min_elev_b`, `occluded`, `occluded_by`, `terrain_blocked`,
-/// `occluder_blocked`, `max_range_m`. Return bool. No hook → the builtin
+/// `occluder_blocked`, `max_range_m`, `builtin`. Return bool. `builtin` is the
+/// range/mask/occlusion result, supplied so a policy can add role restrictions
+/// without reimplementing geometry. No hook → the builtin
 /// range+mask+occlusion rule
 /// (which does NOT gate on delay — a policy that refuses links slower than some
 /// latency budget is exactly the kind of thing this hook is for).
@@ -468,6 +470,7 @@ pub(crate) fn update_links(
                 // for the site-local DEM oracle; mixing it here made authored
                 // occluders miss every link away from the floating origin.
                 && occluder_blocks(a.pose.pos, b.pose.pos, &occluders);
+            let builtin = cheap_ok && !terrain_blocked && !occluder_blocked;
 
             let ctx = HookValue::map([
                 // Identity first (the ids `find()` speaks), labels alongside for a
@@ -505,8 +508,11 @@ pub(crate) fn update_links(
                     "max_range_m",
                     HookValue::Float(a.node.max_range_m.min(b.node.max_range_m)),
                 ),
+                // Let an authored verdict retain the kernel's geometry result and
+                // add only its domain/routing rule. This keeps a policy from
+                // accidentally reopening an occluded or out-of-range pair.
+                ("builtin", HookValue::Bool(builtin)),
             ]);
-            let builtin = cheap_ok && !terrain_blocked && !occluder_blocked;
             let raw = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
                 Some(Ok(v)) => v.as_bool().unwrap_or(builtin),
                 _ => builtin,

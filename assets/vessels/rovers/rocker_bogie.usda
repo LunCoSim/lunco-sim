@@ -231,6 +231,16 @@ def Xform "RockerBogie" (
                     over "LinkAperture"
                     {
                         string lunco:link:class = "rover"
+                        over "LinkBeam"
+                        {
+                            over "Up"
+                            {
+                                over "Driver"
+                                {
+                                    custom float lunco:param:earthOnly = 1
+                                }
+                            }
+                        }
                     }
                 }
             }

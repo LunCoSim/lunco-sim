@@ -248,6 +248,22 @@ def Xform "AckermannRover" (
     {
         double3 xformOp:translate = (0, 0.15, -0.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "YawHead" {
+            over "DishGimbal" {
+                over "DishHead" {
+                    over "LinkAperture" {
+                        string lunco:link:class = "rover"
+                        over "LinkBeam" {
+                            over "Up" {
+                                over "Driver" {
+                                    custom float lunco:param:earthOnly = 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     # --- Drivetrain variant set (see skid_rover.usda for the contract) ---
