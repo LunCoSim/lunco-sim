@@ -101,14 +101,12 @@ const CHANGE_HISTORY_CAPACITY: usize = 256;
 /// source text fails to parse (see [`UsdDocument::with_origin`]).
 const EMPTY_USDA: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\n";
 
-/// The authored marker a dropped waypoint REFERENCES
-/// (`lunco://vessels/markers/waypoint.usda`). A prim carrying this reference
-/// arc is a waypoint marker — the identity the scene-reset cleanup uses to
-/// find session-dropped waypoints.
+/// The authored asset reference used by waypoint marker prims
+/// (`lunco://vessels/markers/waypoint.usda`).
 pub const WAYPOINT_MARKER_ASSET: &str = "lunco://vessels/markers/waypoint.usda";
 /// Scope (under the scene root) holding a scene's waypoint MARKER prims.
-/// Scene-authored routes already use this name (`/Traverse/Route/W0`), so a
-/// dropped waypoint joins the same scope rather than inventing a parallel one.
+/// Scene-authored routes use this name (`/Traverse/Route/W0`), so a dropped
+/// waypoint joins the same scope rather than inventing a parallel one.
 pub const WAYPOINT_ROUTE_SCOPE: &str = "Route";
 /// Name of the `LunCoProgramAPI` child that carries a vessel's mission tree.
 pub const WAYPOINT_MISSION_PROGRAM: &str = "Mission";

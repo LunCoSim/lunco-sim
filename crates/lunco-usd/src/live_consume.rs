@@ -8,11 +8,11 @@
 //! full-reload the *whole* scene on any generation bump — so dragging a gizmo
 //! re-instantiated every rover + terrain every frame of the drag.
 //!
-//! E2-1 makes that system change-aware via the helpers here: classify the
-//! changes since the last-synced generation, apply transform-only edits in
-//! place (no reload), and fall back to the structural reload **only** when a
-//! spawn/remove/rename (or any non-transform edit) appears. Incremental
-//! spawn/despawn (E2-2/E2-3) will later replace that structural fallback too.
+//! The document projector replays typed edits onto the live canonical stage.
+//! This read-side bridge drains the stage sink, applies transform and other
+//! attribute edits in place, and reconciles structural resyncs incrementally.
+//! Coarse document operations use the explicit full-rebuild path in
+//! `twin_projection`; ordinary waypoint edits never reach it.
 
 use bevy::prelude::*;
 use lunco_autopilot::usd_tree::{BehaviorProgramSource, BehaviorXml, BehaviorXmlPath};
@@ -75,12 +75,11 @@ pub(crate) fn mark_live_translate(
     }
 }
 
-// Edit → live-stage projection is now **op-driven** (author-once): the twin
-// projection (`twin_projection::sync_twin_overlays`) replays the document's typed
-// ops directly onto the `CanonicalStage`, so the old change-ring *classification*
-// (`ChangeBatch` / `classify_changes_since`) that re-derived deltas from the
-// composed state was removed. This module keeps the read-side of the bridge
-// (`project_stage_changes` and its helpers), which drains the openusd sink.
+// Edit → live-stage projection is **op-driven** (author-once): the twin
+// projection (`twin_projection::sync_twin_overlays`) replays the document's
+// typed ops directly onto the `CanonicalStage`. This module is the read-side
+// of that bridge: it drains the OpenUSD sink and projects the committed stage
+// changes into ECS.
 
 /// The live entity projecting `path` in the scene scoped to `stage_handle_id`,
 /// if one exists.

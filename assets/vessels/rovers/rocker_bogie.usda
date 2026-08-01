@@ -160,34 +160,36 @@ def Xform "RockerBogie" (
         bool physics:collisionEnabled = false
     }
 
-    # ── Rocker bearing shafts: what the arms actually hang FROM ──────────────
+    # ── Rocker bearing housings: the body-side half of each hinge ────────────
     #
-    # The rocker pivots sit just outside the 1.90 m-wide equipment box. The short
-    # trunnions are structural detail only; the articulated rocker bodies and their
-    # authored hinges remain the sole physical linkage.
+    # The rocker pivots sit at the lower outside corners of the 1.90 m-wide
+    # equipment box. These housings are deliberately larger than the axle shafts
+    # so the body-to-rocker attachment remains visible at rover scale. The
+    # articulated rocker bodies and their authored hinges remain the sole physical
+    # linkage.
     #
-    # Structure, not mechanism: these are children of the CHASSIS and turn with it,
-    # while the arm rotates about them. Collision is off — the rocker's own `Collider`
-    # already occupies this volume, and a second body here would fight it.
-    def Cylinder "RockerShaftL"
+    # Structure, not a second mechanism: these are children of the CHASSIS and turn
+    # with it, while the arm rotates about them. Collision is off — the rocker's own
+    # `Collider` already occupies this volume, and a second body here would fight it.
+    def Cylinder "RockerBearingL"
     {
         uniform token axis = "X"
-        double radius = 0.07
-        double height = 0.08
-        double3 xformOp:translate = (-0.97, -0.2, 0.0)
+        double radius = 0.16
+        double height = 0.12
+        double3 xformOp:translate = (-0.96, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+        color3f[] primvars:displayColor = [(0.55, 0.42, 0.16)]
         bool physics:collisionEnabled = false
     }
 
-    def Cylinder "RockerShaftR"
+    def Cylinder "RockerBearingR"
     {
         uniform token axis = "X"
-        double radius = 0.07
-        double height = 0.08
-        double3 xformOp:translate = (0.97, -0.2, 0.0)
+        double radius = 0.16
+        double height = 0.12
+        double3 xformOp:translate = (0.96, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+        color3f[] primvars:displayColor = [(0.55, 0.42, 0.16)]
         bool physics:collisionEnabled = false
     }
 
@@ -341,12 +343,14 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
 
-        # Rocker joint cover housing
-        def Cylinder "JointCover"
+        # Rocker-side pivot hub. It overlaps the body-side bearing housing at the
+        # authored hinge frame, making the leg-to-body attachment readable while
+        # remaining a visual-only child of this rigid body.
+        def Cylinder "RockerPivotHub"
         {
             uniform token axis = "X"
             double radius = 0.12
-            double height = 0.12
+            double height = 0.2
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
@@ -517,11 +521,11 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
 
-        def Cylinder "JointCover"
+        def Cylinder "RockerPivotHub"
         {
             uniform token axis = "X"
             double radius = 0.12
-            double height = 0.12
+            double height = 0.2
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
