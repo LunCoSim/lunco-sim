@@ -476,16 +476,12 @@ impl Plugin for SandboxEditUiPlugin {
         app.add_view_model_every_frame(command_deck::populate_command_deck_view);
 
         // Joint State view-model: the selected vessel's joints and wheels are
-        // live physics (θ / ω / τ change every tick), so while something is
-        // selected the producer runs each frame — bounded by the vessel's
-        // joint count, the same scale as the joint_viz gizmo pass. The gate
-        // stands the scan down entirely when nothing is selected (plus one
-        // run after deselect, to empty the view).
+        // live physics (θ / ω / τ change every tick), so this is an explicit
+        // every-frame producer — bounded by the vessel's joint count, the same
+        // scale as the joint_viz gizmo pass. Its first branch returns before
+        // iterating any joint or wheel query when nothing is selected.
         app.init_resource::<joint_state::JointStateView>();
-        app.add_view_model(
-            joint_state::populate_joint_state_view,
-            joint_state::joint_state_active,
-        );
+        app.add_view_model_every_frame(joint_state::populate_joint_state_view);
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);

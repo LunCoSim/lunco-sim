@@ -64,6 +64,8 @@ pub struct JointReadout {
 /// the panel reads it via `ctx.resource`.
 #[derive(Resource, Default)]
 pub struct InspectorView {
+    /// The primary selection used to derive the joint readout.
+    pub selected: Option<Entity>,
     /// First scene sun (directional light), if any.
     pub sun: Option<SunReadout>,
     /// Global ambient brightness, if the resource exists.
@@ -195,6 +197,7 @@ pub fn populate_inspector_view(world: &mut World) {
     };
 
     let mut view = world.resource_mut::<InspectorView>();
+    view.selected = selected;
     view.sun = sun;
     view.ambient_brightness = ambient_brightness;
     view.earthshine_lux = earthshine_lux;
@@ -226,7 +229,10 @@ pub fn populate_inspector_view(world: &mut World) {
 /// So the gate compares the handful of scalars the view actually holds against
 /// the world's current values: a few single-entity component reads, versus the
 /// producer's `&mut World` scans. When the sun's aim moves by a ULP and the
-/// rendered readout would print the same degrees, nothing runs.
+/// rendered readout would print the same degrees, nothing runs. Selection and
+/// ambient use the same value comparison; their Bevy change ticks are not an
+/// input because unrelated systems can borrow those resources while leaving
+/// the displayed value unchanged.
 pub(crate) fn inspector_inputs_changed(
     mut first: Local<bool>,
     mut joint_poll: Local<f32>,
@@ -247,10 +253,8 @@ pub(crate) fn inspector_inputs_changed(
             Without<bevy::camera::visibility::RenderLayers>,
         ),
     >,
-    cameras: Query<(
-        Option<&bevy::camera::Exposure>,
-        Option<&bevy::post_process::bloom::Bloom>,
-    )>,
+    exposures: Query<&bevy::camera::Exposure>,
+    blooms: Query<&bevy::post_process::bloom::Bloom>,
     mut removed_lights: RemovedComponents<bevy::light::DirectionalLight>,
 ) -> bool {
     use bevy::math::EulerRot;
@@ -265,22 +269,43 @@ pub(crate) fn inspector_inputs_changed(
     let sun_moved = {
         let live = lights.iter().next().map(|(tf, light, cascades)| {
             let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            let lin = light.color.to_linear();
             (
                 yaw.to_degrees(),
                 pitch.to_degrees(),
                 light.illuminance,
                 light.shadow_maps_enabled,
-                cascades.and_then(|c| c.bounds.first().copied()),
+                cascades.map(|c| {
+                    (
+                        c.bounds.first().copied().unwrap_or(40.0),
+                        c.bounds.last().copied().unwrap_or(1500.0),
+                    )
+                }),
+                [lin.red, lin.green, lin.blue],
             )
         });
         match (&view.sun, live) {
             (None, None) => false,
-            (Some(cached), Some((yaw, pitch, lux, shadows, first_bound))) => {
+            (Some(cached), Some((yaw, pitch, lux, shadows, shadow_bounds, rgb))) => {
+                let shadow_changed = match ((cached.shadow_first, cached.shadow_max), shadow_bounds)
+                {
+                    ((None, None), None) => false,
+                    ((Some(cached_first), Some(cached_max)), Some((live_first, live_max))) => {
+                        (cached_first - live_first).abs() > 1.0e-3
+                            || (cached_max - live_max).abs() > 1.0e-3
+                    }
+                    _ => true,
+                };
                 (cached.yaw_deg - yaw).abs() > 0.05
                     || (cached.pitch_deg - pitch).abs() > 0.05
                     || (cached.illuminance - lux).abs() > 1.0
                     || cached.shadow_maps_enabled != shadows
-                    || cached.shadow_first != first_bound
+                    || shadow_changed
+                    || cached
+                        .rgb
+                        .iter()
+                        .zip(rgb)
+                        .any(|(cached, live)| (cached - live).abs() > 1.0e-4)
             }
             // Appeared or disappeared — the view is stale either way.
             _ => true,
@@ -288,11 +313,8 @@ pub(crate) fn inspector_inputs_changed(
     };
 
     let camera_changed = {
-        let (live_ev, live_bloom) = cameras
-            .iter()
-            .next()
-            .map(|(e, b)| (e.map(|e| e.ev100), b.map(|b| b.intensity)))
-            .unwrap_or((None, None));
+        let live_ev = exposures.iter().next().map(|e| e.ev100);
+        let live_bloom = blooms.iter().next().map(|b| b.intensity);
         let ev_moved = match (view.exposure_ev100, live_ev) {
             (Some(a), Some(b)) => (a - b).abs() > 1.0e-3,
             (None, None) => false,
@@ -317,9 +339,19 @@ pub(crate) fn inspector_inputs_changed(
         *joint_poll = 0.0;
     }
 
+    let selection_changed = view.selected != selection.primary();
+    let ambient_changed = match (
+        view.ambient_brightness,
+        ambient.as_ref().map(|a| a.brightness),
+    ) {
+        (None, None) => false,
+        (Some(cached), Some(live)) => (cached - live).abs() > 1.0e-4,
+        _ => true,
+    };
+
     let run = !*first
-        || selection.is_changed()
-        || ambient.is_some_and(|a| a.is_changed())
+        || selection_changed
+        || ambient_changed
         || sun_moved
         || camera_changed
         || removed
