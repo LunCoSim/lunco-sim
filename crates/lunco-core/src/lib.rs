@@ -74,10 +74,9 @@ pub use invariants::BigSpaceInvariantsPlugin;
 pub use log::*;
 pub use markers::{
     ActuatorDrivenJoint, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
-    GridAnchor, GroundSettleContact, GroundSettleFootprint, HorizonShadowTerrain,
-    NeedsGroundSettle, NextScene, ScenarioProgramPrim, ScriptParams, SoiMigrant,
-    SunAngularDiameter, TriggerZone, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS,
-    TRIGGER_COLLISION_LAYER,
+    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, ScenarioProgramPrim,
+    ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, CELESTIAL_COLLISION_LAYER,
+    NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
@@ -818,8 +817,6 @@ impl Plugin for LunCoCorePlugin {
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
             .register_type::<NeedsGroundSettle>()
-            .register_type::<GroundSettleFootprint>()
-            .register_type::<GroundSettleContact>()
             .register_type::<SoiMigrant>()
             .register_type::<ActuatorDrivenJoint>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`

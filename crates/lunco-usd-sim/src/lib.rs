@@ -279,7 +279,6 @@ impl Plugin for UsdSimPlugin {
                     activate_dynamic_bodies
                         .in_set(UsdSimSet::ActivateDynamicBodies)
                         .run_if(any_with_component::<ShouldBeDynamic>),
-                    collect_raycast_settle_footprints.after(process_usd_sim_prims),
                 ),
             );
         // Self-healing watchdog: a USD prim that stays unprocessed forever means
@@ -2850,7 +2849,9 @@ fn resolve_behavior_targets(
         debug!(
             "[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}",
             vessel,
-            vessel_path.map(|p| p.path.as_str()).unwrap_or("no-usd-path"),
+            vessel_path
+                .map(|p| p.path.as_str())
+                .unwrap_or("no-usd-path"),
             targets.len(),
             targets
         );
@@ -2965,11 +2966,9 @@ fn activate_dynamic_bodies(
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     // Physical wheels arm their joint-connected assembly for one-time
-    // drop-onto-terrain placement. Raycast vehicles deliberately do NOT arm it
-    // here: their contact footprint is only valid after the wheel projection has
-    // completed, and `collect_raycast_settle_footprints` inserts the footprint
-    // and request atomically. Free dynamic bodies (balloons, etc.) must NOT be
-    // pinned to the ground.
+    // drop-onto-terrain placement. Free dynamic bodies (balloons, etc.) must
+    // not be pinned to the ground. Probe-based models publish their own
+    // `PhysicsSupportFootprint` and placement policy from their physics owner.
     q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
     // Ground still building → gravity would win the race; keep everything
@@ -2994,9 +2993,7 @@ fn activate_dynamic_bodies(
             commands.entity(entity).try_insert(RigidBody::Dynamic);
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
             // A physical wheel is part of the chassis' joint-connected assembly,
-            // so marking it moves the whole vehicle as one. Raycast wheels need
-            // their projected contact footprint first; that path marks its root
-            // in `collect_raycast_settle_footprints` instead.
+            // so marking it moves the whole vehicle as one.
             if q_wheel.contains(entity) {
                 commands
                     .entity(entity)
@@ -3014,39 +3011,6 @@ fn activate_dynamic_bodies(
         // next lets the terrain ring observe that inserted body before its
         // dedicated hold becomes the only gate.
         activation.0 = 2;
-    }
-}
-
-/// Publish raycast wheel contact geometry to the shared terrain placement pass.
-/// USD simulation knows the wheel topology; terrain owns all surface sampling
-/// and body translation. There is one settle mechanism for every vehicle type.
-fn collect_raycast_settle_footprints(
-    roots: Query<(Entity, &Children), (With<DriveMix>, Without<lunco_core::GroundSettleFootprint>)>,
-    wheels: Query<(&WheelRaycast, &Transform, &ChildOf)>,
-    mut commands: Commands,
-) {
-    for (root, children) in &roots {
-        let contacts = children
-            .iter()
-            .filter_map(|child| wheels.get(child).ok())
-            .filter(|(_, _, parent)| parent.parent() == root)
-            .map(|(wheel, transform, _)| lunco_core::GroundSettleContact {
-                local_offset: transform.translation.as_dvec3(),
-                radius: wheel.wheel_radius,
-            })
-            .collect::<Vec<_>>();
-        if !contacts.is_empty() {
-            commands.entity(root).insert((
-                lunco_core::GroundSettleFootprint(contacts),
-                // Authored raycast vehicles can already be Dynamic when
-                // they enter the scene, so they never pass through the
-                // ShouldBeDynamic activation path that normally arms
-                // ground placement. The footprint and the placement
-                // request are one fact: publish both from the topology
-                // owner, otherwise the raycast visuals start embedded.
-                lunco_core::NeedsGroundSettle,
-            ));
-        }
     }
 }
 

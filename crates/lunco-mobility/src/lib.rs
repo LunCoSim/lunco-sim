@@ -97,6 +97,11 @@ impl Plugin for LunCoMobilityPlugin {
             // physics is held — a rover that spawns during a cinematic hold is
             // still the same rover.
             .add_systems(FixedUpdate, fold_proxy_wheel_mass)
+            // A raycast suspension is a physics model without Avian colliders.
+            // Publish its support geometry through the physics contract once the
+            // USD-to-mobility projection has created the wheel entities. Terrain
+            // consumes only that contract and never inspects mobility types.
+            .add_systems(Update, publish_raycast_support_footprints)
             // G5 rocker-bogie differential — separate set: it doesn't read the
             // control ports, only couples two rocker hinges. Idle unless a
             // `DifferentialCoupling` exists, so it's free for every other vehicle.
@@ -232,6 +237,49 @@ impl Plugin for LunCoMobilityPlugin {
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
 pub struct ProxyWheelMassFolded;
+
+/// Publish the support envelope of the raycast physics realization.
+///
+/// This is intentionally owned by mobility: it knows the contact model and its
+/// wheel parameters. The published component is owned by `lunco-physics`, so
+/// terrain, readiness, and future support consumers do not depend on rover
+/// components. Collider-backed bodies need no publisher; Avian supplies their
+/// support geometry through runtime collider AABBs.
+fn publish_raycast_support_footprints(
+    mut commands: Commands,
+    roots: Query<
+        (Entity, &Children),
+        (
+            With<DriveMix>,
+            Without<lunco_physics::PhysicsSupportFootprint>,
+        ),
+    >,
+    wheels: Query<(&WheelRaycast, &Transform, &ChildOf)>,
+) {
+    for (root, children) in &roots {
+        let contacts = children
+            .iter()
+            .filter_map(|child| wheels.get(child).ok())
+            .filter(|(_, _, parent)| parent.parent() == root)
+            .map(
+                |(wheel, transform, _)| lunco_physics::PhysicsSupportContact {
+                    local_offset: transform.translation.as_dvec3(),
+                    radius: wheel.wheel_radius.max(0.0),
+                },
+            )
+            .collect::<Vec<_>>();
+        if !contacts.is_empty() {
+            commands.entity(root).try_insert((
+                lunco_physics::PhysicsSupportFootprint(contacts),
+                // A probe-only support model has no low rigid body for the
+                // generic activation path to place. Request the shared
+                // one-shot initial placement; this is not part of per-frame
+                // ring selection and is consumed by terrain after readiness.
+                lunco_core::NeedsGroundSettle,
+            ));
+        }
+    }
+}
 
 /// Fold the proxy wheels' authored mass onto the chassis rigid body.
 ///

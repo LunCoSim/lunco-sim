@@ -104,10 +104,11 @@ impl Plugin for TerrainSurfacePlugin {
         // not assumed in a comment — an authored transform on a terrain prim is
         // honoured by no two subsystems the same way.
         app.add_systems(Update, crate::surface_query::report_unreachable_dem_frame);
-        // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
+        // M7 (physics): opt-in canonical-resolution heightfield COLLIDER ring.
         // Inert unless a DEM is built with `collider_ring`; then it replaces the
         // static collider with deterministic per-tile colliders streamed around the
-        // dynamic bodies. See `crate::collider_ring`.
+        // dynamic physical bodies and their support footprints. See
+        // `crate::collider_ring`.
         app.add_systems(
             Update,
             (
@@ -133,7 +134,7 @@ impl Plugin for TerrainSurfacePlugin {
         );
         // Freeze the sim while a DEM terrain is still building — and, on ring
         // terrains, until the ring tiles under every dynamic body are resident —
-        // so rovers don't fall through the not-yet-ready collider (esp. web,
+        // so dynamic bodies don't fall through the not-yet-ready collider (esp. web,
         // where the DEM load is slow). See `collider_ring::hold_physics_until_dem_ready`.
         // This is a `lunco_time::SimHolds` hold, NOT a transport pause: the user's
         // play state is untouched, so the scene does not open "paused" while the
@@ -151,7 +152,8 @@ impl Plugin for TerrainSurfacePlugin {
         // (`SweptCcd` on the wheels + liveness-gated hold), so a body can no longer
         // end up under the terrain and needs no reseat.
         // One-time drop-onto-terrain placement for freshly-activated physical
-        // rovers (marked `NeedsGroundSettle` in `activate_dynamic_bodies`): lift the
+        // newly activated assemblies (marked `NeedsGroundSettle` by their physics
+        // owner): lift the
         // assembly so its wheels clear the one-sided heightfield instead of starting
         // embedded (authored chassis-at-surface + wheels-hang-below) and sinking.
         app.add_systems(Update, crate::collider_ring::settle_grounded_assemblies);

@@ -37,7 +37,7 @@
 //! - [`terrain`] — M3 spawn: build a static terrain entity (mesh + avian
 //!   `Collider::heightfield`) from a DEM asset via the `SpawnDemTerrain` command.
 //! - [`plugin`] — the Bevy [`TerrainSurfacePlugin`]. Wires the M3 spawn path;
-//!   tile streaming + LOD + per-rover collider ring land in M7.
+//!   tile streaming + LOD + the dynamic-physics collider ring land in M7.
 
 pub mod band;
 pub mod collider_ring;

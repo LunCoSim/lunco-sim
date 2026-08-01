@@ -38,9 +38,11 @@ use bevy::prelude::*;
 pub mod escape;
 pub mod readiness;
 pub mod spatial;
+pub mod support;
 pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::GridSpatialQuery;
+pub use support::{PhysicsSupportContact, PhysicsSupportFootprint};
 
 /// The set of reasons physics is currently suspended. Empty ⇒ physics integrates.
 ///
@@ -232,7 +234,9 @@ pub struct PhysicsGatePlugin;
 
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PhysicsHolds>()
+        app.register_type::<PhysicsSupportFootprint>()
+            .register_type::<PhysicsSupportContact>()
+            .init_resource::<PhysicsHolds>()
             .init_resource::<PhysicsStepRequest>()
             .add_systems(PreUpdate, apply_physics_holds)
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
