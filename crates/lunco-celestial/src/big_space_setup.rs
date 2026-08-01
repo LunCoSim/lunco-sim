@@ -108,10 +108,8 @@ const MOON_BODY_COLOR: [f32; 3] = [0.5, 0.5, 0.5];
 /// normal `ALL` filter here makes every streamed terrain collider that enters a
 /// planet-sized sphere a narrow-phase pair, even though the sphere has no
 /// `RigidBody` and can never contribute a physical response.
-const CELESTIAL_PICKING_LAYERS: CollisionLayers = CollisionLayers::from_bits(
-    lunco_core::CELESTIAL_COLLISION_LAYER,
-    0,
-);
+const CELESTIAL_PICKING_LAYERS: CollisionLayers =
+    CollisionLayers::from_bits(lunco_core::CELESTIAL_COLLISION_LAYER, 0);
 
 /// Adopt a look AUTHORED on the body's prim onto its globe tiles.
 ///
@@ -485,12 +483,13 @@ pub fn setup_big_space_hierarchy(
                 ..default()
             },
             Name::new("Sun Body"),
-            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-            // it exists so a click can focus the body. It IS in the spatial-query BVH,
-            // and a body's volume routinely contains the entire local scene (the Sun's
-            // sphere sits on the origin in any scene that anchors no site), so it must be
-            // masked out of suspension/sensor rays or every raycast wheel reports a
-            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+            // PICKING-ONLY GEOMETRY. The empty collision filter is what keeps this
+            // collider out of Avian's physical contact graph; the absence of a
+            // `RigidBody` alone is not sufficient because collider-only geometry is
+            // still broad-phase indexed.
+            // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
+            // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
+            // the whole local scene and otherwise returns a distance-0 hit.
             Collider::sphere(696_340.0e3),
             CELESTIAL_PICKING_LAYERS,
         ))
@@ -624,12 +623,13 @@ pub fn setup_big_space_hierarchy(
             SOI {
                 radius_m: earth_soi,
             },
-            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-            // it exists so a click can focus the body. It IS in the spatial-query BVH,
-            // and a body's volume routinely contains the entire local scene (the Sun's
-            // sphere sits on the origin in any scene that anchors no site), so it must be
-            // masked out of suspension/sensor rays or every raycast wheel reports a
-            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+            // PICKING-ONLY GEOMETRY. The empty collision filter is what keeps this
+            // collider out of Avian's physical contact graph; the absence of a
+            // `RigidBody` alone is not sufficient because collider-only geometry is
+            // still broad-phase indexed.
+            // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
+            // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
+            // the whole local scene and otherwise returns a distance-0 hit.
             Collider::sphere(6371.0e3),
             CELESTIAL_PICKING_LAYERS,
             Name::new("Earth Body (Rotating)"),
@@ -720,12 +720,13 @@ pub fn setup_big_space_hierarchy(
                 model: Box::new(PointMassGravity { gm: moon_gm }),
             },
             SOI { radius_m: moon_soi },
-            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-            // it exists so a click can focus the body. It IS in the spatial-query BVH,
-            // and a body's volume routinely contains the entire local scene (the Sun's
-            // sphere sits on the origin in any scene that anchors no site), so it must be
-            // masked out of suspension/sensor rays or every raycast wheel reports a
-            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+            // PICKING-ONLY GEOMETRY. The empty collision filter is what keeps this
+            // collider out of Avian's physical contact graph; the absence of a
+            // `RigidBody` alone is not sufficient because collider-only geometry is
+            // still broad-phase indexed.
+            // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
+            // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
+            // the whole local scene and otherwise returns a distance-0 hit.
             Collider::sphere(MOON_MEAN_RADIUS_M),
             CELESTIAL_PICKING_LAYERS,
             Name::new("Moon Body (Rotating)"),
@@ -861,15 +862,32 @@ pub fn setup_big_space_hierarchy(
                     ..default()
                 },
                 Name::new(format!("{} Body", body_desc.name)),
-                // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-                // it exists so a click can focus the body. It IS in the spatial-query BVH,
-                // and a body's volume routinely contains the entire local scene (the Sun's
-                // sphere sits on the origin in any scene that anchors no site), so it must be
-                // masked out of suspension/sensor rays or every raycast wheel reports a
-                // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+                // PICKING-ONLY GEOMETRY. The empty collision filter is what keeps this
+                // collider out of Avian's physical contact graph; the absence of a
+                // `RigidBody` alone is not sufficient because collider-only geometry is
+                // still broad-phase indexed.
+                // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
+                // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
+                // the whole local scene and otherwise returns a distance-0 hit.
                 Collider::sphere(body_desc.radius_m),
                 CELESTIAL_PICKING_LAYERS,
             ))
             .set_parent_in_place(solar_grid);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn celestial_picking_geometry_is_queryable_but_not_physical() {
+        assert_ne!(
+            CELESTIAL_PICKING_LAYERS.memberships.0 & lunco_core::CELESTIAL_COLLISION_LAYER,
+            0,
+        );
+        assert_eq!(CELESTIAL_PICKING_LAYERS.filters.0, 0);
+        let physical_geometry = CollisionLayers::from_bits(1, u32::MAX);
+        assert!(!CELESTIAL_PICKING_LAYERS.interacts_with(physical_geometry));
     }
 }

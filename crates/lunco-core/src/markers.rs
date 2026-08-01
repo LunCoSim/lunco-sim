@@ -258,15 +258,18 @@ pub const TRIGGER_COLLISION_LAYER: u32 = 1 << 7;
 /// planet-sized spheres `lunco-celestial` puts on the Sun, Earth, Moon and the
 /// other bodies).
 ///
-/// Those colliders carry no `RigidBody`, so they never enter the contact pipeline
-/// — they exist for picking (click a planet to focus it). They ARE in the
-/// spatial-query BVH though, and a body's volume routinely contains the whole
-/// local scene: with no site anchor the Solar Grid is never pinned, so the Sun's
-/// 696 340 km sphere is centred on the scene origin. A suspension ray then starts
-/// INSIDE it and avian's default `solid: true` returns distance 0 with a zero
-/// normal — every raycast wheel reports contact with the Sun instead of the
-/// ground. (Physical wheels are immune: they use contacts, which these colliders
-/// never generate. That is the raycast-only, celestial-only split.)
+/// They intentionally carry no `RigidBody` and use an empty Avian collision
+/// filter, so they cannot enter the physical contact graph — they exist for
+/// picking (click a planet to focus it). The empty filter is essential: Avian
+/// still broad-phase indexes collider-only geometry, so the absence of a
+/// `RigidBody` alone does not prevent expensive terrain/celestial pairs.
+///
+/// They ARE in the spatial-query BVH, and a body's volume routinely contains the
+/// whole local scene: with no site anchor the Solar Grid is never pinned, so the
+/// Sun's 696 340 km sphere is centred on the scene origin. A suspension ray then
+/// starts INSIDE it and avian's default `solid: true` returns distance 0 with a
+/// zero normal — every raycast wheel reports contact with the Sun instead of the
+/// ground. Vehicle rays therefore mask this layer while picking still sees it.
 ///
 /// Same contract as [`TRIGGER_COLLISION_LAYER`]: bodies are MEMBERS of this layer
 /// and vehicle/sensor rays mask it out via [`NON_PHYSICAL_QUERY_LAYERS`], while a

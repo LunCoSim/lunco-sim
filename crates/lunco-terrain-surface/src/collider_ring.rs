@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use avian3d::prelude::{Collider, ColliderAabb, ColliderOf, RigidBody};
+use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
@@ -297,6 +298,7 @@ pub struct PhysicsSupportCache {
     bodies: HashMap<Entity, CachedBody>,
     colliders: HashMap<Entity, CachedCollider>,
     colliders_by_body: HashMap<Entity, HashSet<Entity>>,
+    joint_bodies: HashMap<Entity, [Entity; 2]>,
     assemblies: Vec<CachedAssembly>,
     assembly_of: HashMap<Entity, usize>,
     topology_dirty: bool,
@@ -342,6 +344,19 @@ impl PhysicsSupportCache {
             .or_default()
             .insert(entity);
         changed_bodies.insert(owner);
+    }
+
+    fn observe_joint(&mut self, entity: Entity, bodies: [Entity; 2]) -> bool {
+        let changed = match self.joint_bodies.get(&entity) {
+            Some(previous) => *previous != bodies,
+            None => true,
+        };
+        self.joint_bodies.insert(entity, bodies);
+        changed
+    }
+
+    fn remove_joint(&mut self, entity: Entity) -> bool {
+        self.joint_bodies.remove(&entity).is_some()
     }
 
     fn recompute_body(&mut self, entity: Entity) {
@@ -408,16 +423,29 @@ impl PhysicsSupportCache {
     }
 }
 
-/// Maintain the physics support index from ECS change detection.
-pub fn update_physics_support_cache(
-    mut cache: ResMut<PhysicsSupportCache>,
+fn collider_bounds(aabb: &ColliderAabb) -> Option<[f64; 4]> {
+    (aabb.min.is_finite()
+        && aabb.max.is_finite()
+        && aabb.min.x <= aabb.max.x
+        && aabb.min.z <= aabb.max.z)
+        .then_some([aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z])
+}
+
+/// ECS inputs for the support projection, bundled so the change-driven system
+/// remains a valid Bevy system as its lifecycle coverage grows. Each query is
+/// still independently change-filtered; this only packages the system's
+/// access declaration and does not turn any of the scans into per-frame work.
+#[derive(SystemParam)]
+pub(crate) struct PhysicsSupportQueries<'w, 's> {
     bodies: Query<
+        'w,
+        's,
         (
             Entity,
-            &RigidBody,
-            &avian3d::prelude::Position,
-            Option<&avian3d::prelude::Rotation>,
-            Option<&lunco_physics::PhysicsSupportFootprint>,
+            &'static RigidBody,
+            &'static avian3d::prelude::Position,
+            Option<&'static avian3d::prelude::Rotation>,
+            Option<&'static lunco_physics::PhysicsSupportFootprint>,
         ),
         Or<(
             Added<RigidBody>,
@@ -428,42 +456,153 @@ pub fn update_physics_support_cache(
             Changed<lunco_physics::PhysicsSupportFootprint>,
         )>,
     >,
+    all_bodies: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static RigidBody,
+            &'static avian3d::prelude::Position,
+            Option<&'static avian3d::prelude::Rotation>,
+        ),
+    >,
     colliders: Query<
-        (Entity, &ColliderAabb, Option<&ColliderOf>),
+        'w,
+        's,
+        (Entity, &'static ColliderAabb, Option<&'static ColliderOf>),
         Or<(
             Added<ColliderAabb>,
             Changed<ColliderAabb>,
             Added<ColliderOf>,
         )>,
     >,
-    mut removed_bodies: RemovedComponents<RigidBody>,
-    mut removed_colliders: RemovedComponents<ColliderAabb>,
-    added_revolute: Query<(), Added<avian3d::prelude::RevoluteJoint>>,
-    added_fixed: Query<(), Added<avian3d::prelude::FixedJoint>>,
-    added_prismatic: Query<(), Added<avian3d::prelude::PrismaticJoint>>,
-    added_spherical: Query<(), Added<avian3d::prelude::SphericalJoint>>,
-    added_distance: Query<(), Added<avian3d::prelude::DistanceJoint>>,
-    mut removed_revolute: RemovedComponents<avian3d::prelude::RevoluteJoint>,
-    mut removed_fixed: RemovedComponents<avian3d::prelude::FixedJoint>,
-    mut removed_prismatic: RemovedComponents<avian3d::prelude::PrismaticJoint>,
-    mut removed_spherical: RemovedComponents<avian3d::prelude::SphericalJoint>,
-    mut removed_distance: RemovedComponents<avian3d::prelude::DistanceJoint>,
+    all_colliders: Query<'w, 's, (Entity, &'static ColliderAabb, Option<&'static ColliderOf>)>,
+    removed_bodies: RemovedComponents<'w, 's, RigidBody>,
+    removed_colliders: RemovedComponents<'w, 's, ColliderAabb>,
+    removed_footprints: RemovedComponents<'w, 's, lunco_physics::PhysicsSupportFootprint>,
+    removed_collider_owners: RemovedComponents<'w, 's, ColliderOf>,
+    revolute_joints: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::RevoluteJoint),
+        Or<(
+            Added<avian3d::prelude::RevoluteJoint>,
+            Changed<avian3d::prelude::RevoluteJoint>,
+        )>,
+    >,
+    fixed_joints: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::FixedJoint),
+        Or<(
+            Added<avian3d::prelude::FixedJoint>,
+            Changed<avian3d::prelude::FixedJoint>,
+        )>,
+    >,
+    prismatic_joints: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::PrismaticJoint),
+        Or<(
+            Added<avian3d::prelude::PrismaticJoint>,
+            Changed<avian3d::prelude::PrismaticJoint>,
+        )>,
+    >,
+    spherical_joints: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::SphericalJoint),
+        Or<(
+            Added<avian3d::prelude::SphericalJoint>,
+            Changed<avian3d::prelude::SphericalJoint>,
+        )>,
+    >,
+    distance_joints: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::DistanceJoint),
+        Or<(
+            Added<avian3d::prelude::DistanceJoint>,
+            Changed<avian3d::prelude::DistanceJoint>,
+        )>,
+    >,
+    removed_revolute: RemovedComponents<'w, 's, avian3d::prelude::RevoluteJoint>,
+    removed_fixed: RemovedComponents<'w, 's, avian3d::prelude::FixedJoint>,
+    removed_prismatic: RemovedComponents<'w, 's, avian3d::prelude::PrismaticJoint>,
+    removed_spherical: RemovedComponents<'w, 's, avian3d::prelude::SphericalJoint>,
+    removed_distance: RemovedComponents<'w, 's, avian3d::prelude::DistanceJoint>,
+}
+
+/// Maintain the physics support index from ECS change detection.
+pub(crate) fn update_physics_support_cache(
+    mut cache: ResMut<PhysicsSupportCache>,
+    queries: PhysicsSupportQueries,
     joints: JointGraph,
 ) {
+    let PhysicsSupportQueries {
+        bodies,
+        all_bodies,
+        colliders,
+        all_colliders,
+        mut removed_bodies,
+        mut removed_colliders,
+        mut removed_footprints,
+        mut removed_collider_owners,
+        revolute_joints,
+        fixed_joints,
+        prismatic_joints,
+        spherical_joints,
+        distance_joints,
+        mut removed_revolute,
+        mut removed_fixed,
+        mut removed_prismatic,
+        mut removed_spherical,
+        mut removed_distance,
+    } = queries;
     let mut changed_bodies = HashSet::new();
     let mut topology_dirty = cache.topology_dirty;
 
-    if added_revolute.iter().next().is_some()
-        || added_fixed.iter().next().is_some()
-        || added_prismatic.iter().next().is_some()
-        || added_spherical.iter().next().is_some()
-        || added_distance.iter().next().is_some()
-        || removed_revolute.read().count() > 0
-        || removed_fixed.read().count() > 0
-        || removed_prismatic.read().count() > 0
-        || removed_spherical.read().count() > 0
-        || removed_distance.read().count() > 0
-    {
+    // Motors and joint frames may change frequently. Observe changed joints but
+    // rebuild assemblies only when their endpoint pair changes; ordinary drive
+    // updates must not turn this cache back into a per-frame topology rebuild.
+    for (entity, joint) in &revolute_joints {
+        topology_dirty |= cache.observe_joint(entity, [joint.body1, joint.body2]);
+    }
+    for (entity, joint) in &fixed_joints {
+        topology_dirty |= cache.observe_joint(entity, [joint.body1, joint.body2]);
+    }
+    for (entity, joint) in &prismatic_joints {
+        topology_dirty |= cache.observe_joint(entity, [joint.body1, joint.body2]);
+    }
+    for (entity, joint) in &spherical_joints {
+        topology_dirty |= cache.observe_joint(entity, [joint.body1, joint.body2]);
+    }
+    for (entity, joint) in &distance_joints {
+        topology_dirty |= cache.observe_joint(entity, [joint.body1, joint.body2]);
+    }
+
+    let mut removed_joint = false;
+    for entity in removed_revolute.read() {
+        cache.remove_joint(entity);
+        removed_joint = true;
+    }
+    for entity in removed_fixed.read() {
+        cache.remove_joint(entity);
+        removed_joint = true;
+    }
+    for entity in removed_prismatic.read() {
+        cache.remove_joint(entity);
+        removed_joint = true;
+    }
+    for entity in removed_spherical.read() {
+        cache.remove_joint(entity);
+        removed_joint = true;
+    }
+    for entity in removed_distance.read() {
+        cache.remove_joint(entity);
+        removed_joint = true;
+    }
+    if removed_joint {
         topology_dirty = true;
     }
 
@@ -478,6 +617,41 @@ pub fn update_physics_support_cache(
                     cache.colliders.remove(&collider);
                 }
             }
+        }
+        let joint_count = cache.joint_bodies.len();
+        cache
+            .joint_bodies
+            .retain(|_, bodies| bodies[0] != entity && bodies[1] != entity);
+        topology_dirty |= cache.joint_bodies.len() != joint_count;
+    }
+
+    // A removed footprint does not match the filtered body query anymore. Reset
+    // its cached support-only bounds from the body's current pose, then let the
+    // cached Avian collider bounds be re-unioned below.
+    for entity in removed_footprints.read() {
+        let Ok((_, rigid_body, position, rotation)) = all_bodies.get(entity) else {
+            continue;
+        };
+        if !matches!(rigid_body, RigidBody::Dynamic) {
+            continue;
+        }
+        if let Some(body) = cache.bodies.get_mut(&entity) {
+            body.support_bounds =
+                runtime_support_xz_bounds(GridPos(position.0), rotation, None, None);
+            changed_bodies.insert(entity);
+        }
+    }
+
+    // ColliderOf is an immutable relationship, so ownership changes arrive as
+    // removal + insertion events rather than Changed<ColliderOf>. Re-project a
+    // surviving AABB onto its new implicit owner (itself), or remove it when the
+    // collider was removed in the same update.
+    for entity in removed_collider_owners.read() {
+        if let Ok((_, aabb, collider_of)) = all_colliders.get(entity) {
+            let owner = collider_of.map_or(entity, |collider_of| collider_of.body);
+            cache.update_collider(entity, owner, collider_bounds(aabb), &mut changed_bodies);
+        } else {
+            cache.remove_collider(entity, &mut changed_bodies);
         }
     }
 
@@ -507,11 +681,7 @@ pub fn update_physics_support_cache(
 
     for (collider_entity, aabb, collider_of) in &colliders {
         let owner = collider_of.map_or(collider_entity, |collider_of| collider_of.body);
-        let bounds = (aabb.min.is_finite()
-            && aabb.max.is_finite()
-            && aabb.min.x <= aabb.max.x
-            && aabb.min.z <= aabb.max.z)
-            .then_some([aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z]);
+        let bounds = collider_bounds(aabb);
         cache.update_collider(collider_entity, owner, bounds, &mut changed_bodies);
     }
 
@@ -1427,6 +1597,7 @@ mod tests {
     use super::*;
     use crate::quadtree::QuadCoord;
     use avian3d::parry::query::Ray;
+    use bevy::ecs::entity::Entity;
     use lunco_obstacle_field::field::HeightGrid;
     use lunco_terrain_core::{Crater, Craters};
 
@@ -1484,6 +1655,23 @@ mod tests {
         nodes.sort_unstable_by_key(|node| (node.x, node.z));
         nodes.dedup();
         assert_eq!(nodes.len(), 16);
+    }
+
+    #[test]
+    fn support_cache_rebuilds_only_when_joint_endpoints_change() {
+        let mut cache = PhysicsSupportCache::default();
+        let joint = Entity::from_raw_u32(1).unwrap();
+        let first = [
+            Entity::from_raw_u32(2).unwrap(),
+            Entity::from_raw_u32(3).unwrap(),
+        ];
+        let replacement = [first[0], Entity::from_raw_u32(4).unwrap()];
+
+        assert!(cache.observe_joint(joint, first));
+        assert!(!cache.observe_joint(joint, first));
+        assert!(cache.observe_joint(joint, replacement));
+        assert!(cache.remove_joint(joint));
+        assert!(!cache.remove_joint(joint));
     }
 
     /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at
