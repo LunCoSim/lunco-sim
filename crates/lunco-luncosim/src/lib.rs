@@ -71,6 +71,10 @@ use lunco_terrain_surface::TerrainSurfacePlugin;
 // added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
 use lunco_modelica::ModelicaSet;
 
+/// Domain producers for the generic engine exposure registry. Consumers are
+/// independent of this module: HTML, egui, API, and telemetry can all read the
+/// same retained snapshot.
+mod engine_exposure;
 /// Chassis smoothness census (`LUNCO_JITTER_CSV`) — compares solver `Position`
 /// against the rendered `Transform`, so it only means anything in a `ui` build.
 #[cfg(feature = "ui")]
@@ -2177,7 +2181,8 @@ pub struct SandboxCorePlugin {
 /// physics steps. The camera and billboard paths consume that same rendered
 /// pose, so omitting it makes a fast rover visibly staircase at display rate.
 fn sandbox_physics_plugins() -> impl PluginGroup {
-    PhysicsPlugins::default().with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
+    PhysicsPlugins::default()
+        .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
 }
 
@@ -2431,6 +2436,13 @@ impl Plugin for SandboxCorePlugin {
             ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
+            .add_systems(
+                Update,
+                (
+                    engine_exposure::mark_exposure_dirty,
+                    engine_exposure::publish_exposure.after(engine_exposure::mark_exposure_dirty),
+                ),
+            )
             .add_plugins(lunco_core::WorldShellPlugin)
             // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer
             // side (`lunco_api`'s `sampled_param_observer`, i.e. `SubscribeTelemetry`,

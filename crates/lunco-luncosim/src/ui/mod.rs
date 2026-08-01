@@ -31,9 +31,9 @@ mod rhai_editor_panel;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
-/// Driver cockpit overlay for the View perspective — attitude/tilt, nav readout,
-/// and the physics-real transport band. Paints only while possessing a vessel.
-mod rover_hud;
+/// Generic retained HUI/Flair exposure boundary shared by runtime-authored
+/// templates and engine value producers.
+mod runtime_exposure;
 /// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
 /// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
 #[cfg(feature = "networking")]
@@ -128,16 +128,16 @@ impl Plugin for SandboxUiPlugin {
             use lunco_settings::AppSettingsExt;
             use lunco_workbench::WorkbenchAppExt;
             app.register_settings_section::<lunco_settings::DownloadSettings>();
-            app.init_resource::<rover_hud::RoverHudView>();
-            app.add_systems(Startup, rover_hud::spawn_rover_hud);
+            app.add_systems(Startup, spawn_vessel_surface);
             app.add_systems(
                 Update,
                 (
-                    rover_hud::bind_hud_to_camera,
-                    rover_hud::publish_rover_hud_view.run_if(in_view_perspective),
-                    rover_hud::attach_hui_names.before(bevy_flair::style::StyleSystems::Prepare),
-                    rover_hud::hand_hud_styling_to_flair.after(bevy_hui::HuiSystems::Style),
-                    rover_hud::apply_rover_hud_view,
+                    runtime_exposure::bind_runtime_ui_to_camera,
+                    runtime_exposure::attach_runtime_ui_names
+                        .before(bevy_flair::style::StyleSystems::Prepare),
+                    runtime_exposure::hand_runtime_ui_styling_to_flair
+                        .after(bevy_hui::HuiSystems::Style),
+                    runtime_exposure::apply_runtime_ui_exposures,
                 ),
             );
             // Rover-specific panels and the attach-a-model click flow.
@@ -340,6 +340,17 @@ impl Plugin for SandboxUiPlugin {
 /// shadow edges under grazing lunar light. USD- and Avatar-spawned cameras
 /// land async over many frames; the `Without<ShadowFilteringMethod>` filter
 /// catches each exactly once.
+fn spawn_vessel_surface(mut commands: Commands, server: Res<AssetServer>) {
+    runtime_exposure::spawn_html_surface(
+        &mut commands,
+        &server,
+        "ui/rover_hud.html",
+        "ui/rover_hud.css",
+        "driven-vessel",
+        Some(lunco_workbench::PerspectiveId("sandbox_view")),
+    );
+}
+
 /// True while an offline take is capturing frames — the signal that "this
 /// viewport is the film, not the editor". Chrome that exists for an operator
 /// (view switcher, sky-clock scrubber) hides behind it; instrumentation that

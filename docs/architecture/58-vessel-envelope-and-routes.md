@@ -31,9 +31,10 @@ then written by hand into:
 Retune the tire and six places lie. Worse, they lie *plausibly* — 26.6° stays a
 believable number, so nothing looks broken.
 
-The HUD has the same defect from the other direction. `rover_hud.rs` colours tilt
-against fixed `CAUTION_TILT_DEG = 20.0` / `DANGER_TILT_DEG = 30.0`, with an honest
-comment explaining why they are generic and inviting the fix:
+The HUD had the same defect from the other direction. The engine exposure producer
+coloured tilt against fixed `CAUTION_TILT_DEG = 20.0` /
+`DANGER_TILT_DEG = 30.0`, with an honest comment explaining why they are generic
+and inviting the fix:
 
 > deliberately not a per-vehicle limit … A rover that wants its own arcs should
 > publish them; until it does, these are honest thresholds
@@ -66,9 +67,9 @@ them is not new data — it is refusing to make humans recompute data we have.
 
 ### The rejected version, and why
 
-The first implementation added a `VesselEnvelope` component to `lunco-mobility`,
-recomputed by a change-driven system. **It was built, tested, and reverted the same
-day**, because it contradicts the argument this document makes.
+The first implementation cached the derived limits in `lunco-mobility`,
+recomputed by a change-driven system. **It was built, tested, and reverted the
+same day**, because it contradicts the argument this document makes.
 
 `atan(min μ)` is one minimum and one arctangent over data already in memory. Caching
 it buys nothing — it is not expensive, not shared mutable state, and changes only
@@ -90,12 +91,13 @@ contact, and averaging would flatter a rover with one bald tire.
 
 | Consumer | Where the derivation lives |
 |---|---|
-| Driver HUD (per frame, Rust) | `tilt_bands()` — a free function in `rover_hud.rs`, fed by the wheel query the system already has |
+| Driver HUD (reactive engine exposure) | `tilt_bands()` in `crates/lunco-luncosim/src/engine_exposure.rs`, fed by the wheel query the producer already has |
 | Lessons (one-shot, rhai) | `slip_limit()` / `exceeds_slip()` in `assets/scripting/prelude/vessel.rhai`, reading `WheelRaycast.friction_mu` by reflection |
 
-The cost profile is the right way round: the per-frame consumer is Rust, where six
-wheels and an `atan` are cheaper than the layout of the panel they label; the
-reflection-crossing consumer is rhai, which only ever asks at configuration time.
+The cost profile is the right way round: the engine producer resolves six wheels
+and an `atan` only after relevant ECS inputs change and publishes at a bounded
+cadence; the reflection-crossing consumer is rhai, which only ever asks at
+configuration time.
 
 **Guidance the prelude states explicitly:** a rhai task that wants this every tick
 must read it once into `this` in `on_start`. The limit does not change while you

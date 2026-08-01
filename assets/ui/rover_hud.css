@@ -12,21 +12,21 @@
   --ok-color: rgba(166, 227, 161, 1);
   --caution-color: rgba(249, 226, 175, 1);
   --danger-color: rgba(243, 139, 168, 1);
-  --tilt-color: rgba(166, 227, 161, 1);
-  --comms-color: rgba(166, 173, 200, 1);
-  --power-color: rgba(166, 227, 161, 1);
-  --thermal-color: rgba(166, 227, 161, 1);
-  --tilt-marker: 0%;
-  --caution-width: 44%;
-  --danger-start: 44%;
-  --danger-width: 22%;
-  --autopilot-display: none;
-  --geo-display: none;
-  --local-display: flex;
-  --comms-display: none;
-  --comms-los-display: none;
-  --power-display: none;
-  --thermal-display: none;
+  --ui-tilt-color: var(--ok-color);
+  --ui-comms-color: var(--muted-color);
+  --ui-power-color: var(--ok-color);
+  --ui-thermal-color: var(--ok-color);
+  --ui-tilt-marker: 0%;
+  --ui-caution-width: 44%;
+  --ui-danger-start: 44%;
+  --ui-danger-width: 22%;
+  --ui-autopilot-display: none;
+  --ui-geo-display: none;
+  --ui-local-display: flex;
+  --ui-comms-display: none;
+  --ui-comms-los-display: none;
+  --ui-power-display: none;
+  --ui-thermal-display: none;
 }
 
 #rover-hud-root {
@@ -102,7 +102,7 @@
 }
 
 #rover-hud-tilt {
-  color: var(--tilt-color);
+  color: var(--ui-tilt-color);
   font-size: 25px;
   font-weight: 700;
 }
@@ -112,7 +112,7 @@
 #rover-hud-comms-status,
 #rover-hud-power-value,
 #rover-hud-thermal-value {
-  color: var(--tilt-color);
+  color: var(--ui-tilt-color);
   font-size: 10px;
   font-weight: 700;
 }
@@ -143,22 +143,22 @@
 }
 
 #rover-hud-tilt-caution {
-  width: var(--caution-width);
+  width: var(--ui-caution-width);
   background-color: var(--ok-color);
 }
 
 #rover-hud-tilt-danger {
-  left: var(--danger-start);
-  width: var(--danger-width);
+  left: var(--ui-danger-start);
+  width: var(--ui-danger-width);
   background-color: var(--caution-color);
 }
 
 #rover-hud-tilt-marker {
-  left: var(--tilt-marker);
+  left: var(--ui-tilt-marker);
   width: 2px;
   height: 14px;
   top: -3px;
-  background-color: var(--tilt-color);
+  background-color: var(--ui-tilt-color);
 }
 
 #rover-hud-speed,
@@ -183,24 +183,24 @@
 }
 
 #rover-hud-autopilot {
-  display: var(--autopilot-display);
+  display: var(--ui-autopilot-display);
   color: var(--ok-color);
   font-size: 10px;
   font-weight: 700;
 }
 
 #rover-hud-geo {
-  display: var(--geo-display);
+  display: var(--ui-geo-display);
 }
 
 #rover-hud-local {
-  display: var(--local-display);
+  display: var(--ui-local-display);
 }
 
 #rover-hud-comms,
 #rover-hud-power,
 #rover-hud-thermal {
-  display: var(--comms-display);
+  display: var(--ui-comms-display);
   flex-direction: column;
   row-gap: 4px;
   padding-top: 7px;
@@ -216,11 +216,11 @@
 }
 
 #rover-hud-comms-status {
-  color: var(--comms-color);
+  color: var(--ui-comms-color);
 }
 
 #rover-hud-comms-detail {
-  display: var(--comms-los-display);
+  display: var(--ui-comms-los-display);
 }
 
 #rover-hud-comms-los {
@@ -228,17 +228,17 @@
 }
 
 #rover-hud-power {
-  display: var(--power-display);
+  display: var(--ui-power-display);
 }
 
 #rover-hud-power-value {
-  color: var(--power-color);
+  color: var(--ui-power-color);
 }
 
 #rover-hud-thermal {
-  display: var(--thermal-display);
+  display: var(--ui-thermal-display);
 }
 
 #rover-hud-thermal-value {
-  color: var(--thermal-color);
+  color: var(--ui-thermal-color);
 }

@@ -1,62 +1,24 @@
-//! Driver HUD for the View perspective — the cockpit overlay for whatever vessel
-//! the local avatar is currently possessing.
+//! Engine-side producers for the generic exposure registry.
 //!
-//! Two floating clusters, presented only while something is actually being driven
-//! (free-flight shows nothing, so the plain luncosim viewport stays clean). Both sit
-//! along the BOTTOM edge, flanking the viewport centre — the thing the driver is
-//! actually looking at — rather than boxing it in from three sides:
+//! This module has no HTML, egui, or Flair dependency. It resolves authoritative
+//! engine state for the currently possessed vessel and publishes a named
+//! capability snapshot through `lunco_core::exposure::EngineExposures`. Any
+//! consumer can read that snapshot: runtime HTML, egui, API, telemetry, or a
+//! remote client. The producer is scheduled with the simulation, not with a
+//! particular presentation surface.
 //!
-//! - **ATTITUDE** (bottom-left) — the tilt gauge, SPEED as the hero number, then
-//!   roll/pitch as one line of fine print. Tilt is the number that matters on a
-//!   slope: it is what puts a rover on its roof.
-//! - **NAV + COMMS** (bottom-right) — the vessel's name, ALT as the hero number,
-//!   then E/N/heading as one line, and the live link home.
-//!
-//! ONE hero readout per cluster, centred and large; everything else is a compact
-//! inline row. A HUD of equal-weight rows makes the driver read all of it to find
-//! the one number the moment is about — speed while flying, altitude while
-//! landing — and on camera it reads as a debug dump rather than an instrument.
-//!
-//! The key-press legend deliberately lives NOWHERE here: `lunco-workbench`'s
-//! `input_overlay` already paints it centre-screen, and a second copy in this
-//! panel said the same thing twice while pushing the numbers into the margins.
-//!
-//! COMMS reads the generic link kernel (`lunco_celestial::link`, doc 49) — real
-//! range/elevation/occlusion, never a scripted flag. It is the driver-facing half of
-//! the same state `ss3_radio_shadow.rhai` turns into a tele-op refusal: when this
-//! says NO LINK, commands genuinely cannot reach the vessel, so the readout has to
-//! answer "why is it not responding" without the student going to a panel for it.
-//! Shown only for a vessel that carries a link node — see `resolve_link`.
-//!
-//! TRANSPORT (pause + rate) is deliberately NOT here: the workbench toolbar already
-//! owns the pause button and the same `TimeTransport` authority, and it explicitly
-//! avoids a second transport row. The rate buttons were added next to it there.
-//!
-//! The HUD is a retained Bevy UI tree rather than a Workbench `Panel`. The View
-//! perspective is full-screen 3D with no dock, and `PanelSlot::Floating` is a
-//! declared-but-unimplemented placeholder (`lunco-workbench/src/panel.rs`), so
-//! the template is attached directly to the app's UI world and hidden outside
-//! this perspective.
-//!
-//! FRAME: pose comes from [`lunco_core::coords::world_pose`], which walks the cell
-//! chain and applies ancestor grid rotation. A camera-relative `GlobalTransform` is
-//! floating-origin-relative and useless for geography — see the same note on
-//! `mode_exposure`. In a site-anchored scene the root frame IS site-ENU metres
-//! (East +X, Up +Y, North −Z), which is the frame the survey and any route
-//! waypoints are already expressed in.
+//! Continuous sources are invalidated by Bevy change ticks and coalesced to the
+//! bounded exposure cadence. Static or paused scenes do not repeat the expensive
+//! resolution work.
 
 use avian3d::prelude::{ComputedCenterOfMass, LinearVelocity};
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy_egui::PrimaryEguiContext;
-use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
-use bevy_hui::prelude::{
-    CompileContextEvent, HtmlNode, HtmlStyle, HtmlTemplate, TemplateProperties, UiId,
-};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
+use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
 use lunco_core::{Avatar, GlobalEntityId};
 use lunco_mobility::WheelRaycast;
 
@@ -64,9 +26,10 @@ use lunco_mobility::WheelRaycast;
 ///
 /// GENERIC on purpose: the real roll-over angle is `atan(half_track / com_height)`
 /// and the real slip limit is `atan(μ)`, both properties of the AUTHORED vehicle.
-/// A rover now publishes exactly those as [`VesselEnvelope`], and the HUD prefers
-/// them — see `docs/architecture/58-vessel-envelope-and-routes.md`. These remain
-/// for the unknown-vehicle case (a lander, a wheel-less body), where they are
+/// A driven rover publishes exactly those through the generic exposure registry,
+/// and the HTML HUD prefers them — see
+/// `docs/architecture/58-vessel-envelope-and-routes.md`. These remain for the
+/// unknown-vehicle case (a lander, a wheel-less body), where they are
 /// honest "meaningful slope" / "slope that rolls things" bands spanning the range
 /// real lunar rovers cared about (Lunokhod-1 drove to ~32° operationally, with a
 /// 45° auto-brake cut-out).
@@ -82,7 +45,7 @@ const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
 use lunco_cosim::SimComponent;
 
 /// Information about a driven vessel's energy budget/battery.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct EnergyInfo {
     /// State of charge in percent (0.0 ..= 100.0).
     soc_pct: f32,
@@ -93,7 +56,7 @@ struct EnergyInfo {
 }
 
 /// Information about a driven vessel's motor temperatures.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct ThermalInfo {
     temp_left_k: Option<f32>,
     temp_right_k: Option<f32>,
@@ -110,7 +73,9 @@ impl ThermalInfo {
     }
 }
 
-/// What the HUD needs about the driven vessel, resolved once per frame.
+/// What the HUD needs about the driven vessel, resolved at the bounded exposure
+/// cadence after authoritative inputs change.
+#[derive(PartialEq)]
 struct DrivenVessel {
     entity: Entity,
     label: String,
@@ -193,6 +158,7 @@ fn tilt_bands(min_mu: f64, half_track: f64, com_above_contact: f64) -> (f32, f32
 /// peer (falling back to the nearest severed one) matches how
 /// `inject_link_state_into_cosim` reduces a class to a single set of ports, so the
 /// HUD and the cosim ports never disagree about which peer is "the" link.
+#[derive(PartialEq)]
 struct LinkInfo {
     connected: bool,
     /// Peer prim name, or a GID fallback if the peer has no `Name`.
@@ -655,89 +621,49 @@ mod energy_thermal_tests {
     }
 }
 
-/// Root entity for the runtime-authored HUD template.
-#[derive(Component)]
-pub(crate) struct RoverHudRoot;
-
-/// Render-free presentation snapshot consumed by the template adapter.
+/// Cheap reactive invalidation in front of the expensive vessel resolver.
 ///
-/// The resolver remains here for now because this is the first migration. The
-/// renderer only sees this bounded snapshot and never receives an ECS query.
-#[derive(Resource, Default)]
-pub(crate) struct RoverHudView {
-    driven: Option<DrivenVessel>,
-    autopilot: bool,
-}
-
-/// Spawn the View HUD as an external HUI template with an inherited Flair
-/// stylesheet. The entity stays alive across possession and perspective changes;
-/// visibility is controlled by the presentation adapter below.
-pub(crate) fn spawn_rover_hud(mut commands: Commands, server: Res<AssetServer>) {
-    let template: Handle<HtmlTemplate> = server.load("ui/rover_hud.html");
-    let stylesheet: Handle<StyleSheet> = server.load("ui/rover_hud.css");
-
-    commands.spawn((
-        Node::default(),
-        HtmlNode(template),
-        Styled::new(stylesheet),
-        InlineStyle::default(),
-        RoverHudRoot,
-        Visibility::Hidden,
-    ));
-}
-
-/// Keep the retained HUD on its stable window-targeting UI camera. Bevy otherwise
-/// selects the highest-order window camera, but the scene camera is replaced
-/// during possession and perspective changes.
-pub(crate) fn bind_hud_to_camera(
-    mut commands: Commands,
-    cameras: Query<Entity, With<PrimaryEguiContext>>,
-    roots: Query<(Entity, Option<&UiTargetCamera>), With<RoverHudRoot>>,
+/// The queries only inspect Bevy change ticks. Continuous motion still marks the
+/// HUD dirty, but the publisher below coalesces those changes to the presentation
+/// cadence. Static scenes, paused simulations, and idle frames do not rebuild the
+/// view model.
+pub(crate) fn mark_exposure_dirty(
+    q_avatar: Query<(), Or<(Changed<ControllerLink>, Changed<Avatar>)>>,
+    q_velocity: Query<(), Changed<LinearVelocity>>,
+    q_spatial: Query<(), Or<(Changed<CellCoord>, Changed<Transform>, Changed<ChildOf>)>>,
+    q_links: Query<(), Changed<LinkState>>,
+    q_wheels: Query<(), Or<(Changed<WheelRaycast>, Changed<Transform>)>>,
+    q_com: Query<(), Changed<ComputedCenterOfMass>>,
+    q_sim: Query<(), Changed<SimComponent>>,
+    q_autopilot: Query<(), Changed<Autopilot>>,
+    mut refresh: ResMut<ExposureRefresh>,
 ) {
-    let Some(camera) = cameras.iter().next() else {
-        return;
-    };
+    let changed = !q_avatar.is_empty()
+        || !q_velocity.is_empty()
+        || !q_spatial.is_empty()
+        || !q_links.is_empty()
+        || !q_wheels.is_empty()
+        || !q_com.is_empty()
+        || !q_sim.is_empty()
+        || !q_autopilot.is_empty();
 
-    for (entity, target) in &roots {
-        if target.is_none_or(|target| target.entity() != camera) {
-            commands.entity(entity).insert(UiTargetCamera(camera));
-        }
+    if changed {
+        refresh.dirty = true;
     }
 }
 
-/// HUI exposes stable UiIds rather than Bevy Names. Flair selectors follow the
-/// Bevy Name component for CSS id selectors, so bridge only this template's IDs
-/// after HUI has built its nodes.
-pub(crate) fn attach_hui_names(
-    mut commands: Commands,
-    ids: Query<(Entity, &UiId), (With<Node>, Without<Name>)>,
-) {
-    for (entity, id) in &ids {
-        if id.id().starts_with("rover-hud-") {
-            commands.entity(entity).insert(Name::new(id.id().clone()));
-        }
-    }
+/// Publish a vessel exposure namespace. The engine resolves its authoritative
+/// state here, then writes only generic named values; the runtime UI layer owns
+/// all template and style mechanics.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ExposureRuntime<'w, 's> {
+    time: Res<'w, Time>,
+    timer: Local<'s, ExposureTimer>,
+    refresh: ResMut<'w, ExposureRefresh>,
+    exposures: ResMut<'w, EngineExposures>,
 }
 
-/// HUI's inline-style system writes its cached HTML attributes every frame.
-/// This template deliberately has no HUI style attributes: Flair owns the
-/// external CSS and must be the final writer of Bevy UI components. Remove the
-/// empty HUI style components after HUI has built the tree so its default
-/// `HtmlStyle` values cannot overwrite the stylesheet on the next frame.
-pub(crate) fn hand_hud_styling_to_flair(
-    mut commands: Commands,
-    nodes: Query<(Entity, &UiId), With<HtmlStyle>>,
-) {
-    for (entity, id) in &nodes {
-        if id.id().starts_with("rover-hud-") {
-            commands.entity(entity).remove::<HtmlStyle>();
-        }
-    }
-}
-
-/// Publish the driven-vessel view model. This system contains the old HUD's
-/// domain resolution, but no presentation calls or layout knowledge.
-pub(crate) fn publish_rover_hud_view(
+pub(crate) fn publish_exposure(
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_name: Query<&Name>,
     q_callsign: Query<&lunco_core::markers::Callsign>,
@@ -752,8 +678,17 @@ pub(crate) fn publish_rover_hud_view(
     q_com: Query<&ComputedCenterOfMass>,
     q_sim: Query<(Entity, &SimComponent)>,
     geo: GeodeticHud,
-    mut view: ResMut<RoverHudView>,
+    mut runtime: ExposureRuntime,
 ) {
+    let timer_finished = runtime.timer.0.tick(runtime.time.delta()).just_finished();
+    if !runtime.refresh.dirty || (!timer_finished && !runtime.refresh.first_update) {
+        return;
+    }
+    runtime.refresh.dirty = false;
+    runtime.refresh.first_update = false;
+
+    let mut ui = runtime.exposures.writer("driven-vessel");
+
     let Some(vessel) = resolve_driven(
         &q_avatar,
         &q_name,
@@ -771,40 +706,27 @@ pub(crate) fn publish_rover_hud_view(
         geo.site.iter().next(),
         geo.bodies.as_deref(),
     ) else {
-        view.driven = None;
-        view.autopilot = false;
+        ui.visible(false);
         return;
     };
 
-    view.autopilot = geo
+    let autopilot = geo
         .autopilots
         .iter()
         .any(|pilot| pilot.vessel == vessel.entity);
-    view.driven = Some(vessel);
+    ui.visible(true);
+    publish_vessel_values(&mut ui, &vessel, autopilot);
 }
 
-fn set_property(properties: &mut TemplateProperties, key: &str, value: impl Into<String>) {
-    let value = value.into();
-    if properties.get(key).map(String::as_str) != Some(value.as_str()) {
-        properties.set(key, &value);
+struct ExposureTimer(Timer);
+
+impl Default for ExposureTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(
+            1.0 / EXPOSURE_UPDATE_HZ,
+            TimerMode::Repeating,
+        ))
     }
-}
-
-fn set_css_var(style: &mut InlineStyle, key: &str, value: impl Into<String>) {
-    let value = value.into();
-    if style.get(key) != Some(value.as_str()) {
-        style.set(key.to_string(), value);
-    }
-}
-
-fn css_color(color: bevy_egui::egui::Color32) -> String {
-    format!(
-        "rgba({},{},{},{:.3})",
-        color.r(),
-        color.g(),
-        color.b(),
-        f32::from(color.a()) / 255.0
-    )
 }
 
 fn percent(value: f32) -> String {
@@ -863,255 +785,151 @@ fn link_snapshot(
     )
 }
 
-/// Apply the snapshot to the external template. All layout and visual component
-/// writes remain in the authored CSS; this adapter only supplies text and root
-/// custom properties for the stylesheet.
-pub(crate) fn apply_rover_hud_view(
-    mut commands: Commands,
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
-    view: Res<RoverHudView>,
-    theme: Option<Res<lunco_theme::Theme>>,
-    mut roots: Query<
-        (
-            Entity,
-            &mut Visibility,
-            &mut TemplateProperties,
-            &InlineStyle,
-        ),
-        With<RoverHudRoot>,
-    >,
-) {
-    let in_view = layout.is_some_and(|layout| {
-        layout.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
-    });
+/// Publish the formatted values for the vessel exposure namespace.
+///
+/// This is the only domain-specific part of the first producer. It emits generic
+/// properties and CSS state variables; no HUI, Flair, egui, or Bevy UI component
+/// is touched here.
+fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilot: bool) {
+    let tilt_color = if v.tilt_deg >= v.danger_deg {
+        "var(--danger-color)"
+    } else if v.tilt_deg >= v.caution_deg {
+        "var(--caution-color)"
+    } else {
+        "var(--ok-color)"
+    };
+    let danger_width = (v.danger_deg - v.caution_deg).max(0.0) / 45.0 * 100.0;
+    let limits = if v.limits_derived {
+        format!("slip {:.0}° · tip {:.0}°", v.caution_deg, v.danger_deg)
+    } else {
+        "generic limits".into()
+    };
 
-    for (entity, mut visibility, mut properties, existing_style) in &mut roots {
-        let driven = view.driven.is_some();
-        if !driven || !in_view {
-            *visibility = Visibility::Hidden;
-        } else {
-            *visibility = Visibility::Visible;
-        }
-
-        let Some(v) = view.driven.as_ref() else {
-            continue;
-        };
-        if !in_view {
-            continue;
-        }
-
-        let previous_properties = properties.0.clone();
-        let mut style = existing_style.clone();
-
-        let tokens = theme.as_deref().map(|theme| &theme.tokens);
-        let panel_background = tokens.map_or_else(
-            || "rgba(24,24,37,0.92)".into(),
-            |tokens| css_color(tokens.overlay_backdrop),
-        );
-        let panel_border = tokens.map_or_else(
-            || "rgba(127,212,255,0.55)".into(),
-            |tokens| css_color(tokens.overlay_border),
-        );
-        let text = tokens.map_or_else(
-            || "rgba(205,214,244,1.0)".into(),
-            |tokens| css_color(tokens.text),
-        );
-        let muted = tokens.map_or_else(
-            || "rgba(166,173,200,1.0)".into(),
-            |tokens| css_color(tokens.text_subdued),
-        );
-        let ok = tokens.map_or_else(
-            || "rgba(166,227,161,1.0)".into(),
-            |tokens| css_color(tokens.success),
-        );
-        let caution = tokens.map_or_else(
-            || "rgba(249,226,175,1.0)".into(),
-            |tokens| css_color(tokens.warning),
-        );
-        let danger = tokens.map_or_else(
-            || "rgba(243,139,168,1.0)".into(),
-            |tokens| css_color(tokens.error),
-        );
-        let accent = "rgba(127,212,255,1.0)".to_string();
-
-        let tilt_color = if v.tilt_deg >= v.danger_deg {
-            &danger
+    ui.property("tilt_color", tilt_color);
+    ui.property("tilt_marker", percent(v.tilt_deg / 45.0 * 100.0));
+    ui.property("caution_width", percent(v.caution_deg / 45.0 * 100.0));
+    ui.property("danger_start", percent(v.caution_deg / 45.0 * 100.0));
+    ui.property("danger_width", percent(danger_width));
+    ui.property("autopilot_display", if autopilot { "flex" } else { "none" });
+    ui.property("label", v.label.clone());
+    ui.property("tilt", format!("{:.0}°", v.tilt_deg));
+    ui.property("tilt_limits", limits);
+    ui.property(
+        "tilt_status",
+        if v.tilt_deg >= v.danger_deg {
+            "DANGER"
         } else if v.tilt_deg >= v.caution_deg {
-            &caution
+            "CAUTION"
         } else {
-            &ok
-        };
-        let danger_width = (v.danger_deg - v.caution_deg).max(0.0) / 45.0 * 100.0;
-        let limits = if v.limits_derived {
-            format!("slip {:.0}° · tip {:.0}°", v.caution_deg, v.danger_deg)
-        } else {
-            "generic limits".into()
-        };
+            "STABLE"
+        },
+    );
+    ui.property(
+        "speed",
+        v.speed
+            .map_or_else(|| "—".into(), |speed| format!("{speed:.1}")),
+    );
+    ui.property("altitude", format!("{:.1}", v.pos.y));
+    ui.property("roll", format!("{:+.0}°", v.roll_deg));
+    ui.property("pitch", format!("{:+.0}°", v.pitch_deg));
+    ui.property("heading", format!("{:.0}°", v.heading_deg));
 
-        set_css_var(&mut style, "--panel-background", panel_background);
-        set_css_var(&mut style, "--panel-border", panel_border);
-        set_css_var(&mut style, "--text-color", text.clone());
-        set_css_var(&mut style, "--muted-color", muted.clone());
-        set_css_var(&mut style, "--accent-color", accent);
-        set_css_var(&mut style, "--ok-color", ok.clone());
-        set_css_var(&mut style, "--caution-color", caution.clone());
-        set_css_var(&mut style, "--danger-color", danger.clone());
-        set_css_var(&mut style, "--tilt-color", tilt_color.clone());
-        set_css_var(
-            &mut style,
-            "--tilt-marker",
-            percent(v.tilt_deg / 45.0 * 100.0),
+    if let Some(geo) = v.geo {
+        ui.property("geo_display", "flex");
+        ui.property("local_display", "none");
+        let lat = if geo.lat_deg >= 0.0 { "N" } else { "S" };
+        let lon = if geo.lon_deg >= 0.0 { "E" } else { "W" };
+        ui.property(
+            "geographic",
+            format!(
+                "{:.4}° {lat}  ·  {:.4}° {lon}",
+                geo.lat_deg.abs(),
+                geo.lon_deg.abs()
+            ),
         );
-        set_css_var(
-            &mut style,
-            "--caution-width",
-            percent(v.caution_deg / 45.0 * 100.0),
+    } else {
+        ui.property("geo_display", "none");
+        ui.property("local_display", "flex");
+        ui.property(
+            "local_position",
+            format!("E {:+.0}  ·  N {:+.0}", v.pos.x, -v.pos.z),
         );
-        set_css_var(
-            &mut style,
-            "--danger-start",
-            percent(v.caution_deg / 45.0 * 100.0),
-        );
-        set_css_var(&mut style, "--danger-width", percent(danger_width));
-        set_css_var(
-            &mut style,
-            "--autopilot-display",
-            if view.autopilot { "flex" } else { "none" },
-        );
-        set_property(&mut properties, "label", v.label.clone());
-        set_property(&mut properties, "tilt", format!("{:.0}°", v.tilt_deg));
-        set_property(&mut properties, "tilt_limits", limits);
-        set_property(
-            &mut properties,
-            "tilt_status",
-            if v.tilt_deg >= v.danger_deg {
-                "DANGER"
-            } else if v.tilt_deg >= v.caution_deg {
-                "CAUTION"
-            } else {
-                "STABLE"
+    }
+
+    let (
+        comms_display,
+        comms_status,
+        comms_peer,
+        comms_range,
+        comms_elevation,
+        comms_los_display,
+        comms_color,
+    ) = link_snapshot(
+        v.link.as_ref(),
+        "var(--muted-color)",
+        "var(--ok-color)",
+        "var(--danger-color)",
+    );
+    ui.property("comms_display", comms_display);
+    ui.property("comms_status", comms_status);
+    ui.property("comms_peer", comms_peer);
+    ui.property("comms_range", comms_range);
+    ui.property("comms_elevation", comms_elevation);
+    ui.property("comms_los_display", comms_los_display);
+    ui.property("comms_color", comms_color);
+
+    if let Some(energy) = &v.energy {
+        let power_color = if energy.soc_pct > 30.0 {
+            "var(--ok-color)"
+        } else if energy.soc_pct > 15.0 {
+            "var(--caution-color)"
+        } else {
+            "var(--danger-color)"
+        };
+        let detail = energy.energy_wh.map_or_else(
+            || format!("charge {:.1}%", energy.soc_pct),
+            |wh| {
+                let energy_str = if wh >= 1000.0 {
+                    format!("{:.2} kWh", wh / 1000.0)
+                } else {
+                    format!("{:.0} Wh", wh)
+                };
+                let capacity = energy.capacity_wh.map_or_else(String::new, |cap| {
+                    if cap >= 1000.0 {
+                        format!(" · cap {:.1} kWh", cap / 1000.0)
+                    } else {
+                        format!(" · cap {:.0} Wh", cap)
+                    }
+                });
+                format!("{energy_str}{capacity}")
             },
         );
-        set_property(
-            &mut properties,
-            "speed",
-            v.speed
-                .map_or_else(|| "—".into(), |speed| format!("{speed:.1}")),
-        );
-        set_property(&mut properties, "altitude", format!("{:.1}", v.pos.y));
-        set_property(&mut properties, "roll", format!("{:+.0}°", v.roll_deg));
-        set_property(&mut properties, "pitch", format!("{:+.0}°", v.pitch_deg));
-        set_property(&mut properties, "heading", format!("{:.0}°", v.heading_deg));
+        ui.property("power_display", "flex");
+        ui.property("power_color", power_color);
+        ui.property("power_value", format!("{:.0}%", energy.soc_pct));
+        ui.property("power_detail", detail);
+    } else {
+        ui.property("power_display", "none");
+    }
 
-        if let Some(geo) = v.geo {
-            set_css_var(&mut style, "--geo-display", "flex");
-            set_css_var(&mut style, "--local-display", "none");
-            let lat = if geo.lat_deg >= 0.0 { "N" } else { "S" };
-            let lon = if geo.lon_deg >= 0.0 { "E" } else { "W" };
-            set_property(
-                &mut properties,
-                "geographic",
-                format!(
-                    "{:.4}° {lat}  ·  {:.4}° {lon}",
-                    geo.lat_deg.abs(),
-                    geo.lon_deg.abs()
-                ),
-            );
+    if let Some(thermal) = &v.thermal {
+        let max_temp_k = thermal.max_temp_k();
+        let thermal_color = if max_temp_k > 350.0 {
+            "var(--danger-color)"
+        } else if max_temp_k > 310.0 {
+            "var(--caution-color)"
         } else {
-            set_css_var(&mut style, "--geo-display", "none");
-            set_css_var(&mut style, "--local-display", "flex");
-            set_property(
-                &mut properties,
-                "local_position",
-                format!("E {:+.0}  ·  N {:+.0}", v.pos.x, -v.pos.z),
-            );
-        }
-
-        let (
-            comms_display,
-            comms_status,
-            comms_peer,
-            comms_range,
-            comms_elevation,
-            comms_los_display,
-            comms_color,
-        ) = link_snapshot(v.link.as_ref(), &muted, &ok, &danger);
-        set_css_var(&mut style, "--comms-display", comms_display);
-        set_property(&mut properties, "comms_status", comms_status);
-        set_property(&mut properties, "comms_peer", comms_peer);
-        set_property(&mut properties, "comms_range", comms_range);
-        set_property(&mut properties, "comms_elevation", comms_elevation);
-        set_css_var(&mut style, "--comms-los-display", comms_los_display);
-        set_css_var(&mut style, "--comms-color", comms_color);
-
-        if let Some(energy) = &v.energy {
-            let power_color = if energy.soc_pct > 30.0 {
-                &ok
-            } else if energy.soc_pct > 15.0 {
-                &caution
-            } else {
-                &danger
-            };
-            let detail = energy.energy_wh.map_or_else(
-                || format!("charge {:.1}%", energy.soc_pct),
-                |wh| {
-                    let energy_str = if wh >= 1000.0 {
-                        format!("{:.2} kWh", wh / 1000.0)
-                    } else {
-                        format!("{:.0} Wh", wh)
-                    };
-                    let capacity = energy.capacity_wh.map_or_else(String::new, |cap| {
-                        if cap >= 1000.0 {
-                            format!(" · cap {:.1} kWh", cap / 1000.0)
-                        } else {
-                            format!(" · cap {:.0} Wh", cap)
-                        }
-                    });
-                    format!("{energy_str}{capacity}")
-                },
-            );
-            set_css_var(&mut style, "--power-display", "flex");
-            set_css_var(&mut style, "--power-color", power_color.clone());
-            set_property(
-                &mut properties,
-                "power_value",
-                format!("{:.0}%", energy.soc_pct),
-            );
-            set_property(&mut properties, "power_detail", detail);
-        } else {
-            set_css_var(&mut style, "--power-display", "none");
-        }
-
-        if let Some(thermal) = &v.thermal {
-            let max_temp_k = thermal.max_temp_k();
-            let thermal_color = if max_temp_k > 350.0 {
-                &danger
-            } else if max_temp_k > 310.0 {
-                &caution
-            } else {
-                &ok
-            };
-            let detail = match (thermal.temp_left_k, thermal.temp_right_k) {
-                (Some(left), Some(right)) => format!("L {:.0} K  ·  R {:.0} K", left, right),
-                _ => String::new(),
-            };
-            set_css_var(&mut style, "--thermal-display", "flex");
-            set_css_var(&mut style, "--thermal-color", thermal_color.clone());
-            set_property(
-                &mut properties,
-                "thermal_value",
-                format!("{:.0}°C", max_temp_k - 273.15),
-            );
-            set_property(&mut properties, "thermal_detail", detail);
-        } else {
-            set_css_var(&mut style, "--thermal-display", "none");
-        }
-
-        if &style != existing_style {
-            commands.entity(entity).insert(style);
-        }
-        if properties.0 != previous_properties {
-            commands.trigger(CompileContextEvent { entity });
-        }
+            "var(--ok-color)"
+        };
+        let detail = match (thermal.temp_left_k, thermal.temp_right_k) {
+            (Some(left), Some(right)) => format!("L {:.0} K  ·  R {:.0} K", left, right),
+            _ => String::new(),
+        };
+        ui.property("thermal_display", "flex");
+        ui.property("thermal_color", thermal_color);
+        ui.property("thermal_value", format!("{:.0}°C", max_temp_k - 273.15));
+        ui.property("thermal_detail", detail);
+    } else {
+        ui.property("thermal_display", "none");
     }
 }

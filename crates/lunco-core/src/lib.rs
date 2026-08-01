@@ -45,6 +45,9 @@ pub mod subsystems;
 
 pub mod derived;
 
+/// Domain-free named engine exposure snapshots for UI, API, and diagnostics.
+pub mod exposure;
+
 pub mod mobility;
 
 pub mod tools;
@@ -909,7 +912,9 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // require these to exist (same always-on rule as the session resources
         // above — see the AppliedInputSeq fix).
         .init_resource::<CommandResults>()
-        .init_resource::<ActiveCommandId>();
+        .init_resource::<ActiveCommandId>()
+        .init_resource::<exposure::EngineExposures>()
+        .init_resource::<exposure::ExposureRefresh>();
 }
 
 /// HOST: re-key the input-ack watermarks against the authoritative ownership
