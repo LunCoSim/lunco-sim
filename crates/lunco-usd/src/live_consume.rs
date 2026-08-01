@@ -26,6 +26,16 @@ const TRANSLATE_ATTR: &str = "xformOp:translate";
 /// The attribute a rotate edit (`UsdOp::SetRotate`) records as `InfoOnly`.
 const ROTATE_ATTR: &str = "xformOp:rotateXYZ";
 
+fn transform_prim_paths(info_only: &[String]) -> Vec<String> {
+    info_only
+        .iter()
+        .filter_map(|path| {
+            let (prim, attr) = path.split_once('.')?;
+            (attr == TRANSLATE_ATTR || attr == ROTATE_ATTR).then(|| prim.to_string())
+        })
+        .collect()
+}
+
 /// Transform paths explicitly authored by the typed live-stage projector.
 ///
 /// OpenUSD can report a transform author as a resync of an already-live prim,
@@ -222,15 +232,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
         projected_anything = true;
 
-        let prim_paths: Vec<String> = info_only
-            .iter()
-            .filter_map(|path| {
-                let Some((prim, attr)) = path.split_once('.') else {
-                    return Some(path.clone());
-                };
-                (attr == TRANSLATE_ATTR || attr == ROTATE_ATTR).then(|| prim.to_string())
-            })
-            .collect();
+        let prim_paths = transform_prim_paths(&info_only);
         apply_translates_live(world, id, &prim_paths);
         apply_rotates_live(world, id, &prim_paths);
         // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not
@@ -824,6 +826,22 @@ mod tests {
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 
+    #[test]
+    fn bare_resync_paths_never_become_transform_edits() {
+        let info_only = vec![
+            "/World".to_string(),
+            "/World/Rover".to_string(),
+            "/World/Route/W0".to_string(),
+            "/World/Route/W0.xformOp:translate".to_string(),
+            "/World/Rover/Mission.info:sourceCode".to_string(),
+        ];
+
+        assert_eq!(
+            transform_prim_paths(&info_only),
+            vec!["/World/Route/W0".to_string()]
+        );
+    }
+
     /// **Moving an ALREADY-LIVE prim must move its entity.** Authoring
     /// `xformOp:translate` onto the live stage — the exact call
     /// `twin_projection::apply_incremental_op_to_stage` makes when it replays a
@@ -909,6 +927,75 @@ mod tests {
             (landed - Vec3::new(5.0, 0.0, 7.0)).length() < 1e-4,
             "authored move must reach the live entity: Transform is {landed:?}, \
              authored (5, 0, 7)"
+        );
+    }
+
+    /// A descendant structural edit may resync an existing ancestor in the
+    /// OpenUSD sink. That notice is not a transform edit: re-seating the live
+    /// entity from its authored spawn pose would teleport a moving physics body.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn unrelated_resync_preserves_an_already_live_pose() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>();
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset {
+                recipe: Some(recipe.clone()),
+            });
+        let id = handle.id();
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_or_build(id, &recipe)
+            .expect("stage builds");
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
+
+        let rover = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle,
+                    path: "/World/Rover".into(),
+                },
+                Transform::from_translation(Vec3::new(10.0, -1901.0, 10.0)),
+            ))
+            .id();
+
+        reconcile_structural_live(
+            app.world_mut(),
+            id,
+            &["/World/Rover".to_string()],
+            &HashSet::new(),
+        );
+        assert_eq!(
+            app.world().get::<Transform>(rover).unwrap().translation,
+            Vec3::new(10.0, -1901.0, 10.0),
+            "a descendant resync must not restore the authored spawn pose"
+        );
+
+        let authored_translate = HashSet::from(["/World/Rover".to_string()]);
+        reconcile_structural_live(
+            app.world_mut(),
+            id,
+            &["/World/Rover".to_string()],
+            &authored_translate,
+        );
+        assert_eq!(
+            app.world().get::<Transform>(rover).unwrap().translation,
+            Vec3::new(0.0, -1900.0, 0.0),
+            "an explicit SetTranslate resync must still seat the authored pose"
         );
     }
 
