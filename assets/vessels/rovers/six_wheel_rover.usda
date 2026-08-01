@@ -404,6 +404,22 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (0, 0.25, -0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "YawHead" {
+            over "DishGimbal" {
+                over "DishHead" {
+                    over "LinkAperture" {
+                        string lunco:link:class = "rover"
+                        over "LinkBeam" {
+                            over "Up" {
+                                over "Driver" {
+                                    custom float lunco:param:earthOnly = 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     variantSet "generation" = {

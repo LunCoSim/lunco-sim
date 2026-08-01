@@ -179,3 +179,62 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
         "a waypoint whose zone was never entered must not be marked reached"
     );
 }
+
+#[test]
+fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.init_resource::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>();
+    app.add_systems(
+        FixedPostUpdate,
+        lunco_luncosim_edit::ui::checkpoint_click::mark_reached_waypoints_on_enter,
+    );
+
+    let vessel = app
+        .world_mut()
+        .spawn((
+            lunco_core::InputPorts::new(&["throttle", "steer", "brake"]),
+            lunco_usd_bevy::UsdPrimPath {
+                stage_handle: Default::default(),
+                path: "/Runtime/Rover".to_string(),
+            },
+        ))
+        .id();
+    let marker = app
+        .world_mut()
+        .spawn(
+            lunco_luncosim_edit::ui::checkpoint_click::RuntimeWaypointBinding { vessel, index: 0 },
+        )
+        .id();
+    let zone = app
+        .world_mut()
+        .spawn((
+            lunco_core::TriggerZone("waypoint".to_string()),
+            lunco_usd_bevy::UsdPrimPath {
+                stage_handle: Default::default(),
+                path: "/WaypointMarker/Zone".to_string(),
+            },
+            avian3d::prelude::Sensor,
+            ChildOf(marker),
+        ))
+        .id();
+
+    app.world_mut()
+        .resource_mut::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>()
+        .write(avian3d::prelude::CollisionStart {
+            collider1: zone,
+            collider2: vessel,
+            body1: None,
+            body2: Some(vessel),
+        });
+    app.world_mut().run_schedule(FixedPostUpdate);
+
+    let reached = app
+        .world()
+        .get::<lunco_autopilot::usd_tree::ReachedWaypoints>(vessel)
+        .expect("runtime sensor arrival must add ReachedWaypoints");
+    assert!(
+        reached.0.contains("/__runtime_waypoint_0"),
+        "runtime marker collision must record its bound patrol index"
+    );
+}
