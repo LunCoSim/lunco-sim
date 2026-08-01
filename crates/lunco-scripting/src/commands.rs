@@ -299,6 +299,58 @@ pub fn attach_embedded_scenarios(
     }
 }
 
+/// Attach the canonical rover autonomy program to every newly materialised
+/// wheeled control surface that does not already own a scenario.
+///
+/// This is capability-based, not name-based: the authored `InputPorts` surface
+/// (`throttle`/`steer`/`brake`) plus at least one drive actuator is the topology
+/// contract for a rover. It therefore covers both USD-authored rovers and
+/// runtime-spawned asset instances, including a rover from an external Twin.
+/// An explicitly authored scenario wins by virtue of already carrying
+/// [`ScriptedModel`]. The system only adds the file marker; loading, compiling,
+/// lifecycle, and hot reload remain on the normal Rhai scenario path below.
+#[cfg(feature = "rhai")]
+pub fn attach_rover_autonomy_paths(
+    q: Query<
+        (
+            Entity,
+            &lunco_core::InputPorts,
+            Option<&lunco_core::ActuatorPorts>,
+        ),
+        (
+            Without<ScriptedModel>,
+            Without<lunco_core::EmbeddedScenarioPath>,
+            Without<lunco_core::EmbeddedScenarioSource>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for (entity, inputs, actuators) in q.iter() {
+        if !has_rover_control_surface(inputs, actuators) {
+            continue;
+        }
+        commands.entity(entity).insert(lunco_core::EmbeddedScenarioPath(
+            "scenarios/rover_autonomy.rhai".to_string(),
+        ));
+        info!(
+            "[scripting] attaching canonical rover autonomy to control surface {entity:?}"
+        );
+    }
+}
+
+#[cfg(feature = "rhai")]
+fn has_rover_control_surface(
+    inputs: &lunco_core::InputPorts,
+    actuators: Option<&lunco_core::ActuatorPorts>,
+) -> bool {
+    ["throttle", "steer", "brake"]
+        .into_iter()
+        .all(|name| inputs.values.contains_key(name))
+        && actuators.is_some_and(|ports| {
+            ports.get("drive_left").is_some() || ports.get("drive_right").is_some()
+        })
+}
+
 /// The canonical asset id (`twin://ep1/main.rhai`) a pending
 /// [`lunco_core::EmbeddedScenarioSource`] was loaded from — the anchor a relative
 /// `import` inside that script resolves against.
@@ -994,5 +1046,24 @@ mod tests {
         assert_eq!(reg.policy_for("SetPorts"), CommandPolicy::OWNED_CONTROL);
         // An undeclared command stays OPEN (the RBAC-readiness invariant).
         assert_eq!(reg.policy_for("SomeUngatedQuery"), CommandPolicy::OPEN);
+    }
+
+    #[test]
+    fn rover_autonomy_requires_the_complete_wheeled_surface() {
+        use bevy::prelude::*;
+        use std::collections::HashMap;
+
+        let mut inputs = lunco_core::InputPorts::new(&["throttle", "steer", "brake"]);
+        let drive = Entity::PLACEHOLDER;
+        let actuators = lunco_core::ActuatorPorts::new(HashMap::from([(
+            "drive_left".to_string(),
+            drive,
+        )]));
+        assert!(super::has_rover_control_surface(&inputs, Some(&actuators)));
+
+        inputs.values.remove("brake");
+        assert!(!super::has_rover_control_surface(&inputs, Some(&actuators)));
+        inputs = lunco_core::InputPorts::new(&["throttle", "steer", "brake"]);
+        assert!(!super::has_rover_control_surface(&inputs, None));
     }
 }

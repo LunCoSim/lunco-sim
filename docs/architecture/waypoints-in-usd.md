@@ -92,14 +92,23 @@ the XML/JSON intermediate and is gone by the time a tree is built.
 A tree naming a deleted waypoint **refuses to compile** and keeps its last good route
 — it must never silently bake `[0,0,0]` and drive the rover into the world origin.
 
-## Interaction — every edit is an existing `UsdOp`
+## Interaction — document-backed and runtime-only routes
 
-**No new command verbs.** Alt+LMB lowers one intent to `ApplyUsdOps`: ordered
+For a rover mounted in an authored USD document, **no new command verbs** are
+needed. Alt+LMB lowers one intent to `ApplyUsdOps`: ordered
 `AddPrim`/`SetTranslate` operations for the marker, optional mission-program
 construction (`AddPrim` + `SetApiSchemas`), and `SetAttribute` for
 `info:sourceCode`. The document journals it as one undo unit and the live projector
 sees the complete authored shape after the change set, so no ECS component is
 patched directly by the editor.
+
+A runtime-spawned asset has no owning `UsdDocument`. Alt+LMB therefore does not
+guess the active document or write a path into an unrelated scene. It extends the
+vessel's mirrored `AutopilotBehaviorSpec` through the existing
+`SetAutopilotBehavior`/`EngageAutopilot` commands. The resulting route is
+read-only runtime geometry: it is visible and drives the same behaviour-tree
+autopilot, but has no authored marker to drag or persist until the user mounts or
+authors it in a document.
 
 Everything else about a waypoint is *already implemented*, by code that knows nothing
 about waypoints:
@@ -151,11 +160,11 @@ re-armed ⇒ never re-fires; a real lap drives away and back ⇒ fires once per 
 ## Still open
 
 - **`patrol()` in rhai** still emits `SetAutopilotBehavior{spec_json}` rather than
-  authoring prims, so script and mouse currently produce two different forms. Phase 3
-  converges them.
-- **Read-only pins for non-prim-backed trees** (a tree with baked coordinates, or one
-  authored purely in rhai) — project them into the runtime layer so they are visible
-  but not draggable. Phase 4.
+  authoring prims. This is intentional for runtime-only vessels; a future document
+  authoring command may offer an explicit “promote route to USD” operation.
+- Runtime-only pins are visible but intentionally not draggable or right-click
+  editable: there is no USD prim/document to own those edits. Promotion to authored
+  USD is still a separate authoring feature.
 - **Ctrl+Z does not undo a spawn or a gizmo move today** — the editor's `UndoStack` is
   a separate ECS-only stack, while the real (typed, invertible) undo lives on the
   document host. Waypoints ride the document path, so re-pointing Ctrl+Z at
