@@ -137,7 +137,6 @@ pub fn drain_sim_samples_to_viz(
     mut signals: Option<ResMut<SignalRegistry>>,
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
     doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
-    mut last_catalog_revision: Local<u64>,
 ) {
     if stream.batches.is_empty() {
         return;
@@ -198,31 +197,6 @@ pub fn drain_sim_samples_to_viz(
     // was removed: it caused every telemetry/cosim/modelica signal to appear in
     // the graph on startup, making it unreadable. Users now add signals manually
     // via the Telemetry panel checkboxes.
-    //
-    // let revision = sigs.catalog_revision();
-    // if revision != *last_catalog_revision {
-    //     if let Some(reg) = viz_registry.as_deref_mut() {
-    //         let cfg = crate::ui::viz::ensure_default_modelica_graph(reg);
-    //         for (sig, ty) in sigs.iter_signals() {
-    //             if ty != lunco_viz::SignalType::Scalar
-    //                 || cfg.inputs.iter().any(|b| b.source == *sig)
-    //             {
-    //                 continue;
-    //             }
-    //             let Some(meta) = sigs.meta(sig) else { continue };
-    //             let documented = matches!(
-    //                 meta.provenance.as_deref(),
-    //                 Some("modelica" | "cosim" | "telemetry")
-    //             );
-    //             if documented {
-    //                 cfg.inputs
-    //                     .push(lunco_viz::SignalBinding::live(sig.clone(), "y"));
-    //             }
-    //         }
-    //     }
-    //     *last_catalog_revision = revision;
-    // }
-    let _ = (viz_registry, last_catalog_revision); // suppress unused warnings
 }
 
 /// Reactive UI: project core [`crate::ModelicaNotice`] events into the Console

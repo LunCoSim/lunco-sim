@@ -1,14 +1,14 @@
 //! Joint State panel — live joint positions / velocities / torques for the
 //! selected vessel (deep-review §2.7 gap 2).
 //!
-//! **WP-8 reactive shape:** a change-gated view-model producer
+//! **WP-8 reactive shape:** an explicitly live view-model producer
 //! ([`populate_joint_state_view`]) flattens the selected vessel's joint and
 //! wheel state into [`JointStateView`]; the panel ([`JointStatePanel`]) is a
-//! pure reader via [`PanelCtx::resource`]. The producer's gate
-//! ([`joint_state_active`]) keeps the joint scan off entirely while nothing
-//! is selected — while a vessel *is* selected the values are live physics and
-//! change every tick, so the producer legitimately runs each frame (same
-//! bounded-by-vessel scale as the `joint_viz` gizmo pass).
+//! pure reader via [`PanelCtx::resource`]. The producer returns before any
+//! joint or wheel scan while nothing is selected — while a vessel *is*
+//! selected the values are live physics and change every tick, so it
+//! intentionally runs each frame (same bounded-by-vessel scale as the
+//! `joint_viz` gizmo pass).
 //!
 //! Row sources, per joint kind:
 //! - **Revolute** (physical wheels, rocker-bogie pins, doors): angle = twist of
@@ -83,7 +83,7 @@ pub struct JointStateRow {
     pub steer: Option<f64>,
 }
 
-/// Change-driven view-model for the Joint State panel. Producer:
+/// Live view-model for the Joint State panel. Producer:
 /// [`populate_joint_state_view`]; reader: [`JointStatePanel`].
 #[derive(Resource, Default)]
 pub struct JointStateView {
@@ -97,16 +97,8 @@ pub struct JointStateView {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Producer + gate
+// Producer
 // ─────────────────────────────────────────────────────────────────────
-
-/// Gate for [`populate_joint_state_view`]: run while something is selected
-/// (values are live physics, changing every tick) and once more after a
-/// deselect so the view empties. A quiescent, nothing-selected scene never
-/// pays for the joint scan.
-pub fn joint_state_active(selection: Res<SelectedEntities>, view: Res<JointStateView>) -> bool {
-    selection.primary().is_some() || view.vessel.is_some() || !view.rows.is_empty()
-}
 
 /// Walk `ChildOf` to the top-most ancestor — the vessel root the transform
 /// gizmo / selection machinery operates on.
@@ -160,7 +152,9 @@ fn row_name(entity: Entity, body: Option<Entity>, q_name: &Query<&Name>) -> Stri
 }
 
 /// Producer for [`JointStateView`]: fills the view for the SELECTED vessel
-/// only. Registered via `add_view_model` gated on [`joint_state_active`].
+/// only. Registered via `add_view_model_every_frame`: live joint values change
+/// every physics tick, while the selection guard below keeps the no-selection
+/// path O(1) before any joint or wheel query is iterated.
 #[allow(clippy::too_many_arguments)]
 pub fn populate_joint_state_view(
     mut view: ResMut<JointStateView>,

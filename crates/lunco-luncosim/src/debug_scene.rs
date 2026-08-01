@@ -483,7 +483,7 @@ fn probe_divergence_state(
         p.x, p.y, p.z, q.x, q.y, q.z, q.w, vl.x, vl.y, vl.z, va.x, va.y, va.z
     );
     let mut wheels_found = 0usize;
-    for (wp, pos2, _, lv2, av2) in q_chassis.iter() {
+    for (wp, pos2, lv2, av2) in q_wheels.iter() {
         if !wp.path.starts_with("/RoverComparison/Easy") || wp.path == "/RoverComparison/Easy" {
             continue;
         }

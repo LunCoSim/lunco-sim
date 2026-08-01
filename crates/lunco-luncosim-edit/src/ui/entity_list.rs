@@ -82,6 +82,12 @@ pub struct EntityTreeView {
     pub kids: HashMap<Entity, Vec<Entity>>,
     /// Leaf display label per visible named entity.
     pub labels: HashMap<Entity, String>,
+    /// Direct parent snapshot for visible named entities. The gate compares
+    /// this value rather than trusting a `Changed<ChildOf>` tick: grid and
+    /// celestial systems may re-stamp an identical parent every frame.
+    parents: HashMap<Entity, Entity>,
+    /// The filter value used for the cached tree.
+    show_system: bool,
     /// Set once the first build runs, so the change-gate forces an initial fill.
     built: bool,
 }
@@ -226,6 +232,17 @@ pub(crate) fn populate_entity_tree_view(
         .into_iter()
         .filter(|(entity, _)| shown.get(entity).copied().unwrap_or(false))
         .collect();
+    view.parents = view
+        .labels
+        .keys()
+        .filter_map(|entity| {
+            child_of
+                .get(entity)
+                .copied()
+                .map(|parent| (*entity, parent))
+        })
+        .collect();
+    view.show_system = settings.show_system;
     view.built = true;
 }
 
@@ -249,7 +266,7 @@ pub(crate) fn scene_topology_changed(
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
     changed: Query<
-        Entity,
+        (Entity, &Name, Option<&ChildOf>),
         (
             With<Name>,
             Or<(Changed<Name>, Changed<ChildOf>)>,
@@ -257,7 +274,7 @@ pub(crate) fn scene_topology_changed(
         ),
     >,
     changed_system: Query<
-        Entity,
+        (Entity, &Name, Option<&ChildOf>),
         (
             With<Name>,
             Or<(Changed<Name>, Changed<ChildOf>)>,
@@ -303,17 +320,19 @@ pub(crate) fn scene_topology_changed(
     // not inputs to this view. A change to a node the current view does not show
     // therefore cannot justify rebuilding the entire tree. New mesh/selectable
     // nodes still enter through `added`, then become visible on this rebuild.
-    let visible_changed = changed
-        .iter()
-        .any(|entity| view.labels.contains_key(&entity));
+    let value_changed = |(entity, name, parent): (Entity, &Name, Option<&ChildOf>)| {
+        let Some(cached_label) = view.labels.get(&entity) else {
+            return false;
+        };
+        leaf(name.as_str()) != *cached_label
+            || view.parents.get(&entity).copied() != parent.map(|p| p.parent())
+    };
+    let visible_changed = changed.iter().any(value_changed);
     let visible_added = !added.is_empty();
     let system_churn = settings.show_system
-        && (changed_system
-            .iter()
-            .any(|entity| view.labels.contains_key(&entity))
-            || !added_system.is_empty());
+        && (changed_system.iter().any(value_changed) || !added_system.is_empty());
     let run = !*first
-        || settings.is_changed()
+        || view.show_system != settings.show_system
         || visible_changed
         || visible_added
         || system_churn
