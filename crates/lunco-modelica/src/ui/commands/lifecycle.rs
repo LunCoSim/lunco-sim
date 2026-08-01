@@ -887,6 +887,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
     };
     for result in pending {
         let path = result.path;
+        let read_only_library = lunco_assets::msl::owns_filesystem_path(&path);
         let source = match result.read_result {
             Ok(s) => s,
             Err(e) => {
@@ -934,6 +935,12 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
                     // keeps generation and the op ring coherent without touching
                     // undo. Same semantics as USD's re-open.
                     lunco_doc::FileBacked::reload_base(host.document_mut(), &source);
+                    if read_only_library {
+                        host.document_mut().set_origin(DocumentOrigin::File {
+                            path: path.clone(),
+                            writable: false,
+                        });
+                    }
                     registry.mark_changed(doc);
                 }
                 doc
@@ -942,7 +949,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
                 source,
                 DocumentOrigin::File {
                     path: path.clone(),
-                    writable: true,
+                    writable: !read_only_library,
                 },
             ),
         };

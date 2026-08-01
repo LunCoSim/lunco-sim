@@ -288,22 +288,71 @@ fn running_app_name() -> &'static str {
     })
 }
 
-fn on_open_tab(trigger: On<OpenTab>, mut layout: ResMut<WorkbenchLayout>) {
+fn on_open_tab(
+    trigger: On<OpenTab>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut pending: ResMut<PendingTabRequests>,
+) {
     let ev = *trigger.event();
-    layout.open_instance(ev.kind, ev.instance);
+    if let Some(mut layout) = layout {
+        layout.open_instance(ev.kind, ev.instance);
+    } else {
+        pending.0.push(TabRequest::Open(ev));
+    }
 }
 
 fn on_open_tab_preserve_focus(
     trigger: On<OpenTabPreserveFocus>,
-    mut layout: ResMut<WorkbenchLayout>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut pending: ResMut<PendingTabRequests>,
 ) {
     let ev = *trigger.event();
-    layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore);
+    if let Some(mut layout) = layout {
+        layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore);
+    } else {
+        pending.0.push(TabRequest::OpenPreserveFocus(ev));
+    }
 }
 
-fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
+fn on_close_tab(
+    trigger: On<CloseTab>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut pending: ResMut<PendingTabRequests>,
+) {
     let ev = *trigger.event();
-    layout.close_instance(ev.kind, ev.instance);
+    if let Some(mut layout) = layout {
+        layout.close_instance(ev.kind, ev.instance);
+    } else {
+        pending.0.push(TabRequest::Close(ev));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TabRequest {
+    Open(OpenTab),
+    OpenPreserveFocus(OpenTabPreserveFocus),
+    Close(CloseTab),
+}
+
+#[derive(Resource, Default)]
+struct PendingTabRequests(Vec<TabRequest>);
+
+fn drain_pending_tab_requests(
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut pending: ResMut<PendingTabRequests>,
+) {
+    let Some(mut layout) = layout else {
+        return;
+    };
+    for request in std::mem::take(&mut pending.0) {
+        match request {
+            TabRequest::Open(ev) => layout.open_instance(ev.kind, ev.instance),
+            TabRequest::OpenPreserveFocus(ev) => {
+                layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore)
+            }
+            TabRequest::Close(ev) => layout.close_instance(ev.kind, ev.instance),
+        }
+    }
 }
 
 /// Bring a registered singleton panel forward in the dock.
@@ -620,6 +669,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(perspective_help::PerspectiveHelpPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<PendingTabRequests>()
             .init_resource::<PendingPanelFocus>()
             .init_resource::<HelpAnchors>()
             .init_resource::<DockSizes>()
@@ -644,6 +694,7 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
+            .add_systems(Update, drain_pending_tab_requests)
             .add_systems(
                 Update,
                 (

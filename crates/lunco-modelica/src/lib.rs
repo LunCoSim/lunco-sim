@@ -1178,8 +1178,11 @@ impl ModelicaCompiler {
                     std::collections::hash_map::Entry::Occupied(_) => {}
                 }
             }
-            if self.session.add_document(uri, &stripped).is_ok() {
-                inserted += 1;
+            match self.session.add_document(uri, &stripped) {
+                Ok(()) => inserted += 1,
+                Err(error) => log::warn!(
+                    "[ModelicaCompiler] source root `{id}`: could not seat {uri}: {error}"
+                ),
             }
         }
         rumoca_compile::compile::SourceRootLoadReport {

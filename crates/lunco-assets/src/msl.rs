@@ -110,6 +110,24 @@ pub fn has_msl_source() -> bool {
     !global_msl_sources().is_empty()
 }
 
+/// Returns whether `path` belongs to an installed filesystem-backed MSL
+/// source root.
+///
+/// MSL is a library asset, not authored user source. Keeping this ownership
+/// query here prevents consumers from duplicating cache-layout knowledge and
+/// accidentally classifying a cached library file as writable.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn owns_filesystem_path(path: &std::path::Path) -> bool {
+    global_msl_sources()
+        .iter()
+        .any(|source| matches!(source, MslAssetSource::Filesystem(root) if path.starts_with(root)))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn owns_filesystem_path(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// Read a relative (or root-joined) path's bytes from the first root
 /// that has it.
 pub fn msl_read(rel: &std::path::Path) -> Option<Vec<u8>> {

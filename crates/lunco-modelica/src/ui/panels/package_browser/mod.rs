@@ -483,6 +483,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     } else {
         Some(class.qualified())
     };
+    let read_only_library = lunco_assets::msl::owns_filesystem_path(&path);
     // Non-`.mo` files have no Modelica classes to render in Canvas
     // mode — default the tab to Text mode so the user sees the raw
     // file contents instead of an empty diagram.
@@ -500,6 +501,18 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         .resource::<ModelicaDocumentRegistry>()
         .find_by_path(&path);
     if let Some(doc) = already_open {
+        if read_only_library {
+            if let Some(host) = world
+                .resource_mut::<ModelicaDocumentRegistry>()
+                .host_mut(doc)
+            {
+                host.document_mut()
+                    .set_origin(lunco_doc::DocumentOrigin::File {
+                        path: path.clone(),
+                        writable: false,
+                    });
+            }
+        }
         // Re-Opening an already-open file reloads it from disk so external
         // edits (an editor, a tool, an agent writing the `.mo`) are picked up
         // — previously this just focused the stale tab. Read synchronously
@@ -565,7 +578,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         .to_string();
     let origin = lunco_doc::DocumentOrigin::File {
         path: path.clone(),
-        writable: true,
+        writable: !read_only_library,
     };
     let path_for_task = path.clone();
     let task = AsyncComputeTaskPool::get().spawn(async move {

@@ -31,9 +31,22 @@ pub struct Options {
     /// When `Some`, only warm-compile the listed fully-qualified
     /// class names. Implies `warm = true`.
     pub warm_only: Option<Vec<String>>,
+    /// Native source root to index. `None` selects the canonical MSL cache;
+    /// the workbench sets this when a user configured a local MSL root.
+    pub(crate) source_root: Option<std::path::PathBuf>,
 }
 
 impl Options {
+    /// Index the supplied native MSL root while writing generated artifacts
+    /// beside that root. The CLI keeps using the canonical cache through
+    /// [`Default`].
+    pub(crate) fn for_source_root(source_root: std::path::PathBuf) -> Self {
+        Self {
+            source_root: Some(source_root),
+            ..Self::default()
+        }
+    }
+
     /// Parse from CLI args. Calls `std::process::exit` on unknown
     /// arguments or `--help` — only suitable from the binary entry
     /// point, not from inside the running app.
@@ -1030,8 +1043,9 @@ impl MSLIndexer {
 /// bundle builder ([`parse_native_msl_bundle`]) so both resolve exactly
 /// the same libraries. Roots come from `lunco-assets` (`msl_dir`/
 /// `cache_dir`) + `discover_third_party_libs`.
-pub(crate) fn native_msl_roots() -> (Vec<(std::path::PathBuf, String)>, Vec<std::path::PathBuf>) {
-    let msl_root = lunco_assets::msl_dir();
+pub(crate) fn native_msl_roots(
+    msl_root: &std::path::Path,
+) -> (Vec<(std::path::PathBuf, String)>, Vec<std::path::PathBuf>) {
     let mut dirs: Vec<(std::path::PathBuf, String)> = Vec::new();
     let mut files: Vec<std::path::PathBuf> = Vec::new();
 
@@ -1109,7 +1123,8 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
     use rayon::prelude::*;
-    let (root_dirs, companion_files) = native_msl_roots();
+    let msl_root = lunco_assets::msl_dir();
+    let (root_dirs, companion_files) = native_msl_roots(&msl_root);
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for (dir, _prefix) in &root_dirs {
         collect_mo_files(dir, &mut paths);
@@ -1203,7 +1218,10 @@ pub fn run_with_cancel(
         println!("[indexer] using rumoca parse cache at {}", target.display());
     }
 
-    let msl_root = lunco_assets::msl_dir();
+    let msl_root = opts
+        .source_root
+        .clone()
+        .unwrap_or_else(lunco_assets::msl_dir);
     let msl_path = msl_root.join("Modelica");
     if !msl_path.exists() {
         println!("[indexer] MSL not found at {:?}", msl_path);
@@ -1227,7 +1245,7 @@ pub fn run_with_cancel(
     // `Complex.mo`, referenced by Modelica.Fluid / ComplexBlocks)
     // separately, since the indexer keys flat files by declared class name
     // and folder packages by their `package.mo` `within` shape.
-    let (root_dirs, companion_files) = native_msl_roots();
+    let (root_dirs, companion_files) = native_msl_roots(&msl_root);
     for (dir, prefix) in &root_dirs {
         bail_if_cancelled!();
         println!("[indexer] scanning `{}` at {:?}", prefix, dir);

@@ -600,7 +600,7 @@ impl ModelicaEngine {
         // Fast path: class_to_uri was populated when this AST was
         // installed via upsert_document_with_ast / install_parsed_ast /
         // load_library_files.
-        let file_uri: Option<String> = self.class_to_uri.get(qualified).cloned();
+        let mapped_uri: Option<String> = self.class_to_uri.get(qualified).cloned();
 
         // Prefix path: `index_ast_classes` records only a file's TOP-LEVEL
         // class key (e.g. `SatelliteDatacenter` for a user file that also
@@ -610,7 +610,7 @@ impl ModelicaEngine {
         // `class_to_uri` (segment-boundary) so the most specific file wins.
         // This resolves user-model nested classes in O(map) WITHOUT falling
         // through to the MSL-bundle scan — the path that caused the storm.
-        let file_uri = file_uri.or_else(|| {
+        let mapped_uri = mapped_uri.or_else(|| {
             let mut best: Option<(usize, &String)> = None;
             for (q, uri) in self.class_to_uri.iter() {
                 let is_container =
@@ -621,6 +621,26 @@ impl ModelicaEngine {
             }
             best.map(|(_, uri)| uri.clone())
         });
+
+        // A URI prefix is only a candidate. MSL packages commonly split
+        // children into sibling files (`Blocks/package.mo` contains the
+        // package and examples, while `Continuous.mo` contains Continuous),
+        // so a package URI must not shadow the indexed file that actually
+        // contains the requested nested class.
+        if let Some(uri) = mapped_uri.as_deref() {
+            if let Some(parsed) = self.session.parsed_file_query(uri) {
+                if let Some(found) =
+                    crate::diagram::find_class_by_qualified_name(&parsed, qualified).cloned()
+                {
+                    return Some(found);
+                }
+            }
+            bevy::log::debug!(
+                "[engine] class_def: mapped URI `{}` does not contain {}; resolving by source index",
+                uri,
+                qualified
+            );
+        }
 
         // Slow fallback: the class arrived via replace_parsed_source_set
         // (e.g. the bulk MSL install), which bypasses add_document and
@@ -637,8 +657,7 @@ impl ModelicaEngine {
         // multi-file (engine/class_cache/msl_remote) and MSL resolution is
         // regression-prone (nested-URI / within-prefix). See
         // docs/architecture/engineering-backlog-and-standards.md.
-        let file_uri = file_uri.or_else(|| {
-            let bundle = crate::msl_remote::parsed_msl_bundle()?;
+        let file_uri = crate::msl_remote::parsed_msl_bundle().and_then(|bundle| {
             // A `.mo` that declares top-level qualified class `q` (= within +
             // top-level key) ALSO contains every class nested under it (MSL
             // packs whole packages per file, e.g. `Modelica/Blocks/Examples.mo`
@@ -687,12 +706,6 @@ impl ModelicaEngine {
             );
             return None;
         };
-        // Cache the bridged URI (prefix- or bundle-resolved) so subsequent
-        // lookups are O(1) exact hits and never re-scan.
-        self.class_to_uri
-            .entry(qualified.to_string())
-            .or_insert_with(|| file_uri.clone());
-
         let Some(parsed) = self.session.parsed_file_query(&file_uri) else {
             bevy::log::warn!(
                 "[engine] class_def: parsed_file_query failed for uri {} (class {})",
@@ -708,15 +721,21 @@ impl ModelicaEngine {
         // for `Foo.Bar` (the segment walk would look for "Foo" in
         // `parsed.classes`, which is keyed under "Bar"). Same bug
         // class as `walk_qualified` and `lookup_class_mut` had.
-        let found = crate::diagram::find_class_by_qualified_name(&parsed, qualified).cloned();
-        if found.is_none() {
-            bevy::log::warn!(
-                "[engine] class_def: find_class_by_qualified_name failed for {} in uri {}",
-                qualified,
-                file_uri
+        let Some(found) = crate::diagram::find_class_by_qualified_name(&parsed, qualified).cloned()
+        else {
+            self.class_uri_misses.insert(qualified.to_string());
+            bevy::log::debug!(
+                "[engine] class_def: indexed URI `{}` does not contain {}",
+                file_uri,
+                qualified
             );
-        }
-        found
+            return None;
+        };
+
+        // Cache only a URI that was proven to contain the requested class.
+        self.class_to_uri
+            .insert(qualified.to_string(), file_uri.clone());
+        Some(found)
     }
 
     /// Whether `qualified` resolves to a class currently in the

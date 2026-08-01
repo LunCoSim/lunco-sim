@@ -648,14 +648,17 @@ pub(crate) fn render_compile_class_picker(
 /// — i.e. run the loaded example in place, never a temp copy. User documents
 /// (Untitled scratch, writable files) and bundled examples are NOT in the
 /// session, so they overlay their full source as before.
-fn compile_overlay_source(document: &crate::document::ModelicaDocument) -> String {
-    if matches!(
-        document.origin(),
-        lunco_doc::DocumentOrigin::File {
-            writable: false,
-            ..
+fn is_library_document(document: &crate::document::ModelicaDocument) -> bool {
+    match document.origin() {
+        lunco_doc::DocumentOrigin::File { path, writable } => {
+            !writable || lunco_assets::msl::owns_filesystem_path(path)
         }
-    ) {
+        _ => false,
+    }
+}
+
+fn compile_overlay_source(document: &crate::document::ModelicaDocument) -> String {
+    if is_library_document(document) {
         String::new()
     } else {
         document.source().to_string()
@@ -1104,7 +1107,7 @@ pub fn on_compile_model(
                 // A read-only library doc (a drilled-in MSL class) is already
                 // in the loaded session — overlaying it as a cross-doc source
                 // would re-register its class and duplicate-collide. Skip.
-                if host.document().origin().is_read_only() {
+                if is_library_document(host.document()) {
                     return None;
                 }
                 let names = class_names_of(other_doc);

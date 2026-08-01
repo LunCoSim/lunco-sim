@@ -751,13 +751,31 @@ impl Plugin for MslRemotePlugin {
                     root.display()
                 );
                 lunco_assets::msl::install_global_msl_sources(sources_with_extras(
-                    MslAssetSource::Filesystem(root),
+                    MslAssetSource::Filesystem(root.clone()),
                 ));
-                app.insert_resource(MslLoadState::Ready {
-                    file_count: count,
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                });
+                if crate::visual_diagram::msl_index_available() {
+                    app.insert_resource(MslLoadState::Ready {
+                        file_count: count,
+                        compressed_bytes: 0,
+                        uncompressed_bytes: 0,
+                    });
+                } else {
+                    info!(
+                        "[MSL] source root is present but its generated editor index is missing; +                         indexing in the background"
+                    );
+                    let slot: NativeInstallSlot =
+                        Arc::new(Mutex::new(NativeInstallSlotInner::default()));
+                    let cancel = MslInstallCancel::default();
+                    app.insert_resource(MslLoadState::Loading {
+                        phase: MslLoadPhase::Parsing,
+                        bytes_done: 0,
+                        bytes_total: 0,
+                    });
+                    app.insert_resource(NativeMslInstallSlot(slot.clone()));
+                    app.insert_resource(cancel.clone());
+                    app.add_systems(Update, drain_native_msl_install);
+                    spawn_native_index(slot, cancel.0, root);
+                }
             } else {
                 if !network_allowed {
                     info!("[MSL] no on-disk root and network access is disabled; skipping the MSL download");
@@ -912,6 +930,50 @@ struct NativeInstallSlotInner {
 struct NativeMslInstallSlot(NativeInstallSlot);
 
 #[cfg(not(target_arch = "wasm32"))]
+fn spawn_native_index(
+    slot: NativeInstallSlot,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    root: std::path::PathBuf,
+) {
+    bevy::tasks::AsyncComputeTaskPool::get()
+        .spawn(async move {
+            bevy::log::info!("[MSL] indexing editor metadata for {}…", root.display());
+            let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::indexer::run_with_cancel(
+                    crate::indexer::Options::for_source_root(root.clone()),
+                    Some(cancel.clone()),
+                );
+            }))
+            .is_ok();
+
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                set_install_state(&slot, MslLoadState::Failed("cancelled".into()));
+                return;
+            }
+            if !completed || !crate::visual_diagram::msl_index_available() {
+                set_install_state(
+                    &slot,
+                    MslLoadState::Failed(format!(
+                        "MSL editor index was not generated at {}",
+                        root.join("msl_index.json").display()
+                    )),
+                );
+                return;
+            }
+
+            set_install_state(
+                &slot,
+                MslLoadState::Ready {
+                    file_count: count_mo_files(&root),
+                    compressed_bytes: 0,
+                    uncompressed_bytes: 0,
+                },
+            );
+        })
+        .detach();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::AtomicBool>) {
     use lunco_assets::download::AssetManifest;
 
@@ -1029,29 +1091,9 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
             inner.pending_version = version;
         }
 
-        // ── Indexer (best-effort, in-process) ─────────────────────
-        // Same workflow the `msl_indexer` binary uses. The runtime
-        // parse path still works without the bincode cache, just
-        // slower; any panic inside `run` is logged and swallowed.
-        bevy::log::info!("[MSL] running indexer to warm parsed-msl.bin cache…");
-        let cancel_for_indexer = cancel_for_task.clone();
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::indexer::run_with_cancel(
-                crate::indexer::Options::default(),
-                Some(cancel_for_indexer),
-            );
-        }));
-
-        // Indexer done — flip the chip to Ready.
-        let file_count = count_mo_files(&root);
-        set_install_state(
-            &slot,
-            MslLoadState::Ready {
-                file_count,
-                compressed_bytes: 0,
-                uncompressed_bytes: 0,
-            },
-        );
+        // The same indexer repairs both generated artifacts and flips the chip
+        // to Ready only after the editor metadata has been validated.
+        spawn_native_index(slot, cancel_for_task, root);
     })
     .detach();
 }

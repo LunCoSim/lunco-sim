@@ -27,6 +27,20 @@ use crate::ui::MODEL_VIEW_KIND;
 
 const KIND: &str = "modelica";
 
+fn restore_origin(origin: &lunco_doc::DocumentOrigin) -> lunco_doc::DocumentOrigin {
+    match origin {
+        lunco_doc::DocumentOrigin::File { path, .. }
+            if lunco_assets::msl::owns_filesystem_path(path) =>
+        {
+            lunco_doc::DocumentOrigin::File {
+                path: path.clone(),
+                writable: false,
+            }
+        }
+        _ => origin.clone(),
+    }
+}
+
 /// Per-domain hot-exit codec for Modelica documents.
 pub struct ModelicaSessionCodec;
 
@@ -136,9 +150,10 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         // we open it here ourselves. Without this the restored doc lives
         // in the registry with no visible tab and the centre shows only
         // Welcome. The saved camera is applied in `apply_view_state`.
+        let origin = restore_origin(&snap.origin);
         let new_id = world
             .get_resource_mut::<ModelicaDocumentRegistry>()?
-            .allocate_with_origin(snap.source.clone(), snap.origin.clone());
+            .allocate_with_origin(snap.source.clone(), origin);
         let tab_id = world.resource_mut::<ModelTabs>().ensure_for(new_id, None);
         world.commands().trigger(OpenTab {
             kind: MODEL_VIEW_KIND,

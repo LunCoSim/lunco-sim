@@ -441,6 +441,13 @@ pub fn msl_bundled_nodes() -> &'static [crate::package_tree::types::PackageNode]
     msl_index().map(|i| i.bundled.as_slice()).unwrap_or(&[])
 }
 
+/// Whether the generated palette/example index is present and in the current
+/// runtime format. Native startup uses this as part of MSL readiness; a source
+/// tree without its index is usable for parsing but cannot populate the editor.
+pub fn msl_index_available() -> bool {
+    msl_index().is_some()
+}
+
 fn msl_index() -> Option<&'static MslIndex> {
     if let Some(idx) = MSL_LIBRARY.get() {
         return Some(idx);

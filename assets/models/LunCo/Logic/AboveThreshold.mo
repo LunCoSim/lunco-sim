@@ -1,7 +1,6 @@
 within LunCo.Logic;
-block AboveThreshold
+block AboveThreshold "Branch-free 0..1 indication that a signal is above a threshold"
   extends LunCo.Icons.Logic;
-  "Branch-free 0..1 indication that a signal is above a threshold"
   parameter Real threshold = 0.0 "Activation threshold";
   parameter Real transition_width = 1.0 "Width of the clamped transition";
   input Real value = 0.0;

@@ -13,6 +13,7 @@
 //! screen. These tests pin the resolution so it cannot regress into silence.
 
 use lunco_modelica::ModelicaCompiler;
+use rumoca_compile::Session;
 use rumoca_sim::{SimOptions, SimulationSession};
 
 fn package_member(suffix: &str) -> String {
@@ -21,6 +22,29 @@ fn package_member(suffix: &str) -> String {
         .find(|(path, _)| path.ends_with(suffix))
         .map(|(_, src)| src)
         .unwrap_or_else(|| panic!("{suffix} is part of the shipped LunCo package"))
+}
+
+#[test]
+fn lunco_logic_class_is_registered_in_a_rumoca_session() {
+    let mut session = Session::default();
+    let files = lunco_assets::models::package_files("LunCo");
+    assert!(!files.is_empty());
+    for (uri, source) in files {
+        session
+            .add_document(&uri, &source)
+            .unwrap_or_else(|error| panic!("{uri}: {error}"));
+    }
+    for qualified in [
+        "LunCo.Propulsion.BellNozzle",
+        "LunCo.Pointing.SunTracker",
+        "LunCo.Logic.AboveThreshold",
+    ] {
+        eprintln!("{qualified}: {:?}", session.class_lookup_query(qualified));
+    }
+    assert_eq!(
+        session.class_lookup_query("LunCo.Logic.AboveThreshold"),
+        Some("LunCo.Logic.AboveThreshold".to_string())
+    );
 }
 
 /// The regression itself: a package member compiles, by the short name the USD
@@ -158,6 +182,28 @@ fn earth_tracker_package_member_compiles() {
         "lunco://models/LunCo/Pointing/EarthTracker.mo",
     );
     assert!(result.is_ok(), "EarthTracker: {:?}", result.err());
+}
+
+#[test]
+fn nested_logic_package_member_compiles_with_its_inline_icon_base() {
+    let mut compiler = ModelicaCompiler::new();
+    let result = compiler.compile_str(
+        "AboveThreshold",
+        &package_member("Logic/AboveThreshold.mo"),
+        "lunco://models/LunCo/Logic/AboveThreshold.mo",
+    );
+    assert!(result.is_ok(), "AboveThreshold: {:?}", result.err());
+}
+
+#[test]
+fn lander_resolves_nested_logic_dependency() {
+    let mut compiler = ModelicaCompiler::new();
+    let result = compiler.compile_str(
+        "Lander",
+        lunco_modelica::models::get_model("Lander.mo").expect("bundled Lander.mo"),
+        "lunco://models/Lander.mo",
+    );
+    assert!(result.is_ok(), "Lander: {:?}", result.err());
 }
 
 /// The library must be seated from the DISK tree, not the `include_dir!` snapshot
