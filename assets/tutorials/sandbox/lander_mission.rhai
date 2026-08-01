@@ -44,19 +44,75 @@ fn human_drives(id) {
     role != () && role != "AiAgent"
 }
 
+fn lander_touchdown_message(me) {
+    hint("Touchdown. The mission is about to cut the rover loose.");
+}
+
+fn lander_deployed_message(me) {
+    hint("The rover is driving itself. Take it: click the rover, or press F.");
+}
+
+fn lander_human_takeover(me) {
+    hint("You have the rover. Drive it through the glowing waypoint gates with W / A / S / D.");
+}
+
+fn lander_human_has_control(me) {
+    human_drives(find("/LanderTest/SkidRover"))
+}
+
+fn lander_at_final_gate(me) {
+    let d = distance(find("/LanderTest/SkidRover"), find("/LanderTest/RoverTarget3"));
+    d >= 0.0 && d < 6.0
+}
+
+fn lander_course_finished(me) {
+    notify_kind("Course complete — mission accomplished!", "success");
+}
+
+fn lander_autopilot_takeover(me) {
+    cmd("PossessVessel", #{ target: find("/LanderTest/SkidRover") });
+    notify_kind("[debug] auto-takeover — driving the course", "info");
+}
+
+fn lander_drive_gate_1(me) {
+    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget1")), 0.7, 4.0)
+}
+
+fn lander_gate_1_done(me) {
+    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget1")), 4.0)
+}
+
+fn lander_drive_gate_2(me) {
+    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget2")), 0.7, 4.0)
+}
+
+fn lander_gate_2_done(me) {
+    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget2")), 4.0)
+}
+
+fn lander_drive_gate_3(me) {
+    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget3")), 0.7, 4.0)
+}
+
+fn lander_gate_3_done(me) {
+    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget3")), 4.0)
+}
+
+fn lander_brake(me) {
+    brake(find("/LanderTest/SkidRover"))
+}
+
 fn mission(me) {
     // Scene paths as LOCALS so the closures capture them (named fns can't see
     // module consts; closures capture enclosing locals) — same idiom as
     // first_drive.rhai. Each objective completes on a real event / world state.
-    let rover = "/LanderTest/SkidRover";
-    let goal  = "/LanderTest/RoverTarget3";   // the final gate of the 3-gate course
     [
         // 1 — passive: the lander's own supervisor emits `lander_touchdown` when it
         // settles on its legs. We just wait for that event (no polling the descent).
         objective("touchdown", #{
             text: "Watch the powered descent land the rover",
             requires_event: "lander_touchdown",
-            on_complete: |m| hint("Touchdown. The mission is about to cut the rover loose."),
+            on_complete: Fn("lander_touchdown_message"),
         }),
         // 2 — passive: the scene detaches the joint and announces `rover_deployed`.
         // Its own step in the checklist, because from the student's seat "the rover
@@ -66,15 +122,15 @@ fn mission(me) {
             text: "Wait for the rover to be released",
             requires: ["touchdown"],
             requires_event: "rover_deployed",
-            on_complete: |m| hint("The rover is driving itself. Take it: click the rover, or press F."),
+            on_complete: Fn("lander_deployed_message"),
         }),
         // 3 — take over. Completes when a PERSON holds the rover, however they got
         // it. NOT an event latch: possessing the lander must not satisfy this.
         objective("takeover", #{
             text: "Take control of the deployed rover (click it or press F)",
             requires: ["deploy"],
-            done: |m| human_drives(find(rover)),
-            on_complete: |m| hint("You have the rover. Drive it through the glowing waypoint gates with W / A / S / D."),
+            done: Fn("lander_human_has_control"),
+            on_complete: Fn("lander_human_takeover"),
         }),
         // 4 — drive the course home. Gated on the takeover, then completes on a
         // plain distance read to the final gate. dwell 0.4s so a fly-through won't
@@ -82,9 +138,9 @@ fn mission(me) {
         objective("finish", #{
             text: "Drive the rover to the final waypoint",
             requires: ["takeover"],
-            done: |m| { let d = distance(find(rover), find(goal)); d >= 0.0 && d < 6.0 },
+            done: Fn("lander_at_final_gate"),
             dwell: 0.4,
-            on_complete: |m| notify_kind("Course complete — mission accomplished!", "success"),
+            on_complete: Fn("lander_course_finished"),
         }),
     ]
 }
@@ -114,18 +170,12 @@ fn task(me) {
     seq([
         wait_for("rover_deployed"),
         wait(0.5),
-        once(|m| {
-            cmd("PossessVessel", #{ target: find("/LanderTest/SkidRover") });
-            notify_kind("[debug] auto-takeover — driving the course", "info");
-        }),
+        once(Fn("lander_autopilot_takeover")),
         // The autopilot yielded on possession, so nothing is steering. Drive the
         // three gates ourselves, exactly as a student would.
-        step(|m| nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget1")), 0.7, 4.0),
-             |m| arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget1")), 4.0)),
-        step(|m| nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget2")), 0.7, 4.0),
-             |m| arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget2")), 4.0)),
-        step(|m| nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget3")), 0.7, 4.0),
-             |m| arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget3")), 4.0)),
-        #{ act: |m| brake(find("/LanderTest/SkidRover")), secs: 1.0 },
+        step(Fn("lander_drive_gate_1"), Fn("lander_gate_1_done")),
+        step(Fn("lander_drive_gate_2"), Fn("lander_gate_2_done")),
+        step(Fn("lander_drive_gate_3"), Fn("lander_gate_3_done")),
+        #{ act: Fn("lander_brake"), secs: 1.0 },
     ])
 }

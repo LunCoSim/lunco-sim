@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "FirstDrive"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Runs the actual built-in First Drive lesson in unattended mode. The second
+# program is an observer/verdict only; it must not provide a second drive path.
+def Xform "FirstDrive" (
+    prepend references = @lunco://tutorials/sandbox/first_drive.usda@</FirstDrive>
+)
+{
+    custom string lunco:scenario = "tutorial-first-drive"
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
+    }
+
+    # A second Rhai program cannot share the FirstDrive owner: one owner has one
+    # ScriptedModel. Give the verdict observer its own host so both the lesson
+    # and the observer execute instead of the later source replacing the first.
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_first_drive.rhai@
+        }
+    }
+}

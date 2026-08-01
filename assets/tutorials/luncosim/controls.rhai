@@ -1,41 +1,83 @@
-//! LunCoSim Controls — camera focus, vessels, and taking command.
+//! LunCoSim Authority Handoff — a real control-state lesson.
 //!
-//! A guided coach-mark tour (advances on Next / Back / Skip). Follows the
-//! Welcome tour in the onboarding chain. Pure narration — safe everywhere,
-//! no dependency on specific scene entities.
+//! The learner performs the two meaningful actions: take a rover from the
+//! simulation and release it again. The checklist reads the authoritative
+//! controller state, so a command aimed at the wrong entity cannot pass the
+//! lesson merely because some other vessel was possessed.
 
-fn steps() {
-    [
-        #{ anchor: "", title: "Focus a body",      body: "Select a celestial body (Earth, Moon) to orbit the camera around it. The camera frames it automatically." },
-        #{ anchor: "", title: "Fly the camera",    body: "The avatar camera has several rigs — orbit a body, free-fly through space, or ride along a vessel. Right-drag + scroll to move." },
-        #{ anchor: "", title: "Take command",      body: "Select a vessel and possess it to fly or drive it yourself. Release control and its autopilot takes back over — the same `piloted` handoff a real GNC uses." },
-        #{ anchor: "", title: "Mission Control",   body: "The right-hand panel shows live mission telemetry — time, epoch, and vessel state, updating every frame." },
-        #{ anchor: "", title: "You're set!",       body: "Explore the system, warp time, and take a vessel for a spin. Pick another lesson any time from the Tutorials panel." },
-    ]
+fn human_drives(id) {
+    if id < 0 { return false; }
+    let role = controller(id);
+    role != () && role != "AiAgent"
 }
 
-fn show(s, i) {
-    let step = s[i];
-    coach(i, s.len(), step.anchor, step.title, step.body);
+fn authority_taken(me) {
+    human_drives(find("/FirstDrive/Rover"))
+}
+
+fn authority_taken_message(me) {
+    clear_spotlight();
+    hint("You own the rover now. Confirm the Command Deck says Driving (you), then release control.");
+    spotlight("panel.command_deck", "Review the live authority state before releasing control.");
+}
+
+fn authority_released(me) {
+    clear_spotlight();
+    notify_kind("Authority handoff complete — the rover is free again.", "success");
+}
+
+fn authority_is_released(me) {
+    !is_controlled(find("/FirstDrive/Rover"))
+}
+
+fn authority_possess(me) {
+    cmd("PossessVessel", #{ target: find("/FirstDrive/Rover") })
+}
+
+fn authority_release(me) {
+    cmd("ReleaseVessel", #{ target: find("/FirstDrive/Rover") })
 }
 
 fn on_start(me) {
-    this.i = 0;
-    show(steps(), 0);
+    hint("Select the rover, open Command Deck, and take control. Watch the status change before releasing it again.");
+    spotlight("panel.command_deck", "The Command Deck is the authoritative handoff surface.");
+    notify_kind("Tutorial: Authority Handoff", "info");
+}
+
+fn mission(me) {
+    [
+        objective("take_control", #{
+            text: "Take control of the rover",
+            done: Fn("authority_taken"),
+            on_complete: Fn("authority_taken_message"),
+        }),
+        objective("release_control", #{
+            text: "Release the rover back to the simulation",
+            requires: ["take_control"],
+            done: Fn("authority_is_released"),
+            dwell: 0.2,
+            on_complete: Fn("authority_released"),
+        }),
+    ]
 }
 
 fn on_event(me, evt) {
-    let s = steps();
-    if evt.name == "cmd:TutorialNext" { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("You're ready — welcome aboard 🚀", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        show(s, this.i);
+    if evt.name == "MISSION_COMPLETE" {
+        hint("Next: drive a rover over a gentle ramp, read its telemetry, and feel what the terrain does to the vehicle.");
+        notify_kind("Authority Handoff complete 🎉", "success");
     }
+}
+
+// Headless verification performs the same possession/release state changes as
+// the learner. The UI path remains manual because this branch is gated by the
+// actual host mode, not by a debug build flag.
+fn task(me) {
+    if !is_unattended() { return; }
+    seq([
+        wait(1.0),
+        once(Fn("authority_possess")),
+        wait(1.0),
+        once(Fn("authority_release")),
+        wait(1.0),
+    ])
 }

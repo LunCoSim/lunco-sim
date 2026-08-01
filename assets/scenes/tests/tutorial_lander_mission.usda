@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "LanderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The scene already owns descent/deployment. The tutorial and verdict observer
+# are separate hosts so neither replaces the scene's rover-surface supervisor.
+def Xform "LanderTest" (
+    prepend references = @lunco://scenes/luncosim/lander_ops.usda@</LanderTest>
+)
+{
+    custom string lunco:scenario = "tutorial-lander-mission"
+
+    def Xform "TutorialHost"
+    {
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://tutorials/sandbox/lander_mission.rhai@
+        }
+    }
+
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_lander_mission.rhai@
+        }
+    }
+}

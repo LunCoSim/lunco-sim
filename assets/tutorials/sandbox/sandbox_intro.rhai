@@ -28,7 +28,7 @@ fn steps() {
         // 9
         #{ anchor: "panel.bottom",          title: "Agentic Workflows",     body: "LunCoSim is built for automation! You can write scripts using Rhai, run co-simulations, or connect external AI coding agents via the HTTP API and MCP tools. Click Next to complete.", require: "next" },
         // 10
-        #{ anchor: "",                      title: "You're ready!",         body: "Now you know the layout, camera, and core concepts. Next up: S1 Moon Driving Basics — take control of a rover and feel a slope.", require: "next" },
+        #{ anchor: "",                      title: "You're ready!",         body: "Now you know the layout, camera, and core concepts. Choose First Drive or Moon Driving Basics from the Tutorials menu when you want to practise.", require: "next" },
     ]
 }
 

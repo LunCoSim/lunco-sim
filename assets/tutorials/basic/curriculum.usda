@@ -31,7 +31,7 @@ def Scope "Basic" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b1_driving_basics.rhai@
-        string lunco:tutorial:title = "1 · Moon Driving Basics"
+        string lunco:tutorial:title = "Moon Driving Basics"
         string lunco:tutorial:blurb = "Take control of a rover — throttle, steer, brake, camera — and climb a gentle ramp to feel wheel slip on a gravel grade."
         uniform token lunco:tutorial:difficulty = "beginner"
         rel lunco:tutorial:next = </Basic/SlopesTipOver>
@@ -43,7 +43,7 @@ def Scope "Basic" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
-        string lunco:tutorial:title = "2 · Slopes & Tip-Over"
+        string lunco:tutorial:title = "Slopes & Tip-Over"
         string lunco:tutorial:blurb = "Climb a borderline grade and feel exactly why a top-heavy rover rolls — plus how to right one that has."
         uniform token lunco:tutorial:difficulty = "beginner"
         rel lunco:tutorial:next = </Basic/RoverVariants>
@@ -55,7 +55,7 @@ def Scope "Basic" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b4_rover_variants.rhai@
-        string lunco:tutorial:title = "3 · Rover Variants"
+        string lunco:tutorial:title = "Rover Variants"
         string lunco:tutorial:blurb = "Drive the three rovers back to back — Explorer LT, Standard, Hauler — and feel how centre of mass and power change the handling."
         uniform token lunco:tutorial:difficulty = "beginner"
         rel lunco:tutorial:next = </Basic/JoinTeam>
@@ -66,7 +66,7 @@ def Scope "Basic" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b5_join_team.rhai@
-        string lunco:tutorial:title = "4 · Join a Team Session"
+        string lunco:tutorial:title = "Join a Team Session"
         string lunco:tutorial:blurb = "Connect to a server, find and possess your rover, and read your telemetry — everything you need to drive with a team."
         uniform token lunco:tutorial:difficulty = "beginner"
     }

@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "FirstDrive"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Runs the actual authority lesson over the same First Drive world.
+def Xform "FirstDrive" (
+    prepend references = @lunco://tutorials/sandbox/first_drive.usda@</FirstDrive>
+)
+{
+    custom string lunco:scenario = "tutorial-authority-handoff"
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/luncosim/controls.rhai@
+    }
+
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_authority_handoff.rhai@
+        }
+    }
+}

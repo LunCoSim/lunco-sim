@@ -71,4 +71,3 @@ fn run_plan(entity, plan, idx, speed, radius) {
     }
     idx
 }
-

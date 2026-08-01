@@ -87,7 +87,7 @@ def Xform "FirstDrive" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
-        double3 xformOp:translate = (14.0, 0.0, 8.0)
+        double3 xformOp:translate = (0.0, 0.0, -18.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
