@@ -156,7 +156,7 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
 
     // "Reached" is LIVE-ONLY in the ECS: recorded in `ReachedWaypoints`, never
     // written into the XML. The mission keeps its leg — reaching a waypoint does
-    // not delete it — and the authored flag goes to the runtime layer instead.
+    // not delete it — and the marker USD is not rewritten.
     let updated_xml = app
         .world()
         .get::<lunco_autopilot::usd_tree::BehaviorXml>(vessel_entity)

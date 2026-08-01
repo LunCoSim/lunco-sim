@@ -62,6 +62,7 @@ pub use big_space_setup::*;
 pub use embedded_assets::*;
 pub use ephemeris::*;
 pub use geo::*;
+pub use globe_lod::GlobeLodBudget;
 pub use gravity::*;
 pub use iau::*;
 pub use kepler::*;
@@ -188,6 +189,7 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
+        app.init_resource::<globe_lod::GlobeLodBudget>();
         // Generic celestial geometry queries (Occultation / BodyPosition /
         // SolarPose) — the domain-free substrate authored subsystems compose
         // over (docs 10/12) — plus the solar-pose tracking system that feeds

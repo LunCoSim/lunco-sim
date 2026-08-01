@@ -115,7 +115,7 @@ pub struct TargetBindings(pub HashMap<String, Entity>);
 /// starts empty). Kept out of the XML on purpose: dropping a new waypoint re-authors
 /// the whole XML through `ApplyUsdOp`, which would otherwise bake this transient
 /// "visited" flag into the saved `.usda`. [`compile_behavior_xml`] reads it to strip
-/// reached legs; `sync_waypoint_visuals` reads it to grey them.
+/// reached legs; route-map/path projections read it to distinguish visited legs.
 #[derive(Component, Debug, Clone, Default)]
 pub struct ReachedWaypoints(pub std::collections::HashSet<String>);
 

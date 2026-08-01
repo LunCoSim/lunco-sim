@@ -1243,15 +1243,11 @@ fn composed_prim_exists(
 /// `ApiEntityRegistry`. The zone is matched by its `TriggerZone("waypoint")`
 /// component + `UsdPrimPath`; the marker prim path is the zone path's parent.
 ///
-/// Reaching a waypoint **deletes nothing**. Two states are written:
-///
-/// 1. the vessel's runtime [`ReachedWaypoints`] set — what the compiled tree
-///    consumes to advance past a completed leg (so the autopilot skips it), and
-/// 2. `lunco:waypoint:reached` on the marker prim, authored into the RUNTIME
-///    layer — session state that never reaches the saved `.usda`.
-///
-/// The mission keeps its leg and the map keeps its pin, so a route can be
-/// reviewed, replayed and re-run.
+/// Reaching a waypoint **deletes nothing**. The vessel's runtime
+/// [`ReachedWaypoints`] set is the authoritative session state consumed by the
+/// compiled tree to advance past a completed leg. The mission keeps its leg and
+/// the map keeps its pin, so a route can be reviewed, replayed and re-run; no
+/// transient arrival flag is authored into USD.
 ///
 /// Scheduled in `FixedPostUpdate` after `PhysicsSystems::Writeback` so it reads
 /// the same tick's collision events (the avian contract

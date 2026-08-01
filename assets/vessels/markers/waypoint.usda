@@ -22,18 +22,9 @@ def Xform "WaypointMarker" (
     uniform bool lunco:spawnable = true
     custom string lunco:waypoint = "true"
 
-    # ── ARRIVAL STATE — authored, not deleted ────────────────────────────────
-    # Reaching a waypoint does NOT remove it: the leg stays in the mission and
-    # the marker stays on the map, so a route can be reviewed, replayed and
-    # re-run. Arrival flips this flag in the RUNTIME layer (session state, not
-    # the saved scene), driven by the `enter:` event this marker's own trigger
-    # zone fires — never a per-tick distance poll.
-    custom bool lunco:waypoint:reached = false
-
-    # Both palettes live HERE, in the asset, because a waypoint's livery is
-    # authored content — Rust selects between them, it does not define them.
-    custom color3f lunco:waypoint:color:active = (0.35, 1.0, 0.6)
-    custom color3f lunco:waypoint:color:reached = (0.45, 0.47, 0.5)
+    # Arrival is session state on the vessel's `ReachedWaypoints` component.
+    # The marker remains authored geometry and is never rewritten or deleted
+    # when a route leg completes. This keeps the scene reusable and replayable.
 
     # Emission REQUIRES a material. `displayColor` and `displayOpacity` are real
     # UsdGeomGprim primvars and stay on the geometry, but USD has no "display

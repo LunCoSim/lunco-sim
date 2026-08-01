@@ -245,7 +245,7 @@ pub(crate) fn apply_look_to_tiles(
     for entity in tiles.resident.values() {
         commands.entity(*entity).try_insert(look.clone());
     }
-    for (entity, _) in &tiles.retiring {
+    for (entity, _, _) in &tiles.retiring {
         commands.entity(*entity).try_insert(look.clone());
     }
 }

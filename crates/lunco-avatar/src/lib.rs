@@ -15,6 +15,7 @@
 //!
 //! Transitions use `FrameBlend` with pre-computed endpoints for smooth "frame handoffs."
 
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
@@ -121,7 +122,7 @@ impl Default for MouseSensitivity {
 /// Tracks cumulative mouse scroll delta for zoom control.
 ///
 /// Per-avatar mouse-wheel zoom accumulator. Fed each frame by
-/// [`collect_camera_zoom`] from the `UserIntent::Zoom` axis (gated on
+/// [`collect_camera_zoom`] from Bevy's unit-preserving scroll input (gated on
 /// `EguiFocus.wants_pointer` so scrolling over a panel doesn't zoom the scene);
 /// consumed + reset by whichever camera behavior is active. Lives on the avatar
 /// entity — zoom is per-camera state, not a global — replacing the old global
@@ -135,12 +136,12 @@ pub struct CameraZoomInput {
 /// Scroll→zoom sensitivity (unitless; feeds the exponential in
 /// [`apply_scroll_zoom`]).
 ///
-/// ~50× the old `CameraScrollSensitivity` default (0.1): that value was tuned for
-/// the egui bridge's **pixel** scroll deltas (~50 px/notch), but the `Zoom` intent
-/// now comes from leafwing `MouseScrollAxis::Y` in **line** units (~1.0/notch), so
-/// the same feel needs a proportionally larger constant. `5.0` ≈ the old ~5%
-/// zoom-per-notch.
+/// Input is normalized to line units before it reaches this constant. Keeping
+/// conversion at the source boundary makes a pixel-mode touchpad and a
+/// line-mode wheel produce the same camera response.
 const ZOOM_SENSITIVITY: f32 = 5.0;
+const ZOOM_FACTOR_MIN: f64 = 0.75;
+const ZOOM_FACTOR_MAX: f64 = 1.25;
 
 /// Altitude of the orbital zoom's min-distance floor above a celestial body's
 /// surface. Doubles as the scroll-through threshold: one more inward detent
@@ -1167,7 +1168,9 @@ fn apply_scroll_zoom(
     max_dist: f64,
 ) {
     if *scroll_delta != 0.0 {
-        let zoom_factor = (-*scroll_delta as f64 * sens as f64 * 0.01).exp();
+        let zoom_factor = (-*scroll_delta as f64 * sens as f64 * 0.01)
+            .exp()
+            .clamp(ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX);
         *distance = (*distance * zoom_factor).clamp(min_dist, max_dist);
         *scroll_delta = 0.0;
     }
@@ -2376,7 +2379,7 @@ fn freeflight_scroll_transit_system(
         // delta must never become a teleport-sized step.
         let factor = (-zoom.delta as f64 * ZOOM_SENSITIVITY as f64 * 0.01)
             .exp()
-            .clamp(0.75, 1.25);
+            .clamp(ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX);
         let scroll_out = zoom.delta < 0.0;
         zoom.delta = 0.0;
         // Signed dolly step: negative (forward) on scroll-in. The 50 m floor
@@ -2624,30 +2627,39 @@ fn capture_avatar_intent(
     }
 }
 
-/// Mouse-wheel → per-avatar [`CameraZoomInput`], sourced from the `UserIntent::Zoom`
-/// axis and gated on egui pointer capture.
+/// Convert Bevy's accumulated mouse-scroll input to line units.
 ///
-/// This is the single, unified zoom path: it replaces the two bespoke egui
-/// `CameraScroll` bridges (which read `raw_scroll_delta` gated on
-/// `wants_pointer_input()`). The `Zoom` axis is already in the shared
-/// `InputMap<UserIntent>` (`MouseScrollAxis::Y`), so wheel input flows through the
-/// same intent vocabulary as everything else; we accumulate it per-avatar for the
-/// active camera behavior to consume + reset. Zeroed while egui holds the pointer
-/// so scrolling a panel/scrollarea doesn't zoom the scene.
+/// Bevy preserves the unit supplied by the OS/device. Leafwing's
+/// `MouseScrollAxis` exposes only a scalar, so using that axis here loses the
+/// distinction and makes pixel-mode touchpads produce enormous zoom deltas.
+fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
+    match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+    }
+}
+
+/// Mouse-wheel → per-avatar [`CameraZoomInput`], gated on egui pointer capture.
+///
+/// Camera zoom is presentation state, not a vessel control port. It consumes the
+/// unit-preserving Bevy input at this boundary, then accumulates it per avatar for
+/// the active camera behavior to consume + reset.
 fn collect_camera_zoom(
     egui_focus: Res<lunco_core::EguiFocus>,
-    mut q_avatar: Query<(Entity, &IntentState, &mut CameraZoomInput), With<Avatar>>,
+    scroll: Res<AccumulatedMouseScroll>,
+    mut q_avatar: Query<(Entity, &mut CameraZoomInput), With<Avatar>>,
     mut commands: Commands,
 ) {
     if egui_focus.wants_pointer {
         return;
     }
-    for (entity, intent_state, mut zoom) in q_avatar.iter_mut() {
-        let d = intent_state.value(&UserIntent::Zoom);
-        if d.abs() > f32::EPSILON {
-            zoom.delta += d;
-            commands.entity(entity).remove::<lunco_core::ActiveAction>();
-        }
+    let d = normalized_scroll_delta(&scroll);
+    if d.abs() <= f32::EPSILON {
+        return;
+    }
+    for (entity, mut zoom) in q_avatar.iter_mut() {
+        zoom.delta += d;
+        commands.entity(entity).remove::<lunco_core::ActiveAction>();
     }
 }
 
@@ -4435,6 +4447,33 @@ mod tests {
             find_control_owner_from_hit(wheel_mesh, &q_parents, &q_input_ports, &q_ground),
             Some(rover)
         );
+    }
+
+    #[test]
+    fn scroll_units_are_normalized_before_zoom() {
+        let line = AccumulatedMouseScroll {
+            delta: Vec2::new(0.0, 1.0),
+            unit: MouseScrollUnit::Line,
+        };
+        let pixel = AccumulatedMouseScroll {
+            delta: Vec2::new(0.0, MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR),
+            unit: MouseScrollUnit::Pixel,
+        };
+        assert_eq!(normalized_scroll_delta(&line), 1.0);
+        assert_eq!(normalized_scroll_delta(&pixel), 1.0);
+    }
+
+    #[test]
+    fn scroll_zoom_limits_one_frame_to_a_safe_factor() {
+        let mut distance = 100.0;
+        let mut delta = -10_000.0;
+        apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
+        assert_eq!(distance, 125.0);
+
+        let mut distance = 100.0;
+        let mut delta = 10_000.0;
+        apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
+        assert_eq!(distance, 75.0);
     }
 
     /// **A retired avatar camera must leave the viewport candidate pool.**

@@ -27,12 +27,13 @@
 //! no dump, and no clue for the tester. Converting a crash into a silent
 //! infinite loop is worse than crashing.
 //!
-//! So a repeated error escalates through [`Ladder`], a three-rung ladder:
+//! So a repeated error escalates through [`Ladder`], a resource-aware ladder:
 //!
 //! | rung | when | what |
 //! |---|---|---|
 //! | `Healthy` | — | drop the bad frame, log rate-limited (transient skew) |
-//! | `ShadowMapsOff` | first non-transient error | turn shadow maps off on every light — the reported failure IS the shadow atlas, and this releases it |
+//! | `ShadowMapsOff` | first shadow-map failure | turn shadow maps off on every light — this releases the named atlas |
+//! | `PersistentFailure` | first non-shadow failure | preserve scene state and wait for a bounded give-up decision |
 //! | `GaveUp` | still failing [`GIVE_UP_AFTER_SECS`] later, or device lost | deactivate every camera, log once, loudly |
 //!
 //! `GaveUp` stops the null loop rather than the process: the sim, the API and
@@ -55,7 +56,7 @@
 //!   -error with a logging handler, so the render system no longer unwinds
 //!   mid-frame and panic (2) is avoided.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use bevy::prelude::*;
@@ -66,8 +67,9 @@ use bevy::render::{
     settings::WgpuSettings,
     RenderApp, RenderStartup,
 };
+use bevy_egui::{egui, EguiContexts};
 
-/// How long a failure must persist *after* shadow maps have been turned off
+/// How long a failure must persist after the applicable recovery decision
 /// before presentation is abandoned.
 ///
 /// Measured in wall-clock, not frames, deliberately: the failure mode this exists
@@ -153,6 +155,9 @@ pub struct RenderHealth {
     device_lost: AtomicBool,
     /// Once presentation is abandoned, suppress the render-thread error storm.
     presentation_stopped: AtomicBool,
+    /// Last failure class observed by the callback. This keeps recovery aligned
+    /// with the resource that actually failed instead of guessing from totals.
+    last_failure_kind: AtomicU8,
 }
 
 impl RenderHealth {
@@ -161,6 +166,35 @@ impl RenderHealth {
     }
     fn device_lost(&self) -> bool {
         self.device_lost.load(Ordering::Relaxed)
+    }
+    fn failure_kind(&self) -> FailureKind {
+        FailureKind::from_u8(self.last_failure_kind.load(Ordering::Relaxed))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum FailureKind {
+    #[default]
+    Other = 0,
+    ShadowMap = 1,
+    OutOfMemory = 2,
+}
+
+impl FailureKind {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::ShadowMap,
+            2 => Self::OutOfMemory,
+            _ => Self::Other,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Other => "a render validation/internal fault",
+            Self::ShadowMap => "a shadow-map allocation/validation fault",
+            Self::OutOfMemory => "out of memory",
+        }
     }
 }
 
@@ -179,12 +213,64 @@ pub struct RenderGaveUp {
     pub reason: String,
 }
 
+/// Persistent presentation warning shown while the simulation is still alive.
+#[derive(Resource, Clone, Debug)]
+pub struct RenderWarning {
+    /// Human-readable warning shown in the workbench overlay.
+    pub message: String,
+}
+
+/// Keep a render-health decision visible in the surviving workbench UI.
+pub(crate) fn draw_render_recovery_banner(
+    mut egui_ctx: EguiContexts,
+    warning: Option<Res<RenderWarning>>,
+    gave_up: Option<Res<RenderGaveUp>>,
+) {
+    let (title, message, color) = if let Some(gave_up) = gave_up {
+        (
+            "⚠  PRESENTATION STOPPED",
+            gave_up.reason.clone(),
+            egui::Color32::from_rgb(255, 120, 120),
+        )
+    } else if let Some(warning) = warning {
+        (
+            "⚠  RENDERING DEGRADED",
+            warning.message.clone(),
+            egui::Color32::from_rgb(255, 210, 110),
+        )
+    } else {
+        return;
+    };
+
+    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
+    let screen = ctx.content_rect();
+    egui::Area::new(egui::Id::new("lunco_render_recovery"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .fixed_pos(egui::pos2(screen.center().x - 210.0, screen.top() + 12.0))
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgba_unmultiplied(42, 24, 18, 238))
+                .corner_radius(10.0)
+                .stroke(egui::Stroke::new(1.0, color.linear_multiply(0.75)))
+                .inner_margin(egui::Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new(title).color(color).strong());
+                        ui.label(egui::RichText::new(message).color(egui::Color32::WHITE));
+                    });
+                });
+        });
+}
+
 /// Which rung of the degradation ladder we are on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Rung {
     #[default]
     Healthy,
     ShadowMapsOff,
+    PersistentFailure,
     GaveUp,
 }
 
@@ -202,15 +288,26 @@ pub(crate) struct Ladder {
     /// Error total at the previous evaluation, to detect "did it fail again".
     last_total: u64,
     /// When the current unbroken run of failing frames began, on the current
-    /// rung. Cleared the moment a frame renders without a new error, so a
-    /// transient burst can never accumulate its way to `GaveUp`.
+    /// rung.
     failing_since: Option<f64>,
+    /// Last time a new failure was observed. A short callback gap does not make
+    /// a wedged render path look healthy merely because no callback arrived.
+    last_failure_at: Option<f64>,
+    failure_kind: FailureKind,
 }
+
+const FAILURE_QUIET_SECS: f64 = 0.5;
 
 impl Ladder {
     /// Advance one evaluation. `now` is monotonic seconds; `total` is
     /// [`RenderHealth::total`].
-    pub(crate) fn step(&mut self, total: u64, device_lost: bool, now: f64) -> Option<Action> {
+    fn step(
+        &mut self,
+        total: u64,
+        kind: FailureKind,
+        device_lost: bool,
+        now: f64,
+    ) -> Option<Action> {
         // Device loss short-circuits every rung: the shadow-map fallback cannot
         // help when there is no device to render with.
         if device_lost {
@@ -225,31 +322,52 @@ impl Ladder {
         self.last_total = total;
 
         if !failed_again {
-            // A clean frame ends the run. This is what keeps the one-frame
-            // resize skew — the case this module was originally written for —
-            // from ever escalating.
-            self.failing_since = None;
+            // A callback gap shorter than the quiet threshold is not evidence
+            // that a failed resource recovered. This protects the grace clock
+            // from render-thread scheduling jitter while still clearing a real
+            // one-frame resize skew.
+            if self
+                .last_failure_at
+                .is_some_and(|last| now - last >= FAILURE_QUIET_SECS)
+            {
+                self.failing_since = None;
+                self.last_failure_at = None;
+                self.failure_kind = FailureKind::Other;
+            }
             return None;
         }
 
+        self.last_failure_at = Some(now);
+        let kind_changed = self.failure_kind != kind;
+        self.failure_kind = kind;
         let since = *self.failing_since.get_or_insert(now);
 
         match self.rung {
-            // First non-transient failure: shed the shadow atlas immediately.
-            // Not after N frames — the reported failure was already permanent on
-            // frame 1, and every frame spent deciding is a frame rendered wrong.
-            Rung::Healthy => {
+            // Only the resource named by the error gets this fallback. OOM and
+            // unrelated validation faults must not toggle every light in the
+            // scene; their bounded outcome is a visible give-up state.
+            Rung::Healthy if kind == FailureKind::ShadowMap => {
                 self.rung = Rung::ShadowMapsOff;
                 // Restart the clock: persistence is now measured against the
                 // mitigation, not against the original fault.
                 self.failing_since = Some(now);
                 Some(Action::DisableShadowMaps)
             }
-            Rung::ShadowMapsOff if now - since >= GIVE_UP_AFTER_SECS => {
+            Rung::Healthy => {
+                self.rung = Rung::PersistentFailure;
+                self.failing_since = Some(now);
+                None
+            }
+            Rung::ShadowMapsOff if kind_changed => {
+                self.rung = Rung::PersistentFailure;
+                self.failing_since = Some(now);
+                None
+            }
+            Rung::ShadowMapsOff | Rung::PersistentFailure if now - since >= GIVE_UP_AFTER_SECS => {
                 self.rung = Rung::GaveUp;
                 Some(Action::GiveUp)
             }
-            Rung::ShadowMapsOff | Rung::GaveUp => None,
+            Rung::ShadowMapsOff | Rung::PersistentFailure | Rung::GaveUp => None,
         }
     }
 }
@@ -354,6 +472,9 @@ fn set_error_handler(
                     return;
                 }
                 health.device_lost.store(true, Ordering::Relaxed);
+                health
+                    .last_failure_kind
+                    .store(FailureKind::Other as u8, Ordering::Relaxed);
                 health.total.fetch_add(1, Ordering::Relaxed);
                 error!(
                     "GPU device lost ({reason:?}) on {adapter_desc}: {message}. \
@@ -378,10 +499,24 @@ fn set_error_handler(
             // Matched on the resource LABEL, which is what wgpu actually gives
             // us; the reported labels were `directional_light_shadow_map_texture`
             // and `directional_light_shadow_map_array_texture_view`.
-            if desc.contains("shadow_map") {
+            let kind = if matches!(err, wgpu::Error::OutOfMemory { .. }) {
+                FailureKind::OutOfMemory
+            } else if desc.contains("shadow_map") {
+                FailureKind::ShadowMap
+            } else {
+                FailureKind::Other
+            };
+            // Once an OOM has occurred, later validation fallout is a symptom
+            // of that exhausted allocation, not a new shader diagnosis.
+            if kind == FailureKind::OutOfMemory || health.oom.load(Ordering::Relaxed) == 0 {
+                health
+                    .last_failure_kind
+                    .store(kind as u8, Ordering::Relaxed);
+            }
+            if kind == FailureKind::ShadowMap {
                 health.shadow.fetch_add(1, Ordering::Relaxed);
             }
-            if matches!(err, wgpu::Error::OutOfMemory { .. }) {
+            if kind == FailureKind::OutOfMemory {
                 health.oom.fetch_add(1, Ordering::Relaxed);
             }
 
@@ -390,6 +525,17 @@ fn set_error_handler(
                 // buffer is rejected and we continue. The Windows resize
                 // depth/color mismatch lands here; dropping the frame is correct.
                 wgpu::Error::Validation { .. } => {
+                    if health.oom.load(Ordering::Relaxed) > 0 {
+                        let n = validation_hits.fetch_add(1, Ordering::Relaxed);
+                        if n == 0 {
+                            warn!(
+                                "wgpu validation errors follow an out-of-memory failure; \
+                                 suppressing shader hints while the render ladder handles \
+                                 resource exhaustion: {desc}"
+                            );
+                        }
+                        return;
+                    }
                     // SMAA without the `smaa_luts` cargo feature binds the area/search
                     // LUT as the wrong texture dimension (D3 where D2 is expected),
                     // so the "SMAA blending weight" bind group fails validation and
@@ -452,13 +598,26 @@ fn escalate_render_recovery(
     mut ladder: ResMut<Ladder>,
     time: Res<Time>,
     mut commands: Commands,
+    warning: Option<Res<RenderWarning>>,
     mut dir: Query<&mut bevy::light::DirectionalLight>,
     mut point: Query<&mut bevy::light::PointLight>,
     mut spot: Query<&mut bevy::light::SpotLight>,
     mut cameras: Query<&mut bevy::camera::Camera>,
 ) {
     let h = &health.0;
-    let Some(action) = ladder.step(h.total(), h.device_lost(), time.elapsed_secs_f64()) else {
+    let kind = h.failure_kind();
+    let action = ladder.step(h.total(), kind, h.device_lost(), time.elapsed_secs_f64());
+
+    if action.is_none() && ladder.rung == Rung::PersistentFailure && warning.is_none() {
+        commands.insert_resource(RenderWarning {
+            message: format!(
+                "Rendering is failing because of {}. No shadow fallback was applied; presentation will stop if it does not recover.",
+                kind.label()
+            ),
+        });
+    }
+
+    let Some(action) = action else {
         return;
     };
 
@@ -478,14 +637,16 @@ fn escalate_render_recovery(
                 n += 1;
             }
             let shadow = h.shadow.load(Ordering::Relaxed);
-            let oom = h.oom.load(Ordering::Relaxed);
             warn!(
-                "GPU errors are not clearing ({shadow} naming a shadow map, {oom} out-of-memory) \
+                "GPU errors are not clearing ({shadow} naming a shadow map) \
                  — disabling shadow maps on {n} light(s) to release the shadow atlas and keep \
                  rendering. Shadows are off for the rest of this session; reload after closing \
                  some scene content to get them back. If the errors continue, presentation will \
                  stop in {GIVE_UP_AFTER_SECS:.0}s."
             );
+            commands.insert_resource(RenderWarning {
+                message: "Rendering recovered with shadow maps disabled. The simulation and API are still running.".to_string(),
+            });
         }
         Action::GiveUp => {
             h.presentation_stopped.store(true, Ordering::Relaxed);
@@ -498,9 +659,10 @@ fn escalate_render_recovery(
                 "the GPU device was lost".to_string()
             } else {
                 format!(
-                    "GPU errors persisted for {GIVE_UP_AFTER_SECS:.0}s after shadow maps \
-                     were disabled ({} total, {} out-of-memory)",
+                    "{} persisted for {GIVE_UP_AFTER_SECS:.0}s ({} total, {} shadow-map, {} out-of-memory)",
+                    kind.label(),
                     h.total(),
+                    h.shadow.load(Ordering::Relaxed),
                     h.oom.load(Ordering::Relaxed)
                 )
             };
@@ -511,6 +673,11 @@ fn escalate_render_recovery(
                  API and any open documents are UNAFFECTED and still running; only display \
                  has stopped. Save your work and restart to render again."
             );
+            commands.insert_resource(RenderWarning {
+                message: format!(
+                    "Presentation stopped: {reason}. Simulation and API remain available; restart the window to restore rendering."
+                ),
+            });
             commands.insert_resource(RenderGaveUp { reason });
         }
     }
@@ -600,10 +767,10 @@ mod tests {
     #[test]
     fn a_transient_error_never_gives_up() {
         let mut l = Ladder::default();
-        l.step(1, false, 0.0);
+        l.step(1, FailureKind::ShadowMap, false, 0.0);
         for i in 0..1000 {
             // No new errors: healthy frames, arbitrarily far into the future.
-            assert_eq!(l.step(1, false, i as f64), None);
+            assert_eq!(l.step(1, FailureKind::ShadowMap, false, i as f64), None);
         }
         assert_eq!(l.rung, Rung::ShadowMapsOff);
         assert!(
@@ -617,7 +784,10 @@ mod tests {
     #[test]
     fn first_failure_sheds_shadow_maps() {
         let mut l = Ladder::default();
-        assert_eq!(l.step(1, false, 0.0), Some(Action::DisableShadowMaps));
+        assert_eq!(
+            l.step(1, FailureKind::ShadowMap, false, 0.0),
+            Some(Action::DisableShadowMaps)
+        );
         assert_eq!(l.rung, Rung::ShadowMapsOff);
     }
 
@@ -626,7 +796,10 @@ mod tests {
     #[test]
     fn persistent_failure_gives_up_after_the_grace_period() {
         let mut l = Ladder::default();
-        assert_eq!(l.step(1, false, 0.0), Some(Action::DisableShadowMaps));
+        assert_eq!(
+            l.step(1, FailureKind::ShadowMap, false, 0.0),
+            Some(Action::DisableShadowMaps)
+        );
 
         // Still failing, but inside the grace period: hold.
         let mut total = 1;
@@ -634,18 +807,27 @@ mod tests {
         while t + 0.5 < GIVE_UP_AFTER_SECS - 0.1 {
             t += 0.5;
             total += 1;
-            assert_eq!(l.step(total, false, t), None, "gave up too early at t={t}");
+            assert_eq!(
+                l.step(total, FailureKind::ShadowMap, false, t),
+                None,
+                "gave up too early at t={t}"
+            );
         }
 
         // Past it: give up exactly once.
         total += 1;
         assert_eq!(
-            l.step(total, false, GIVE_UP_AFTER_SECS + 0.01),
+            l.step(
+                total,
+                FailureKind::ShadowMap,
+                false,
+                GIVE_UP_AFTER_SECS + 0.01
+            ),
             Some(Action::GiveUp)
         );
         total += 1;
         assert_eq!(
-            l.step(total, false, 99.0),
+            l.step(total, FailureKind::ShadowMap, false, 99.0),
             None,
             "give up is not repeatable"
         );
@@ -658,11 +840,17 @@ mod tests {
     #[test]
     fn grace_period_starts_at_the_mitigation() {
         let mut l = Ladder::default();
-        assert_eq!(l.step(1, false, 100.0), Some(Action::DisableShadowMaps));
+        assert_eq!(
+            l.step(1, FailureKind::ShadowMap, false, 100.0),
+            Some(Action::DisableShadowMaps)
+        );
         // 4s after the mitigation — not yet.
-        assert_eq!(l.step(2, false, 104.0), None);
+        assert_eq!(l.step(2, FailureKind::ShadowMap, false, 104.0), None);
         // 5s after the mitigation.
-        assert_eq!(l.step(3, false, 105.0), Some(Action::GiveUp));
+        assert_eq!(
+            l.step(3, FailureKind::ShadowMap, false, 105.0),
+            Some(Action::GiveUp)
+        );
     }
 
     /// A recovery that works must be permanent: once frames render again the
@@ -670,10 +858,13 @@ mod tests {
     #[test]
     fn a_successful_mitigation_never_escalates() {
         let mut l = Ladder::default();
-        l.step(1, false, 0.0);
+        l.step(1, FailureKind::ShadowMap, false, 0.0);
         // Shadow maps off; frames now render. Total never moves again.
         for i in 0..100 {
-            assert_eq!(l.step(1, false, i as f64 * 10.0), None);
+            assert_eq!(
+                l.step(1, FailureKind::ShadowMap, false, i as f64 * 10.0),
+                None
+            );
         }
         assert_eq!(l.rung, Rung::ShadowMapsOff);
     }
@@ -684,9 +875,16 @@ mod tests {
     #[test]
     fn device_lost_gives_up_immediately() {
         let mut l = Ladder::default();
-        assert_eq!(l.step(0, true, 0.0), Some(Action::GiveUp));
+        assert_eq!(
+            l.step(0, FailureKind::Other, true, 0.0),
+            Some(Action::GiveUp)
+        );
         assert_eq!(l.rung, Rung::GaveUp);
-        assert_eq!(l.step(0, true, 0.1), None, "give up is not repeatable");
+        assert_eq!(
+            l.step(0, FailureKind::Other, true, 0.1),
+            None,
+            "give up is not repeatable"
+        );
     }
 
     /// Device loss after a shadow-map fallback still terminates immediately,
@@ -694,8 +892,30 @@ mod tests {
     #[test]
     fn device_lost_from_a_degraded_rung_is_still_immediate() {
         let mut l = Ladder::default();
-        l.step(1, false, 0.0);
+        l.step(1, FailureKind::ShadowMap, false, 0.0);
         assert_eq!(l.rung, Rung::ShadowMapsOff);
-        assert_eq!(l.step(2, true, 0.5), Some(Action::GiveUp));
+        assert_eq!(
+            l.step(2, FailureKind::Other, true, 0.5),
+            Some(Action::GiveUp)
+        );
+    }
+
+    #[test]
+    fn oom_does_not_disable_shadow_maps() {
+        let mut l = Ladder::default();
+        assert_eq!(l.step(1, FailureKind::OutOfMemory, false, 0.0), None);
+        assert_eq!(l.rung, Rung::PersistentFailure);
+    }
+
+    #[test]
+    fn a_short_callback_gap_does_not_reset_persistent_failure_clock() {
+        let mut l = Ladder::default();
+        assert_eq!(l.step(1, FailureKind::OutOfMemory, false, 0.0), None);
+        assert_eq!(l.step(1, FailureKind::OutOfMemory, false, 0.25), None);
+        assert_eq!(l.step(2, FailureKind::OutOfMemory, false, 0.75), None);
+        assert_eq!(
+            l.step(3, FailureKind::OutOfMemory, false, 5.01),
+            Some(Action::GiveUp)
+        );
     }
 }

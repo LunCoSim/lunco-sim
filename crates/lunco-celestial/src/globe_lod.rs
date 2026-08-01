@@ -59,7 +59,14 @@ pub struct GlobeTiles {
     /// moving camera the LOD churns continuously and the whole sphere
     /// flickered ("still blinking"). The brief overlap of coplanar identical
     /// surfaces is invisible; a hole is not.
-    pub retiring: Vec<(Entity, u8)>,
+    pub retiring: Vec<(Entity, u8, TileCoord)>,
+    /// Reusable mesh handles for recently streamed tiles. The cache is bounded
+    /// and only keeps handles that are not currently needed when it evicts; live
+    /// entities keep their own handles, so releasing a cache entry cannot remove
+    /// an in-use asset.
+    mesh_cache: HashMap<TileCoord, CachedTileMesh>,
+    mesh_cache_bytes: usize,
+    cache_clock: u64,
     /// Camera position (body-local) the desired set was last solved AND fully
     /// realised at — the camera-motion gate for [`update_globe_lod`].
     ///
@@ -80,18 +87,45 @@ pub struct GlobeTiles {
     pub last_solve_punch: Option<GlobePunch>,
 }
 
-/// Max fresh tiles spawned per body per frame. A fast zoom crosses several
-/// LOD levels in a handful of frames; unbudgeted, one frame could demand
-/// hundreds of fresh meshes (build + `Assets<Mesh>` add + render-world
-/// upload) — the p99 ~150 ms zoom hitch. Outgoing tiles stay resident until
-/// their replacements are up (see the coverage rule in [`update_globe_lod`]),
-/// so spreading spawns costs nothing but a few frames of refinement latency.
-const TILE_SPAWN_BUDGET: usize = 16;
+#[derive(Clone)]
+struct CachedTileMesh {
+    handle: Handle<Mesh>,
+    bytes: usize,
+    last_used: u64,
+}
 
-/// Max retired-tile entities despawned per body per frame. A zoom-out merges
-/// hundreds of fine tiles into a few coarse ones in one step; freeing all
-/// their entities + mesh assets in one frame is its own (smaller) hitch.
-const TILE_DESPAWN_BUDGET: usize = 32;
+/// Resource limits for live globe streaming.
+///
+/// These are resource values rather than hidden constants so a host can tune
+/// them for a known adapter without changing the scene or the LOD algorithm.
+/// The resident limit is a backpressure boundary: once reached, refinement
+/// waits for old tiles to retire instead of allocating an unbounded replacement
+/// set.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct GlobeLodBudget {
+    /// Maximum fresh tile entities created for one body in one frame.
+    pub spawn_tiles_per_frame: usize,
+    /// Maximum retired tile entities released for one body in one frame.
+    pub despawn_tiles_per_frame: usize,
+    /// Approximate mesh bytes allowed for resident and retiring tile entities.
+    pub max_resident_mesh_bytes: usize,
+    /// Approximate bytes retained by the reusable mesh-handle cache.
+    pub max_cached_mesh_bytes: usize,
+    /// Fresh mesh bytes allowed in one frame, independent of entity count.
+    pub max_fresh_mesh_bytes_per_frame: usize,
+}
+
+impl Default for GlobeLodBudget {
+    fn default() -> Self {
+        Self {
+            spawn_tiles_per_frame: 16,
+            despawn_tiles_per_frame: 32,
+            max_resident_mesh_bytes: 64 * 1024 * 1024,
+            max_cached_mesh_bytes: 16 * 1024 * 1024,
+            max_fresh_mesh_bytes_per_frame: 4 * 1024 * 1024,
+        }
+    }
+}
 
 /// Camera motion, as a fraction of its ALTITUDE above the body, below which the
 /// desired tile set cannot have changed enough to be worth recomputing.
@@ -110,6 +144,48 @@ const LOD_CAMERA_MOTION_FRACTION: f64 = 0.01;
 fn tile_dist2(coord: &TileCoord, radius_m: f64, camera_body_local: DVec3) -> f64 {
     let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
     (cube_to_sphere(coord.face, u, v) * radius_m).distance_squared(camera_body_local)
+}
+
+/// Conservative CPU/GPU accounting for the mesh layout produced by
+/// `create_quadsphere_tile_mesh` (position, normal, UV and u32 indices).
+fn tile_mesh_bytes(res: u32) -> usize {
+    let side = res as usize + 1;
+    let vertices = side.saturating_mul(side);
+    let indices = (res as usize)
+        .saturating_mul(res as usize)
+        .saturating_mul(6);
+    vertices
+        .saturating_mul((3 + 3 + 2) * std::mem::size_of::<f32>())
+        .saturating_add(indices.saturating_mul(std::mem::size_of::<u32>()))
+}
+
+fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
+    if tiles.mesh_cache_bytes <= budget.max_cached_mesh_bytes {
+        return;
+    }
+
+    let in_use: HashSet<TileCoord> = tiles
+        .resident
+        .keys()
+        .copied()
+        .chain(tiles.retiring.iter().map(|(_, _, coord)| *coord))
+        .collect();
+    let mut candidates: Vec<(TileCoord, u64)> = tiles
+        .mesh_cache
+        .iter()
+        .filter(|(coord, _)| !in_use.contains(coord))
+        .map(|(coord, cached)| (*coord, cached.last_used))
+        .collect();
+    candidates.sort_unstable_by_key(|(_, last_used)| *last_used);
+
+    for (coord, _) in candidates {
+        if tiles.mesh_cache_bytes <= budget.max_cached_mesh_bytes {
+            break;
+        }
+        if let Some(cached) = tiles.mesh_cache.remove(&coord) {
+            tiles.mesh_cache_bytes = tiles.mesh_cache_bytes.saturating_sub(cached.bytes);
+        }
+    }
 }
 
 /// Hole-punch under a site's DEM terrain patch: globe tiles that lie FULLY
@@ -180,6 +256,7 @@ fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
 pub(crate) fn update_globe_lod(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    budget: Res<GlobeLodBudget>,
     // `With<SceneCamera>`, NOT `With<Camera3d>`: "which entity is the scene camera?"
     // is a render-FREE question, and asking it with `Camera3d` was what made this
     // crate link bevy_core_pipeline → wgpu. See `lunco_render::camera`.
@@ -267,8 +344,8 @@ pub(crate) fn update_globe_lod(
         }
 
         // Spawn newly-desired tiles FIRST (so this frame's spawns count as
-        // coverage for retirement below), BUDGETED per frame — see
-        // `TILE_SPAWN_BUDGET`. Coarse-and-near first: a coarse tile covers the
+        // coverage for retirement below), BUDGETED per frame by
+        // `GlobeLodBudget`. Coarse-and-near first: a coarse tile covers the
         // most area (unblocks the most retirements), a near tile is what the
         // viewer is looking at. Placement verbatim from the proven static
         // path: mesh in body-local (tile_center = ZERO), entity anchored at the
@@ -287,17 +364,23 @@ pub(crate) fn update_globe_lod(
                 ))
             })
         });
-        // INITIAL fill is unbudgeted: with no resident tiles there is no old
-        // coverage to hold the sphere together while spawns amortize — a
-        // budgeted first fill shows a partially-tiled globe for ~15 frames at
-        // scene load. One synchronous fill there is the old (pre-budget)
-        // behavior and is hidden behind scene loading anyway.
-        let budget = if tiles.resident.is_empty() {
-            usize::MAX
-        } else {
-            TILE_SPAWN_BUDGET
-        };
-        for coord in missing.into_iter().take(budget) {
+        // Initial fill is budgeted too. A scene load must not synchronously
+        // allocate the whole finest visible shell before the render thread can
+        // upload anything; the same backpressure applies at every camera range.
+        let tile_bytes = tile_mesh_bytes(lod.res);
+        let mut fresh_bytes = 0usize;
+        for coord in missing.into_iter().take(budget.spawn_tiles_per_frame) {
+            let needs_fresh_mesh = !tiles.mesh_cache.contains_key(&coord);
+            if needs_fresh_mesh
+                && (fresh_bytes.saturating_add(tile_bytes) > budget.max_fresh_mesh_bytes_per_frame
+                    || (tiles.resident.len() + tiles.retiring.len())
+                        .saturating_mul(tile_bytes)
+                        .saturating_add(fresh_bytes)
+                        .saturating_add(tile_bytes)
+                        > budget.max_resident_mesh_bytes)
+            {
+                break;
+            }
             let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
             let tile_center_dir = cube_to_sphere(coord.face, u, v);
             let tile_body_local = tile_center_dir * lod.radius_m;
@@ -311,16 +394,35 @@ pub(crate) fn update_globe_lod(
             // shell (the long-standing "globe invisible" bug). Centre-relative
             // coords also keep vertex magnitudes small (≪ radius), avoiding f32
             // precision loss at 6.4e6 m.
-            let mesh = create_quadsphere_tile_mesh(
-                body_ent,
-                coord.face,
-                coord.level,
-                coord.i,
-                coord.j,
-                lod.radius_m,
-                lod.res,
-                tile_body_local,
-            );
+            tiles.cache_clock = tiles.cache_clock.wrapping_add(1);
+            let cache_clock = tiles.cache_clock;
+            let mesh_handle = if let Some(cached) = tiles.mesh_cache.get_mut(&coord) {
+                cached.last_used = cache_clock;
+                cached.handle.clone()
+            } else {
+                let mesh = create_quadsphere_tile_mesh(
+                    body_ent,
+                    coord.face,
+                    coord.level,
+                    coord.i,
+                    coord.j,
+                    lod.radius_m,
+                    lod.res,
+                    tile_body_local,
+                );
+                let handle = meshes.add(mesh);
+                tiles.mesh_cache.insert(
+                    coord,
+                    CachedTileMesh {
+                        handle: handle.clone(),
+                        bytes: tile_bytes,
+                        last_used: cache_clock,
+                    },
+                );
+                tiles.mesh_cache_bytes = tiles.mesh_cache_bytes.saturating_add(tile_bytes);
+                fresh_bytes = fresh_bytes.saturating_add(tile_bytes);
+                handle
+            };
             // Atomic (ChildOf, CellCoord, Transform) — the authored grid-local
             // pose IS the placement. `set_parent_in_place` here was the globe
             // corruption: it OVERWRITES the child Transform from its current
@@ -332,7 +434,7 @@ pub(crate) fn update_globe_lod(
             // the view moves (exploded tile shards from orbit).
             let ent = commands
                 .spawn((
-                    Mesh3d(meshes.add(mesh)),
+                    Mesh3d(mesh_handle),
                     lod.look.clone(),
                     coord,
                     TerrainTile,
@@ -383,7 +485,7 @@ pub(crate) fn update_globe_lod(
         // globe tiles occupy the same surface and depth-fight during close/far
         // camera jumps, which presents as Earth blinking.
         let resident_now: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
-        let mut newly_retired: Vec<(Entity, u8)> = Vec::new();
+        let mut newly_retired: Vec<(Entity, u8, TileCoord)> = Vec::new();
         tiles.resident.retain(|coord, ent| {
             if desired.contains(coord) {
                 return true;
@@ -393,7 +495,7 @@ pub(crate) fn update_globe_lod(
                 .filter(|d| tiles_overlap(d, coord))
                 .all(|d| resident_now.contains(d));
             if covered {
-                newly_retired.push((*ent, 0));
+                newly_retired.push((*ent, 0, *coord));
                 false
             } else {
                 true
@@ -401,9 +503,9 @@ pub(crate) fn update_globe_lod(
         });
         tiles.retiring.extend(newly_retired);
         let mut despawned = 0usize;
-        tiles.retiring.retain_mut(|(ent, frames)| {
+        tiles.retiring.retain_mut(|(ent, frames, _coord)| {
             if *frames == 0 {
-                if despawned < TILE_DESPAWN_BUDGET {
+                if despawned < budget.despawn_tiles_per_frame {
                     commands.entity(*ent).try_despawn();
                     despawned += 1;
                     return false;
@@ -414,6 +516,7 @@ pub(crate) fn update_globe_lod(
             *frames -= 1;
             true
         });
+        evict_unused_mesh_cache(&mut tiles, &budget);
 
         // Arm the camera-motion gate ONLY if this pass left nothing outstanding:
         // every desired tile is resident (the spawn budget may have deferred

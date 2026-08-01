@@ -100,7 +100,7 @@ pub use perspective_help::{
     PerspectiveHelp, PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
 pub use render_robustness::{
-    preferred_wgpu_settings, RenderGaveUp, RenderHealth, RenderHealthHandle,
+    preferred_wgpu_settings, RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning,
 };
 pub use window_command::{
     merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
@@ -506,6 +506,10 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin::default());
         }
+        app.add_systems(
+            EguiPrimaryContextPass,
+            render_robustness::draw_render_recovery_banner,
+        );
         // Egui host + viewport-rect sync + invariant sentinels.
         // See `viewport.rs` doc-comment for the architecture (why we
         // confine the 3D camera to the panel rect instead of letting it
