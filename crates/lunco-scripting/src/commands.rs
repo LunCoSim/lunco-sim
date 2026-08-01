@@ -329,12 +329,12 @@ pub fn attach_rover_autonomy_paths(
         if !has_rover_control_surface(inputs, actuators) {
             continue;
         }
-        commands.entity(entity).insert(lunco_core::EmbeddedScenarioPath(
-            "scenarios/rover_autonomy.rhai".to_string(),
-        ));
-        info!(
-            "[scripting] attaching canonical rover autonomy to control surface {entity:?}"
-        );
+        commands
+            .entity(entity)
+            .insert(lunco_core::EmbeddedScenarioPath(
+                "scenarios/rover_autonomy.rhai".to_string(),
+            ));
+        info!("[scripting] attaching canonical rover autonomy to control surface {entity:?}");
     }
 }
 
@@ -1055,10 +1055,8 @@ mod tests {
 
         let mut inputs = lunco_core::InputPorts::new(&["throttle", "steer", "brake"]);
         let drive = Entity::PLACEHOLDER;
-        let actuators = lunco_core::ActuatorPorts::new(HashMap::from([(
-            "drive_left".to_string(),
-            drive,
-        )]));
+        let actuators =
+            lunco_core::ActuatorPorts::new(HashMap::from([("drive_left".to_string(), drive)]));
         assert!(super::has_rover_control_surface(&inputs, Some(&actuators)));
 
         inputs.values.remove("brake");

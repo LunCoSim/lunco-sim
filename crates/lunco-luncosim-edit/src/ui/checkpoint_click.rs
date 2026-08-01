@@ -428,7 +428,11 @@ pub fn on_scene_click_checkpoint(
     let host = doc.and_then(|id| doc_ctx.usd_registry.host(id));
     if host.is_none() {
         let current_spec = vessels.q_specs.get(vessel).ok();
-        let current_xml = vessels.q_xml.get(vessel).ok().map(|(_, xml)| xml.0.as_str());
+        let current_xml = vessels
+            .q_xml
+            .get(vessel)
+            .ok()
+            .map(|(_, xml)| xml.0.as_str());
         let spec = match append_runtime_patrol(
             current_spec,
             current_xml,
@@ -445,10 +449,7 @@ pub fn on_scene_click_checkpoint(
             return;
         };
         if vessels.q_autopilots.iter().any(|ap| ap.vessel == vessel) {
-            commands.trigger(lunco_autopilot::SetAutopilotBehavior {
-                vessel,
-                spec_json,
-            });
+            commands.trigger(lunco_autopilot::SetAutopilotBehavior { vessel, spec_json });
         } else {
             commands.trigger(lunco_autopilot::EngageAutopilot {
                 vessel,
@@ -958,9 +959,7 @@ fn get_waypoint_positions(
     positions
 }
 
-fn get_runtime_waypoint_positions(
-    spec: &lunco_autopilot::AutopilotBehaviorSpec,
-) -> Vec<DVec3> {
+fn get_runtime_waypoint_positions(spec: &lunco_autopilot::AutopilotBehaviorSpec) -> Vec<DVec3> {
     spec.patrol_waypoints()
         .unwrap_or_default()
         .iter()
@@ -1086,7 +1085,9 @@ pub fn draw_waypoint_overlay(
             collect_targets(&value, &mut targets);
             targets
         });
-        let authored_route = xml_targets.as_ref().is_some_and(|targets| !targets.is_empty());
+        let authored_route = xml_targets
+            .as_ref()
+            .is_some_and(|targets| !targets.is_empty());
         let wp_positions = if authored_route {
             get_waypoint_positions(
                 &xml.expect("authored route has XML").0,
@@ -1123,15 +1124,10 @@ pub fn draw_waypoint_overlay(
                 xml_targets
                     .as_ref()
                     .and_then(|targets| targets.get(i))
-                    .is_some_and(|target| {
-                        reached.is_some_and(|reached| reached.0.contains(target))
-                    })
+                    .is_some_and(|target| reached.is_some_and(|reached| reached.0.contains(target)))
             } else {
-                reached.is_some_and(|reached| {
-                    reached
-                        .0
-                        .contains(&format!("/__runtime_waypoint_{i}"))
-                })
+                reached
+                    .is_some_and(|reached| reached.0.contains(&format!("/__runtime_waypoint_{i}")))
             };
 
             wp_screens.push(WpScreen {
@@ -1170,21 +1166,9 @@ pub fn draw_waypoint_overlay(
             };
             let font = egui::FontId::proportional(font_size);
             let tc = egui::Color32::from_rgba_unmultiplied(
-                if wp.visited {
-                    80
-                } else {
-                    label_color.r()
-                },
-                if wp.visited {
-                    240
-                } else {
-                    label_color.g()
-                },
-                if wp.visited {
-                    140
-                } else {
-                    label_color.b()
-                },
+                if wp.visited { 80 } else { label_color.r() },
+                if wp.visited { 240 } else { label_color.g() },
+                if wp.visited { 140 } else { label_color.b() },
                 alpha,
             );
 
@@ -1427,13 +1411,7 @@ fn composed_prim_exists(
 pub fn mark_reached_waypoints_on_enter(
     mut starts: MessageReader<avian3d::prelude::CollisionStart>,
     q_zones: Query<(&lunco_core::TriggerZone, &UsdPrimPath), With<avian3d::prelude::Sensor>>,
-    q_vessel_roots: Query<
-        (),
-        (
-            With<UsdPrimPath>,
-            Or<(With<BehaviorXml>, With<InputPorts>)>,
-        ),
-    >,
+    q_vessel_roots: Query<(), (With<UsdPrimPath>, Or<(With<BehaviorXml>, With<InputPorts>)>)>,
     q_parents: Query<&ChildOf>,
     q_vessels: Query<(Entity, Option<&BehaviorXml>)>,
     q_reached: Query<&ReachedWaypoints>,
@@ -1552,20 +1530,15 @@ pub fn mark_runtime_waypoints_reached(
 ) {
     for (vessel, spec, reached) in q_vessels.iter() {
         let lunco_autopilot::BehaviorSpec::Patrol {
-            waypoints,
-            radius,
-            ..
+            waypoints, radius, ..
         } = &spec.0
         else {
             continue;
         };
-        let Some(vessel_pos) = lunco_core::coords::world_position(
-            vessel,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
-        .map(|p| p.0) else {
+        let Some(vessel_pos) =
+            lunco_core::coords::world_position(vessel, &q_parents, &q_grids, &q_spatial)
+                .map(|p| p.0)
+        else {
             continue;
         };
         let reached = reached.map(|r| &r.0);
@@ -2323,17 +2296,13 @@ mod tests {
         let w2 = DVec3::new(20.0, 0.0, 0.0);
         let rover = DVec3::new(2.0, 0.0, 0.0);
 
-        let (green_before, blue_before) = route_ribbon_points(
-            &[(w0, false), (w1, false), (w2, false)],
-            Some(rover),
-        );
+        let (green_before, blue_before) =
+            route_ribbon_points(&[(w0, false), (w1, false), (w2, false)], Some(rover));
         assert_eq!(green_before, vec![w0, w1, w2]);
         assert_eq!(blue_before, vec![rover, w0]);
 
-        let (green_after, blue_after) = route_ribbon_points(
-            &[(w0, true), (w1, false), (w2, false)],
-            Some(rover),
-        );
+        let (green_after, blue_after) =
+            route_ribbon_points(&[(w0, true), (w1, false), (w2, false)], Some(rover));
         assert_eq!(green_after, vec![w0, w1, w2]);
         assert_eq!(blue_after, vec![rover, w1]);
     }
