@@ -18,12 +18,52 @@ use bevy::prelude::*;
 use lunco_autopilot::usd_tree::{BehaviorProgramSource, BehaviorXml, BehaviorXmlPath};
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
+use std::collections::{HashMap, HashSet};
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
 
 /// The attribute a rotate edit (`UsdOp::SetRotate`) records as `InfoOnly`.
 const ROTATE_ATTR: &str = "xformOp:rotateXYZ";
+
+/// Transform paths explicitly authored by the typed live-stage projector.
+///
+/// OpenUSD can report a transform author as a resync of an already-live prim,
+/// because authoring `xformOpOrder` changes a uniform field. A resync of a
+/// descendant can also include its existing ancestors, though. The latter is
+/// structural bookkeeping, not a request to overwrite a moving physics body
+/// with its authored spawn pose. Keep the typed transform intent beside the
+/// sink notice so the structural bridge can distinguish those two cases.
+#[derive(Resource, Default)]
+pub(crate) struct LiveTransformEditHints {
+    translate_paths: HashMap<AssetId<UsdStageAsset>, HashSet<String>>,
+}
+
+impl LiveTransformEditHints {
+    pub(crate) fn mark_translate(&mut self, stage: AssetId<UsdStageAsset>, path: String) {
+        self.translate_paths
+            .entry(stage)
+            .or_default()
+            .insert(path);
+    }
+
+    fn take_translate_paths(&mut self, stage: AssetId<UsdStageAsset>) -> HashSet<String> {
+        self.translate_paths.remove(&stage).unwrap_or_default()
+    }
+}
+
+/// Record a successful typed `SetTranslate` authoring operation. The resource
+/// is optional for small headless projection tests that construct only the sink
+/// bridge; production installs it with `UsdCommandsPlugin`.
+pub(crate) fn mark_live_translate(
+    world: &mut World,
+    stage: AssetId<UsdStageAsset>,
+    path: impl Into<String>,
+) {
+    if let Some(mut hints) = world.get_resource_mut::<LiveTransformEditHints>() {
+        hints.mark_translate(stage, path.into());
+    }
+}
 
 // Edit → live-stage projection is now **op-driven** (author-once): the twin
 // projection (`twin_projection::sync_twin_overlays`) replays the document's typed
@@ -153,6 +193,10 @@ pub(crate) fn project_stage_changes(world: &mut World) {
 
     let mut projected_anything = false;
     for (id, changes) in batches {
+        let authored_translate_paths = world
+            .get_resource_mut::<LiveTransformEditHints>()
+            .map(|mut hints| hints.take_translate_paths(id))
+            .unwrap_or_default();
         // Merge this stage's committed changes into one resync / info-only set.
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
@@ -200,7 +244,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // input, a light's intensity, a radius, `visibility` — re-projects here,
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
-        reconcile_structural_live(world, id, &resynced);
+        reconcile_structural_live(world, id, &resynced, &authored_translate_paths);
     }
 
     // Connections are derived from native `connectionPaths` by
@@ -684,6 +728,7 @@ pub(crate) fn reconcile_structural_live(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
     resync_paths: &[String],
+    authored_translate_paths: &HashSet<String>,
 ) {
     use lunco_usd_bevy::CanonicalStages;
     for path in resync_paths {
@@ -745,12 +790,17 @@ pub(crate) fn reconcile_structural_live(
             // the waypoint context menu's `Move` did, and what any scripted or
             // API-driven move of an already-spawned prim does.
             //
-            // Re-seating the composed translate is idempotent (re-applying the
-            // value a prim is already at is a no-op — pinned by
-            // `re_seating_the_current_position_does_not_move_the_prim`), so this
-            // costs one attribute read on the rare structural resync and cannot
-            // fight the gizmo, whose drag has ended by the time it authors.
+            // Only a typed SetTranslate may re-seat an already-live prim here.
+            // A descendant edit (for example adding `/Rover/Mission`) can report
+            // `/Rover` as resynced even though no rover transform was authored.
+            // Re-seating in that case overwrites Avian's settled/moving pose with
+            // the USD spawn transform — the first-waypoint reset. The typed hint
+            // also preserves support for a genuine transform whose xform-order
+            // authoring arrives as resync with no info-only property notice.
             (true, Some(entity)) => {
+                if !authored_translate_paths.contains(path) {
+                    continue;
+                }
                 let v = {
                     let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                         return;

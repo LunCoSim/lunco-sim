@@ -766,6 +766,8 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             {
                 if let Err(e) = cs.projector().author_translate(&sp, *value) {
                     warn!("[twin] author translate {path}: {e}");
+                } else {
+                    crate::live_consume::mark_live_translate(world, scene_id, path.clone());
                 }
             }
         }
@@ -1561,6 +1563,12 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         if let Some(translate) = item.translate {
             if let Err(e) = cs.projector().author_translate(&sp, translate) {
                 warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
+            } else {
+                crate::live_consume::mark_live_translate(
+                    world,
+                    item.scene_id,
+                    item.prim_path.clone(),
+                );
             }
         }
     }

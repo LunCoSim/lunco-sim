@@ -168,6 +168,7 @@ impl Plugin for UsdCommandsPlugin {
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
         app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
+        app.init_resource::<crate::live_consume::LiveTransformEditHints>();
         // Referenced spawns whose asset closure is still loading (fetched once,
         // then authored onto the live stage — no whole-scene reload).
         app.init_resource::<crate::twin_projection::PendingRefSpawns>();
