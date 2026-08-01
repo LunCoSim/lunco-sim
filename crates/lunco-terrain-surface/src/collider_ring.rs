@@ -1,27 +1,31 @@
-//! Per-rover **physics collider ring** (milestone M7, physics half).
+//! Per-physical-body **physics collider ring** (milestone M7, physics half).
 //!
 //! Opt-in via `collider_ring` (USD `lunco:terrain:colliderRing`). When on, the
 //! single static full-DEM heightfield collider is **suppressed** (replacing it,
 //! not augmenting — overlapping heightfields would double-up contacts) and instead
 //! a small ring of per-tile `Collider::heightfield`s is streamed around the moving
-//! rovers, each sampled from the retained DEM (`DemHeightField`).
+//! dynamic physical assemblies, each sampled from the retained DEM
+//! (`DemHeightField`).
 //!
 //! **Deterministic, decoupled from visual LOD.** Tiles are selected at a single
-//! *canonical depth* from each rover's **world position** (not the camera, not a
+//! *canonical depth* from each body's **world position** (not the camera, not a
 //! screen metric) — so every peer and the headless server pick the identical tile
 //! set and agree on contact (the networking invariant in [`crate::quadtree`]). The
 //! collider resolution is fixed (≈ native DEM spacing), independent of how coarse
 //! or fine the visual tiles happen to be.
 //!
-//! v1 maintains a 3×3 block of canonical-depth tiles around each dynamic body
-//! (the body's node + its 8 neighbours = build-ahead in every direction), diffed
-//! against the resident set each frame. Memory-LRU and `PhysicsHold` build-ahead
-//! pause are deferred — at moonbase scale the ring is a handful of tiles.
+//! v1 maintains the canonical-depth tiles covering each free dynamic body or
+//! joint-connected dynamic assembly, plus one tile of build-ahead in every
+//! direction. The footprint comes from Avian's runtime collider AABBs plus any
+//! runtime contact probes (such as raycast wheels), and the assembly comes from
+//! Avian's joint graph; no USD prim, schema, or authoring marker participates in
+//! the selection. The global wanted set is deduplicated before it is diffed
+//! against the resident set.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use avian3d::prelude::{Collider, RigidBody};
+use avian3d::prelude::{Collider, ColliderAabb, ColliderOf, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
@@ -38,7 +42,7 @@ use crate::stream_viz::DemHeightField;
 /// Seed values for the collider ring. `for_viz` replaces these with the active
 /// visual tile lattice. Keeping the fallback here is useful for reflected/test
 /// construction, but production terrain must not have a second resolution
-/// contract: a collider sampled on another lattice can put a rover above a
+/// contract: a collider sampled on another lattice can put a body above a
 /// visible slope or below a visible crater rim.
 const COLLIDER_DEPTH: u8 = 8;
 const COLLIDER_RES: usize = 49;
@@ -48,7 +52,7 @@ const COLLIDER_RES: usize = 49;
 /// abutting tiles with different datums still agree exactly on shared edges.
 const COLLIDER_QUANT_STEP: f64 = 1e-3;
 
-/// Marker + params: this terrain streams a per-rover collider ring instead of one
+/// Marker + params: this terrain streams a per-body collider ring instead of one
 /// static heightfield. Inserted by the DEM build when the request set
 /// `collider_ring`. Needs the retained [`DemHeightField`] to sample tiles from.
 ///
@@ -79,7 +83,7 @@ impl TerrainColliderRing {
     /// with `viz.tile_res` samples, so its step is
     /// `(2·half_extent) / 2^max_depth / (tile_res − 1)` and its gate is `2·step`.
     /// The collider's own native gate (`2·collider_step`) is finer, so the floor
-    /// picks the coarser visual gate — what the rover touches is what the eye
+    /// picks the coarser visual gate — what the body touches is what the eye
     /// sees, not a finer band the mesh flattens out.
     pub fn for_viz(viz: &crate::stream_viz::TerrainLodViz, half_extent: f64) -> Self {
         let depth = viz.max_depth;
@@ -91,7 +95,7 @@ impl TerrainColliderRing {
             res,
             // The collider and visual tile now sample exactly the same lattice
             // and therefore use the same band-limit. This is the important
-            // invariant; it also avoids a rover riding a finer physics surface
+            // invariant; it also avoids a body riding a finer physics surface
             // than the mesh currently shown to the user.
             contact_band: SurfaceBand::contact(step, step),
         }
@@ -132,11 +136,11 @@ pub struct ColliderTiles {
     /// tether the rover keeps driving the PRE-swap surface (visibly floating
     /// above every crater the recompose added).
     oracle_key: u64,
-    /// Each focus body's canonical-depth ring node last frame (sorted). The
-    /// cheap gate: when no body crossed a node boundary the wanted set is
-    /// unchanged by construction, so with nothing stale and nothing baking the
-    /// whole wanted/diff/queue rebuild is skipped for the frame.
-    last_foci_nodes: Vec<QuadCoord>,
+    /// The canonical-depth assembly-ring nodes last frame (sorted). The cheap
+    /// gate: when no physics footprint crossed a node boundary the wanted set
+    /// is unchanged by construction, so with nothing stale and nothing baking
+    /// the whole wanted/diff/queue rebuild is skipped for the frame.
+    last_ring_nodes: Vec<QuadCoord>,
 }
 
 /// In-flight off-thread collider-tile bakes for a terrain. Sampling the oracle
@@ -271,12 +275,155 @@ fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
         && s.center[1] + s.half >= a[1]
 }
 
+/// Return the X/Z footprint of one dynamic body in Avian's world frame.
+///
+/// `ColliderAabb` is the authoritative broad-phase geometry, so this remains
+/// correct as a body rotates or as a runtime-generated collider changes shape.
+/// A body can briefly lack a valid AABB while its collider is being registered;
+/// during that bounded initialization window its authoritative position is the
+/// safe conservative fallback.
+fn collider_xz_bounds(
+    position: GridPos,
+    collider_aabb: Option<&avian3d::prelude::ColliderAabb>,
+) -> [f64; 4] {
+    match collider_aabb {
+        Some(aabb)
+            if aabb.min.is_finite()
+                && aabb.max.is_finite()
+                && aabb.min.x <= aabb.max.x
+                && aabb.min.z <= aabb.max.z =>
+        {
+            [aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z]
+        }
+        _ => [position.0.x, position.0.z, position.0.x, position.0.z],
+    }
+}
+
+/// Extend a body's collision footprint with runtime contact probes.
+///
+/// Raycast wheels are intentionally not Avian colliders: their contact point is
+/// a query origin, not a body shape. They still need terrain coverage. The
+/// shared [`lunco_physics::PhysicsSupportFootprint`] is published by the
+/// physics model and stores offsets in the body's local frame, so this remains
+/// independent of USD identity and works at any world/grid position.
+fn contact_footprint_xz_bounds(
+    position: GridPos,
+    rotation: DQuat,
+    footprint: Option<&lunco_physics::PhysicsSupportFootprint>,
+) -> Option<[f64; 4]> {
+    let mut bounds = None;
+    for contact in footprint?.0.iter() {
+        let center = position.0 + rotation * contact.local_offset;
+        let radius = contact.radius.max(0.0);
+        bounds = Some(union_xz_bounds(
+            bounds,
+            [
+                center.x - radius,
+                center.z - radius,
+                center.x + radius,
+                center.z + radius,
+            ],
+        ));
+    }
+    bounds
+}
+
+/// The complete terrain-support footprint of one dynamic body.
+///
+/// This is the single geometry contract consumed by both ring selection and the
+/// physics-readiness hold. Keeping those consumers on the same footprint makes
+/// it impossible to release physics while a wheel's terrain tile is still
+/// absent, which is the boundary failure mode for a raycast rover.
+fn runtime_support_xz_bounds(
+    position: GridPos,
+    rotation: Option<&avian3d::prelude::Rotation>,
+    collider_aabb: Option<&ColliderAabb>,
+    footprint: Option<&lunco_physics::PhysicsSupportFootprint>,
+) -> [f64; 4] {
+    let bounds = collider_xz_bounds(position, collider_aabb);
+    let rotation = rotation.map_or(DQuat::IDENTITY, |rotation| rotation.0);
+    contact_footprint_xz_bounds(position, rotation, footprint).map_or(bounds, |contact_bounds| {
+        union_xz_bounds(Some(bounds), contact_bounds)
+    })
+}
+
+/// Union two X/Z footprints.
+fn union_xz_bounds(current: Option<[f64; 4]>, next: [f64; 4]) -> [f64; 4] {
+    current.map_or(next, |a| {
+        [
+            a[0].min(next[0]),
+            a[1].min(next[1]),
+            a[2].max(next[2]),
+            a[3].max(next[3]),
+        ]
+    })
+}
+
+/// Add the canonical-depth footprint and one tile of build-ahead to `out`.
+///
+/// A free body therefore gets the familiar 3×3 ring. A physically jointed
+/// assembly gets one bounded ring around its complete runtime footprint rather
+/// than one ring for every wheel/link. The caller deduplicates the resulting
+/// coordinates across assemblies.
+fn push_assembly_ring_nodes(
+    qt: &Quadtree,
+    depth: u8,
+    half_extent: f64,
+    node_count: u32,
+    bounds: [f64; 4],
+    out: &mut Vec<QuadCoord>,
+) {
+    if bounds[2] < -half_extent
+        || bounds[0] > half_extent
+        || bounds[3] < -half_extent
+        || bounds[1] > half_extent
+    {
+        return;
+    }
+    let max_coord = half_extent - f64::EPSILON * half_extent.max(1.0);
+    let min_x = bounds[0].max(-half_extent).min(max_coord);
+    let min_z = bounds[1].max(-half_extent).min(max_coord);
+    let max_x = bounds[2].max(-half_extent).min(max_coord);
+    let max_z = bounds[3].max(-half_extent).min(max_coord);
+    if min_x > max_x || min_z > max_z {
+        return;
+    }
+
+    let min_node = qt.node_containing(depth, [min_x, min_z]);
+    let max_node = qt.node_containing(depth, [max_x, max_z]);
+    let min_x = min_node.x as i64 - 1;
+    let min_z = min_node.z as i64 - 1;
+    let max_x = max_node.x as i64 + 1;
+    let max_z = max_node.z as i64 + 1;
+    for z in min_z.max(0)..=max_z.min(node_count as i64 - 1) {
+        for x in min_x.max(0)..=max_x.min(node_count as i64 - 1) {
+            out.push(QuadCoord {
+                depth,
+                x: x as u32,
+                z: z as u32,
+            });
+        }
+    }
+}
+
 pub fn update_collider_ring(
     mut commands: Commands,
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
-    // Dynamic bodies (rovers, wheels, dropped payloads) are the ring foci, read
-    // through avian's authoritative f64 pose — see the frame rule above.
-    bodies: Query<(&RigidBody, &avian3d::prelude::Position)>,
+    // The ring is derived from the physics world only. Position and ColliderAabb
+    // are Avian's authoritative grid-absolute state; the joint graph below groups
+    // dynamic links without consulting USD identity or authoring metadata.
+    bodies: Query<(
+        Entity,
+        &RigidBody,
+        &avian3d::prelude::Position,
+        Option<&avian3d::prelude::Rotation>,
+        Option<&lunco_physics::PhysicsSupportFootprint>,
+    )>,
+    // Every Avian collider contributes its world-space broad-phase AABB. A
+    // child collider is attributed to its owning body through `ColliderOf`,
+    // while a collider on the body root is attributed by entity identity.
+    colliders: Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
+    joints: JointGraph,
     mut terrains: Query<(
         Entity,
         &DemHeightField,
@@ -290,7 +437,11 @@ pub fn update_collider_ring(
     // HashSet/Vec per frame (per terrain, for `wanted`) was pure allocator
     // traffic for zero work. Each is cleared at the point it was previously
     // constructed, so the logic is unchanged.
-    mut foci: Local<Vec<GridPos>>,
+    mut positions: Local<HashMap<Entity, GridPos>>,
+    mut body_bounds: Local<HashMap<Entity, [f64; 4]>>,
+    mut dynamic_entities: Local<Vec<Entity>>,
+    mut assembly_seen: Local<HashSet<Entity>>,
+    mut assembly_bounds: Local<Vec<[f64; 4]>>,
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
@@ -313,17 +464,75 @@ pub fn update_collider_ring(
     #[cfg(not(target_arch = "wasm32"))]
     let mut bake_budget: usize = usize::MAX;
 
-    // Grid-absolute positions of the dynamic bodies the ring should cover.
-    //
-    // ⚠ avian `Position`, NOT `GlobalTransform` — see the frame rule on this
-    // system. A render GT is origin-relative; the DEM frame is grid-absolute.
-    foci.clear();
-    foci.extend(
-        bodies
-            .iter()
-            .filter(|(rb, _)| matches!(rb, RigidBody::Dynamic))
-            .map(|(_, pos)| GridPos(pos.0)),
-    );
+    // Snapshot the dynamic physics topology. Avian Position and every
+    // ColliderAabb are in the same canonical world frame, so the ring follows
+    // actual collision geometry (including compound child colliders and
+    // rotation) rather than an authored USD hierarchy.
+    positions.clear();
+    body_bounds.clear();
+    dynamic_entities.clear();
+    for (entity, rigid_body, position, rotation, footprint) in &bodies {
+        if !matches!(rigid_body, RigidBody::Dynamic) {
+            continue;
+        }
+        let grid_pos = GridPos(position.0);
+        positions.insert(entity, grid_pos);
+        body_bounds.insert(
+            entity,
+            runtime_support_xz_bounds(grid_pos, rotation, None, footprint),
+        );
+        dynamic_entities.push(entity);
+    }
+
+    // Start with the body's position as a conservative initialization fallback,
+    // then replace/extend it with every valid Avian AABB. This handles a body
+    // whose broad-phase has not published an AABB yet without dropping its ring,
+    // and it also handles compound colliders whose AABB lives on child entities.
+    for (collider_entity, aabb, collider_of) in &colliders {
+        let owner = collider_of
+            .map(|collider_of| collider_of.body)
+            .filter(|owner| positions.contains_key(owner))
+            .or_else(|| {
+                positions
+                    .contains_key(&collider_entity)
+                    .then_some(collider_entity)
+            });
+        let Some(owner) = owner else { continue };
+        if !(aabb.min.is_finite()
+            && aabb.max.is_finite()
+            && aabb.min.x <= aabb.max.x
+            && aabb.min.z <= aabb.max.z)
+        {
+            continue;
+        }
+        let bounds = [aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z];
+        let current = body_bounds.remove(&owner);
+        body_bounds.insert(owner, union_xz_bounds(current, bounds));
+    }
+
+    // A rover with six wheels is not special here: if it is a raycast vehicle it
+    // is one free dynamic chassis; if it uses physical wheel bodies, Avian joints
+    // connect those bodies into one component. Either form contributes one union
+    // footprint and therefore cannot multiply a 3×3 ring per wheel.
+    let adjacency = joints.adjacency(|entity| positions.contains_key(&entity));
+    assembly_seen.clear();
+    assembly_bounds.clear();
+    for &seed in dynamic_entities.iter() {
+        if !assembly_seen.insert(seed) {
+            continue;
+        }
+        let members = joint_component(seed, &adjacency);
+        assembly_seen.extend(members.iter().copied());
+        let mut bounds = None;
+        for member in members {
+            if let Some(member_bounds) = body_bounds.get(&member) {
+                bounds = Some(union_xz_bounds(bounds, *member_bounds));
+            }
+        }
+        if let Some(bounds) = bounds {
+            assembly_bounds.push(bounds);
+        }
+    }
 
     for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
         let oracle = &hf.0;
@@ -365,25 +574,18 @@ pub fn update_collider_ring(
             commands.entity(terrain).try_remove::<ColliderDirtyRegion>();
         }
 
-        // Each focus body's canonical-depth node this frame. The DEM frame IS
-        // the grid frame: the terrain entity is a grid-direct child at
-        // `CellCoord::default()` (`terrain.rs`), and the tile-placement half
-        // below writes tile origins with `grid.translation_to_grid(<DEM coords>)`
-        // on that same assumption. So a grid-absolute body position is already
-        // DEM-local, and no transform belongs in between (`.0` here IS that
-        // identity).
+        // Each assembly's canonical-depth footprint plus one tile of build-ahead.
+        // The DEM frame IS the grid frame: a grid-absolute body position is
+        // already DEM-local, and no render transform belongs in between.
         ring_nodes.clear();
-        for f in foci.iter() {
-            let (lx, lz) = (f.0.x, f.0.z);
-            if lx.abs() > h || lz.abs() > h {
-                continue; // body is off the DEM region
-            }
-            ring_nodes.push(qt.node_containing(ring.depth, [lx, lz]));
+        for &bounds in assembly_bounds.iter() {
+            push_assembly_ring_nodes(&qt, ring.depth, h, nodes, bounds, &mut ring_nodes);
         }
-        // Sorted so the comparison is order-independent (body iteration order
-        // is not a signal; two bodies swapping nodes is still "unchanged").
+        // Sorted so the comparison is order-independent (entity iteration order
+        // is not a signal; two assemblies swapping nodes is still "unchanged").
         ring_nodes.sort_unstable_by_key(|c| (c.depth, c.x, c.z));
-        // The cheap per-frame gate: no body crossed a node boundary → the
+        ring_nodes.dedup();
+        // The cheap per-frame gate: no physics footprint crossed a node boundary → the
         // wanted set is unchanged by construction, and with nothing stale and
         // nothing baking there is no diff to run, no bake to poll, no tile to
         // queue. This was the only remaining ungated per-frame rebuild in the
@@ -393,34 +595,18 @@ pub fn update_collider_ring(
         // still), and skipping then would never re-queue them — the physics
         // hold waits on those exact tiles.
         if !oracle_swapped
-            && *ring_nodes == tiles.last_foci_nodes
+            && *ring_nodes == tiles.last_ring_nodes
             && tiles.stale.is_empty()
             && pending.0.is_empty()
         {
             continue;
         }
-        tiles.last_foci_nodes.clone_from(&ring_nodes);
+        tiles.last_ring_nodes.clone_from(&ring_nodes);
 
-        // The canonical-depth node set wanted this frame: each focus's node + its
-        // 8 neighbours (3×3 build-ahead), deduped across all bodies.
+        // The canonical-depth footprint + build-ahead set, already deduplicated
+        // across every body and assembly.
         wanted.clear();
-        for centre in ring_nodes.iter() {
-            let (cx, cz) = (centre.x as i64, centre.z as i64);
-            for dz in -1..=1 {
-                for dx in -1..=1 {
-                    let nx = cx + dx;
-                    let nz = cz + dz;
-                    if nx < 0 || nz < 0 || nx >= nodes as i64 || nz >= nodes as i64 {
-                        continue;
-                    }
-                    wanted.insert(QuadCoord {
-                        depth: ring.depth,
-                        x: nx as u32,
-                        z: nz as u32,
-                    });
-                }
-            }
-        }
+        wanted.extend(ring_nodes.iter().copied());
 
         // Despawn tiles no longer wanted; drop in-flight bakes for them too.
         let t = &mut *tiles;
@@ -560,6 +746,7 @@ pub fn despawn_orphaned_collider_tiles(
 /// `(x, z)`, or `None` outside the terrain footprint. Agrees with the
 /// wanted-set derivation in [`update_collider_ring`] by construction — both
 /// are [`Quadtree::node_containing`].
+#[cfg(test)]
 fn ring_node(half: f64, depth: u8, x: f64, z: f64) -> Option<QuadCoord> {
     if x.abs() > half || z.abs() > half {
         return None;
@@ -603,44 +790,100 @@ pub fn hold_physics_until_dem_ready(
     // WRONG frame is worse than not asking: it answered about a point ~a
     // FloatingOrigin cell away, found a resident tile there, released physics —
     // and the rover fell through the hole it was supposed to be protected from.
-    bodies: Query<(&RigidBody, &avian3d::prelude::Position)>,
+    bodies: Query<(
+        Entity,
+        &RigidBody,
+        &avian3d::prelude::Position,
+        Option<&avian3d::prelude::Rotation>,
+        Option<&lunco_physics::PhysicsSupportFootprint>,
+    )>,
+    colliders: Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
     // Broad-phase liveness probe. `ColliderAabb` is a REQUIRED component of
     // `Collider`, so it exists from spawn — but initialised to `INVALID`
     // (min=+∞, max=−∞); avian fills a real AABB only AFTER its prepare/broad-phase
     // pass. Testing mere presence is a no-op; we must test VALIDITY.
     q_live: Query<&avian3d::prelude::ColliderAabb>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut positions: Local<HashMap<Entity, GridPos>>,
+    mut body_bounds: Local<HashMap<Entity, [f64; 4]>>,
+    mut required_nodes: Local<Vec<QuadCoord>>,
 ) {
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
+        positions.clear();
+        body_bounds.clear();
+        for (entity, rb, pos, rotation, footprint) in &bodies {
+            if !matches!(rb, RigidBody::Dynamic) {
+                continue;
+            }
+            let grid_pos = GridPos(pos.0);
+            positions.insert(entity, grid_pos);
+            body_bounds.insert(
+                entity,
+                runtime_support_xz_bounds(grid_pos, rotation, None, footprint),
+            );
+        }
+        for (collider_entity, aabb, collider_of) in &colliders {
+            let owner = collider_of
+                .map(|collider_of| collider_of.body)
+                .filter(|owner| positions.contains_key(owner))
+                .or_else(|| {
+                    positions
+                        .contains_key(&collider_entity)
+                        .then_some(collider_entity)
+                });
+            let Some(owner) = owner else { continue };
+            if !(aabb.min.is_finite()
+                && aabb.max.is_finite()
+                && aabb.min.x <= aabb.max.x
+                && aabb.min.z <= aabb.max.z)
+            {
+                continue;
+            }
+            let current = body_bounds.remove(&owner);
+            body_bounds.insert(
+                owner,
+                union_xz_bounds(current, [aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z]),
+            );
+        }
         'terrains: for (hf, ring, tiles) in &rings {
             let half = hf.0.half_extent() as f64;
-            for (rb, pos) in &bodies {
-                if !matches!(rb, RigidBody::Dynamic) {
+            for (entity, _, _, _, _) in &bodies {
+                let Some(&bounds) = body_bounds.get(&entity) else {
                     continue;
-                }
-                // Typed at the read: avian `Position` IS the grid-absolute point
-                // the DEM/ring lattice is addressed in.
-                let p = GridPos(pos.0);
-                let Some(coord) = ring_node(half, ring.depth, p.0.x, p.0.z) else {
-                    continue; // off this terrain — its ring doesn't apply
                 };
+                required_nodes.clear();
+                push_assembly_ring_nodes(
+                    &Quadtree::new(half, ring.depth, 1.0, half),
+                    ring.depth,
+                    half,
+                    1u32 << ring.depth,
+                    bounds,
+                    &mut required_nodes,
+                );
+                required_nodes.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
+                required_nodes.dedup();
+                if required_nodes.is_empty() {
+                    continue; // off this terrain — its ring doesn't apply
+                }
                 // Gate on avian broad-phase LIVENESS, not `tiles.map` membership.
-                // The map gains the coord the instant the tile spawn command is
-                // QUEUED (see `update_collider_ring`), one or more frames before the
-                // command flushes and avian builds the collider's `ColliderAabb`.
+                // The map gains a coordinate when its tile is QUEUED, one or more
+                // frames before avian builds that tile's `ColliderAabb`.
                 // Releasing on membership unpaused physics into that gap and a
                 // fully-Dynamic (physical) wheel free-fell through the not-yet-live
-                // collider — the tunnel. Require the tile to actually carry
-                // `ColliderAabb` so physics resumes only once it is truly collidable.
-                let live = tiles
-                    .map
-                    .get(&coord)
-                    .is_some_and(|&e| q_live.get(e).is_ok_and(|aabb| aabb.min.x.is_finite()));
-                if !live {
-                    wait = true;
-                    break 'terrains;
+                // collider — the tunnel. Require every footprint tile to be truly
+                // collidable.
+                for coord in required_nodes.iter().copied() {
+                    let live = tiles.map.get(&coord).is_some_and(|&e| {
+                        q_live
+                            .get(e)
+                            .is_ok_and(|aabb| aabb.min.x.is_finite() && aabb.max.x.is_finite())
+                    });
+                    if !live {
+                        wait = true;
+                        break 'terrains;
+                    }
                 }
             }
         }
@@ -736,7 +979,7 @@ const RAYCAST_SETTLE_CLEARANCE: f64 = -0.02;
 pub fn settle_grounded_assemblies(
     terrains: Query<&crate::stream_viz::DemHeightField, With<TerrainColliderRing>>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
-    footprints: Query<Option<&lunco_core::GroundSettleFootprint>>,
+    footprints: Query<Option<&lunco_physics::PhysicsSupportFootprint>>,
     mut bodies: Query<(
         Entity,
         &mut avian3d::prelude::Position,
@@ -789,7 +1032,7 @@ pub fn settle_grounded_assemblies(
         done.extend(members.iter().copied());
         let mut lift = 0.0_f64;
         let mut over_terrain = false;
-        // Probe-only contact geometry (raycast wheels) belongs to the same
+        // Probe-only contact geometry belongs to the same
         // placement pass as rigid members. It is authored in the vehicle frame,
         // transformed once by the solved root pose, and sampled from the same
         // oracle as every other terrain consumer.
@@ -797,7 +1040,7 @@ pub fn settle_grounded_assemblies(
         // encountered for a jointed vehicle. The raycast contact footprint,
         // however, belongs to its DriveMix root. Resolve it from the seed and
         // then across the whole assembly instead of assuming the arbitrary
-        // dynamic member owns it. Raycast vehicles MUST use only this geometry:
+        // dynamic member owns it. Probe-based vehicles MUST use only this geometry:
         // their high chassis has no terrain contact, and its near-zero generic
         // lift used to consume the request before a wheel probe could settle it.
         let raycast_footprint = footprints
@@ -1063,6 +1306,50 @@ mod tests {
     fn native_band(region: Square) -> SurfaceBand {
         let step = region.side() / (COLLIDER_RES as f64 - 1.0);
         SurfaceBand::visual(step)
+    }
+
+    #[test]
+    fn collider_ring_uses_one_runtime_assembly_footprint() {
+        let qt = Quadtree::new(16.0, 2, 1.0, 16.0);
+        let mut nodes = Vec::new();
+        push_assembly_ring_nodes(&qt, 2, 16.0, 1 << 2, [1.0, 1.0, 2.0, 2.0], &mut nodes);
+        nodes.sort_unstable_by_key(|node| (node.x, node.z));
+        nodes.dedup();
+        assert_eq!(nodes.len(), 9);
+
+        // Extending the physical assembly across a tile boundary expands the
+        // one bounded ring; it does not create an independent 3x3 ring per
+        // member.
+        nodes.clear();
+        push_assembly_ring_nodes(&qt, 2, 16.0, 1 << 2, [-7.0, 1.0, 7.0, 2.0], &mut nodes);
+        nodes.sort_unstable_by_key(|node| (node.x, node.z));
+        nodes.dedup();
+        assert_eq!(nodes.len(), 12);
+    }
+
+    #[test]
+    fn collider_ring_includes_raycast_contact_footprint() {
+        let footprint = lunco_physics::PhysicsSupportFootprint(vec![
+            lunco_physics::PhysicsSupportContact {
+                local_offset: DVec3::new(-7.0, -0.5, 0.0),
+                radius: 0.5,
+            },
+            lunco_physics::PhysicsSupportContact {
+                local_offset: DVec3::new(7.0, -0.5, 0.0),
+                radius: 0.5,
+            },
+        ]);
+        let bounds = runtime_support_xz_bounds(GridPos(DVec3::ZERO), None, None, Some(&footprint));
+        assert_eq!(bounds, [-7.5, -0.5, 7.5, 0.5]);
+
+        // A chassis at x=0 whose raycast wheels reach both sides of a tile
+        // boundary must keep the complete support footprint resident.
+        let qt = Quadtree::new(16.0, 2, 1.0, 16.0);
+        let mut nodes = Vec::new();
+        push_assembly_ring_nodes(&qt, 2, 16.0, 1 << 2, bounds, &mut nodes);
+        nodes.sort_unstable_by_key(|node| (node.x, node.z));
+        nodes.dedup();
+        assert_eq!(nodes.len(), 16);
     }
 
     /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at

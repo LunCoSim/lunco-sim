@@ -9,7 +9,8 @@
 //! origin cell, mirroring `lunco-obstacle-field`.
 //!
 //! This is the non-streamed spine: one downsampled tile of the whole DEM. Tiled
-//! streaming + LOD + a per-rover canonical-res collider ring come later (M7); the
+//! streaming + LOD + a canonical-res collider ring around dynamic physical
+//! support footprints come later (M7); the
 //! `resample` bridge and this spawn path are what they build on.
 
 use avian3d::prelude::{Collider, RigidBody};
@@ -184,8 +185,9 @@ pub struct DemTerrainRequest {
     /// production visual path (default ON from the USD bridge); `false` = the
     /// single static mesh.
     pub lod_viz: bool,
-    /// Opt-in: stream a per-rover canonical-res heightfield collider ring instead
-    /// of one static full-DEM collider (see [`crate::collider_ring`]). When `true`
+    /// Opt-in: stream a canonical-res heightfield collider ring around runtime
+    /// physical support footprints instead of one static full-DEM collider (see
+    /// [`crate::collider_ring`]). When `true`
     /// the static collider is **suppressed** (the ring replaces it — overlapping
     /// heightfields would double up contacts). `false` = the single static collider.
     pub collider_ring: bool,
@@ -459,8 +461,9 @@ pub struct SpawnDemTerrain {
     /// Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of
     /// one static mesh; collider/physics unchanged. Production visual path.
     pub lod_viz: bool,
-    /// Stream a per-rover canonical-res collider ring instead of one static
-    /// full-DEM collider (replaces it — physics rides the streamed tiles).
+    /// Stream a canonical-res collider ring around runtime physical support
+    /// footprints instead of one static full-DEM collider (replaces it — physics
+    /// rides the streamed tiles).
     pub collider_ring: bool,
     /// Convenience: add a crater layer at this density (craters per hectare). `0`
     /// (default) = no craters. The USD path instead composes layers as child prims
