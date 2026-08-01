@@ -335,7 +335,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`),  resolved to a Bevy `Entity` in the observer via `ApiEntityRegistry`.   Deliberately `u64`, not `Entity` — this is "**Pattern B**". The  type-driven id codec (`crates/lunco-networking/PH2_ID_CODEC.md`)  auto-converts only `Entity`-typed fields, so a `u64` field opts out and  is resolved here instead. NOT migrated to `Entity` because this command  is `#[Command(default)]`, which derives `Default`, and `Entity` has no  `Default`. Leaving it `u64` is a cleanliness leftover, not a  names/correctness issue — the codec no longer keys off field names at  all, so this `u64` is simply ignored by it. (An earlier comment here  blamed the resolver "dropping the generation"; that was stale — the  codec preserves index+generation via `Entity::to_bits()`.) |
-| `translation` | `Vec3` |  Target translation, **grid-absolute** — the frame USD authors  `xformOp:translate` in, NOT the entity's raw `Transform.translation`.   The two are the same thing only for an entity in cell 0, which is why  this went unnoticed in the luncosim: everything there sits in the origin  cell. At the moonbase (cells 2 km wide) a caller that passed  `Transform.translation` was short by `cell × edge`, and the move  teleported the object a whole cell — see `lunco_core::coords::grid_absolute`. |
+| `translation` | `[f64; 3]` | Target translation, **grid-absolute** — the frame USD authors `xformOp:translate` in, not the entity's raw `Transform.translation`. The f64 wire form preserves precision across big-space cells. |
 
 #### `ReloadShader`
 
@@ -439,6 +439,28 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`), same  resolution path as [`MoveEntity`] — `u64` "Pattern B", resolved in the  observer; see [`MoveEntity`]'s `entity_id` for why it stays `u64`. |
 | `property` | `String` |  Property name (see struct docs). |
 | `value` | `String` |  Value; comma-separated `r,g,b` for colors, a single float for params,  an asset path for `shader`, `true`/`false` for `visible`. |
+
+#### `SetUsdAttribute`
+
+Author a standard USD attribute in the active document's runtime layer. This is
+the generic authoring command used by data-driven Rhai tools; it does not create
+a LunCo-specific geometry schema.
+
+```jsonc
+{"command":"SetUsdAttribute",
+ "params":{"path":"/World/Guide","name":"points",
+           "type_name":"point3f[]","value":"[(0,0,0),(1,0,0)]"}}
+```
+
+The prim must belong to the active document. The document validates the USD
+type and literal, journals the edit, and re-composes the live stage.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` | Absolute USD prim path. |
+| `name` | `String` | Standard USD attribute name. |
+| `type_name` | `String` | USD type name, such as `point3f[]`. |
+| `value` | `String` | USDA literal, except raw `string` values. |
 
 #### `SetShaderSource`
 

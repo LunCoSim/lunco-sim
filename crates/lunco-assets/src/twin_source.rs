@@ -342,6 +342,17 @@ impl AssetReader for TwinReader {
 mod tests {
     use super::*;
 
+    #[test]
+    fn twin_uri_normalizes_windows_relative_paths() {
+        assert_eq!(
+            twin_uri(
+                "Summer Space School",
+                Path::new(r"sim\scenes\traverse.usda")
+            ),
+            "twin://Summer Space School/sim/scenes/traverse.usda"
+        );
+    }
+
     /// The overlay must be keyed identically to the path the `AssetReader`
     /// receives for `twin://<name>/<rel>` (scheme stripped) — otherwise an
     /// `AssetServer` load would miss it and read the on-disk file.

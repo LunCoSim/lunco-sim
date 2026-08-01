@@ -565,7 +565,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                             };
                             world.trigger(crate::commands::MoveEntity {
                                 entity_id: gid.get(),
-                                translation: new_t,
+                                translation: new_t.to_array().map(f64::from),
                             });
                         });
                     }

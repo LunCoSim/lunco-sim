@@ -11,6 +11,8 @@
 //! high-precision manual editing. It ensures the coordinate system
 //! remains stable by temporarily pausing origin re-centering.
 
+use std::collections::HashSet;
+
 use avian3d::prelude::{
     LinearVelocity, RigidBody, RotationInterpolation, TranslationInterpolation,
 };
@@ -19,6 +21,21 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::FloatingOrigin;
 use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTarget};
+
+/// The authoritative lifecycle of a gizmo edit.
+///
+/// Bevy command insertion is deferred, so a component query is not a drag
+/// session. Keeping the captured entities and the exact FloatingOrigin holder
+/// here makes capture/restore idempotent across frames and scene reloads.
+#[derive(Resource, Default)]
+pub struct GizmoDragSession {
+    /// Real entities whose pre-drag state is owned by this session.
+    targets: HashSet<Entity>,
+    /// The entity that owned FloatingOrigin when the session began.
+    frozen_origin: Option<Entity>,
+    /// Whether the origin transaction has been opened.
+    origin_frozen: bool,
+}
 
 /// Tracks the previous parent-local position and metadata for drag lifecycle.
 #[derive(Component)]
@@ -239,13 +256,13 @@ pub fn sync_gizmo_dragging_marker(
 pub fn capture_gizmo_start(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     q_rigid_bodies: Query<&RigidBody>,
-    q_prev_pos: Query<&GizmoPrevPos>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     // The cell chain, for the grid-absolute drag anchor (`GizmoPrevPos::abs_pos`).
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
-    q_floating_origin: Query<Entity, With<FloatingOrigin>>,
+    q_origin_holders: Query<(Entity, Has<FloatingOrigin>, Has<lunco_core::Avatar>)>,
+    mut session: ResMut<GizmoDragSession>,
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
@@ -255,10 +272,12 @@ pub fn capture_gizmo_start(
         if !gizmo_target.is_active() {
             continue;
         }
-        if q_prev_pos.get(entity).is_ok() {
+        // `GizmoPrevPos` is inserted through deferred commands. The session is
+        // the synchronous guard; without it, every Last pass before the insert
+        // flushes captures and freezes FloatingOrigin again.
+        if session.targets.contains(&entity) {
             continue;
         }
-        captured_any = true;
 
         // 2. DISABLE INTERPOLATION
         // Remove interpolation components so the visual mesh doesn't "fight" the gizmo.
@@ -277,6 +296,8 @@ pub fn capture_gizmo_start(
         let Ok((_, tf)) = q_spatial.get(entity) else {
             continue;
         };
+        captured_any = true;
+        session.targets.insert(entity);
         let local_pos = tf.translation.as_dvec3();
         let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
             .map(|p| p.0)
@@ -300,7 +321,7 @@ pub fn capture_gizmo_start(
             });
     }
 
-    if captured_any {
+    if captured_any && !session.origin_frozen {
         // A selected lander is an articulation: legs and pads are separate
         // dynamic bodies coupled to the root. Holding the entire physics world
         // is the only atomic capture boundary available to Avian; changing only
@@ -310,7 +331,11 @@ pub fn capture_gizmo_start(
         // 1. FREEZE COORDINATE SYSTEM
         // Remove FloatingOrigin from the camera. This stops big_space from shifting
         // the world while we drag, breaking the positive feedback loop with the camera.
-        for cam_ent in q_floating_origin.iter() {
+        session.frozen_origin = q_origin_holders
+            .iter()
+            .find_map(|(entity, has_origin, _)| has_origin.then_some(entity));
+        session.origin_frozen = true;
+        if let Some(cam_ent) = session.frozen_origin {
             commands.entity(cam_ent).try_remove::<FloatingOrigin>();
             info!("GIZMO: freezing FloatingOrigin on camera {:?}", cam_ent);
         }
@@ -438,8 +463,7 @@ pub fn restore_gizmo_dynamic(
     q_prev_pos: Query<(Entity, &GizmoPrevPos)>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_avatar: Query<Entity, With<lunco_core::Avatar>>,
-    q_floating_origin: Query<Entity, With<FloatingOrigin>>,
+    q_origin_holders: Query<(Entity, Has<FloatingOrigin>, Has<lunco_core::Avatar>)>,
     q_tf: Query<&Transform>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     q_parents: Query<&ChildOf>,
@@ -447,14 +471,18 @@ pub fn restore_gizmo_dynamic(
     q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
     usd_registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut session: ResMut<GizmoDragSession>,
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
-    let mut restored_any = false;
+    let mut restored_entities = Vec::new();
     let released = mouse
         .as_deref()
         .is_some_and(|buttons| buttons.just_released(MouseButton::Left));
     for (entity, prev) in q_prev_pos.iter() {
+        if !session.targets.contains(&entity) {
+            continue;
+        }
         // `GizmoTarget::is_active` is the transform-gizmo crate's authoritative
         // interaction state.  Do not combine it with raw mouse state here:
         // `Last` is deliberately later than input processing, and doing so can
@@ -466,8 +494,6 @@ pub fn restore_gizmo_dynamic(
         if active && !released {
             continue;
         }
-
-        restored_any = true;
 
         info!(
             "GIZMO: drag ended for {:?}, restoring coordinate systems",
@@ -552,43 +578,52 @@ pub fn restore_gizmo_dynamic(
         if let (Ok(gid), Some(abs)) = (q_gid.get(entity), abs) {
             commands.trigger(crate::commands::MoveEntity {
                 entity_id: gid.get(),
-                translation: abs.0.as_vec3(),
+                translation: abs.0.to_array(),
             });
         }
+        restored_entities.push(entity);
     }
 
-    // Re-attach FloatingOrigin to the avatar camera ONLY when the LAST drag
-    // ends — i.e. no `GizmoTarget` is still active. With several entities
-    // shift-selected and dragged together, restoring the origin the instant the
-    // first one releases would un-freeze big_space *underneath* the entities
-    // still being dragged (re-introducing the camera/origin feedback loop the
-    // capture-time freeze exists to prevent).
-    let any_still_active = gizmo_targets.iter().any(|(_, gt)| gt.is_active());
-    // Take the origin off its current holder ONLY once we know who gets it next.
-    // If the scene reloaded mid-drag the avatar is gone, and stripping the origin
-    // with nobody to hand it to left the world with zero origins — big_space
-    // logs "BigSpace … has no floating origins" and stops propagating transforms
-    // until the `anchor_owns_origin_by_default` guard re-seats it a frame later.
-    // No avatar means: leave whoever holds it holding it.
-    if restored_any && !any_still_active && !q_avatar.is_empty() {
-        // 1. RESTORE ORIGIN TRACKING
-        // Claim FloatingOrigin from the fallback anchor.
-        for origin in q_floating_origin.iter() {
-            commands.entity(origin).try_remove::<FloatingOrigin>();
+    for entity in restored_entities {
+        session.targets.remove(&entity);
+    }
+    // A scene reload can despawn a target before the deferred restore runs. Do
+    // not leave a dead entity holding the physics transaction open forever.
+    session
+        .targets
+        .retain(|entity| q_tf.get(*entity).is_ok());
+    let session_empty = session.targets.is_empty();
+
+    // Restore the exact origin holder captured at drag start. Re-attaching to
+    // "whatever avatar exists now" was the source of the asymmetric lifecycle:
+    // repeated captures removed the origin from one entity while restore guessed
+    // another. Only use the current avatar as the documented scene-reload
+    // recovery when the original holder no longer exists.
+    if session_empty && session.origin_frozen {
+        let holder = session
+            .frozen_origin
+            .filter(|entity| q_tf.get(*entity).is_ok())
+            .or_else(|| {
+                q_origin_holders
+                    .iter()
+                    .find_map(|(entity, _, is_avatar)| is_avatar.then_some(entity))
+            });
+        if let Some(holder) = holder {
+            for (origin, has_origin, _) in q_origin_holders.iter() {
+                if has_origin && origin != holder {
+                    commands.entity(origin).try_remove::<FloatingOrigin>();
+                }
+            }
+            commands.entity(holder).try_insert(FloatingOrigin);
+            info!("GIZMO: restored FloatingOrigin on {:?}", holder);
         }
-        // Re-attach FloatingOrigin to the avatar camera.
-        for av_ent in q_avatar.iter() {
-            commands.entity(av_ent).try_insert(FloatingOrigin);
-            info!(
-                "GIZMO: restored FloatingOrigin on avatar camera {:?}",
-                av_ent
-            );
-        }
+        session.frozen_origin = None;
+        session.origin_frozen = false;
     }
     // Resume only after every released drag has authored its root teleport and
     // its velocity was zeroed. This keeps a jointed lander from taking one fixed
     // step against a half-restored articulation.
-    if restored_any && !any_still_active {
+    if session_empty {
         physics_holds.set(lunco_physics::PhysicsHolds::CINEMATIC, false);
     }
 }
@@ -683,6 +718,7 @@ mod tests {
         // it writes must exist — a bare `App` has none, and the missing init made
         // the system fail param validation instead of running the case under test.
         app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.init_resource::<GizmoDragSession>();
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let vessel = app
@@ -702,6 +738,10 @@ mod tests {
                 LinearVelocity::default(),
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<GizmoDragSession>()
+            .targets
+            .insert(vessel);
 
         app.world_mut().spawn(ControllerLink {
             vessel_entity: vessel,
@@ -740,6 +780,7 @@ mod tests {
         // it writes must exist — a bare `App` has none, and the missing init made
         // the system fail param validation instead of running the case under test.
         app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.init_resource::<GizmoDragSession>();
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let prop = app
@@ -760,6 +801,10 @@ mod tests {
                 LinearVelocity::default(),
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<GizmoDragSession>()
+            .targets
+            .insert(prop);
         app.world_mut()
             .resource_mut::<SelectedEntities>()
             .entities
@@ -796,6 +841,7 @@ mod tests {
         // Same reason as the tests above: `restore_gizmo_dynamic` writes the
         // physics hold, so the resource must exist for the system to run at all.
         app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.init_resource::<GizmoDragSession>();
         app.add_observer(crate::commands::persist_move_to_runtime_layer);
         app.add_systems(Update, restore_gizmo_dynamic);
 
@@ -835,6 +881,10 @@ mod tests {
                 },
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<GizmoDragSession>()
+            .targets
+            .insert(dragged);
         app.world_mut()
             .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
             .assign(dragged, lunco_core::GlobalEntityId::from_raw(42));

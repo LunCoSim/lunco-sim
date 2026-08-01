@@ -621,12 +621,9 @@ pub struct MoveEntity {
     /// cell. At the moonbase (cells 2 km wide) a caller that passed
     /// `Transform.translation` was short by `cell × edge`, and the move
     /// teleported the object a whole cell — see `lunco_core::coords::grid_absolute`.
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. `Vec3` here is f32 on the wire, violating the f64
-    // spatial mandate (AGENTS.md §4) — precision is lost before the handler's
-    // `DVec3` cast. Migrate to `[f64; 3]` before multiplayer hardening
-    // (INDEPENDENT-REVIEW-2026-07-19_agy.md SCENE-2).
-    pub translation: Vec3,
+    /// The wire representation is f64 so a grid-absolute pose keeps precision
+    /// across cells and network/API round trips.
+    pub translation: [f64; 3],
 }
 
 /// Observer for `MoveEntity`.
@@ -648,6 +645,13 @@ pub fn on_move_entity_command(
     q_marker: Query<&JustMovedKinematic>,
 ) {
     let cmd = trigger.event();
+    if cmd.translation.iter().any(|value| !value.is_finite()) {
+        warn!(
+            "MOVE_ENTITY: rejecting non-finite grid-absolute target for api_id={}",
+            cmd.entity_id
+        );
+        return;
+    }
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
         warn!("MOVE_ENTITY: no api_id={} in registry", cmd.entity_id);
@@ -676,7 +680,7 @@ pub fn on_move_entity_command(
     );
     let (new_cell, new_local) = lunco_core::coords::grid_local_from_absolute(
         target,
-        lunco_core::coords::GridPos(cmd.translation.as_dvec3()),
+        lunco_core::coords::GridPos(DVec3::from_array(cmd.translation)),
         &q_parents,
         &q_grids,
     );
@@ -735,7 +739,7 @@ pub fn on_move_entity_command(
     // Grid-absolute delta: a displacement is frame-invariant across the cell
     // split, so this is the same vector whether or not the move crossed a cell
     // boundary — which `cmd.translation - tf.translation` was not.
-    let delta = lunco_core::coords::GridPos(cmd.translation.as_dvec3()) - prev_abs;
+    let delta = lunco_core::coords::GridPos(DVec3::from_array(cmd.translation)) - prev_abs;
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }
@@ -745,7 +749,7 @@ pub fn on_move_entity_command(
 
     info!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
-        cmd.entity_id, cmd.translation.x, cmd.translation.y, cmd.translation.z
+        cmd.entity_id, cmd.translation[0], cmd.translation[1], cmd.translation[2]
     );
 }
 
@@ -885,7 +889,7 @@ pub fn persist_move_to_runtime_layer(
         op: UsdOp::SetTranslate {
             edit_target: LayerId::runtime(),
             path,
-            value: [v.x as f64, v.y as f64, v.z as f64],
+            value: v,
         },
     });
 }
@@ -1182,6 +1186,71 @@ pub fn on_set_usd_connection(
                 cmd.type_name.clone()
             },
             sources: cmd.sources.clone(),
+        },
+    });
+}
+
+/// Author one standard USD attribute in the active document's runtime layer.
+///
+/// This is the generic authoring verb for data-driven editor tools. It does not
+/// add a LunCo schema or mutate an ECS component: the USD type and literal are
+/// passed to the document's typed `UsdOp::SetAttribute` path, so composed USD
+/// remains the source of truth. A tool such as `nurbs.rhai` can therefore edit
+/// `point3f[] points` without a Rust handler for every geometry type.
+#[Command(default)]
+pub struct SetUsdAttribute {
+    /// Absolute USD prim path owned by the active document.
+    pub path: String,
+    /// Attribute name, for example `points` or `inputs:radius`.
+    pub name: String,
+    /// USD type name, for example `point3f[]`, `float`, or `token`.
+    pub type_name: String,
+    /// USD literal, exactly as it would appear in USDA (except `string`, which
+    /// is raw content according to `UsdOp::SetAttribute`'s contract).
+    pub value: String,
+}
+
+#[on_command(SetUsdAttribute)]
+pub fn on_set_usd_attribute(
+    trigger: On<SetUsdAttribute>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    if cmd.path.is_empty() || cmd.name.is_empty() || cmd.type_name.is_empty() {
+        warn!("SET_USD_ATTRIBUTE: path, name, and type_name are required");
+        return;
+    }
+    let Ok(path) = lunco_usd_bevy::SdfPath::new(&cmd.path) else {
+        warn!("SET_USD_ATTRIBUTE: invalid prim path `{}`", cmd.path);
+        return;
+    };
+    let Some(doc) = workspace.as_deref().and_then(|ws| ws.0.active_document) else {
+        debug!("SET_USD_ATTRIBUTE: no active document");
+        return;
+    };
+    let Some(host) = usd_registry.host(doc) else {
+        warn!("SET_USD_ATTRIBUTE: active document {doc} is unavailable");
+        return;
+    };
+    if host.document().data().spec(&path).is_none()
+        && host.document().runtime_data().spec(&path).is_none()
+    {
+        warn!(
+            "SET_USD_ATTRIBUTE: prim `{}` is not owned by the active document",
+            cmd.path
+        );
+        return;
+    }
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: cmd.path.clone(),
+            name: cmd.name.clone(),
+            type_name: cmd.type_name.clone(),
+            value: cmd.value.clone(),
         },
     });
 }
@@ -3210,6 +3279,7 @@ register_commands!(
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
+    on_set_usd_attribute,
     on_set_usd_connection,
     on_spawn_entity_command,
     on_step_physics,
@@ -3406,7 +3476,7 @@ mod tests {
         // Move it 100 m up, in grid-absolute terms: 3947 → 4047.
         app.world_mut().trigger(MoveEntity {
             entity_id: 7,
-            translation: Vec3::new(0.0, 4047.0, 0.0),
+            translation: [0.0, 4047.0, 0.0],
         });
         app.update();
 
@@ -3450,7 +3520,7 @@ mod tests {
 
         app.world_mut().trigger(MoveEntity {
             entity_id: 9,
-            translation: Vec3::new(1.0, 2.0, 3.0),
+            translation: [1.0, 2.0, 3.0],
         });
         app.update();
 
@@ -3517,7 +3587,7 @@ mod tests {
         let (mut app, doc) = app_with_runtime_producer("/World", 42);
         app.world_mut().trigger(MoveEntity {
             entity_id: 42,
-            translation: Vec3::new(3.0, 4.0, 5.0),
+            translation: [3.0, 4.0, 5.0],
         });
         for _ in 0..3 {
             app.update();
@@ -3611,7 +3681,7 @@ mod tests {
         app.add_observer(lunco_usd::commands::on_undo_usd_document);
         app.world_mut().trigger(MoveEntity {
             entity_id: 42,
-            translation: Vec3::new(3.0, 4.0, 5.0),
+            translation: [3.0, 4.0, 5.0],
         });
         for _ in 0..3 {
             app.update();
@@ -3659,7 +3729,7 @@ mod tests {
         let (mut app, doc) = app_with_runtime_producer("/PaletteSpawn", 7);
         app.world_mut().trigger(MoveEntity {
             entity_id: 7,
-            translation: Vec3::new(1.0, 2.0, 3.0),
+            translation: [1.0, 2.0, 3.0],
         });
         for _ in 0..3 {
             app.update();

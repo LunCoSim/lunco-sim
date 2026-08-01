@@ -235,14 +235,7 @@ impl Plugin for UsdSimPlugin {
             .add_observer(on_add_usd_sim_prim)
             // `try_wire_wheel` runs in PreUpdate so that the `SimConnection` entities
             // exist before cosim propagation pushes values through them.
-            .add_systems(
-                PreUpdate,
-                (
-                    try_wire_wheel,
-                    resolve_differential_coupling,
-                    resolve_behavior_targets,
-                ),
-            )
+            .add_systems(PreUpdate, (try_wire_wheel, resolve_differential_coupling))
             // USD → ShaderMaterial authoring. Ordered AFTER the visuals exist
             // and BEFORE `process_usd_sim_prims` consumes them, so the material
             // is always present before a wheel is split onto its visual child
@@ -267,6 +260,13 @@ impl Plugin for UsdSimPlugin {
                 (
                     process_usd_sim_prims
                         .run_if(any_unprocessed_usd_sim)
+                        .after(lunco_usd_bevy::sync_usd_visuals),
+                    // Resolve behavior targets only after this frame's USD
+                    // prim projection has admitted newly spawned waypoint
+                    // entities. Running in PreUpdate raced the projection and
+                    // replaced a valid binding with an incomplete map.
+                    resolve_behavior_targets
+                        .after(process_usd_sim_prims)
                         .after(lunco_usd_bevy::sync_usd_visuals),
                     // Independent link/celestial projector — runs for EVERY prim (cosim,
                     // wheel, plain), gated by its own marker, blocked by nothing.
@@ -2903,28 +2903,15 @@ fn resolve_behavior_targets(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    let has_unresolved_targets = q_trees.iter().any(|(vessel, xml, _)| {
-        let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
-        if targets.is_empty() {
-            return false;
-        }
-        match q_existing_bindings.get(vessel) {
-            Ok(b) => targets.iter().any(|t| !b.0.contains_key(t)),
-            Err(_) => true,
-        }
-    });
-
     if q_trees.is_empty()
-        || (q_new_prims.is_empty()
-            && q_changed_xml.is_empty()
-            && q_new_ids.is_empty()
-            && !has_unresolved_targets)
+        || (q_new_prims.is_empty() && q_changed_xml.is_empty() && q_new_ids.is_empty())
     {
         return;
     }
     for (vessel, xml, vessel_path) in q_trees.iter() {
         let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
+        let mut missing = false;
         let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
         debug!(
             "[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}",
@@ -2959,13 +2946,27 @@ fn resolve_behavior_targets(
                 );
                 bindings.0.insert(path, e);
             } else {
-                warn!(
-                    "[resolve_behavior_targets] failed to resolve target {} for vessel {:?}",
+                missing = true;
+                debug!(
+                    "[resolve_behavior_targets] target {} for vessel {:?} is pending USD projection",
                     path, vessel
                 );
             }
         }
-        commands.entity(vessel).try_insert(bindings);
+        // A binding is an atomic projection: replacing a complete map with a
+        // partial map makes the compiler observe a transient dangling target,
+        // which used to send the rover toward a default origin for one frame.
+        // Keep the previous complete map until the next prim projection gives
+        // us every target. The compiler then either has a complete new map or
+        // refuses the tree without changing vehicle pose.
+        if !missing {
+            commands.entity(vessel).try_insert(bindings);
+        } else if q_existing_bindings.get(vessel).is_ok() {
+            debug!(
+                "[resolve_behavior_targets] retaining prior complete bindings for vessel {:?}",
+                vessel
+            );
+        }
     }
 }
 

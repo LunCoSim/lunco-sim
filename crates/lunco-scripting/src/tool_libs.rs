@@ -235,7 +235,14 @@ mod tests {
     fn builtins_scanned_from_embedded_dir() {
         register_builtins();
         let names = lunco_tools::names();
-        for expected in ["formation", "survey", "debug_viz", "mathx"] {
+        for expected in [
+            "formation",
+            "survey",
+            "debug_viz",
+            "gizmo",
+            "nurbs",
+            "mathx",
+        ] {
             assert!(
                 names.contains(&expected.to_string()),
                 "missing built-in {expected}"
