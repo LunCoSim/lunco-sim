@@ -15,7 +15,9 @@ To tune a rover, edit its corresponding `.usda` file (e.g., [rocker_bogie.usda](
 ### 1. Mass & Inertia Properties
 These live on the root vehicle or link `Xform` prims:
 *   `float physics:mass`: The mass of the link or body (in kg).
-    *   *Chassis root:* Default is `300.0` kg.
+    *   *Perseverance-class chassis root:* `720.0` kg; with articulated links,
+        wheels, drives, avionics, and camera hardware the composed rover is
+        approximately `1,025.0` kg.
     *   *Rockers:* Default is `50.0` kg.
     *   *Bogies:* Default is `30.0` kg.
     *   *Wheels:* Default is `25.0` kg.
@@ -38,7 +40,11 @@ Even for joint-based physical rovers, the suspension settings are read from stan
 ### 4. Drivetrain & Motor Actuation (Authored per Wheel)
 Controlling traction and speed:
 *   `float physxVehicleEngine:peakTorque`: Maximum motor torque (default `300.0` N·m). High torque allows climbing steep slopes but can cause wheelspin.
-*   `float physxVehicleEngine:maxRotationSpeed`: No-load axle angular velocity (default `12.0` rad/s ⇒ ~4.8 m/s at r=0.4). This is THE speed ceiling for **both** wheel realizations — the physical joint motor's target and the raycast force curve's rolloff (`clamp(1 − ω/ω_max, 0, 1)`) read the same attribute, which is what keeps the two drivetrains in parity. See `assets/scenarios/tests/drivetrain_parity.rhai`.
+*   `float physxVehicleEngine:maxRotationSpeed`: No-load axle angular velocity.
+    The Perseverance-class rocker-bogie authors a 0.525 m wheel and its
+    speed/torque curve in the motor and gearbox parts; both physical and raycast
+    realizations read the same composed wheel parameters, which keeps the
+    drivetrain contract in parity. See `assets/scenarios/tests/drivetrain_parity.rhai`.
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
 *   `double lunco:tire:frictionCoefficient`: Coulomb friction coefficient ($\mu$, default `0.8`) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).

@@ -38,7 +38,7 @@ def Xform "RockerBogieTest" (
         rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
     }
 
-    # The step under the left-rear foot (world x≈-1.2, z≈+1.2). Static collider
+    # The step under the left-rear foot (world x≈-1.29, z≈+1.2). Static collider
     # (root-level, no rigid body): centred on y=0 with a 0.5 m Y scale, so its top
     # is at y=0.25 and it lifts that foot a quarter of a metre.
     def Cube "Step" (
@@ -46,7 +46,7 @@ def Xform "RockerBogieTest" (
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.0, 0.0, 1.2)
+        double3 xformOp:translate = (-1.29, 0.0, 1.2)
         double3 xformOp:scale = (0.7, 0.5, 0.7)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]
@@ -72,16 +72,10 @@ def Xform "RockerBogieTest" (
     }
 
     # DROP HEIGHT IS CALIBRATED TO THE ROVER'S RIDE HEIGHT, not a round number.
-    # Every wheel centre sits 0.6 m below the chassis origin, so on 0.25 m wheels
-    # the chassis rests at y = 0.85 and this is a 0.6 m fall. It was y = 1.6 when
-    # the rover ran on 0.4 m wheels — the same 0.6 m. Left there after the wheels
-    # shrank, the extra 0.15 m of fall bounced the rear-left foot clean OFF the
-    # step at t ≈ 7 s, and the test then asserted "chassis level, L + R ≈ 0" about
-    # a rover sitting flat on the ground with nothing loading it: a PASS that a
-    # rover with no differential at all would also earn. The anti-trivial guard
-    # (peak |L| > 0.02 rad) still held, because the transient alone cleared it.
-    #
-    # If the wheels are resized again, move this with them.
+    # Every wheel centre sits 0.6 m below the chassis origin; with the 0.2625 m
+    # Perseverance wheel the settled chassis is about y = 0.86, and y = 1.6 keeps
+    # the same safe drop clearance. The step is centered on the authored rear-left
+    # axle rather than relying on the old proxy's x position.
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )

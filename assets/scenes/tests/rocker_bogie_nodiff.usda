@@ -39,7 +39,7 @@ def Xform "RockerBogieTest" (
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.0, 0.0, 1.2)
+        double3 xformOp:translate = (-1.29, 0.0, 1.2)
         double3 xformOp:scale = (0.7, 0.5, 0.7)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]

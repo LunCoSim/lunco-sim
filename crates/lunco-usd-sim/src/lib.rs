@@ -515,7 +515,7 @@ fn process_usd_sim_prims(
         ),
         Without<UsdSimProcessed>,
     >,
-    all_prims: Query<(Entity, &UsdPrimPath)>,
+    all_prims: Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     q_grids: Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
@@ -636,6 +636,7 @@ fn process_usd_sim_prims(
             wait_for_visuals,
             topology,
             &all_prims,
+            &q_child_of,
             &q_existing_floating_origins,
             &q_provisional_cameras,
             &q_grids,
@@ -738,7 +739,8 @@ fn process_usd_sim_prim_read(
     maybe_child_of: Option<&ChildOf>,
     wait_for_visuals: bool,
     topology: &StageJointTopology,
-    all_prims: &Query<(Entity, &UsdPrimPath)>,
+    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    q_child_of: &Query<&ChildOf>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
@@ -836,12 +838,17 @@ fn process_usd_sim_prim_read(
             Some("spring") => {
                 commands.entity(entity).try_insert(SuspensionSpring);
             }
+            Some("casing") => {
+                // Static carrier-mounted housing. Physical-wheel projection
+                // reparents it to the chassis; raycast wheels leave it in the
+                // authored wheel hierarchy.
+            }
             // The API's whole purpose is the role; applying it without one (or
             // with a token outside `allowedTokens`) is an authoring mistake.
             other => warn!(
                 "USD prim {} applies LunCoSuspensionVisualAPI but its \
-                     lunco:suspensionVisual:role is {:?} — expected \"piston\" or \
-                     \"spring\"; no visual will be animated.",
+                     lunco:suspensionVisual:role is {:?} — expected \"casing\", \
+                     \"piston\", or \"spring\"; no visual will be animated.",
                 sdf_path.as_str(),
                 other.unwrap_or("<unauthored>")
             ),
@@ -1455,11 +1462,11 @@ fn process_usd_sim_prim_read(
         let motor_entity = powertrain.as_ref().and_then(|binding| {
             all_prims
                 .iter()
-                .find(|(_, candidate)| {
+                .find(|(_, candidate, _)| {
                     candidate.stage_handle == prim_path.stage_handle
                         && candidate.path == binding.motor.as_str()
                 })
-                .map(|(entity, _)| entity)
+                .map(|(entity, _, _)| entity)
         });
         let params = match WheelParams::read(
             reader,
@@ -1591,6 +1598,18 @@ fn process_usd_sim_prim_read(
                 maybe_mat,
                 maybe_shader_mat,
                 maybe_child_of,
+                physical_suspension_visuals(
+                    reader,
+                    prim_path,
+                    entity,
+                    Transform {
+                        translation: existing_tf.translation,
+                        rotation: Quat::IDENTITY,
+                        scale: existing_tf.scale,
+                    },
+                    &all_prims,
+                    &q_child_of,
+                ),
                 &params,
                 motor_entity,
                 p_drive,
@@ -1982,6 +2001,50 @@ fn setup_raycast_wheel(
         .remove::<Mass>();
 }
 
+/// Finds suspension visuals that USD authored below a wheel. Physical wheels
+/// spin as rigid bodies, so these visuals must be moved to the wheel's carrier
+/// before the wheel body is allowed to rotate. Their local transforms are
+/// converted from wheel-local to carrier-local while preserving the authored
+/// composed stage hierarchy.
+fn physical_suspension_visuals(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    wheel_path: &UsdPrimPath,
+    wheel_entity: Entity,
+    wheel_tf: Transform,
+    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    q_child_of: &Query<&ChildOf>,
+) -> Vec<(Entity, Transform)> {
+    let mut visuals = Vec::new();
+    for (child, child_path, maybe_child_tf) in all_prims.iter() {
+        if child == wheel_entity || child_path.stage_handle != wheel_path.stage_handle {
+            continue;
+        }
+        let Ok(child_of) = q_child_of.get(child) else {
+            continue;
+        };
+        if child_of.parent() != wheel_entity {
+            continue;
+        }
+        let Ok(sdf_child_path) = SdfPath::new(&child_path.path) else {
+            continue;
+        };
+        if !reader.has_api_schema(&sdf_child_path, "LunCoSuspensionVisualAPI") {
+            continue;
+        }
+        let Some(role) = reader.text(&sdf_child_path, "lunco:suspensionVisual:role") else {
+            continue;
+        };
+        if !matches!(role.as_str(), "casing" | "piston" | "spring") {
+            continue;
+        }
+        let Some(child_tf) = maybe_child_tf.copied() else {
+            continue;
+        };
+        visuals.push((child, wheel_tf.mul_transform(child_tf)));
+    }
+    visuals
+}
+
 /// Sets up a wheel as a full rigid body bound to the chassis by a revolute
 /// joint, mirroring the standard `PhysicsRevoluteJoint` authored in USD.
 ///
@@ -2003,6 +2066,7 @@ fn setup_physical_wheel(
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
+    suspension_visuals: Vec<(Entity, Transform)>,
     params: &WheelParams,
     motor_entity: Option<Entity>,
     p_drive: Entity,
@@ -2203,6 +2267,15 @@ fn setup_physical_wheel(
         return;
     };
     let chassis = child_of.parent();
+    // The wheel body rotates about its axle. Keep the authored suspension strut
+    // on the chassis carrier so its casing, piston, and spring remain visually
+    // connected to the mount instead of spinning with the tire. The transforms
+    // were converted from wheel-local to chassis-local by the caller.
+    for (visual, transform) in suspension_visuals {
+        commands
+            .entity(visual)
+            .insert((transform, ChildOf(chassis)));
+    }
     // NOTE: `ArticulatedVehicle` (the articulated-root guard) is no longer stamped
     // here. It is derived declaratively from the USD joint graph in
     // `process_usd_sim_prims` (a prim that is a joint `physics:body0` target, or

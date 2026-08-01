@@ -59,12 +59,15 @@ over "Suspension" (
     # lunco-mobility) animates them along the suspension travel axis. A `kind`
     # token is NOT used for this — `kind` is USD's regulated model taxonomy
     # (component/assembly/subcomponent), and "piston"/"spring" are not valid kinds.
-    # The casing never moves, so it applies nothing: it is plain geometry.
+    # The casing never animates, but its role lets the physical-wheel projection
+    # keep it on the chassis carrier instead of inheriting wheel spin.
 
     def Cylinder "SuspensionCasing" (
+        prepend apiSchemas = ["LunCoSuspensionVisualAPI"]
         doc = "Visual housing (outer cylinder) of the suspension strut. Stays fixed to the chassis mount point."
     )
     {
+        uniform token lunco:suspensionVisual:role = "casing"
         uniform token axis = "Y"
         double radius = 0.04
         double height = 0.2

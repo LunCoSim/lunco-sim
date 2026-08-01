@@ -148,11 +148,11 @@ fn every_rover_wheel_composes_its_applied_schemas() {
     }
 }
 
-/// A strut's moving visuals declare themselves; the casing does not.
+/// A strut's visuals declare their role; the casing is explicitly static.
 ///
 /// The piston and spring apply `LunCoSuspensionVisualAPI` and carry a role token;
-/// the casing never moves, so it applies nothing and stays plain geometry. The
-/// loader gates on the API, so a role token without the API animates nothing.
+/// the casing stays carrier-mounted and receives no animation. The loader gates
+/// on the API, so each role is explicit in the composed stage.
 #[test]
 fn suspension_visuals_declare_their_role() {
     let cs = compose("vessels/rovers/skid_rover.usda");
@@ -176,8 +176,13 @@ fn suspension_visuals_declare_their_role() {
 
     let casing = SdfPath::new("/SkidRover/Wheel_FL/SuspensionCasing").unwrap();
     assert!(
-        !view.has_api_schema(&casing, "LunCoSuspensionVisualAPI"),
-        "the casing does not move — it must not claim a visual role"
+        view.has_api_schema(&casing, "LunCoSuspensionVisualAPI"),
+        "the casing must declare its static suspension visual role"
+    );
+    assert_eq!(
+        view.text(&casing, "lunco:suspensionVisual:role").as_deref(),
+        Some("casing"),
+        "the casing must declare the casing role"
     );
 }
 
@@ -191,7 +196,7 @@ fn a_wheel_composes_its_tire() {
     // Grip — `regolith` is the wheel's default tire.
     assert_eq!(
         view.real(&fl, "lunco:tire:frictionCoefficient"),
-        Some(1.2),
+        Some(1.5),
         "Wheel_FL must compose its tire's friction"
     );
     assert_eq!(

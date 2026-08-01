@@ -119,6 +119,14 @@ pub(crate) fn update_wheel_spin(
     }
 
     for (entity, mut wheel, local_tf, global_tf, hits, parent) in q_wheels.iter_mut() {
+        // A ray can report a zero-normal hit when its origin is inside a
+        // collider. Suspension rejects that as non-contact; the spin solver
+        // must use the same contact selection or it will solve grip against a
+        // fabricated flat normal for one tick at the terrain transition.
+        let contact = hits
+            .iter_sorted()
+            .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
+
         // All dynamics coefficients are USD-derived (stored on the component).
         let r = wheel.wheel_radius.max(1e-3);
         let inertia = wheel.axle_inertia();
@@ -253,11 +261,7 @@ pub(crate) fn update_wheel_spin(
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.
-            let normal = hits
-                .iter_sorted()
-                .next()
-                .map(|h| h.normal)
-                .unwrap_or(DVec3::Y);
+            let normal = contact.as_ref().map(|h| h.normal).unwrap_or(DVec3::Y);
             basis = crate::contact_plane_basis(wheel_forward, wheel_right, normal);
             v_long = hub_vel.dot(basis.0);
             v_lat = hub_vel.dot(basis.1);
@@ -280,7 +284,7 @@ pub(crate) fn update_wheel_spin(
         // which is the exact class of divergence the parity scenes exist to catch.
         let tau_drive = if braking { 0.0 } else { tau_drive };
 
-        let on_ground = wheel.last_normal_force >= 1.0 && hits.iter().next().is_some();
+        let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
         let mut w = wheel.spin_velocity;
         let mu_n = friction_mu * wheel.last_normal_force;
         // Longitudinal tire force, filled by whichever branch below resolves ω so

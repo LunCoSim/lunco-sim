@@ -1090,7 +1090,9 @@ class "LunCoSuspensionVisualAPI" (
     doc = """Marks a prim as a moving part of a suspension strut's VISUAL, so the
     mobility animation system can drive it from the live compression. Applied to the
     piston/spring subcomponents of a suspension
-    (`assets/components/mobility/suspensions/standard.usda`).
+    (`assets/components/mobility/suspensions/standard.usda`). The `casing` role
+    identifies static housing that remains mounted to a rigid carrier when the
+    wheel itself is projected as a spinning rigid body.
 
     LunCo extension: the PhysX vehicle schema is physics-only — it has no notion of
     a strut's visual parts."""
@@ -1099,13 +1101,14 @@ class "LunCoSuspensionVisualAPI" (
     uniform token lunco:suspensionVisual:role (
         doc = """Which moving part this prim is. `"piston"` ⇒ the prim is stamped
         with a `SuspensionPiston` Bevy component (translates along the travel axis);
-        `"spring"` ⇒ a `SuspensionSpring` component (scales along the travel axis).
+        `"spring"` ⇒ a `SuspensionSpring` component (scales along the travel axis);
+        `casing` is carrier-mounted static geometry and receives no animation.
         A `kind` token is NOT used for this — `kind` is USD's regulated model
         taxonomy (component/assembly/subcomponent), and "piston"/"spring" are not
         valid kinds. Read at load by `process_usd_sim_prim_read` (lunco-usd-sim).
         No fallback and no `""`: applying the API IS the claim to be a moving part,
         so there is no such thing as a roleless one."""
-        allowedTokens = ["piston", "spring"]
+        allowedTokens = ["casing", "piston", "spring"]
     )
 }
 

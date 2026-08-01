@@ -1,0 +1,52 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogieFlat"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Minimal physics fixture: no DEM, no terrain streaming, and no scenario. The
+# rover is driven through SetPorts after it settles so the body/contact solver
+# can be measured on a mathematically flat surface.
+def Xform "RockerBogieFlat" (
+    kind = "assembly"
+)
+{
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RockerBogieFlat/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+    )
+    {
+        double3 xformOp:translate = (0, 1.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

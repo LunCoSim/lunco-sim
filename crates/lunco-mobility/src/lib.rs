@@ -837,7 +837,7 @@ fn sync_raycast_wheel_physics_pose(
 /// from sliding like it's on ice and limits drive force to what the tire can
 /// actually grip.
 fn apply_wheel_drive(
-    q_wheels: Query<(&WheelRaycast, &Transform, &RayHits, &ChildOf)>,
+    q_wheels: Query<(&WheelRaycast, &Suspension, &Transform, &RayHits, &ChildOf)>,
     q_ports: Query<&Port>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
@@ -848,7 +848,7 @@ fn apply_wheel_drive(
         (With<DriveMix>, lunco_physics::Integrable),
     >,
 ) {
-    for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
+    for (wheel, susp, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
         if let Ok((mut forces, body, _)) = q_chassis.get_mut(parent_entity) {
             // drive-diag: the drive port the wheel reads, the body kind (Dynamic
@@ -869,7 +869,12 @@ fn apply_wheel_drive(
             }
             if q_ports.get(wheel.drive_port).is_ok() {
                 // Traction only exists when the ray is hitting the ground.
-                if hits.iter_sorted().next().is_some() {
+                let Some(hit) = hits.iter_sorted().find(|hit| {
+                    hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12
+                }) else {
+                    continue;
+                };
+                {
                     let normal_force = wheel.last_normal_force;
                     if normal_force < 1.0 {
                         // Not enough contact to transmit meaningful force
@@ -883,19 +888,33 @@ fn apply_wheel_drive(
                     // out (CQ-201). `wheel_tf.rotation` carries the steer angle (set
                     // in `apply_wheel_steering`); roll-spin lives on the child
                     // visual, so the drive direction stays correct.
-                    let (hub_pos_world, _) = wheel_hub_pose(
+                    let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
                         GridPos(forces.position().0),
                         GridRot(forces.rotation().0),
                         wheel_tf.translation.as_dvec3(),
                         wheel_tf.rotation.as_dquat(),
                     );
+                    // The tyre force belongs at the ray's contact point, not at
+                    // the hub. Applying it at the hub erased the wheel-radius
+                    // moment and was only equivalent on a flat, upright contact.
+                    // On a DEM slope that missing moment changes load transfer and
+                    // feeds the next suspension sample, producing the observed
+                    // forward/back contact limit cycle. The ray starts at the
+                    // authored strut top, so reconstruct its hit point in the
+                    // same grid-absolute frame as the chassis and ray query.
+                    let ray_origin = hub_pos_world.0
+                        + hub_rot_world.0
+                            * DVec3::Y
+                            * strut_offset(susp.rest_length, wheel.wheel_radius);
+                    let ray_direction = hub_rot_world.0 * DVec3::NEG_Y;
+                    let contact_point = ray_origin + ray_direction * hit.distance;
                     // The tire force was already solved this tick, from the real
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
                     // see `update_wheel_spin`. Applying it is all that is left.
-                    forces.apply_force_at_point(wheel.tire_force, hub_pos_world.0);
+                    forces.apply_force_at_point(wheel.tire_force, contact_point);
                     drive_diag_block!({
                         if wheel.tire_force.length() > 1.0 {
-                            let arm = hub_pos_world.0 - forces.position().0;
+                            let arm = contact_point - forces.position().0;
                             let moment = arm.cross(wheel.tire_force);
                             info!(
                                 "[drive-diag] apply_wheel_drive: chassis {:?} tire_force=({:.1},{:.1},{:.1}) at=({:.2},{:.2},{:.2}) body_pos=({:.2},{:.2},{:.2}) computed_moment_y={:.1}",
@@ -903,9 +922,9 @@ fn apply_wheel_drive(
                                 wheel.tire_force.x,
                                 wheel.tire_force.y,
                                 wheel.tire_force.z,
-                                hub_pos_world.0.x,
-                                hub_pos_world.0.y,
-                                hub_pos_world.0.z,
+                                contact_point.x,
+                                contact_point.y,
+                                contact_point.z,
                                 forces.position().0.x,
                                 forces.position().0.y,
                                 forces.position().0.z,

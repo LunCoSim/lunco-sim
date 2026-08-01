@@ -3500,8 +3500,8 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             .join("../../assets/vessels/rovers/rocker_bogie.usda");
         let stage = compose_file_to_stage(&f).expect("compose rocker_bogie");
         for (name, lp0) in [
-            ("HingeL", [-0.9, -0.2, 0.0]), // chassis ↔ rocker (ancestor)
-            ("HingeR", [0.9, -0.2, 0.0]),
+            ("HingeL", [-0.99, -0.2, 0.0]), // chassis ↔ rocker (ancestor)
+            ("HingeR", [0.99, -0.2, 0.0]),
             ("BogieHingeL", [0.0, -0.2, 0.6]), // rocker ↔ bogie (SIBLING)
             ("BogieHingeR", [0.0, -0.2, 0.6]),
         ] {
@@ -3512,7 +3512,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             .unwrap_or_else(|| panic!("{name} reads + derives"));
             assert!(
                 close(j.local_pos0, DVec3::new(lp0[0], lp0[1], lp0[2])),
-                "{name}: derived {:?} != old authored {lp0:?}",
+                "{name}: derived {:?} != Perseverance-class authored {lp0:?}",
                 j.local_pos0
             );
             assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
