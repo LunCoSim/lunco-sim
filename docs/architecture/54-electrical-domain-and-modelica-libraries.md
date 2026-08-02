@@ -218,6 +218,32 @@ believing the island.
 The network's own authored `outputs:soc` is a *boundary* name and is not how a member's
 interior variable is addressed — `get(elec, "soc")` reads nothing.
 
+### 2b. Prove a photovoltaic source reaches the battery
+
+For a fixed rover panel, the minimum end-to-end acceptance is:
+
+1. the `Electrical` scope compiles from the explicit battery/panel/load collection;
+2. the panel publishes a positive `power_out` under a lit environment;
+3. the same island publishes `cos_incidence` and `Battery.soc_out`; and
+4. the battery reports charging current, or its state of charge changes during a
+   parked observation.
+
+The mesh and the presence of a `SolarPanel` entity are not enough. A useful live
+`ReadPorts` filter includes the scope boundaries and the member paths:
+
+```bash
+curl -sS -X POST http://127.0.0.1:4101/api/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"ReadPorts","params":{"api_id":<electrical-api-id>}}' \
+  | jq '.data.ports[] | select(.name == "solar_power" or .name == "solar_incidence" or .name == "soc" or (.name | test("SolarPanel\\.(power_out|generated_current_a)")))'
+```
+
+The API id comes from `ListEntities` for the composed `…/Rover/Electrical`
+entity; it is not the Rhai entity id. A positive panel output together with a
+matching battery current proves the source is electrically connected rather
+than merely compiled. For a fixed +Y panel, test generation under a known sun
+vector; do not require a tracker yaw response from a component that has no joint.
+
 ## 3. Why library loading looks the way it does
 
 `assets/models/LunCo/` is a standard structured Modelica package — `package.mo` +

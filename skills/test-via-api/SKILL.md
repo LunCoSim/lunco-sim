@@ -1,7 +1,7 @@
 ---
 name: test-via-api
 description: >
-  How to verify lunica changes end-to-end without asking the
+  How to verify luncosim changes end-to-end without asking the
   user to click. Trigger whenever a UI flow needs verification — a new
   diagram, a fix to drill-in, a screenshot to confirm a regression, a
   smoke test of any reflect-registered Event command. The workbench
@@ -17,7 +17,7 @@ description: >
 
 # Test the workbench via API
 
-The lunica exposes a reflect-registered Event API on
+The production `luncosim` exposes a reflect-registered Event API on
 `--api PORT` (default 4101). Always pass this flag when launching the luncosim, including
 visual checks; use another explicit free port if 4101 is occupied. UI verification — diagrams rendering,
 drill-ins, simulations, file ops — should be driven from this API
@@ -41,14 +41,16 @@ rebuilt binary or an explicit clean session is required.
 ## Lifecycle (start → drive → stop)
 
 ```bash
-# 1. After the previous session is confirmed stopped, start. MUST use run_in_background:true of the Bash tool, otherwise
-#    the bash wrapper exits and the workbench dies with it.
-cargo run --bin lunica -- --api 4101   # run_in_background:true
+# 1. After the previous session is confirmed stopped, start the production
+#    binary built in this worktree. Keep it alive in the runner's background
+#    session.
+target/debug/luncosim --api 4101
 
-# 2. Wait for API. Use a Monitor with an until-loop, NOT chained sleeps:
-until curl -s -o /dev/null -X POST http://127.0.0.1:4101/api/commands \
-  -H "Content-Type: application/json" \
-  -d '{"command":"Ping","params":{}}' 2>/dev/null; do sleep 1; done
+# 2. Wait for the readiness contract, not just an open socket:
+until curl -s http://127.0.0.1:4101/api/ready 2>/dev/null \
+  | jq -e '.data.ready == true and .data.world_hold == false and .data.pending_count == 0' >/dev/null; do
+  sleep 1
+done
 
 # 3. Send commands (see catalog below).
 
@@ -57,6 +59,11 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{"command":"Exit","params":{}}'
 ```
+
+After `Exit`, verify that the process and `:4101` listener are gone before
+starting another session. A queued command or a reachable socket is not proof
+that a scene is ready; `/api/ready` is the gate for scene load, Modelica compile
+and participant initialization.
 
 ## Curl shape
 
@@ -233,7 +240,16 @@ composition, connection, and Modelica-worker lifecycle are implemented as one
 operation, use the full `RestartScene` reload for rover tests. A successful full
 reload must re-run USD prim projection, cosim model creation/compilation, and
 connection rewiring before the test verdict is trusted.
+
 ```
+
+For a placed rover, also query the composed USD transform after reload. Check
+that every authored rotation op appears in `xformOpOrder` and that the effective
+heading comes from one placement layer. For a fixed solar panel, list the
+composed `SolarPanel`, `Battery` and `Electrical` entities, then read the
+electrical scope ports. Presence of a panel mesh is not a power verdict: require
+positive `solar_power`/panel `power_out`, a valid incidence, and battery current
+or changing `soc`.
 
 ## Production tutorial tests
 
