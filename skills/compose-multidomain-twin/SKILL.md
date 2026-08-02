@@ -219,3 +219,14 @@ def Scope "Scenario" ( kind = "component" )
   runtime contract. Use the readiness query/policy to wait for that stage; a
   compiler-pending endpoint is assembly progress, while an unknown port after the
   contract is terminal is a real authoring failure.
+
+### Declared topology is not a sample
+
+Keep the set of connectable output names separate from the values sampled this
+tick. `DeclaredOutputPorts` records topology; `SimComponent.outputs` records
+current samples. An empty codeless `LunCoEnvironmentProbeAPI` asset is valid:
+the projection supplies the authoritative environment names, while the
+environment domain removes absent samples instead of fabricating zeroes or
+retaining stale values. Do not add dummy USD properties or an EarthTracker
+alias to hide a missing declaration. See
+[`tutorial-autopilot-and-port-contracts`](../../docs/architecture/tutorial-autopilot-and-port-contracts.md).

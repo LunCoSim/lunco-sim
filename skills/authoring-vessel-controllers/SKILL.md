@@ -140,6 +140,14 @@ A **parameter** is an input with a constant instead of a connection:
   intent→port `Controls` scope (next section) when they possess. Camera-follow
   without taking control: `follow(entity)` (inserts a chase camera, no `ControllerLink`).
 
+### Autopilots must drive like humans
+
+An autopilot is only a different policy. It must acquire authority with
+`PossessVessel`, then use the vessel's `ControlBinding`/intent surface and the
+same live port writes as a human. Do not set `Position`, `LinearVelocity`,
+`ModelicaModel.inputs`, or a private actuator component to make a scenario move;
+those bypass possession, arbitration, and the authored input contract.
+
 ## What makes an entity *active* — the intent→port `Controls` scope
 
 An entity is **possessable + drivable** when it carries two things:

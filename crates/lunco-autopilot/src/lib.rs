@@ -2136,21 +2136,91 @@ pub struct SetAutopilotBehavior {
     pub spec_json: String,
 }
 
+/// Return the resume cursor for a live patrol that only gained waypoints at the
+/// end of its route.
+///
+/// A patrol is implemented as `forever(sequence(...))`, so the behaviour-tree
+/// cursor resets to zero as soon as the last old waypoint succeeds.  That zero
+/// is correct for the next ordinary patrol lap, but it is wrong when the user
+/// appends a new waypoint after the old route was completed: the new tree must
+/// begin at the first appended leg.  `reached_count` is supplied by the live
+/// collision-backed waypoint state; it is deliberately not inferred from the
+/// tree cursor, because the cursor has already wrapped.
+fn patrol_append_resume_cursor(
+    old: &BehaviorSpec,
+    new: &BehaviorSpec,
+    old_cursor: Option<usize>,
+    reached_count: usize,
+) -> Option<usize> {
+    let (
+        BehaviorSpec::Patrol {
+            waypoints: old_waypoints,
+            speed: old_speed,
+            radius: old_radius,
+            dwell: old_dwell,
+        },
+        BehaviorSpec::Patrol {
+            waypoints: new_waypoints,
+            speed: new_speed,
+            radius: new_radius,
+            dwell: new_dwell,
+        },
+    ) = (old, new)
+    else {
+        return None;
+    };
+
+    if new_waypoints.len() <= old_waypoints.len()
+        || new_waypoints[..old_waypoints.len()] != old_waypoints[..]
+        || old_speed != new_speed
+        || old_radius != new_radius
+        || old_dwell != new_dwell
+    {
+        return None;
+    }
+
+    Some(if reached_count >= old_waypoints.len() {
+        old_waypoints.len()
+    } else {
+        old_cursor.unwrap_or(0)
+    })
+}
+
 #[on_command(SetAutopilotBehavior)]
 fn on_set_autopilot_behavior(
     trigger: On<SetAutopilotBehavior>,
-    q: Query<(Entity, &Autopilot)>,
+    q: Query<(Entity, &Autopilot, Option<&AutopilotBehavior>)>,
+    q_spec: Query<&AutopilotBehaviorSpec>,
+    q_reached: Query<Option<&usd_tree::ReachedWaypoints>>,
     mut commands: Commands,
 ) {
-    let behavior = match AutopilotBehavior::from_json(&cmd.spec_json) {
-        Ok(b) => b,
+    let cmd = trigger.event();
+    let spec = match serde_json::from_str::<BehaviorSpec>(&cmd.spec_json) {
+        Ok(spec) => spec,
         Err(e) => {
             warn!("[autopilot] SetAutopilotBehavior: bad spec: {e}");
             return;
         }
     };
-    match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
-        Some((entity, _)) => {
+    match q.iter().find(|(_, ap, _)| ap.vessel == cmd.vessel) {
+        Some((entity, _, old_behavior)) => {
+            let resume_cursor = q_spec.get(cmd.vessel).ok().and_then(|old_spec| {
+                let reached_count = q_reached
+                    .get(cmd.vessel)
+                    .ok()
+                    .flatten()
+                    .map(|reached| reached.0.len())
+                    .unwrap_or(0);
+                patrol_append_resume_cursor(
+                    &old_spec.0,
+                    &spec,
+                    old_behavior.and_then(AutopilotBehavior::route_cursor),
+                    reached_count,
+                )
+            });
+            let behavior = resume_cursor
+                .map(|cursor| AutopilotBehavior::resume(&spec, Some(cursor)))
+                .unwrap_or_else(|| AutopilotBehavior::new(&spec));
             commands
                 .entity(entity)
                 .try_insert((behavior, AutopilotExecutionState::Running));
@@ -2417,5 +2487,72 @@ impl Plugin for AutopilotPlugin {
             ),
         );
         register_all_commands(app);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn patrol(points: &[f32]) -> BehaviorSpec {
+        BehaviorSpec::Patrol {
+            waypoints: points
+                .iter()
+                .map(|x| PatrolWaypoint::at([*x, 0.0, 0.0]))
+                .collect(),
+            speed: 0.6,
+            radius: 1.0,
+            dwell: 0.0,
+        }
+    }
+
+    fn ctx_at(x: f64) -> DriveCtx {
+        DriveCtx {
+            self_gid: 0,
+            pos: GridPos(DVec3::new(x, 0.0, 0.0)),
+            fwd: Vec3::X,
+            now: 0.0,
+            out: (0.0, 0.0, 0.0),
+            targets: Default::default(),
+            clearance: Default::default(),
+            fired: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn completed_patrol_append_starts_at_new_waypoint() {
+        let old = patrol(&[10.0, 20.0]);
+        let new = patrol(&[10.0, 20.0, 30.0]);
+        let mut old_tree = AutopilotBehavior::new(&old);
+
+        // Finish both old legs. The forever wrapper resets its sequence cursor
+        // to zero, so the cursor alone cannot distinguish a fresh lap from a
+        // route that has just been extended.
+        old_tree.0.tick(&mut ctx_at(10.0));
+        old_tree.0.tick(&mut ctx_at(20.0));
+        assert_eq!(old_tree.route_cursor(), Some(0));
+
+        let cursor = patrol_append_resume_cursor(&old, &new, old_tree.route_cursor(), 2);
+        assert_eq!(cursor, Some(2));
+
+        let mut resumed = AutopilotBehavior::resume(&new, cursor);
+        let mut ctx = ctx_at(20.0);
+        assert_eq!(resumed.0.tick(&mut ctx), Status::Running);
+        assert_eq!(resumed.route_cursor(), Some(2));
+        assert!(ctx.out.0 > 0.0, "the appended waypoint must own the drive");
+    }
+
+    #[test]
+    fn in_progress_patrol_append_keeps_current_leg() {
+        let old = patrol(&[10.0, 20.0]);
+        let new = patrol(&[10.0, 20.0, 30.0]);
+        let mut old_tree = AutopilotBehavior::new(&old);
+        old_tree.0.tick(&mut ctx_at(10.0));
+        assert_eq!(old_tree.route_cursor(), Some(1));
+
+        assert_eq!(
+            patrol_append_resume_cursor(&old, &new, old_tree.route_cursor(), 1),
+            Some(1)
+        );
     }
 }

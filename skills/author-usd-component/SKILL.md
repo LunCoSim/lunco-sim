@@ -107,6 +107,13 @@ zero is a no-op, not a reset.
 `axis` defaults to `"Z"`, not Y — a `Cylinder` with no `axis` lies along Z
 (`lib.rs:1144`). `Cube.width/height/depth` do **not** exist. `extent` is never read.
 
+If a referenced component supplies a generic visual proxy but the enclosing
+vehicle needs a different authored shape, keep the reference for its ports and
+domain facets, set the referencing visual prim's standard `visibility` to
+`"invisible"`, and add the replacement as a visual-only child of the same
+rigid body. Do not duplicate the electrical/environment component or give the
+replacement its own body. This keeps USD topology and runtime ownership intact.
+
 **Not supported at all:** `Points`, `GeomSubset`, `PointInstancer`,
 `instanceable`, `subdivisionScheme` (a `catmullClark` mesh renders as its raw
 control cage).

@@ -25,6 +25,7 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 | Do a task with an agent | [`../skills/README.md`](../skills/README.md) |
 | Check what's specced vs built | [`../specs/README.md`](../specs/README.md) |
 | Know what's currently broken | [`reviews/`](reviews/) |
+| Track nightly changes | [`releases/`](releases/README.md) |
 
 ## Applications
 
@@ -67,6 +68,7 @@ The full catalogue with trigger phrases is in
 | [`apps/`](apps/README.md) | Per-binary guides: flags, controls, workflows |
 | [`tutorials/`](tutorials/README.md) | Build-something-real walkthroughs (and how the in-app lessons work) |
 | [`reviews/`](reviews/) | Standing known issues (`open-*.md`) and dated audit reports |
+| [`releases/`](releases/README.md) | Commit-derived nightly changelists and release-note snapshots |
 | [`numeric-experiments/`](numeric-experiments/README.md) | Solver/numerics investigations with reproducible setups |
 | [`architecture/research/`](architecture/research/) | Prior art, inspiration, roads not taken |
 | [`../specs/`](../specs/README.md) | Feature contracts, with an Implemented/Partial/Not-built index |
