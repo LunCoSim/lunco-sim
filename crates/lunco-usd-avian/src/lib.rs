@@ -125,87 +125,27 @@ impl Plugin for UsdAvianPlugin {
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
-            // `build_usd_physics_joints` runs in avian's `PhysicsSystems::Prepare`,
-            // NOT in `Update`, and that placement is load-bearing — it is the whole
-            // reason the authored-joint path is safe.
-            //
-            // The window it has to hit: a joint may only be attached AFTER both
-            // bodies are admitted to the island graph (else `merge_islands` panics
-            // "Neither body … is in an island", which is what the `With<Position>`
-            // gate below is for) but BEFORE the first narrow phase that could put
-            // those bodies in contact (else the born-disabled `JointGraphEdge` comes
-            // too late, `on_disable_joint_collision` deletes an already-touching
-            // contact without unlinking it from its island, and a later island op
-            // unwraps the freed `ContactId` — `islands/mod.rs:547`/`:608`).
-            //
-            // `Prepare` is exactly that window: it is chained before
-            // `PhysicsSystems::StepSimulation`, which is what runs the broad/narrow
-            // phase, while body admission (`RigidBody`'s required `Position` + the
-            // `SolverBody`/`BodyIslandNode` hop) has already flushed. In `Update` the
-            // gate could only open AFTER avian had already stepped — so the joint
-            // always arrived a tick late, into live contacts. That is not a
-            // hypothetical: `lunco-usd-sim`'s synthesized wheel joint hit this exact
-            // race and was moved to a synchronous attach for it ("raced narrow-phase
-            // contacts … crashing the Avian solver with 'Head contact has no
-            // island'"); the authored path had the same bug and kept it.
-            //
-            // Within `Prepare` it must ALSO run after whatever makes `Position` REAL.
-            // `Position` is a required component of `RigidBody`, so it EXISTS from the
-            // moment the body spawns — holding its default of zero until something
-            // derives it from the authored transform. The `With<Position>` gate
-            // therefore proves admission to the island graph and nothing about the
-            // pose being real. Read too early, every body is at (0,0,0), and the seat
-            // below measures `localPos0 - localPos1` instead of the actual anchor
-            // violation: a scene misplaced by metres is never corrected, a
-            // correctly-placed one is nudged by the anchor offset. Both are silent —
-            // the seat "succeeds" either way.
-            //
-            // WHICH system makes it real is the subtle part, and the reason the
-            // obvious ordering did not work. In THIS app it is NOT avian's
-            // `transform_to_position`: `BigSpacePhysicsBridgePlugin` sets
-            // `PhysicsTransformConfig { transform_to_position: false, .. }`
-            // (`big_space_bridge.rs`), and avian gates that system on exactly that
-            // flag (`avian3d-0.7.0/src/physics_transform/mod.rs:108-110`). The system
-            // never runs, `PhysicsTransformSystems::TransformToPosition` is an EMPTY
-            // set, and ordering `.after` it is vacuous — measured: bodies still read
-            // (0,0,0). The bridge owns the sync instead, in `pose_to_position`.
-            //
-            // The second half: `pose_to_position` lives in `PhysicsSchedule`, so this
-            // system must too. They are different schedules — `PhysicsSchedule` is run
-            // by avian's `run_physics_schedule` from inside `FixedPostUpdate`'s
-            // `PhysicsSystems::StepSimulation`
-            // (`avian3d-0.7.0/src/schedule/mod.rs:110-113`). A `FixedPostUpdate`
-            // `Prepare` system is ordered strictly BEFORE the whole physics schedule,
-            // so no `.after(...)` inside `FixedPostUpdate` can see a bridge-written
-            // `Position`; cross-schedule ordering is silently a no-op.
-            //
-            // Sitting in `PhysicsSchedule` keeps the required window:
-            // `.before(PhysicsStepSystems::First)` is ahead of the broad/narrow
-            // phase, and `.after(pose_to_position)` is a REAL edge in a REAL shared
-            // schedule. When the bridge is absent
-            // (plain-avian tests), `.after` degrades to a no-op — but then avian's own
-            // `transform_to_position` is enabled and runs in `FixedPostUpdate`, i.e.
-            // still before `PhysicsSchedule`. Correct in both configurations.
+            // The joint builder is preparation, not integration. It therefore runs
+            // in the enclosing fixed schedule, after the bridge's read pass. This
+            // remains live while a world-readiness hold pauses Avian's nested
+            // PhysicsSchedule, allowing the binding transaction to finish without
+            // stepping the solver. `attach_joint` parks the constructed constraint
+            // as `PendingJoint`; `JointAttachPlugin` admits it later, only after
+            // Avian has placed both bodies in its island graph.
+            .add_systems(
+                FixedPostUpdate,
+                build_usd_physics_joints
+                    .in_set(avian3d::prelude::PhysicsSystems::Prepare)
+                    .after(big_space_bridge::PhysicsBridgeSystems::Read)
+                    .before(avian3d::prelude::PhysicsSystems::StepSimulation)
+                    .run_if(any_with_component::<PendingUsdJoint>),
+            )
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
-                (
-                    // Seats its joints, then hands each to `attach_joint`. Ordered
-                    // BEFORE `JointAdmission` (configured below) so the sync point
-                    // falls between: the constraint it seated this tick is
-                    // installed this tick, not after gravity has moved the pair.
-                    build_usd_physics_joints
-                        .before(JointAdmission)
-                        .run_if(any_with_component::<PendingUsdJoint>),
-                    // Same window, same reason: avian's broad phase never
-                    // re-filters a pair already in the contact graph, so a filter
-                    // armed after the first narrow phase does not apply to the
-                    // contact it was authored to prevent.
-                    filtered_pairs::resolve_filtered_pairs
-                        .run_if(any_with_component::<PendingFilteredPairs>),
-                )
+                filtered_pairs::resolve_filtered_pairs
+                    .run_if(any_with_component::<PendingFilteredPairs>)
                     .in_set(avian3d::prelude::PhysicsSystems::Prepare)
                     .after(avian3d::prelude::PhysicsSystems::First)
-                    .after(big_space_bridge::PhysicsBridgeSystems::Read)
                     .before(avian3d::schedule::PhysicsStepSystems::First),
             )
             .add_systems(
@@ -1987,34 +1927,20 @@ const JOINT_RESOLVE_RETRY_INTERVAL: u32 = 60;
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
-    // **Avian ADMISSION gate**: matching on `&Position` (added by
-    // Avian's body-init systems alongside `BodyIslandNode`) ensures
-    // we don't create a joint before Avian has admitted both bodies
-    // into its island graph — without this the solver panics with
-    // `Neither body … is in an island`. `process_usd_avian_prims`
-    // queues the `RigidBody` insertion in our `Update`; Avian's
-    // initialisation runs in its `PhysicsSchedule` (FixedUpdate),
-    // so this query is empty for the first few frames after spawn,
-    // and the joint stays in `PendingUsdJoint` until ready.
+    // Preparation may run while the world-readiness hold has paused Avian's
+    // nested PhysicsSchedule. These filters establish that both USD endpoints
+    // are live rigid bodies with a Position slot and are not explicitly
+    // disabled; they do NOT claim island admission. `attach_joint` parks the
+    // constraint as `PendingJoint`, and `JointAttachPlugin` is the sole owner of
+    // admitting that parked constraint after Avian creates both island nodes.
     //
-    // Admission is NOT pose readiness. `Position` is a required component of
-    // `RigidBody` and exists at its default zero from the instant the body
-    // spawns, so this filter says nothing about the pose being real — that is
-    // what `q_shadow` below is for. Conflating the two is the bug that made
-    // joint seating measure `localPos0 - localPos1` for its whole life.
-    //
-    // `Without<RigidBodyDisabled>` is part of ADMISSION for the same reason
-    // `With<Position>` is. A disabled body is out of the island graph, and
-    // avian's joint-add observer merges the islands of both bodies with no
-    // regard for whether either has one — `merge_islands` panics outright
-    // (`islands/mod.rs:820`, "Neither body … is in an island"). Bodies are
-    // disabled while a scene is mounting, by `lunco_physics`'s readiness freeze
-    // (a lander whose Modelica model has not compiled yet), so a jointed vehicle
-    // arriving in that window used to take the whole app down — reproducibly, by
-    // switching scene while a tutorial's scene was still spawning. The joint
-    // stays `PendingUsdJoint` until the freeze lifts, exactly as it already does
-    // for a body avian has not admitted.
-    q_bodies: Query<(Entity, &UsdPrimPath), (With<Position>, Without<RigidBodyDisabled>)>,
+    // `Position` is still only pose storage until `q_shadow` below confirms the
+    // bridge has seeded it. Keeping those two facts separate prevents seating
+    // against the required-component default at the origin.
+    q_bodies: Query<
+        (Entity, &UsdPrimPath),
+        (With<RigidBody>, With<Position>, Without<RigidBodyDisabled>),
+    >,
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
     q_shadow: Query<&big_space_bridge::BridgeShadow>,

@@ -160,20 +160,20 @@ fn register_settings_menu(world: &mut World) {
         ui.separator();
 
         ui.label(egui::RichText::new("Tutorial / Teach Mode").weak().small());
-        
+
         let mut teach_mode = tut_settings.teach_mode;
         if ui.checkbox(&mut teach_mode, "🎓 Teach Mode (Broadcast status)")
             .on_hover_text("Take control of the system and stream your window and avatar status to followers.")
-            .changed() 
+            .changed()
         {
             world.trigger(crate::sync::SetTeachMode { enabled: teach_mode });
         }
-        
+
         if teach_mode {
             ui.indent("tutor_indent", |ui| {
                 let current_target = tut_settings.target_client;
                 let mut selected_target = current_target;
-                
+
                 let combo_label = selected_target
                     .and_then(|id| presence_users.get(&crate::sync::UserId(id)))
                     .map(|u| u.display_name.as_str())
@@ -192,11 +192,11 @@ fn register_settings_menu(world: &mut World) {
                             }
                         }
                     });
-                
+
                 if changed {
                     world.trigger(crate::sync::SetTargetClient { target: selected_target });
                 }
-                
+
                 let mut allow_free = tut_settings.allow_free_movement;
                 if ui.checkbox(&mut allow_free, "🔓 Allow followers to move freely")
                     .on_hover_text("If checked, followers can move as they want. Otherwise, they are locked to your perspective.")
@@ -204,7 +204,7 @@ fn register_settings_menu(world: &mut World) {
                 {
                     world.trigger(crate::sync::SetAllowFreeMovement { enabled: allow_free });
                 }
-                
+
                 let target_name = selected_target
                     .and_then(|id| presence_users.get(&crate::sync::UserId(id)))
                     .map(|u| u.display_name.as_str())
@@ -216,7 +216,7 @@ fn register_settings_menu(world: &mut World) {
                 {
                     world.trigger(crate::sync::SharePerspective {});
                 }
-                    
+
                 if selected_target.is_some() {
                     let mut observe_mode = tut_settings.observe_mode;
                     if ui.checkbox(&mut observe_mode, "🔍 Observe Target's View (Reverse stream)")
@@ -228,7 +228,7 @@ fn register_settings_menu(world: &mut World) {
                 }
             });
         }
-        
+
         // Per-peer opt-in: consent to be locked by a tutor broadcasting to Everyone.
         let mut follow_opt_in = tut_settings.follow_opt_in;
         if ui.checkbox(&mut follow_opt_in, "🤝 Let a tutor lock my view (opt in)")
