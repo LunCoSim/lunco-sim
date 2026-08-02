@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use lunco_core::architecture::{InputPorts, Port};
 use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry};
 
-use crate::SimComponent;
+use crate::{DeclaredOutputPorts, SimComponent};
 
 /// The fixed port name a [`Port`] exposes (its `f64` `value`).
 pub const PORT_NAME: &str = "value";
@@ -195,6 +195,17 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
             push_map(out, &c.outputs, PortDirection::Out);
+            if let Some(declared) = w.get::<DeclaredOutputPorts>(e) {
+                for name in &declared.names {
+                    if !c.outputs.contains_key(name) {
+                        out.push(PortRef {
+                            name: name.clone(),
+                            direction: PortDirection::Out,
+                            value: 0.0,
+                        });
+                    }
+                }
+            }
             push_map(out, &c.inputs, PortDirection::In);
         }
     },

@@ -71,6 +71,22 @@ pub const EARTH_MOUNT_X_CONNECTOR: &str = "earth_mount_x";
 pub const EARTH_MOUNT_Y_CONNECTOR: &str = "earth_mount_y";
 pub const EARTH_MOUNT_Z_CONNECTOR: &str = "earth_mount_z";
 
+/// The complete output contract of a `LunCoEnvironmentProbeAPI` source prim.
+///
+/// These are schema-declared properties, so they are not necessarily present in
+/// a live prim's authored `property_names()` list. The USD runtime projection
+/// uses this contract to materialize the source-side port surface that the
+/// environment domain fills and ordinary USD connections consume.
+pub const ENVIRONMENT_PROBE_OUTPUTS: &[&str] = &[
+    GRAVITY_SOURCE_CONNECTOR,
+    SUN_MOUNT_X_CONNECTOR,
+    SUN_MOUNT_Y_CONNECTOR,
+    SUN_MOUNT_Z_CONNECTOR,
+    EARTH_MOUNT_X_CONNECTOR,
+    EARTH_MOUNT_Y_CONNECTOR,
+    EARTH_MOUNT_Z_CONNECTOR,
+];
+
 /// Prefix of the SimComponent **output** connectors `lunco-celestial`'s link bridge
 /// writes on every link node, one set per authored peer `class`:
 ///

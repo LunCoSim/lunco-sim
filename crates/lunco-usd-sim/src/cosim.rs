@@ -30,7 +30,8 @@ use lunco_core::{
     on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid,
 };
 use lunco_cosim::{
-    CosimOutputDescriptor, CosimOutputMetadata, SimComponent, SimConnection, SimStatus,
+    CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts, SimComponent, SimConnection,
+    SimStatus,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
@@ -139,6 +140,25 @@ fn declared_interface(
         }
     }
     (inputs, outputs)
+}
+
+/// Publish the complete runtime interface of an environment probe.
+///
+/// `LunCoEnvironmentProbeAPI` declares these outputs on the schema class. The
+/// live OpenUSD `property_names()` query intentionally reports authored
+/// properties, not properties inherited from a codeless API schema, so using
+/// [`declared_interface`] alone would create an empty source component for the
+/// usual empty `probe.usda` asset. The environment domain owns this connector
+/// contract; its systems fill the values when the corresponding fact exists,
+/// while the declared-output component keeps the no-data probe structurally
+/// connected without inventing a sample.
+fn environment_probe_interface() -> DeclaredOutputPorts {
+    DeclaredOutputPorts {
+        names: lunco_cosim::ENVIRONMENT_PROBE_OUTPUTS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect(),
+    }
 }
 
 /// A compile-specific port-contract verdict already reported to the console.
@@ -417,14 +437,14 @@ pub fn process_usd_cosim_prims(
         commands.entity(entity).try_insert(UsdSourcedCosim);
         let view = cs.view();
         if view.has_api_schema(&sdf_path, "LunCoEnvironmentProbeAPI") {
-            let (_, outputs) = declared_interface(&view, &sdf_path);
+            let declared_outputs = environment_probe_interface();
             commands.entity(entity).try_insert((
                 lunco_environment::EnvironmentProbe,
                 SimComponent {
                     model_name: "EnvironmentProbe".into(),
-                    outputs,
                     ..default()
                 },
+                declared_outputs,
             ));
             // A stage may finish composing after the prim's Added event. Force
             // the native USD wiring cache to resolve connections from this
@@ -3438,6 +3458,22 @@ mod tests {
             Some("earth_mount_z".to_owned())
         );
         assert_eq!(declared_port_name("physics:mass", "inputs:"), None);
+    }
+
+    #[test]
+    fn environment_probe_publishes_schema_declared_output_contract() {
+        let outputs = environment_probe_interface();
+        assert_eq!(
+            outputs
+                .names
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            lunco_cosim::ENVIRONMENT_PROBE_OUTPUTS
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
     }
 
     /// A model that has been parsed and dispatched but not yet solved:

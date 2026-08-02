@@ -8,7 +8,9 @@
 use bevy::prelude::*;
 use lunco_core::ports::PortRegistry;
 
-use crate::{diagnostics::BrokenConnection, CosimDiagnostics, SimConnection, SimStatus};
+use crate::{
+    diagnostics::BrokenConnection, CosimDiagnostics, DeclaredOutputPorts, SimConnection, SimStatus,
+};
 
 /// Runtime lifecycle of a port-owning endpoint.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
@@ -127,10 +129,11 @@ pub fn bind_connections(world: &mut World) {
             || matches!(dst, Some(EndpointLifecycle::Pending))
             || matches!(model_status(spec.start_element), Some(SimStatus::Compiling))
             || matches!(model_status(spec.end_element), Some(SimStatus::Compiling));
-        // `resolve_*` answers whether a backend offers a cached slot.  Map
-        // backends (Modelica) deliberately have no slot, so `None` there means
-        // "use the canonical name path", not "the port is absent". Binding is
-        // validating authored names, not compiling the propagation fast path.
+        // Binding validates the declared topology, not whether a source has
+        // produced a sample yet. Ordinary outputs still use their live value;
+        // endpoints with an explicit declared-output contract are also valid
+        // before their first sample (the environment probe is the current
+        // example).
         let source_ok = if spec.start_is_input {
             registry
                 .read_input_port(world, spec.start_element, &spec.start_connector)
@@ -139,6 +142,9 @@ pub fn bind_connections(world: &mut World) {
             registry
                 .read_output_port(world, spec.start_element, &spec.start_connector)
                 .is_some()
+                || world
+                    .get::<DeclaredOutputPorts>(spec.start_element)
+                    .is_some_and(|declared| declared.names.contains(&spec.start_connector))
         };
         let target_ok = registry
             .read_input_port(world, spec.end_element, &spec.end_connector)
@@ -310,6 +316,56 @@ mod tests {
 
         assert!(world.get::<BoundConnection>(edge).is_some());
         assert!(world.resource::<CosimDiagnostics>().faults.is_empty());
+    }
+
+    #[test]
+    fn declared_output_binds_before_its_first_sample() {
+        use crate::{DeclaredOutputPorts, SimComponent};
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<BindingRevision>();
+        world.init_resource::<CosimDiagnostics>();
+        {
+            let mut registry = world.resource_mut::<PortRegistry>();
+            crate::ports::register_builtin_port_backends(&mut registry);
+        }
+        let source = world
+            .spawn((
+                SimComponent::default(),
+                DeclaredOutputPorts {
+                    names: ["earth_mount_x".to_owned()].into_iter().collect(),
+                },
+                EndpointLifecycle::Ready,
+            ))
+            .id();
+        let target = world
+            .spawn((
+                InputPorts::new(&["earth_mount_x"]),
+                EndpointLifecycle::Ready,
+            ))
+            .id();
+        let edge = world
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "earth_mount_x".into(),
+                end_element: target,
+                end_connector: "earth_mount_x".into(),
+                ..default()
+            })
+            .id();
+
+        world.resource_mut::<BindingRevision>().seal_epoch();
+        world.run_system_once(bind_connections).unwrap();
+
+        assert!(world.get::<BoundConnection>(edge).is_some());
+        assert!(world.resource::<CosimDiagnostics>().faults.is_empty());
+        assert_eq!(
+            world
+                .resource::<PortRegistry>()
+                .read_output_port(&world, source, "earth_mount_x"),
+            None
+        );
     }
 
     #[test]

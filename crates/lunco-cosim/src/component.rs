@@ -4,7 +4,19 @@
 //! attached to an entity. Engine plugins create these when models compile.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Output ports declared by an endpoint whose current samples are optional.
+///
+/// The declaration is topology: it lets authored connections bind before a
+/// provider has produced its first value. The live sample remains in
+/// [`SimComponent::outputs`], so a declared port with no sample is still read
+/// as unavailable rather than as a fabricated zero.
+#[derive(Component, Debug, Clone, Default)]
+pub struct DeclaredOutputPorts {
+    /// Names in the endpoint's output contract.
+    pub names: HashSet<String>,
+}
 
 /// Authored documentation for the observable outputs of a co-simulation model.
 ///
