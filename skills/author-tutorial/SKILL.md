@@ -192,10 +192,26 @@ first. lunica ids include `modelica_experiments`, `modelica_inspector`,
 - **3D lesson needs a world** → ship an env-only `.usda` next to it and
   `load_scene` it in `on_start`; a model lesson just `cmd("OpenClass", …)`.
 
+## Autopilot and test closure
+
+An unattended tutorial is a policy variant of the human lesson, not a second
+vehicle-control path. Drive through `PossessVessel`, the authored
+`ControlBinding`/intent map, and the same `SetPorts` or live control stream a
+person uses. Do not move entities by writing `Position`, `LinearVelocity`,
+`ModelicaModel.inputs`, or private actuator state.
+
+Test the path at its boundaries: observe `cmd:PossessVessel`, the port-write
+event, a live movement/port predicate, and the final objective. A
+`MISSION_COMPLETE` event without those checks can be a false green. The full
+scene contract is documented in
+[`tutorial-autopilot-and-port-contracts`](../../docs/architecture/tutorial-autopilot-and-port-contracts.md).
+
 ## Verify
 
 Launch the app with `--api` (per [`test-via-api`](../test-via-api/SKILL.md)),
 `StartTutorial {id}`, then drive the objective's real action (or set
 `LUNCO_SCENARIO_UNATTENDED=1` and let the autopilot play it, even with a window
-open) and confirm the HUD ticks + `MISSION_COMPLETE` fires. Read
-live objective state via [`inspect-simulation`](../inspect-simulation/SKILL.md).
+open) and confirm the HUD ticks + `MISSION_COMPLETE` fires. For acceptance,
+build and run the production `target/debug/luncosim test` scene gate as well;
+parsing or a queued API command is not runtime proof. Read live objective state
+via [`inspect-simulation`](../inspect-simulation/SKILL.md).
