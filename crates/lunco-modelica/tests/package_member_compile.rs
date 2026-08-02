@@ -206,6 +206,47 @@ fn lander_resolves_nested_logic_dependency() {
     assert!(result.is_ok(), "Lander: {:?}", result.err());
 }
 
+#[test]
+fn stripped_lander_resolves_nested_logic_dependency() {
+    let source = lunco_modelica::models::get_model("Lander.mo").expect("bundled Lander.mo");
+    let (stripped, _defaults, issues) =
+        lunco_modelica::ast_extract::strip_input_defaults_with_report(source);
+    assert!(
+        issues.is_empty(),
+        "Lander preprocessing must not report input-default issues: {issues:?}"
+    );
+
+    let mut compiler = ModelicaCompiler::new();
+    let result = compiler.compile_str("Lander", &stripped, "lunco://models/Lander.mo");
+    assert!(
+        result.is_ok(),
+        "worker-preprocessed Lander must resolve LunCo.Logic.AboveThreshold: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn disk_lander_resolves_nested_logic_dependency() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models/Lander.mo"),
+    )
+    .expect("disk Lander.mo");
+    let (stripped, _defaults, issues) =
+        lunco_modelica::ast_extract::strip_input_defaults_with_report(&source);
+    assert!(
+        issues.is_empty(),
+        "disk Lander preprocessing must not report input-default issues: {issues:?}"
+    );
+
+    let mut compiler = ModelicaCompiler::new();
+    let result = compiler.compile_str("Lander", &stripped, "lunco://models/Lander.mo");
+    assert!(
+        result.is_ok(),
+        "disk Lander must resolve LunCo.Logic.AboveThreshold: {:?}",
+        result.err()
+    );
+}
+
 /// The library must be seated from the DISK tree, not the `include_dir!` snapshot
 /// baked into the binary.
 ///

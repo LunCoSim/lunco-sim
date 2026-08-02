@@ -751,6 +751,13 @@ fn modelica_port_contract_error(
     let missing_inputs: Vec<_> = contract
         .inputs
         .difference(&model.compiled_input_names)
+        // A single USD prim may be both a Modelica program and a physical
+        // endpoint. In that shape `inputs:force_y` is the Avian body sink,
+        // while `output Real force_y` is the Modelica actuator source. The
+        // USD input is intentionally absent from the Modelica DAE; a same-
+        // named compiled output proves this is the cross-domain loop rather
+        // than a typo in a Modelica input name.
+        .filter(|name| !model.variables.contains_key(*name))
         .cloned()
         .collect();
     let actual_outputs: BTreeSet<_> = model.variables.keys().cloned().collect();
@@ -1239,6 +1246,20 @@ pub fn sync_modelica_outputs(
     }
 }
 
+/// Copy only values accepted by the Modelica program into its solver input
+/// buffer. A USD program prim can also carry physical sink attributes on the
+/// same entity (`inputs:force_y` for Avian); those names belong to the shared
+/// cosim surface but are not Modelica inputs. Promoting them into
+/// `ModelicaModel::inputs` would hide same-named Modelica actuator outputs from
+/// the worker's observable set and stop the self-loop from ever binding.
+fn copy_modelica_input_values(model: &mut ModelicaModel, component: &SimComponent) {
+    for (name, value) in &component.inputs {
+        if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
+            model.inputs.insert(name.clone(), *value);
+        }
+    }
+}
+
 /// Per-tick: SimComponent.inputs → ModelicaModel.inputs.
 /// Hands wire-propagated values (height, velocity, …) back to the
 /// Modelica worker for the next solver step.
@@ -1246,7 +1267,7 @@ pub fn sync_modelica_inputs(
     mut q: Query<(&SimComponent, &mut ModelicaModel), With<UsdSourcedCosim>>,
 ) {
     for (comp, mut model) in &mut q {
-        upsert_ports(&mut model.inputs, comp.inputs.iter());
+        copy_modelica_input_values(&mut model, comp);
     }
 }
 
@@ -1401,14 +1422,23 @@ fn request_binding_epoch_on_model_change(
 fn modelica_models_terminal<'a>(
     mut models: impl Iterator<Item = (Option<&'a ModelicaModel>, Option<&'a SimComponent>)>,
 ) -> bool {
-    models.all(|(model, component)| match model {
-        None => true,
-        Some(_) => {
-            matches!(component, Some(component) if !matches!(component.status, SimStatus::Compiling))
-        }
+    models.all(|(model, component)| match (model, component) {
+        // A bind-published SimComponent with no ModelicaModel is the async
+        // source-load gap. Its status is deliberately Compiling, so it must
+        // not seal the epoch before dispatch has created the authoritative
+        // solver participant.
+        (None, Some(component)) => !matches!(component.status, SimStatus::Compiling),
+        (None, None) => true,
+        (Some(_), Some(component)) => !matches!(component.status, SimStatus::Compiling),
+        (Some(_), None) => false,
     })
 }
 
+/// Native physics endpoints must be admitted before a dynamic body is allowed
+/// to integrate. Modelica compilation is entity-scoped and therefore does not
+/// hold the whole world, but a pending joint/wheel/reference endpoint is a
+/// world-level safety condition: otherwise the body can fall or drift before
+/// its constraint exists and Avian later seats it with a large violation.
 /// The sole USD-side transition from a loading projection epoch to a bindable
 /// one.  Failed models are terminal: readiness policy decides whether to hold
 /// physics, while the binder must be allowed to record the failed endpoint.
@@ -3315,6 +3345,10 @@ mod tests {
             ..default()
         };
         assert!(!modelica_models_terminal(std::iter::once((
+            None,
+            Some(&compiling),
+        ))));
+        assert!(!modelica_models_terminal(std::iter::once((
             Some(&model),
             Some(&compiling),
         ))));
@@ -3359,6 +3393,43 @@ mod tests {
         model.variables.insert("thrust".into(), 42.0);
 
         assert_eq!(modelica_port_contract_error(&contract, &model), None);
+    }
+
+    #[test]
+    fn compiled_output_can_share_a_usd_input_name_for_a_physical_sink() {
+        let contract = UsdModelicaPortContract {
+            inputs: ["force_y".to_string()].into_iter().collect(),
+            outputs: BTreeSet::new(),
+        };
+        let mut model = dispatched_but_unsolved();
+        model.compiled_input_names.clear();
+        model.variables.insert("force_y".into(), 42.0);
+
+        assert_eq!(
+            modelica_port_contract_error(&contract, &model),
+            None,
+            "a same-prim USD physics sink must not be reported as a Modelica input"
+        );
+    }
+
+    #[test]
+    fn physical_sink_inputs_do_not_hide_same_named_modelica_outputs() {
+        let mut model = dispatched_but_unsolved();
+        model.inputs.insert("guidance_throttle".into(), 0.0);
+        model
+            .compiled_input_names
+            .insert("guidance_throttle".into());
+        let mut component = SimComponent::default();
+        component.inputs.insert("guidance_throttle".into(), 0.75);
+        component.inputs.insert("force_y".into(), 0.0);
+
+        copy_modelica_input_values(&mut model, &component);
+
+        assert_eq!(model.inputs.get("guidance_throttle"), Some(&0.75));
+        assert!(
+            !model.inputs.contains_key("force_y"),
+            "a physical sink must remain outside the Modelica input map"
+        );
     }
 
     #[test]
