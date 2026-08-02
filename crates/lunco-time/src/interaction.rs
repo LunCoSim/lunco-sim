@@ -11,10 +11,9 @@
 //! * it **stops on pause** — but a paused world must still let you fly the camera; and
 //! * it **rate-scales** — an 8× sim would fly the avatar 8× faster.
 //!
-//! Which left the avatar with two bad options, and the code took both: ride
-//! `FixedUpdate` for a constant `dt` and freeze on pause (the old `spring_arm_system`),
-//! or ride the render frame and take a variable `dt` (`apply_fly` on `Time<Real>`) —
-//! plus a duplicate system to cover the paused case. Cadence was standing in for clock.
+//! The camera and avatar therefore use an explicit presentation cadence rather than
+//! borrowing the simulation clock. Stepped camera modes use this schedule; the spring
+//! arm follows the final rendered body pose in `PostUpdate` after the render handoff.
 //!
 //! This is the third option: a fixed step rooted on the **wall clock**. Constant `dt`,
 //! immune to pause and to sim rate, by construction — there is no path from

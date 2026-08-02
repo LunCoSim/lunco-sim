@@ -1358,6 +1358,9 @@ fn spring_arm_system(
         (
             With<Avatar>,
             Without<FrameBlend>,
+            Without<OrbitCamera>,
+            Without<FreeFlightCamera>,
+            Without<SurfaceCamera>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
@@ -1793,6 +1796,9 @@ fn orbit_system(
         (
             With<Avatar>,
             Without<FrameBlend>,
+            Without<SpringArmCamera>,
+            Without<FreeFlightCamera>,
+            Without<SurfaceCamera>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
@@ -2275,6 +2281,8 @@ fn freeflight_system(
             With<Avatar>,
             Without<FrameBlend>,
             Without<OrbitCamera>,
+            Without<SpringArmCamera>,
+            Without<SurfaceCamera>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
@@ -2345,6 +2353,7 @@ fn freeflight_scroll_transit_system(
             With<Avatar>,
             Or<(With<FreeFlightCamera>, With<SurfaceCamera>)>,
             Without<OrbitCamera>,
+            Without<SpringArmCamera>,
             Without<FrameBlend>,
         ),
     >,
@@ -2452,6 +2461,9 @@ fn surface_camera_system(
         (
             With<Avatar>,
             Without<FrameBlend>,
+            Without<SpringArmCamera>,
+            Without<FreeFlightCamera>,
+            Without<OrbitCamera>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
@@ -3466,12 +3478,13 @@ fn on_possess_command(
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();
 
-    // One follow solver for all three modes (`spring_arm_system`, on the interaction
-    // step + `InteractionEased`): they differ ONLY in the derived attitude. `OrbitCamera`
-    // is NOT used here — it is the celestial orbital-view solver; reusing it for a
-    // fast-flying vessel was the source of the "jitters when flying fast" (a
-    // render-rate solve against a frame-stale target sample). Strip the celestial
-    // orbit component in case a prior focus left it on.
+    // One follow solver serves the vessel follow modes. The spring arm owns the
+    // render-rate chase pose; stepped camera modes own their pose through the
+    // interaction schedule and `InteractionEased`. They differ only in derived
+    // attitude. `OrbitCamera` is NOT used here — it is the celestial orbital-view
+    // solver; reusing it for a fast-flying vessel was the source of the old
+    // frame-stale target sampling jitter. Strip the celestial orbit component in
+    // case a prior focus left it on the avatar.
     use lunco_core::CameraFollow as CF;
     let (attitude, track_heading, damping) = match follow {
         // Stable external frame: track position, keep world up, ignore attitude.
