@@ -248,6 +248,43 @@ pub const SEND_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_
 #[cfg(not(target_arch = "wasm32"))]
 pub const RECV_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Number of additional attempts for a transient connection or server error.
+///
+/// Asset downloads run in CI as well as from the workbench. A short-lived
+/// refusal from a public dataset host must not turn an otherwise healthy
+/// build into a missing-asset failure, while a permanently unavailable URL
+/// must still fail after a bounded amount of time.
+pub const DOWNLOAD_RETRIES: usize = 3;
+
+/// Returns whether a failed request is worth trying again.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_retryable_download_error(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::StatusCode(code) => {
+            matches!(code, 408 | 425 | 429 | 500..=599)
+        }
+        ureq::Error::Io(_)
+        | ureq::Error::Timeout(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::Protocol(_) => true,
+        _ => false,
+    }
+}
+
+/// Bounded delay between request retries. The body is never
+/// retried here: it is streamed into an attempt-unique scratch file and any
+/// hash mismatch remains a terminal integrity error.
+#[cfg(not(target_arch = "wasm32"))]
+fn download_retry_delay(retry_number: usize) -> std::time::Duration {
+    let seconds = match retry_number {
+        1 => 1,
+        2 => 16,
+        _ => 32,
+    };
+    std::time::Duration::from_secs(seconds)
+}
+
 /// How long a body may go with ZERO new bytes before the download is treated as
 /// stalled. Enforced by the caller (see `datasets::spawn_download`) against the
 /// [`DownloadControl::progress`] callback, not by ureq — see the comment at the
@@ -413,10 +450,32 @@ pub fn download_asset_with_control(
         .timeout_recv_response(Some(RECV_RESPONSE_TIMEOUT))
         .build()
         .into();
-    let response = agent
-        .get(&entry.url)
-        .call()
-        .map_err(|e| DownloadError::DownloadFailed(entry.url.clone(), e.to_string()))?;
+    let mut retries = 0;
+    let response = loop {
+        match agent.get(&entry.url).call() {
+            Ok(response) => break response,
+            Err(error) if is_retryable_download_error(&error) && retries < DOWNLOAD_RETRIES => {
+                retries += 1;
+                let attempt_number = retries;
+                let delay = download_retry_delay(attempt_number);
+                eprintln!(
+                    "  ! download attempt {attempt_number} failed for {key}: {error}; \
+                     retry {attempt_number}/{DOWNLOAD_RETRIES} in {}s",
+                    delay.as_secs()
+                );
+                if cancelled() {
+                    return Err(DownloadError::Cancelled);
+                }
+                std::thread::sleep(delay);
+            }
+            Err(error) => {
+                return Err(DownloadError::DownloadFailed(
+                    entry.url.clone(),
+                    error.to_string(),
+                ));
+            }
+        }
+    };
     let total: u64 = response
         .headers()
         .get("content-length")
@@ -975,6 +1034,17 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_downloads_use_three_bounded_retries() {
+        assert_eq!(DOWNLOAD_RETRIES, 3);
+        assert_eq!(download_retry_delay(1), std::time::Duration::from_secs(1));
+        assert_eq!(download_retry_delay(2), std::time::Duration::from_secs(16));
+        assert_eq!(download_retry_delay(3), std::time::Duration::from_secs(32));
+        assert!(is_retryable_download_error(&ureq::Error::ConnectionFailed));
+        assert!(is_retryable_download_error(&ureq::Error::StatusCode(503)));
+        assert!(!is_retryable_download_error(&ureq::Error::StatusCode(404)));
+    }
 
     #[test]
     fn safe_rel_dest_accepts_plain_relative() {
