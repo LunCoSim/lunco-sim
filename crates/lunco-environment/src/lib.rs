@@ -276,15 +276,20 @@ pub fn feed_gravity_into_imu_sensors(
 /// Runs in [`EnvironmentSet::Apply`] (after `LocalGravity` is computed) and
 /// before cosim's propagation, so the freshly-written output is read the same
 /// tick. Writes every tick because a model's own output sync may rewrite its
-/// outputs map.
+/// outputs map. In surface-gravity scenes where no provider has resolved yet,
+/// removes the gravity output rather than exposing a stale value.
 pub fn inject_local_gravity_into_cosim(
-    mut q: Query<(&LocalGravity, &mut lunco_cosim::SimComponent), With<EnvironmentProbe>>,
+    mut q: Query<(Option<&LocalGravity>, &mut lunco_cosim::SimComponent), With<EnvironmentProbe>>,
 ) {
     for (gravity, mut comp) in &mut q {
-        comp.outputs.insert(
-            lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_string(),
-            gravity.magnitude(),
-        );
+        if let Some(gravity) = gravity {
+            comp.outputs.insert(
+                lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_string(),
+                gravity.magnitude(),
+            );
+        } else {
+            comp.outputs.remove(lunco_cosim::GRAVITY_SOURCE_CONNECTOR);
+        }
     }
 }
 

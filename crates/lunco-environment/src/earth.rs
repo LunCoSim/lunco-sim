@@ -162,10 +162,22 @@ pub fn compute_local_earth(
 ///
 /// Writes every tick rather than on change, because a model's own output sync
 /// rewrites its outputs map — same reasoning as the gravity and solar bridges.
+/// When the ephemeris has no answer, removes only the Earth outputs. The probe's
+/// schema contract remains bound, but propagation then correctly treats the
+/// Earth direction as unavailable instead of commanding a zero vector.
 pub fn inject_local_earth_into_cosim(
-    mut q: Query<(&LocalEarth, &mut lunco_cosim::SimComponent), With<crate::EnvironmentProbe>>,
+    mut q: Query<
+        (Option<&LocalEarth>, &mut lunco_cosim::SimComponent),
+        With<crate::EnvironmentProbe>,
+    >,
 ) {
     for (earth, mut comp) in &mut q {
+        let Some(earth) = earth else {
+            comp.outputs.remove(EARTH_MOUNT_X_CONNECTOR);
+            comp.outputs.remove(EARTH_MOUNT_Y_CONNECTOR);
+            comp.outputs.remove(EARTH_MOUNT_Z_CONNECTOR);
+            continue;
+        };
         comp.outputs.insert(
             EARTH_MOUNT_X_CONNECTOR.to_string(),
             earth.direction.x as f64,
@@ -198,13 +210,44 @@ mod tests {
         app.add_systems(Update, compute_local_earth);
         let e = app
             .world_mut()
-            .spawn(lunco_cosim::SimComponent::default())
+            .spawn((
+                crate::EnvironmentProbe,
+                lunco_cosim::SimComponent::default(),
+            ))
             .id();
         app.update();
         assert!(
             app.world().get::<LocalEarth>(e).is_none(),
             "a degenerate direction is missing data — it must not become 'due north, \
              on the horizon'"
+        );
+    }
+
+    #[test]
+    fn missing_earth_direction_removes_only_earth_outputs() {
+        let mut app = App::new();
+        let mut sim = lunco_cosim::SimComponent::default();
+        sim.outputs.insert(EARTH_MOUNT_X_CONNECTOR.to_owned(), 1.0);
+        sim.outputs.insert(EARTH_MOUNT_Y_CONNECTOR.to_owned(), 2.0);
+        sim.outputs.insert(EARTH_MOUNT_Z_CONNECTOR.to_owned(), 3.0);
+        sim.outputs
+            .insert(lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
+        let entity = app.world_mut().spawn((crate::EnvironmentProbe, sim)).id();
+        app.add_systems(Update, inject_local_earth_into_cosim);
+
+        app.update();
+
+        let outputs = &app
+            .world()
+            .get::<lunco_cosim::SimComponent>(entity)
+            .unwrap()
+            .outputs;
+        assert!(!outputs.contains_key(EARTH_MOUNT_X_CONNECTOR));
+        assert!(!outputs.contains_key(EARTH_MOUNT_Y_CONNECTOR));
+        assert!(!outputs.contains_key(EARTH_MOUNT_Z_CONNECTOR));
+        assert_eq!(
+            outputs.get(lunco_cosim::GRAVITY_SOURCE_CONNECTOR),
+            Some(&9.81)
         );
     }
 
@@ -224,7 +267,10 @@ mod tests {
         app.add_systems(Update, compute_local_earth);
         let e = app
             .world_mut()
-            .spawn(lunco_cosim::SimComponent::default())
+            .spawn((
+                crate::EnvironmentProbe,
+                lunco_cosim::SimComponent::default(),
+            ))
             .id();
         app.update();
         let got = app
@@ -266,6 +312,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
+                crate::EnvironmentProbe,
                 lunco_cosim::SimComponent::default(),
                 GlobalTransform::from(facing_east),
             ))
@@ -297,6 +344,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
+                crate::EnvironmentProbe,
                 lunco_cosim::SimComponent::default(),
                 GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_x(
                     std::f32::consts::FRAC_PI_2,
