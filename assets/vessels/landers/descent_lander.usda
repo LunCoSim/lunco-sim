@@ -343,9 +343,21 @@ def Xform "DescentLander" (
     # A scene that wants the raw unaugmented airframe overrides this to 0.
     float inputs:attitude_hold = 1.0
     # Controller gains are scene inputs so two instances can be compared with
-    # different tuning while sharing this airframe and Modelica source.
-    float inputs:hold_kp = 2.0
-    float inputs:hold_kd = 2.5
+    # different tuning while sharing this reusable airframe.
+    float inputs:hold_kp = 2.0 (
+        customData = {
+            double min = 0.0
+            double max = 12.0
+            string unit = "rad/s2"
+        }
+    )
+    float inputs:hold_kd = 2.5 (
+        customData = {
+            double min = 0.0
+            double max = 12.0
+            string unit = "rad/s"
+        }
+    )
     float inputs:leg_force_px.connect = </DescentLander/LegPX_Spring.outputs:force>
     float inputs:leg_force_nx.connect = </DescentLander/LegNX_Spring.outputs:force>
     float inputs:leg_force_pz.connect = </DescentLander/LegPZ_Spring.outputs:force>

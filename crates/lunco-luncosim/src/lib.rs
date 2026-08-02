@@ -3604,12 +3604,12 @@ fn activate_offscreen_camera(
     if selected.is_none() && !*warned && has_image_camera {
         *warned = true;
         warn!(
-            "[offscreen] no authored SceneCamera is ready; all competing image cameras are +             disabled and the recording remains black until a scene camera is bound"
+            "[offscreen] no authored SceneCamera is ready; all competing image cameras are disabled and the recording remains black until a scene camera is bound"
         );
     } else if selected.is_none() && !*warned && !cameras.is_empty() {
         *warned = true;
         warn!(
-            "[offscreen] no renderable SceneCamera yet (binding pending or the scene +             authors none) — the recording stays black until one exists"
+            "[offscreen] no renderable SceneCamera yet (binding pending or the scene authors none) — the recording stays black until one exists"
         );
     }
 }

@@ -1,0 +1,101 @@
+#usda 1.0
+(
+    defaultPrim = "PositionPIDGuidance"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Reusable 3D position-PID guidance component.  It composes onto any rigid-body
+# lander: the body publishes position/velocity, this program computes a thrust
+# vector, and the airframe consumes normalized throttle/pitch/roll/yaw commands.
+# The mission scene supplies the target connection; the component itself defaults
+# to the origin so it remains useful without a scene-specific script.
+def Xform "PositionPIDGuidance"
+{
+    float inputs:guidance_throttle.connect = </PositionPIDGuidance/GNC.outputs:throttle_cmd>
+    float inputs:guidance_pitch.connect = </PositionPIDGuidance/GNC.outputs:pitch_cmd>
+    float inputs:guidance_roll.connect = </PositionPIDGuidance/GNC.outputs:roll_cmd>
+    float inputs:guidance_yaw.connect = </PositionPIDGuidance/GNC.outputs:yaw_cmd>
+
+    def Scope "GNC" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+        doc = "Three-axis position PID navigation and thrust-vector guidance."
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/GNC/PositionPID3D.mo@
+        uniform bool lunco:program:realtimeSafe = true
+
+        # The rigid-body state is an engine-owned Avian output surface.  No copy
+        # of position or velocity is maintained in Rhai or in the scene.
+        float inputs:pos_x.connect = </PositionPIDGuidance.outputs:position_x>
+        float inputs:pos_y.connect = </PositionPIDGuidance.outputs:position_y>
+        float inputs:pos_z.connect = </PositionPIDGuidance.outputs:position_z>
+        float inputs:vel_x.connect = </PositionPIDGuidance.outputs:velocity_x>
+        float inputs:vel_y.connect = </PositionPIDGuidance.outputs:velocity_y>
+        float inputs:vel_z.connect = </PositionPIDGuidance.outputs:velocity_z>
+        float inputs:vehicle_mass.connect = </PositionPIDGuidance.outputs:mass>
+        float inputs:piloted.connect = </PositionPIDGuidance.outputs:piloted>
+
+        # Target position and velocity are mission inputs.  A scene may connect
+        # them to a kinematic target body's live position outputs, or leave the
+        # authored origin/zero defaults for a fixed landing site.
+        float inputs:target_x = 0.0
+        float inputs:target_y = 5.0
+        float inputs:target_z = 0.0
+        float inputs:target_vel_x = 0.0
+        float inputs:target_vel_y = 0.0
+        float inputs:target_vel_z = 0.0
+
+        # PID gains are live inputs, with Inspector ranges authored at the
+        # consumer boundary.  Changing them does not rebuild or replace the
+        # Modelica component.
+        float inputs:kp_x = 0.08 (
+            customData = { double min = 0.0 double max = 1.0 string unit = "1/s2" }
+        )
+        float inputs:ki_x = 0.003 (
+            customData = { double min = 0.0 double max = 0.1 string unit = "1/s3" }
+        )
+        float inputs:kd_x = 0.75 (
+            customData = { double min = 0.0 double max = 5.0 string unit = "1/s" }
+        )
+        float inputs:kp_y = 0.18 (
+            customData = { double min = 0.0 double max = 1.0 string unit = "1/s2" }
+        )
+        float inputs:ki_y = 0.006 (
+            customData = { double min = 0.0 double max = 0.1 string unit = "1/s3" }
+        )
+        float inputs:kd_y = 1.20 (
+            customData = { double min = 0.0 double max = 5.0 string unit = "1/s" }
+        )
+        float inputs:kp_z = 0.08 (
+            customData = { double min = 0.0 double max = 1.0 string unit = "1/s2" }
+        )
+        float inputs:ki_z = 0.003 (
+            customData = { double min = 0.0 double max = 0.1 string unit = "1/s3" }
+        )
+        float inputs:kd_z = 0.75 (
+            customData = { double min = 0.0 double max = 5.0 string unit = "1/s" }
+        )
+        float inputs:integral_limit = 12.0 (
+            customData = { double min = 0.0 double max = 100.0 string unit = "state" }
+        )
+        float inputs:anti_windup_gain = 1.0 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "1/s" }
+        )
+        float inputs:max_lateral_accel = 4.0 (
+            customData = { double min = 0.1 double max = 20.0 string unit = "m/s2" }
+        )
+        float inputs:max_vertical_accel = 8.0 (
+            customData = { double min = 0.1 double max = 30.0 string unit = "m/s2" }
+        )
+        float inputs:g = 1.62 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "m/s2" }
+        )
+        float inputs:max_thrust = 60000.0 (
+            customData = { double min = 1.0 double max = 1000000.0 string unit = "N" }
+        )
+        float inputs:engage = 1.0 (
+            customData = { double min = 0.0 double max = 1.0 string unit = "bool" }
+        )
+    }
+}

@@ -247,8 +247,6 @@ impl Plugin for SandboxUiPlugin {
         )
         // Confine window-targeting cameras to the ViewportPanel rect (prevents
         // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
-        // Sharpest shadow filter (hard airless-Moon terminator) on each camera.
-        .add_systems(Update, force_hard_shadow_filtering)
         // Fallback free-flight camera when the scene authors none — interactive
         // only; a headless server has no user to control.
         .add_systems(
@@ -410,17 +408,6 @@ fn on_dismiss_terrain_overlay(
 ) {
     status.user_dismissed = true;
     status.active = false;
-}
-
-fn force_hard_shadow_filtering(
-    mut commands: Commands,
-    q: Query<Entity, (With<Camera3d>, Without<bevy::light::ShadowFilteringMethod>)>,
-) {
-    for e in &q {
-        commands
-            .entity(e)
-            .try_insert(bevy::light::ShadowFilteringMethod::Gaussian);
-    }
 }
 
 /// Grace period before [`spawn_fallback_avatar`] steps in (USD load is async).

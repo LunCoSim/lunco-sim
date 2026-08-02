@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "LandingTarget"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Kinematic navigation target: its Avian position ports are the authoritative
+# target coordinates consumed by PositionPID3D.  The visual marker is kept as a
+# child reference, while its body origin sits at the lander's touchdown COM
+# height (5 m); the dome itself is offset to the ground surface.
+def Xform "LandingTarget" (
+    prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker>
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
+    kind = "component"
+)
+{
+    uniform bool lunco:spawnable = true
+    custom string lunco:navigationTarget = "true"
+    bool physics:rigidBodyEnabled = true
+    bool physics:kinematicEnabled = true
+    float physics:mass = 1.0
+    string lunco:net:authority = "opaque"
+
+    over "Dome"
+    {
+        double3 xformOp:translate = (0.0, -5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    over "Zone"
+    {
+        double3 xformOp:translate = (0.0, -4.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

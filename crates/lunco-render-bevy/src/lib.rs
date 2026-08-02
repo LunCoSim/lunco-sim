@@ -129,6 +129,11 @@ impl Plugin for LuncoRenderPlugin {
                     .in_set(lunco_render::LookRebind),
             );
         scene_camera::build(app);
+        // Shadow filtering is a render policy, not a workbench concern. Attach it
+        // when a camera enters the render graph so windowed and offscreen captures
+        // use the same lunar terminator without either binary having a second
+        // implementation or a per-frame sweep.
+        app.add_observer(ensure_lunar_shadow_filtering);
         // Lights and transforms become connection targets, so a value the
         // simulation publishes reaches them through the ordinary port graph rather
         // than through a script that samples a port every tick.
@@ -156,6 +161,25 @@ impl Plugin for LuncoRenderPlugin {
         // Connectivity beams: runtime-spawned mesh, authored look, local Transform (no
         // gizmo, no GlobalTransform, no jitter). This is the only connectivity visual.
         link_beams::build(app);
+    }
+}
+
+/// Apply the renderer's lunar shadow filter to every 3D camera, including
+/// cameras created after startup by an asynchronously loaded USD scene.
+fn ensure_lunar_shadow_filtering(
+    add: On<Add, Camera3d>,
+    profile: Res<RenderProfile>,
+    cameras: Query<(), Without<bevy::light::ShadowFilteringMethod>>,
+    mut commands: Commands,
+) {
+    if profile.is_fast() {
+        return;
+    }
+    let entity = add.entity;
+    if cameras.get(entity).is_ok() {
+        commands
+            .entity(entity)
+            .try_insert(bevy::light::ShadowFilteringMethod::Gaussian);
     }
 }
 
