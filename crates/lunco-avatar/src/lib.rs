@@ -916,8 +916,11 @@ pub fn spawn_avatar_camera(
             // Bevy's EV 9.7 against the 131 klx lunar sun (~5 stops open, every
             // surface white) and, because `project_env_settings` only writes
             // cameras that already have the component, permanently uncorrectable.
+            // `SceneCamera` is the render-free camera intent. The render-side
+            // binder adds `Camera3d` and its complete render graph atomically;
+            // inserting a bare `Camera` here would trigger Bevy's missing
+            // render-graph warning before that binder runs.
             (
-                Camera::default(),
                 lunco_render::scene_camera_look(None),
                 lunco_render::usd_default_perspective_projection(),
             ),

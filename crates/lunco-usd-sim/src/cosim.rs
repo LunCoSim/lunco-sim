@@ -3023,7 +3023,7 @@ fn tag_cosim_opaque(
 
 /// Per-tick ordering inside `FixedUpdate` matches the cosim master
 /// algorithm:
-///   `ModelicaSet::HandleResponses → sync_*_outputs →
+///   `ModelicaSet::HandleResponses (Update) → sync_*_outputs →
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 pub(crate) fn install(app: &mut App) {
@@ -3167,15 +3167,9 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
-            validate_usd_modelica_port_contracts
-                .after(ModelicaSet::HandleResponses)
-                .before(sync_modelica_outputs),
-            sync_modelica_outputs
-                .after(ModelicaSet::HandleResponses)
-                .before(PropagateCosimSet::Propagate),
-            sync_script_outputs
-                .after(ModelicaSet::HandleResponses)
-                .before(PropagateCosimSet::Propagate),
+            validate_usd_modelica_port_contracts.before(sync_modelica_outputs),
+            sync_modelica_outputs.before(PropagateCosimSet::Propagate),
+            sync_script_outputs.before(PropagateCosimSet::Propagate),
             sync_modelica_inputs
                 .after(ApplyForcesCosimSet::ApplyForces)
                 .before(ModelicaSet::SpawnRequests),

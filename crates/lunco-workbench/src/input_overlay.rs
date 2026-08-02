@@ -349,15 +349,19 @@ register_commands!(
     on_toggle_input_overlay,
 );
 
-/// Registers the input overlay resources, settings, commands, and systems.
-pub fn build_input_overlay(app: &mut App) {
+/// Register the typed presentation commands without installing an egui panel.
+/// Offscreen/headless scenario runners still receive the shared command surface.
+pub fn register_input_overlay_commands(app: &mut App) {
     app.init_resource::<InputOverlaySettings>();
     app.init_resource::<SimulatedInputs>();
     app.add_message::<InjectedPointer>();
-    // Who is flying — written by possess/release, read by the AUTO/MANUAL badge.
     app.init_resource::<lunco_core::markers::FlightAuthority>();
+    register_all_commands(app);
+}
+
+/// Registers the input overlay resources, settings, commands, and systems.
+pub fn build_input_overlay(app: &mut App) {
+    register_input_overlay_commands(app);
     app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
     app.add_systems(PreUpdate, emit_injected_pointer);
-
-    register_all_commands(app);
 }

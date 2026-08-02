@@ -220,6 +220,8 @@ fn update_world_bounds(
 fn report_escaped_bodies(
     bounds: Res<WorldBounds>,
     mut reported: ResMut<ReportedEscapes>,
+    mut holds: ResMut<crate::PhysicsHolds>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // `Changed<Position>` is the query-level body-kind gate: avian has no
     // per-variant marker component (`RigidBody` is one enum component), so
     // "dynamic only" cannot be a `With<>` filter — but a body cannot escape
@@ -256,16 +258,27 @@ fn report_escaped_bodies(
         if !reported.0.insert(entity) {
             continue;
         }
+        holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
+        let label = name.map(Name::as_str).unwrap_or("<unnamed>");
+        if let Some(faults) = faults.as_deref_mut() {
+            let detail = format!(
+                "position={:?}, velocity={:?}, bounds={:?}",
+                pos.0, vel.0, *bounds
+            );
+            if faults.raise("physics-body-escaped", Some(entity), label, detail) {
+                error!(
+                    "[physics] terminal runtime failure: body left the world: {} ({entity})",
+                    label
+                );
+            }
+        }
         error!(
             "[physics] body left the world: {} ({entity}) at {:?}, velocity {:?} \
              — outside {:?}. A dynamic body outside the static geometry has nothing \
              left to collide with and will keep accelerating. Usual cause: physics \
              stepped while its collider was absent (see `PhysicsHolds`), or the body \
              was spawned below the terrain.",
-            name.map(Name::as_str).unwrap_or("<unnamed>"),
-            pos.0,
-            vel.0,
-            *bounds,
+            label, pos.0, vel.0, *bounds,
         );
     }
 }

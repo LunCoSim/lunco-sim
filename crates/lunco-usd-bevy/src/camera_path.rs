@@ -766,8 +766,16 @@ pub fn drive_camera_paths(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut q_cams: Query<&mut CameraPathDriven>,
+    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut tick: Local<u32>,
 ) {
+    let mut faults = faults;
+    if faults
+        .as_deref()
+        .is_some_and(lunco_core::RuntimeFaults::active)
+    {
+        return;
+    }
     *tick = tick.wrapping_add(1);
     let chatty = *tick % 100 == 0;
     for (curve_entity, path) in q_paths.iter() {
@@ -802,20 +810,50 @@ pub fn drive_camera_paths(
             curve_pos + curve_rot * local.as_dvec3()
         };
         let world = at(u);
+        if !world.is_finite() {
+            if faults.as_deref_mut().is_some_and(|faults| {
+                faults.raise(
+                    "camera-path-nonfinite-eye",
+                    Some(curve_entity),
+                    "camera path",
+                    format!("eye={world:?}, t={t}, u={u}"),
+                )
+            }) {
+                error!("[camera-path] terminal runtime failure: non-finite eye pose at t={t:.3}");
+            }
+            continue;
+        }
 
         // Aim, per the track in force at this instant. Direction is a DIFFERENCE
         // of two grid-absolute points, so it is small and safe in f32 — unlike the
         // positions themselves.
+        let mut invalid_target = false;
         let look_dir = match path.aim_at(t) {
             AimMode::Target(e) => {
                 match lunco_core::coords::world_pose(e, &q_parents, &q_grids, &q_spatial) {
                     Some((target, _)) => {
+                        let dir = (target.0 - world).as_vec3();
+                        if !target.0.is_finite() || !dir.is_finite() {
+                            invalid_target = true;
+                            if faults.as_deref_mut().is_some_and(|faults| {
+                                faults.raise(
+                                    "camera-path-nonfinite-target",
+                                    Some(e),
+                                    format!("target={e:?}"),
+                                    format!("eye={world:?}, target={target:?}, look={dir:?}"),
+                                )
+                            }) {
+                                error!(
+                                    "[camera-path] terminal runtime failure: non-finite target pose for {e:?}"
+                                );
+                            }
+                        }
                         info_once!(
                             "[camera-path] target aim live: eye {:?} -> target {:?}",
                             world,
                             target
                         );
-                        Some((target.0 - world).as_vec3())
+                        Some(dir)
                     }
                     None => {
                         // Target despawned (or its Transform is gone) — hold the
@@ -836,6 +874,25 @@ pub fn drive_camera_paths(
             // the rotation for this stretch.
             AimMode::Manual => None,
         };
+
+        if invalid_target {
+            continue;
+        }
+        if look_dir.is_some_and(|dir| !dir.is_finite()) {
+            if faults.as_deref_mut().is_some_and(|faults| {
+                faults.raise(
+                    "camera-path-nonfinite-look",
+                    Some(curve_entity),
+                    "camera path",
+                    format!("eye={world:?}, look={look_dir:?}, t={t}, u={u}"),
+                )
+            }) {
+                error!(
+                    "[camera-path] terminal runtime failure: non-finite look direction at t={t:.3}"
+                );
+            }
+            continue;
+        }
 
         if chatty {
             info!(
@@ -893,8 +950,12 @@ fn find_grid(
 pub fn apply_camera_paths(
     q_grids: Query<&Grid>,
     mut q: Query<(&mut CellCoord, &mut Transform, &ChildOf, &CameraPathDriven)>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut tick: Local<u32>,
 ) {
+    if faults.is_some_and(|faults| faults.active()) {
+        return;
+    }
     *tick = tick.wrapping_add(1);
     let chatty = *tick % 100 == 0;
     for (mut cell, mut tf, child_of, driven) in q.iter_mut() {

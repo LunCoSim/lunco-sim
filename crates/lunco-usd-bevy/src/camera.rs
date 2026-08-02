@@ -1,9 +1,9 @@
-//! `UsdGeomCamera` (`def Camera`) → Bevy `Camera` + [`SceneCamera`] intent.
+//! `UsdGeomCamera` (`def Camera`) → render-free camera intent.
 //!
 //! Scene files author cameras as **standard** USD `def Camera` prims; this
 //! translator projects each to a Bevy `Camera` that keeps the prim's `Name`
 //! and gets a `Projection` derived from the USD film-back attributes. The
-//! render *pipeline* half (`Camera3d`, tonemapping, MSAA, bloom) is attached by
+//! render *pipeline* half (`Camera3d`, its render graph, tonemapping, MSAA, bloom) is attached by
 //! `lunco-render-bevy` when it observes [`SceneCamera`] — so a headless world
 //! still holds a fully-formed camera and this crate links no wgpu. A
 //! "switchable scene camera" is a [`SceneCamera`] whose `RenderTarget` is a
@@ -114,9 +114,10 @@ pub fn read_camera_exposure_ev100(reader: &crate::StageView<'_>, path: &SdfPath)
     Some((f_stop * f_stop / time * (100.0 / iso) / responsivity).log2() - compensation)
 }
 
-/// If `prim_type` is `Camera`, attach an **inactive** Bevy camera to `entity`
-/// and return `true`. Called from `instantiate_usd_prim`; the prim's transform
-/// and visibility are applied by the shared path there.
+/// If `prim_type` is `Camera`, attach the camera intent to `entity` and return
+/// `true`. The render binding later adds an **inactive** Bevy `Camera3d` with a
+/// complete render graph. Called from `instantiate_usd_prim`; the prim's
+/// transform and visibility are applied by the shared path there.
 pub(crate) fn instantiate_camera_prim(
     reader: &crate::StageView<'_>,
     sdf_path: &SdfPath,
@@ -218,15 +219,15 @@ pub(crate) fn instantiate_camera_prim(
         }
     };
 
+    // A scene camera is an intent until the render binding runs.  Do not add a
+    // bare `Camera` here: Bevy 0.19 validates `Camera` at insertion time and
+    // emits a missing-render-graph warning before `lunco-render-bevy` can add
+    // `Camera3d`.  The render binder inserts `Camera3d` (and its required
+    // `Camera`, `CameraRenderGraph`, and target) as one complete pipeline.
+    // Keeping only the projection here also preserves the render-free USD
+    // bridge and makes headless camera projection data available immediately.
     let mut camera = commands.entity(entity);
-    camera.try_insert((
-        Camera {
-            is_active: false,
-            ..default()
-        },
-        projection,
-        pose,
-    ));
+    camera.try_insert((projection, pose));
     if is_viewport {
         camera.try_insert(lunco_render::scene_camera_look(read_camera_exposure_ev100(
             reader, sdf_path,

@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
 
-use crate::{BoundConnection, SimConnection};
+use crate::{is_physics_force_port, BoundConnection, RealtimeSafe, SimConnection};
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -124,6 +124,8 @@ struct DetectedLoop {
     entity: Entity,
     global_id: Option<lunco_core::GlobalEntityId>,
     port: String,
+    force_producing: bool,
+    realtime_safe: bool,
 }
 
 /// The flattened wiring fabric — the "SignalBus" — cached inside
@@ -329,8 +331,17 @@ impl CompiledWiring {
             // Every wire whose both endpoints sit inside the SCC IS the coupling;
             // wires are already in P10 order, so the description is deterministic.
             let mut parts: Vec<String> = Vec::new();
+            let mut force_producing = false;
             for w in &self.wires {
                 let dst = &self.targets[w.dst_index];
+                // A participant can feed a body-force port on itself (the
+                // common Modelica-to-Avian projection), so the force edge is
+                // intentionally not part of the multi-entity SCC above.
+                // It still makes the SCC's control loop force-producing and
+                // therefore subject to the RealtimeSafe contract.
+                if members.contains(&w.src_entity) && is_physics_force_port(&dst.name) {
+                    force_producing = true;
+                }
                 if w.src_entity != dst.entity
                     && members.contains(&w.src_entity)
                     && members.contains(&dst.entity)
@@ -353,10 +364,16 @@ impl CompiledWiring {
                     )
                 })
                 .expect("SCC has >= 2 members");
+            let realtime_safe = force_producing
+                && members
+                    .iter()
+                    .all(|member| world.get::<RealtimeSafe>(*member).is_some());
             self.loops.push(DetectedLoop {
                 entity,
                 global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
                 port: format!("{ALGEBRAIC_LOOP_PORT} {}", parts.join(", ")),
+                force_producing,
+                realtime_safe,
             });
         }
     }
@@ -474,29 +491,69 @@ pub fn propagate_connections(
         // wire faults, which are history), so a rewire retracts stale ones and
         // re-asserts the current set. The synthetic key ([`ALGEBRAIC_LOOP_PORT`]
         // prefix) keeps them out of the landed-retraction path — no real write
-        // can ever clear one. Propagation is NOT blocked: the loop still runs
-        // with the documented 1-step ZOH delay per feedthrough hop.
-        let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
-        diag.faults
+        // can ever clear one. A force-producing loop is accepted only when every
+        // participant explicitly declares the realtime contract. Otherwise it is
+        // a terminal runtime fault and physics is held before force application.
+        world
+            .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+            .faults
             .retain(|(_, port), _| !port.starts_with(ALGEBRAIC_LOOP_PORT));
         for l in &compiled.loops {
-            if reported.insert(l.port.clone()) {
-                warn!(
-                    "[cosim] algebraic loop in the wiring — co-simulated with a 1-step \
-                     delay per hop, which may diverge for tight coupling: {}",
-                    l.port
-                );
+            if l.force_producing && l.realtime_safe {
+                if reported.insert(l.port.clone()) {
+                    info!(
+                        "[cosim] force loop accepted under the declared realtime \
+                         lockstep contract (one fixed-step exchange delay): {}",
+                        l.port
+                    );
+                }
+                continue;
             }
-            diag.faults.insert(
-                (l.entity, l.port.clone()),
-                crate::diagnostics::BrokenConnection {
-                    entity: l.entity,
-                    global_id: l.global_id,
-                    port: l.port.clone(),
-                    has_port_surface: true,
-                    dropped_value: 0.0,
-                },
-            );
+            if reported.insert(l.port.clone()) {
+                if l.force_producing {
+                    error!(
+                        "[cosim] unsafe force-producing algebraic loop rejected: {}",
+                        l.port
+                    );
+                } else {
+                    warn!(
+                        "[cosim] algebraic loop in the wiring — co-simulated with a 1-step \
+                         delay per hop: {}",
+                        l.port
+                    );
+                }
+            }
+            if l.force_producing {
+                let raised = world
+                    .get_resource_mut::<lunco_core::RuntimeFaults>()
+                    .is_some_and(|mut faults| {
+                        faults.raise(
+                            "cosim-unsafe-force-loop",
+                            Some(l.entity),
+                            "co-simulation wiring",
+                            l.port.clone(),
+                        )
+                    });
+                if raised {
+                    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>()
+                    {
+                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                    }
+                }
+            }
+            world
+                .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .insert(
+                    (l.entity, l.port.clone()),
+                    crate::diagnostics::BrokenConnection {
+                        entity: l.entity,
+                        global_id: l.global_id,
+                        port: l.port.clone(),
+                        has_port_surface: true,
+                        dropped_value: 0.0,
+                    },
+                );
         }
     }
 
@@ -1081,6 +1138,36 @@ mod wire_order_tests {
         assert!(
             loop_faults(&world).is_empty(),
             "a loop entry is a fact about the current fabric — retracted on rewire"
+        );
+    }
+
+    /// A control loop may reach a body force through a self-wired participant
+    /// edge rather than through an inter-entity edge in the SCC. The force
+    /// classification must still see it and accept it only when every loop
+    /// participant declares the realtime contract.
+    #[test]
+    fn realtime_safe_loop_with_self_wired_force_is_accepted() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let a = world
+            .spawn((GlobalEntityId::from_raw(10), RealtimeSafe))
+            .id();
+        let b = world
+            .spawn((GlobalEntityId::from_raw(20), RealtimeSafe))
+            .id();
+        wire(&mut world, a, "out", b, "in");
+        wire(&mut world, b, "out", a, "in");
+        wire(&mut world, a, "force", a, "force_y");
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        assert!(
+            loop_faults(&world).is_empty(),
+            "a declared realtime-safe force loop is accepted, not reported as a generic fault"
         );
     }
 

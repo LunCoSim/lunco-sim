@@ -48,6 +48,8 @@ pub mod derived;
 /// Domain-free named engine exposure snapshots for UI, API, and diagnostics.
 pub mod exposure;
 
+pub mod faults;
+
 pub mod mobility;
 
 pub mod tools;
@@ -59,10 +61,11 @@ pub mod gate;
 
 pub use architecture::*;
 pub use derived::RebuildOnChange;
+pub use faults::{RuntimeFault, RuntimeFaults};
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
-pub use pacing::KeepAwake;
+pub use pacing::{KeepAwake, RealtimeCoupling};
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external
@@ -914,7 +917,9 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>()
         .init_resource::<exposure::EngineExposures>()
-        .init_resource::<exposure::ExposureRefresh>();
+        .init_resource::<exposure::ExposureRefresh>()
+        .init_resource::<RuntimeFaults>()
+        .init_resource::<pacing::RealtimeCoupling>();
 }
 
 /// HOST: re-key the input-ack watermarks against the authoritative ownership

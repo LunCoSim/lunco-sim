@@ -786,7 +786,6 @@ pub fn setup_big_space_hierarchy(
 
         commands
             .spawn((
-                Camera::default(),
                 // The scene camera stated as INTENT: `lunco-render-bevy` attaches `Camera3d`,
                 // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
                 // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.

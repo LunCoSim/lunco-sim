@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), and canonical diagram data types. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
+| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), canonical diagram data types, and shared terminal runtime faults/fixed-step coupling state. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, and recents. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, and file indexing. |
@@ -43,7 +43,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-physics`** | The physics **readiness gate** — "is the world safe to integrate right now?" A DEM still baking or a collider ring not yet paged in suspends integration without touching the user's transport clock, so a `Dynamic` body cannot free-fall through a collider that does not exist yet. |
 | **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
 | **`lunco-experiments`** | Backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory) with `RunStatus` (`Pending`/`Queued`/`Running`/`Done`/`Failed`/`Cancelled`) and `RunBounds`; the sim backend plugs in via the `ExperimentRunner` trait, parallel runs schedule across a worker pool. |
-| **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit input/output wiring (`SimConnection`), following FMI/SSP causality. Port backends (incl. the `piloted` control-authority sensor derived from possession) resolve every exposed value by name. |
+| **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit input/output wiring (`SimConnection`), following FMI/SSP causality. Force-producing algebraic loops require an authored `RealtimeSafe` contract; the shared fixed-step barrier prevents stale-force accumulation. Port backends (incl. the `piloted` control-authority sensor derived from possession) resolve every exposed value by name. |
 
 ---
 
@@ -108,7 +108,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-modelica`** | Modelica integration: AST-based editing, compilation via Rumoca, diagram visualization, and the Modelica workbench + worker pool. |
+| **`lunco-modelica`** | Modelica integration: AST-based editing, compilation via Rumoca, diagram visualization, and the Modelica workbench + worker pool. Live stepping uses fixed-step back-pressure shared with physics; pending worker results hold physics rather than accumulating stale-force debt. |
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. |
 | **`lunco-tools`** | Backend-agnostic, dependency-free tool trait + registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Owns the bevy-free `Tool` trait (discovery + `as_any` downcast) + global registry + discovery. Behaviour-tree execution lives in `lunco-tools-bevy`. |
 | **`lunco-tools-rhai`** | rhai adapter binding for the `lunco-tools` registry: `RhaiTool` (source) + `NativeRhaiTool` (native Rust), and `refresh`, which binds every registered tool into a rhai `Engine` as a static module callable as `name::fn(...)`. |
@@ -236,7 +236,7 @@ Input mapping and translation. Converts raw human-interface device inputs (Keybo
 High-level USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs.
 
 **`lunco-usd-bevy`**
-Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes, and transforms into Bevy entities/components, decodes the full xform-op stack (`local_transform_at`), and drives authored `timeSamples` animation (`sample_usd_animation`). Composition/flattening lives here (`compose.rs`, `flatten_stage`) — there is no separate `lunco-usd-composer` crate. Also owns the **camera pipeline**: USD `def Camera` → inactive `Camera3d` (`camera.rs`), rover-mounted grid-direct camera followers (`camera_mount.rs`), and the **single-authority viewport-camera reconciler** + `SetActiveCamera`/`KeyC` switch that actuates `lunco_core::SceneViewport` (`camera_switch.rs`). See [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
+Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes, and transforms into Bevy entities/components, decodes the full xform-op stack (`local_transform_at`), and drives authored `timeSamples` animation (`sample_usd_animation`). Composition/flattening lives here (`compose.rs`, `flatten_stage`) — there is no separate `lunco-usd-composer` crate. Also owns the **camera intent bridge**: USD `def Camera` → render-free intent, with `lunco-render-bevy` supplying the complete inactive `Camera3d` pipeline, rover-mounted grid-direct camera followers (`camera_mount.rs`), and the **single-authority viewport-camera reconciler** + `SetActiveCamera`/`KeyC` switch that actuates `lunco_core::SceneViewport` (`camera_switch.rs`). See [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 
 **`lunco-usd-avian`**
 Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge).

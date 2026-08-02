@@ -395,7 +395,8 @@ expose telemetry ports (see [`22-domain-cosim.md`](22-domain-cosim.md)):
 ### Cameras
 
 Scene cameras are **standard `def Camera` (`UsdGeomCamera`) prims** — `lunco-usd-bevy`
-projects each to an *inactive* Bevy `Camera3d` (see [`17-view-and-intent.md §6`](17-view-and-intent.md)).
+projects each to render-free camera intent and `lunco-render-bevy` binds the
+complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17-view-and-intent.md)).
 
 | Attribute | Meaning |
 |---|---|

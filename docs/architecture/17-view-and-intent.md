@@ -95,9 +95,11 @@ and USD standards rather than inventing bespoke types, and follows a strict
 ### 6.1 Cameras are standard USD + Bevy
 
 - A scene camera is a standard USD **`def Camera`** (`UsdGeomCamera`) prim.
-  `lunco-usd-bevy` (`camera.rs`) translates each to an **inactive** Bevy
-  `Camera3d`: `focalLength` / `verticalAperture` → vertical FOV, `clippingRange`
-  → near/far, `projection` token → perspective/orthographic. The optional
+  `lunco-usd-bevy` (`camera.rs`) translates each to render-free camera intent;
+  `lunco-render-bevy` then creates the **inactive** Bevy `Camera3d` and its
+  complete render graph atomically: `focalLength` / `verticalAperture` → vertical
+  FOV, `clippingRange` → near/far, `projection` token → perspective/orthographic.
+  The optional
   `lunco:cameraLookAt` (double3, parent-local) aims the camera at a point.
 - "Which camera renders" is Bevy's own **`Camera::is_active`** — there is no
   bespoke "active camera" marker.

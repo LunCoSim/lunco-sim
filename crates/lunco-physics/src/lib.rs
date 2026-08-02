@@ -74,6 +74,8 @@ impl PhysicsHolds {
     /// script, so a paused scene can never run the script that would unpause it.
     /// Advance the world from a script with [`PhysicsStepRequest`] instead.
     pub const CINEMATIC: &'static str = "cinematic";
+    /// A terminal runtime fault has invalidated the simulation state.
+    pub const SAFETY_FAILURE: &'static str = "runtime-safety-failure";
 
     /// Is any subsystem holding physics?
     #[inline]
@@ -170,8 +172,13 @@ impl PhysicsStepRequest {
 /// gate is open for the entire window this needs to close. Both are checked here —
 /// a paused world clock must stop force application too, and `Time<Physics>` does
 /// not report itself paused merely because virtual time is.
-pub fn physics_is_live(physics_time: Res<Time<Physics>>, virtual_time: Res<Time<Virtual>>) -> bool {
-    !physics_time.is_paused()
+pub fn physics_is_live(
+    physics_time: Res<Time<Physics>>,
+    virtual_time: Res<Time<Virtual>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+) -> bool {
+    !faults.is_some_and(|state| state.active())
+        && !physics_time.is_paused()
         && !virtual_time.is_paused()
         && virtual_time.relative_speed_f64() > 0.0
 }
@@ -183,8 +190,15 @@ pub fn physics_is_live(physics_time: Res<Time<Physics>>, virtual_time: Res<Time<
 /// keeps advancing. Runs in `PreUpdate`, ahead of the physics schedule, and is
 /// change-driven: it only writes when the desired state differs from the actual, so
 /// it is also self-healing if anything pauses the physics clock out of band.
-pub fn apply_physics_holds(holds: Res<PhysicsHolds>, mut physics_time: ResMut<Time<Physics>>) {
-    let held = holds.is_held();
+pub fn apply_physics_holds(
+    holds: Res<PhysicsHolds>,
+    coupling: Option<Res<lunco_core::RealtimeCoupling>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+    mut physics_time: ResMut<Time<Physics>>,
+) {
+    let held = holds.is_held()
+        || coupling.is_some_and(|state| state.physics_held)
+        || faults.is_some_and(|state| state.active());
     if held != physics_time.is_paused() {
         if held {
             physics_time.pause();
@@ -206,9 +220,18 @@ pub fn apply_physics_holds(holds: Res<PhysicsHolds>, mut physics_time: ResMut<Ti
 /// integrated step.
 pub fn grant_physics_step(
     holds: Res<PhysicsHolds>,
+    coupling: Option<Res<lunco_core::RealtimeCoupling>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut steps: ResMut<PhysicsStepRequest>,
     mut physics_time: ResMut<Time<Physics>>,
 ) {
+    if coupling.is_some_and(|state| state.physics_held)
+        || faults.is_some_and(|state| state.active())
+    {
+        steps.clear();
+        physics_time.pause();
+        return;
+    }
     if !holds.is_held() {
         // Nothing to step past. Drop the debt rather than let it fire later against
         // an unrelated hold (a terrain bake, say).

@@ -44,7 +44,13 @@ fn msaa_of(m: MsaaLevel) -> Msaa {
 /// non-HDR target is a no-op that still pays for a downsample/upsample chain, which
 /// is precisely the bug (`R4`) four crates in this repo shipped. Here it is refused,
 /// loudly, instead of silently wasting the passes.
-fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderProfile) {
+fn apply(
+    commands: &mut Commands,
+    e: Entity,
+    cam: &SceneCamera,
+    profile: RenderProfile,
+    initial_inactive: bool,
+) {
     let mut ec = commands.entity(e);
     let (tonemapping, msaa) = if profile.is_fast() {
         (Tonemapping::None, Msaa::Off)
@@ -65,7 +71,10 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderP
     // Set through `entry`, not by inserting a fresh `Camera`: `order`, `viewport` and
     // `is_active` on this entity are owned by the viewport reconciler, and a wholesale
     // insert would reset all three.
-    ec.entry::<Camera>().and_modify(|mut c| {
+    ec.entry::<Camera>().and_modify(move |mut c| {
+        if initial_inactive {
+            c.is_active = false;
+        }
         if !matches!(c.clear_color, ClearColorConfig::Custom(_)) {
             c.clear_color = ClearColorConfig::Custom(Color::BLACK);
         }
@@ -112,7 +121,7 @@ fn bind_scene_camera(
 ) {
     let e = add.entity;
     let Ok(cam) = cams.get(e) else { return };
-    apply(&mut commands, e, cam, *profile);
+    apply(&mut commands, e, cam, *profile, true);
 }
 
 /// Re-apply when the look is retuned live (the render-settings panel).
@@ -122,7 +131,7 @@ fn rebind_changed_scene_camera(
     mut commands: Commands,
 ) {
     for (e, cam) in &changed {
-        apply(&mut commands, e, cam, *profile);
+        apply(&mut commands, e, cam, *profile, false);
     }
 }
 
@@ -143,10 +152,7 @@ mod tests {
     #[test]
     fn scene_camera_gains_a_pipeline() {
         let mut a = app();
-        let e = a
-            .world_mut()
-            .spawn((Camera::default(), SceneCamera::agx()))
-            .id();
+        let e = a.world_mut().spawn(SceneCamera::agx()).id();
         a.update();
         assert!(a.world().entity(e).contains::<Camera3d>());
         assert_eq!(
@@ -160,10 +166,7 @@ mod tests {
     #[test]
     fn msaa_is_actually_configured() {
         let mut a = app();
-        let e = a
-            .world_mut()
-            .spawn((Camera::default(), SceneCamera::default()))
-            .id();
+        let e = a.world_mut().spawn(SceneCamera::default()).id();
         a.update();
         let expected = if cfg!(target_arch = "wasm32") {
             Msaa::Off
@@ -181,14 +184,11 @@ mod tests {
         let mut a = app();
         let e = a
             .world_mut()
-            .spawn((
-                Camera::default(),
-                SceneCamera {
-                    bloom: Some(BloomLook::default()),
-                    hdr: false,
-                    ..Default::default()
-                },
-            ))
+            .spawn((SceneCamera {
+                bloom: Some(BloomLook::default()),
+                hdr: false,
+                ..Default::default()
+            },))
             .id();
         a.update();
         assert!(
@@ -203,10 +203,7 @@ mod tests {
         let mut a = app();
         let e = a
             .world_mut()
-            .spawn((
-                Camera::default(),
-                SceneCamera::default().with_bloom(BloomLook::default()),
-            ))
+            .spawn(SceneCamera::default().with_bloom(BloomLook::default()))
             .id();
         a.update();
         assert!(a.world().entity(e).contains::<Bloom>());
@@ -219,10 +216,7 @@ mod tests {
         a.insert_resource(RenderProfile::Fast);
         let e = a
             .world_mut()
-            .spawn((
-                Camera::default(),
-                SceneCamera::default().with_bloom(BloomLook::default()),
-            ))
+            .spawn(SceneCamera::default().with_bloom(BloomLook::default()))
             .id();
         a.update();
 

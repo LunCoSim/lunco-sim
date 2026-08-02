@@ -43,3 +43,23 @@ impl KeepAwake {
         self.0 > 0
     }
 }
+
+/// Fixed-step barrier between live Modelica outputs and rigid-body physics.
+///
+/// A live Modelica model may be evaluated off-thread, but physics must not
+/// integrate while the output for its next communication point is still in
+/// flight. The Modelica bridge raises `physics_held` before dispatching a step
+/// and clears it when the result lands. Physics reads this resource as an
+/// additional hold; no stale force value is allowed to accumulate while the
+/// worker is behind.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct RealtimeCoupling {
+    /// Whether the next physics step must wait for a Modelica result.
+    pub physics_held: bool,
+    /// Number of live compiled Modelica models measured on the last fixed tick.
+    pub active_models: usize,
+    /// Largest target/current clock gap on the last fixed tick.
+    pub worst_lag_secs: f64,
+    /// Model responsible for `worst_lag_secs`.
+    pub worst_entity: Option<Entity>,
+}

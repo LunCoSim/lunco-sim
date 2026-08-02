@@ -582,13 +582,12 @@ const LIVE_MICRO_DT: f64 = lunco_core::SECS_PER_TICK / 3.0;
 
 /// Hard cap on micro-steps integrated inside ONE `Step` command.
 ///
-/// This is the catch-up clamp: a model that has fallen behind the world clock
-/// (a long compile, a hitched frame, a `TimeTransport.rate` burst) asks for a
-/// large `dt`, and we integrate at most this many micro-steps for it —
-/// ~0.178 s of model time. Whatever is left over stays as lag and is caught up
-/// on the following ticks (`spawn_modelica_requests` recomputes the deficit from
-/// the model's OWN clock every tick, so nothing is lost). The clamp exists so a
-/// 10-second stall can't hand the solver a 10-second macro step.
+/// A large deficit can still occur after an intentional pause or a rate change,
+/// so the requested macro step is capped at this many micro-steps (~0.178 s).
+/// A worker stall is handled differently: the fixed-step coupling barrier holds
+/// physics and does not advance `target_time` while a step is in flight. The
+/// clamp therefore bounds an explicit authored time jump, not accumulated worker
+/// debt.
 const MAX_MICRO_STEPS_PER_MACRO: u32 = 32;
 
 /// Largest `dt` one `Step` command may carry (= the clamp above, in seconds).
@@ -632,9 +631,10 @@ fn integrate_macro_step(
     Ok(())
 }
 
-/// Model-vs-world lag past which the co-sim coupling is no longer trustworthy
-/// (the forces avian integrates this tick come from a model state this far in
-/// the past). Surfaced as a rate-limited `warn!` + [`CosimLag`].
+/// Model-vs-world lag past which the co-sim worker is visibly waiting on the
+/// coupling barrier. Surfaced as a rate-limited `warn!` + [`CosimLag`]; physics
+/// is held while the in-flight result is pending, so this is not permission to
+/// apply stale forces.
 const LAG_WARN_SECS: f64 = 0.25;
 
 /// Fixed ticks between two lag warnings (5 s at 60 Hz) — the warn is on the
@@ -648,11 +648,10 @@ const LAG_WARN_COOLDOWN_TICKS: u32 = 300;
 /// Before this existed, NOTHING compared the model's own clock to the world's —
 /// the model could run at half speed forever and no surface reported it.
 ///
-/// `worst_secs` is the coupling delay: the age of the model state whose outputs
-/// the current tick's forces were computed from. In steady state it sits at
-/// roughly one macro step (the in-flight `Step`); a sustained rise means the
-/// worker cannot keep up with the fixed clock and the model is being carried by
-/// the catch-up path.
+/// `worst_secs` is the distance between the next communication point and the
+/// model's last completed state. During an in-flight step it describes the
+/// amount of simulation the main loop is waiting for; it is not a stale-force
+/// allowance because the physics clock is held by `RealtimeCoupling`.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct CosimLag {
     /// Worst `|model_time − world_time|` seen on the last fixed tick, seconds.
@@ -2796,22 +2795,19 @@ pub fn on_remove_modelica(trigger: On<Remove, ModelicaModel>, channels: Res<Mode
 /// testable without a worker thread or an `App`:
 ///
 /// * `target_time` — the world clock (model-local), advanced one fixed delta per
-///   fixed tick by the caller. NEVER a render-frame quantity.
+///   fixed tick when no step is in flight. NEVER a render-frame quantity.
 /// * `current_time` — the model's own clock, from the last worker result.
 /// * `in_flight` — a `Step` is already out at the worker for this model.
 ///
 /// Returns the `dt` to request, or `None` for "nothing to do this tick".
 ///
 /// The requested `dt` is the **whole deficit**, clamped to
-/// [`MAX_MACRO_STEP_DT`]: a model that fell behind asks for a bigger macro step
-/// and closes the gap over the next few ticks, instead of silently dropping the
-/// ticks it missed (the old code always sent `Time<Fixed>::delta` and skipped
-/// entirely whenever a step was in flight — so at 30 FPS the model ran at half
-/// speed, and at `rate = 10` it ran 10× too slow).
+/// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None` and the caller does
+/// not advance `target_time`; the next communication point is scheduled only
+/// after the previous result releases the barrier.
 ///
 /// While a step is in flight we do not dispatch another (one macro step per
-/// model at a time — the worker owns one `SimulationSession` per entity). The deficit
-/// is NOT lost: it keeps growing and the next dispatched step carries it.
+/// model at a time — the worker owns one `SimulationSession` per entity).
 pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bool) -> Option<f64> {
     if in_flight {
         return None;
@@ -2841,6 +2837,8 @@ pub fn spawn_modelica_requests(
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
     mut lag: ResMut<CosimLag>,
+    coupling: Option<ResMut<lunco_core::RealtimeCoupling>>,
+    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // Auto-compile request goes out as a core event; the UI relays it to the
     // `CompileModel` command. Core no longer references the UI command.
     mut compile_requests: MessageWriter<crate::CompileRequested>,
@@ -2853,6 +2851,8 @@ pub fn spawn_modelica_requests(
     let mut worst_secs = 0.0_f64;
     let mut worst_entity = None;
     let mut live_models = 0usize;
+    let mut coupling_held = false;
+    let mut faults = faults;
 
     for (entity, mut model) in q_models.iter_mut() {
         if model.paused {
@@ -2894,6 +2894,23 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
+        // A live Modelica step is the communication barrier for the next
+        // physics step. Do not advance target_time while the worker is busy:
+        // accumulating debt here was the source of the unbounded stale-force
+        // condition reported by the episode recording. Physics remains held
+        // until this result lands, so one slow worker step costs wall time but
+        // never turns into a multi-tick extrapolation.
+        if model.is_stepping {
+            coupling_held = true;
+            live_models += 1;
+            let lag_secs = (model.target_time - model.current_time).abs();
+            if lag_secs > worst_secs {
+                worst_secs = lag_secs;
+                worst_entity = Some(entity);
+            }
+            continue;
+        }
+
         // ── The world clock advances by exactly one FIXED tick ──────────────
         model.target_time += fixed_dt;
 
@@ -2917,8 +2934,7 @@ pub fn spawn_modelica_requests(
             .map(|(name, val)| (name.clone(), *val))
             .collect();
 
-        model.is_stepping = true;
-        let _ = channels.tx.send(ModelicaCommand::Step {
+        let sent = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
             model_path: model.model_path.clone(),
@@ -2926,11 +2942,38 @@ pub fn spawn_modelica_requests(
             inputs,
             dt,
         });
+        if sent.is_ok() {
+            model.is_stepping = true;
+            coupling_held = true;
+        } else {
+            model.paused = true;
+            model.is_compiled = false;
+            model.last_error = Some("Modelica worker channel closed".to_string());
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "modelica-worker-unavailable",
+                    Some(entity),
+                    model.model_name.clone(),
+                    "the Modelica worker channel closed while dispatching a fixed-step request",
+                );
+            }
+            error!(
+                "[modelica] worker channel closed while dispatching a step for `{}`",
+                model.model_name
+            );
+        }
     }
 
     lag.worst_secs = worst_secs;
     lag.worst_entity = worst_entity;
     lag.models = live_models;
+
+    if let Some(mut coupling) = coupling {
+        coupling.physics_held = coupling_held;
+        coupling.active_models = live_models;
+        coupling.worst_lag_secs = worst_secs;
+        coupling.worst_entity = worst_entity;
+    }
 
     // Rate-limited divergence alarm. A sustained lag means the forces avian is
     // integrating come from a model state this far in the past — the coupling is
@@ -2939,9 +2982,8 @@ pub fn spawn_modelica_requests(
         lag.cooldown -= 1;
     } else if worst_secs > LAG_WARN_SECS {
         warn!(
-            "[cosim] Modelica model clock is {:.3}s behind the fixed-step world clock \
-             (entity {:?}, {} live model(s)). The solver cannot keep up with the sim rate; \
-             forces are being computed from a stale model state.",
+            "[cosim] Modelica coupling is waiting {:.3}s for the fixed-step result \
+             (entity {:?}, {} live model(s)); physics remains held until it lands.",
             worst_secs, worst_entity, live_models,
         );
         lag.cooldown = LAG_WARN_COOLDOWN_TICKS;
@@ -2972,6 +3014,7 @@ pub fn handle_modelica_responses(
     mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
+    coupling: Option<ResMut<lunco_core::RealtimeCoupling>>,
 ) {
     let mut compile_states = compile_states;
     let mut source_roots = source_roots;
@@ -3294,6 +3337,16 @@ pub fn handle_modelica_responses(
                 });
             }
         }
+    }
+
+    // A result landing is the only release edge for the coupling barrier. The
+    // next FixedUpdate may dispatch the following step, but PreUpdate has
+    // already observed this release, so the current physics step consumes only
+    // the fresh output that just arrived.
+    if let Some(mut coupling) = coupling {
+        coupling.physics_held = q_models
+            .iter()
+            .any(|model| !model.paused && model.is_compiled && model.is_stepping);
     }
 }
 

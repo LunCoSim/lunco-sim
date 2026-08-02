@@ -54,18 +54,20 @@ so every engine advances with the same `dt`:
 
 ```
 FixedUpdate:
-  1. ModelicaSet::HandleResponses   — receive async results from worker thread
-  2. sync_modelica_outputs          — ModelicaModel.variables → SimComponent.outputs
-  3. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
+  1. sync_modelica_outputs          — completed Modelica results → SimComponent.outputs
+  2. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
                                        (force_* → PendingForces; joint angle/displacement → motor)
-  4. CosimSet::ApplyForces          — apply_pending_forces: drain PendingForces into Avian Forces
-  5. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
-  6. ModelicaSet::SpawnRequests     — send next step command with fixed dt
+  3. CosimSet::ApplyForces          — apply_pending_forces: drain PendingForces into Avian Forces
+  4. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
+  5. ModelicaSet::SpawnRequests     — send next step command with fixed dt
 
 FixedPostUpdate:
-  7. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
+  6. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
                                        (Avian outputs — Position / LinearVelocity — read on demand
                                         via PortRegistry; no separate read_avian_outputs snapshot system)
+
+Update:
+  7. ModelicaSet::HandleResponses   — receive async results and release the coupling barrier
 ```
 
 The master loop reads outputs, propagates through connections, writes inputs,
@@ -79,10 +81,10 @@ for whom. Stating it explicitly (finding `A3` — it was previously unstated, an
 the code did not implement any coherent version of it):
 
 **1. The communication grid is the FIXED-STEP clock.** Every model carries
-`target_time` — the world clock, in model-local seconds — and it advances by
-exactly one `Time<Fixed>` delta per **unpaused fixed tick**. Not per render
-frame. A `TimeTransport.rate` burst yields *more ticks*, so it yields
-proportionally more model time, automatically.
+`target_time` — the next world communication point, in model-local seconds.
+It advances by exactly one `Time<Fixed>` delta when no step for that model is in
+flight. Not per render frame. A `TimeTransport.rate` burst yields *more ticks*,
+so it yields proportionally more model time, automatically.
 
 **2. The macro step is `target_time − current_time`, clamped.** `current_time` is
 the model's own clock (`stepper.time()`), reported back by the worker. The
@@ -93,23 +95,18 @@ step. A model that missed ticks — a slow solver, a long compile, a hitched fra
 Consequently: **model time is a pure function of the fixed-step clock**, not of
 frame rate, GPU load, or window focus.
 
-**3. The coupling is explicit (Jacobi-flavoured), and the delay is measured, not
-assumed.** The `Step` dispatched at tick *N* is executed on the worker thread and
-its result lands at tick *N+k*, k ≥ 1. So the forces avian integrates at tick *N*
-were computed from a model state that is one macro step old. This is an
-**explicit / loosely-coupled** master (no iteration to a fixed point, no step
-rejection, no `SetFMUState` rollback), and the resulting coupling error is
-first-order in the macro step. A strict Gauss-Seidel barrier — block the fixed
-tick on the worker result — is the rigorous alternative and is **deliberately not
-implemented**: it would put an unbounded solver on the critical path of the main
-loop, which the app's responsiveness mandate forbids.
+**3. The coupling is explicit and back-pressured.** The `Step` dispatched at
+tick *N* is executed on the worker thread. While its result is pending,
+`RealtimeCoupling` holds Avian's physics clock and the master does not advance
+that model's `target_time`. The result is consumed in `Update`; the next fixed
+tick then propagates the fresh outputs, applies forces once, and dispatches the
+next step. A slow solver costs wall time, never a burst of stale-force physics
+or an unbounded target-time debt.
 
-Because the delay is real, it is **surfaced**: `lunco_modelica::worker::CosimLag`
-records `|model_time − world_time|` for every live model every fixed tick, and
-`warn!`s (rate-limited) past 0.25 s. In steady state it sits at about one macro
-step; a sustained rise means the solver cannot keep up with the sim rate and the
-forces are being computed from a stale model — the coupling has degraded from
-co-simulation into extrapolation, and you can see it happen.
+Because the wait is real, it is **surfaced**: `lunco_modelica::worker::CosimLag`
+records the communication gap for every live model every fixed tick, and
+`warn!`s (rate-limited) past 0.25 s. The warning means the main loop is waiting;
+the physics barrier is already closed, so it is not a stale-force fallback.
 
 **4. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
 The worker's command-squashing (which correctly collapses redundant

@@ -85,16 +85,19 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !render_origin.0.is_finite() {
+        if !render_origin.0.is_finite()
+            || !direction.as_vec3().is_finite()
+            || !max_distance.is_finite()
+            || max_distance < 0.0
+        {
             return None;
         }
-        self.spatial.cast_ray(
-            self.to_physics(render_origin)?.0,
-            direction,
-            max_distance,
-            solid,
-            filter,
-        )
+        let origin = self.to_physics(render_origin)?.0;
+        if !origin.is_finite() {
+            return None;
+        }
+        self.spatial
+            .cast_ray(origin, direction, max_distance, solid, filter)
     }
 
     /// Cast a ray whose origin is ALREADY grid-absolute (an avian `Position`,
@@ -115,7 +118,11 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !origin.0.is_finite() {
+        if !origin.0.is_finite()
+            || !direction.as_vec3().is_finite()
+            || !max_distance.is_finite()
+            || max_distance < 0.0
+        {
             return None;
         }
         self.spatial

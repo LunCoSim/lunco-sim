@@ -1891,8 +1891,17 @@ pub fn sense_clearance(
         &avian3d::prelude::Rotation,
     )>,
     mut field: ResMut<ClearanceField>,
+    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     use avian3d::prelude::SpatialQueryFilter;
+    let mut faults = faults;
+    if faults
+        .as_deref()
+        .is_some_and(lunco_core::RuntimeFaults::active)
+    {
+        field.0.clear();
+        return;
+    }
     // DRAIN, don't peek: un-drained removal events stay queued for their whole
     // retention window and would re-clear the cache for several extra frames.
     let hierarchy_removed = removed_children.read().count() > 0;
@@ -1919,12 +1928,20 @@ pub fn sense_clearance(
         // But it must not be silent either — a vessel that vanishes from the clearance
         // field would otherwise read as "sensor returned nothing" to every consumer.
         if !pos.0.is_finite() || !rot.0.is_finite() {
-            warn!(
-                "[autopilot] non-finite pose for gid {}, skipping clearance probe: \
-                 pos={:?} — physics has diverged for this body; see the escape guard",
-                gid.get(),
-                pos.0
-            );
+            let detail = format!("position={:?}, rotation={:?}", pos.0, rot.0);
+            if faults.as_deref_mut().is_some_and(|faults| {
+                faults.raise(
+                    "autopilot-nonfinite-pose",
+                    Some(vessel),
+                    format!("gid={}", gid.get()),
+                    detail,
+                )
+            }) {
+                error!(
+                    "[autopilot] terminal runtime failure: non-finite pose for gid {}",
+                    gid.get()
+                );
+            }
             continue;
         }
         // Level forward: drop the pitch so the probe skims a horizontal plane instead
@@ -1947,13 +1964,30 @@ pub fn sense_clearance(
         });
         let base = GridPos(pos.0);
         // Cast each lane at every body height, keep the nearest hit across them.
-        let lane = |dir: Vec3| -> Option<f32> {
+        let mut lane = |dir: Vec3| -> Option<f32> {
             let d = Dir3::new(dir).ok()?;
             PROBE_HEIGHTS
                 .iter()
                 .filter_map(|h| {
                     // Body-local up-offset: a bare delta onto the grid point.
                     let origin = base + DVec3::Y * *h as f64;
+                    if !origin.0.is_finite() {
+                        if faults
+                            .as_deref_mut()
+                            .is_some_and(|faults| faults.raise(
+                                "autopilot-nonfinite-ray-origin",
+                                Some(vessel),
+                                format!("gid={}", gid.get()),
+                                format!("origin={:?}", origin.0),
+                            ))
+                        {
+                            error!(
+                                "[autopilot] terminal runtime failure: non-finite clearance origin for gid {}",
+                                gid.get()
+                            );
+                        }
+                        return None;
+                    }
                     spatial
                         .cast_ray_grid(origin, d, SENSOR_RANGE as f64, true, filter)
                         .map(|hit| hit.distance as f32)

@@ -559,6 +559,8 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
 /// (after propagation).
 pub fn apply_pending_forces(
     mut q_pending: Query<(Entity, &mut PendingForces)>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
@@ -566,6 +568,26 @@ pub fn apply_pending_forces(
     mut forces: Query<Forces, lunco_physics::Integrable>,
 ) {
     for (e, mut pf) in &mut q_pending {
+        if !pf.f.is_finite() || !pf.f_local.is_finite() || !pf.torque.is_finite() {
+            let detail = format!(
+                "force={:?}, force_local={:?}, torque={:?}",
+                pf.f, pf.f_local, pf.torque
+            );
+            pf.f = DVec3::ZERO;
+            pf.f_local = DVec3::ZERO;
+            pf.torque = DVec3::ZERO;
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            if let Some(faults) = faults.as_deref_mut() {
+                if faults.raise("cosim-nonfinite-force", Some(e), "PendingForces", detail) {
+                    error!(
+                        "[cosim] terminal runtime failure: non-finite force accumulator on {e:?}"
+                    );
+                }
+            }
+            continue;
+        }
         if pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO {
             if let Ok(mut f) = forces.get_mut(e) {
                 if pf.f != DVec3::ZERO {

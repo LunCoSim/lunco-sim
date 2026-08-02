@@ -25,8 +25,20 @@ pub struct ActivatePerspective {
 }
 
 #[on_command(ActivatePerspective)]
-fn on_activate_perspective(trigger: On<ActivatePerspective>, mut layout: ResMut<WorkbenchLayout>) {
+fn on_activate_perspective(
+    trigger: On<ActivatePerspective>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    pending: Option<ResMut<crate::PendingLayoutRequests>>,
+) {
     let id = trigger.event().id.clone();
+    let Some(mut layout) = layout else {
+        if let Some(mut pending) = pending {
+            pending
+                .0
+                .push(crate::LayoutRequest::ActivatePerspective(id));
+        }
+        return;
+    };
     if layout.activate_perspective_by_str(&id) {
         info!("[ActivatePerspective] activated `{id}`");
     } else {
@@ -44,8 +56,15 @@ pub struct ResetWorkspaceLayout {}
 #[on_command(ResetWorkspaceLayout)]
 fn on_reset_workspace_layout(
     _trigger: On<ResetWorkspaceLayout>,
-    mut layout: ResMut<WorkbenchLayout>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    pending: Option<ResMut<crate::PendingLayoutRequests>>,
 ) {
+    let Some(mut layout) = layout else {
+        if let Some(mut pending) = pending {
+            pending.0.push(crate::LayoutRequest::Reset);
+        }
+        return;
+    };
     layout.reset_to_default_layout();
     info!("[ResetWorkspaceLayout] dock reset to active perspective preset");
 }

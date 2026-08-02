@@ -2532,12 +2532,12 @@ impl Plugin for SandboxCorePlugin {
             // silently boots a scene-less world (only procedural terrain /
             // obstacles), which masks the real error.
             .add_systems(Update, startup_scene_failguard)
-            // Cosim pipeline ordering inside FixedUpdate:
-            //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
+            // Cosim pipeline ordering: worker responses land in Update; the
+            // fixed loop then propagates, applies, and dispatches the next
+            // Modelica communication point.
             .configure_sets(
                 FixedUpdate,
                 (
-                    ModelicaSet::HandleResponses,
                     PropagateCosimSet::Propagate,
                     ApplyForcesCosimSet::ApplyForces,
                     ModelicaSet::SpawnRequests,
@@ -3352,6 +3352,27 @@ impl Plugin for SandboxOffscreenPlugin {
         // the GUI gets this from `WorkbenchPlugin`, which this mode skips.
         // `setup_sandbox`'s twin-load path panics without it.
         app.add_plugins(lunco_workspace::WorkspacePlugin);
+
+        // `CloseWindow` is a presentation intent in the shared recording
+        // script. Offscreen has no OS window; the recorder's drained-state
+        // exit owns process lifetime, so acknowledge this explicit intent
+        // through the shared scenario-command policy instead of advertising a
+        // window command whose semantics would terminate before the video
+        // trailer is written.
+        app.insert_resource(lunco_scripting::bridge_core::IgnoredScenarioCommands::new(
+            ["CloseWindow"],
+        ));
+
+        // Recording owns its deterministic clock. Do not inherit a persisted
+        // editor cadence (especially the scene-test EXACT setting), which
+        // makes the expensive celestial cluster solve on every evaluation.
+        app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::default());
+
+        // Presentation commands remain part of the scenario command surface
+        // without requiring the egui workbench in an offscreen run.
+        app.add_plugins(lunco_theme::ThemePlugin);
+        app.add_plugins(lunco_workbench::theme_command::ThemeCommandPlugin);
+        lunco_workbench::input_overlay::register_input_overlay_commands(app);
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).

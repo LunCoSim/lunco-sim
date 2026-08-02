@@ -72,7 +72,9 @@ What is actually in the code, as of 2026-07-12 (finding `A4`):
 | Piece | Status |
 |---|---|
 | `uniform bool lunco:program:realtimeSafe`, read at prim-read time (`lunco-usd-sim/src/cosim.rs`) → the `RealtimeSafe` component (`crates/lunco-cosim/src/connection.rs`) | **implemented** |
-| Gate: a program **without** `RealtimeSafe` wiring a force/torque port on a client-predicted `Dynamic` body | **warns at wire-build time** (`rewire_usd_connections`); does **not** refuse the wire |
+| Gate: a program **without** `RealtimeSafe` wiring a force/torque port on a client-predicted `Dynamic` body | **rejects the force loop at wire-build time** (`rewire_usd_connections`) and raises a terminal runtime fault |
+| Force-producing algebraic loop with every participant explicitly `RealtimeSafe` | **accepted with a one-fixed-step exchange delay**; physics is held while each worker step is pending |
+| Non-force algebraic loop | **diagnostic warning**; it does not enter the force safety gate |
 | `lunco:replication` → always-on `Replication` metadata (§5, §"declared in USD") | **not implemented** — no code reads it |
 | Promise ↔ solver/caps validation | **implemented** (2026-07-27) — `lunco_experiments::solver` resolves by capability and refuses an incapable pairing at stepper construction |
 | A fixed-step deterministic solver good enough to honour the promise | **not available** — see below |

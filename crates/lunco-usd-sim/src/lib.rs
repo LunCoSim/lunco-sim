@@ -1058,23 +1058,11 @@ fn process_usd_sim_prim_read(
         // high-contrast lunar exposure (ev100 stays lunar-calibrated).
         let camera_look = move || {
             (
-                // Spawn INACTIVE. `reconcile_scene_viewport` is the ONE
-                // writer of `Camera::is_active` and turns the bound camera
-                // on within a frame — but a `Camera` left at its default is
-                // active the moment it spawns, so a
-                // stage recompose that re-instantiates this prim renders as
-                // a SECOND active order-0 window camera (Bevy's per-frame
-                // "camera order ambiguities" warning + the whole scene
-                // rendered twice) until the arbiter and the prior avatar's
-                // deferred despawn catch up.
-                bevy::camera::Camera {
-                    is_active: false,
-                    ..Default::default()
-                },
                 bevy::camera::Exposure { ev100 },
-                // Camera INTENT: `lunco-render-bevy` binds `Camera3d` +
-                // `Tonemapping::AgX` + MSAA. Render-free here, and it is what
-                // every "which entity is the scene camera?" query filters on.
+                // Camera INTENT: `lunco-render-bevy` binds `Camera3d` + its
+                // render graph + `Tonemapping::AgX` + MSAA. Render-free here,
+                // and it is what every "which entity is the scene camera?"
+                // query filters on.
                 SceneCamera::agx(),
             )
         };

@@ -984,8 +984,9 @@ fn instantiate_usd_prim_read(
             prim_path.stage_handle.id(),
         );
 
-        // UsdGeomCamera (`def Camera`) → an inactive Bevy `Camera3d` (see
-        // `camera.rs`). Standard USD camera prim; which one renders is Bevy's
+        // UsdGeomCamera (`def Camera`) → camera intent (see `camera.rs`). The
+        // render binding turns viewport intent into an inactive Bevy `Camera3d`
+        // with a complete render graph; which one renders is Bevy's
         // `Camera::is_active`, chosen by the switch mechanism in `lunco-avatar`.
         // A camera nested under a moving prim rides it via the shared transform
         // path below + `ChildOf` propagation ("camera on a rover").

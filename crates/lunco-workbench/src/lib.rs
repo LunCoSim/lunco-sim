@@ -334,6 +334,23 @@ enum TabRequest {
     Close(CloseTab),
 }
 
+/// Layout mutations raised by egui controls are committed by `Update`, after
+/// the complete egui multipass run. Mutating the dock while egui is replaying
+/// a layout pass makes the same rectangle contain a different widget on pass
+/// two, which is precisely the `Widget rect changed id between passes` warning
+/// and can also make a click run twice.
+#[derive(Clone)]
+enum LayoutRequest {
+    Reset,
+    SetActivityBar(bool),
+    AddSingleton { id: PanelId, slot: PanelSlot },
+    RemoveSingleton(PanelId),
+    ActivatePerspective(String),
+}
+
+#[derive(Resource, Default)]
+struct PendingLayoutRequests(Vec<LayoutRequest>);
+
 #[derive(Resource, Default)]
 struct PendingTabRequests(Vec<TabRequest>);
 
@@ -351,6 +368,70 @@ fn drain_pending_tab_requests(
                 layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore)
             }
             TabRequest::Close(ev) => layout.close_instance(ev.kind, ev.instance),
+        }
+    }
+}
+
+fn drain_pending_layout_requests(
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut pending: ResMut<PendingLayoutRequests>,
+) {
+    let Some(mut layout) = layout else {
+        return;
+    };
+
+    for request in std::mem::take(&mut pending.0) {
+        match request {
+            LayoutRequest::Reset => layout.reset_to_default_layout(),
+            LayoutRequest::SetActivityBar(visible) => layout.activity_bar = visible,
+            LayoutRequest::ActivatePerspective(id) => {
+                layout.activate_perspective_by_str(&id);
+            }
+            LayoutRequest::AddSingleton { id, slot } => {
+                if !layout.panels.contains_key(&id) {
+                    continue;
+                }
+                let already_docked = layout
+                    .dock
+                    .iter_all_tabs()
+                    .any(|(_, tab)| matches!(tab, TabId::Singleton(tab_id) if *tab_id == id));
+                if already_docked {
+                    continue;
+                }
+                match slot {
+                    PanelSlot::SideBrowser => {
+                        if !layout.side_browser.contains(&id) {
+                            layout.side_browser.push(id);
+                        }
+                    }
+                    PanelSlot::Center => {
+                        if !layout.center.contains(&id) {
+                            layout.center.push(id);
+                        }
+                    }
+                    PanelSlot::RightInspector => {
+                        if !layout.right_inspector.contains(&id) {
+                            layout.right_inspector.push(id);
+                        }
+                    }
+                    PanelSlot::Bottom => {
+                        if !layout.bottom.contains(&id) {
+                            layout.bottom.push(id);
+                        }
+                    }
+                    PanelSlot::Floating => {
+                        unreachable!("floating panels are normalized before queueing")
+                    }
+                }
+                layout.insert_panel_into_dock(id, slot);
+            }
+            LayoutRequest::RemoveSingleton(id) => {
+                layout.side_browser.retain(|panel| *panel != id);
+                layout.center.retain(|panel| *panel != id);
+                layout.right_inspector.retain(|panel| *panel != id);
+                layout.bottom.retain(|panel| *panel != id);
+                layout.remove_panel_from_dock(id);
+            }
         }
     }
 }
@@ -621,6 +702,11 @@ impl Plugin for WorkbenchPlugin {
             .contains_resource::<input_overlay::InputOverlaySettings>()
         {
             input_overlay::build_input_overlay(app);
+        } else {
+            // A host may install the render-free command substrate before the
+            // workbench. Preserve the command surface even when its egui panel
+            // is already owned by that host.
+            input_overlay::register_input_overlay_commands(app);
         }
         if !app.is_plugin_added::<theme_command::ThemeCommandPlugin>() {
             app.add_plugins(theme_command::ThemeCommandPlugin);
@@ -670,6 +756,7 @@ impl Plugin for WorkbenchPlugin {
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<PendingTabRequests>()
+            .init_resource::<PendingLayoutRequests>()
             .init_resource::<PendingPanelFocus>()
             .init_resource::<HelpAnchors>()
             .init_resource::<DockSizes>()
@@ -694,7 +781,10 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
-            .add_systems(Update, drain_pending_tab_requests)
+            .add_systems(
+                Update,
+                (drain_pending_tab_requests, drain_pending_layout_requests).chain(),
+            )
             .add_systems(
                 Update,
                 (
@@ -3373,12 +3463,18 @@ fn render_layout(
                     // Recovery hatch: re-apply the active perspective's preset,
                     // restoring panels (notably the 3D Viewport) a stale
                     // persisted layout dropped.
-                    layout.reset_to_default_layout();
+                    world
+                        .resource_mut::<PendingLayoutRequests>()
+                        .0
+                        .push(LayoutRequest::Reset);
                     ui.close();
                 }
                 ui.separator();
                 if ui.button("Toggle Activity Bar").clicked() {
-                    layout.toggle_activity_bar();
+                    world
+                        .resource_mut::<PendingLayoutRequests>()
+                        .0
+                        .push(LayoutRequest::SetActivityBar(!layout.activity_bar));
                     ui.close();
                 }
                 ui.separator();
@@ -3488,7 +3584,10 @@ fn render_layout(
                     if ui.checkbox(&mut checked, title).clicked() {
                         if checked && !is_open {
                             if let Some((kind, instance)) = instance {
-                                layout.open_instance(kind, instance);
+                                world
+                                    .resource_mut::<PendingTabRequests>()
+                                    .0
+                                    .push(TabRequest::Open(OpenTab { kind, instance }));
                                 ui.close();
                                 continue;
                             }
@@ -3511,33 +3610,16 @@ fn render_layout(
                                 PanelSlot::Floating => PanelSlot::SideBrowser,
                                 other => other,
                             };
-                            match slot {
-                                PanelSlot::SideBrowser => {
-                                    if !layout.side_browser.contains(&id) {
-                                        layout.side_browser.push(id);
-                                    }
-                                }
-                                PanelSlot::Center => {
-                                    if !layout.center.contains(&id) {
-                                        layout.center.push(id);
-                                    }
-                                }
-                                PanelSlot::RightInspector => {
-                                    if !layout.right_inspector.contains(&id) {
-                                        layout.right_inspector.push(id);
-                                    }
-                                }
-                                PanelSlot::Bottom => {
-                                    if !layout.bottom.contains(&id) {
-                                        layout.bottom.push(id);
-                                    }
-                                }
-                                PanelSlot::Floating => unreachable!("remapped above"),
-                            }
-                            layout.insert_panel_into_dock(id, slot);
+                            world
+                                .resource_mut::<PendingLayoutRequests>()
+                                .0
+                                .push(LayoutRequest::AddSingleton { id, slot });
                         } else if !checked && is_open {
                             if let Some((kind, instance)) = instance {
-                                layout.close_instance(kind, instance);
+                                world
+                                    .resource_mut::<PendingTabRequests>()
+                                    .0
+                                    .push(TabRequest::Close(CloseTab { kind, instance }));
                                 ui.close();
                                 continue;
                             }
@@ -3546,13 +3628,10 @@ fn render_layout(
                                 continue;
                             };
                             // Untrack from slot lists.
-                            layout.side_browser.retain(|p| *p != id);
-                            layout.center.retain(|p| *p != id);
-                            layout.right_inspector.retain(|p| *p != id);
-                            layout.bottom.retain(|p| *p != id);
-                            // In-place removal — preserves instance
-                            // tabs and any user dock customisations.
-                            layout.remove_panel_from_dock(id);
+                            world
+                                .resource_mut::<PendingLayoutRequests>()
+                                .0
+                                .push(LayoutRequest::RemoveSingleton(id));
                         }
                         ui.close();
                     }
@@ -3999,7 +4078,10 @@ fn render_layout(
                     for (id, title, is_active) in tabs {
                         let button = egui::Button::new(title.as_str()).selected(is_active);
                         if ui.add(button).clicked() && !is_active {
-                            layout.activate_perspective(id);
+                            world
+                                .resource_mut::<PendingLayoutRequests>()
+                                .0
+                                .push(LayoutRequest::ActivatePerspective(id.0.to_owned()));
                         }
                     }
                 }

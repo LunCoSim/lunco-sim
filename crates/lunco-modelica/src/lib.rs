@@ -1811,10 +1811,12 @@ fn build_modelica_core(app: &mut App) {
     // configured idle mode the moment all sims pause/finish.
     app.add_systems(Update, sim_focus_pace);
 
-    app.configure_sets(
-        FixedUpdate,
-        (ModelicaSet::HandleResponses, ModelicaSet::SpawnRequests).chain(),
-    );
+    // Worker responses land on the render/update schedule, before the next
+    // fixed loop. This is the release edge for the realtime physics barrier;
+    // keeping it in FixedUpdate made a fast response invisible until after the
+    // next PreUpdate hold and forced an unnecessary extra stale-physics tick.
+    app.configure_sets(Update, ModelicaSet::HandleResponses);
+    app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
 
     // The model-vs-world clock divergence diagnostic (A3): written every fixed
     // tick by `spawn_modelica_requests`, read by anything that wants to know
@@ -1824,11 +1826,12 @@ fn build_modelica_core(app: &mut App) {
     app.register_type::<ModelicaModel>()
         .add_observer(worker::on_remove_modelica)
         .add_systems(
+            Update,
+            handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+        )
+        .add_systems(
             FixedUpdate,
-            (
-                handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
-                spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
-            ),
+            spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
         );
 
     // Global frame-time tracker. Logs every Update tick that exceeds

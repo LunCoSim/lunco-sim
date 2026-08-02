@@ -97,7 +97,11 @@ impl Plugin for ScreenshotPlugin {
             // `--offscreen` exits the process once the take is on disk.
             .add_systems(
                 Update,
-                (stop_recording_at_limit, exit_when_recording_drained),
+                (
+                    abort_recording_on_runtime_fault,
+                    stop_recording_at_limit,
+                    exit_when_recording_drained,
+                ),
             )
             // `Last`: the strategy written here is read by `TimeSystem` in `First`
             // next frame, so the decision is made after every other system has run.
@@ -497,6 +501,13 @@ pub struct OfflineRecordLimit(pub u64);
 #[derive(Resource)]
 pub struct ExitAfterRecording;
 
+/// A terminal engine fault stopped the current recording. Kept separate from
+/// `OfflineRecordingState` so the drain path finalizes the encoder and still
+/// returns a failing process status instead of mistaking an aborted take for a
+/// successful one.
+#[derive(Resource, Debug, Clone)]
+pub struct OfflineRecordingFailure(pub String);
+
 /// Is a runnable `ffmpeg` on PATH? Probed once at activation so a machine
 /// without it demotes the recording to a PNG sequence with a loud `warn!`
 /// instead of failing on the first frame.
@@ -626,6 +637,7 @@ impl VideoSink {
 #[on_command(StartOfflineRecording)]
 fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: Commands) {
     let cmd = trigger.event();
+    commands.remove_resource::<OfflineRecordingFailure>();
     let dir = if cmd.output_dir.is_empty() {
         std::env::current_dir()
             .unwrap_or_default()
@@ -1085,6 +1097,11 @@ fn drive_offline_clock(
     // `--offscreen` mode: capture the offscreen render target, not the
     // (nonexistent) primary window.
     capture_target: Option<Res<OfflineCaptureTarget>>,
+    // A live Modelica worker is a fixed-step barrier. Keep the recording clock
+    // frozen after a capture until the worker releases the next physics step;
+    // otherwise a slow worker produces duplicate frames at the same simulation
+    // time and the captured sequence outruns its force state.
+    coupling: Option<Res<lunco_core::RealtimeCoupling>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
@@ -1127,6 +1144,15 @@ fn drive_offline_clock(
             std::time::Duration::ZERO,
         ));
     } else if state.frame_just_captured {
+        if coupling
+            .as_deref()
+            .is_some_and(|coupling| coupling.physics_held && coupling.active_models > 0)
+        {
+            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::ZERO,
+            ));
+            return;
+        }
         // A frame landed: let the next frame advance by exactly one step.
         state.frame_just_captured = false;
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
@@ -1316,6 +1342,34 @@ fn stop_recording_at_limit(
     }
 }
 
+/// Stop a capture at the first engine-owned terminal fault. The physics/cosim
+/// owners already hold their schedules; this boundary also makes the recorder's
+/// result truthful and guarantees the encoder follows its normal finalization
+/// path.
+fn abort_recording_on_runtime_fault(
+    state: Res<OfflineRecordingState>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+    mut commands: Commands,
+    mut fired: Local<bool>,
+) {
+    if *fired || !state.active {
+        return;
+    }
+    let Some(fault) = faults.and_then(|faults| faults.first.clone()) else {
+        return;
+    };
+    error!(
+        "[offline-record] aborting capture on {} for {}: {}",
+        fault.kind, fault.subject, fault.detail
+    );
+    commands.insert_resource(OfflineRecordingFailure(format!(
+        "{}: {} ({})",
+        fault.kind, fault.subject, fault.detail
+    )));
+    commands.trigger(StopOfflineRecording {});
+    *fired = true;
+}
+
 /// One-shot process contract (`--offscreen`): exit once the recording has
 /// finished. Saves here are synchronous — a frame is on disk before
 /// `frame_index` advances — so "recorder inactive, nothing armed, no readback
@@ -1325,6 +1379,7 @@ fn stop_recording_at_limit(
 fn exit_when_recording_drained(
     exit_requested: Option<Res<ExitAfterRecording>>,
     state: Res<OfflineRecordingState>,
+    failure: Option<Res<OfflineRecordingFailure>>,
     pending: Option<Res<PendingShotStart>>,
     mut exit: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
     mut fired: Local<bool>,
@@ -1333,6 +1388,15 @@ fn exit_when_recording_drained(
         return;
     }
     if pending.is_some() || state.active || state.is_waiting_for_frame || state.frame_index == 0 {
+        return;
+    }
+    if let Some(failure) = failure {
+        error!(
+            "[offline-record] recording drained after terminal failure ({} frames): {}",
+            state.frame_index, failure.0
+        );
+        *fired = true;
+        exit.write(bevy::app::AppExit::error());
         return;
     }
     info!(

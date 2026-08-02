@@ -14,13 +14,16 @@
 //! `Projection`, `Exposure` and `Visibility` are all `bevy_camera` and already free —
 //! it is only the *pipeline* components that cost. So:
 //!
-//! - domain crates spawn `Camera` + [`SceneCamera`] and filter on `With<SceneCamera>`;
-//! - `lunco-render-bevy` observes `SceneCamera` and attaches `Camera3d`, the
-//!   tonemapper, MSAA and bloom.
+//! - domain crates spawn [`SceneCamera`] plus projection/pose data and filter
+//!   on `With<SceneCamera>`;
+//! - `lunco-render-bevy` observes `SceneCamera` and attaches the complete
+//!   `Camera3d` pipeline, including Bevy's `CameraRenderGraph`, tonemapper,
+//!   MSAA and bloom.
 //!
-//! Headless keeps a fully-formed camera entity — pose, projection, tracking, mounts,
-//! the lot — it simply never gets a render pipeline. That is what makes an offscreen
-//! or server-side camera meaningful at all.
+//! Headless keeps the camera intent entity — pose, projection, tracking, mounts,
+//! the lot — without requiring a render graph. A windowed render binding adds
+//! the complete Bevy camera atomically, so a bare `Camera` never exists in a
+//! render-enabled world.
 //!
 //! # This also fixes two long-standing render bugs (review `R4`)
 //!
