@@ -6,7 +6,7 @@ uncommitted work is deliberately excluded.
 
 ## Latest snapshot
 
-- [Nightly 2026-08-02](nightly-20260802.md) — `nightly-20260731T115555Z..HEAD`
+- [Nightly 2026-08-02](nightly-20260802.md) — `nightly-20260731T115555Z..4b46c0877224960e60652023f26005c72436c2d0`
 
 Future snapshots are generated with
 `skills/nightly-changelog/scripts/generate_changelog.py`. The manual nightly
