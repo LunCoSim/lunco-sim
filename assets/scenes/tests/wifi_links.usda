@@ -1,0 +1,57 @@
+#usda 1.0
+(
+    defaultPrim = "WifiLinksTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production/headless acceptance fixture for the separate rover radio graph.
+# The scenario spawns two ordinary rover assets, then requires a Wi-Fi edge while
+# the direct Earth-policy graph remains edge-free.
+def Xform "WifiLinksTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Wi-Fi acceptance: two spawned rover radios connect without creating a direct Links edge."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    # Scene-local link nodes need a solar-frame pose. The anchor is the
+    # authoritative frame for the flat test plot; the solar tree supplies the
+    # common ephemeris frame consumed by the link kernel.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.3
+    int lunco:anchor:body = 301
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </WifiLinksTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "wifi-links"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/wifi_links.rhai@
+        }
+    }
+}

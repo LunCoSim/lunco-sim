@@ -22,12 +22,16 @@ fn on_tick(me) {
     if this.done { return; }
     this.elapsed += dt();
 
-    if !this.spawn_issued {
+    // SpawnCatalog is populated asynchronously from USD.  Keep the public
+    // command intact, but do not turn that normal startup race into a false
+    // acceptance failure.
+    if !this.spawn_issued && this.elapsed >= 1.0 {
         let result = cmd("SpawnEntity", #{
             entry_id: "ackermann_rover",
             position: [0.0, 0.0, 0.0],
         });
         if !result.ok {
+            if this.elapsed <= 10.0 { return; }
             this.done = true;
             report_verdict(["SpawnEntity failed: " + result.error],
                            "RUNTIME WAYPOINT", "RUNTIME_WAYPOINT");

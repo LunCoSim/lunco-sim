@@ -146,6 +146,18 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .before(PhysicsStepSystems::First)
                 .before(PhysicsTransformSystems::TransformToPosition),
         );
+        // The world-readiness hold pauses Avian's inner PhysicsSchedule, but
+        // preparation must still be able to seed poses while that hold is up:
+        // authored joints are one of the things the hold is waiting for. This
+        // is the same read pass, in the enclosing fixed schedule, before the
+        // nested solver invocation. It writes Position/Rotation only; no
+        // integration occurs here.
+        app.add_systems(
+            FixedPostUpdate,
+            pose_to_position
+                .in_set(PhysicsSystems::Prepare)
+                .before(PhysicsSystems::StepSimulation),
+        );
         app.add_systems(
             PhysicsSchedule,
             position_to_pose

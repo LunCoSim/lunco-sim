@@ -1396,6 +1396,12 @@ pub struct WiringDirty(pub bool);
 #[derive(Resource, Default)]
 pub(crate) struct BindingEpochDirty(pub bool);
 
+/// Last published Modelica participant status. `SimComponent` also carries
+/// continuously changing inputs/outputs, so Bevy's broad `Changed<SimComponent>`
+/// signal is not by itself a binding-lifecycle event.
+#[derive(Resource, Default)]
+struct BindingModelStatuses(HashMap<Entity, SimStatus>);
+
 #[derive(Resource)]
 pub(crate) struct BindingEpochWait(pub(crate) lunco_readiness::ReadinessTicket);
 
@@ -1411,12 +1417,29 @@ fn request_binding_epoch_on_remove<T: Component>(
 }
 
 fn request_binding_epoch_on_model_change(
-    changed: Query<(), Changed<SimComponent>>,
+    changed: Query<(Entity, &SimComponent), Changed<SimComponent>>,
+    mut statuses: ResMut<BindingModelStatuses>,
     mut dirty: ResMut<BindingEpochDirty>,
 ) {
-    if !changed.is_empty() {
-        dirty.0 = true;
+    for (entity, component) in &changed {
+        if statuses
+            .0
+            .get(&entity)
+            .is_none_or(|previous| previous != &component.status)
+        {
+            statuses.0.insert(entity, component.status.clone());
+            dirty.0 = true;
+        }
     }
+}
+
+fn forget_binding_model_status(
+    trigger: On<Remove, SimComponent>,
+    mut statuses: ResMut<BindingModelStatuses>,
+    mut dirty: ResMut<BindingEpochDirty>,
+) {
+    statuses.0.remove(&trigger.entity);
+    dirty.0 = true;
 }
 
 fn modelica_models_terminal<'a>(
@@ -2319,6 +2342,149 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
     }
 }
 
+/// API query provider for the native binding transaction. `CosimStatus` only
+/// covers solver participants; this query exposes the other admission gates
+/// that can legitimately keep the world ticket open (deferred USD stages,
+/// joints, wheels, and differentials).
+pub struct BindingStatusProvider;
+
+impl lunco_api::ApiQueryProvider for BindingStatusProvider {
+    fn name(&self) -> &'static str {
+        "BindingStatus"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let awaiting = world
+            .query_filtered::<&UsdPrimPath, With<UsdAwaitingStage>>()
+            .iter(world)
+            .map(|path| path.path.clone())
+            .collect::<Vec<_>>();
+        let pending_joints = world
+            .query_filtered::<(
+                Entity,
+                &UsdPrimPath,
+                &lunco_usd_avian::PendingUsdJoint,
+                Option<&lunco_core::Provenance>,
+                Option<&lunco_core::GlobalEntityId>,
+                Has<UsdInstanceRoot>,
+            ), With<lunco_usd_avian::PendingUsdJoint>>()
+            .iter(world)
+            .map(|(entity, path, joint, provenance, gid, is_instance_root)| {
+                serde_json::json!({
+                    "entity": entity.to_bits(),
+                    "path": path.path,
+                    "stage": format!("{:?}", path.stage_handle),
+                    "joint_type": joint.joint_type,
+                    "body0": joint.body0_path,
+                    "body1": joint.body1_path,
+                    "provenance": provenance.map(|value| format!("{value:?}")),
+                    "gid": gid.map(|value| value.get()),
+                    "instance_root": is_instance_root,
+                })
+            })
+            .collect::<Vec<_>>();
+        let pending_wheels = world
+            .query_filtered::<&UsdPrimPath, With<crate::PendingWheelWiring>>()
+            .iter(world)
+            .map(|path| path.path.clone())
+            .collect::<Vec<_>>();
+        let pending_differentials = world
+            .query_filtered::<&UsdPrimPath, With<crate::PendingDifferential>>()
+            .iter(world)
+            .map(|path| path.path.clone())
+            .collect::<Vec<_>>();
+
+        let pending_body_paths = pending_joints
+            .iter()
+            .filter_map(|joint| {
+                let object = joint.as_object()?;
+                Some([
+                    object.get("body0")?.as_str()?.to_string(),
+                    object.get("body1")?.as_str()?.to_string(),
+                ])
+            })
+            .flatten()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut bodies = world.query::<(
+            Entity,
+            &UsdPrimPath,
+            Option<&avian3d::prelude::RigidBody>,
+            Option<&avian3d::prelude::Position>,
+            Option<&avian3d::prelude::RigidBodyDisabled>,
+            Option<&lunco_usd_avian::big_space_bridge::BridgeShadow>,
+            Option<&lunco_core::Provenance>,
+            Option<&lunco_core::GlobalEntityId>,
+            Has<UsdInstanceRoot>,
+        )>();
+        let bodies = bodies
+            .iter(world)
+            .filter(|(_, path, _, _, _, _, _, _, _)| pending_body_paths.contains(&path.path))
+            .map(|(
+                entity,
+                path,
+                body,
+                position,
+                disabled,
+                shadow,
+                provenance,
+                gid,
+                is_instance_root,
+            )| {
+                serde_json::json!({
+                    "entity": entity.to_bits(),
+                    "path": path.path,
+                    "stage": format!("{:?}", path.stage_handle),
+                    "rigid_body": body.map(|body| format!("{body:?}")),
+                    "has_position": position.is_some(),
+                    "disabled": disabled.is_some(),
+                    "shadow_seeded": shadow.map(|shadow| shadow.is_seeded()),
+                    "provenance": provenance.map(|value| format!("{value:?}")),
+                    "gid": gid.map(|value| value.get()),
+                    "instance_root": is_instance_root,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut non_terminal_models = Vec::new();
+        let mut models = world.query_filtered::<(
+            &Name,
+            Option<&ModelicaModel>,
+            Option<&SimComponent>,
+        ), With<UsdSourcedCosim>>();
+        for (name, model, component) in models.iter(world) {
+            if !modelica_models_terminal(std::iter::once((model, component))) {
+                non_terminal_models.push(serde_json::json!({
+                    "name": name.as_str(),
+                    "has_model": model.is_some(),
+                    "has_simcomponent": component.is_some(),
+                    "status": component.map(|c| format!("{:?}", c.status)),
+                }));
+            }
+        }
+
+        let connection_count = world
+            .query_filtered::<(), With<SimConnection>>()
+            .iter(world)
+            .count();
+        let wait_open = world.get_resource::<BindingEpochWait>().is_some();
+        let dirty = world
+            .get_resource::<BindingEpochDirty>()
+            .is_some_and(|dirty| dirty.0);
+
+        lunco_api::ApiResponse::ok(serde_json::json!({
+            "wait_open": wait_open,
+            "dirty": dirty,
+            "connection_count": connection_count,
+            "awaiting": awaiting,
+            "pending_joints": pending_joints,
+            "bodies": bodies,
+            "pending_wheels": pending_wheels,
+            "pending_differentials": pending_differentials,
+            "non_terminal_models": non_terminal_models,
+        }))
+    }
+}
+
 /// Read-only camera/avatar inventory for diagnosing scene lifecycle failures.
 ///
 /// [`lunco_api::ApiEntityRegistry`] is intentionally keyed by stable USD identity,
@@ -3042,6 +3208,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>()
         .init_resource::<BindingEpochDirty>()
+        .init_resource::<BindingModelStatuses>()
         .init_resource::<crate::domain_projection::MemberClasses>()
         .init_resource::<crate::domain_projection::ProjectionDirty>()
         // The open synthesizer registry (doc 37 §8): the acausal-network
@@ -3052,6 +3219,8 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
         .add_observer(request_binding_epoch::<ModelicaModel>)
         .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
+        .add_observer(request_binding_epoch::<SimComponent>)
+        .add_observer(forget_binding_model_status)
         .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
         .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
         .add_observer(request_binding_epoch::<crate::PendingWheelWiring>)
@@ -3194,6 +3363,7 @@ pub(crate) fn install(app: &mut App) {
                 reg.register(ReleasePortProvider);
                 // Richer per-entity cosim introspection (not an alias of the above).
                 reg.register(CosimStatusProvider);
+                reg.register(BindingStatusProvider);
                 // Lifecycle diagnostics must inspect raw ECS candidates: the normal
                 // entity list is identity-deduplicated and cannot reveal two
                 // projections of the same USD camera path.
