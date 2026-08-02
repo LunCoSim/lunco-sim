@@ -378,6 +378,23 @@ pub fn insert_celestial_comms_components(
             });
     }
 
+    // --- Separate rover radio endpoint ---
+    // A Wi-Fi endpoint shares the generic link geometry observation but is
+    // intentionally not part of `LinkState`: the latter remains governed by
+    // the authored Earth-only direct-link policy.
+    if reader
+        .scalar::<bool>(sdf_path, "lunco:wifiNode")
+        .unwrap_or(false)
+    {
+        commands
+            .entity(entity)
+            .try_insert(lunco_celestial::wifi::WifiNode {
+                max_range_m: reader
+                    .real(sdf_path, "lunco:wifi:maxRangeM")
+                    .unwrap_or(5_000.0),
+            });
+    }
+
     // --- Sight-line occluder (generic geometry, not a comms concept) ---
     // Marks THIS prim's geometry as opaque to link sight-lines: any link whose
     // segment crosses its box is severed. Author it on the geometry prim that

@@ -47,8 +47,12 @@ use lunco_usd::document::{
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
-use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 use crate::SelectedEntities;
+
+pub use lunco_scene_commands::runtime_waypoint::{
+    append_runtime_patrol, mark_reached_waypoints_on_enter, runtime_waypoint_key,
+    RuntimeWaypointBinding, RuntimeWaypointSpawner,
+};
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -199,56 +203,6 @@ impl<'w> WaypointDocContext<'w> {
     }
 }
 
-/// Extend a runtime-only patrol with one ground click.
-///
-/// A spawned USD asset has no owning [`UsdDocument`], so it cannot receive the
-/// authored marker/BT.CPP edit used by a scene-mounted rover. Its live source of
-/// truth is the mirrored [`lunco_autopilot::AutopilotBehaviorSpec`] instead. Keep
-/// this branch deliberately narrow: a click may extend a patrol, or create the
-/// first patrol when the asset has no program, but it must never replace a
-/// different authored behaviour tree behind the user's back.
-fn append_runtime_patrol(
-    current: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
-    current_xml: Option<&str>,
-    point: [f32; 3],
-) -> Result<lunco_autopilot::BehaviorSpec, String> {
-    if let Some(xml) = current_xml {
-        // Preserve the same shape rule as authored waypoint editing. Runtime
-        // routes use synthetic behaviour keys, while their actual marker and
-        // arrival Sensor are instantiated from the shared USD marker asset.
-        append_waypoint_leaf(Some(xml), "/__runtime_waypoint__")
-            .map_err(|e| format!("runtime rover mission cannot accept a waypoint: {e}"))?;
-    }
-
-    match current.map(|spec| &spec.0) {
-        Some(lunco_autopilot::BehaviorSpec::Patrol {
-            waypoints,
-            speed,
-            radius,
-            dwell,
-        }) => {
-            let mut waypoints = waypoints.clone();
-            waypoints.push(lunco_autopilot::PatrolWaypoint::at(point));
-            Ok(lunco_autopilot::BehaviorSpec::Patrol {
-                waypoints,
-                speed: *speed,
-                radius: *radius,
-                dwell: *dwell,
-            })
-        }
-        Some(_) => Err(
-            "runtime rover has a non-patrol behaviour; edit that behaviour explicitly before adding a waypoint"
-                .to_string(),
-        ),
-        None => Ok(lunco_autopilot::BehaviorSpec::Patrol {
-            waypoints: vec![lunco_autopilot::PatrolWaypoint::at(point)],
-            speed: 0.6,
-            radius: 3.0,
-            dwell: 0.0,
-        }),
-    }
-}
-
 /// Click-ray inputs bundled into one [`SystemParam`] so the observer stays under
 /// Bevy's 16-argument limit.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -276,78 +230,6 @@ pub struct WaypointVesselQueries<'w, 's> {
     pub q_xml: Query<'w, 's, (Entity, &'static BehaviorXml)>,
     pub q_inputs: Query<'w, 's, Entity, With<InputPorts>>,
     pub q_autopilots: Query<'w, 's, &'static lunco_autopilot::Autopilot>,
-    pub q_specs: Query<'w, 's, &'static lunco_autopilot::AutopilotBehaviorSpec>,
-}
-
-/// Binds a runtime-spawned marker's USD sensor to the route and vessel that
-/// created it. The marker asset remains the single source of collision
-/// geometry; this component only carries the route identity that a repeated
-/// `/WaypointMarker/Zone` prim path cannot provide for multiple instances.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RuntimeWaypointBinding {
-    /// Vessel whose route owns the marker.
-    pub vessel: Entity,
-    /// Zero-based patrol waypoint index.
-    pub index: usize,
-}
-
-/// Asset and scene-root handles needed to instantiate the same USD waypoint
-/// marker for a runtime-only rover. Kept in a SystemParam so the click observer
-/// remains below Bevy's system-parameter limit.
-#[derive(bevy::ecs::system::SystemParam)]
-pub struct RuntimeWaypointSpawner<'w, 's> {
-    pub asset_server: Res<'w, AssetServer>,
-    pub catalog: Res<'w, SpawnCatalog>,
-    pub q_scene_root: Query<'w, 's, Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
-}
-
-fn runtime_waypoint_key(index: usize) -> String {
-    format!("/__runtime_waypoint_{index}")
-}
-
-/// Instantiate the authored marker asset, including its overlap-only Sensor,
-/// for a waypoint attached to a runtime-spawned rover.
-fn spawn_runtime_waypoint_marker(
-    spawner: &RuntimeWaypointSpawner,
-    commands: &mut Commands,
-    vessel: Entity,
-    index: usize,
-    position: DVec3,
-) -> Result<(), String> {
-    let entry = spawner
-        .catalog
-        .entries
-        .iter()
-        .find(|entry| {
-            matches!(
-                &entry.source,
-                SpawnSource::UsdFile(path)
-                    if lunco_assets::engine_asset_rel(path)
-                        == lunco_assets::engine_asset_rel(WAYPOINT_MARKER_ASSET)
-            )
-        })
-        .ok_or_else(|| {
-            format!(
-                "runtime waypoint marker asset is not in the spawn catalog: {WAYPOINT_MARKER_ASSET}"
-            )
-        })?;
-    let scene_root = spawner
-        .q_scene_root
-        .iter()
-        .next()
-        .ok_or_else(|| "runtime waypoint marker has no mounted scene root".to_string())?;
-    let marker = spawn_usd_entry(
-        commands,
-        &spawner.asset_server,
-        entry,
-        position.as_vec3(),
-        Quat::IDENTITY,
-        SpawnAnchor::scene_root(scene_root),
-    );
-    commands
-        .entity(marker.root_entity)
-        .insert(RuntimeWaypointBinding { vessel, index });
-    Ok(())
 }
 
 /// Resolve the pointer to a point on the ground in **WORLD** (grid-absolute) space —
@@ -419,7 +301,6 @@ pub fn on_scene_click_checkpoint(
     surface: lunco_terrain_surface::GridSurfaceQuery,
     raycaster: lunco_physics::GridSpatialQuery,
     doc_ctx: WaypointDocContext,
-    runtime_marker: RuntimeWaypointSpawner,
     canonical: NonSend<CanonicalStages>,
 
     mut commands: Commands,
@@ -501,55 +382,12 @@ pub fn on_scene_click_checkpoint(
     let doc = doc_ctx.resolve_document(&vessel_prim.stage_handle);
     let host = doc.and_then(|id| doc_ctx.usd_registry.host(id));
     if host.is_none() {
-        let current_spec = vessels.q_specs.get(vessel).ok();
-        let current_xml = vessels
-            .q_xml
-            .get(vessel)
-            .ok()
-            .map(|(_, xml)| xml.0.as_str());
-        let spec = match append_runtime_patrol(
-            current_spec,
-            current_xml,
-            [hit.x as f32, hit.y as f32, hit.z as f32],
-        ) {
-            Ok(spec) => spec,
-            Err(err) => {
-                warn!("[waypoint] {err}");
-                return;
-            }
-        };
-        let waypoint_index = match &spec {
-            lunco_autopilot::BehaviorSpec::Patrol { waypoints, .. } => {
-                waypoints.len().saturating_sub(1)
-            }
-            _ => 0,
-        };
-        let Ok(spec_json) = serde_json::to_string(&spec) else {
-            warn!("[waypoint] runtime patrol could not be serialized");
-            return;
-        };
-        if let Err(err) = spawn_runtime_waypoint_marker(
-            &runtime_marker,
-            &mut commands,
-            vessel,
-            waypoint_index,
-            hit,
-        ) {
-            warn!("[waypoint] runtime marker could not be spawned: {err}");
-            return;
-        }
-        if vessels.q_autopilots.iter().any(|ap| ap.vessel == vessel) {
-            commands.trigger(lunco_autopilot::SetAutopilotBehavior { vessel, spec_json });
-        } else {
-            commands.trigger(lunco_autopilot::EngageAutopilot {
-                vessel,
-                index: 0,
-                throttle: 0.0,
-                spec_json,
-            });
-        }
+        commands.trigger(lunco_scene_commands::runtime_waypoint::AddRuntimeWaypoint {
+            target: vessel,
+            position: hit.as_vec3(),
+        });
         info!(
-            "[waypoint] runtime-only rover {:?} received patrol waypoint; no authored USD document was modified",
+            "[waypoint] runtime-only rover {:?} received a live waypoint command; no authored USD document was modified",
             vessel
         );
         return;
@@ -1478,168 +1316,6 @@ fn composed_prim_exists(
         .is_some_and(|(stage, prim)| stage.view().has_prim(&prim))
 }
 
-/// Mark a waypoint reached when a vessel's body ENTERS the marker's trigger zone.
-///
-/// Arrival is read DIRECTLY from Avian's `CollisionStart` events against the
-/// marker's own `Sensor` zone — not through the `TelemetryEvent`/`enter:` string
-/// bus. The collision event carries both the zone collider and the entrant's
-/// `body` (the rover chassis `RigidBody`, reached through the wheel collider),
-/// so the (zone, vessel) pair is identified without a gid round-trip through the
-/// `ApiEntityRegistry`. The zone is matched by its `TriggerZone("waypoint")`
-/// component + `UsdPrimPath`; the marker prim path is the zone path's parent.
-///
-/// Reaching a waypoint **deletes nothing**. The vessel's runtime
-/// [`ReachedWaypoints`] set is the authoritative session state consumed by the
-/// compiled tree to advance past a completed leg. The mission keeps its leg and
-/// the map keeps its pin, so a route can be reviewed, replayed and re-run; no
-/// transient arrival flag is authored into USD.
-///
-/// Scheduled in `FixedPostUpdate` after `PhysicsSystems::Writeback` so it reads
-/// the same tick's collision events (the avian contract
-/// `bridge_collision_events` already follows).
-pub fn mark_reached_waypoints_on_enter(
-    mut starts: MessageReader<avian3d::prelude::CollisionStart>,
-    q_zones: Query<(&lunco_core::TriggerZone, &UsdPrimPath), With<avian3d::prelude::Sensor>>,
-    q_runtime_bindings: Query<&RuntimeWaypointBinding>,
-    q_vessel_roots: Query<(), (With<UsdPrimPath>, Or<(With<BehaviorXml>, With<InputPorts>)>)>,
-    q_parents: Query<&ChildOf>,
-    q_vessels: Query<(Entity, Option<&BehaviorXml>)>,
-    q_reached: Query<&ReachedWaypoints>,
-    mut commands: Commands,
-) {
-    enum Arrival {
-        Authored { marker_path: String, vessel: Entity },
-        Runtime { vessel: Entity, index: usize },
-    }
-
-    // `MessageReader::read` is a lending iterator. Do ALL identification work that
-    // needs only immutable queries inside it, collect the resolved
-    // (marker_path, vessel_entity) pairs, then mutate after the borrow ends.
-    // Duplicate arrivals (same vessel × same marker from two colliders in one
-    // tick) are de-duplicated by the `already-reached` check in the mutation pass.
-    let mut arrivals = Vec::new();
-
-    for ev in starts.read() {
-        // The two sides of the contact; one is the zone collider, the other the
-        // entrant collider. `body*` resolves a child collider to its chassis
-        // `RigidBody` (a wheel hits the zone, not the chassis itself).
-        for (zone_ent, other_ent, other_body) in [
-            (ev.collider1, ev.collider2, ev.body2),
-            (ev.collider2, ev.collider1, ev.body1),
-        ] {
-            let Ok((zone, zone_prim)) = q_zones.get(zone_ent) else {
-                continue;
-            };
-            // Only waypoint trigger zones drive route arrival.
-            if zone.0 != "waypoint" {
-                continue;
-            }
-            let runtime_binding = {
-                let mut curr = zone_ent;
-                let mut binding = None;
-                for _ in 0..16 {
-                    if let Ok(value) = q_runtime_bindings.get(curr) {
-                        binding = Some(*value);
-                        break;
-                    }
-                    let Ok(parent) = q_parents.get(curr) else {
-                        break;
-                    };
-                    curr = parent.parent();
-                }
-                binding
-            };
-            // The marker prim path is the zone path's parent (`/<…>/Route/W0`
-            // for a zone at `/<…>/Route/W0/Zone`).
-            let Some((marker_path, _)) = zone_prim.path.rsplit_once('/') else {
-                continue;
-            };
-            // The entrant is the OTHER side's body (preferred — the chassis
-            // RigidBody reached through the wheel collider); fall back to its
-            // collider entity.
-            // Try climbing from both the collider entity and its rigid body parent to find the vessel root with BehaviorXml.
-            let mut resolved = false;
-            for candidate in [other_ent, other_body.unwrap_or(other_ent)] {
-                let mut curr = candidate;
-                for _ in 0..16 {
-                    if q_vessel_roots.get(curr).is_ok() {
-                        if let Some(binding) = runtime_binding {
-                            if binding.vessel == curr {
-                                arrivals.push(Arrival::Runtime {
-                                    vessel: binding.vessel,
-                                    index: binding.index,
-                                });
-                            }
-                        } else {
-                            arrivals.push(Arrival::Authored {
-                                marker_path: marker_path.to_string(),
-                                vessel: curr,
-                            });
-                        }
-                        resolved = true;
-                        break;
-                    }
-                    match q_parents.get(curr) {
-                        Ok(p) => curr = p.parent(),
-                        Err(_) => break,
-                    }
-                }
-                if resolved {
-                    break;
-                }
-            }
-        }
-    }
-
-    if arrivals.is_empty() {
-        return;
-    }
-
-    for arrival in arrivals {
-        let (vessel, key) = match arrival {
-            Arrival::Runtime { vessel, index } => (vessel, runtime_waypoint_key(index)),
-            Arrival::Authored {
-                marker_path,
-                vessel,
-            } => {
-                let Ok((_, Some(xml))) = q_vessels.get(vessel) else {
-                    continue;
-                };
-                // Only the vessel whose mission names THIS marker has arrived at it.
-                let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
-                    continue;
-                };
-                let mut targets = Vec::new();
-                collect_targets(&value, &mut targets);
-                if !targets.iter().any(|t| {
-                    t == &marker_path || t.ends_with(&marker_path) || marker_path.ends_with(t)
-                }) {
-                    continue;
-                }
-                (vessel, marker_path)
-            }
-        };
-        // Skip if already reached (read-only query avoids a conflicting mutable
-        // borrow; the insert below is via `commands`).
-        if q_reached
-            .get(vessel)
-            .map(|r| {
-                r.0.iter()
-                    .any(|p| p == &key || p.ends_with(&key) || key.ends_with(p))
-            })
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        info!("[waypoint] reached {key} (zone enter)");
-        let mut set: std::collections::HashSet<String> = q_reached
-            .get(vessel)
-            .map(|r| r.0.clone())
-            .unwrap_or_default();
-        set.insert(key);
-        commands.entity(vessel).insert(ReachedWaypoints(set));
-    }
-}
 /// the autopilot currently driving it and returns ownership to the local session.
 ///
 /// Without this the autopilot keeps the vessel claimed, so `drive_from_bindings`

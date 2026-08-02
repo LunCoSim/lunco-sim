@@ -1185,7 +1185,11 @@ fn extract_avian_prim(
         commands
             .entity(entity)
             .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
-        add_collider_from_usd(commands, entity, reader, sdf_path);
+        // Avian snapshots `CollisionEventsEnabled` when the collider proxy is
+        // inserted into its tree. Insert the complete trigger contract first;
+        // adding the event marker after the collider leaves an already-created
+        // contact edge with CONTACT_EVENTS=false, so no CollisionStart message
+        // can ever be emitted for a waypoint that was present from frame zero.
         commands.entity(entity).try_insert((
             Sensor,
             CollisionEventsEnabled,
@@ -1194,8 +1198,9 @@ fn extract_avian_prim(
                 LayerMask(lunco_core::TRIGGER_COLLISION_LAYER),
                 LayerMask::ALL,
             ),
-            UsdAvianProcessed,
         ));
+        add_collider_from_usd(commands, entity, reader, sdf_path);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
     }
 

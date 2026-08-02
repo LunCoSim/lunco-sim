@@ -231,6 +231,8 @@ def Xform "RockerBogie" (
                     over "LinkAperture"
                     {
                         string lunco:link:class = "rover"
+                        bool lunco:wifiNode = true
+                        double lunco:wifi:maxRangeM = 5000.0
                         over "LinkBeam"
                         {
                             over "Up"

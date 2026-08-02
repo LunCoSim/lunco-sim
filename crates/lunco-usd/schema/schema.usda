@@ -486,6 +486,27 @@ class "LunCoLinkAPI" (
     )
 }
 
+class "LunCoWifiAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Declares a short-range rover radio endpoint.
+
+    This graph is deliberately separate from `LunCoLinkAPI`: the generic link
+    kernel publishes geometry, while the Wi-Fi projection applies this endpoint
+    range and exposes its own `WifiLinks` snapshot. It does not alter the
+    Earth-only direct-link policy."""
+)
+{
+    uniform bool lunco:wifiNode = false (
+        doc = """Marks this prim as an endpoint in the separate Wi-Fi graph."""
+    )
+    double lunco:wifi:maxRangeM = 5000.0 (
+        doc = """Maximum symmetric radio range for this endpoint, in metres."""
+    )
+}
+
 class "LunCoOccluderAPI" (
     inherits = </APISchemaBase>
     customData = {

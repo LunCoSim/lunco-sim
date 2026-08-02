@@ -1,0 +1,44 @@
+#usda 1.0
+(
+    defaultPrim = "RuntimeWaypointTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production/headless acceptance fixture for the runtime-only waypoint path.
+# The scenario spawns a rover through the public SpawnEntity command, appends a
+# live waypoint through AddRuntimeWaypoint, and waits for the shared USD marker's
+# Avian Sensor to report arrival. No authored rover or authored waypoint is used.
+def Xform "RuntimeWaypointTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Runtime waypoint acceptance: a spawned rover must create a shared marker and record arrival from its collision Sensor."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RuntimeWaypointTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "runtime-waypoint"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/runtime_waypoint.rhai@
+        }
+    }
+}

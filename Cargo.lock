@@ -7731,6 +7731,7 @@ dependencies = [
  "lunco-signal",
  "lunco-storage",
  "lunco-terrain-surface",
+ "lunco-time",
  "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-avian",

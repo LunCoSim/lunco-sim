@@ -3293,6 +3293,9 @@ impl Plugin for SpawnCommandPlugin {
         // whenever the second half was forgotten the command silently vanished
         // from the HTTP API / rhai / `discover_schema`).
         register_all_commands(app);
+        // Runtime waypoint creation and collision-sensor arrival are shared by
+        // the GUI click path and the deterministic headless scene runner.
+        crate::runtime_waypoint::register(app);
         // The READ verb for the same entities. Registered here so any binary with
         // the scene verbs answers `QueryEntity` too — the headless server included.
         crate::entity_query::register(app);

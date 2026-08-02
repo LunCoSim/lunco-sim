@@ -519,16 +519,6 @@ impl Plugin for SandboxEditUiPlugin {
             .add_observer(checkpoint_click::on_scene_right_click_waypoint)
             // Consumes the ground click that follows a Move / Insert-after.
             .add_observer(checkpoint_click::on_scene_click_place_waypoint)
-            // Arrival: read Avian's `CollisionStart` against the marker's own
-            // `Sensor` trigger zone DIRECTLY (not through the TelemetryEvent bus),
-            // after physics writeback so same-tick contacts are seen. Populates
-            // `ReachedWaypoints`, which `compile_behavior_xml` consumes to skip
-            // already-passed legs on a route rebuild.
-            .add_systems(
-                FixedPostUpdate,
-                checkpoint_click::mark_reached_waypoints_on_enter
-                    .after(avian3d::prelude::PhysicsSystems::Writeback),
-            )
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
             // a context's begin/end pass here, so a widget built outside it never joins
             // egui's input pass: the context menu PAINTED but nothing in it could be

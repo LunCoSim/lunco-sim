@@ -54,6 +54,8 @@ pub mod doc_resolve;
 pub mod entity_query;
 /// `RunLint` — lint the loaded scene on demand, through the authored rules.
 pub mod lint_command;
+/// Runtime-only waypoint command and shared collision-sensor arrival path.
+pub mod runtime_waypoint;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;

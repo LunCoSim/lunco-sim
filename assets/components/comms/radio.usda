@@ -68,6 +68,12 @@ def Xform "CommsRadio" (
                 {
                     uniform asset info:sourceAsset = @lunco://models/CommsLink.mo@
 
+                    # This component is the rover radio endpoint. Keep its
+                    # short-range peer graph separate from the direct
+                    # Earth/relay link policy published by the link kernel.
+                    bool lunco:wifiNode = true
+                    double lunco:wifi:maxRangeM = 5000.0
+
                     # Geometry in, from the link kernel via the cosim bridge.
                     float inputs:link_range_m.connect = </CommsRadio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_relay_range_m>
                     float inputs:link_connected.connect = </CommsRadio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_relay_connected>

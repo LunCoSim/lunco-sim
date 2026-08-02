@@ -189,7 +189,7 @@ def Xform "CommsAntenna" (
         # approximate endpoint. Nest the horn under it so the visual and the
         # physical endpoint have one transform, one spelling.
                 def Xform "LinkAperture" (
-                    prepend apiSchemas = ["LunCoLinkAPI"]
+                    prepend apiSchemas = ["LunCoLinkAPI", "LunCoWifiAPI"]
                     doc = "Dish feed phase centre: connectivity endpoint and link-beam origin."
                 )
                 {

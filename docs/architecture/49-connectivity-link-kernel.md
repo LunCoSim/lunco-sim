@@ -37,6 +37,15 @@ LinkState    { peers: Vec<LinkPeer> }                    // component, written p
 LinkPeer     { peer: u64, connected, range_m, light_time_s, elevation_deg }
 ```
 
+### Separate rover radio graph
+
+Rover-to-rover communication is not a direct `LinkState` edge. The kernel also
+publishes the raw observation as `LinkGeometryState`; the separate Wi-Fi
+projection consumes that geometry for entities authored with `LunCoWifiAPI` and
+writes `WifiState`. Its range check uses both endpoints' `lunco:wifi:maxRangeM`
+values. `query("Links")` therefore remains the Earth-only direct-link view,
+while `query("WifiLinks")` reports short-range rover radio edges.
+
 `class` is an authored role string. **The core never interprets it** — it is passed
 through to the verdict/routing policy and used to GROUP nodes. (This is deliberate:
 the moment the core branches on `class == "relay"`, the domain is back in Rust.)

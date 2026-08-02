@@ -23,6 +23,7 @@ use crate::geo::{solar_position_of_geodetic, GeodeticAnchor};
 use crate::kepler::KeplerOrbit;
 use crate::link::{node_label, LinkNode, LinkState};
 use crate::registry::CelestialBodyRegistry;
+use crate::wifi::{WifiNode, WifiState};
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].
 fn parse_point(v: Option<&serde_json::Value>) -> Option<DVec3> {
@@ -358,6 +359,53 @@ impl ApiQueryProvider for LinksProvider {
     }
 }
 
+/// `WifiLinks` — the separate short-range radio graph. It is projected from
+/// raw link geometry and never reads the Earth-only `Links` policy state.
+pub struct WifiLinksProvider;
+
+impl ApiQueryProvider for WifiLinksProvider {
+    fn name(&self) -> &'static str {
+        "WifiLinks"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        let mut nodes = Vec::new();
+        let mut adj = serde_json::Map::new();
+        let mut edges = Vec::new();
+        let mut q = world.query::<(&GlobalEntityId, &WifiNode, &WifiState, Option<&Name>)>();
+        for (gid, wifi, state, name) in q.iter(world) {
+            let id = gid.get();
+            let peers: Vec<u64> = state
+                .peers
+                .iter()
+                .filter(|peer| peer.connected)
+                .map(|peer| peer.peer)
+                .collect();
+            for peer in state.peers.iter().filter(|peer| peer.connected) {
+                if id <= peer.peer {
+                    edges.push(serde_json::json!({
+                        "a": id,
+                        "b": peer.peer,
+                        "range_m": peer.range_m,
+                        "light_time_s": peer.light_time_s,
+                    }));
+                }
+            }
+            adj.insert(id.to_string(), serde_json::json!(peers));
+            nodes.push(serde_json::json!({
+                "id": id,
+                "name": name.map(|name| name.as_str()).unwrap_or_default(),
+                "max_range_m": wifi.max_range_m,
+            }));
+        }
+        ApiResponse::ok(serde_json::json!({
+            "nodes": nodes,
+            "adj": adj,
+            "edges": edges,
+        }))
+    }
+}
+
 /// Register the generic celestial geometry providers into the [`ApiQueryRegistry`]
 /// (init-if-absent, mirroring `register_terrain_queries`). Called from
 /// [`CelestialPlugin`](crate::CelestialPlugin) — these are generic geometry that
@@ -369,4 +417,5 @@ pub fn register_celestial_queries(app: &mut App) {
     reg.register(BodyPositionProvider);
     reg.register(SolarPoseProvider);
     reg.register(LinksProvider);
+    reg.register(WifiLinksProvider);
 }

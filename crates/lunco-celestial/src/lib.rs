@@ -48,6 +48,7 @@ mod trajectories;
 /// also why its `libration_in_solar` — the only L1/L2 solver in the tree — has never
 /// been reachable from a scene.
 pub mod transform;
+pub mod wifi;
 
 /// Re-export terrain types from lunco-terrain for backward compatibility.
 pub use lunco_terrain_globe::*;
@@ -74,6 +75,7 @@ pub use registry::*;
 pub use soi::*;
 pub use systems::*;
 pub use trajectories::*;
+pub use wifi::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -209,6 +211,9 @@ impl Plugin for CelestialPlugin {
         app.register_type::<link::LinkNode>();
         app.register_type::<link::LinkOccluder>();
         app.register_type::<link::LinkState>();
+        app.register_type::<link::LinkGeometryState>();
+        app.register_type::<wifi::WifiNode>();
+        app.register_type::<wifi::WifiState>();
         link::register_all_commands(app);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through
         // Commands and adds no extra command-flush sync point. (An earlier
@@ -216,6 +221,7 @@ impl Plugin for CelestialPlugin {
         // `&mut World`, inserted a sync point that interleaved with the
         // twin/terrain despawns and tripped avian's island bookkeeping.)
         app.add_systems(Update, link::update_links);
+        app.add_systems(Update, wifi::update_wifi_links.after(link::update_links));
         // Expose the working peer's range + verdict as PORTS, so an authored RF model
         // (`assets/models/CommsLink.mo`) can turn metres into bits/s off an ordinary
         // output→input wire.

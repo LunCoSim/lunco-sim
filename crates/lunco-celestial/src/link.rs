@@ -201,6 +201,26 @@ pub struct LinkState {
     pub peers: Vec<LinkPeer>,
 }
 
+/// The pairwise geometry observation published independently of the authored
+/// `link.connected` verdict. Domain graphs such as rover Wi-Fi reuse this output
+/// instead of reimplementing range, horizon and occlusion calculations.
+#[derive(Component, Debug, Clone, Default, Reflect)]
+#[reflect(Component)]
+pub struct LinkGeometryState {
+    pub peers: Vec<LinkGeometryPeer>,
+}
+
+#[derive(Debug, Clone, Reflect)]
+pub struct LinkGeometryPeer {
+    pub peer: u64,
+    /// The raw range/mask/occlusion result before any role policy or debounce.
+    pub builtin: bool,
+    pub range_m: f64,
+    pub light_time_s: f64,
+    pub elevation_deg: Option<f64>,
+    pub class: Option<String>,
+}
+
 #[derive(Debug, Clone, Reflect)]
 pub struct LinkPeer {
     /// The peer's [`GlobalEntityId`](lunco_core::GlobalEntityId) — the project's
@@ -328,6 +348,7 @@ pub(crate) fn update_links(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut q_state: Query<&mut LinkState>,
+    mut q_geometry: Query<&mut LinkGeometryState>,
     mut state: Local<LinkSolverState>,
     mut commands: Commands,
 ) {
@@ -416,6 +437,7 @@ pub(crate) fn update_links(
 
     // Pairwise verdicts.
     let mut per_node: HashMap<Entity, Vec<LinkPeer>> = HashMap::new();
+    let mut per_geometry: HashMap<Entity, Vec<LinkGeometryPeer>> = HashMap::new();
     let mut up_now: HashSet<(u64, u64)> = HashSet::new();
     for i in 0..nodes.len() {
         for j in (i + 1)..nodes.len() {
@@ -518,6 +540,32 @@ pub(crate) fn update_links(
                 _ => builtin,
             };
 
+            // Publish the domain-free geometry observation before applying the
+            // role verdict. A rover↔rover pair may be rejected from the direct
+            // Earth-link graph while still being a valid Wi-Fi candidate.
+            per_geometry
+                .entry(a.entity)
+                .or_default()
+                .push(LinkGeometryPeer {
+                    peer: b.gid,
+                    builtin,
+                    range_m,
+                    light_time_s: light_time_s(range_m),
+                    elevation_deg: elev_a,
+                    class: b.node.class.clone(),
+                });
+            per_geometry
+                .entry(b.entity)
+                .or_default()
+                .push(LinkGeometryPeer {
+                    peer: a.gid,
+                    builtin,
+                    range_m,
+                    light_time_s: light_time_s(range_m),
+                    elevation_deg: elev_b,
+                    class: a.node.class.clone(),
+                });
+
             // Asymmetric drop debounce (see `LinkConfig::drop_debounce`). Acquire the
             // instant geometry closes; drop only after N consecutive severed reads, so a
             // grazing-horizon flicker becomes one honest LOS instead of green↔red chatter.
@@ -592,6 +640,14 @@ pub(crate) fn update_links(
             st.peers = peers;
         } else {
             commands.entity(node.entity).try_insert(LinkState { peers });
+        }
+        let peers = per_geometry.remove(&node.entity).unwrap_or_default();
+        if let Ok(mut st) = q_geometry.get_mut(node.entity) {
+            st.peers = peers;
+        } else {
+            commands
+                .entity(node.entity)
+                .try_insert(LinkGeometryState { peers });
         }
     }
 }

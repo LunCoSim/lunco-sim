@@ -2,8 +2,10 @@
 (
     "Generated schema for luncoSchema"
     """
-    GENERATED — do not edit. Regenerate with `python3 scripts/gen_schema.py`
-    after editing `schema.usda`, which is the authoritative source.
+    GENERATED — do not edit. Regenerate with
+        LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation
+    after editing `schema.usda`, which is the authoritative source
+    (`lunco_usd::schema_gen::generate_schema` is the generator).
 
     This is the file a USD runtime actually registers (via `plugInfo.json`), and
     the file `lunco_usd::schema` parses to answer "what does this property's
@@ -429,6 +431,26 @@ class "LunCoLinkAPI" (
         doc = """Elevation mask, degrees above this node's local horizon. A peer below
         it is refused. `5` is realistic for a DSN dish; the default `-90` masks
         nothing. A node with no local horizon (a free orbit) always passes."""
+    )
+}
+
+class "LunCoWifiAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Declares a short-range rover radio endpoint.
+
+    This graph is deliberately separate from `LunCoLinkAPI`: the generic link
+    kernel publishes geometry, while the Wi-Fi projection applies this endpoint
+    range and exposes its own `WifiLinks` snapshot. It does not alter the
+    Earth-only direct-link policy."""
+)
+{
+    uniform bool lunco:wifiNode = false (
+        doc = """Marks this prim as an endpoint in the separate Wi-Fi graph."""
+    )
+    double lunco:wifi:maxRangeM = 5000.0 (
+        doc = """Maximum symmetric radio range for this endpoint, in metres."""
     )
 }
 
