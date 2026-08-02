@@ -582,10 +582,10 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<MouseSensitivity>()
             .init_resource::<CameraDefaults>()
             .init_resource::<SurfaceModeThreshold>();
-        // Every camera writer runs in `lunco_time::InteractionSchedule` (see the
-        // registration below), so the cadence itself is a hard dependency — guarantee
-        // the time spine rather than silently registering into a schedule no runner
-        // ever executes.
+        // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
+        // spring arm follows the final rendered body pose in `PostUpdate` below. The
+        // time spine is a hard dependency for both paths; guarantee it rather than
+        // silently registering into a schedule no runner ever executes.
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
