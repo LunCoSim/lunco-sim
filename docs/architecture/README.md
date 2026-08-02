@@ -118,6 +118,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`rhai-integration.md`](rhai-integration.md) | Why rhai, and the as-built scripting surface. The *how-to* is [`../scripting-guide.md`](../scripting-guide.md) |
 | [`command-sequences.md`](command-sequences.md) | Command sequences and the visual sequence editor |
 | [`waypoints-in-usd.md`](waypoints-in-usd.md) | Routes and waypoints as authored USD, not runtime-only state |
+| [`tutorial-autopilot-and-port-contracts.md`](tutorial-autopilot-and-port-contracts.md) | Same control path for human/autopilot tutorial tests; declared cosim topology versus live samples |
 
 ## Open issues & posture
 

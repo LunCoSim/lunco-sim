@@ -235,6 +235,22 @@ reload must re-run USD prim projection, cosim model creation/compilation, and
 connection rewiring before the test verdict is trusted.
 ```
 
+## Production tutorial tests
+
+Tutorial acceptance belongs to the production `target/debug/luncosim` binary.
+Build that binary in the worktree, run the scene-test command directly, and
+capture its exit code and authored verdict. `--validate` proves only USD
+parsing; `command_id` proves only that an API request was queued. A live API
+check must also wait for `/api/ready` to report `ready:true`,
+`world_hold:false`, and `pending_count:0`.
+
+Autopilot checks should observe the same `PossessVessel` and port-write events
+as a human control sequence, plus a real movement/port predicate and the final
+goal. Keep declared cosim topology separate from current samples: a connection
+may resolve before the first sample, but an absent value is not a valid zero.
+The complete boundary is in
+[`tutorial-autopilot-and-port-contracts`](../../docs/architecture/tutorial-autopilot-and-port-contracts.md).
+
 ## Diagnosing common failures
 
 - **"0 nodes 0 edges" after drill-in**: the target class resolved but
