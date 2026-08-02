@@ -71,6 +71,16 @@ impl Plugin for SandboxUiPlugin {
         let args: Vec<String> = std::env::args().collect();
         let networked = args.iter().any(|a| a == "--host" || a == "--connect");
         let no_throttle = args.iter().any(|a| a == "--no-throttle");
+        if networked || no_throttle {
+            // `ModelicaPlugin::sim_focus_pace` is the last writer of
+            // `WinitSettings::unfocused_mode`. Keep the CLI's continuous-rate
+            // contract in the shared pacing plane so that pacer cannot restore
+            // reactive-low-power after the scene becomes idle.
+            app.init_resource::<lunco_core::KeepAwake>();
+            app.world_mut()
+                .resource_mut::<lunco_core::KeepAwake>()
+                .acquire();
+        }
         {
             use bevy::winit::{UpdateMode, WinitSettings};
             app.insert_resource(WinitSettings {
@@ -126,13 +136,7 @@ impl Plugin for SandboxUiPlugin {
             use lunco_workbench::WorkbenchAppExt;
             app.register_settings_section::<lunco_settings::DownloadSettings>();
             app.init_resource::<runtime_exposure::RuntimeUiGates>();
-            app.add_systems(
-                Startup,
-                (
-                    runtime_exposure::load_runtime_ui_manifest,
-                    register_runtime_ui_actions,
-                ),
-            );
+            app.add_systems(Startup, (runtime_exposure::load_runtime_ui_manifest,));
             app.add_observer(on_runtime_ui_action)
                 .add_observer(on_dismiss_terrain_overlay);
             app.add_systems(
@@ -140,6 +144,10 @@ impl Plugin for SandboxUiPlugin {
                 (
                     runtime_exposure::sync_runtime_ui_manifest,
                     update_runtime_ui_gates,
+                    runtime_exposure::mount_runtime_ui_surfaces
+                        .after(runtime_exposure::sync_runtime_ui_manifest)
+                        .after(update_runtime_ui_gates)
+                        .before(bevy_hui::HuiSystems::Build),
                     runtime_exposure::bind_runtime_ui_to_camera
                         .after(runtime_exposure::sync_runtime_ui_manifest),
                     runtime_exposure::attach_runtime_ui_names
@@ -149,10 +157,21 @@ impl Plugin for SandboxUiPlugin {
                         .after(bevy_hui::HuiSystems::Style)
                         .after(runtime_exposure::sync_runtime_ui_manifest),
                     runtime_exposure::apply_runtime_ui_exposures
-                        .after(runtime_exposure::sync_runtime_ui_manifest),
+                        .after(runtime_exposure::sync_runtime_ui_manifest)
+                        // HUI replaces the template root's Node while building
+                        // the tree. Apply the manifest-owned rectangle only after
+                        // that authoritative build/deferred-command boundary.
+                        .after(bevy_hui::HuiSystems::Style),
                     runtime_exposure::register_runtime_ui_input_regions
                         .after(runtime_exposure::apply_runtime_ui_exposures),
                 ),
+            );
+            app.add_systems(
+                PostUpdate,
+                runtime_exposure::apply_runtime_ui_placement_after_style
+                    .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+                    .after(bevy::ui::UiSystems::Propagate)
+                    .before(bevy::ui::UiSystems::Content),
             );
             // Rover-specific panels and the attach-a-model click flow.
             app.register_panel(code_panel::CodePanel);
@@ -311,17 +330,6 @@ impl Plugin for SandboxUiPlugin {
         #[cfg(target_arch = "wasm32")]
         app.add_systems(bevy::prelude::Update, sandbox_boot_from_url);
     }
-}
-
-fn register_runtime_ui_actions(mut functions: bevy_hui::prelude::HtmlFunctions) {
-    runtime_exposure::register_action(&mut functions, "runtime_view_surface", "view.surface");
-    runtime_exposure::register_action(&mut functions, "runtime_view_moon", "view.body.moon");
-    runtime_exposure::register_action(&mut functions, "runtime_view_earth", "view.body.earth");
-    runtime_exposure::register_action(
-        &mut functions,
-        "runtime_terrain_dismiss",
-        "overlay.terrain.dismiss",
-    );
 }
 
 fn update_runtime_ui_gates(

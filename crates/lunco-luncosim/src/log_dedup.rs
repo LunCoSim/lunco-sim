@@ -28,8 +28,8 @@
 //! Only WARN and ERROR are deduped; INFO/DEBUG/TRACE pass untouched, so the hot
 //! logging path pays nothing but a level comparison.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};

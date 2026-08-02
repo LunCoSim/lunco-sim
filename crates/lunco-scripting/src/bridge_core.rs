@@ -40,14 +40,14 @@ use std::{
     collections::HashSet,
 };
 
-use lunco_api::executor::{ApiCommandEvent, authz_target_gid};
+use lunco_api::executor::{authz_target_gid, ApiCommandEvent};
 use lunco_api::queries::ApiQueryRegistry;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
+use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId, SECS_PER_TICK, SessionId,
-    Severity, SimTick, TelemetryEvent, TelemetryValue, coords,
+    coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId, SessionId,
+    Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────

@@ -54,7 +54,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map};
+use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, AST};
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;

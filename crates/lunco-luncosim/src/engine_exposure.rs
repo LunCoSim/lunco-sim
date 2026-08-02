@@ -740,7 +740,7 @@ pub(crate) fn publish_exposure(
     ) else {
         ui.visible(false);
         drop(ui);
-        publish_celestial_exposure(
+        publish_celestial_capability(
             &mut runtime.exposures,
             &runtime.bodies,
             runtime.orbital_pin.as_deref(),
@@ -756,7 +756,7 @@ pub(crate) fn publish_exposure(
     ui.visible(true);
     publish_vessel_values(&mut ui, &vessel, autopilot);
     drop(ui);
-    publish_celestial_exposure(
+    publish_celestial_capability(
         &mut runtime.exposures,
         &runtime.bodies,
         runtime.orbital_pin.as_deref(),
@@ -775,7 +775,7 @@ impl Default for ExposureTimer {
     }
 }
 
-fn publish_celestial_exposure(
+fn publish_celestial_capability(
     exposures: &mut EngineExposures,
     bodies: &Query<&CelestialBody>,
     orbital_pin: Option<&OrbitalViewPin>,
@@ -793,56 +793,9 @@ fn publish_celestial_exposure(
     let active_body = orbital_pin.filter(|pin| pin.active).map(|pin| pin.body);
     let mut ui = exposures.writer("celestial-view");
     ui.visible(moon || earth);
-    ui.property(
-        "surface_background",
-        if active_body.is_none() {
-            "var(--accent-color)"
-        } else {
-            "transparent"
-        },
-    );
-    ui.property(
-        "surface_color",
-        if active_body.is_none() {
-            "var(--panel-background)"
-        } else {
-            "var(--muted-color)"
-        },
-    );
-    ui.property("moon_display", if moon { "flex" } else { "none" });
-    ui.property(
-        "moon_background",
-        if active_body == Some(301) {
-            "var(--accent-color)"
-        } else {
-            "transparent"
-        },
-    );
-    ui.property(
-        "moon_color",
-        if active_body == Some(301) {
-            "var(--panel-background)"
-        } else {
-            "var(--muted-color)"
-        },
-    );
-    ui.property("earth_display", if earth { "flex" } else { "none" });
-    ui.property(
-        "earth_background",
-        if active_body == Some(399) {
-            "var(--accent-color)"
-        } else {
-            "transparent"
-        },
-    );
-    ui.property(
-        "earth_color",
-        if active_body == Some(399) {
-            "var(--panel-background)"
-        } else {
-            "var(--muted-color)"
-        },
-    );
+    ui.property("body_moon_present", moon);
+    ui.property("body_earth_present", earth);
+    ui.property("active_body_id", f64::from(active_body.unwrap_or_default()));
 }
 
 fn publish_runtime_overlay_exposures(

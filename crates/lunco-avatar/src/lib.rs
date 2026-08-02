@@ -829,16 +829,21 @@ pub struct AvatarCameraSet;
 /// arm and would reintroduce the phase mismatch this mode is designed to avoid.
 fn sync_avatar_easing(
     mut commands: Commands,
-    q: Query<(
-        Entity,
-        Has<SpringArmCamera>,
-        Has<lunco_time::InteractionEased>,
-    ), With<Avatar>>,
+    q: Query<
+        (
+            Entity,
+            Has<SpringArmCamera>,
+            Has<lunco_time::InteractionEased>,
+        ),
+        With<Avatar>,
+    >,
 ) {
     for (entity, spring_arm, eased) in q.iter() {
         match (spring_arm, eased) {
             (true, true) => {
-                commands.entity(entity).remove::<lunco_time::InteractionEased>();
+                commands
+                    .entity(entity)
+                    .remove::<lunco_time::InteractionEased>();
             }
             (false, false) => {
                 commands
@@ -1279,6 +1284,163 @@ impl VesselJoints<'_, '_> {
     }
 }
 
+/// Structural inputs for the spring-arm self-collision filter.
+///
+/// Joint motor/frame updates are observed as well, but the cache compares their
+/// endpoint pairs before rebuilding. This keeps a frequently driven joint from
+/// turning a structure cache back into per-frame work.
+#[derive(bevy::ecs::system::SystemParam)]
+struct VesselCollisionTopology<'w, 's> {
+    children: Query<'w, 's, (), Or<(Added<Children>, Changed<Children>)>>,
+    parents: Query<'w, 's, (), Or<(Added<ChildOf>, Changed<ChildOf>)>>,
+    revolute: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::RevoluteJoint),
+        Or<(
+            Added<avian3d::prelude::RevoluteJoint>,
+            Changed<avian3d::prelude::RevoluteJoint>,
+        )>,
+    >,
+    fixed: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::FixedJoint),
+        Or<(
+            Added<avian3d::prelude::FixedJoint>,
+            Changed<avian3d::prelude::FixedJoint>,
+        )>,
+    >,
+    prismatic: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::PrismaticJoint),
+        Or<(
+            Added<avian3d::prelude::PrismaticJoint>,
+            Changed<avian3d::prelude::PrismaticJoint>,
+        )>,
+    >,
+    spherical: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::SphericalJoint),
+        Or<(
+            Added<avian3d::prelude::SphericalJoint>,
+            Changed<avian3d::prelude::SphericalJoint>,
+        )>,
+    >,
+    distance: Query<
+        'w,
+        's,
+        (Entity, &'static avian3d::prelude::DistanceJoint),
+        Or<(
+            Added<avian3d::prelude::DistanceJoint>,
+            Changed<avian3d::prelude::DistanceJoint>,
+        )>,
+    >,
+    removed_children: RemovedComponents<'w, 's, Children>,
+    removed_parents: RemovedComponents<'w, 's, ChildOf>,
+    removed_revolute: RemovedComponents<'w, 's, avian3d::prelude::RevoluteJoint>,
+    removed_fixed: RemovedComponents<'w, 's, avian3d::prelude::FixedJoint>,
+    removed_prismatic: RemovedComponents<'w, 's, avian3d::prelude::PrismaticJoint>,
+    removed_spherical: RemovedComponents<'w, 's, avian3d::prelude::SphericalJoint>,
+    removed_distance: RemovedComponents<'w, 's, avian3d::prelude::DistanceJoint>,
+}
+
+/// Render-rate cache for spring-arm self-collision filters.
+///
+/// The exclusion set is a function of hierarchy and joint topology, not of the
+/// followed body's pose. Keep the derived filter in RAM and invalidate it only
+/// when one of those structural inputs changes.
+#[derive(Default)]
+struct VesselCollisionFilterCache {
+    adjacency: bevy::platform::collections::HashMap<Entity, Vec<Entity>>,
+    joint_bodies: bevy::ecs::entity::EntityHashMap<[Entity; 2]>,
+    filters: bevy::ecs::entity::EntityHashMap<avian3d::prelude::SpatialQueryFilter>,
+    initialized: bool,
+}
+
+impl VesselCollisionFilterCache {
+    fn observe_joint(&mut self, entity: Entity, bodies: [Entity; 2]) -> bool {
+        let changed = self.joint_bodies.get(&entity) != Some(&bodies);
+        self.joint_bodies.insert(entity, bodies);
+        changed
+    }
+
+    fn remove_joint(&mut self, entity: Entity) -> bool {
+        self.joint_bodies.remove(&entity).is_some()
+    }
+
+    fn refresh(&mut self, joints: &VesselJoints, topology: &mut VesselCollisionTopology) {
+        let mut dirty = !self.initialized;
+        dirty |= !topology.children.is_empty() || !topology.parents.is_empty();
+        dirty |= topology.removed_children.read().next().is_some();
+        dirty |= topology.removed_parents.read().next().is_some();
+
+        for (entity, joint) in &topology.revolute {
+            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
+        }
+        for (entity, joint) in &topology.fixed {
+            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
+        }
+        for (entity, joint) in &topology.prismatic {
+            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
+        }
+        for (entity, joint) in &topology.spherical {
+            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
+        }
+        for (entity, joint) in &topology.distance {
+            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
+        }
+
+        for entity in topology.removed_revolute.read() {
+            self.remove_joint(entity);
+            dirty = true;
+        }
+        for entity in topology.removed_fixed.read() {
+            self.remove_joint(entity);
+            dirty = true;
+        }
+        for entity in topology.removed_prismatic.read() {
+            self.remove_joint(entity);
+            dirty = true;
+        }
+        for entity in topology.removed_spherical.read() {
+            self.remove_joint(entity);
+            dirty = true;
+        }
+        for entity in topology.removed_distance.read() {
+            self.remove_joint(entity);
+            dirty = true;
+        }
+
+        if !dirty {
+            return;
+        }
+
+        self.adjacency = joints.adjacency();
+        self.filters.clear();
+        self.initialized = true;
+    }
+
+    fn filter_for(
+        &mut self,
+        target: Entity,
+        q_children: &Query<&Children>,
+    ) -> &avian3d::prelude::SpatialQueryFilter {
+        if !self.filters.contains_key(&target) {
+            let excluded =
+                vessel_collision_exclusions_from_adjacency(target, q_children, &self.adjacency);
+            let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
+            filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
+            self.filters.insert(target, filter);
+        }
+        self.filters
+            .get(&target)
+            .expect("spring-arm filter inserted above")
+    }
+}
+
 /// [`vessel_collision_exclusions`] against a `&mut World`, for tests.
 ///
 /// The system form takes `SystemParam` queries, which a test would otherwise have
@@ -1316,6 +1478,14 @@ fn vessel_collision_exclusions(
     joints: &VesselJoints,
 ) -> Vec<Entity> {
     let adj = joints.adjacency();
+    vessel_collision_exclusions_from_adjacency(target, q_children, &adj)
+}
+
+fn vessel_collision_exclusions_from_adjacency(
+    target: Entity,
+    q_children: &Query<&Children>,
+    adj: &bevy::platform::collections::HashMap<Entity, Vec<Entity>>,
+) -> Vec<Entity> {
     // BFS the joint-connected component containing the target.
     let mut members = vec![target];
     let mut seen = bevy::platform::collections::HashSet::from([target]);
@@ -1373,11 +1543,14 @@ fn spring_arm_system(
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
     joints: VesselJoints,
+    mut collision_filters: Local<VesselCollisionFilterCache>,
+    mut topology: VesselCollisionTopology,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
         return;
     }
     let dt = time.delta_secs();
+    collision_filters.refresh(&joints, &mut topology);
 
     for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in
         q_avatar.iter_mut()
@@ -1507,9 +1680,6 @@ fn spring_arm_system(
         //
         // The exclusion set is the whole JOINTED VESSEL — see
         // `vessel_collision_exclusions`.
-        let excluded = vessel_collision_exclusions(arm.target, &q_children, &joints);
-        let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
-        filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
         // A non-finite origin is not a camera problem to solve, but it IS one this
         // cast cannot survive: obvhs asserts `origin.is_finite()`, so following a
         // vessel whose solve has diverged would panic the compute pool from inside
@@ -1517,13 +1687,16 @@ fn spring_arm_system(
         // right behaviour for a frame with nothing valid to look at.
         let castable = ray_origin.is_finite() && ray_len.is_finite();
         let hit = match spatial_query {
-            Some(ref sq) if castable => sq.cast_ray(
-                ray_origin,
-                bevy::math::Dir3::new(ray_dir.as_vec3()).unwrap_or(bevy::math::Dir3::Y),
-                ray_len,
-                true,
-                &filter,
-            ),
+            Some(ref sq) if castable => {
+                let filter = collision_filters.filter_for(arm.target, &q_children);
+                sq.cast_ray(
+                    ray_origin,
+                    bevy::math::Dir3::new(ray_dir.as_vec3()).unwrap_or(bevy::math::Dir3::Y),
+                    ray_len,
+                    true,
+                    filter,
+                )
+            }
             _ => None,
         };
 
@@ -4522,14 +4695,20 @@ mod tests {
 
         app.update();
         assert!(
-            app.world().get::<lunco_time::InteractionEased>(avatar).is_none(),
+            app.world()
+                .get::<lunco_time::InteractionEased>(avatar)
+                .is_none(),
             "spring-arm cameras must not have a second interpolation writer"
         );
 
-        app.world_mut().entity_mut(avatar).remove::<SpringArmCamera>();
+        app.world_mut()
+            .entity_mut(avatar)
+            .remove::<SpringArmCamera>();
         app.update();
         assert!(
-            app.world().get::<lunco_time::InteractionEased>(avatar).is_some(),
+            app.world()
+                .get::<lunco_time::InteractionEased>(avatar)
+                .is_some(),
             "stepped camera modes must regain interaction-rate easing"
         );
     }

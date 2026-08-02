@@ -25,11 +25,11 @@ use std::sync::Arc;
 use bevy::camera::visibility::RenderLayers;
 use bevy::light::{CascadeShadowConfig, DirectionalLight};
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_core::HorizonShadowTerrain;
 use lunco_environment::{
-    HeightField, HorizonMap, HorizonShadowCache, install_horizon_map_from_field,
+    install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
 };
 use lunco_terrain_surface::{DemHeightField, HeightSource, TerrainLodViz, TileShadowCache};
 

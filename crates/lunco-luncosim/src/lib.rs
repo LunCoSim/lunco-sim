@@ -696,7 +696,13 @@ fn default_plugins_with_profile(
             Some(p) => format!("LunCoSim — Listening on {p}"),
             None => "LunCoSim".to_string(),
         };
-        let present = if no_vsync || networked {
+        // Let the backend select the fastest available non-vsync mode. Wayland
+        // commonly rejects `Immediate`, while `AutoNoVsync` can still select
+        // Mailbox; hard-coding Immediate silently falls back to FIFO and caps
+        // the production window at the compositor refresh rate.
+        let present = if no_vsync {
+            bevy::window::PresentMode::AutoNoVsync
+        } else if networked {
             bevy::window::PresentMode::Mailbox
         } else {
             bevy::window::PresentMode::Fifo
@@ -2479,7 +2485,13 @@ impl Plugin for SandboxCorePlugin {
             .add_systems(
                 Update,
                 (
-                    engine_exposure::mark_exposure_dirty,
+                    engine_exposure::mark_exposure_dirty.run_if(
+                        bevy::time::common_conditions::on_timer(
+                            std::time::Duration::from_secs_f32(
+                                1.0 / lunco_core::exposure::EXPOSURE_UPDATE_HZ,
+                            ),
+                        ),
+                    ),
                     engine_exposure::publish_exposure.after(engine_exposure::mark_exposure_dirty),
                 ),
             )

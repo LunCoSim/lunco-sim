@@ -35,10 +35,10 @@ pub(crate) struct RuntimeUiAction {
 /// Bind one HUI callback name to a semantic runtime action.
 pub(crate) fn register_action(
     functions: &mut HtmlFunctions,
-    callback: &'static str,
-    action: &'static str,
+    callback: impl Into<String>,
+    action: impl Into<String>,
 ) {
-    let action = action.to_owned();
+    let action = action.into();
     functions.register(
         callback,
         move |In(source): In<Entity>, mut commands: Commands| {
@@ -58,10 +58,13 @@ pub(crate) struct RuntimeUiManifest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RuntimeUiSurfaceDefinition {
-    pub id: String,
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
+    #[serde(default)]
+    pub bindings: HashMap<String, RuntimeUiBindingDefinition>,
+    #[serde(default)]
+    pub actions: Vec<RuntimeUiActionDefinition>,
     #[serde(default)]
     pub visible_in_perspective: Option<String>,
     #[serde(default)]
@@ -69,6 +72,26 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     #[serde(default)]
     pub interactive: bool,
     pub placement: RuntimeUiPlacementDefinition,
+}
+
+/// Authored mapping from an engine capability value to a template property.
+/// The target key is the template property's name; the source is an engine
+/// exposure property. `map` is optional for identity bindings and required for
+/// authored state translations such as a boolean display or an active color.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RuntimeUiBindingDefinition {
+    pub source: String,
+    #[serde(default)]
+    pub map: HashMap<String, String>,
+}
+
+/// Authored callback-to-command mapping. HUI knows only the callback name;
+/// the runtime bridge emits the semantic action without a widget-specific Rust
+/// registration.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RuntimeUiActionDefinition {
+    pub callback: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -207,9 +230,13 @@ struct ResolvedRuntimeUiPlacement {
 #[derive(Component, Debug)]
 pub(crate) struct RuntimeUiSurface {
     namespace: String,
+    template: Handle<HtmlTemplate>,
+    stylesheet: Handle<StyleSheet>,
+    bindings: HashMap<String, RuntimeUiBindingDefinition>,
     visible_in_perspective: Option<String>,
     gate: Option<String>,
     interactive: bool,
+    mounted: bool,
     placement: RuntimeUiPlacement,
     applied_revision: u64,
     applied_placement: Option<ResolvedRuntimeUiPlacement>,
@@ -217,12 +244,20 @@ pub(crate) struct RuntimeUiSurface {
 }
 
 impl RuntimeUiSurface {
-    fn from_definition(definition: &RuntimeUiSurfaceDefinition) -> Self {
+    fn from_definition(
+        definition: &RuntimeUiSurfaceDefinition,
+        template: Handle<HtmlTemplate>,
+        stylesheet: Handle<StyleSheet>,
+    ) -> Self {
         Self {
             namespace: definition.namespace.clone(),
+            template,
+            stylesheet,
+            bindings: definition.bindings.clone(),
             visible_in_perspective: definition.visible_in_perspective.clone(),
             gate: definition.gate.clone(),
             interactive: definition.interactive,
+            mounted: false,
             placement: (&definition.placement).into(),
             applied_revision: 0,
             applied_placement: None,
@@ -249,6 +284,7 @@ pub(crate) fn sync_runtime_ui_manifest(
     mut state: ResMut<RuntimeUiManifestState>,
     roots: Query<Entity, With<RuntimeUiSurface>>,
     server: Res<AssetServer>,
+    mut functions: HtmlFunctions,
 ) {
     let changed = state.applied.is_none()
         || events.read().any(|event| {
@@ -267,6 +303,16 @@ pub(crate) fn sync_runtime_ui_manifest(
         return;
     };
 
+    for surface in &manifest.surfaces {
+        for action in &surface.actions {
+            register_action(
+                &mut functions,
+                action.callback.clone(),
+                action.action.clone(),
+            );
+        }
+    }
+
     for root in &roots {
         commands.entity(root).despawn_related::<Children>();
         commands.entity(root).despawn();
@@ -276,11 +322,7 @@ pub(crate) fn sync_runtime_ui_manifest(
         let stylesheet: Handle<StyleSheet> = server.load(definition.stylesheet.clone());
         commands.spawn((
             Node::default(),
-            HtmlNode(template),
-            Styled::new(stylesheet),
-            InlineStyle::default(),
-            RuntimeUiSurface::from_definition(definition),
-            Name::new(format!("runtime-ui:{}", definition.id)),
+            RuntimeUiSurface::from_definition(definition, template, stylesheet),
             Visibility::Hidden,
         ));
     }
@@ -288,11 +330,83 @@ pub(crate) fn sync_runtime_ui_manifest(
     state.rebuild_pending = true;
 }
 
+/// Attach HUI/Flair only to surfaces that can currently be shown. Runtime
+/// manifests may describe many optional overlays, but hidden trees still incur
+/// HUI compilation, CSS matching, and Bevy UI layout cost if they are mounted.
+/// The marker root remains alive so an exposure can activate it later without
+/// rebuilding the manifest.
+pub(crate) fn mount_runtime_ui_surfaces(
+    mut commands: Commands,
+    manifest_state: Res<RuntimeUiManifestState>,
+    exposures: Res<EngineExposures>,
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    gates: Option<Res<RuntimeUiGates>>,
+    rects: Option<Res<PanelRects>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut roots: Query<(
+        Entity,
+        &mut RuntimeUiSurface,
+        Option<&ComputedUiRenderTargetInfo>,
+    )>,
+) {
+    if manifest_state.rebuild_pending {
+        return;
+    }
+
+    let window = windows.iter().next();
+    for (entity, mut surface, target) in &mut roots {
+        if surface.mounted {
+            continue;
+        }
+        let Some(exposure) = exposures.surfaces.get(&surface.namespace) else {
+            continue;
+        };
+        if !exposure.visible
+            || !runtime_ui_is_allowed(&surface, layout.as_deref(), gates.as_deref())
+            || resolve_placement(&surface.placement, rects.as_deref(), target, window).is_none()
+        {
+            continue;
+        }
+
+        commands.entity(entity).insert((
+            HtmlNode(surface.template.clone()),
+            Styled::new(surface.stylesheet.clone()),
+            InlineStyle::default(),
+        ));
+        surface.mounted = true;
+    }
+}
+
+fn runtime_ui_is_allowed(
+    surface: &RuntimeUiSurface,
+    layout: Option<&lunco_workbench::WorkbenchLayout>,
+    gates: Option<&RuntimeUiGates>,
+) -> bool {
+    let perspective_visible = surface
+        .visible_in_perspective
+        .as_deref()
+        .is_none_or(|required| {
+            layout.is_some_and(|layout| {
+                layout
+                    .active_perspective()
+                    .is_some_and(|active| active.as_str() == required)
+            })
+        });
+    let gate_visible = surface
+        .gate
+        .as_deref()
+        .is_none_or(|gate| gates.is_some_and(|gates| gates.allows(gate)));
+    perspective_visible && gate_visible
+}
+
 /// Keep retained HTML surfaces on the same window-targeting camera as egui.
 pub(crate) fn bind_runtime_ui_to_camera(
     mut commands: Commands,
     cameras: Query<Entity, With<PrimaryEguiContext>>,
-    roots: Query<(Entity, Option<&UiTargetCamera>), With<RuntimeUiSurface>>,
+    roots: Query<
+        (Entity, Option<&UiTargetCamera>),
+        (With<RuntimeUiSurface>, Added<RuntimeUiSurface>),
+    >,
 ) {
     let Some(camera) = cameras.iter().next() else {
         return;
@@ -309,7 +423,7 @@ pub(crate) fn bind_runtime_ui_to_camera(
 /// by Flair. This is shared by all runtime-authored templates.
 pub(crate) fn attach_runtime_ui_names(
     mut commands: Commands,
-    ids: Query<(Entity, &UiId), (With<Node>, Without<Name>)>,
+    ids: Query<(Entity, &UiId), (With<Node>, Or<(Added<UiId>, Changed<UiId>)>)>,
 ) {
     for (entity, id) in &ids {
         commands.entity(entity).insert(Name::new(id.id().clone()));
@@ -322,7 +436,7 @@ pub(crate) fn attach_runtime_ui_names(
 pub(crate) fn hand_runtime_ui_styling_to_flair(
     mut commands: Commands,
     roots: Query<Entity, With<RuntimeUiSurface>>,
-    nodes: Query<(Entity, &HtmlStyle)>,
+    nodes: Query<(Entity, &HtmlStyle), Or<(Added<HtmlStyle>, Changed<HtmlStyle>)>>,
     parents: Query<&ChildOf>,
 ) {
     for (entity, _) in &nodes {
@@ -361,8 +475,8 @@ pub(crate) fn apply_runtime_ui_exposures(
         &mut RuntimeUiSurface,
         &mut Node,
         &mut Visibility,
-        &mut TemplateProperties,
-        &InlineStyle,
+        Option<&mut TemplateProperties>,
+        Option<&InlineStyle>,
         Option<&ComputedUiRenderTargetInfo>,
     )>,
 ) {
@@ -379,7 +493,7 @@ pub(crate) fn apply_runtime_ui_exposures(
     let gates_changed = gates.as_ref().is_some_and(|gates| gates.is_changed());
     let window = windows.iter().next();
 
-    for (entity, mut surface, mut node, mut visibility, mut properties, existing_style, target) in
+    for (entity, mut surface, mut node, mut visibility, properties, existing_style, target) in
         &mut roots
     {
         let placement = resolve_placement(&surface.placement, rects.as_deref(), target, window);
@@ -433,19 +547,50 @@ pub(crate) fn apply_runtime_ui_exposures(
             surface.input_rect = None;
         }
 
+        let Some(mut properties) = properties else {
+            // The root is intentionally unmounted until its exposure becomes
+            // visible. Do not advance the exposure revision before HUI has
+            // supplied TemplateProperties, or the first mounted frame would
+            // skip its initial projection.
+            continue;
+        };
+
         let mut properties_changed = false;
-        let mut style = existing_style.clone();
+        let mut style = existing_style.cloned().unwrap_or_default();
         let mut style_changed = false;
-        for (name, value) in &exposure.properties {
-            let rendered = value.render();
-            if properties.get(name).map(String::as_str) != Some(rendered.as_str()) {
-                properties.set(name, &rendered);
-                properties_changed = true;
+        if surface.bindings.is_empty() {
+            for (name, value) in &exposure.properties {
+                apply_runtime_ui_property(
+                    name,
+                    value.render(),
+                    &mut properties,
+                    &mut style,
+                    &mut properties_changed,
+                    &mut style_changed,
+                );
             }
-            let css_name = format!("--ui-{}", name.replace('_', "-"));
-            if style.get(&css_name) != Some(rendered.as_str()) {
-                style.set(css_name, rendered);
-                style_changed = true;
+        } else {
+            for (target, binding) in &surface.bindings {
+                let Some(value) = exposure.properties.get(&binding.source) else {
+                    continue;
+                };
+                let source_value = value.render();
+                let rendered = if binding.map.is_empty() {
+                    source_value
+                } else {
+                    let Some(mapped) = binding.map.get(&source_value) else {
+                        continue;
+                    };
+                    mapped.clone()
+                };
+                apply_runtime_ui_property(
+                    target,
+                    rendered,
+                    &mut properties,
+                    &mut style,
+                    &mut properties_changed,
+                    &mut style_changed,
+                );
             }
         }
 
@@ -456,6 +601,78 @@ pub(crate) fn apply_runtime_ui_exposures(
             commands.trigger(CompileContextEvent { entity });
         }
         surface.applied_revision = exposures.revision;
+    }
+}
+
+/// Apply the manifest rectangle after HUI has finished replacing the template
+/// root's [`Node`] and Flair has applied authored CSS.
+///
+/// This is change-detected on the root node. It runs for the initial HUI build
+/// (and for an actual resize/style rebuild), then goes dormant; there is no
+/// per-frame geometry write. The manifest owns the outer rectangle and the
+/// stylesheet owns the contents of that rectangle.
+pub(crate) fn apply_runtime_ui_placement_after_style(
+    rects: Option<Res<PanelRects>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut roots: Query<
+        (
+            &mut RuntimeUiSurface,
+            &mut Node,
+            Option<&ComputedUiRenderTargetInfo>,
+        ),
+        Changed<Node>,
+    >,
+) {
+    let window = windows.iter().next();
+    for (mut surface, mut node, target) in &mut roots {
+        let placement = resolve_placement(&surface.placement, rects.as_deref(), target, window);
+        if surface.applied_placement != placement {
+            surface.applied_placement = placement;
+            surface.input_rect = if surface.interactive {
+                placement
+                    .filter(|placement| placement.rect.is_positive())
+                    .map(|placement| placement.rect)
+            } else {
+                None
+            };
+        }
+        let Some(placement) = placement else {
+            continue;
+        };
+        let rect = placement.rect;
+        let already_applied = node.position_type == PositionType::Absolute
+            && node.left == Val::Px(rect.min.x)
+            && node.top == Val::Px(rect.min.y)
+            && node.width == Val::Px(rect.width())
+            && node.height == Val::Px(rect.height());
+        if !already_applied {
+            apply_placement(&mut node, rect);
+        }
+    }
+}
+
+fn apply_runtime_ui_property(
+    name: &str,
+    rendered: String,
+    properties: &mut TemplateProperties,
+    style: &mut InlineStyle,
+    properties_changed: &mut bool,
+    style_changed: &mut bool,
+) {
+    // A capability is only projected when the authored template declares the
+    // property. This prevents raw engine facts from becoming write-only UI
+    // state and keeps the manifest the reader boundary.
+    if properties.get(name).is_none() {
+        return;
+    }
+    if properties.get(name).map(String::as_str) != Some(rendered.as_str()) {
+        properties.set(name, &rendered);
+        *properties_changed = true;
+    }
+    let css_name = format!("--ui-{}", name.replace('_', "-"));
+    if style.get(&css_name) != Some(rendered.as_str()) {
+        style.set(css_name, rendered);
+        *style_changed = true;
     }
 }
 
@@ -482,22 +699,25 @@ fn resolve_placement(
     target: Option<&ComputedUiRenderTargetInfo>,
     window: Option<&Window>,
 ) -> Option<ResolvedRuntimeUiPlacement> {
-    let scale = target
-        .map(ComputedUiRenderTargetInfo::scale_factor)
-        .or_else(|| window.map(Window::scale_factor))?;
+    // The UI target component is propagated before the camera has a live
+    // viewport on the first frame, so its default is a valid-looking 1.0 scale
+    // paired with a 0x0 physical size. Do not let that placeholder shadow the
+    // already-valid window dimensions; doing so makes a top-center surface
+    // resolve to a negative x coordinate until the first resize event.
+    let target_dimensions = target.and_then(|target| {
+        let scale = target.scale_factor();
+        let physical_size = target.physical_size();
+        (scale.is_finite() && scale > 0.0 && physical_size.x > 0 && physical_size.y > 0)
+            .then_some((scale, physical_size))
+    });
+    let (scale, physical_size) = target_dimensions
+        .or_else(|| window.map(|window| (window.scale_factor(), window.physical_size())))?;
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let physical_size = target
-        .map(ComputedUiRenderTargetInfo::physical_size)
-        .or_else(|| {
-            window.map(|window| {
-                UVec2::new(
-                    window.resolution.physical_width(),
-                    window.resolution.physical_height(),
-                )
-            })
-        })?;
+    if physical_size.x == 0 || physical_size.y == 0 {
+        return None;
+    }
     let window_size = physical_size.as_vec2() / scale;
     let egui_vec2 = |value: Vec2| egui::vec2(value.x, value.y);
     let egui_pos2 = |value: Vec2| egui::pos2(value.x, value.y);
@@ -619,6 +839,27 @@ mod tests {
         assert_eq!(resolved.rect.height(), 80.0);
         assert!(resolved.rect.max.x <= window.width());
         assert!(resolved.rect.max.y <= window.height());
+    }
+
+    #[test]
+    fn zero_sized_target_uses_live_window_dimensions() {
+        let window = Window::default();
+        let placement = RuntimeUiPlacement::Window {
+            anchor: RuntimeUiWindowAnchor::TopCenter,
+            offset: Vec2::new(0.0, 50.0),
+            width: 350.0,
+            height: 58.0,
+        };
+        let resolved = resolve_placement(
+            &placement,
+            None,
+            Some(&ComputedUiRenderTargetInfo::default()),
+            Some(&window),
+        )
+        .expect("the initialized window is a valid fallback target");
+
+        assert_eq!(resolved.rect.min, egui::pos2(465.0, 50.0));
+        assert_eq!(resolved.rect.size(), egui::vec2(350.0, 58.0));
     }
 
     #[test]

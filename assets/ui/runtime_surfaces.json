@@ -1,7 +1,6 @@
 {
   "surfaces": [
     {
-      "id": "vessel-hud",
       "template": "ui/rover_hud.html",
       "stylesheet": "ui/rover_hud.css",
       "namespace": "driven-vessel",
@@ -9,26 +8,93 @@
       "placement": { "mode": "viewport" }
     },
     {
-      "id": "view-switcher",
       "template": "ui/view_mode.html",
       "stylesheet": "ui/view_mode.css",
       "namespace": "celestial-view",
+      "bindings": {
+        "surface_background": {
+          "source": "active_body_id",
+          "map": {
+            "0": "var(--accent-color)",
+            "301": "var(--button-background)",
+            "399": "var(--button-background)"
+          }
+        },
+        "surface_color": {
+          "source": "active_body_id",
+          "map": {
+            "0": "var(--active-text-color)",
+            "301": "var(--muted-color)",
+            "399": "var(--muted-color)"
+          }
+        },
+        "moon_display": {
+          "source": "body_moon_present",
+          "map": { "true": "flex", "false": "none" }
+        },
+        "moon_background": {
+          "source": "active_body_id",
+          "map": {
+            "0": "var(--button-background)",
+            "301": "var(--accent-color)",
+            "399": "var(--button-background)"
+          }
+        },
+        "moon_color": {
+          "source": "active_body_id",
+          "map": {
+            "0": "var(--muted-color)",
+            "301": "var(--active-text-color)",
+            "399": "var(--muted-color)"
+          }
+        },
+        "earth_display": {
+          "source": "body_earth_present",
+          "map": { "true": "flex", "false": "none" }
+        },
+        "earth_background": {
+          "source": "active_body_id",
+          "map": {
+            "0": "var(--button-background)",
+            "301": "var(--button-background)",
+            "399": "var(--accent-color)"
+          }
+        },
+        "earth_color": {
+          "source": "active_body_id",
+          "map": {
+            "0": "var(--muted-color)",
+            "301": "var(--muted-color)",
+            "399": "var(--active-text-color)"
+          }
+        }
+      },
+      "actions": [
+        { "callback": "runtime_view_surface", "action": "view.surface" },
+        { "callback": "runtime_view_moon", "action": "view.body.moon" },
+        { "callback": "runtime_view_earth", "action": "view.body.earth" }
+      ],
       "visible_in_perspective": "sandbox_view",
       "gate": "view_switcher",
       "interactive": true,
       "placement": {
         "mode": "window",
         "anchor": "top_center",
-        "offset": [0.0, 40.0],
-        "width": 240.0,
-        "height": 40.0
+        "offset": [0.0, 50.0],
+        "width": 350.0,
+        "height": 58.0
       }
     },
     {
-      "id": "terrain-progress",
       "template": "ui/terrain_progress.html",
       "stylesheet": "ui/terrain_progress.css",
       "namespace": "terrain-progress",
+      "actions": [
+        {
+          "callback": "runtime_terrain_dismiss",
+          "action": "overlay.terrain.dismiss"
+        }
+      ],
       "interactive": true,
       "placement": {
         "mode": "window",
@@ -39,7 +105,6 @@
       }
     },
     {
-      "id": "scenario-download",
       "template": "ui/scenario_download.html",
       "stylesheet": "ui/scenario_download.css",
       "namespace": "scenario-download",

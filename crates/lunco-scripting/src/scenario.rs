@@ -33,9 +33,9 @@ use lunco_core::{SessionId, TelemetryEvent};
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
-use crate::ScriptRegistry;
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::{ScriptLanguage, ScriptedModel};
+use crate::ScriptRegistry;
 
 /// Controls whether persistent scenario programs are allowed to attach and
 /// execute their lifecycle hooks.
