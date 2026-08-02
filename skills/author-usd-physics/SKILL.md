@@ -559,6 +559,26 @@ lint cannot simulate). See
 [`validate-assets`](../validate-assets/SKILL.md#the-rules-are-authored--the-lint-layer)
 and [`docs/architecture/lint-substrate.md`](../../docs/architecture/lint-substrate.md).
 
+### 6b.1 Vehicle-level stability acceptance
+
+Mounted-part linting catches free bodies, but it cannot prove a rover will stay
+upright under drive. Add a real flat-ground or production-terrain scene test
+that settles the assembled vehicle, drives through its authored control path,
+and reports:
+
+- travel and enough fixed-step samples;
+- maximum body tilt;
+- missing or detached descendants and their worst relative displacement; and
+- any domain output that is part of the vehicle acceptance, such as solar power
+  and battery state.
+
+On lunar regolith, inspect the force application height and the authored
+`physics:centerOfMass` before changing solver parameters. If all driven wheels
+reach the friction limit and the centre of mass is high above the contact plane,
+the launch pitch moment is physical. Lower or correctly assemble the mass
+distribution and rerun the test; do not turn a repeatable tip into a larger tilt
+allowance or a rendering filter.
+
 ## 6c. What this engine does NOT read
 
 Before authoring a schema because a DCC offers it, check it is consumed. The full

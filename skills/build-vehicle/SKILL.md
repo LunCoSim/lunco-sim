@@ -202,6 +202,27 @@ component whose geometry points along another axis. Validate the target vector,
 setpoint, measured joint angles, and rendered boresight together after a full
 scene reload.
 
+For a fixed photovoltaic deck, there is no tracker controller to tune. Reference
+`components/power/solar_panel.usda` once, author its `inputs:area` and placement
+on the rover, use the component's +Y normal unless a different face is explicit,
+connect its `connectors:p` to the battery, and include both
+in the one `Electrical` collection with the driven loads. Keep the panel's
+visual frame and cell surface under that same mounted component; do not add a
+second rigid body or a disconnected visual proxy. A horizontal deck uses the
+component's +Y collecting face. Verify `power_out`, `cos_incidence`, battery
+current and `soc_out`, not only that a panel prim appears in the hierarchy.
+
+### Stability before tuning
+
+If a lunar rover tips at launch, inspect the assembled load path before changing
+solver settings or adding visual smoothing. High-grip contact forces applied at
+the wheel plane create a real pitch moment when the authored
+`physics:centerOfMass` is high. The vehicle-level acceptance test should report
+travel, maximum tilt, detached descendants, and fixed-step sample count. A
+repeatable tilt failure is a geometry/mass/traction defect; a visual jitter with
+the body and its labels moving together is a coordinate/transform defect and
+needs composed transform inspection.
+
 ## Variant axes (orthogonal, each choosing a component)
 
 Axes are **opt-in per vehicle** — a rover only has the axes its file declares.

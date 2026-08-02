@@ -34,6 +34,7 @@ or the `mcp__lunco__*` tools if wired.
 |---|---|
 | `list_entities` (`ListEntities`) | every registered entity → `{api_id, name, type, pos}`. **Start here** — most reads need an `api_id`. |
 | `query_entity` (`QueryEntity {id}`) | one entity's pose/name/type blob. |
+| `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. |
 | `read_ports` | **live telemetry.** With `api_id`: that entity's ports `[{name,value,direction,kind}]`. Without: EVERY port-bearing entity (large — pass `name_filter` substring and/or `ports:[…]` to narrow). One-shot. |
 | `read_port` `{api_id, port}` | a single named port value. |
 | `watch_ports` `{api_id, …}` | a **time-series** of ports (use when you need change over time, not a single sample). |
@@ -52,6 +53,24 @@ poke an input, `possess_vessel` to take control, then re-read.
 3. Need a trend (settling, oscillation, arrival)? `watch_ports` for a series instead of hammering `read_ports`.
 4. Modelica in the loop? `snapshot_variables` for solver state, or `cosim_status` for the whole chain.
 5. `capture_screenshot` → `/tmp/x.png` → Read it, to confirm the physical picture.
+
+Before interpreting a live read as a finished scene, check
+`GET /api/ready` and require `ready:true`, `world_hold:false`, and
+`pending_count:0`. A port may be absent while its Modelica island is still
+compiling; that is different from a valid zero.
+
+### Fixed-panel rover readout
+
+For a fixed solar deck, list the rover's `…/Electrical` entity and read the
+scope boundaries plus the panel and battery member outputs. The useful minimum
+is `solar_power`, `solar_incidence`, panel `power_out`/`generated_current_a`,
+and battery `terminal_current_a`/`soc_out`. A positive mesh count or a visible
+`SolarPanel` prim does not prove that current reaches the battery.
+
+For a placed rover, pair the live pose with `QueryUsdPrim` on the composed rover
+prim. Confirm the local forward-axis contract, the effective rotation op and
+its `xformOpOrder`; do not infer orientation from a screenshot chosen on a
+symmetry axis.
 
 ## Example (curl)
 

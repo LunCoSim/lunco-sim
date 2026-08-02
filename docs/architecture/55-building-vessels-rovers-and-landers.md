@@ -65,6 +65,67 @@ When building any vehicle assembly in LunCoSim:
    - Rhai scenario scripts handle **high-level mission events and state switches ONLY** (`wait_for("touchdown")`, `state = "SAFE_MODE"`).
    - Per-tick PID loops, numerical integration, matrix math, and thruster mapping run natively inside **Modelica** (`LunCo.GNC`) or **Rust**.
 
+### 1.1 Mounted parts have one physical owner
+
+A fixed rover part — a battery, photovoltaic deck, lamp, motor housing, or
+instrument box — is part of the rover's one rigid body. Reference its reusable
+component and give the component mass and collision geometry, but do not apply a
+second `PhysicsRigidBodyAPI` to the mounted child. Its colliders and mass belong
+to the nearest host body. A part that must move relative to the rover is the
+different case: it owns a rigid body **and** the joint that attaches it, in the
+same reusable assembly.
+
+This distinction is structural, not visual. A child can remain in the USD tree
+while its unjointed body falls away in the first physics step. The
+`nested-body-no-joint` lint catches the authoring error, while a drive test must
+still verify that mounted descendants preserve their body-relative positions.
+
+### 1.2 Separate asset frame from scene placement
+
+The canonical vehicle frame is Y-up, right-handed, SI metres, with the vehicle
+forward direction conventionally along −Z. The asset owns its local geometry and
+declares that contract; the scene placement owns the initial heading for a
+particular route or point of interest. Do not duplicate a heading in the asset,
+a variant, and a wrapper layer.
+
+If a placement can author a rotation, the base prim must declare that rotation
+op in `xformOpOrder`; an attribute that is not listed is inert. Keep one
+authoritative heading in the strongest scene layer and leave subsequent heading
+changes to the vehicle controller. Verify the composed `xformOpOrder` and
+`xformOp:rotateXYZ` after composition, not only the source layer.
+
+### 1.3 Stability is an assembled-load property
+
+On low-gravity, high-grip terrain, a high centre of mass can turn a normal
+straight launch into a real pitch-over. Treat that as a load-transfer defect
+before treating it as solver noise: inspect the wheel contact forces, friction
+cone, contact plane, authored `physics:centerOfMass`, mass, and inertia together.
+Do not hide a repeatable tip by loosening the acceptance limit or adding
+rendering smoothing.
+
+A vehicle acceptance scene should settle, drive under its real control path, and
+assert all of the following: measurable travel, bounded tilt, no missing or
+detached descendants, enough fixed-step samples, and the scenario's authored
+verdict. The same scene can also assert generated electrical outputs, so a rover
+that looks correct but has a disconnected panel cannot pass.
+
+### 1.4 Fixed photovoltaic decks use the electrical component contract
+
+Use the shared `components/power/solar_panel.usda` for a fixed panel. The
+vehicle owns its area, placement and wiring; the component's fixed collecting
+normal is +Y unless the vehicle explicitly overrides it. The component owns the
+visual frame/cell surface, mass/collision facet, environment probe and
+`SolarPanel.mo` source. A horizontal collecting face uses the component's +Y
+normal. Include the panel, battery and driven loads in the same explicit
+`CollectionAPI:components` electrical scope and connect the panel pin to the
+battery pin.
+
+The acceptance is a chain, not a mesh check: the electrical scope must compile,
+the panel must publish `power_out`/`cos_incidence`, and the battery must publish
+`soc_out` while receiving current. Read the live island through `ReadPorts`; the
+member port uses the fully mangled prim path, while the scope boundary may expose
+short names such as `solar_power` and `soc`.
+
 ---
 
 ## 2. Step-by-Step Build Walkthrough

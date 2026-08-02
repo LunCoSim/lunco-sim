@@ -303,6 +303,17 @@ carry `PhysicsCollisionAPI` only and get **no** independent body.
 Render and collision are allowed to differ, and only a cutaway view can tell.
 That is a legitimate technique, not a bug — but write down that you did it.
 
+For a fixed component mounted on a rover (battery, solar panel, lamp or
+instrument), keep one root component with its visual, mass and collision facets;
+do not apply `PhysicsRigidBodyAPI` to the component unless a joint in the same
+assembly attaches that body to its host. The host body is the physical owner of
+fixed descendants. For a photovoltaic component specifically, expose the
+electrical pin and environment inputs on the reusable root, while the enclosing
+vehicle owns area, placement and battery wiring (the fixed panel's semantic
+normal is +Y unless explicitly overridden). This lets the
+same component be visibly and electrically real without creating a free body or
+duplicating the panel geometry.
+
 ## Behaviour — one binding for every language
 
 There is **one program contract, not a per-language schema**. `LunCoProgramAPI` is
@@ -449,6 +460,12 @@ the origin). Nesting is the one shape both envelope spellings accept.
 Check the log before concluding anything about geometry. The reader warns on
 every skip path, and "no warning + no geometry" means the prim was never
 traversed — a different bug from "patch rejected".
+
+For a placed mechanism, inspect the composed transform as well as the source
+file: every authored `xformOp:*` must appear in `xformOpOrder`, and the layer that
+owns the final placement must be the one that supplies the effective heading.
+An asset-local forward axis and a scene-specific route heading are separate
+facts; keep them in separate layers and verify the composed result.
 
 ## Anti-patterns
 
