@@ -1,0 +1,16 @@
+<template>
+  <property name="title">Downloading scenario</property>
+  <property name="asset_count">0 / 0 assets</property>
+  <property name="progress_width">0%</property>
+  <property name="progress_text">0.0 / 0.0 MB</property>
+
+  <node id="scenario-download-root">
+    <text id="scenario-download-title">{title}</text>
+    <text id="scenario-download-assets">{asset_count}</text>
+    <node id="scenario-download-track">
+      <node id="scenario-download-fill" />
+    </node>
+    <text id="scenario-download-value">{progress_text}</text>
+    <text id="scenario-download-caption">Fetching scenario assets from server…</text>
+  </node>
+</template>

@@ -1,0 +1,55 @@
+{
+  "surfaces": [
+    {
+      "id": "vessel-hud",
+      "template": "ui/rover_hud.html",
+      "stylesheet": "ui/rover_hud.css",
+      "namespace": "driven-vessel",
+      "visible_in_perspective": "sandbox_view",
+      "placement": { "mode": "viewport" }
+    },
+    {
+      "id": "view-switcher",
+      "template": "ui/view_mode.html",
+      "stylesheet": "ui/view_mode.css",
+      "namespace": "celestial-view",
+      "visible_in_perspective": "sandbox_view",
+      "gate": "view_switcher",
+      "interactive": true,
+      "placement": {
+        "mode": "window",
+        "anchor": "top_center",
+        "offset": [0.0, 40.0],
+        "width": 240.0,
+        "height": 40.0
+      }
+    },
+    {
+      "id": "terrain-progress",
+      "template": "ui/terrain_progress.html",
+      "stylesheet": "ui/terrain_progress.css",
+      "namespace": "terrain-progress",
+      "interactive": true,
+      "placement": {
+        "mode": "window",
+        "anchor": "top_center",
+        "offset": [0.0, 96.0],
+        "width": 360.0,
+        "height": 196.0
+      }
+    },
+    {
+      "id": "scenario-download",
+      "template": "ui/scenario_download.html",
+      "stylesheet": "ui/scenario_download.css",
+      "namespace": "scenario-download",
+      "placement": {
+        "mode": "window",
+        "anchor": "top_center",
+        "offset": [0.0, 96.0],
+        "width": 360.0,
+        "height": 172.0
+      }
+    }
+  ]
+}

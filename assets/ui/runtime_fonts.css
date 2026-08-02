@@ -1,0 +1,13 @@
+/*
+ * Runtime-authored UI uses an explicit bundled font. Bevy's built-in
+ * default_font is intentionally ASCII-only; relying on it turns valid HUD
+ * telemetry glyphs into tofu on every platform.
+ */
+@font-face {
+  font-family: "LunCo UI";
+  src: url("fonts/FiraSans-Regular.ttf");
+}
+
+:root {
+  font-family: "LunCo UI";
+}

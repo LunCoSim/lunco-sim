@@ -1,0 +1,23 @@
+<template>
+  <property name="surface_background">transparent</property>
+  <property name="surface_color">var(--muted-color)</property>
+  <property name="moon_display">none</property>
+  <property name="moon_background">transparent</property>
+  <property name="moon_color">var(--muted-color)</property>
+  <property name="earth_display">none</property>
+  <property name="earth_background">transparent</property>
+  <property name="earth_color">var(--muted-color)</property>
+
+  <node id="runtime-view-mode-root">
+    <text id="runtime-view-mode-label">View</text>
+    <button id="runtime-view-mode-surface" on_press="runtime_view_surface">
+      <text>Surface</text>
+    </button>
+    <button id="runtime-view-mode-moon" on_press="runtime_view_moon">
+      <text>Moon</text>
+    </button>
+    <button id="runtime-view-mode-earth" on_press="runtime_view_earth">
+      <text>Earth</text>
+    </button>
+  </node>
+</template>

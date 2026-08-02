@@ -165,9 +165,9 @@ pub enum SceneTarget {
 
 /// Per-panel screen-space rect, in *physical* pixels.
 ///
-/// Populated by `Panel::render` implementations that want to be
-/// camera-targetable ([`ViewportPanel`], the USD preview). Consumed by
-/// `resize_viewport_image` in `lunco-usd`.
+/// Populated by the active dock tab while it renders. Scene panels use these
+/// rects for camera/image sizing, and runtime-authored UI uses them to anchor
+/// a surface to an egui-dock panel without rebuilding the dock layout.
 ///
 /// Cleared at the top of every egui pass (`render_workbench`) and refilled by the
 /// panels that actually render, so a panel that left the layout (perspective

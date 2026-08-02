@@ -3,6 +3,8 @@
  * custom properties on the template root; no Rust system writes Node,
  * BackgroundColor, or TextColor after the template is built.
  */
+@import "ui/runtime_fonts.css";
+
 :root {
   --panel-background: rgba(24, 24, 37, 0.92);
   --panel-border: rgba(127, 212, 255, 0.55);

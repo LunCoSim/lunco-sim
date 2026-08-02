@@ -1,0 +1,58 @@
+@import "ui/runtime_fonts.css";
+
+:root {
+  --panel-background: rgba(24, 24, 37, 0.94);
+  --panel-border: rgba(127, 212, 255, 0.38);
+  --text-color: rgba(205, 214, 244, 1);
+  --muted-color: rgba(166, 173, 200, 1);
+  --accent-color: rgba(127, 212, 255, 1);
+  --ui-progress-width: 0%;
+}
+
+#scenario-download-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 24px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background-color: var(--panel-background);
+  color: var(--text-color);
+  font-family: "LunCo UI";
+  row-gap: 8px;
+}
+
+#scenario-download-title {
+  font-size: 16px;
+}
+
+#scenario-download-assets {
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+#scenario-download-track {
+  width: 260px;
+  height: 8px;
+  border-radius: 4px;
+  background-color: rgba(166, 173, 200, 0.20);
+  overflow: hidden;
+}
+
+#scenario-download-fill {
+  width: var(--ui-progress-width);
+  height: 8px;
+  border-radius: 4px;
+  background-color: var(--accent-color);
+}
+
+#scenario-download-value {
+  color: var(--accent-color);
+  font-size: 12px;
+}
+
+#scenario-download-caption {
+  color: var(--muted-color);
+  font-size: 11px;
+}

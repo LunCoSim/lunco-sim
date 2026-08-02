@@ -34,13 +34,9 @@ mod rhai_repl_panel;
 /// Generic retained HUI/Flair exposure boundary shared by runtime-authored
 /// templates and engine value producers.
 mod runtime_exposure;
-/// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
-/// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
-#[cfg(feature = "networking")]
-mod scenario_download;
-/// Centered "Generating terrain…" overlay during the initial DEM bake.
-mod terrain_progress;
-mod view_mode;
+/// Typed intent emitted by the authored terrain-progress surface.
+#[derive(Event, Clone, Debug)]
+struct DismissTerrainOverlay;
 
 /// The luncosim's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -90,6 +86,7 @@ impl Plugin for SandboxUiPlugin {
         app.add_plugins((
             bevy_hui::HuiPlugin,
             bevy_flair::FlairPlugin,
+            runtime_exposure::RuntimeUiManifestPlugin,
             bevy::pbr::wireframe::WireframePlugin::default(),
         ))
         // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
@@ -128,16 +125,33 @@ impl Plugin for SandboxUiPlugin {
             use lunco_settings::AppSettingsExt;
             use lunco_workbench::WorkbenchAppExt;
             app.register_settings_section::<lunco_settings::DownloadSettings>();
-            app.add_systems(Startup, spawn_vessel_surface);
+            app.init_resource::<runtime_exposure::RuntimeUiGates>();
+            app.add_systems(
+                Startup,
+                (
+                    runtime_exposure::load_runtime_ui_manifest,
+                    register_runtime_ui_actions,
+                ),
+            );
+            app.add_observer(on_runtime_ui_action)
+                .add_observer(on_dismiss_terrain_overlay);
             app.add_systems(
                 Update,
                 (
-                    runtime_exposure::bind_runtime_ui_to_camera,
+                    runtime_exposure::sync_runtime_ui_manifest,
+                    update_runtime_ui_gates,
+                    runtime_exposure::bind_runtime_ui_to_camera
+                        .after(runtime_exposure::sync_runtime_ui_manifest),
                     runtime_exposure::attach_runtime_ui_names
+                        .after(runtime_exposure::sync_runtime_ui_manifest)
                         .before(bevy_flair::style::StyleSystems::Prepare),
                     runtime_exposure::hand_runtime_ui_styling_to_flair
-                        .after(bevy_hui::HuiSystems::Style),
-                    runtime_exposure::apply_runtime_ui_exposures,
+                        .after(bevy_hui::HuiSystems::Style)
+                        .after(runtime_exposure::sync_runtime_ui_manifest),
+                    runtime_exposure::apply_runtime_ui_exposures
+                        .after(runtime_exposure::sync_runtime_ui_manifest),
+                    runtime_exposure::register_runtime_ui_input_regions
+                        .after(runtime_exposure::apply_runtime_ui_exposures),
                 ),
             );
             // Rover-specific panels and the attach-a-model click flow.
@@ -241,50 +255,15 @@ impl Plugin for SandboxUiPlugin {
             PostUpdate,
             spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback),
         )
-        // Centered "Generating terrain…" card during the initial DEM bake
-        // (heightmap decode + crater stamp), so the black startup viewport
-        // reads as progress. Clears itself once the bake finishes.
+        // The sky clock remains native egui because the deliberately minimal
+        // HUI contract has no equivalent text-input semantics for its UTC seek
+        // field. Its state still flows through the typed SetClock command.
         .add_systems(
             bevy_egui::EguiPrimaryContextPass,
-            (
-                terrain_progress::draw_terrain_progress,
-                // Surface ⇄ Moon ⇄ Earth switcher — appears only when the
-                // celestial hierarchy is live (the scene declared bodies).
-                //
-                // NOT while recording: these two are EDITOR chrome — they
-                // exist so an operator can retarget the view and scrub the
-                // sky clock. An offline take is film output, and a scene
-                // that declares celestial bodies (which any scene with a
-                // real sun now does) would otherwise burn a clock readout
-                // and a view switcher into every frame.
-                //
-                // Both are window-space `egui::Area`s, so they are also
-                // gated on the View perspective (`in_view_perspective`) —
-                // in an authoring perspective they painted straight across
-                // the docked panels.
-                // Both are also OPT-IN now (`OverlaySettings`, off by default,
-                // toggled from the Time menu). Permanent chrome over the
-                // viewport should be something you asked for; the sky clock's
-                // controls live in that menu regardless, so switching the pill
-                // off costs no capability.
-                view_mode::draw_view_mode_switcher
-                    .run_if(not(recording_offline))
-                    .run_if(in_view_perspective)
-                    .run_if(overlays::view_switcher_visible),
-                // Sky clock: rate + couple/detach for the CELESTIAL clock only
-                // (not the sim transport). Same visibility gate.
-                celestial_time::draw_celestial_time
-                    .run_if(not(recording_offline))
-                    .run_if(in_view_perspective)
-                    .run_if(overlays::sky_clock_visible),
-            ),
-        );
-        // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.
-        // Networking-only — the module is `#[cfg(feature = "networking")]`.
-        #[cfg(feature = "networking")]
-        app.add_systems(
-            bevy_egui::EguiPrimaryContextPass,
-            scenario_download::draw_scenario_download,
+            celestial_time::draw_celestial_time
+                .run_if(not(recording_offline))
+                .run_if(in_view_perspective)
+                .run_if(overlays::sky_clock_visible),
         );
 
         // Tutorial TRACKS come from the curriculum layer `TutorialCorePlugin`
@@ -335,43 +314,102 @@ impl Plugin for SandboxUiPlugin {
     }
 }
 
-/// Inserts the Castano 13-tap filter (`Gaussian`) on every 3D camera as it
-/// appears — `Hardware2x2` reads as visibly blocky stair-steps on terrain
-/// shadow edges under grazing lunar light. USD- and Avatar-spawned cameras
-/// land async over many frames; the `Without<ShadowFilteringMethod>` filter
-/// catches each exactly once.
-fn spawn_vessel_surface(mut commands: Commands, server: Res<AssetServer>) {
-    runtime_exposure::spawn_html_surface(
-        &mut commands,
-        &server,
-        "ui/rover_hud.html",
-        "ui/rover_hud.css",
-        "driven-vessel",
-        Some(lunco_workbench::PerspectiveId("sandbox_view")),
+fn register_runtime_ui_actions(mut functions: bevy_hui::prelude::HtmlFunctions) {
+    runtime_exposure::register_action(&mut functions, "runtime_view_surface", "view.surface");
+    runtime_exposure::register_action(&mut functions, "runtime_view_moon", "view.body.moon");
+    runtime_exposure::register_action(&mut functions, "runtime_view_earth", "view.body.earth");
+    runtime_exposure::register_action(
+        &mut functions,
+        "runtime_terrain_dismiss",
+        "overlay.terrain.dismiss",
     );
 }
 
-/// True while an offline take is capturing frames — the signal that "this
-/// viewport is the film, not the editor". Chrome that exists for an operator
-/// (view switcher, sky-clock scrubber) hides behind it; instrumentation that
-/// describes the VEHICLE does not.
-fn recording_offline(
-    state: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
-) -> bool {
-    state.is_some_and(|s| s.active)
+fn update_runtime_ui_gates(
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    overlays: Option<Res<overlays::OverlaySettings>>,
+    recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+    mut gates: ResMut<runtime_exposure::RuntimeUiGates>,
+    mut initialized: Local<bool>,
+) {
+    let changed = !*initialized
+        || layout.as_ref().is_some_and(|value| value.is_changed())
+        || overlays.as_ref().is_some_and(|value| value.is_changed())
+        || recording.as_ref().is_some_and(|value| value.is_changed());
+    if !changed {
+        return;
+    }
+    *initialized = true;
+    let in_view = layout.is_some_and(|value| {
+        value.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+    });
+    let overlay_enabled = overlays.is_some_and(|value| value.view_switcher);
+    let recording = recording.is_some_and(|value| value.active);
+    gates.set("view_switcher", in_view && overlay_enabled && !recording);
 }
 
-/// True only in the 🎬 View perspective — full-screen 3D, no dock.
-///
-/// The remaining floating overlays (view switcher and sky clock) are
-/// window-space `egui::Area`s. The driver HUD is a retained Bevy UI template,
-/// but follows the same perspective visibility boundary. All three know
-/// nothing about the dock and would paint over authoring panels, so they exist
-/// only where the whole window IS the viewport.
+fn recording_offline(
+    recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+) -> bool {
+    recording.is_some_and(|recording| recording.active)
+}
+
 fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) -> bool {
-    layout.is_some_and(|l| {
-        l.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+    layout.is_some_and(|layout| {
+        layout.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
     })
+}
+
+fn on_runtime_ui_action(
+    trigger: On<runtime_exposure::RuntimeUiAction>,
+    q_avatar: Query<(Entity, Option<&Camera>), With<lunco_core::Avatar>>,
+    q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
+    orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    mut commands: Commands,
+) {
+    match trigger.event().action.as_str() {
+        "view.surface" => {
+            if !orbital_pin.is_some_and(|pin| pin.active) {
+                return;
+            }
+            let avatar = q_avatar
+                .iter()
+                .find(|(_, camera)| camera.is_some_and(|camera| camera.is_active))
+                .or_else(|| q_avatar.iter().next())
+                .map(|(entity, _)| entity);
+            if let Some(target) = avatar {
+                commands.trigger(lunco_avatar::ReleaseVessel { target });
+            }
+        }
+        "view.body.moon" => runtime_focus_body(301, &q_bodies, &mut commands),
+        "view.body.earth" => runtime_focus_body(399, &q_bodies, &mut commands),
+        "overlay.terrain.dismiss" => commands.trigger(DismissTerrainOverlay),
+        action => warn!("unknown runtime UI action `{action}`"),
+    }
+}
+
+fn runtime_focus_body(
+    ephemeris_id: i32,
+    q_bodies: &Query<(Entity, &lunco_core::CelestialBody)>,
+    commands: &mut Commands,
+) {
+    if let Some((target, _)) = q_bodies
+        .iter()
+        .find(|(_, body)| body.ephemeris_id == ephemeris_id)
+    {
+        commands.trigger(lunco_avatar::FocusTarget {
+            avatar: None,
+            target,
+        });
+    }
+}
+
+fn on_dismiss_terrain_overlay(
+    _trigger: On<DismissTerrainOverlay>,
+    mut status: ResMut<lunco_terrain_surface::TerrainGenStatus>,
+) {
+    status.user_dismissed = true;
+    status.active = false;
 }
 
 fn force_hard_shadow_filtering(

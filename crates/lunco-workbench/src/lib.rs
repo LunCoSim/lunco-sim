@@ -634,7 +634,13 @@ impl Plugin for WorkbenchPlugin {
         #[cfg(feature = "api")]
         app.add_plugins(screenshot::ScreenshotPlugin);
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
-            app.add_plugins(bevy_egui::EguiPlugin::default());
+            app.add_plugins(bevy_egui::EguiPlugin {
+                // Runtime-authored HUI surfaces may be anchored to an egui-dock
+                // tab. They must paint above that tab to be a real replacement /
+                // customization surface rather than an invisible underlay.
+                ui_render_order: bevy_egui::UiRenderOrder::BevyUiAboveEgui,
+                ..Default::default()
+            });
         }
         app.add_systems(
             EguiPrimaryContextPass,
@@ -2766,12 +2772,24 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // render so even early-returning panels still register an
         // anchor for the current frame.
         let panel_rect = ui.max_rect();
+        let measured_panel_rect = viewport::PanelRects::panel_rect_from_ui(ui);
         let panel_key = match *tab {
             TabId::Singleton(id) => Some(format!("panel.{}", id.as_str())),
             TabId::Instance { kind, .. } => Some(format!("panel.{}", kind.as_str())),
         };
         if let (Some(mut a), Some(k)) = (self.world.get_resource_mut::<HelpAnchors>(), panel_key) {
             a.set(k, panel_rect);
+        }
+
+        // Publish the active tab's authoritative screen rect before rendering
+        // its contents. Camera/image panels and runtime-authored surfaces both
+        // consume this same geometry; neither needs to infer dock positions.
+        let panel_id = match *tab {
+            TabId::Singleton(id) => id,
+            TabId::Instance { kind, .. } => kind,
+        };
+        if let Some(mut rects) = self.world.get_resource_mut::<viewport::PanelRects>() {
+            rects.record(panel_id, measured_panel_rect);
         }
 
         match *tab {
