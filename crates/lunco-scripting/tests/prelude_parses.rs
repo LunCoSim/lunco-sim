@@ -126,6 +126,39 @@ fn policy_files_all_parse() {
     }
 }
 
+/// The direct-link policy is intentionally narrower than the generic geometry
+/// kernel: rover endpoints may use only Earth peers, and a failed geometry
+/// verdict must never be reopened by the role rule.
+#[test]
+fn link_policy_allows_rover_earth_only() {
+    let (_, src) = lunco_assets::scripting::policies()
+        .into_iter()
+        .find(|(stem, _)| *stem == "link")
+        .expect("link.rhai must be a shipped policy");
+    let engine = runtime_engine();
+    let ast = engine.compile(src).expect("link.rhai parses");
+
+    let cases = [
+        ("rover", "earth", true, true),
+        ("earth", "rover", true, true),
+        ("rover", "rover", true, false),
+        ("rover", "earth", false, false),
+        ("rover", "relay", true, false),
+        ("relay", "earth", true, true),
+    ];
+    for (class_a, class_b, builtin, expected) in cases {
+        let mut ctx = rhai::Map::new();
+        ctx.insert("class_a".into(), rhai::Dynamic::from(class_a));
+        ctx.insert("class_b".into(), rhai::Dynamic::from(class_b));
+        ctx.insert("builtin".into(), rhai::Dynamic::from_bool(builtin));
+        let mut scope = rhai::Scope::new();
+        let actual: bool = engine
+            .call_fn(&mut scope, &ast, "link_connected", (ctx,))
+            .unwrap_or_else(|e| panic!("link_connected({class_a}, {class_b}) failed: {e}"));
+        assert_eq!(actual, expected, "{class_a}↔{class_b}, builtin={builtin}");
+    }
+}
+
 /// The readiness policy and `lunco_readiness::Action::builtin` must AGREE.
 ///
 /// They are two statements of one rule — the Rust one runs when scripting is
