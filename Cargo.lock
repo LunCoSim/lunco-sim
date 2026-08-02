@@ -8106,6 +8106,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
+ "lunco-physics",
  "lunco-readiness",
  "lunco-render",
  "lunco-scripting",

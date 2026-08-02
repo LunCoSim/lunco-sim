@@ -166,6 +166,50 @@ fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String>
     Ok(profile)
 }
 
+/// Read the one explicit startup-scene argument, if present.
+///
+/// Startup has no scene default. Keeping this parser pure makes the empty-shell
+/// policy testable without constructing the renderer or a Bevy app.
+fn startup_scene_arg(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--scene")
+        .map(|pair| pair[1].clone())
+}
+
+#[cfg(test)]
+mod startup_scene_tests {
+    use super::startup_scene_arg;
+
+    #[test]
+    fn no_scene_argument_keeps_startup_empty() {
+        let args = [
+            "luncosim".to_string(),
+            "--api".to_string(),
+            "5544".to_string(),
+        ];
+        assert_eq!(startup_scene_arg(&args), None);
+    }
+
+    #[test]
+    fn explicit_scene_argument_is_preserved_verbatim() {
+        let args = [
+            "luncosim".to_string(),
+            "--scene".to_string(),
+            "/tmp/mission.usda".to_string(),
+        ];
+        assert_eq!(
+            startup_scene_arg(&args),
+            Some("/tmp/mission.usda".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_scene_value_does_not_create_a_default() {
+        let args = ["luncosim".to_string(), "--scene".to_string()];
+        assert_eq!(startup_scene_arg(&args), None);
+    }
+}
+
 #[cfg(test)]
 mod render_profile_tests {
     use super::*;
@@ -222,6 +266,8 @@ FLAGS:
                          POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
         --scene PATH     Load this USD scene at startup. PATH may be relative to
                          assets/, relative to the current directory, or absolute.
+                         Without --scene, start with an empty persistent world
+                         shell; the sandbox is an explicit scene/test fixture.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
         --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.btxml/.xml):
                          parse-only, no window/GPU/app. Prints a report and
@@ -2335,20 +2381,14 @@ impl Plugin for SandboxCorePlugin {
         // without networking; the activation projector is networking-gated for now.
         register_all_commands(app);
 
-        // `--scene <path>` overrides the default sandbox_scene.usda load. The
-        // resolver accepts the shipped asset-root spelling, a workspace/cwd
-        // relative path, or an absolute filesystem path. The latter two are
-        // required for running a custom Twin without copying it into assets/.
-        let scene_path = {
-            let mut s = "scenes/luncosim/sandbox_scene.usda".to_string();
-            for i in 0..args.len() {
-                if args[i] == "--scene" && i + 1 < args.len() {
-                    s = args[i + 1].clone();
-                    break;
-                }
-            }
-            s
-        };
+        // `--scene <path>` is an explicit startup request. With no argument
+        // the process owns only the persistent world shell; it must not
+        // silently mount the safety-test sandbox and fault the session before
+        // an API client has selected its scene. The resolver accepts the
+        // shipped asset-root spelling, a workspace/cwd relative path, or an
+        // absolute filesystem path. The latter two are required for running a
+        // custom Twin without copying it into assets/.
+        let scene_path = startup_scene_arg(&args);
 
         // Cap how much catchup `FixedUpdate` does after a slow frame. Default
         // Bevy behaviour: a 50ms frame breeds 3 catch-up fixed ticks next frame,
@@ -3610,10 +3650,11 @@ impl Plugin for SandboxHeadlessPlugin {
     }
 }
 
-/// Resource that holds the asset-source-relative path of the scene to load on
-/// Startup. Initialised from the `--scene` CLI arg by [`SandboxCorePlugin`].
+/// Resource that holds the optional asset-source-relative path of the scene to
+/// load on Startup. `None` means an intentionally empty world shell. It is
+/// initialised from the `--scene` CLI arg by [`SandboxCorePlugin`].
 #[derive(Resource)]
-pub struct ScenePath(pub String);
+pub struct ScenePath(pub Option<String>);
 
 // `set_parent_in_place` is `disallowed_methods`-banned for its atomicity
 // hazard (a `GridAnchor`/`RigidBody` parented after spawn can be mis-tagged
@@ -3622,7 +3663,7 @@ pub struct ScenePath(pub String);
 // apply. Locally allowed.
 #[allow(clippy::disallowed_methods)]
 fn setup_sandbox(world: &mut World) {
-    let scene_path: String = world.resource::<ScenePath>().0.clone();
+    let scene_path = world.resource::<ScenePath>().0.clone();
 
     // The persistent world shell (BigSpace root + `WorldGrid` + the single
     // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is a
@@ -3638,12 +3679,13 @@ fn setup_sandbox(world: &mut World) {
     let _grid = lunco_core::ensure_world_root(world);
 
     // ── Boot-entry policy (GUI only) ─────────────────────────────────────────
-    // Before loading the default scene, consult the shared boot policy
+    // Before loading a startup scene, consult the shared boot policy
     // (`boot.rhai`, via `lunco_tutorial::consult_boot`). On a first interactive
     // run it TAKES OVER — onboards with a tutorial that `load_scene`s its own
     // environment — so we skip the default load and there's no load-then-replace
-    // race. Explicit `--scene` / `--api` → the policy stands down and we load
-    // normally. Headless (no `ui`, no tutorial engine) never onboards → loads.
+    // race. Explicit `--scene` / `--api` → the policy stands down. With no
+    // scene, headless/API runs remain an empty world shell; GUI boot policy may
+    // still choose an onboarding scene for an interactive first run.
     // The world shell above is set up regardless, so a taking-over tutorial scene
     // still has it.
     #[cfg(feature = "ui")]
@@ -3663,7 +3705,9 @@ fn setup_sandbox(world: &mut World) {
     // → "Entity despawned" panic → aborted wasm → dark viewport. The filesystem
     // twin-resolve below is meaningless in the browser anyway (no `twin.toml` FS).
     #[cfg(not(target_arch = "wasm32"))]
-    load_startup_scene(world, scene_path);
+    if let Some(scene_path) = scene_path {
+        load_startup_scene(world, scene_path);
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (world, scene_path);
@@ -3780,17 +3824,17 @@ fn resolve_scene_cli_path(input: &str) -> std::path::PathBuf {
     lunco_assets::assets_dir_abs().join(path)
 }
 
-/// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a
-/// silent asset-load failure into a loud, fatal error. Removed once the scene
-/// has loaded (or failed), so later runtime `LoadScene`s (API / UI) — which
-/// must NOT crash the app on a bad request — are never affected.
+/// Tracks an explicitly requested startup scene so [`startup_scene_failguard`]
+/// can turn a silent asset-load failure into a loud, fatal error. Removed once
+/// the scene has loaded (or failed), so later runtime `LoadScene`s (API / UI) —
+/// which must NOT crash the app on a bad request — are never affected.
 #[derive(Resource)]
 struct StartupSceneGuard {
-    /// File name of the requested startup scene, e.g. `sandbox_scene.usda`.
+    /// File name of the explicitly requested startup scene.
     file: String,
 }
 
-/// Fail loud if the `--scene` (or default) USD scene fails to load at startup.
+/// Fail loud if the explicit `--scene` USD scene fails to load at startup.
 ///
 /// The bug this guards: `--scene` paths are relative to the `assets/` source
 /// root; prefixing `assets/` doubles it (`assets/assets/…`), the asset is not
