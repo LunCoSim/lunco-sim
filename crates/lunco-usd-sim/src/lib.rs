@@ -54,7 +54,7 @@ use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
-use lunco_usd_avian::ShouldBeDynamic;
+use lunco_usd_avian::{PendingJointAdmission, ShouldBeDynamic};
 use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
@@ -3029,6 +3029,7 @@ fn activate_dynamic_bodies(
     mut activation: ResMut<GroundActivationInFlight>,
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
+    q_pending_admissions: Query<&PendingJointAdmission>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     // Physical wheels arm their joint-connected assembly for one-time
     // drop-onto-terrain placement. Free dynamic bodies (balloons, etc.) must
@@ -3036,20 +3037,18 @@ fn activate_dynamic_bodies(
     // `PhysicsSupportFootprint` and placement policy from their physics owner.
     q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
-    // Ground still building → gravity would win the race; keep everything
-    // kinematic until the terrain collider lands.
-    if ground_pending.0 {
-        return;
-    }
     let mut promoted = false;
     for (entity, path) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints
             .iter()
             .any(|j_path| j_path.stage_handle == path.stage_handle);
+        let has_pending_admission = q_pending_admissions
+            .iter()
+            .any(|pending| pending.body0 == entity || pending.body1 == entity);
         let has_pending_diff = q_pending_diffs
             .iter()
             .any(|d_path| d_path.stage_handle == path.stage_handle);
-        if !has_pending_joint && !has_pending_diff {
+        if !ground_pending.0 && !has_pending_joint && !has_pending_admission && !has_pending_diff {
             // Despawn-safe: scene-load churn / doc-backed reload can despawn a
             // ShouldBeDynamic entity between this queue and `apply_deferred`; a plain
             // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
@@ -3150,6 +3149,75 @@ def Xform "Rover" {
             Some(&"/Rover/WheelJoint".to_string()),
             "a projection revision must rebuild a replacement stage"
         );
+    }
+}
+
+#[cfg(test)]
+mod dynamic_activation_tests {
+    use super::*;
+
+    #[test]
+    fn pending_typed_joint_keeps_only_its_bodies_kinematic_until_admission() {
+        let mut app = App::new();
+        app.init_resource::<GroundColliderPending>()
+            .init_resource::<GroundActivationInFlight>()
+            .add_systems(Update, activate_dynamic_bodies);
+
+        let stage = Handle::<UsdStageAsset>::default();
+        let body = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Rover".into(),
+                },
+                RigidBody::Kinematic,
+                ShouldBeDynamic,
+            ))
+            .id();
+        let unrelated = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/Other".into(),
+                },
+                RigidBody::Kinematic,
+                ShouldBeDynamic,
+            ))
+            .id();
+        let admission = app
+            .world_mut()
+            .spawn(PendingJointAdmission {
+                body0: body,
+                body1: body,
+            })
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<RigidBody>(body),
+            Some(&RigidBody::Kinematic),
+            "a body must not integrate while its typed joint is parked"
+        );
+        assert!(app.world().get::<ShouldBeDynamic>(body).is_some());
+        assert_eq!(
+            app.world().get::<RigidBody>(unrelated),
+            Some(&RigidBody::Dynamic),
+            "an unrelated articulated part must not wait on this joint"
+        );
+
+        app.world_mut()
+            .entity_mut(admission)
+            .remove::<PendingJointAdmission>();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<RigidBody>(body),
+            Some(&RigidBody::Dynamic),
+            "dynamic promotion resumes after joint admission"
+        );
+        assert!(app.world().get::<ShouldBeDynamic>(body).is_none());
     }
 }
 

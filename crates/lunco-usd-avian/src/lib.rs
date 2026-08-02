@@ -2461,11 +2461,14 @@ pub fn attach_joint<J: Component + Clone>(
     // be cleaned up afterwards without corrupting avian's island bookkeeping.
     // See `filtered_pairs::filter_pair`.
     filtered_pairs::filter_pair(commands, body0, body1);
-    commands.entity(joint_entity).try_insert(PendingJoint {
-        body0,
-        body1,
-        joint,
-    });
+    commands.entity(joint_entity).try_insert((
+        PendingJoint {
+            body0,
+            body1,
+            joint,
+        },
+        PendingJointAdmission { body0, body1 },
+    ));
 }
 
 /// The other half of [`attach_joint`]: installs parked joints once their bodies
@@ -2563,6 +2566,22 @@ pub struct PendingJoint<J: Component + Clone> {
     pub joint: J,
 }
 
+/// Cross-kind lifecycle marker for a joint parked by [`attach_joint`].
+///
+/// [`PendingJoint`] carries the typed constraint, so a consumer that needs to
+/// ask whether *any* native joint is still waiting would otherwise have to
+/// duplicate the complete list of Avian joint types. The endpoints are kept on
+/// this marker so the dynamic-admission gate can hold only the bodies belonging
+/// to this still-pending constraint; already-admitted parts of an articulated
+/// assembly must not drift while an unrelated joint catches up.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PendingJointAdmission {
+    /// First jointed body.
+    pub body0: Entity,
+    /// Second jointed body.
+    pub body1: Entity,
+}
+
 /// Install every [`PendingJoint<J>`] whose two bodies avian has admitted into
 /// its island graph, as one bundle with [`JointCollisionDisabled`].
 ///
@@ -2618,7 +2637,8 @@ pub fn admit_pending_joints<J: Component + Clone>(
         commands
             .entity(entity)
             .try_insert((p.joint.clone(), JointCollisionDisabled))
-            .try_remove::<PendingJoint<J>>();
+            .try_remove::<PendingJoint<J>>()
+            .try_remove::<PendingJointAdmission>();
     }
 }
 
