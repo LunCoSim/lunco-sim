@@ -1,6 +1,6 @@
 //! Schema discovery — tells API clients what commands exist.
 
-use crate::queries::ApiVisibility;
+use crate::queries::{ApiQueryRegistry, ApiVisibility};
 use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
 use bevy::prelude::*;
 use bevy::reflect::{TypeInfo, TypeRegistry};
@@ -56,13 +56,28 @@ pub fn discover_commands(
         .collect()
 }
 
+/// Discover data-returning query providers registered by the runtime.
+///
+/// Providers are intentionally represented by their stable names here. Their
+/// parameter and response contracts live with the provider implementation, and
+/// the result is still self-describing JSON. Sorting makes the wire schema
+/// stable despite the registry's hash-map storage.
+pub fn discover_queries(registry: Option<&ApiQueryRegistry>) -> Vec<String> {
+    let mut queries = registry
+        .map(|registry| registry.names().map(str::to_owned).collect::<Vec<_>>())
+        .unwrap_or_default();
+    queries.sort_unstable();
+    queries
+}
+
 /// Builds the API schema by introspecting the ECS world.
 pub fn discover_schema(world: &World) -> ApiSchema {
     let type_registry = world.resource::<AppTypeRegistry>();
     let registry_read = type_registry.read();
     let visibility = world.get_resource::<ApiVisibility>();
     let commands = discover_commands(&registry_read, visibility);
-    ApiSchema { commands }
+    let queries = discover_queries(world.get_resource::<ApiQueryRegistry>());
+    ApiSchema { commands, queries }
 }
 
 /// Plugin that registers schema discovery (no runtime systems needed).

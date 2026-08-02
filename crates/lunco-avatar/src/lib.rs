@@ -3358,9 +3358,8 @@ fn on_possess_command(
     // scenario drives the vessel through ports while an authored camera path
     // owns the camera, and the chase-camera bind below would land on that very
     // path-driven avatar and steal the shot. The `ControllerLink` is NOT camera
-    // work though — it is the control/telemetry binding the vessel HUD keys on
-    // (`draw_rover_hud` shows exactly when the avatar carries one) — so it is
-    // still bound before bailing.
+    // work though — it is the control/telemetry binding consumed by the generic
+    // exposure publisher and runtime HUD — so it is still bound before bailing.
     if !cmd.bind_camera {
         commands.entity(avatar_ent).try_insert(ControllerLink {
             vessel_entity: cmd.target,

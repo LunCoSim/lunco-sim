@@ -9,7 +9,7 @@
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use crate::{
-    discovery::discover_commands,
+    discovery::{discover_commands, discover_queries},
     queries::{ApiQueryRegistry, ApiVisibility},
     registry::ApiEntityRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
@@ -716,8 +716,13 @@ fn execute_request(
         }
         ApiRequest::DiscoverSchema => {
             let cmds = discover_commands(type_registry, Some(visibility));
+            let queries = discover_queries(Some(query_registry));
             Some(ApiResponse::ok(
-                serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default(),
+                serde_json::to_value(&ApiSchema {
+                    commands: cmds,
+                    queries,
+                })
+                .unwrap_or_default(),
             ))
         }
         ApiRequest::SubscribeTelemetry { filter } => {

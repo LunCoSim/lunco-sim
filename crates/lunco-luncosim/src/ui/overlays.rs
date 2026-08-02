@@ -44,11 +44,6 @@ pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool 
     settings.is_some_and(|s| s.sky_clock)
 }
 
-/// `run_if` for the view-mode switcher overlay.
-pub(crate) fn view_switcher_visible(settings: Option<Res<OverlaySettings>>) -> bool {
-    settings.is_some_and(|s| s.view_switcher)
-}
-
 /// Contribute the overlay checkboxes to the workbench Time menu, alongside the
 /// sky-clock controls themselves (`celestial_time::sky_clock_menu_ui`).
 ///

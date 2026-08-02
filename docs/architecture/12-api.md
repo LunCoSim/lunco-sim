@@ -515,6 +515,11 @@ See `crates/lunco-modelica/src/api_queries.rs` for examples and
 spec [`032-model-source-listing`](../../specs/032-model-source-listing/spec.md)
 for the design.
 
+The built-in `ReadExposures` query reads the domain-neutral
+`EngineExposures` registry used by runtime HTML/CSS surfaces and other
+clients. Its `revision` is the change-detection boundary; callers can poll
+without rebuilding unchanged views.
+
 **Adding a new typed command** (side-effect): follow the existing
 pattern in `skills/test-via-api/SKILL.md`.
 

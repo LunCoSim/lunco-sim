@@ -62,7 +62,7 @@ the MCP server for AI agents.
 - **The command set is discovered, not hard-coded.** New `#[Command]` types
   self-register; enumerate the live surface with `DiscoverSchema` (HTTP) or the
   `discover_schema` MCP tool. Built-in read queries: `ListEntities`,
-  `DiscoverSchema`, `QueryEntity`, plus extension queries (`ListBundled`,
+  `DiscoverSchema`, `QueryEntity`, `ReadExposures`, plus extension queries (`ListBundled`,
   `ListOpenDocuments`, `ListTwin`, `ListMsl`).
 - **Full API reference:** [`architecture/12-api.md`](../architecture/12-api.md)
   and [`crates/lunco-api/README.md`](../../crates/lunco-api/README.md).

@@ -1,0 +1,21 @@
+<template>
+  <property name="title">Preparing</property>
+  <property name="caption">Preparing terrain generation…</property>
+  <property name="progress_width">35%</property>
+  <property name="progress_text">working…</property>
+
+  <node id="terrain-progress-root">
+    <node id="terrain-progress-heading">
+      <text id="terrain-progress-spinner">•</text>
+      <text id="terrain-progress-title">{title}</text>
+    </node>
+    <node id="terrain-progress-track">
+      <node id="terrain-progress-fill" />
+    </node>
+    <text id="terrain-progress-value">{progress_text}</text>
+    <text id="terrain-progress-caption">{caption}</text>
+    <button id="terrain-progress-dismiss" on_press="runtime_terrain_dismiss">
+      Dismiss Overlay
+    </button>
+  </node>
+</template>

@@ -336,7 +336,79 @@ impl ApiQueryProvider for ReadinessProvider {
     }
 }
 
-pub fn register_builtin_spatial_queries(registry: &mut ApiQueryRegistry) {
+/// `ReadExposures` — reads the generic engine capability snapshot consumed by
+/// runtime UI surfaces, egui, telemetry tools, and remote clients.
+///
+/// params: `{ surface?: string }` · returns:
+/// `{ revision, surfaces: { <name>: { visible, properties: { <key>: value } } } }`
+///
+/// `revision` is the change-detection boundary owned by `EngineExposures`. A
+/// client can poll this query and skip rebuilding its view when the revision is
+/// unchanged. The optional filter avoids serializing unrelated surfaces for a
+/// narrow consumer while retaining one generic API contract.
+pub struct ReadExposuresProvider;
+impl ApiQueryProvider for ReadExposuresProvider {
+    fn name(&self) -> &'static str {
+        "ReadExposures"
+    }
+
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let surface_filter = match params.get("surface") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(name)) => Some(name.as_str()),
+            Some(_) => {
+                return ApiResponse::error(
+                    ApiErrorCode::DeserializationError,
+                    "ReadExposures: `surface` must be a string",
+                )
+            }
+        };
+
+        let Some(exposures) = world.get_resource::<lunco_core::exposure::EngineExposures>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "ReadExposures: EngineExposures resource is not present",
+            );
+        };
+
+        let surfaces = exposures
+            .surfaces
+            .iter()
+            .filter(|(name, _)| surface_filter.is_none_or(|filter| (*name).as_str() == filter))
+            .map(|(name, surface)| {
+                let properties = surface
+                    .properties
+                    .iter()
+                    .map(|(key, value)| (key.clone(), exposure_value_to_json(value)))
+                    .collect::<serde_json::Map<_, _>>();
+                (
+                    name.clone(),
+                    serde_json::json!({
+                        "visible": surface.visible,
+                        "properties": properties,
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+
+        ApiResponse::ok(serde_json::json!({
+            "revision": exposures.revision,
+            "surfaces": surfaces,
+        }))
+    }
+}
+
+fn exposure_value_to_json(value: &lunco_core::exposure::ExposureValue) -> serde_json::Value {
+    match value {
+        lunco_core::exposure::ExposureValue::Text(value) => serde_json::json!(value),
+        lunco_core::exposure::ExposureValue::Bool(value) => serde_json::json!(*value),
+        lunco_core::exposure::ExposureValue::Number(value) => serde_json::Number::from_f64(*value)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+    }
+}
+
+pub fn register_builtin_queries(registry: &mut ApiQueryRegistry) {
     registry.register(NearestProvider);
     registry.register(EntitiesInRadiusProvider);
     // Not spatial, but built-in and transform/physics-agnostic (it only reads the
@@ -345,6 +417,7 @@ pub fn register_builtin_spatial_queries(registry: &mut ApiQueryRegistry) {
     // Readiness status — backs `GET /api/ready`. Always available; degrades to
     // `readiness_tracked: false` when the readiness substrate isn't installed.
     registry.register(ReadinessProvider);
+    registry.register(ReadExposuresProvider);
 }
 
 // ─── ApiVisibility ─────────────────────────────────────────────────────
@@ -419,5 +492,66 @@ pub struct ApiVisibilityPlugin;
 impl Plugin for ApiVisibilityPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ApiVisibility>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_core::exposure::EngineExposures;
+
+    #[test]
+    fn read_exposures_returns_revision_and_typed_properties() {
+        let mut world = World::new();
+        let mut exposures = EngineExposures::default();
+        {
+            let mut surface = exposures.writer("hud");
+            surface.visible(true);
+            surface.property("label", "Rover");
+            surface.property("speed", 1.5_f64);
+            surface.property("active", true);
+        }
+        let revision = exposures.revision;
+        world.insert_resource(exposures);
+
+        let response = ReadExposuresProvider.execute(&mut world, &serde_json::json!({}));
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
+            panic!("ReadExposures did not return data");
+        };
+        assert_eq!(data["revision"], revision);
+        assert_eq!(data["surfaces"]["hud"]["visible"], true);
+        assert_eq!(data["surfaces"]["hud"]["properties"]["label"], "Rover");
+        assert_eq!(data["surfaces"]["hud"]["properties"]["speed"], 1.5);
+        assert_eq!(data["surfaces"]["hud"]["properties"]["active"], true);
+    }
+
+    #[test]
+    fn read_exposures_can_filter_one_surface() {
+        let mut world = World::new();
+        let mut exposures = EngineExposures::default();
+        exposures.writer("hud").visible(true);
+        exposures.writer("telemetry").visible(true);
+        world.insert_resource(exposures);
+
+        let response =
+            ReadExposuresProvider.execute(&mut world, &serde_json::json!({ "surface": "hud" }));
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
+            panic!("ReadExposures did not return data");
+        };
+        assert!(data["surfaces"].get("hud").is_some());
+        assert!(data["surfaces"].get("telemetry").is_none());
+    }
+
+    #[test]
+    fn builtin_queries_register_the_exposure_reader() {
+        let mut registry = ApiQueryRegistry::default();
+        register_builtin_queries(&mut registry);
+        assert!(registry.get("ReadExposures").is_some());
     }
 }

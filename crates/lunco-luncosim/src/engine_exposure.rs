@@ -17,10 +17,23 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
 use lunco_celestial::link::LinkState;
+use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
-use lunco_core::exposure::{EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureWriter};
-use lunco_core::{Avatar, GlobalEntityId};
+use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
+use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
 use lunco_mobility::WheelRaycast;
+
+/// Optional progress resources projected into generic runtime surfaces.
+///
+/// The values stay domain-neutral after this boundary: HUI and egui consumers
+/// receive the same named snapshot, while the terrain/networking crates retain
+/// ownership of how progress is calculated.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct RuntimeOverlayInputs<'w> {
+    terrain: Option<Res<'w, lunco_terrain_surface::TerrainGenStatus>>,
+    #[cfg(feature = "networking")]
+    scenario: Option<Res<'w, lunco_networking::scenario_sync::ScenarioDownloadStatus>>,
+}
 
 /// Fallback amber threshold, for a vessel whose limits cannot be derived.
 ///
@@ -636,6 +649,9 @@ pub(crate) fn mark_exposure_dirty(
     q_com: Query<(), Changed<ComputedCenterOfMass>>,
     q_sim: Query<(), Changed<SimComponent>>,
     q_autopilot: Query<(), Changed<Autopilot>>,
+    q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
+    orbital_pin: Option<Res<OrbitalViewPin>>,
+    overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
 ) {
     let changed = !q_avatar.is_empty()
@@ -645,9 +661,22 @@ pub(crate) fn mark_exposure_dirty(
         || !q_wheels.is_empty()
         || !q_com.is_empty()
         || !q_sim.is_empty()
-        || !q_autopilot.is_empty();
+        || !q_autopilot.is_empty()
+        || !q_bodies.is_empty()
+        || orbital_pin.is_some_and(|pin| pin.is_changed());
 
-    if changed {
+    let overlay_changed = overlays
+        .terrain
+        .as_ref()
+        .is_some_and(|status| status.is_changed());
+    #[cfg(feature = "networking")]
+    let overlay_changed = overlay_changed
+        || overlays
+            .scenario
+            .as_ref()
+            .is_some_and(|status| status.is_changed());
+
+    if changed || overlay_changed {
         refresh.dirty = true;
     }
 }
@@ -661,6 +690,8 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     timer: Local<'s, ExposureTimer>,
     refresh: ResMut<'w, ExposureRefresh>,
     exposures: ResMut<'w, EngineExposures>,
+    bodies: Query<'w, 's, &'static CelestialBody>,
+    orbital_pin: Option<Res<'w, OrbitalViewPin>>,
 }
 
 pub(crate) fn publish_exposure(
@@ -679,6 +710,7 @@ pub(crate) fn publish_exposure(
     q_sim: Query<(Entity, &SimComponent)>,
     geo: GeodeticHud,
     mut runtime: ExposureRuntime,
+    overlays: RuntimeOverlayInputs,
 ) {
     let timer_finished = runtime.timer.0.tick(runtime.time.delta()).just_finished();
     if !runtime.refresh.dirty || (!timer_finished && !runtime.refresh.first_update) {
@@ -707,6 +739,13 @@ pub(crate) fn publish_exposure(
         geo.bodies.as_deref(),
     ) else {
         ui.visible(false);
+        drop(ui);
+        publish_celestial_exposure(
+            &mut runtime.exposures,
+            &runtime.bodies,
+            runtime.orbital_pin.as_deref(),
+        );
+        publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
         return;
     };
 
@@ -716,6 +755,13 @@ pub(crate) fn publish_exposure(
         .any(|pilot| pilot.vessel == vessel.entity);
     ui.visible(true);
     publish_vessel_values(&mut ui, &vessel, autopilot);
+    drop(ui);
+    publish_celestial_exposure(
+        &mut runtime.exposures,
+        &runtime.bodies,
+        runtime.orbital_pin.as_deref(),
+    );
+    publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
 }
 
 struct ExposureTimer(Timer);
@@ -726,6 +772,151 @@ impl Default for ExposureTimer {
             1.0 / EXPOSURE_UPDATE_HZ,
             TimerMode::Repeating,
         ))
+    }
+}
+
+fn publish_celestial_exposure(
+    exposures: &mut EngineExposures,
+    bodies: &Query<&CelestialBody>,
+    orbital_pin: Option<&OrbitalViewPin>,
+) {
+    let mut moon = false;
+    let mut earth = false;
+    for body in bodies.iter() {
+        match body.ephemeris_id {
+            301 => moon = true,
+            399 => earth = true,
+            _ => {}
+        }
+    }
+
+    let active_body = orbital_pin.filter(|pin| pin.active).map(|pin| pin.body);
+    let mut ui = exposures.writer("celestial-view");
+    ui.visible(moon || earth);
+    ui.property(
+        "surface_background",
+        if active_body.is_none() {
+            "var(--accent-color)"
+        } else {
+            "transparent"
+        },
+    );
+    ui.property(
+        "surface_color",
+        if active_body.is_none() {
+            "var(--panel-background)"
+        } else {
+            "var(--muted-color)"
+        },
+    );
+    ui.property("moon_display", if moon { "flex" } else { "none" });
+    ui.property(
+        "moon_background",
+        if active_body == Some(301) {
+            "var(--accent-color)"
+        } else {
+            "transparent"
+        },
+    );
+    ui.property(
+        "moon_color",
+        if active_body == Some(301) {
+            "var(--panel-background)"
+        } else {
+            "var(--muted-color)"
+        },
+    );
+    ui.property("earth_display", if earth { "flex" } else { "none" });
+    ui.property(
+        "earth_background",
+        if active_body == Some(399) {
+            "var(--accent-color)"
+        } else {
+            "transparent"
+        },
+    );
+    ui.property(
+        "earth_color",
+        if active_body == Some(399) {
+            "var(--panel-background)"
+        } else {
+            "var(--muted-color)"
+        },
+    );
+}
+
+fn publish_runtime_overlay_exposures(
+    exposures: &mut EngineExposures,
+    overlays: &RuntimeOverlayInputs,
+) {
+    let mut terrain = exposures.writer("terrain-progress");
+    let terrain_active = overlays
+        .terrain
+        .as_deref()
+        .is_some_and(|status| status.active && !status.user_dismissed);
+    terrain.visible(terrain_active);
+    if let Some(status) = overlays.terrain.as_deref() {
+        let title = if status.site.is_empty() {
+            status.phase.label().to_owned()
+        } else {
+            format!("{} — {}", status.phase.label(), status.site)
+        };
+        terrain.property("title", title);
+        terrain.property("caption", status.phase.caption());
+        terrain.property(
+            "progress_width",
+            status.fraction.map_or_else(
+                || "35%".to_owned(),
+                |fraction| format!("{:.1}%", fraction * 100.0),
+            ),
+        );
+        terrain.property(
+            "progress_text",
+            status.fraction.map_or_else(
+                || "working…".to_owned(),
+                |fraction| format!("{:.0}%", fraction * 100.0),
+            ),
+        );
+    }
+    drop(terrain);
+
+    #[cfg(feature = "networking")]
+    {
+        let mut scenario = exposures.writer("scenario-download");
+        let active = overlays
+            .scenario
+            .as_deref()
+            .is_some_and(|status| status.active);
+        scenario.visible(active);
+        if let Some(status) = overlays.scenario.as_deref() {
+            scenario.property(
+                "title",
+                if status.name.is_empty() {
+                    "Downloading scenario".to_owned()
+                } else {
+                    format!("Downloading {}", status.name)
+                },
+            );
+            scenario.property(
+                "asset_count",
+                format!("{} / {} assets", status.assets_done, status.assets_total),
+            );
+            scenario.property(
+                "progress_width",
+                status.fraction().map_or_else(
+                    || "0%".to_owned(),
+                    |fraction| format!("{:.1}%", fraction * 100.0),
+                ),
+            );
+            scenario.property(
+                "progress_text",
+                format!(
+                    "{:.1} / {:.1} MB",
+                    status.bytes_done as f64 / (1024.0 * 1024.0),
+                    status.bytes_total as f64 / (1024.0 * 1024.0)
+                ),
+            );
+        }
     }
 }
 

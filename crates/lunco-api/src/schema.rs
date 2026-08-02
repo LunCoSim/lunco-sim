@@ -187,6 +187,10 @@ fn telemetry_value_to_json(value: &lunco_core::TelemetryValue) -> serde_json::Va
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiSchema {
     pub commands: Vec<CommandSchema>,
+    /// Names of data-returning query providers accepted by `ExecuteCommand`.
+    /// Query providers are runtime capabilities, so this list is discovered
+    /// from the same registry that executes them.
+    pub queries: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,0 +1,81 @@
+@import "ui/runtime_fonts.css";
+
+:root {
+  --panel-background: rgba(24, 24, 37, 0.94);
+  --panel-border: rgba(127, 212, 255, 0.38);
+  --text-color: rgba(205, 214, 244, 1);
+  --muted-color: rgba(166, 173, 200, 1);
+  --accent-color: rgba(127, 212, 255, 1);
+  --ui-progress-width: 35%;
+}
+
+#terrain-progress-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 24px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background-color: var(--panel-background);
+  color: var(--text-color);
+  font-family: "LunCo UI";
+  row-gap: 8px;
+}
+
+#terrain-progress-heading {
+  display: flex;
+  align-items: center;
+  column-gap: 8px;
+}
+
+#terrain-progress-spinner {
+  color: var(--accent-color);
+  font-size: 22px;
+}
+
+#terrain-progress-title {
+  font-size: 16px;
+}
+
+#terrain-progress-track {
+  width: 260px;
+  height: 8px;
+  border-radius: 4px;
+  background-color: rgba(166, 173, 200, 0.20);
+  overflow: hidden;
+}
+
+#terrain-progress-fill {
+  width: var(--ui-progress-width);
+  height: 8px;
+  border-radius: 4px;
+  background-color: var(--accent-color);
+}
+
+#terrain-progress-value {
+  color: var(--accent-color);
+  font-size: 12px;
+}
+
+#terrain-progress-caption {
+  color: var(--muted-color);
+  font-size: 11px;
+  text-align: center;
+}
+
+#terrain-progress-dismiss {
+  margin-top: 4px;
+  padding: 4px 10px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--muted-color);
+  font-size: 11px;
+}
+
+#terrain-progress-dismiss:hover {
+  background-color: rgba(127, 212, 255, 0.18);
+  color: var(--text-color);
+}

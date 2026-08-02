@@ -80,9 +80,24 @@ Returns all available commands with their field types:
         { "name": "steer", "type_name": "f64" }
       ]
     }
-  ]
+  ],
+  "queries": ["EntitiesInRadius", "GetReadiness", "Nearest", "ReadExposures", "ReadPorts"]
 }
 ```
+
+Data-returning queries use the same `POST /api/commands` envelope as commands.
+`ReadExposures` reads the generic runtime capability registry used by HTML/CSS
+surfaces and other clients:
+
+```json
+{
+  "command": "ReadExposures",
+  "params": { "surface": "hud" }
+}
+```
+
+The response contains the current `revision` and typed surface properties.
+Clients can avoid rebuilding a view while that revision is unchanged.
 
 ## Domain Observer Integration
 

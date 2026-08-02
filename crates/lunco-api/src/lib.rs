@@ -191,11 +191,10 @@ impl Plugin for LunCoApiPlugin {
         add_plugin_once::<ApiDiscoveryPlugin>(app, ApiDiscoveryPlugin);
         add_plugin_once::<ApiTelemetryPlugin>(app, ApiTelemetryPlugin);
 
-        // Built-in transform-only spatial query providers (Nearest,
-        // EntitiesInRadius) — reachable over the API and via the scripting
-        // `query()` verb. Physics-backed providers (Raycast) register the same
+        // Built-in query providers — reachable over the API and via the
+        // scripting `query()` verb. Domain-owned providers register the same
         // way from their owning crate.
-        queries::register_builtin_spatial_queries(
+        queries::register_builtin_queries(
             &mut app.world_mut().resource_mut::<queries::ApiQueryRegistry>(),
         );
 
