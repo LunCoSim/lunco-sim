@@ -101,11 +101,7 @@ fn find_libpython_linux() -> Option<std::path::PathBuf> {
 fn find_libpython_macos() -> Option<std::path::PathBuf> {
     find_libpython_via_python3().or_else(|| {
         let p = std::path::PathBuf::from("/usr/local/lib/libpython3.dylib");
-        if p.exists() {
-            Some(p)
-        } else {
-            None
-        }
+        if p.exists() { Some(p) } else { None }
     })
 }
 

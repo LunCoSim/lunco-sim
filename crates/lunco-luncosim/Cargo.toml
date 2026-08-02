@@ -118,6 +118,8 @@ lunco-experiments = { path = "../lunco-experiments" }
 # Result-artifact (de)serialization (RunResult ↔ JSON) for persistence. Core.
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-readiness = { workspace = true }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 # Tutorial execution is scenario runtime, so it stays available to headless

@@ -33,9 +33,35 @@ use lunco_core::{SessionId, TelemetryEvent};
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
+use crate::ScriptRegistry;
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::{ScriptLanguage, ScriptedModel};
-use crate::ScriptRegistry;
+
+/// Controls whether persistent scenario programs are allowed to attach and
+/// execute their lifecycle hooks.
+///
+/// The normal runtime leaves this enabled. Headless scene runners may disable
+/// it while an authored scene's asynchronous participants are being compiled
+/// and admitted, so `on_start` cannot begin measuring scenario time against a
+/// world that is still held for readiness. This is a lifecycle boundary, not a
+/// second pause mechanism: once enabled, the ordinary `ScriptedModel::paused`
+/// state remains the only per-program pause control.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScenarioExecutionGate {
+    /// Whether scenario attachment and lifecycle execution may proceed.
+    pub enabled: bool,
+}
+
+impl Default for ScenarioExecutionGate {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// Run condition for scenario lifecycle systems.
+pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
+    gate.map_or(true, |gate| gate.enabled)
+}
 
 /// The session a scenario acts on behalf of — captured at attach from the wire
 /// origin ([`lunco_core::session::SyncApplyGuard`]). `Some` only for a scenario

@@ -902,17 +902,19 @@ const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500)
 /// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
 /// minutes to an episode and burying the timeout `warn!` under false positives.
 ///
-/// Both entries are published by `lunco-luncosim`, which mirrors state this crate
+/// These entries are published by `lunco-luncosim`, which mirrors state this crate
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
 /// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
 /// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +
-/// `UsdAwaitingStage`). The entries are the SAME consts the publishers push under,
-/// not copies of their spelling — see
-/// [`TERRAIN_SOURCE`](crate::status_bus::TERRAIN_SOURCE) and
-/// [`SCENE_SOURCE`](crate::status_bus::SCENE_SOURCE).
+/// `UsdAwaitingStage`), plus Modelica participant state. The entries are the SAME
+/// consts the publishers push under, not copies of their spelling — see
+/// [`TERRAIN_SOURCE`](crate::status_bus::TERRAIN_SOURCE),
+/// [`SCENE_SOURCE`](crate::status_bus::SCENE_SOURCE), and
+/// [`MODELICA_SOURCE`](crate::status_bus::MODELICA_SOURCE).
 const VISUAL_BUSY_SOURCES: &[&str] = &[
     crate::status_bus::TERRAIN_SOURCE,
     crate::status_bus::SCENE_SOURCE,
+    crate::status_bus::MODELICA_SOURCE,
 ];
 
 /// **The one definition of "this scene is presentable".** Returns `None` when the

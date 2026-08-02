@@ -62,13 +62,16 @@ model Lander
 
   // ── Stability augmentation (RCS) ──
   input Real attitude_hold = 0.0 "1 = the RCS holds the vehicle upright and damps rotation, whoever is commanding. UNWIRED = 0 = bare airframe";
-  parameter Real hold_kp = 2.0 "Stabiliser stiffness: angular accel (rad/s^2) per unit tilt sine";
-  parameter Real hold_kd = 2.5 "Stabiliser damping: angular accel (rad/s^2) per rad/s. Chosen above 2*sqrt(hold_kp) so recovery is overdamped and never oscillates the shot";
+  input Real hold_kp = 2.0 "Stabiliser stiffness: angular accel (rad/s^2) per unit tilt sine";
+  input Real hold_kd = 2.5 "Stabiliser damping: angular accel (rad/s^2) per rad/s. Chosen above 2*sqrt(hold_kp) so recovery is overdamped and never oscillates the shot";
 
   // ── Outputs ──
   output Real force_x; output Real force_y; output Real force_z;
   output Real torque_x; output Real torque_y; output Real torque_z;
   output Real throttle "Effective throttle fraction 0..1 (telemetry / flame)";
+  output Real propellant_mass "Remaining propellant mass (kg)";
+  output Real propellant_used "Propellant consumed since start (kg)";
+  output Real propellant_flow "Current propellant flow (kg/s)";
   output Real low_fuel "Discrete 0/1 low-fuel signal";
   output Real depleted "Discrete 0/1 propellant-depleted signal";
   output Real touchdown "Discrete 0/1 touchdown signal from combined leg reactions";
@@ -172,7 +175,10 @@ equation
   torque_z = t_world_z + hold_z;
 
   thrust = sqrt(force_x*force_x + force_y*force_y + force_z*force_z);
-  der(m_prop) = -thrust / v_e;
+  propellant_flow = thrust / v_e;
+  der(m_prop) = -propellant_flow;
+  propellant_mass = max(0.0, m_prop);
+  propellant_used = max(0.0, 2000.0 - m_prop);
   throttle = thrust / max_thrust;
   low_fuel = max(0.0, min(1.0, 0.5 + 100.0 * (low_fuel_mass - m_prop)));
   depleted = max(0.0, min(1.0, 0.5 + 100.0 * (depleted_mass - m_prop)));

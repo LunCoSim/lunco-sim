@@ -2757,6 +2757,18 @@ impl Plugin for SandboxCorePlugin {
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
 
+        // Modelica participant readiness → status bus. The screenshot gate must
+        // not start a take while a USD-defined visual participant is still
+        // loading or compiling: its authored output (the lander's plume
+        // photometry is one example) is not live yet. This is a derived mirror
+        // of participant state, not a recorder-specific timer.
+        #[cfg(feature = "ui")]
+        app.add_systems(
+            Update,
+            report_modelica_status
+                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+        );
+
         // Hold each camera path at its first frame until the RECORDER rolls, so the
         // captured shot starts at the path's own frame 0.
         //
@@ -3159,6 +3171,54 @@ fn report_scene_spawn_status(
     }
 }
 
+/// Mirror USD-driven Modelica participant loading/compilation into the same
+/// status channel consumed by offline recording readiness.
+#[cfg(feature = "ui")]
+fn report_modelica_status(
+    pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
+    models: Query<
+        (
+            &lunco_modelica::ModelicaModel,
+            Option<&lunco_cosim::SimComponent>,
+        ),
+        With<lunco_usd_sim::cosim::UsdSourcedCosim>,
+    >,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    let Some(mut bus) = bus else { return };
+    const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
+
+    let pending = pending_sources.iter().count();
+    let compiling = models
+        .iter()
+        .filter(|(model, component)| {
+            model.is_compiling
+                || !model.is_compiled
+                || component.is_none()
+                || component
+                    .is_some_and(|sim| matches!(&sim.status, lunco_cosim::SimStatus::Compiling))
+        })
+        .count();
+
+    if pending > 0 {
+        bus.push_progress(
+            SOURCE,
+            format!("loading {pending} Modelica source(s)"),
+            0,
+            0,
+        );
+    } else if compiling > 0 {
+        bus.push_progress(
+            SOURCE,
+            format!("compiling {compiling} Modelica participant(s)"),
+            0,
+            0,
+        );
+    } else {
+        bus.clear_progress(SOURCE);
+    }
+}
+
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
@@ -3376,6 +3436,7 @@ impl Plugin for SandboxOffscreenPlugin {
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).
+        app.init_resource::<lunco_workbench::status_bus::StatusBus>();
         app.add_plugins(lunco_workbench::screenshot::ScreenshotPlugin);
 
         // No winit event loop, so tick the app ourselves — flat out, zero wait:
@@ -3393,7 +3454,7 @@ impl Plugin for SandboxOffscreenPlugin {
         app.add_systems(Startup, setup_offscreen_target);
         app.add_systems(
             Update,
-            (retarget_cameras_to_offscreen, activate_offscreen_camera),
+            (retarget_cameras_to_offscreen, activate_offscreen_camera).chain(),
         );
 
         info!(
@@ -3462,39 +3523,93 @@ fn retarget_cameras_to_offscreen(
 /// loud once-per-run warning rather than a silent black take.
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn activate_offscreen_camera(
-    mut cameras: Query<(Entity, &mut Camera, bevy::ecs::query::Has<Camera3d>)>,
-    scene_cams: Query<(), With<lunco_render::SceneCamera>>,
+    mut cameras: Query<(
+        Entity,
+        &mut Camera,
+        &bevy::camera::RenderTarget,
+        bevy::ecs::query::Has<Camera3d>,
+        bevy::ecs::query::Has<lunco_render::SceneCamera>,
+        bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
+    )>,
+    mut commands: Commands,
     mut warned: Local<bool>,
 ) {
-    // "Active" must mean RENDERING: a bare `Camera` with no `Camera3d` has no
-    // render graph and draws nothing (the avatar rig spawns one such), so it
-    // neither counts as coverage nor may keep the take black by squatting on
-    // the active slot.
-    if cameras
+    // The capture target has one owner.  In particular, do not preserve an
+    // arbitrary active Camera3d: the provisional avatar camera is deliberately
+    // active while the USD scene is loading, but the authored SceneCamera is the
+    // camera that the recording path drives.  Preserving the provisional camera
+    // here makes the path update one camera while the recorder renders another.
+    // That is the source of the sky-only first frame and the apparent sky/ground
+    // flicker in the marketing take.
+    //
+    // Prefer an already-active authored camera so a live camera switch survives
+    // this reconciliation.  If several are active, the entity order makes the
+    // result deterministic and the loop below turns all others off.
+    let active_authored = cameras
         .iter()
-        .any(|(_, c, has_pipeline)| c.is_active && has_pipeline)
-    {
-        return;
-    }
-    let target = cameras
-        .iter()
-        .find(|(e, _, has_pipeline)| *has_pipeline && scene_cams.contains(*e))
-        .map(|(e, ..)| e);
-    if let Some(target) = target {
-        for (e, mut cam, _) in &mut cameras {
-            if e == target {
-                info!("[offscreen] activating authored scene camera {e}");
-                cam.is_active = true;
-            } else if cam.is_active {
-                info!("[offscreen] deactivating non-rendering active camera {e}");
-                cam.is_active = false;
+        .filter(|(_, c, target, has_pipeline, has_scene, _)| {
+            c.is_active
+                && *has_pipeline
+                && *has_scene
+                && matches!(target, bevy::camera::RenderTarget::Image(_))
+        })
+        .map(|(entity, ..)| entity)
+        .min();
+    let selected = active_authored.or_else(|| {
+        cameras
+            .iter()
+            .filter(|(_, _, target, has_pipeline, has_scene, _)| {
+                *has_pipeline
+                    && *has_scene
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .map(|(entity, ..)| entity)
+            .min()
+    });
+
+    let mut has_image_camera = false;
+    for (entity, mut camera, target, has_pipeline, has_scene, has_lod_origin) in &mut cameras {
+        let is_image_camera =
+            has_pipeline && matches!(target, bevy::camera::RenderTarget::Image(_));
+        if !is_image_camera {
+            continue;
+        }
+        has_image_camera = true;
+
+        // A non-SceneCamera image target is never a capture owner.  It is
+        // explicitly deactivated even when no authored camera exists yet, so
+        // a provisional camera cannot take over again on the next frame.
+        let keep = has_scene && Some(entity) == selected;
+        if camera.is_active != keep {
+            camera.is_active = keep;
+            if keep {
+                info!("[offscreen] selected authored scene camera {entity}");
+            } else {
+                info!("[offscreen] disabled competing image camera {entity}");
             }
         }
-    } else if !*warned && !cameras.is_empty() {
+        if keep {
+            if !has_lod_origin {
+                commands
+                    .entity(entity)
+                    .try_insert(bevy::camera::ShadowLodOrigin);
+            }
+        } else if has_lod_origin {
+            commands
+                .entity(entity)
+                .try_remove::<bevy::camera::ShadowLodOrigin>();
+        }
+    }
+
+    if selected.is_none() && !*warned && has_image_camera {
         *warned = true;
         warn!(
-            "[offscreen] no renderable camera yet (SceneCamera binding pending or the \
-             scene authors none) — the recording stays black until one exists"
+            "[offscreen] no authored SceneCamera is ready; all competing image cameras are +             disabled and the recording remains black until a scene camera is bound"
+        );
+    } else if selected.is_none() && !*warned && !cameras.is_empty() {
+        *warned = true;
+        warn!(
+            "[offscreen] no renderable SceneCamera yet (binding pending or the scene +             authors none) — the recording stays black until one exists"
         );
     }
 }

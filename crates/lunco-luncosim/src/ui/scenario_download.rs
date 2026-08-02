@@ -6,7 +6,7 @@
 #![cfg(feature = "networking")]
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 
 use lunco_networking::scenario_sync::ScenarioDownloadStatus;
 

@@ -18,7 +18,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
-use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
+use lunco_core::exposure::{EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureWriter};
 use lunco_core::{Avatar, GlobalEntityId};
 use lunco_mobility::WheelRaycast;
 

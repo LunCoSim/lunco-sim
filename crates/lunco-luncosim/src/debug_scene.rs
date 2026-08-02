@@ -146,6 +146,8 @@ use bevy::time::TimeUpdateStrategy;
 
 use crate::SandboxHeadlessPlugin;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
+use lunco_modelica::ModelicaModel;
+use lunco_usd_sim::cosim::{PendingModelicaSource, UsdSourcedCosim};
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
 /// at 60 Hz — an order of magnitude more than any current parity scenario needs
@@ -448,58 +450,57 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     verdict.result = Some((name, passed));
 }
 
-// TEMP DIAG: full-state probe for the rover_comparison divergence window.
-// Prints the Easy chassis state and every Easy wheel's spin/ray state at full
-// f64 precision each tick within the window, so the first run-to-run bit
-// divergence can be localized to a tick and a DOF. REMOVE AFTER THE HUNT.
-fn probe_divergence_state(
-    time: Res<Time<Fixed>>,
-    q_chassis: Query<(
-        &lunco_usd::UsdPrimPath,
-        &avian3d::prelude::Position,
-        &avian3d::prelude::Rotation,
-        &avian3d::prelude::LinearVelocity,
-        &avian3d::prelude::AngularVelocity,
-    )>,
-    q_wheels: Query<(
-        &lunco_usd::UsdPrimPath,
-        &avian3d::prelude::Position,
-        &avian3d::prelude::LinearVelocity,
-        &avian3d::prelude::AngularVelocity,
-    )>,
-) {
-    let t = time.elapsed_secs_f64();
-    if !(4.0..=100.0).contains(&t) {
-        return;
+/// Whether every Modelica source in the composed scene has reached a terminal
+/// compile state. The source marker is included because the `ModelicaModel`
+/// component is created only after the async asset has loaded.
+fn modelica_sources_terminal(world: &mut World) -> bool {
+    let pending = world
+        .query_filtered::<(), (With<UsdSourcedCosim>, With<PendingModelicaSource>)>()
+        .iter(world)
+        .next()
+        .is_none();
+    if !pending {
+        return false;
     }
-    let Some((_, pos, rot, lv, av)) = q_chassis
-        .iter()
-        .find(|(p, ..)| p.path == "/RoverComparison/Easy")
-    else {
-        return;
+
+    let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
+    q.iter(world)
+        .all(|model| !model.is_compiling && (model.is_compiled || model.last_error.is_some()))
+}
+
+/// True once Modelica has produced its first live sample and all authored USD
+/// joints have crossed both deferred admission stages.
+fn participants_ready(world: &mut World) -> bool {
+    let models_ready = {
+        let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
+        q.iter(world).all(|model| {
+            model.last_error.is_none()
+                && model.is_compiled
+                && !model.paused
+                && model.current_time > 0.0
+                && !model.variables.is_empty()
+        })
     };
-    let p = pos.0;
-    let q = rot.0;
-    let vl = lv.0;
-    let va = av.0;
-    let mut line = format!(
-        "[probe] t={t:.12} p={:.17},{:.17},{:.17} q={:.17},{:.17},{:.17},{:.17} lv={:.17},{:.17},{:.17} av={:.17},{:.17},{:.17}",
-        p.x, p.y, p.z, q.x, q.y, q.z, q.w, vl.x, vl.y, vl.z, va.x, va.y, va.z
-    );
-    let mut wheels_found = 0usize;
-    for (wp, pos2, lv2, av2) in q_wheels.iter() {
-        if !wp.path.starts_with("/RoverComparison/Easy") || wp.path == "/RoverComparison/Easy" {
-            continue;
-        }
-        wheels_found += 1;
-        let last = wp.path.rsplit('/').next().unwrap_or("?");
-        line.push_str(&format!(
-            "  {last}:p={:.17},{:.17},{:.17} lv={:.17},{:.17},{:.17} av={:.17},{:.17},{:.17}",
-            pos2.0.x, pos2.0.y, pos2.0.z, lv2.0.x, lv2.0.y, lv2.0.z, av2.0.x, av2.0.y, av2.0.z
-        ));
+    if !models_ready {
+        return false;
     }
-    line.push_str(&format!("  [bodies={wheels_found}]"));
-    println!("{line}");
+
+    if world
+        .get_resource::<lunco_readiness::ReadinessState>()
+        .is_some_and(|state| state.world_hold || !state.held_entities.is_empty())
+    {
+        return false;
+    }
+
+    let mut q_pending = world.query_filtered::<(), Or<(
+        With<lunco_usd_avian::PendingUsdJoint>,
+        With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+        With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+        With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
+        With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
+        With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+    )>>();
+    q_pending.iter(world).next().is_none()
 }
 
 pub fn run() -> u8 {
@@ -586,6 +587,16 @@ pub fn run() -> u8 {
     app.finish();
     app.cleanup();
 
+    // A scene test starts its scenario only after the scene's asynchronous
+    // participants are live. The scripting plugin owns this lifecycle gate;
+    // the runner only sets its explicit test-time policy.
+    if let Some(mut gate) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
+    {
+        gate.enabled = false;
+    }
+
     // ── Scene-readiness freeze ────────────────────────────────────────────────
     //
     // The kinematic→dynamic activation gate (`GroundColliderPending`) clears
@@ -613,9 +624,9 @@ pub fn run() -> u8 {
     // is done", and the release tick depends only on scene content, never on
     // load scheduling.
     //
-    // Bounded: a scene whose gate never clears (unbridgeable prim, DEM bake
-    // held in flight) must fall back to the pre-existing behavior — start the
-    // clock and let the engine's own time-based gates take over.
+    // Bounded: a scene whose gate never clears is reported as a readiness
+    // failure below. Starting scenario time in that state would make a test
+    // verdict depend on wall-clock asset or compiler scheduling.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
     let load_waits = {
         const MAX_LOAD_WAIT_UPDATES: u32 = 60 * 60;
@@ -623,6 +634,7 @@ pub fn run() -> u8 {
         while waits < MAX_LOAD_WAIT_UPDATES {
             app.update();
             waits += 1;
+            std::thread::yield_now();
             // The startup `LoadScene` runs its first step on the very first
             // update; the stage asset and every referenced vessel stage land on
             // the wall clock after that. Until prims exist every readiness query
@@ -651,7 +663,11 @@ pub fn run() -> u8 {
                 .next()
                 .is_none();
             let gate_clear = !app.world().resource::<lunco_usd::GroundColliderPending>().0;
-            if load_finished && all_processed && gate_clear {
+            if load_finished
+                && all_processed
+                && gate_clear
+                && modelica_sources_terminal(app.world_mut())
+            {
                 break;
             }
             if app.should_exit().is_some() {
@@ -663,8 +679,43 @@ pub fn run() -> u8 {
     println!("[test] scene-readiness freeze held {load_waits} updates");
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
 
-    // TEMP DIAG: full-state probe around the comparison divergence window.
-    app.add_systems(Update, probe_divergence_state);
+    // Modelica compilation is asynchronous, and a successful compile still
+    // needs one live fixed-step exchange before readiness can release the
+    // body's physics hold. Run that exchange with scenario execution disabled;
+    // otherwise `on_start` would consume its authored settling interval while
+    // its joints are still parked and its force ports do not yet exist.
+    const MAX_PARTICIPANT_WAIT_UPDATES: u32 = 60 * 60;
+    let participant_waits = {
+        let mut waits = 0u32;
+        while waits < MAX_PARTICIPANT_WAIT_UPDATES {
+            if participants_ready(app.world_mut()) {
+                break;
+            }
+            app.update();
+            waits += 1;
+            std::thread::yield_now();
+            if app.should_exit().is_some() {
+                break;
+            }
+        }
+        waits
+    };
+    let participants_are_ready = participants_ready(app.world_mut());
+    println!("[test] participant-readiness warmup held {participant_waits} updates");
+    if !participants_are_ready {
+        println!(
+            "luncosim test NO-VERDICT  scene={}  — participant readiness did not complete \
+             before the bounded warmup",
+            cli.scene
+        );
+        return 2;
+    }
+    if let Some(mut gate) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
+    {
+        gate.enabled = true;
+    }
 
     let mut ticks = 0u64;
     let mut early_exit = false;

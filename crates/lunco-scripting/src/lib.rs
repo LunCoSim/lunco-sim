@@ -237,6 +237,9 @@ impl Plugin for LunCoScriptingPlugin {
 
         python::initialize_python();
 
+        #[cfg(any(feature = "rhai", feature = "python"))]
+        app.init_resource::<scenario::ScenarioExecutionGate>();
+
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);
         }
@@ -296,7 +299,10 @@ impl Plugin for LunCoScriptingPlugin {
             // errors land here and surface via the ScriptStatus query, exactly
             // like a rhai scenario's compile diagnostics.
             app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
-            app.add_systems(FixedUpdate, run_scripted_models);
+            app.add_systems(
+                FixedUpdate,
+                run_scripted_models.run_if(scenario::scenario_execution_enabled),
+            );
         }
 
         // World-bound rhai: a queue of (command_id, code) drained by an
@@ -374,22 +380,25 @@ impl Plugin for LunCoScriptingPlugin {
                     // file-loader/attach lifecycle, so external Twin rovers and
                     // runtime asset instances use the exact same path as authored
                     // rovers without mutating their source USD.
-                    commands::attach_rover_autonomy_paths,
+                    commands::attach_rover_autonomy_paths
+                        .run_if(scenario::scenario_execution_enabled),
                     // File-referenced scenarios (lunco:scriptPath): load the .rhai
                     // asset and swap the path marker for EmbeddedScenarioSource.
                     // Runs before attach so the loaded source attaches same frame.
-                    commands::resolve_embedded_scenario_paths,
+                    commands::resolve_embedded_scenario_paths
+                        .run_if(scenario::scenario_execution_enabled),
                     // USD-embedded scenarios: attach any the loader stamped with
                     // EmbeddedScenarioSource (lunco:script on the prim) so scene-
                     // authored scenarios run on spawn.
-                    commands::attach_embedded_scenarios,
+                    commands::attach_embedded_scenarios
+                        .run_if(scenario::scenario_execution_enabled),
                     // Persistent per-entity scenario lifecycle (neutral driver,
                     // rhai backend). Runs on EVERY peer now: the driver gates each
                     // entity by its `ScriptScope` (host-only by default), and a
                     // client-scoped scenario's `cmd()`s are restricted to the
                     // client-local surface — so a predicting client runs only
                     // presentation/HUD scripts, never authoritative sim mutation.
-                    world_bridge::tick_rhai_scenarios,
+                    world_bridge::tick_rhai_scenarios.run_if(scenario::scenario_execution_enabled),
                 ),
             );
         }

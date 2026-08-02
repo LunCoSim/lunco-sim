@@ -7,7 +7,7 @@
 //! compiled out but python is in, it falls back to the CPython path.
 
 use bevy::prelude::*;
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{Receiver, unbounded};
 #[cfg(all(feature = "python", not(feature = "rhai")))]
 use pyo3::prelude::*;
 #[cfg(all(feature = "python", not(feature = "rhai")))]

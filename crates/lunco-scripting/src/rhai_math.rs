@@ -119,11 +119,7 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn(
         "clamp",
         |x: f64, lo: f64, hi: f64| {
-            if x.is_nan() {
-                lo
-            } else {
-                x.clamp(lo, hi)
-            }
+            if x.is_nan() { lo } else { x.clamp(lo, hi) }
         },
     );
 

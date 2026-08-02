@@ -244,6 +244,12 @@ pub const TERRAIN_SOURCE: &str = "terrain";
 /// disagreement degrades into recordings that open on a half-spawned scene.
 pub const SCENE_SOURCE: &str = "scene";
 
+/// The status source for USD-driven Modelica participants. The luncosim
+/// composition root mirrors pending source loads and compiler states here so
+/// the offline recorder waits on the same lifecycle that holds a not-yet-
+/// runnable vehicle out of physics.
+pub const MODELICA_SOURCE: &str = "modelica";
+
 /// Workbench-wide status bus. Insert via [`StatusBusPlugin`].
 ///
 /// Carries two flavours of state — discrete history events (info / warn /

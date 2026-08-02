@@ -5,9 +5,9 @@ mod tests {
     #[cfg(feature = "python")]
     use crate::python::reflect::EntityProxy;
     #[cfg(feature = "python")]
-    use pyo3::prelude::*;
-    #[cfg(feature = "python")]
     use pyo3::IntoPyObjectExt;
+    #[cfg(feature = "python")]
+    use pyo3::prelude::*;
     #[cfg(feature = "python")]
     use std::ffi::CString;
 
