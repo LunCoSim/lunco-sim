@@ -1,55 +1,88 @@
 # Runtime UI assets
 
-These files are a small authored UI surface for the running Bevy client. They
-are not a browser document and do not support JavaScript, a DOM, or the full
-HTML/CSS standards.
+These files are authored retained Bevy UI surfaces for the running `luncosim`
+client. They are not browser documents: there is no DOM, JavaScript, network
+fetch, or full HTML/CSS implementation. The architecture and limitations are
+documented in [`docs/architecture/runtime-authored-ui.md`](../../docs/architecture/runtime-authored-ui.md).
 
-The supported HUD contract is intentionally narrow:
+## Stable surface contract
 
-- HUI template nodes: `<template>`, `<property>`, `<node>`, `<text>`, `id`, and
-  `{property}` interpolation.
-- Flair styling: `#id` selectors, `:root` variables, `var(...)`, flex layout,
-  absolute positioning, dimensions, spacing, borders, backgrounds, colors,
-  text size/weight/alignment, and `display`/visibility.
-- Runtime data: engine capabilities publish named snapshots through
-  `lunco_core::exposure::EngineExposures`; templates do not read ECS state or
-  mutate simulation state. Ports, telemetry, physics, scripts, and derived
-  capabilities use the same exposure boundary.
-- HUI callbacks are semantic runtime actions. The adapter emits a typed action
-  event; the host translates it into the existing command/event path. Authored
-  templates never query or mutate domain resources.
+Runtime templates currently rely on:
 
-Each exposed value is mirrored by the HTML adapter as a template property and
-as a CSS custom property named `--ui-<property-name>`. CSS variables are a
-presentation binding rule; the engine registry itself stores no CSS or HUI
-types.
+- HUI `<template>`, `<property>`, `<node>`, `<text>`, and `<button>` elements;
+- stable `id` values and `{property}` interpolation;
+- `on_press="callback_name"` for semantic actions;
+- Flair `#id` selectors, flex/limited grid layout, absolute positioning,
+  dimensions, spacing, borders, backgrounds, colors, text properties,
+  `display`, custom properties, and `var(...)`.
+
+HUI and Flair support additional features, but a feature outside this contract
+needs a real surface test before it becomes a shared interface convention.
+Forms, text inputs, DOM querying, JavaScript, accessibility semantics, and
+browser-style event propagation are not supplied by this layer.
+
+## Data and actions
+
+Engine capabilities publish named snapshots through
+`lunco_core::exposure::EngineExposures`. The template never reads ECS state or
+mutates simulation state. Ports, telemetry, physics, scripts, and derived
+capabilities use the same exposure boundary.
+
+Each exposed value is mirrored as a declared template property and as a CSS
+custom property named `--ui-<property-name>`. The registry stores typed values,
+not CSS or HUI types. A manifest binding may map exact rendered values such as
+`true`, `false`, or `301` into presentation values.
+
+HUI callbacks are semantic runtime actions. The manifest maps a callback name to
+an action string; the adapter emits a typed action event, and the host translates
+that action through the existing command/event path. Templates never inspect
+HTML ids or call domain resources.
+
+## Performance and placement
 
 The exposure registry is reactive: identical values do not advance its revision,
-and producers coalesce continuous changes to a bounded presentation cadence. HUI
-and Flair only apply a changed snapshot, asset reload, or surface-geometry change;
-they do not parse HTML/CSS on every render frame.
+and producers coalesce continuous changes to a bounded presentation cadence
+(currently 20 Hz). HUI/Flair only apply changed snapshots, asset reloads, or
+change-detected geometry; they do not parse HTML/CSS on every render frame.
+Optional surfaces mount lazily when their exposure, perspective, gate, and
+placement are valid.
 
-Runtime surfaces use the stable `WorkbenchEguiHost`/`PrimaryEguiContext` camera.
-Full-window View surfaces occupy the window. Docked surfaces use the workbench's
-authoritative `PanelRects` rectangle and existing egui scene-pick ownership;
-they do not duplicate dock widths, reconstruct egui hit regions, or spawn a
-second UI camera.
+Runtime surfaces use the existing `WorkbenchEguiHost`/`PrimaryEguiContext`
+camera. Full-window surfaces occupy the window. Docked surfaces use the
+workbench's authoritative `PanelRects` rectangle and existing scene-pick
+ownership; they do not duplicate dock widths, reconstruct egui hit regions, or
+spawn a second UI camera. The manifest owns the outer rectangle and CSS owns
+the contents. Placement is reapplied after HUI/Flair style changes through change
+detection, not by a per-frame correction loop.
 
-Runtime styles import `runtime_fonts.css`, which selects the bundled Fira Sans
-asset as the deterministic UI font. Bevy's minimal `default_font` is ASCII-only;
-runtime-authored telemetry must not depend on a host-installed font or render
-Unicode symbols as tofu.
+## Fonts and theme
 
-The shipped runtime surfaces include the rover HUD, celestial view switcher,
-terrain-generation progress card, and networking scenario-download progress
-card. Rich text editors and the UTC date field remain workbench-owned egui
-panels until the minimal runtime contract grows explicit text-input semantics.
+Runtime styles should import `runtime_fonts.css`, which selects the bundled Fira
+Sans asset. Bevy's minimal `default_font` does not cover the Unicode glyphs
+needed by many telemetry/status surfaces; do not depend on a host-installed font.
 
-Theme colors are authored CSS custom-property defaults for HTML surfaces. The
-engine still owns semantic theme selection for non-HTML consumers, but it does
-not overwrite an HTML stylesheet's color variables on every update.
+HTML surface colors, spacing, and rounding are authored CSS custom-property
+defaults. `lunco-theme` remains the semantic theme source for egui/workbench
+consumers, but it does not overwrite HTML stylesheet variables every frame.
 
-The desktop GUI watches these assets. Editing the template or stylesheet emits
-an asset modification event and rebuilds/restyles the retained Bevy UI tree
-without relaunching the simulation. The headless/server feature does not link
-this UI or its file watcher.
+## Reloading
+
+On native desktop, the asset watcher handles the following without relaunching:
+
+| Edit | Result |
+|---|---|
+| `*.html` | Rebuilds the affected retained surface tree. |
+| `*.css` or an imported stylesheet | Reapplies Flair styles. |
+| `runtime_surfaces.json` | Replaces registered roots and action mappings. |
+| `runtime_fonts.css` | Reapplies the font stylesheet; verify the font asset exists. |
+
+Changing Rust producers or action observers still requires a rebuilt binary and
+a controlled session replacement. `ReloadShader` and `RunScenario` reload
+other systems and do not reload HTML/CSS. The headless/server feature does not
+link this UI or its file watcher; web builds use the normal bundled-asset cache
+workflow.
+
+The shipped surfaces are the rover HUD, celestial view switcher, terrain
+progress card, and networking scenario-download card. Rich text editors and
+UTC date editing remain workbench-owned egui panels until explicit text-input
+semantics are added to this contract.

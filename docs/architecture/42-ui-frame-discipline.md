@@ -31,6 +31,12 @@ heavyweight egui UI on top. The frame budget is shared — UI work that
 looks "cheap in isolation" still competes with the physics step and
 the renderer every tick. Three rules:
 
+For Twin-facing retained HTML/CSS-like surfaces, see
+[`runtime-authored-ui.md`](runtime-authored-ui.md) for the HUI/Flair contract,
+reload loop, and exposure revision boundary. The same frame-budget rules apply:
+the authored surface avoids unnecessary rebuilds, but it is still part of the
+rendered UI and must be measured with the rest of the frame.
+
 ## 1. Per-frame work is the anti-default
 Bevy makes it easy to write `Update` systems that do work every tick.
 **Do not treat that as the right shape for UI state.** A system that

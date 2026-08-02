@@ -19,6 +19,7 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 | Build a mission end-to-end | [`tutorials/`](tutorials/README.md) |
 | Write rhai behaviour | [`scripting-guide.md`](scripting-guide.md) · [`behaviour-trees.md`](behaviour-trees.md) |
 | Build a rover or lander | [`architecture/55-building-vessels-rovers-and-landers.md`](architecture/55-building-vessels-rovers-and-landers.md) |
+| Build a Twin-facing HTML/CSS surface | [`architecture/runtime-authored-ui.md`](architecture/runtime-authored-ui.md) · [`../skills/runtime-ui/SKILL.md`](../skills/runtime-ui/SKILL.md) |
 | Record a video / frame-exact capture | [`offline-recording.md`](offline-recording.md) |
 | Understand how it all fits together | [`architecture/README.md`](architecture/README.md) |
 | Know the rules before writing code | [`principles.md`](principles.md) · [`../AGENTS.md`](../AGENTS.md) |
@@ -59,6 +60,7 @@ The full catalogue with trigger phrases is in
 | [compose-multidomain-twin](../skills/compose-multidomain-twin/SKILL.md) | Assemble USD + Modelica + cosim + rhai into a Twin |
 | [inspect-simulation](../skills/inspect-simulation/SKILL.md) | Observe a running sim — ports, variables, screenshots |
 | [test-via-api](../skills/test-via-api/SKILL.md) | Verify a change without asking a human to click |
+| [runtime-ui](../skills/runtime-ui/SKILL.md) | Author reloadable Twin-facing HTML/CSS-like runtime surfaces |
 
 ## Documentation map
 

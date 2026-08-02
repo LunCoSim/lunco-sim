@@ -54,6 +54,7 @@ one directly when doing that kind of task by hand.
 |---|---|
 | [**lunco-ui**](lunco-ui/SKILL.md) | Build workbench panels using the reactive `Panel`/widget patterns |
 | [**lunco-theme**](lunco-theme/SKILL.md) | Use the centralized design tokens (colours, schematic palette) |
+| [**runtime-ui**](runtime-ui/SKILL.md) | Author a reloadable Twin-facing HTML/CSS-like surface, bind engine capabilities, or add a semantic runtime UI action |
 
 ## Work at scale
 

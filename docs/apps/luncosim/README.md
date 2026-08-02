@@ -17,6 +17,21 @@
   this way; see the [Cosim walkthrough](../../tutorials/03-cosim.md).
 - **Networked Play**: Can act as a listen-server or client for multiplayer testing.
 
+## Runtime-authored UI
+
+Twin-facing HUDs and lightweight overlays can be authored under `assets/ui/`
+with the retained HTML/CSS-like surface layer. Start with the
+[runtime-authored UI architecture guide](../../architecture/runtime-authored-ui.md)
+and the [runtime UI skill](../../../skills/runtime-ui/SKILL.md). Edit the HTML
+or CSS while a native `luncosim` session is running; the asset watcher reloads
+those files without rebuilding or relaunching the simulator. Engine values must
+be published through the generic `EngineExposures` capability registry, and
+buttons map to semantic actions handled by the existing typed command path.
+
+This is a small native UI language, not browser HTML: use the workbench/egui
+panels for rich editors, text input, large inspectors, and controls whose
+semantics are not in the runtime surface contract.
+
 ## Workspaces
 
 The luncosim has two workspaces, switched via the tabs at the top of the window:

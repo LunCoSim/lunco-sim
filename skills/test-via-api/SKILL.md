@@ -31,6 +31,33 @@ path reloads the standard shader set; pass `shaders/starfield.wgsl` to limit the
 Confirm the command result and inspect the unchanged window. Do not relaunch the app just
 to pick up a starfield or material edit.
 
+## Live runtime HTML/CSS iteration
+
+The native `luncosim` UI watches the retained runtime surfaces under
+`assets/ui/`. Edit a surface's `.html` or `.css` in place and inspect the same
+window; HUI rebuilds the affected template and Flair reapplies the stylesheet
+without a binary rebuild or relaunch. Editing `runtime_surfaces.json` rebuilds
+the registered surface roots and action bindings. Rust exposure producers and
+action observers still require a rebuilt production binary.
+
+Use `ReadExposures` to verify the data side independently of the pixels:
+
+```bash
+curl -s -X POST http://127.0.0.1:4101/api/commands \
+  -H 'content-type: application/json' \
+  -d '{"command":"ReadExposures","params":{"surface":"driven-vessel"}}' | jq .
+```
+
+The response's `revision` changes only when an exposed value or visibility flag
+changes. If it is stable, an unchanged runtime surface should not rebuild its
+view-model. Use `CaptureScreenshot` for the visual check. `ReloadShader` and
+`RunScenario` reload WGSL and Rhai respectively; neither reloads HTML/CSS.
+
+Runtime UI is a small native HUI/Flair language, not a browser DOM. Do not
+expect JavaScript, forms, text inputs, full CSS, or host-font fallback. Read the
+[runtime UI skill](../runtime-ui/SKILL.md) for the supported surface contract,
+placement/dock ownership, font rules, and performance gates.
+
 ## Session lifecycle
 
 Before launching another luncosim, send `Exit` to the previous API session and verify that

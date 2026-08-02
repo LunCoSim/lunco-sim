@@ -32,6 +32,20 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`, the in-house replacement for the old external `bevy_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
+## Runtime-authored HTML/CSS surfaces
+
+For a Twin-facing HUD, telemetry card, progress overlay, or simple runtime
+control that should change without a Rust rebuild, use the dedicated
+[runtime-ui skill](../runtime-ui/SKILL.md) and
+[`docs/architecture/runtime-authored-ui.md`](../../docs/architecture/runtime-authored-ui.md).
+
+This is a separate presentation path built on HUI/Flair. It uses the generic
+`EngineExposures` capability registry, the existing `WorkbenchEguiHost` camera,
+and the workbench's authoritative dock/pick geometry. It does not replace
+`Panel`/egui, create a second UI camera, or permit templates to mutate domain
+state. Use this skill for workbench panels and use `runtime-ui` for authored
+HTML/CSS surfaces; do not create a hybrid shim for one widget.
+
 ## Adding a Panel
 
 ```rust

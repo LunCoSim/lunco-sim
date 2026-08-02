@@ -46,6 +46,16 @@ decision guide for *where* colors/spacing come from in this repo.
    `theme.rounding`**, not ad-hoc `4.0` / `6.0` / `Margin::same(8.0)`
    literals.
 
+### Runtime-authored HTML/CSS surfaces
+
+Runtime surfaces under `assets/ui/` are the explicit exception to the egui
+consumer rules above: their authored presentation belongs in Flair CSS. Put
+surface colors, spacing, and rounding in CSS custom-property defaults and use
+`--ui-<property>` bindings for engine-driven state. Do not add a Rust system
+that copies `Theme` fields into the HTML tree every frame. `Theme` remains the
+semantic source for egui/workbench consumers; the runtime HTML contract keeps
+its own reloadable CSS presentation boundary.
+
 ## Tier guide
 
 Four tiers. Always work at the highest (most specific) tier that fits.

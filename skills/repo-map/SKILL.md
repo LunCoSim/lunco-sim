@@ -33,10 +33,10 @@ When those disagree with anything here, they win.
 | Dir | What's in it |
 |---|---|
 | `crates/` | All Rust code — libraries **and** the app binaries (there is **no `apps/` dir**). |
-| `assets/` | Runtime data: `scenes/` (USD), `models/` (Modelica `.mo`), `scripting/` (rhai prelude/examples/tools), `tutorials/`, `vessels/`, `shaders/`, `props/`, `missions/`, `config/`. |
+| `assets/` | Runtime data: `scenes/` (USD), `models/` (Modelica `.mo`), `scripting/` (rhai prelude/examples/tools), `tutorials/`, `ui/` (runtime-authored HTML/CSS-like surfaces), `vessels/`, `shaders/`, `props/`, `missions/`, `config/`. |
 | `docs/` | `architecture/` (numbered design docs), `apps/`, `tutorials/`, `crates-index.md`, `scripting-guide.md`, `principles.md`. |
 | `specs/` | Numbered feature specs (`NNN-name/spec.md`) — the *intent* behind subsystems. |
-| `skills/` | Agent skills (this one, `author-scenario`, `authoring-vessel-controllers`, `run-modelica`, `test-via-api`, `lunco-ui`, `lunco-theme`). |
+| `skills/` | Agent skills (this one, `author-scenario`, `authoring-vessel-controllers`, `run-modelica`, `test-via-api`, `lunco-ui`, `runtime-ui`, `lunco-theme`). |
 | `mcp/` | Node MCP server wrapping the HTTP API as tools for AI agents. |
 | `scripts/` | `build*.sh`, `check_*.sh` (lints/wasm), `api/` (HTTP helpers), `deploy/`, `perf/`. |
 
@@ -111,6 +111,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | Which crate owns a responsibility | `docs/crates-index.md` |
 | How to run/launch anything | `docs/apps/README.md` |
 | Writing rover/vehicle behavior (rhai) | skill `author-scenario` + `docs/scripting-guide.md` |
+| Authoring a reloadable Twin-facing UI | skill `runtime-ui` + `docs/architecture/runtime-authored-ui.md` |
 | A self-driving vessel / GNC / autopilot | skill `authoring-vessel-controllers` |
 | Running Modelica / experiments over the API | skill `run-modelica` |
 | Verifying a change end-to-end via the API | skill `test-via-api` |
