@@ -68,6 +68,16 @@ pub struct InteractionSchedule;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InteractionStepSet;
 
+/// Render-rate systems that consume the final body pose after interaction and
+/// physics interpolation have completed.
+///
+/// Systems that follow a rendered body belong after this set.  They must not
+/// use the stepped interaction clock and then add a second interpolation pass:
+/// that samples the body and the camera in different phases and makes the
+/// camera-visible body oscillate even when the solved body pose is stable.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InteractionRenderSet;
+
 /// System set (inside [`InteractionSchedule`], runs FIRST) that restores each eased
 /// entity's *authoritative* stepped pose before the step's writers run — undoing the
 /// previous frame's render interpolation so the sim never reads its own smoothing.
@@ -254,7 +264,7 @@ pub(crate) fn build_interaction_cadence(app: &mut App) {
                 // The step runner FIRST (drains wall time → N steps, updates
                 // `overstep_fraction`), then the render-rate ease using it.
                 run_interaction_schedule.in_set(InteractionStepSet),
-                ease_interaction_poses,
+                ease_interaction_poses.in_set(InteractionRenderSet),
             )
                 .chain()
                 .before(bevy::transform::TransformSystems::Propagate),

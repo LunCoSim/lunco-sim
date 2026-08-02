@@ -32,8 +32,8 @@ pub use domain::*;
 
 pub mod interaction;
 pub use interaction::{
-    Interaction, InteractionEased, InteractionRecordSet, InteractionRestoreSet,
-    InteractionSchedule, InteractionStep, InteractionStepSet,
+    Interaction, InteractionEased, InteractionRecordSet, InteractionRenderSet,
+    InteractionRestoreSet, InteractionSchedule, InteractionStep, InteractionStepSet,
 };
 
 pub mod scales;

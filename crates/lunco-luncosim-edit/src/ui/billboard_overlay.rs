@@ -10,13 +10,13 @@
 //!
 //! ## Two things this must get right
 //!
-//! **big_space.** Positions come from [`lunco_core::coords::world_position`]
-//! (`cell × edge + local`), and projection is done camera-RELATIVE: the offset
-//! from camera to label is computed in `f64`, narrowed to `f32` only once it is
-//! small, and added to the camera's own transform. Projecting an absolute
-//! world position instead would lose metres of precision at kilometre range —
-//! the exact failure the float-origin hierarchy exists to prevent — and labels
-//! would visibly swim against the geometry they name.
+//! **big_space.** Projection uses the subject's and camera's
+//! [`GlobalTransform`] values from the same render frame. Those are the exact
+//! camera-relative poses used by the mesh renderer, so a label cannot combine
+//! an interpolated render pose with an independently sampled grid pose. The
+//! absolute [`lunco_core::coords::world_position`] path is retained only for
+//! geodetic text (`{lat}`, `{lon}`, `{height}`), where authored coordinates are
+//! intentionally reported in the simulation frame rather than the render frame.
 //!
 //! **Depth.** egui paints over everything, so a label whose subject is behind a
 //! ridge would otherwise still be readable. Labels are drawn nearest-last, and
@@ -24,10 +24,16 @@
 //! need a depth read this overlay does not have; the honest mitigation is the
 //! distance cut plus a backdrop chip so text never dissolves into terrain.
 
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, UsdBillboard};
+
+/// Resolve the screen-space anchor from the same render pose as the subject's
+/// mesh. Keeping this small and explicit prevents callers from accidentally
+/// substituting an authoritative grid pose during visual projection.
+fn render_anchor(gtf: &GlobalTransform, offset_y: f32) -> Vec3 {
+    gtf.translation() + Vec3::Y * offset_y
+}
 
 /// The egui layer every **world-space overlay** paints into: labels, numbers and
 /// gizmo text that annotate the 3D scene.
@@ -68,8 +74,9 @@ pub fn draw_billboard_overlay(
         &Name,
         Option<&ViewVisibility>,
         Option<&lunco_core::markers::Callsign>,
+        &GlobalTransform,
     )>,
-    q_camera: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
+    q_camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
@@ -81,7 +88,7 @@ pub fn draw_billboard_overlay(
     if q_billboards.is_empty() {
         return;
     }
-    let Some((cam_entity, camera, cam_gtf)) = q_camera.iter().find(|(_, c, _)| c.is_active) else {
+    let Some((camera, cam_gtf)) = q_camera.iter().find(|(c, _)| c.is_active) else {
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
@@ -89,11 +96,6 @@ pub fn draw_billboard_overlay(
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
-
-    let cam_world =
-        lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
-            .map(|p| p.0)
-            .unwrap_or(DVec3::ZERO);
 
     // Site anchor + body radius, resolved ONCE — every label on screen shares
     // them, and they cannot change within a frame.
@@ -124,26 +126,33 @@ pub fn draw_billboard_overlay(
     }
     let mut drawn: Vec<Drawn> = Vec::new();
 
-    for (entity, bb, name, vis, callsign) in &q_billboards {
+    for (entity, bb, name, vis, callsign, gtf) in &q_billboards {
         // An entity culled or explicitly hidden must not keep a floating label.
         if vis.is_some_and(|v| !v.get()) {
             continue;
         }
+        // The render pose is the billboard's own GlobalTransform, not a
+        // second reconstruction from `(CellCoord, Transform)`. Avian/big_space
+        // may ease/rebase those authoritative components between simulation
+        // ticks; reconstructing them here while projecting through the
+        // camera's already-propagated GlobalTransform mixes two pose phases
+        // and makes a label jitter against the body it annotates.
+        let anchor_render = render_anchor(gtf, bb.offset_y);
         let Some(pos) =
             lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
         else {
             continue;
         };
-        let anchor_world = pos.0 + DVec3::Y * bb.offset_y as f64;
-        let distance = (anchor_world - cam_world).length();
+        let distance = (anchor_render - cam_gtf.translation()).length() as f64;
         if distance > bb.fade_end as f64 {
             continue;
         }
 
-        // Camera-relative projection — see the module header.
-        let cam_relative = (anchor_world - cam_world).as_vec3();
-        let Ok(viewport) = camera.world_to_viewport(cam_gtf, cam_gtf.translation() + cam_relative)
-        else {
+        // GlobalTransform is already in the floating-origin-relative render
+        // frame. Passing it directly preserves the same pose the rover mesh
+        // uses and avoids an absolute f64 -> f32 round trip for the visual
+        // anchor.
+        let Ok(viewport) = camera.world_to_viewport(cam_gtf, anchor_render) else {
             continue; // behind the camera
         };
 
@@ -193,5 +202,17 @@ pub fn draw_billboard_overlay(
             egui::Color32::from_black_alpha((170.0 * fade) as u8),
         );
         painter.galley(top_left, galley, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_anchor;
+    use bevy::prelude::*;
+
+    #[test]
+    fn billboard_anchor_is_derived_from_the_render_pose() {
+        let gtf = GlobalTransform::from(Transform::from_xyz(4.0, 2.0, -7.0));
+        assert_eq!(render_anchor(&gtf, 3.0), Vec3::new(4.0, 5.0, -7.0));
     }
 }

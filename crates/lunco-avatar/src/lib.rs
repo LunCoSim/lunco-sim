@@ -215,10 +215,11 @@ pub enum FollowAttitude {
 
 /// Unified vessel-follow camera. Position always follows the target; the
 /// [`FollowAttitude`] mode selects how orientation is derived. Solved on the
-/// constant-`dt` interaction step (`spring_arm_system`, `lunco_time::InteractionSchedule`)
-/// against the target's eased render pose, so the camera and the followed body share
-/// ONE motion basis — the fix for the fast-flyer jitter that came from solving the
-/// follow against a frame-stale target sample.
+/// render cadence (`spring_arm_system`, after `lunco_time::InteractionRenderSet`)
+/// against the target's final render pose, so the camera and the followed body share
+/// ONE motion basis.  The camera is deliberately not `InteractionEased`: easing a
+/// chase camera independently from the body adds a second phase and makes both the
+/// rover and world-anchored overlays oscillate on screen.
 ///
 /// Position snaps directly to the desired offset (no lerp), but rotation
 /// slerps smoothly toward the desired attitude + user yaw offset. This creates
@@ -762,24 +763,11 @@ impl Plugin for LunCoAvatarPlugin {
         // those systems are the same-frame protection; this is the cleanup.
         app.add_systems(PreUpdate, strip_camera_modes_from_locked);
 
-        // EVERY camera writer — chase included — runs in the INTERACTION cadence
-        // (`lunco_time::InteractionSchedule`): a constant 60 Hz step drained from the wall
-        // clock, with no path from `TimeTransport`. That single registration is what makes
-        // the view unpausable and rate-immune *by construction*, so there is no paused
-        // twin, no `run_if(paused)` gate, and no system reading a per-frame wall delta.
-        //
-        // Inside the schedule the generic `Time` IS the interaction clock (the same
-        // contract `Time` = `Time<Fixed>` holds inside `FixedUpdate`), so these systems
-        // just read `Res<Time>` and get the constant step.
-        //
-        // The chase camera used to ride `FixedPostUpdate` for LOCKSTEP with the body it
-        // follows (both eased by `bevy_transform_interpolation` off the same overstep).
-        // It gets the same property here for free and one step later in the frame: the
-        // runner sits in `PostUpdate` after avian's writeback AND after the bodies have
-        // been eased, so the camera reads the followed body's *smoothed render pose*
-        // rather than chasing a raw fixed sample. Hence no avian interpolation on cameras
-        // any more — `InteractionEased` (added by `ensure_avatar_easing`) is the one
-        // easing mechanism for anything written on this step.
+        // Non-chase camera modes are stepped at a constant 60 Hz and eased by
+        // `InteractionEased`.  The chase camera is different: it follows the body's
+        // final render pose and therefore runs once at render cadence below.  Keeping
+        // it out of this schedule prevents two independent interpolation phases from
+        // fighting over the same camera Transform.
         app.add_systems(
             lunco_time::InteractionSchedule,
             (
@@ -791,9 +779,6 @@ impl Plugin for LunCoAvatarPlugin {
                 surface_camera_system,
                 apply_fly,
                 orbit_system,
-                spring_arm_system,
-                // Clip planes last: they read the pose the writers above produced.
-                update_avatar_clip_planes_system,
                 reset_easing_on_cell_rebase,
             )
                 .chain()
@@ -810,10 +795,20 @@ impl Plugin for LunCoAvatarPlugin {
                 .after(lunco_time::InteractionRestoreSet)
                 .before(lunco_time::InteractionRecordSet),
         );
-        // Render-rate easing for the pose these systems write. Marker-add on
-        // `Added<Avatar>` rather than a bundle field, so every spawn path is covered by
-        // architecture instead of by remembering.
-        app.add_systems(Update, ensure_avatar_easing);
+        // Chase follows the body after physics/render interpolation has written the
+        // final body Transform, then updates clip planes before transform propagation.
+        // It has no InteractionEased marker: the body and camera are sampled in one
+        // render phase and the billboard can follow that same final GlobalTransform.
+        app.add_systems(
+            PostUpdate,
+            (spring_arm_system, update_avatar_clip_planes_system)
+                .chain()
+                .after(lunco_time::InteractionRenderSet)
+                .before(TransformSystems::Propagate),
+        );
+        // Every avatar gets easing only for stepped camera modes.  Spring-arm mode is
+        // render-rate and must not have a second writer for its Transform.
+        app.add_systems(Update, sync_avatar_easing);
 
         // NOTE: there used to be a second, PostUpdate registration of
         // `anchor_solar_frame_to_site` here for same-frame drag re-pins. The
@@ -826,20 +821,32 @@ impl Plugin for LunCoAvatarPlugin {
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AvatarCameraSet;
 
-/// Give every avatar the render-rate easing for a pose written on the interaction
-/// step ([`lunco_time::InteractionEased`]): the camera systems write at a constant
-/// 60 Hz, and this interpolates that to display rate.
+/// Own the camera interpolation mode from the authoritative camera component.
 ///
-/// Marker-add on `Added<Avatar>` rather than a field in the spawn bundle, so a new
-/// spawn path (USD-authored avatar, a test, a restored save) gets it by architecture.
-fn ensure_avatar_easing(
+/// Stepped camera modes use [`lunco_time::InteractionEased`].  A spring arm reads
+/// the final rendered body pose directly in `PostUpdate`, so retaining that marker
+/// would leave a second system writing the same camera Transform before the spring
+/// arm and would reintroduce the phase mismatch this mode is designed to avoid.
+fn sync_avatar_easing(
     mut commands: Commands,
-    q: Query<Entity, (Added<Avatar>, Without<lunco_time::InteractionEased>)>,
+    q: Query<(
+        Entity,
+        Has<SpringArmCamera>,
+        Has<lunco_time::InteractionEased>,
+    ), With<Avatar>>,
 ) {
-    for e in q.iter() {
-        commands
-            .entity(e)
-            .try_insert(lunco_time::InteractionEased::default());
+    for (entity, spring_arm, eased) in q.iter() {
+        match (spring_arm, eased) {
+            (true, true) => {
+                commands.entity(entity).remove::<lunco_time::InteractionEased>();
+            }
+            (false, false) => {
+                commands
+                    .entity(entity)
+                    .insert(lunco_time::InteractionEased::default());
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1332,13 +1339,12 @@ fn vessel_collision_exclusions(
 /// The CHASE camera: position follows the target; [`FollowAttitude`] selects how
 /// orientation is derived (heading-lock, world-locked survey, or full-attitude cockpit).
 ///
-/// Runs in [`lunco_time::InteractionSchedule`], so `Res<Time>` here IS the interaction
-/// clock: a constant 60 Hz step that neither pauses nor rate-scales with the sim. It
-/// reads the followed body AFTER avian's writeback and easing, i.e. the body's smoothed
-/// render pose — the property the old `FixedPostUpdate` registration bought with avian
-/// interpolation on the camera and a duplicate wall-clock system for the paused case.
+/// Runs at render cadence after [`lunco_time::InteractionRenderSet`].  `Time<Real>` is
+/// used only for the camera's visual rotation/obstacle response; the followed body is
+/// read from the final render-frame `Transform`, so no separate stepped pose or camera
+/// interpolation can fight the body.
 fn spring_arm_system(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut q_avatar: Query<
         (
             Entity,
@@ -4476,6 +4482,43 @@ mod tests {
         let mut delta = 10_000.0;
         apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
         assert_eq!(distance, 75.0);
+    }
+
+    #[test]
+    fn spring_arm_owns_render_pose_without_interaction_easing() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_avatar_easing);
+
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                SpringArmCamera {
+                    target: Entity::PLACEHOLDER,
+                    distance: 10.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                    vertical_offset: 2.0,
+                    track_heading: true,
+                    attitude: FollowAttitude::Heading,
+                },
+                lunco_time::InteractionEased::default(),
+            ))
+            .id();
+
+        app.update();
+        assert!(
+            app.world().get::<lunco_time::InteractionEased>(avatar).is_none(),
+            "spring-arm cameras must not have a second interpolation writer"
+        );
+
+        app.world_mut().entity_mut(avatar).remove::<SpringArmCamera>();
+        app.update();
+        assert!(
+            app.world().get::<lunco_time::InteractionEased>(avatar).is_some(),
+            "stepped camera modes must regain interaction-rate easing"
+        );
     }
 
     /// **A retired avatar camera must leave the viewport candidate pool.**
