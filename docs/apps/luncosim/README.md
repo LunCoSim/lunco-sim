@@ -47,7 +47,7 @@ actually parses, so prefer it if this table and the binary ever disagree.
 | `-h`, `--help` | Print usage and exit, without launching the simulator. |
 | `--no-ui` | Run headless — no window, no GPU. Also via `LUNCO_NO_UI=1`. |
 | `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
-| `--scene <PATH>` | Load a specific USD scene. Path is relative to `assets/`. Default: `scenes/luncosim/sandbox_scene.usda`. |
+| `--scene <PATH>` | Load a specific USD scene. Path is relative to `assets/` (or may be workspace-relative/absolute). Without it, luncosim starts with an empty persistent world shell. |
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |
 | `--no-throttle` | Disable background throttling. The window will update at full rate even when unfocused. |
 | `--log-diag` | Enable Bevy's `LogDiagnosticsPlugin` to print FPS, FrameTime, and physics stats to the console. |

@@ -55,4 +55,36 @@ impl RuntimeFaults {
     pub fn active(&self) -> bool {
         self.first.is_some()
     }
+
+    /// Explain why scene mutation is no longer valid in this session.
+    ///
+    /// A terminal runtime fault is session-scoped and first-fault-wins. Scene
+    /// replacement after that point would tear down the evidence that caused
+    /// the fault while leaving the rest of the session in an unknown state, so
+    /// every scene/workspace entry point uses this one policy boundary.
+    pub fn scene_mutation_rejection(&self, operation: &str) -> Option<String> {
+        let fault = self.first.as_ref()?;
+        Some(format!(
+            "cannot {operation}: session has terminal runtime fault `{}` on {}: {}; restart the process",
+            fault.kind, fault.subject, fault.detail
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_mutations_are_allowed_until_a_terminal_fault_exists() {
+        let mut faults = RuntimeFaults::default();
+        assert_eq!(faults.scene_mutation_rejection("load a scene"), None);
+
+        assert!(faults.raise("physics-invalid", None, "rover", "non-finite pose"));
+        let rejection = faults
+            .scene_mutation_rejection("load a scene")
+            .expect("an active terminal fault must reject scene mutation");
+        assert!(rejection.contains("physics-invalid"));
+        assert!(rejection.contains("restart the process"));
+    }
 }

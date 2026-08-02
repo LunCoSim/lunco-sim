@@ -198,7 +198,6 @@ impl Plugin for SandboxUiPlugin {
                 );
             },
         )
-        .insert_resource(CurrentScenePath::default())
         .add_systems(
             Startup,
             (
@@ -209,11 +208,13 @@ impl Plugin for SandboxUiPlugin {
         )
         .add_observer(
             |t: On<lunco_usd::LoadScene>,
-             mut current: ResMut<CurrentScenePath>,
+             current: Option<ResMut<CurrentScenePath>>,
              current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
              hud: Option<ResMut<lunco_workbench::tutorial_overlay::TutorialHud>>,
              pending: Option<ResMut<lunco_tutorial::PendingAdvance>>| {
-                current.0 = t.event().path.clone();
+                if let Some(mut current) = current {
+                    current.0 = t.event().path.clone();
+                }
                 if let Some(mut name) = current_name {
                     name.0 = std::path::Path::new(&t.event().path)
                         .file_name()
@@ -556,7 +557,7 @@ fn sandbox_boot_from_url(
 }
 
 /// Tracks the currently loaded scene path, so the user can restart it.
-#[derive(Resource, Clone, Default)]
+#[derive(Resource, Clone)]
 pub(crate) struct CurrentScenePath(pub(crate) String);
 
 fn init_current_scene_path(
@@ -564,13 +565,15 @@ fn init_current_scene_path(
     mut commands: Commands,
     current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
 ) {
-    commands.insert_resource(CurrentScenePath(scene_path.0.clone()));
-    if let Some(mut name) = current_name {
-        name.0 = std::path::Path::new(&scene_path.0)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or(&scene_path.0)
-            .to_string();
+    if let Some(path) = scene_path.0.as_deref() {
+        commands.insert_resource(CurrentScenePath(path.to_string()));
+        if let Some(mut name) = current_name {
+            name.0 = std::path::Path::new(path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or(path)
+                .to_string();
+        }
     }
 }
 

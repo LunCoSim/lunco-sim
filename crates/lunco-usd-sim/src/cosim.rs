@@ -23,6 +23,7 @@
 //! `lunco-luncosim-edit` keeps using its own markers; this translator
 //! is the authoritative path for USD-defined cosim entities.
 
+use avian3d::prelude::PhysicsTime;
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::telemetry::{ChannelSource, Parameter};
@@ -2419,30 +2420,32 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         let bodies = bodies
             .iter(world)
             .filter(|(_, path, _, _, _, _, _, _, _)| pending_body_paths.contains(&path.path))
-            .map(|(
-                entity,
-                path,
-                body,
-                position,
-                disabled,
-                shadow,
-                provenance,
-                gid,
-                is_instance_root,
-            )| {
-                serde_json::json!({
-                    "entity": entity.to_bits(),
-                    "path": path.path,
-                    "stage": format!("{:?}", path.stage_handle),
-                    "rigid_body": body.map(|body| format!("{body:?}")),
-                    "has_position": position.is_some(),
-                    "disabled": disabled.is_some(),
-                    "shadow_seeded": shadow.map(|shadow| shadow.is_seeded()),
-                    "provenance": provenance.map(|value| format!("{value:?}")),
-                    "gid": gid.map(|value| value.get()),
-                    "instance_root": is_instance_root,
-                })
-            })
+            .map(
+                |(
+                    entity,
+                    path,
+                    body,
+                    position,
+                    disabled,
+                    shadow,
+                    provenance,
+                    gid,
+                    is_instance_root,
+                )| {
+                    serde_json::json!({
+                        "entity": entity.to_bits(),
+                        "path": path.path,
+                        "stage": format!("{:?}", path.stage_handle),
+                        "rigid_body": body.map(|body| format!("{body:?}")),
+                        "has_position": position.is_some(),
+                        "disabled": disabled.is_some(),
+                        "shadow_seeded": shadow.map(|shadow| shadow.is_seeded()),
+                        "provenance": provenance.map(|value| format!("{value:?}")),
+                        "gid": gid.map(|value| value.get()),
+                        "instance_root": is_instance_root,
+                    })
+                },
+            )
             .collect::<Vec<_>>();
 
         let mut non_terminal_models = Vec::new();
@@ -2466,15 +2469,104 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             .query_filtered::<(), With<SimConnection>>()
             .iter(world)
             .count();
+        let pending_avian_joints = serde_json::json!({
+            "revolute": world
+                .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>>()
+                .iter(world)
+                .count(),
+            "prismatic": world
+                .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>>()
+                .iter(world)
+                .count(),
+            "fixed": world
+                .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>>()
+                .iter(world)
+                .count(),
+        });
+        let pending_admission_details = world
+            .query_filtered::<(
+                Entity,
+                &lunco_usd_avian::PendingJointAdmission,
+                Option<&UsdPrimPath>,
+            ), With<lunco_usd_avian::PendingJointAdmission>>()
+            .iter(world)
+            .map(|(joint_entity, pending, path)| {
+                let body = |entity: Entity| {
+                    let rb = world.get::<avian3d::prelude::RigidBody>(entity);
+                    let body_path = world.get::<UsdPrimPath>(entity);
+                    serde_json::json!({
+                        "entity": entity.to_bits(),
+                        "path": body_path.map(|value| value.path.clone()),
+                        "rigid_body": rb.map(|value| format!("{value:?}")),
+                        "has_solver_body": world
+                            .get::<avian3d::dynamics::solver::solver_body::SolverBody>(entity)
+                            .is_some(),
+                        "has_island_node": world
+                            .get::<avian3d::dynamics::solver::islands::BodyIslandNode>(entity)
+                            .is_some(),
+                        "disabled": world
+                            .get::<avian3d::prelude::RigidBodyDisabled>(entity)
+                            .is_some(),
+                        "ecs_disabled": world
+                            .get::<bevy::ecs::entity_disabling::Disabled>(entity)
+                            .is_some(),
+                    })
+                };
+                serde_json::json!({
+                    "joint_entity": joint_entity.to_bits(),
+                    "joint_path": path.map(|value| value.path.clone()),
+                    "body0": body(pending.body0),
+                    "body1": body(pending.body1),
+                })
+            })
+            .collect::<Vec<_>>();
+        let admitted_avian_joints = serde_json::json!({
+            "revolute": world
+                .query_filtered::<(), With<avian3d::prelude::RevoluteJoint>>()
+                .iter(world)
+                .count(),
+            "prismatic": world
+                .query_filtered::<(), With<avian3d::prelude::PrismaticJoint>>()
+                .iter(world)
+                .count(),
+            "fixed": world
+                .query_filtered::<(), With<avian3d::prelude::FixedJoint>>()
+                .iter(world)
+                .count(),
+        });
         let wait_open = world.get_resource::<BindingEpochWait>().is_some();
         let dirty = world
             .get_resource::<BindingEpochDirty>()
             .is_some_and(|dirty| dirty.0);
+        let physics_paused = world
+            .get_resource::<Time<avian3d::prelude::Physics>>()
+            .is_some_and(|time| time.is_paused());
+        let physics_holds = world
+            .get_resource::<lunco_physics::PhysicsHolds>()
+            .map(|holds| holds.reasons().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let runtime_fault = world
+            .get_resource::<lunco_core::RuntimeFaults>()
+            .and_then(|faults| faults.first.as_ref())
+            .map(|fault| {
+                serde_json::json!({
+                    "kind": fault.kind,
+                    "entity": fault.entity.map(Entity::to_bits),
+                    "subject": fault.subject,
+                    "detail": fault.detail,
+                })
+            });
 
         lunco_api::ApiResponse::ok(serde_json::json!({
             "wait_open": wait_open,
             "dirty": dirty,
             "connection_count": connection_count,
+            "pending_avian_joints": pending_avian_joints,
+            "admitted_avian_joints": admitted_avian_joints,
+            "physics_paused": physics_paused,
+            "physics_holds": physics_holds,
+            "runtime_fault": runtime_fault,
+            "pending_admission_details": pending_admission_details,
             "awaiting": awaiting,
             "pending_joints": pending_joints,
             "bodies": bodies,
@@ -2613,11 +2705,19 @@ pub struct RestartScene {
 #[on_command(RestartScene)]
 fn on_restart_scene(
     trigger: On<RestartScene>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     scene: SceneEntities,
 ) {
+    if let Some(reason) = faults
+        .as_deref()
+        .and_then(|faults| faults.scene_mutation_rejection("restart a scene"))
+    {
+        error!("[restart-scene] {reason}");
+        return;
+    }
     // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
     // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
     // (`twin://…`, `lunco://…`) — is respawned. Resolving via `.path()` would
@@ -2672,7 +2772,19 @@ fn on_restart_scene(
 pub struct ClearScene {}
 
 #[on_command(ClearScene)]
-fn on_clear_scene(trigger: On<ClearScene>, mut commands: Commands, scene: SceneEntities) {
+fn on_clear_scene(
+    trigger: On<ClearScene>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+    mut commands: Commands,
+    scene: SceneEntities,
+) {
+    if let Some(reason) = faults
+        .as_deref()
+        .and_then(|faults| faults.scene_mutation_rejection("clear the scene"))
+    {
+        error!("[clear-scene] {reason}");
+        return;
+    }
     info!("[clear-scene] clearing viewport");
     clear_scene_entities(&mut commands, &scene);
 }
