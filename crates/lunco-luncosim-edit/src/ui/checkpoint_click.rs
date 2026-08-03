@@ -920,6 +920,38 @@ fn route_targets(
         .unwrap_or_default()
 }
 
+fn route_loops(
+    xml: Option<&BehaviorXml>,
+    spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+) -> bool {
+    if let Some(xml) = xml {
+        // XML is the authored route and therefore owns topology when both the
+        // authored tree and its derived runtime spec are present.
+        return lunco_autopilot::btcpp_xml::xml_to_value(&xml.0)
+            .ok()
+            .map(|value| authored_route_loops(&value))
+            .unwrap_or(false);
+    }
+
+    spec.is_some_and(|spec| match &spec.0 {
+        lunco_autopilot::BehaviorSpec::Forever { .. }
+        | lunco_autopilot::BehaviorSpec::Patrol { .. } => true,
+        lunco_autopilot::BehaviorSpec::Repeat { times, .. } => *times > 1,
+        _ => false,
+    })
+}
+
+fn authored_route_loops(value: &Value) -> bool {
+    match value.get("kind").and_then(Value::as_str) {
+        Some("forever" | "patrol") => true,
+        Some("repeat") => value
+            .get("times")
+            .and_then(Value::as_u64)
+            .is_some_and(|times| times > 1),
+        _ => false,
+    }
+}
+
 fn target_matches(a: &str, b: &str) -> bool {
     a == b || a.ends_with(b) || b.ends_with(a)
 }
@@ -938,6 +970,7 @@ fn route_visual_state(
     reached: Option<&ReachedWaypoints>,
     cursor: Option<usize>,
     completed: bool,
+    looping: bool,
 ) -> RouteVisualState {
     let mut visited = targets
         .iter()
@@ -959,7 +992,9 @@ fn route_visual_state(
         None
     } else {
         visited.iter().position(|visited| !visited).or_else(|| {
-            cursor
+            looping
+                .then_some(cursor)
+                .flatten()
                 .filter(|_| !targets.is_empty())
                 .map(|i| i % targets.len())
         })
@@ -1104,6 +1139,7 @@ pub fn draw_waypoint_overlay(
 
         let targets = route_targets(xml, spec);
         let authored_route = xml.is_some() && !targets.is_empty();
+        let looping = route_loops(xml, spec);
         let wp_positions = if authored_route {
             get_waypoint_positions(
                 &xml.expect("authored route has XML").0,
@@ -1121,7 +1157,7 @@ pub fn draw_waypoint_overlay(
                 .collect()
         };
         let (cursor, completed) = route_execution(vessel, &q_autopilots);
-        let progress = route_visual_state(&targets, reached, cursor, completed);
+        let progress = route_visual_state(&targets, reached, cursor, completed, looping);
 
         // Collect screen-space points for each waypoint that is in front of the camera.
         struct WpScreen {
@@ -1658,7 +1694,9 @@ fn route_ribbon_points(
     active_index: Option<usize>,
 ) -> (Vec<DVec3>, Vec<DVec3>) {
     let green = points.iter().map(|(point, _)| *point).collect();
-    let next = active_index.or_else(|| points.iter().position(|(_, visited)| !visited));
+    let next = active_index
+        .filter(|&index| index < points.len())
+        .or_else(|| points.iter().position(|(_, visited)| !visited));
     let blue = next
         .map(|index| {
             vec![
@@ -1877,7 +1915,7 @@ pub fn sync_waypoint_path_mesh(
                     targets,
                     None,
                     route_is_smooth(&xml.0),
-                    xml.0.contains("forever"),
+                    route_loops(Some(xml), spec),
                 )
             } else if let Some(spec) = spec {
                 let Some(waypoints) = spec.patrol_waypoints() else {
@@ -1896,7 +1934,7 @@ pub fn sync_waypoint_path_mesh(
                 let targets = (0..points.len())
                     .map(runtime_waypoint_key)
                     .collect::<Vec<_>>();
-                let closed = points.len() > 2;
+                let closed = route_loops(None, Some(spec));
                 (targets, Some(points), false, closed)
             } else {
                 continue;
@@ -1918,13 +1956,13 @@ pub fn sync_waypoint_path_mesh(
             let targets = (0..points.len())
                 .map(runtime_waypoint_key)
                 .collect::<Vec<_>>();
-            let closed = points.len() > 2;
+            let closed = route_loops(None, Some(spec));
             (targets, Some(points), false, closed)
         } else {
             continue;
         };
         let (cursor, completed) = route_execution(vessel, &q_autopilots);
-        let progress = route_visual_state(&targets, reached, cursor, completed);
+        let progress = route_visual_state(&targets, reached, cursor, completed, closed);
         let rover_pos =
             lunco_core::coords::world_position(vessel, &q_parents, &q_grids_only, &q_spatial)
                 .map(|p| p.0);
@@ -2151,7 +2189,7 @@ pub(crate) fn sync_waypoint_marker_visuals(
             vessel,
             (
                 targets.clone(),
-                route_visual_state(&targets, reached, cursor, completed),
+                route_visual_state(&targets, reached, cursor, completed, route_loops(xml, spec)),
             ),
         );
     }
@@ -2219,9 +2257,14 @@ pub(crate) fn sync_waypoint_marker_visuals(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_runtime_patrol, route_ribbon_points, WAYPOINT_MARKER_ASSET};
+    use super::{
+        append_runtime_patrol, route_loops, route_ribbon_points, route_visual_state, BehaviorXml,
+        ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+    };
     use bevy::math::DVec3;
-    use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint};
+    use lunco_autopilot::{
+        btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
+    };
 
     #[test]
     fn runtime_click_creates_and_extends_patrol_without_usd() {
@@ -2298,9 +2341,69 @@ mod tests {
     }
 
     #[test]
+    fn route_ribbon_ignores_an_stale_cursor_after_route_resolution() {
+        let points = [
+            (DVec3::ZERO, true),
+            (DVec3::X * 10.0, false),
+            (DVec3::X * 20.0, false),
+        ];
+        let (_, blue) = route_ribbon_points(&points, Some(DVec3::Y), Some(99));
+        assert_eq!(blue, vec![DVec3::Y, DVec3::X * 10.0]);
+    }
+
+    #[test]
+    fn route_ribbon_has_no_blue_leg_when_a_one_way_route_is_done() {
+        let points = [(DVec3::ZERO, true), (DVec3::X * 10.0, true)];
+        let (_, blue) = route_ribbon_points(&points, Some(DVec3::Y), None);
+        assert!(blue.is_empty());
+    }
+
+    #[test]
+    fn route_loop_detection_uses_authored_tree_shape() {
+        let sequence = BehaviorXml(
+            value_to_xml(&serde_json::json!({
+                "kind": "sequence",
+                "children": [{"kind": "drive_to", "target": "/Route/W0"}]
+            }))
+            .unwrap(),
+        );
+        let forever = BehaviorXml(
+            value_to_xml(&serde_json::json!({
+                "kind": "forever",
+                "child": {
+                    "kind": "sequence",
+                    "children": [{"kind": "drive_to", "target": "/Route/W0"}]
+                }
+            }))
+            .unwrap(),
+        );
+        assert!(!route_loops(Some(&sequence), None));
+        assert!(route_loops(Some(&forever), None));
+    }
+
+    #[test]
+    fn route_loop_detection_uses_runtime_spec_kind_not_waypoint_count() {
+        let one_way = AutopilotBehaviorSpec::new(BehaviorSpec::Sequence {
+            children: vec![BehaviorSpec::DriveTo {
+                target: [1.0, 0.0, 2.0],
+                speed: 0.5,
+                radius: 1.0,
+            }],
+        });
+        let patrol = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
+            waypoints: vec![PatrolWaypoint::at([1.0, 0.0, 2.0])],
+            speed: 0.5,
+            radius: 1.0,
+            dwell: 0.0,
+        });
+        assert!(!route_loops(None, Some(&one_way)));
+        assert!(route_loops(None, Some(&patrol)));
+    }
+
+    #[test]
     fn route_progress_uses_autopilot_cursor_when_sensor_arrival_is_missing() {
         let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
-        let state = route_visual_state(&targets, None, Some(1), false);
+        let state = route_visual_state(&targets, None, Some(1), false, false);
         assert_eq!(state.visited, vec![true, false]);
         assert_eq!(state.active_index, Some(1));
     }
@@ -2311,8 +2414,39 @@ mod tests {
         let mut reached = std::collections::HashSet::new();
         reached.insert("/Route/W0".to_string());
         reached.insert("/Route/W1".to_string());
-        let state = route_visual_state(&targets, Some(&ReachedWaypoints(reached)), Some(0), false);
+        let state = route_visual_state(
+            &targets,
+            Some(&ReachedWaypoints(reached)),
+            Some(0),
+            false,
+            true,
+        );
         assert_eq!(state.visited, vec![true, true]);
         assert_eq!(state.active_index, Some(0));
+    }
+
+    #[test]
+    fn route_progress_stops_the_active_leg_after_a_one_way_route_completes() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let mut reached = std::collections::HashSet::new();
+        reached.insert("/Route/W0".to_string());
+        reached.insert("/Route/W1".to_string());
+        let state = route_visual_state(
+            &targets,
+            Some(&ReachedWaypoints(reached)),
+            Some(2),
+            false,
+            false,
+        );
+        assert_eq!(state.visited, vec![true, true]);
+        assert_eq!(state.active_index, None);
+    }
+
+    #[test]
+    fn route_progress_marks_completion_without_a_cursor() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let state = route_visual_state(&targets, None, None, true, false);
+        assert_eq!(state.visited, vec![true, true]);
+        assert_eq!(state.active_index, None);
     }
 }
