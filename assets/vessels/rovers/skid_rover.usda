@@ -515,41 +515,33 @@ def Xform "SkidRover" (
     }
 
     # --- Thermal: a SEPARATE domain layer, not a graft onto Electrical ------
-    # `basic` composes a self-contained `Scope "Thermal"` — its OWN
-    # `CollectionAPI:components`, compiled to its OWN generated DAE — coupled to
+    # `basic` composes one `CollectionAPI:components` Scope per independent
+    # thermal bank. Each is compiled to its own generated DAE and coupled to
     # the electrical island by CAUSAL cross-domain wires only: each motor's
     # `outputs:heat` feeds a `MotorHeatLoad.inputs:heat_w` here as a runtime
-    # SimConnection. The acausal `connectors:port` edges stay INSIDE this
-    # collection, so thermal compiles independently of electrical. All four
-    # motors get a heat-load bridge; left bank = FL+RL, right bank = FR+RR.
+    # SimConnection. The acausal `connectors:port` edges stay INSIDE each
+    # collection, so thermal compiles independently of electrical and the
+    # left/right banks cannot become one accidental disconnected DAE.
     variantSet "thermal" = {
         "none" {
         }
 
         "basic" {
-            def Scope "Thermal" (
+            def Scope "ThermalLeft" (
                 prepend apiSchemas = ["CollectionAPI:components"]
-                doc = "Rover thermal control network: motor dissipation → masses → radiators."
+                doc = "Left rover thermal network: motor dissipation → mass → radiator."
             )
             {
                 float inputs:motor_heat_FL.connect = </SkidRover/Electrical.outputs:motor_heat_FL>
-                float inputs:motor_heat_FR.connect = </SkidRover/Electrical.outputs:motor_heat_FR>
                 float inputs:motor_heat_RL.connect = </SkidRover/Electrical.outputs:motor_heat_RL>
-                float inputs:motor_heat_RR.connect = </SkidRover/Electrical.outputs:motor_heat_RR>
-
-                float outputs:motor_temp_left.connect  = </SkidRover/Thermal/MotorThermalLeft.outputs:temp_k>
-                float outputs:motor_temp_right.connect = </SkidRover/Thermal/MotorThermalRight.outputs:temp_k>
+                float outputs:motor_temp_left.connect = </SkidRover/ThermalLeft/MotorThermalLeft.outputs:temp_k>
 
                 uniform token collection:components:expansionRule = "explicitOnly"
                 prepend rel collection:components:includes = [
-                    </SkidRover/Thermal/MotorHeat_FL>,
-                    </SkidRover/Thermal/MotorHeat_RL>,
-                    </SkidRover/Thermal/MotorHeat_FR>,
-                    </SkidRover/Thermal/MotorHeat_RR>,
-                    </SkidRover/Thermal/MotorThermalLeft>,
-                    </SkidRover/Thermal/MotorThermalRight>,
-                    </SkidRover/Thermal/MotorRadiatorLeft>,
-                    </SkidRover/Thermal/MotorRadiatorRight>,
+                    </SkidRover/ThermalLeft/MotorHeat_FL>,
+                    </SkidRover/ThermalLeft/MotorHeat_RL>,
+                    </SkidRover/ThermalLeft/MotorThermalLeft>,
+                    </SkidRover/ThermalLeft/MotorRadiatorLeft>,
                 ]
 
                 # ── Left bank: FL + RL into one mass/radiator node ──
@@ -558,16 +550,16 @@ def Xform "SkidRover" (
                 )
                 {
                     prepend rel lunco:telemetry:owner = </SkidRover/Motor_FL>
-                    float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FL>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    float inputs:heat_w.connect = </SkidRover/ThermalLeft.inputs:motor_heat_FL>
+                    custom token connectors:port.connect = </SkidRover/ThermalLeft/MotorThermalLeft.connectors:port>
                 }
                 def Xform "MotorHeat_RL" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
                     prepend rel lunco:telemetry:owner = </SkidRover/Motor_RL>
-                    float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RL>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    float inputs:heat_w.connect = </SkidRover/ThermalLeft.inputs:motor_heat_RL>
+                    custom token connectors:port.connect = </SkidRover/ThermalLeft/MotorThermalLeft.connectors:port>
                 }
                 def Xform "MotorThermalLeft" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
@@ -578,8 +570,26 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
                 )
                 {
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port.connect = </SkidRover/ThermalLeft/MotorThermalLeft.connectors:port>
                 }
+            }
+
+            def Scope "ThermalRight" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+                doc = "Right rover thermal network: motor dissipation → mass → radiator."
+            )
+            {
+                float inputs:motor_heat_FR.connect = </SkidRover/Electrical.outputs:motor_heat_FR>
+                float inputs:motor_heat_RR.connect = </SkidRover/Electrical.outputs:motor_heat_RR>
+                float outputs:motor_temp_right.connect = </SkidRover/ThermalRight/MotorThermalRight.outputs:temp_k>
+
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </SkidRover/ThermalRight/MotorHeat_FR>,
+                    </SkidRover/ThermalRight/MotorHeat_RR>,
+                    </SkidRover/ThermalRight/MotorThermalRight>,
+                    </SkidRover/ThermalRight/MotorRadiatorRight>,
+                ]
 
                 # ── Right bank: FR + RR into one mass/radiator node ──
                 def Xform "MotorHeat_FR" (
@@ -587,16 +597,16 @@ def Xform "SkidRover" (
                 )
                 {
                     prepend rel lunco:telemetry:owner = </SkidRover/Motor_FR>
-                    float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FR>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    float inputs:heat_w.connect = </SkidRover/ThermalRight.inputs:motor_heat_FR>
+                    custom token connectors:port.connect = </SkidRover/ThermalRight/MotorThermalRight.connectors:port>
                 }
                 def Xform "MotorHeat_RR" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
                     prepend rel lunco:telemetry:owner = </SkidRover/Motor_RR>
-                    float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RR>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    float inputs:heat_w.connect = </SkidRover/ThermalRight.inputs:motor_heat_RR>
+                    custom token connectors:port.connect = </SkidRover/ThermalRight/MotorThermalRight.connectors:port>
                 }
                 def Xform "MotorThermalRight" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
@@ -607,7 +617,7 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
                 )
                 {
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    custom token connectors:port.connect = </SkidRover/ThermalRight/MotorThermalRight.connectors:port>
                 }
             }
         }

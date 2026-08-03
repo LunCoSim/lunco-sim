@@ -10,9 +10,9 @@
 # wires them, exactly as `battery.usda`/`motor.usda` are inert parts collected
 # by a vessel's `Electrical` scope.
 #
-# This file declares no `Thermal` scope and no motor names. A rover with N
-# driven motors authors its own `Scope "Thermal"` (carrying
-# `CollectionAPI:components`) that:
+# This file declares no thermal network scopes and no motor names. A rover with N
+# driven motors authors one `CollectionAPI:components` scope per independent
+# thermal bank that:
 #   - includes N `MotorHeatLoad` instances (one per motor),
 #   - includes per-bank `MotorThermalMass` + `MotorRadiator` instances,
 #   - wires each `MotorHeatLoad.inputs:heat_w` to a boundary input sourced from

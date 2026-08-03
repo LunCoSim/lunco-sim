@@ -3,15 +3,17 @@
 // Runs against `scenes/tests/thermal_with_battery.usda`.
 //
 // WHAT IT GUARDS. With `power = "battery"` AND `thermal = "basic"`, the rover
-// carries two independent domain islands: `Scope "Electrical"` and
-// `Scope "Thermal"`, each its own generated Modelica DAE. The motors' solved
-// `outputs:heat` is forwarded to the Electrical boundary, then read by the
-// Thermal island as a causal cross-domain SimConnection. This scenario proves:
+// carries three independent domain islands: `Scope "Electrical"`,
+// `Scope "ThermalLeft"`, and `Scope "ThermalRight"`, each its own generated
+// Modelica DAE. The motors' solved `outputs:heat` is forwarded to the Electrical
+// boundary, then read by the thermal banks as causal cross-domain
+// SimConnections. This scenario proves:
 //
-//   1. BOTH islands compiled and published their boundary ports (the Electrical
-//      `soc` and the Thermal `motor_temp_*` are live, not missing).
-//   2. The thermal temperature is finite and in a plausible range (the thermal
-//      DAE solved and published a real value).
+//   1. The Electrical and left thermal islands compiled and published their
+//      boundary ports (the Electrical `soc` and ThermalLeft `motor_temp_left`
+//      are live, not missing).
+//   2. The left thermal temperature is finite and in a plausible range (its DAE
+//      solved and published a real value).
 //
 // This is the architectural gate: before the domain split, thermal members were
 // grafted into the Electrical collection and there was no separate Thermal
@@ -25,8 +27,9 @@ const PORT_WAIT_S = 30.0;
 // network root (`/` → `_x2f_`). Two shapes:
 //   - OUTSIDE the scope (Battery/Motor_* hang off the vessel): full path.
 //     /ThermalWithBatteryTest/Rover/Battery → ThermalWithBatteryTest_x2f_Rover_x2f_Battery
-//   - INSIDE the scope subtree (thermal parts under /Thermal/...): leaf name only.
-//     /ThermalWithBatteryTest/Rover/Thermal/MotorThermalLeft → MotorThermalLeft
+//   - INSIDE the scope subtree (thermal parts under /ThermalLeft/...): leaf name
+//     only. /ThermalWithBatteryTest/Rover/ThermalLeft/MotorThermalLeft →
+//     MotorThermalLeft
 fn elec_port(member, field) {
     "ThermalWithBatteryTest_x2f_Rover_x2f_" + member + "." + field
 }
@@ -40,16 +43,7 @@ fn on_start(me) {
 
     this.rover = find("/ThermalWithBatteryTest/Rover");
     this.elec = find("/ThermalWithBatteryTest/Rover/Electrical");
-    this.thermal = find("/ThermalWithBatteryTest/Rover/Thermal");
-
-    // The skid_rover's Comms/EarthTracker carries three `earth_mount_*` wires
-    // that never land — a pre-existing issue unrelated to this test (the
-    // EarthTrackerController entity doesn't expose those ports). Declare them
-    // as expected faults so the never-landed gate doesn't mask the actual
-    // verdict. See `expect_fault` in auto_tests.rhai.
-    expect_fault("earth_mount_x");
-    expect_fault("earth_mount_y");
-    expect_fault("earth_mount_z");
+    this.thermal = find("/ThermalWithBatteryTest/Rover/ThermalLeft");
 
     print("[thermal-battery] ── thermal + electrical islands coexist ────");
 }
@@ -69,9 +63,9 @@ fn on_tick(me) {
         return;
     }
 
-    // Wait for both islands to compile and publish. The Electrical island
-    // publishes Battery.soc_out; the Thermal island publishes MotorThermalLeft.temp_k.
-    // Both must be live — this is the core assertion that two separate DAEs
+    // Wait for the Electrical and left thermal islands to compile and publish.
+    // The Electrical island publishes Battery.soc_out; ThermalLeft publishes
+    // MotorThermalLeft.temp_k. Both must be live — this proves separate DAEs
     // compiled and stepped.
     let soc = get(this.elec, elec_port("Battery", "soc_out"));
     let temp = get(this.thermal, thermal_port("MotorThermalLeft", "temp_k"));
@@ -84,8 +78,8 @@ fn on_tick(me) {
         return;
     }
 
-    // Both islands live — take the verdict now. The boundary-forwarded scope
-    // outputs are also checked (read without the mangled island name).
+    // Both tested islands live — take the verdict now. The ThermalLeft boundary
+    // output is also checked (read without the mangled island name).
     this.done = true;
     let fwd_temp = get(this.thermal, "motor_temp_left");
     verdict(#{ soc: soc, temp: temp, fwd_temp: fwd_temp });
@@ -95,8 +89,8 @@ fn verdict(s) {
     let f = [];
     // PRESENCE is the gate: before the split, there was no Thermal island at all.
     f.push(t_present(s.soc, "electrical island Battery.soc_out (island compiled)"));
-    f.push(t_present(s.temp, "thermal island MotorThermalLeft.temp_k (island compiled)"));
-    f.push(t_present(s.fwd_temp, "Thermal.outputs:motor_temp_left forwarded boundary port"));
+    f.push(t_present(s.temp, "ThermalLeft MotorThermalLeft.temp_k (island compiled)"));
+    f.push(t_present(s.fwd_temp, "ThermalLeft.outputs:motor_temp_left forwarded boundary port"));
 
     // A finite, plausible temperature proves the thermal DAE actually solved.
     f.push(t_range(s.temp, 200.0, 400.0,

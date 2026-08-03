@@ -9,8 +9,9 @@
 # flows from the solved electrical DAE into the solved thermal DAE.
 #
 # With `power = "battery"` AND `thermal = "basic"` selected, the rover carries
-# BOTH a `Scope "Electrical"` (Battery + motors) and a `Scope "Thermal"` (heat
-# loads + masses + radiators). They compile to TWO separate generated models.
+# `Scope "Electrical"` (Battery + motors), `Scope "ThermalLeft"`, and
+# `Scope "ThermalRight"` (heat loads + masses + radiators). They compile to
+# three separate generated models.
 # The motors' solved `outputs:heat` (from the electrical DAE) crosses into the
 # thermal DAE as a causal SimConnection. This scene proves both islands compile
 # independently and the cross-domain wire still lands.

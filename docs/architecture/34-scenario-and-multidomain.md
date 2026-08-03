@@ -98,7 +98,8 @@ FMI/SSP scalar-exchange contract.
 This is why the rover's thermal and electrical domains are separate scopes:
 - `Scope "Electrical"` — Battery + motors, acausal `connectors:p` (Kirchhoff
   current) solved together; forwards each motor's `outputs:heat` to its boundary.
-- `Scope "Thermal"` — heat loads + masses + radiators, acausal `connectors:port`
+- `Scope "ThermalLeft"` and `Scope "ThermalRight"` — independent heat-load,
+  mass, and radiator banks, each with acausal `connectors:port`
   (heat balance) solved together; consumes `inputs:motor_heat_*`.
 - **The rover root is the bus** between them: it declares `outputs:motor_heat_*`
   ports, forwards the Electrical boundary output onto them, and the Thermal scope

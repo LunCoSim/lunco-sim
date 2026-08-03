@@ -116,7 +116,7 @@ pub struct DomainProjectionError {
 // A `Scope` is ONE compilation unit: one generated model on one entity carrying
 // one `ModelicaModel`. There is deliberately no runtime island partition — a
 // collection holding several electrically independent islands is an authoring
-// error, reported by the `network-scope-multiple-islands` lint rule, which is
+// error, reported by the `disconnected-component-network` lint rule, which is
 // where that policy lives. A partitioner here would have to invent extra
 // entities to host the extra models, and the two definitions of "island" would
 // then have to agree forever.
