@@ -52,7 +52,7 @@ pub struct UsdVariantView {
 /// View-model producer: harvest the selected prim's variant sets into
 /// [`UsdVariantView`].
 pub fn produce_usd_variant_view(
-    selected: Option<Res<crate::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
     q: Query<&UsdPrimPath>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,

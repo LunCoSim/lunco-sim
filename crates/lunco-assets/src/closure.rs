@@ -4,9 +4,12 @@
 //! crates provide the two pieces of format knowledge: which files are
 //! traversable documents and how a document declares its dependencies.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeSet;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::asset_path;
 
 /// Walk every file transitively named by `roots`.

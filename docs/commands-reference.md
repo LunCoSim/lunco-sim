@@ -2210,7 +2210,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Request the owning domain persist the document **to a new location**.
 
- `path` semantics mirror [`OpenFile`](lunco_workbench::file_ops::OpenFile):
+ `path` semantics mirror [`OpenFile`](lunco_doc_bevy::OpenFile):
 
  - **Empty** → the observer fires
    [`lunco_workbench::picker::PickHandle`](../lunco_workbench/picker/struct.PickHandle.html)

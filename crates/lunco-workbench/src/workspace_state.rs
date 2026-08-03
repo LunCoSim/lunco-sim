@@ -239,8 +239,12 @@ pub struct PerspectiveDockSnapshot {
 
 /// Per-Twin volatile UI state. One of these per project, stored at
 /// [`workspace_state_path`].
-#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceState {
+    /// Version of the persisted representation. Version 2 is the first
+    /// version that records per-perspective docks explicitly.
+    pub schema_version: u32,
     /// The Twin root this state belongs to (empty when no Twin is
     /// active — a "no-folder" session still hot-exits its docs). Stored
     /// so a hash collision (two paths landing on the same file stem) is
@@ -267,6 +271,82 @@ pub struct WorkspaceState {
     pub docks: HashMap<String, PerspectiveDockSnapshot>,
 }
 
+/// Current serialized workspace-state format.
+pub const WORKSPACE_STATE_SCHEMA_VERSION: u32 = 2;
+
+impl Default for WorkspaceState {
+    fn default() -> Self {
+        Self {
+            schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
+            twin_root: PathBuf::new(),
+            perspective: None,
+            documents: Vec::new(),
+            active_document: None,
+            docks: HashMap::new(),
+        }
+    }
+}
+
+/// Decode the persisted representation and perform only the explicitly known
+/// migration: the pre-versioned format's top-level `dock` is moved under the
+/// saved perspective. The caller rewrites migrated data immediately, so this
+/// is a one-time migration rather than a compatibility path kept in runtime
+/// state forever.
+fn decode_workspace_state(text: &str) -> Result<(WorkspaceState, bool), String> {
+    let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "workspace state must be a JSON object".to_string())?;
+    let mut migrated = false;
+    match object.get("schema_version") {
+        None => {
+            migrate_single_dock(object)?;
+            object.insert(
+                "schema_version".to_string(),
+                serde_json::json!(WORKSPACE_STATE_SCHEMA_VERSION),
+            );
+            migrated = true;
+        }
+        Some(version) if version.as_u64() == Some(1) => {
+            migrate_single_dock(object)?;
+            object.insert(
+                "schema_version".to_string(),
+                serde_json::json!(WORKSPACE_STATE_SCHEMA_VERSION),
+            );
+            migrated = true;
+        }
+        Some(version) if version.as_u64() == Some(WORKSPACE_STATE_SCHEMA_VERSION as u64) => {}
+        Some(version) => {
+            return Err(format!(
+                "unsupported workspace state schema version {version} (current {})",
+                WORKSPACE_STATE_SCHEMA_VERSION
+            ));
+        }
+    }
+    let state: WorkspaceState = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    Ok((state, migrated))
+}
+
+fn migrate_single_dock(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let Some(dock) = object.remove("dock") else {
+        return Ok(());
+    };
+    let perspective = object
+        .get("perspective")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "workspace state has a single dock but no perspective; preserving it for manual recovery"
+                .to_string()
+        })?;
+    let mut docks = serde_json::Map::new();
+    docks.insert(perspective.to_string(), serde_json::json!({ "dock": dock }));
+    object.insert("docks".to_string(), serde_json::Value::Object(docks));
+    Ok(())
+}
+
 impl WorkspaceState {
     /// Load the state for a Twin root. Returns `None` on missing /
     /// unreadable / corrupt file, or when the stored `twin_root` doesn't
@@ -278,7 +358,7 @@ impl WorkspaceState {
             .read_sync(&lunco_storage::StorageHandle::File(path.clone()))
             .ok()?;
         let text = String::from_utf8(bytes).ok()?;
-        let state: WorkspaceState = match serde_json::from_str(&text) {
+        let (state, migrated) = match decode_workspace_state(&text) {
             Ok(state) => state,
             Err(e) => {
                 // Falling back to defaults means the next save overwrites this
@@ -307,6 +387,22 @@ impl WorkspaceState {
                 state.twin_root.display(),
             );
             return None;
+        }
+        if migrated {
+            match serde_json::to_string_pretty(&state)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                .and_then(|json| state.save_serialized(&json))
+            {
+                Ok(()) => info!(
+                    "[WorkspaceState] migrated {} to schema version {}",
+                    path.display(),
+                    WORKSPACE_STATE_SCHEMA_VERSION
+                ),
+                Err(e) => warn!(
+                    "[WorkspaceState] migrated {} in memory but could not rewrite it: {e}",
+                    path.display()
+                ),
+            }
         }
         Some(state)
     }
@@ -557,6 +653,7 @@ fn build_state(world: &mut World) -> WorkspaceState {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
     WorkspaceState {
+        schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
         twin_root,
         perspective,
         documents,
@@ -832,6 +929,7 @@ mod tests {
         let root = tmp.join("proj");
         std::fs::create_dir_all(&root).unwrap();
         let state = WorkspaceState {
+            schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             twin_root: root.clone(),
             perspective: Some("analyze".into()),
             documents: vec![
@@ -882,6 +980,7 @@ mod tests {
     #[test]
     fn per_perspective_docks_serde_roundtrip() {
         let state = WorkspaceState {
+            schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             twin_root: PathBuf::from("/proj"),
             perspective: Some("build".into()),
             documents: Vec::new(),
@@ -915,5 +1014,48 @@ mod tests {
         assert_eq!(design.side_browser, vec![PanelId("browser")]);
         assert_eq!(design.bottom, vec![PanelId("plots")]);
         assert_eq!(design.active_center_tab, 2);
+    }
+
+    #[test]
+    fn pre_versioned_single_dock_is_migrated_and_canonicalized() {
+        let old = serde_json::json!({
+            "twin_root": "/proj",
+            "perspective": "build",
+            "documents": [],
+            "active_document": null,
+            "dock": {"surfaces": [{"main": []}]}
+        });
+        let (state, migrated) = decode_workspace_state(&old.to_string()).expect("known migration");
+        assert!(migrated);
+        assert_eq!(state.schema_version, WORKSPACE_STATE_SCHEMA_VERSION);
+        assert_eq!(state.docks["build"].dock, old["dock"]);
+
+        let encoded = serde_json::to_value(state).unwrap();
+        assert_eq!(encoded["schema_version"], WORKSPACE_STATE_SCHEMA_VERSION);
+        assert!(encoded.get("dock").is_none());
+    }
+
+    #[test]
+    fn unknown_workspace_state_fields_and_versions_are_rejected() {
+        let unknown_field = serde_json::json!({
+            "schema_version": WORKSPACE_STATE_SCHEMA_VERSION,
+            "twin_root": "/proj",
+            "perspective": null,
+            "documents": [],
+            "active_document": null,
+            "docks": {},
+            "old_dock": {}
+        });
+        assert!(decode_workspace_state(&unknown_field.to_string()).is_err());
+
+        let future = serde_json::json!({
+            "schema_version": WORKSPACE_STATE_SCHEMA_VERSION + 1,
+            "twin_root": "/proj",
+            "perspective": null,
+            "documents": [],
+            "active_document": null,
+            "docks": {}
+        });
+        assert!(decode_workspace_state(&future.to_string()).is_err());
     }
 }

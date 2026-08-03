@@ -16,7 +16,7 @@
 //! there* or *what already happened* — so every plot would start empty and stay blind to
 //! anything before the moment you connected. These two providers close that, and they are
 //! deliberately transport-agnostic: an HTTP/WebSocket adapter (OpenMCT's telemetry
-//! provider API, a YAMCS bridge) is a thin shim over them, not a rewrite.
+//! provider API, a YAMCS bridge) is a thin integration layer over them, not a rewrite.
 //!
 //! # The channel key
 //!

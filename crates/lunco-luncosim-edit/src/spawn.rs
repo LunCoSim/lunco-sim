@@ -7,8 +7,8 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
 
-use crate::catalog::{prim_path_from_entry_id, SpawnCatalog, SpawnSource};
 use crate::SpawnState;
+use lunco_scene_commands::catalog::{prim_path_from_entry_id, SpawnCatalog, SpawnSource};
 
 /// Ghost entity shown at the spawn placement point.
 #[derive(Component)]
@@ -18,7 +18,7 @@ pub struct SpawnGhost;
 /// `cmd("SetSpawnDiagnostics", #{enabled: true})` in the LunCo REPL (or the
 /// equivalent API command). It logs each material cursor move and every click
 /// decision, including render ray, chosen surface, canonical-world conversion,
-/// grid cell/local placement, and the final [`crate::commands::SpawnEntity`].
+/// grid cell/local placement, and the final [`lunco_scene_commands::commands::SpawnEntity`].
 ///
 /// The trace deliberately has no production fallback or parallel coordinate
 /// calculation: it observes the exact path that creates the ghost and command.
@@ -686,7 +686,7 @@ pub fn on_scene_click_spawn(
     // suspension, so it is safe for both.
     let spawn_world = GridPos(fit.point.0 + fit.normal * (fp.lift - 0.01));
 
-    commands.trigger(crate::commands::SpawnEntity {
+    commands.trigger(lunco_core::SpawnEntity {
         target: grid,
         entry_id: entry_id.clone(),
         position: spawn_world.0.as_vec3(),

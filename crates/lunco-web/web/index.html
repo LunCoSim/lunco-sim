@@ -44,7 +44,7 @@
         //   __lc_test_*  — dev console hooks for the off-thread worker.
         //   lunco_api    — the in-browser API bridge (lunco-api compiled for
         //                  wasm). Same JSON envelope as the native HTTP API:
-        //                  `await window.lunco_api('{"command":"Ping"}')`.
+        //                  `await window.lunco_api('{"type":"ExecuteCommand","command":"Ping","params":{}}')`.
         //   lunco_rhai   — rhai one-shot convenience over lunco_api:
         //                  `await window.lunco_rhai('restart_scene(); pause()')`.
         //   lunco_mount_rhai_tool — mount trusted HTML + CSS that dispatches

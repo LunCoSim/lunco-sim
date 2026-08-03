@@ -47,12 +47,8 @@ use lunco_usd::document::{
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
-use crate::SelectedEntities;
-
-pub use lunco_scene_commands::runtime_waypoint::{
-    append_runtime_patrol, mark_reached_waypoints_on_enter, runtime_waypoint_key,
-    RuntimeWaypointBinding, RuntimeWaypointSpawner,
-};
+use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
+use lunco_scene_commands::SelectedEntities;
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -1997,9 +1993,10 @@ pub fn sync_waypoint_path_mesh(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_runtime_patrol, route_ribbon_points, WAYPOINT_MARKER_ASSET};
+    use super::{route_ribbon_points, WAYPOINT_MARKER_ASSET};
     use bevy::math::DVec3;
     use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint};
+    use lunco_scene_commands::runtime_waypoint::append_runtime_patrol;
 
     #[test]
     fn runtime_click_creates_and_extends_patrol_without_usd() {

@@ -13,7 +13,7 @@ use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 // Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate `PbrLook`
 // and its shader keys mutate `ShaderLook`; the render binders re-materialise on
 // `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
@@ -38,8 +38,8 @@ use lunco_usd_bevy::{
 /// declares this command's wire channel and needs nothing but the type, so keeping
 /// the definition in core is what let `lunco-networking` drop its dependency on
 /// this crate. The HANDLER (`on_spawn_entity_command`) stays here, with the
-/// catalog it spawns from. Re-exported so existing call sites are unchanged.
-pub use lunco_core::SpawnEntity;
+/// catalog it spawns from. Callers use the command type from `lunco-core`
+/// directly.
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]

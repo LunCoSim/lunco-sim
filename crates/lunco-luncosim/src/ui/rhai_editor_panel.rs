@@ -28,7 +28,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::{CompileState, Diagnostic, DiagnosticSeverity, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
-use lunco_luncosim_edit::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 use lunco_scripting::commands::RunScenario;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_scripting::ScriptRegistry;

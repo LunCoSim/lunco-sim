@@ -12,9 +12,10 @@ use bevy::camera::primitives::Aabb;
 use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
 
-use crate::{SelectedEntities, SpawnState};
+use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command};
+use lunco_scene_commands::SelectedEntities;
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]

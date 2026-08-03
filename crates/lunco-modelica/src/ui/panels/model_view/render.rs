@@ -557,8 +557,7 @@ fn render_unified_toolbar(
                 // Same resolver the Experiments-tab Setup uses, so the two
                 // surfaces always agree (draft → runner cache → AST
                 // annotation → fallback).
-                let bounds =
-                    crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
+                let bounds = crate::model_commands::resolve_setup_bounds(world, doc, &model_ref);
                 let overrides_count = world
                     .get_resource::<crate::experiments_runner::ExperimentDrafts>()
                     .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))

@@ -23,10 +23,12 @@ use lunco_render::PbrLook;
 
 use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
 
-use crate::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
-use crate::doc_resolve::{bound_shader_prim, geom_api_schemas, resolve_doc_for_entity};
+use lunco_scene_commands::doc_resolve::{
+    bound_shader_prim, geom_api_schemas, resolve_doc_for_entity,
+};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
@@ -238,7 +240,7 @@ pub(crate) fn inspector_inputs_changed(
     mut joint_poll: Local<f32>,
     time: Res<Time>,
     view: Res<InspectorView>,
-    selection: Res<crate::SelectedEntities>,
+    selection: Res<lunco_scene_commands::SelectedEntities>,
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
     // The SAME sun the producer reads (non-preview, non-fill), so the comparison
     // is against the value that would land in the view.
@@ -492,7 +494,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 // The typed verb — despawns, drops the selection, AND authors the
                 // `RemovePrim`, so the delete persists, journals, replicates, and
                 // undoes (Ctrl+Z).
-                world.trigger(crate::commands::DeleteEntity {
+                world.trigger(lunco_scene_commands::commands::DeleteEntity {
                     target: entity,
                     intent: lunco_core::EditIntent::Persistent,
                 });
@@ -595,7 +597,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                                 warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
                                 return;
                             };
-                            world.trigger(crate::commands::MoveEntity {
+                            world.trigger(lunco_scene_commands::commands::MoveEntity {
                                 entity_id: gid.get(),
                                 translation: new_t.to_array().map(f64::from),
                             });
@@ -792,7 +794,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     ui.separator();
     if ui.button("🗑 Delete Entity (Del)").clicked() {
         ctx.defer(move |world| {
-            world.trigger(crate::commands::DeleteEntity {
+            world.trigger(lunco_scene_commands::commands::DeleteEntity {
                 target: entity,
                 intent: lunco_core::EditIntent::Persistent,
             });
@@ -1982,7 +1984,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         .try_insert(look);
     // …and the material that binder ALREADY bound, or the same double-draw happens
     // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
-    crate::commands::drop_bound_pbr_material(world, part);
+    lunco_scene_commands::commands::drop_bound_pbr_material(world, part);
 
     // Propagate to USD — onto the `Shader` prim of the `Material` this geometry is
     // bound to. A shader is not a property of a mesh: it belongs to the material, and
@@ -2119,7 +2121,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     .clicked()
                 {
                     ctx.defer(|world| {
-                        world.trigger(crate::commands::RescanShaders {});
+                        world.trigger(lunco_scene_commands::commands::RescanShaders {});
                     });
                 }
                 if let Some(path) = current_shader_path(ctx, part) {
@@ -2129,7 +2131,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                         .clicked()
                     {
                         ctx.defer(move |world| {
-                            world.trigger(crate::commands::DeleteShader { path });
+                            world.trigger(lunco_scene_commands::commands::DeleteShader { path });
                         });
                     }
                 }
@@ -2141,19 +2143,19 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
 
 /// Create a shader from `template` (registers it), then bind it to `part`.
 fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str) {
-    world.trigger(crate::commands::CreateShader {
+    world.trigger(lunco_scene_commands::commands::CreateShader {
         name: name.to_string(),
         template: template.to_string(),
         source: String::new(),
         target: 0,
     });
-    let stem = crate::commands::sanitize_stem(name);
+    let stem = lunco_scene_commands::commands::sanitize_stem(name);
     apply_if_registered(world, part, &stem);
 }
 
 /// Import an external `.wgsl` (registers it), then bind it to `part`.
 fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
-    world.trigger(crate::commands::ImportShader {
+    world.trigger(lunco_scene_commands::commands::ImportShader {
         source_path: src_path.to_string(),
         name: String::new(),
         target: 0,
@@ -2161,7 +2163,7 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
     let stem = std::path::Path::new(src_path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(crate::commands::sanitize_stem)
+        .map(lunco_scene_commands::commands::sanitize_stem)
         .unwrap_or_default();
     if !stem.is_empty() {
         apply_if_registered(world, part, &stem);
@@ -2172,7 +2174,7 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
 fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
     let path = {
         let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
-        crate::commands::shader_asset_path_for(tr, stem)
+        lunco_scene_commands::commands::shader_asset_path_for(tr, stem)
     };
     let registered = world
         .resource::<lunco_materials::ShaderCatalog>()

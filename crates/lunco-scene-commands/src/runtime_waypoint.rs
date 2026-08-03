@@ -395,7 +395,7 @@ pub fn mark_reached_waypoints_on_enter(
 fn collect_targets(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::Object(map) => {
-            if map.get("ID").and_then(serde_json::Value::as_str) == Some("drive_to") {
+            if map.get("kind").and_then(serde_json::Value::as_str) == Some("drive_to") {
                 if let Some(target) = map.get("target").and_then(serde_json::Value::as_str) {
                     out.push(target.to_string());
                 }

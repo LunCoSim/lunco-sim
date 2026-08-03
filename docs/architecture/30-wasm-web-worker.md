@@ -6,13 +6,11 @@ How the browser build keeps the UI responsive while rumoca compiles a model.
 
 ## Why
 
-`wasm32-unknown-unknown` is single-threaded. Originally, the wasm build
-ran the Modelica worker logic *on the Bevy main thread* via
-`worker::inline_worker_process`, so any compile that took seconds froze
-the page. Native already had the right shape — `worker::modelica_worker`
-on a `std::thread` exchanging crossbeam messages — and the goal was to
-mirror that on the web without nightly Rust, atomics, or
-`SharedArrayBuffer`.
+`wasm32-unknown-unknown` has no native thread API available to the runtime.
+The Modelica worker therefore runs in a dedicated Web Worker. Native already
+has the same ownership boundary — `worker::modelica_worker` on a
+`std::thread` exchanging crossbeam messages — and the web transport mirrors
+that boundary without nightly Rust, atomics, or `SharedArrayBuffer`.
 
 The chosen approach: a **second wasm bundle running in a Web Worker**.
 Same code, separate JS thread, separate wasm linear memory. Bevy systems
@@ -27,13 +25,13 @@ a transport layer that bridges the channels to the worker over
 │ Main page (lunica bundle)           │         │ Worker (lunica_worker)      │
 │ ─────────────────────────────────────── │         │ ─────────────────────────── │
 │ Bevy app, egui UI, MSL fetcher          │         │ no Bevy app                 │
-│ ModelicaChannels (crossbeam)            │         │ InlineWorkerInner state     │
+│ ModelicaChannels (crossbeam)            │         │ WorkerState                  │
 │   tx_cmd ──┐                            │         │ ModelicaCompiler (lazy)     │
 │   rx_res ◄─┤                            │         │                             │
 │            │                            │         │                             │
 │  pump_commands_to_worker  ──postMessage─►  ──────►  onmessage:                  │
 │       (Update system)        bincode    │         │   WireMessage::Command   →  │
-│                                         │         │     process_inline_command  │
+│                                         │         │     process_command          │
 │                              postMessage             ◄── Vec<ModelicaResult>    │
 │  worker.onmessage ◄──────────  bincode  │         │   WireMessage::Ping      → │
 │      → tx_res.send(result)              │         │     pong via WireResult::Log│
@@ -51,7 +49,7 @@ a transport layer that bridges the channels to the worker over
    `onmessage` closure that decodes `WireResult` and pushes `Result` into
    `tx_res` and `Log` lines into `bevy::log::info!("[worker] …")`, and
    stashes the worker handle in a `OnceLock<WorkerHandle>`. The worker JS
-   bundle is loaded via the **bootstrap shim** (see "Bootstrap" below).
+   bundle is loaded via the **bootstrap adapter** (see "Bootstrap" below).
 3. **Worker init.** Inside the Worker, `bin/lunica_worker.rs::run()` runs
    under `wasm_bindgen(start)`. It installs `self.onmessage`, posts back
    `WireResult::Log("ready")`, and parks.
@@ -67,12 +65,12 @@ a transport layer that bridges the channels to the worker over
    `channels.tx` exactly as on native. Each `Update` tick,
    `worker_transport::pump_commands_to_worker` drains `channels.rx_cmd`,
    wraps each command in `WireMessage::Command(...)`, bincode-encodes,
-   `worker.post_message(...)`. The inline-worker fallback bails out
-   (`worker_transport::is_worker_active()`) so the two paths never race for
-   the same queue.
+   `worker.post_message(...)`. If the worker is unavailable, each command
+   receives an explicit lifecycle failure; simulation is never run on the page
+   thread and commands never remain queued indefinitely.
 6. **Worker dispatch.** Worker `onmessage` decodes the envelope:
-   - `Command(cmd)` → `worker::process_inline_command(state, cmd, |r| post_result(r))`.
-     Same dispatch the inline path uses — single source of truth.
+   - `Command(cmd)` → `worker::process_command(state, cmd, |r| post_result(r))`.
+     This is the single wasm command-dispatch path.
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
    - `InstallParsedMsl(parsed)` → `msl_remote::install_global_parsed_msl_pub(parsed)`.
@@ -108,13 +106,12 @@ shared-snapshot fast-path.
 
 ## Cross-platform footprint
 
-Native unchanged. The serde derives are no-ops at runtime; the inline
-fallback (`worker::inline_worker_process` + `InlineWorker`) is wasm-only.
+Native unchanged. The serde derives are no-ops at runtime.
 `worker_transport.rs` and `bin/lunica_worker.rs` are
-`#![cfg(target_arch = "wasm32")]` end-to-end. The single source of truth
-for command dispatch is `worker::process_inline_command` (also wasm-only,
-extracted from `inline_worker_process` for reuse). The native
-`worker::modelica_worker` loop kept its own dispatch.
+`#![cfg(target_arch = "wasm32")]` end-to-end. The wasm worker owns the
+`WorkerState` and dispatches through `worker::process_command`; there is no
+main-thread simulation fallback. The native `worker::modelica_worker` loop
+keeps its native dispatch and ownership of `SimulationSession` values.
 
 ## Build (`scripts/build_web.sh build lunica`)
 
@@ -150,7 +147,7 @@ is never called, `wasm_bindgen(start)` never fires, the worker silently
 stays without an `onmessage` handler. Every command sent to it queues
 forever.
 
-The fix is a tiny shim:
+The required entry point is a tiny adapter:
 
 ```js
 // dist/lunica/worker/worker_bootstrap.js
@@ -190,7 +187,7 @@ test loops.
 | MSL `post_message_with_transfer`           | ≈0           | `ArrayBuffer` ownership transferred, no clone     |
 | MSL `bincode::deserialize` in worker       | ~0.5 s       | off-thread, doesn't block UI                      |
 | Compile `Osc` (no MSL)                     | 0.07 s       | round-trip including pump + post + decode         |
-| Compile `AnnotatedRocketStage` (full MSL)  | ~3.4 s       | round-trip; native equivalent ~2 s, was 18 s inline |
+| Compile `AnnotatedRocketStage` (full MSL)  | ~3.4 s       | round-trip; native equivalent ~2 s                 |
 | Step                                       | ~50 µs RT    | post + structuredClone of small payload           |
 
 Per-Step roundtrip is dominated by JS event-loop scheduling, not
@@ -222,14 +219,13 @@ starting`) DO appear in the page console in Chrome — Chrome merges
 worker stdout/stderr into the main page Console panel. Other browsers
 may not; `WireResult::Log` is the portable channel.
 
-## Inline fallback
+## Worker-unavailable behavior
 
-If `install_worker` fails (worker bundle missing, browser luncosim
-refuses, etc.) the inline path stays alive. `pump_commands_to_worker`
-early-returns on `WORKER.get().is_none()`, so commands stay in
-`rx_cmd`; `inline_worker_process` then drains them on the main thread
-just like the inline fallback. UI blocks on compile in that mode, but
-the page still works.
+If `install_worker` fails, or a post to the worker is rejected, the transport
+drains the affected command tickets into explicit lifecycle failures. The UI
+can report that the Modelica worker is unavailable and the user can reload the
+web application. No command is silently retained, and no Modelica compile or
+step runs on the page thread.
 
 ## What's NOT solved
 
@@ -328,7 +324,7 @@ dist/<binary>/
     parsed-<sha>.bin.zst    # ~14 MB pre-parsed StoredDefinitions
   worker/
     lunica_worker.js, lunica_worker_bg.wasm   # separate worker bundle
-    worker_bootstrap.js                       # REQUIRED shim (see Bootstrap)
+    worker_bootstrap.js                       # REQUIRED adapter (see Bootstrap)
 target/wasm32-unknown-unknown/web-release/<binary>.wasm   # cargo's raw output
 target/web/<binary>/                          # wasm-bindgen intermediate
 .cargo-bin/                                    # optional local wasm-bindgen install

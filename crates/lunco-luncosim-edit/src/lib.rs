@@ -35,12 +35,8 @@
 // (SpawnCommandPlugin = runtime spawn/move + NetReplicate tagging), `spawn_meta`,
 // `shader_doc`, `doc_resolve` and `SelectedEntities` — moved out to
 // `lunco-scene-commands`, so a `--no-ui` server can link the command layer without
-// linking the editor. Re-exported here under their old paths: everything below is
-// the in-scene editor (gizmo/picking/egui), gated on `ui`, and it reaches for them
-// as `crate::catalog::…` / `crate::SelectedEntities` exactly as before.
-pub use lunco_scene_commands::{
-    catalog, commands, doc_resolve, shader_doc, spawn_meta, SelectedEntities,
-};
+// linking the editor. The in-scene editor imports those modules from their owning
+// crate directly; this crate contains only gizmo/picking/egui concerns.
 
 #[cfg(feature = "ui")]
 pub mod gizmo;
@@ -66,6 +62,8 @@ pub mod terrain_tools;
 pub mod ui;
 
 use bevy::prelude::*;
+#[cfg(feature = "ui")]
+use lunco_scene_commands::{catalog, commands, shader_doc, SelectedEntities};
 
 /// Master plugin for all luncosim editing tools.
 #[cfg(feature = "ui")]

@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use lunco_assets::modelica_dir;
 
 use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
-use crate::sim_stream::{SimSnapshot, SimStream};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::sim_stream::SimSnapshot;
+use crate::sim_stream::SimStream;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 
@@ -145,10 +147,11 @@ pub struct ModelicaChannels {
     pub tx: Sender<ModelicaCommand>,
     /// Receiver for `ModelicaResult` <- worker
     pub rx: Receiver<ModelicaResult>,
-    /// Receiver for `ModelicaCommand` <- UI (used by wasm32 inline worker)
+    /// Receiver for `ModelicaCommand` <- UI (used by the wasm Web Worker transport)
     #[cfg(target_arch = "wasm32")]
     pub rx_cmd: Receiver<ModelicaCommand>,
-    /// Sender for `ModelicaResult` -> UI (used by wasm32 inline worker)
+    /// Sender for `ModelicaResult` -> UI (used when the Web Worker transport
+    /// cannot start and must fail a queued command explicitly)
     #[cfg(target_arch = "wasm32")]
     pub tx_res: Sender<ModelicaResult>,
 }
@@ -393,7 +396,7 @@ impl ModelicaResult {
     /// Overlay the `experiment(...)` annotation defaults lifted from a
     /// compile result onto this message. Single source of the
     /// `DaeCompilationResult` → `experiment_*` field mapping, which was
-    /// copy-pasted at both worker compile sites (native + inline-worker).
+    /// copy-pasted at both worker compile sites (native + Web Worker).
     fn with_experiment(mut self, comp_res: &rumoca_compile::compile::DaeCompilationResult) -> Self {
         self.experiment_start_time = comp_res.experiment_start_time;
         self.experiment_stop_time = comp_res.experiment_stop_time;
@@ -616,8 +619,8 @@ fn micro_steps_for(dt: f64) -> u32 {
 
 /// Integrate one macro step: `micro_steps_for(dt)` fixed micro-steps.
 ///
-/// The ONE integration loop for the live path — native worker and wasm inline
-/// worker both call it, so the two `#[cfg]` twins cannot drift on step policy.
+/// The ONE integration loop for the live path — native and wasm workers both
+/// call it, so the two `#[cfg]` twins cannot drift on step policy.
 /// Advances the model's own clock by exactly `micro_steps_for(dt) *
 /// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
 /// side reconciles any residual against the world clock next tick.
@@ -694,6 +697,53 @@ fn reset_ok(
         is_reset: true,
         ..Default::default()
     }
+}
+
+/// Build the lifecycle-shaped error delivered when the browser Web Worker is
+/// unavailable. Keeping the command's entity/session and lifecycle flags lets
+/// the normal response handler release compile/step state instead of leaving
+/// a spinner or coupling barrier waiting forever.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn worker_unavailable_result(
+    cmd: ModelicaCommand,
+    reason: &str,
+) -> Option<ModelicaResult> {
+    let mut result = match cmd {
+        ModelicaCommand::Step {
+            entity, session_id, ..
+        } => result_ok(entity, session_id),
+        ModelicaCommand::Compile {
+            entity, session_id, ..
+        } => ModelicaResult {
+            entity,
+            session_id,
+            is_new_model: true,
+            ..Default::default()
+        },
+        ModelicaCommand::UpdateParameters {
+            entity, session_id, ..
+        } => ModelicaResult {
+            entity,
+            session_id,
+            is_parameter_update: true,
+            ..Default::default()
+        },
+        ModelicaCommand::Reset { entity, session_id } => ModelicaResult {
+            entity,
+            session_id,
+            is_reset: true,
+            ..Default::default()
+        },
+        // Despawn is fire-and-forget; there is no UI lifecycle state to close.
+        ModelicaCommand::Despawn { .. } => return None,
+        ModelicaCommand::LoadSourceRoot { id, .. } => ModelicaResult {
+            entity: Entity::PLACEHOLDER,
+            loaded_source_root_id: Some(id),
+            ..Default::default()
+        },
+    };
+    result.error = Some(reason.to_string());
+    Some(result)
 }
 
 /// Where a captured default was declared, which decides how its leaf name is
@@ -811,7 +861,7 @@ fn apply_input_defaults_validated(
 /// sibling docs — with the bound-`input` workaround applied to EVERY member.
 ///
 /// All worker compile paths (Compile, Reset, Step auto-init, UpdateParameters;
-/// native and inline) assemble their sources through
+/// native and Web Worker) assemble their sources through
 /// [`assemble_compile_unit`], so no path can hand rumoca an unstripped string:
 /// rumoca demotes a bound `input Real x = <default>` to an algebraic, which
 /// deletes the runtime slot and silently drops every wire into it (see
@@ -1189,8 +1239,8 @@ fn prune_entity_temp_dirs(
 /// **Native only.** It is spawned on a real `std::thread` (see
 /// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
 /// has neither: wasm dispatches the *same* commands through
-/// [`process_inline_command`] (inline, or in the `lunica_worker` Web Worker
-/// bundle) with the source carried in the message instead of read from a path.
+/// [`process_command`] in the `lunica_worker` Web Worker bundle, with the
+/// source carried in the message instead of read from a path.
 /// Gating it native-only is what keeps `std::fs` out of the wasm bundle rather
 /// than shipping calls that always `Err` in a browser.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2083,22 +2133,10 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 }
 
 // =============================================================================
-// WebAssembly Inline Worker (wasm32 only - no thread support in browser)
+// Web Worker simulation state (wasm32 only)
 // =============================================================================
 //
-// Why this exists:
-//   - std::thread::spawn panics on wasm32-unknown-unknown (no OS thread support)
-//   - Web Workers are not available from Rust/wasm-bindgen without additional
-//     tooling (wasm-bindgen-rayon, etc.)
-//   - Instead, we process one simulation command per frame in a Bevy system.
-//     This keeps the UI responsive while still running full Modelica simulation.
-//
-// Trade-offs:
-//   - One command per frame limits throughput (fine for interactive use)
-//   - No back-pressure: commands pile up in the channel if the worker falls behind
-//   - All state lives in a Resource, so it resets on page reload (by design)
-
-/// Inner simulation state for wasm32 inline worker.
+/// Simulation state owned by one wasm Web Worker.
 /// Mirrors the local variables in `modelica_worker` on desktop.
 ///
 /// `pub` so the off-thread worker bin (`bin/lunica_worker.rs`) can own
@@ -2106,7 +2144,7 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 /// crosses crate boundaries.
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
-pub struct InlineWorkerInner {
+pub struct WorkerState {
     steppers: HashMap<Entity, (u64, String, SimulationSession)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
@@ -2120,7 +2158,7 @@ pub struct InlineWorkerInner {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl InlineWorkerInner {
+impl WorkerState {
     /// Lazily-built shared compiler. Same instance the regular
     /// Compile path uses, so RunFast hits the same warm caches.
     pub fn compiler(&mut self) -> &mut ModelicaCompiler {
@@ -2128,84 +2166,19 @@ impl InlineWorkerInner {
     }
 }
 
-/// Thread-safe wrapper for wasm32 inline worker state.
-///
-/// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
-/// SimulationSession internally uses Rc<RefCell<>> which is !Send, but since no threads
-/// exist on this target, we can safely implement Send/Sync.
-#[cfg(target_arch = "wasm32")]
-#[derive(Resource, Default)]
-pub(crate) struct InlineWorker {
-    inner: InlineWorkerInner,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl InlineWorker {
-    /// Drop any previously-constructed `ModelicaCompiler`. Used by the
-    /// MSL drain when the in-memory bundle finishes loading: a compiler
-    /// that was lazily built before MSL was available has an empty
-    /// session and would yield `unresolved type reference` for every
-    /// MSL ref. The next compile will re-init via
-    /// `get_or_insert_with(ModelicaCompiler::new)` and pick up the
-    /// global MSL source.
-    pub(crate) fn reset_compiler(&mut self) {
-        self.inner.compiler = None;
-        // The fresh compiler will see the just-landed MSL bundle — anything
-        // compiled against the old (possibly MSL-less) session is stale.
-        self.inner.library_gen += 1;
-    }
-}
-
-// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
-#[cfg(target_arch = "wasm32")]
-unsafe impl Send for InlineWorker {}
-#[cfg(target_arch = "wasm32")]
-unsafe impl Sync for InlineWorker {}
-
-/// Processes Modelica commands inline on wasm32 (no background thread).
-///
-/// Runs each frame in the Update schedule. Drains one command from the
-/// channel and processes it synchronously, sending results back immediately.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn inline_worker_process(
-    mut worker: ResMut<InlineWorker>,
-    channels: Res<ModelicaChannels>,
-) {
-    // If the off-thread Web Worker is wired up
-    // (`worker_transport::install_worker` succeeded), it owns the
-    // `rx_cmd` queue: its pump system drains commands and forwards them
-    // to the worker bundle. We must not also consume from the same
-    // queue here or commands would race. Bail out — the worker
-    // pipeline is the active one.
-    if crate::worker_transport::is_worker_active() {
-        return;
-    }
-    // Process one command per frame to avoid blocking the main thread.
-    let Ok(cmd) = channels.rx_cmd.try_recv() else {
-        return;
-    };
-    let tx = channels.tx_res.clone();
-    process_inline_command(&mut worker.inner, cmd, |r| {
-        let _ = tx.send(r);
-    });
-}
-
-/// Apply a single `ModelicaCommand` against the inline worker state, sending
+/// Apply a single `ModelicaCommand` against a Web Worker state, sending
 /// any resulting `ModelicaResult` values through `send`.
 ///
-/// Same dispatch the desktop `modelica_worker` loop runs, parameterised over
-/// the result sink so both the in-process inline path
-/// (`inline_worker_process`) and the off-thread Web Worker entry
-/// (`bin/lunica_worker.rs`) can share it. Passing a closure rather than a
-/// concrete `Sender` keeps this fn agnostic to whether results go to a
-/// crossbeam channel, a `Vec`, or a `postMessage` queue.
+/// This is the same dispatch the desktop `modelica_worker` loop runs. Passing
+/// a closure rather than a concrete `Sender` keeps this fn agnostic to whether
+/// results go to a crossbeam channel, a `Vec`, or a `postMessage` queue.
 ///
 /// `state` carries the per-entity `SimulationSession` map, DAE cache, and the lazy
 /// `ModelicaCompiler`. The wasm worker bin owns one of these for the lifetime
 /// of the page and reuses it across postMessage dispatches.
 #[cfg(target_arch = "wasm32")]
-pub fn process_inline_command<F: FnMut(ModelicaResult)>(
-    state: &mut InlineWorkerInner,
+pub fn process_command<F: FnMut(ModelicaResult)>(
+    state: &mut WorkerState,
     cmd: ModelicaCommand,
     mut send: F,
 ) {
@@ -2342,10 +2315,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             } else {
                 w.realtime_models.remove(&entity);
             }
-            // NB: the wasm inline worker runs on the Bevy main thread
-            // today and does not publish to a lock-free SimStream.
-            // Phase A lands on desktop first; TODO(arch-phase-b) wire
-            // the wasm path once the inline worker moves off-thread.
+            // The wasm Web Worker transport does not publish a lock-free
+            // SimStream across wasm instances; it uses result messages.
             w.current_sessions.insert(entity, session_id);
             // Raw sibling docs for the cache — see the native Compile arm.
             let raw_extras = extra_sources.clone();
@@ -2646,7 +2617,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
         }
         ModelicaCommand::LoadSourceRoot { id, payload } => {
             // Wasm path: matches the native handler. Worker thread
-            // (whether off-main Web Worker or inline) merges the
+            // (whether native or off-main Web Worker) merges the
             // library into its session. Idempotent.
             // M3: invalidate cached compiled artifacts (see native arm).
             w.library_gen += 1;
@@ -2661,7 +2632,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 }
             };
             log::info!(
-                "[inline-worker] LoadSourceRoot `{}`: {} parsed / {} \
+                "[modelica-worker] LoadSourceRoot `{}`: {} parsed / {} \
                  inserted in {:.2}s",
                 id,
                 report.parsed_file_count,

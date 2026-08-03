@@ -444,7 +444,7 @@ pub fn restore_dragged_transform(mut q: Query<(&mut Transform, &GizmoPrevPos)>) 
 /// Ctrl+Z could not touch it — the same class of gap the old editor-side undo stack
 /// was papering over.
 ///
-/// The op-authoring path already exists — [`crate::commands::MoveEntity`] is observed
+/// The op-authoring path already exists — [`lunco_scene_commands::commands::MoveEntity`] is observed
 /// by `persist_move_to_runtime_layer`, which authors `UsdOp::SetTranslate` into the
 /// active document's runtime layer (ownership-guarded: a non-document entity simply
 /// doesn't author). The drag itself is deliberately ECS-only, so drag-end fires
@@ -513,9 +513,12 @@ pub fn restore_gizmo_dynamic(
         // Author the released pose. Same guard every other edit path uses, so a prim
         // the active document doesn't own is left alone.
         if let (Some(reg), Ok(tf), Some(abs)) = (usd_registry.as_deref(), q_tf.get(entity), abs) {
-            if let Some((doc, path)) =
-                crate::commands::authorable_prim(entity, &q_prim, reg, workspace.as_deref())
-            {
+            if let Some((doc, path)) = lunco_scene_commands::commands::authorable_prim(
+                entity,
+                &q_prim,
+                reg,
+                workspace.as_deref(),
+            ) {
                 commands.trigger(lunco_usd::commands::ApplyUsdOp {
                     doc,
                     op: lunco_usd::document::UsdOp::SetTranslate {
@@ -576,7 +579,7 @@ pub fn restore_gizmo_dynamic(
         // Grid-absolute, same as the op above — `MoveEntity::translation` is that
         // frame, not the raw `Transform`.
         if let (Ok(gid), Some(abs)) = (q_gid.get(entity), abs) {
-            commands.trigger(crate::commands::MoveEntity {
+            commands.trigger(lunco_scene_commands::commands::MoveEntity {
                 entity_id: gid.get(),
                 translation: abs.0.to_array(),
             });
@@ -708,7 +711,7 @@ mod tests {
 
     #[test]
     fn test_possessed_entity_gizmo_restoration() {
-        use crate::SelectedEntities;
+        use lunco_scene_commands::SelectedEntities;
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
@@ -770,7 +773,7 @@ mod tests {
     /// the user had merely nudged. Hence `Option`: `None` means remove.
     #[test]
     fn dragging_a_non_body_leaves_it_a_non_body() {
-        use crate::SelectedEntities;
+        use lunco_scene_commands::SelectedEntities;
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
@@ -840,7 +843,7 @@ mod tests {
         // physics hold, so the resource must exist for the system to run at all.
         app.init_resource::<lunco_physics::PhysicsHolds>();
         app.init_resource::<GizmoDragSession>();
-        app.add_observer(crate::commands::persist_move_to_runtime_layer);
+        app.add_observer(lunco_scene_commands::commands::persist_move_to_runtime_layer);
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let doc = {

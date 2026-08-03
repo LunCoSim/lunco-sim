@@ -5,7 +5,7 @@
 //! That is a different thing from the **celestial clock**, and conflating them is
 //! what made "speed up time to watch the Earth move" also fast-forward the rovers.
 //!
-//! This panel drives the celestial clock alone, via [`SetClock`]:
+//! This panel drives the celestial [`TimeDomain`] alone, via [`SetClock`]:
 //!
 //! * **Follow sim** — the clock hangs under the sim clock: pausing the world freezes
 //!   the sky too (the default, and the deterministic/replay-safe one).

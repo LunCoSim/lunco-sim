@@ -2,8 +2,8 @@
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Listens for
 //! bincode-serialized `ModelicaCommand` messages from the main page, drives
-//! them through the same `worker::process_inline_command` dispatch the inline
-//! path uses, and `postMessage`s each `ModelicaResult` back.
+//! them through the same `worker::process_command` dispatch as the native
+//! worker, and `postMessage`s each `ModelicaResult` back.
 //!
 //! Why a separate bin
 //! ------------------
@@ -16,7 +16,7 @@
 //!
 //! State
 //! -----
-//! One `InlineWorkerInner` per worker bundle; lives for the lifetime of the
+//! One `WorkerState` per worker bundle; lives for the lifetime of the
 //! page. State (steppers, DAE cache, lazy `ModelicaCompiler`) survives across
 //! postMessage round-trips so back-to-back Step commands hit the warm
 //! stepper without any re-compile cost.
@@ -128,13 +128,13 @@ mod wasm {
     use wasm_bindgen::JsCast;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-    use lunco_modelica::worker::{process_inline_command, InlineWorkerInner};
+    use lunco_modelica::worker::{process_command, WorkerState};
 
     thread_local! {
         /// Per-worker dispatch state. Outlives any single message because rumoca
         /// session caches and the lazy `ModelicaCompiler` are expensive to
         /// rebuild.
-        static STATE: RefCell<InlineWorkerInner> = RefCell::new(InlineWorkerInner::default());
+        static STATE: RefCell<WorkerState> = RefCell::new(WorkerState::default());
 
         /// Holds the `onmessage` closure for the lifetime of the worker; dropping
         /// it would un-register the JS-side handler.
@@ -471,7 +471,7 @@ mod wasm {
                             // a previous panic doesn't crash this one too.
                             match s.try_borrow_mut() {
                                 Ok(mut state) => {
-                                    process_inline_command(&mut state, cmd, |result| {
+                                    process_command(&mut state, cmd, |result| {
                                         post_result(&scope, result);
                                     });
                                 }
@@ -484,7 +484,7 @@ mod wasm {
                                     // next command starts fresh. Loses
                                     // cached compilers but avoids a
                                     // wedge.
-                                    s.replace(InlineWorkerInner::default());
+                                    s.replace(WorkerState::default());
                                 }
                             }
                         });
@@ -525,7 +525,7 @@ mod wasm {
                             // in an inconsistent state. Better to lose
                             // caches than wedge every subsequent compile.
                             STATE.with(|s| {
-                                s.replace(InlineWorkerInner::default());
+                                s.replace(WorkerState::default());
                             });
                             post_log(&scope, "STATE reset after panic — caches cleared");
                         }

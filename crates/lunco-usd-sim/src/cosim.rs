@@ -19,9 +19,9 @@
 //!   The derived set is a pure cache of USD, rebuilt on stage change.
 //!
 //! No domain-specific markers (`BalloonModelMarker`, …) are inserted
-//! here. The legacy catalog/imperative spawn path in
-//! `lunco-luncosim-edit` keeps using its own markers; this translator
-//! is the authoritative path for USD-defined cosim entities.
+//! here. The editor's catalog-driven authoring path owns its explicit
+//! spawn markers; this translator is the authoritative path for
+//! USD-defined cosim entities.
 
 use avian3d::prelude::PhysicsTime;
 use bevy::prelude::*;

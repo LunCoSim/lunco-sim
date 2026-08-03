@@ -5,9 +5,10 @@
 //! would spam `ToolFired` events.
 
 use bevy::math::{DVec3, Vec3};
-use lunco_autopilot::{AutopilotBehavior, BehaviorSpec, DriveCtx, RunToolNode, ToolInvocation};
+use lunco_autopilot::{AutopilotBehavior, BehaviorSpec, DriveCtx, RunToolNode};
 use lunco_behavior::{Node, Status};
 use lunco_core::coords::GridPos;
+use lunco_core::tools::ToolInvocation;
 
 fn ctx() -> DriveCtx {
     DriveCtx {

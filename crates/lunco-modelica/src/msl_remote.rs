@@ -1249,8 +1249,8 @@ fn drain_msl_load_slot(
         // autocomplete) — see `ingest_worker_decoded_msl`.
         let shipped = crate::worker_transport::install_msl_compressed_in_worker(&pbytes);
         if shipped == 0 {
-            // No worker (inline path) — the main thread must decompress +
-            // deserialize the bundle itself.
+            // No worker is available — use the bounded per-frame browser-load
+            // decoder for the editor's resolution/autocomplete index.
             start_main_msl_decode(pbytes);
         } else {
             // Worker will deliver the decoded bytes; keep the compressed blob as
@@ -1339,7 +1339,6 @@ fn drain_msl_load_slot(
 fn drive_msl_parse(
     state: Option<ResMut<MslParseInProgress>>,
     mut load_state: ResMut<MslLoadState>,
-    mut worker: ResMut<crate::worker::InlineWorker>,
     mut commands: Commands,
 ) {
     let Some(mut state) = state else { return };
@@ -1398,10 +1397,6 @@ fn drive_msl_parse(
         );
         crate::worker_transport::install_msl_in_worker(&parsed);
         install_global_parsed_msl(parsed);
-        // Drop the compiler that was lazily built before MSL was ready
-        // (or before parse finished); next compile reinstates with the
-        // pre-parsed bundle.
-        worker.reset_compiler();
         commands.remove_resource::<MslParseInProgress>();
     }
 }

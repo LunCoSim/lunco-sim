@@ -7,8 +7,8 @@
 //! main loop. The blocking compile / step work never blocks the UI.
 //!
 //! On wasm32-unknown-unknown there are no OS threads. Until now the same code
-//! path ran *on the main thread* via `worker::inline_worker_process`, so a
-//! 20 s rumoca compile froze the page. This module replaces that path with a
+//! path ran on the main thread, so a 20 s rumoca compile froze the page. This
+//! module keeps all simulation work in a
 //! Web Worker carrying a second wasm instance (`bin/lunica_worker.rs`). Bevy
 //! systems still see the same crossbeam channels — only the bridge between
 //! them and the worker changes.
@@ -32,14 +32,13 @@
 //!    `ModelicaChannels.rx_cmd`, bincode-encodes each command, and calls
 //!    `Worker::post_message(Uint8Array)`.
 //! 3. The worker bundle (`bin/lunica_worker.rs`) decodes the bytes, runs
-//!    `worker::process_inline_command` against its local `InlineWorkerInner`,
+//!    `worker::process_command` against its local `WorkerState`,
 //!    and posts each `ModelicaResult` back the same way.
 //!
 //! All wasm-only — `cfg(target_arch = "wasm32")` at the module level.
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
@@ -198,7 +197,7 @@ impl serde::Serialize for InstallParsedMslRef<'_> {
 /// panic/error is silent).
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum WireResult {
-    /// A normal `ModelicaResult` produced by `process_inline_command`.
+    /// A normal `ModelicaResult` produced by `process_command`.
     Result(ModelicaResult),
     /// The worker finished decoding the compressed MSL bundle (from
     /// [`WireMessage::InstallParsedMslCompressed`]) into its own
@@ -315,7 +314,7 @@ static WORKER_URL: OnceLock<String> = OnceLock::new();
 /// `InstallParsedMslCompressed { provide_to_main: false }` envelope (~16 MB):
 /// `false` is correct for every (re)seed because main already has the decoded
 /// bundle from worker 0's boot ship — or, if worker 0 died before providing it,
-/// from the main-thread fallback decode — so a (re)seeded worker never re-ships
+/// from the main-thread MSL decode path — so a (re)seeded worker never re-ships
 /// ~165 MB to main. On the decoded slow path (`install_msl_in_worker`) it's the
 /// decoded `InstallParsedMsl` bytes. Set once.
 static MSL_WIRE: OnceLock<Vec<u8>> = OnceLock::new();
@@ -369,14 +368,18 @@ impl WorkerPool {
 /// Post raw `bytes` (a fresh `Uint8Array` copy) to worker `idx`. No-op (with a
 /// warning) if the pool isn't up or the index is out of range. Caller must NOT
 /// hold the pool lock (this takes it).
-fn post_bytes_to(idx: usize, bytes: &[u8], label: &str) {
+fn post_bytes_to(idx: usize, bytes: &[u8], label: &str) -> bool {
     let p = pool().lock_or_recover();
     let Some(inner) = p.inner.as_ref() else {
         bevy::log::warn!("[worker_transport] {label}: worker pool not installed");
-        return;
+        return false;
     };
-    if let Err(e) = inner.post(idx, bytes) {
-        bevy::log::error!("[worker_transport] {label}: post to worker {idx} failed: {e:?}");
+    match inner.post(idx, bytes) {
+        Ok(()) => true,
+        Err(e) => {
+            bevy::log::error!("[worker_transport] {label}: post to worker {idx} failed: {e:?}");
+            false
+        }
     }
 }
 
@@ -404,21 +407,122 @@ pub fn wire_protocol_mismatch() -> bool {
 }
 
 /// Serialize and post a `WireMessage` to worker `idx`.
-fn post_msg_to(idx: usize, msg: &WireMessage, label: &str) {
+fn post_msg_to(idx: usize, msg: &WireMessage, label: &str) -> bool {
     let bytes = match bincode::serde::encode_to_vec(msg, bincode::config::standard()) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] {label}: serialize failed: {e}");
-            return;
+            return false;
         }
     };
-    post_bytes_to(idx, &bytes, label);
+    post_bytes_to(idx, &bytes, label)
 }
 
 /// Process-wide sender for `ModelicaResult` values arriving from the worker.
 /// Set once at startup; drained by the existing
 /// `worker::handle_modelica_responses` system through `ModelicaChannels.rx`.
 static RESULT_TX: OnceLock<Sender<ModelicaResult>> = OnceLock::new();
+
+#[derive(Clone, Copy)]
+enum CommandKind {
+    Step,
+    Compile,
+    UpdateParameters,
+    Reset,
+}
+
+#[derive(Clone)]
+enum CommandTicket {
+    Entity {
+        entity: Entity,
+        session_id: u64,
+        kind: CommandKind,
+    },
+    SourceRoot(String),
+}
+
+fn command_ticket(cmd: &ModelicaCommand) -> Option<CommandTicket> {
+    match cmd {
+        ModelicaCommand::Step {
+            entity, session_id, ..
+        } => Some(CommandTicket::Entity {
+            entity: *entity,
+            session_id: *session_id,
+            kind: CommandKind::Step,
+        }),
+        ModelicaCommand::Compile {
+            entity, session_id, ..
+        } => Some(CommandTicket::Entity {
+            entity: *entity,
+            session_id: *session_id,
+            kind: CommandKind::Compile,
+        }),
+        ModelicaCommand::UpdateParameters {
+            entity, session_id, ..
+        } => Some(CommandTicket::Entity {
+            entity: *entity,
+            session_id: *session_id,
+            kind: CommandKind::UpdateParameters,
+        }),
+        ModelicaCommand::Reset { entity, session_id } => Some(CommandTicket::Entity {
+            entity: *entity,
+            session_id: *session_id,
+            kind: CommandKind::Reset,
+        }),
+        ModelicaCommand::LoadSourceRoot { id, .. } => Some(CommandTicket::SourceRoot(id.clone())),
+        ModelicaCommand::Despawn { .. } => None,
+    }
+}
+
+fn result_matches_ticket(result: &ModelicaResult, ticket: &CommandTicket) -> bool {
+    match ticket {
+        CommandTicket::Entity {
+            entity, session_id, ..
+        } => result.entity == *entity && result.session_id == *session_id,
+        CommandTicket::SourceRoot(id) => result.loaded_source_root_id.as_ref() == Some(id),
+    }
+}
+
+fn command_failure(ticket: CommandTicket, reason: &str) -> ModelicaResult {
+    match ticket {
+        CommandTicket::Entity {
+            entity,
+            session_id,
+            kind,
+        } => ModelicaResult {
+            entity,
+            session_id,
+            error: Some(reason.to_string()),
+            is_new_model: matches!(kind, CommandKind::Compile),
+            is_parameter_update: matches!(kind, CommandKind::UpdateParameters),
+            is_reset: matches!(kind, CommandKind::Reset),
+            ..Default::default()
+        },
+        CommandTicket::SourceRoot(id) => ModelicaResult {
+            entity: Entity::PLACEHOLDER,
+            loaded_source_root_id: Some(id),
+            error: Some(reason.to_string()),
+            ..Default::default()
+        },
+    }
+}
+
+fn fail_in_flight_commands(reason: &str) {
+    let tickets =
+        IN_FLIGHT_COMMANDS.with(|tickets| tickets.borrow_mut().drain(..).collect::<Vec<_>>());
+    let pending =
+        PENDING_COMMANDS.with(|commands| commands.borrow_mut().drain(..).collect::<Vec<_>>());
+    if let Some(tx) = RESULT_TX.get() {
+        for ticket in tickets {
+            let _ = tx.send(command_failure(ticket, reason));
+        }
+        for command in pending {
+            if let Some(result) = crate::worker::worker_unavailable_result(command, reason) {
+                let _ = tx.send(result);
+            }
+        }
+    }
+}
 /// Process-wide sender for `ModelicaCommand`s — same handle the Bevy
 /// systems write to via `ModelicaChannels.tx`. Used by the
 /// `__lc_test_dispatch_compile` JS bridge to fire commands without going
@@ -550,17 +654,16 @@ pub fn register_command_sender(tx_cmd: crossbeam_channel::Sender<ModelicaCommand
 }
 
 /// `true` once a JS Worker has been attached via [`install_worker`]. The
-/// inline worker checks this and bails out so the two paths can't race
-/// for the same `rx_cmd` queue.
+/// Web Worker transport checks this before consuming the shared `rx_cmd` queue.
 pub fn is_worker_active() -> bool {
-    pool().lock().map(|p| p.is_active()).unwrap_or(false)
+    !wire_protocol_mismatch() && pool().lock().map(|p| p.is_active()).unwrap_or(false)
 }
 
 /// Wire up the JS Worker to the Rust result channel.
 ///
-/// `worker_url` is the absolute or origin-relative URL to the worker JS
-/// shim (typically `./worker/lunica_worker.js`, generated by `wasm-bindgen
-/// --target web`). The shim is started as `type=module` so it can `import`
+/// `worker_url` is the absolute or origin-relative URL to the worker entry
+/// adapter (typically `./worker/worker_bootstrap.js`, alongside the generated
+/// `./worker/lunica_worker.js`). The adapter is started as `type=module` so it can `import`
 /// the worker wasm and run `wasm_bindgen(start)`.
 ///
 /// Call exactly once on startup, after `register_result_sender` (which
@@ -623,6 +726,9 @@ fn worker_callbacks() -> Callbacks {
         on_error: Rc::new(|idx| handle_worker_error(idx)),
         on_wire_mismatch: Rc::new(|idx, got| {
             WIRE_MISMATCH.with(|c| c.set(true));
+            fail_in_flight_commands(
+                "Modelica Web Worker wire version does not match the page; rebuild the browser worker bundle",
+            );
             bevy::log::error!(
                 "[worker_transport] STALE WORKER: worker {idx} wire id {got} != main \
                  {WIRE_BUILD_ID}. The shipped lunica_worker wasm was built from different \
@@ -652,6 +758,15 @@ fn route_wire_result(idx: usize, data: JsValue) {
         .map(|(m, _)| m)
     {
         Ok(WireResult::Result(result)) => {
+            IN_FLIGHT_COMMANDS.with(|tickets| {
+                if let Some(index) = tickets
+                    .borrow()
+                    .iter()
+                    .position(|ticket| result_matches_ticket(&result, ticket))
+                {
+                    tickets.borrow_mut().remove(index);
+                }
+            });
             if let Some(tx) = RESULT_TX.get() {
                 let _ = tx.send(result);
             }
@@ -800,6 +915,9 @@ pub fn prewarm_pool_on_msl_ready() {
 ///   2. Respawn a fresh worker in that slot and re-seed it with MSL, so pool
 ///      capacity self-heals (critical for the wasm default single-worker pool).
 fn handle_worker_error(idx: usize) {
+    fail_in_flight_commands(
+        "Modelica Web Worker stopped before completing the command; retry after the worker restarts",
+    );
     if let Some(handle) = crate::engine_resource::global_engine_handle() {
         handle.clear_all_pending();
     }
@@ -899,12 +1017,10 @@ pub fn pump_worker_respawns() {
 ///
 /// Bevy system. Runs every `Update`. Cheap when the queue is empty; when it
 /// isn't, each command is bincode-encoded and posted as a `Uint8Array`. The
-/// worker's `process_inline_command` runs in its own thread and posts results
+/// worker's `process_command` runs in its own thread and posts results
 /// back asynchronously via `onmessage` (see [`install_worker`]).
 pub fn pump_commands_to_worker(channels: Res<ModelicaChannels>) {
-    // Idle tick — nothing queued, so don't spawn the pool. (Must run BEFORE
-    // `inline_worker_process` so that, once we DO spawn, the inline fallback
-    // sees an empty queue and no-ops — see the ordering in lib.rs.)
+    // Idle tick — nothing queued, so don't spawn the pool.
     if channels.rx_cmd.is_empty() {
         return;
     }
@@ -913,8 +1029,15 @@ pub fn pump_commands_to_worker(channels: Res<ModelicaChannels>) {
     ensure_pool_spawned();
     if !is_worker_active() {
         // Pool couldn't be spawned (worker bundle missing / COOP misconfigured).
-        // Leave the commands queued for the main-thread `inline_worker_process`
-        // fallback, which runs after this system.
+        // Fail closed. A missing worker bundle must not silently move the
+        // blocking simulation onto the page's main thread.
+        let reason =
+            "Modelica Web Worker is unavailable; rebuild the browser worker bundle and retry";
+        while let Ok(cmd) = channels.rx_cmd.try_recv() {
+            if let Some(result) = crate::worker::worker_unavailable_result(cmd, reason) {
+                let _ = channels.tx_res.send(result);
+            }
+        }
         return;
     }
     while let Ok(cmd) = channels.rx_cmd.try_recv() {
@@ -944,7 +1067,19 @@ fn post_command_or_queue(cmd: ModelicaCommand) {
         PENDING_COMMANDS.with(|q| q.borrow_mut().push(cmd));
         return;
     }
-    post_msg_to(0, &WireMessage::Command(cmd), "command");
+    let ticket = command_ticket(&cmd);
+    if post_msg_to(0, &WireMessage::Command(cmd), "command") {
+        if let Some(ticket) = ticket {
+            IN_FLIGHT_COMMANDS.with(|tickets| tickets.borrow_mut().push(ticket));
+        }
+    } else if let Some(ticket) = ticket {
+        if let Some(tx) = RESULT_TX.get() {
+            let _ = tx.send(command_failure(
+                ticket,
+                "Modelica Web Worker rejected the command; rebuild the browser worker bundle and retry",
+            ));
+        }
+    }
 }
 
 /// Whether worker 0 — the only worker compile-path traffic is posted to — has
@@ -1075,7 +1210,9 @@ pub fn dispatch_cancel_run(run_id: lunco_experiments::ExperimentId) {
         return;
     }
     match target {
-        Some(idx) => post_msg_to(idx, &WireMessage::CancelRun { run_id }, "cancel_run"),
+        Some(idx) => {
+            let _ = post_msg_to(idx, &WireMessage::CancelRun { run_id }, "cancel_run");
+        }
         None => {
             for i in 0..n {
                 post_msg_to(i, &WireMessage::CancelRun { run_id }, "cancel_run(bcast)");
@@ -1146,7 +1283,7 @@ pub fn __lc_test_worker_ping(tag: &str) {
 
 // ── Boot-race gate for parse requests ──
 //
-// Empirically the worker can be bootstrapped (the JS shim has loaded
+// Empirically the worker can be bootstrapped (the JS entry adapter has loaded
 // and we can `postMessage` to it) seconds before its WASM module is
 // initialised AND seconds before the MSL bundle has landed. A parse
 // request that arrives during that window is delivered to the worker
@@ -1166,6 +1303,11 @@ thread_local! {
     // queued until install_msl_in_worker drains them. Step/Reset/Despawn pass
     // through unconditionally — they don't recompile.
     static PENDING_COMMANDS: std::cell::RefCell<Vec<ModelicaCommand>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Commands posted to the primary worker but not acknowledged yet. A
+    /// bootstrap/runtime error drains these with lifecycle-shaped failures so
+    /// compile and coupling state cannot wait forever for a dead worker.
+    static IN_FLIGHT_COMMANDS: std::cell::RefCell<Vec<CommandTicket>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -1188,15 +1330,15 @@ fn msl_installed() -> bool {
     MSL_INSTALLED.with(|c| c.get())
 }
 
-/// Send a doc to the worker for off-thread parsing. Used by
-/// `engine_resource::drive_engine_sync` on wasm in place of the
-/// main-thread parse spawn. The result lands via the parse-done
-/// channel ([`try_recv_parse_done`]).
-///
-/// Returns `false` when the worker isn't installed (very early boot
-/// or worker init failed); callers fall back to local parsing.
-/// Returns `true` when the request has been posted — the host should
-/// consider it accepted.
+// Send a doc to the worker for off-thread parsing. Used by
+// `engine_resource::drive_engine_sync` on wasm in place of the
+// main-thread parse spawn. The result lands via the parse-done
+// channel (`try_recv_parse_done`).
+//
+// Returns `false` when the worker isn't installed (very early boot
+// or worker init failed); callers use the bounded local data-parse path.
+// Returns `true` when the request has been posted — the host should
+// consider it accepted.
 thread_local! {
     static NEXT_PARSE_WORKER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1213,7 +1355,8 @@ pub fn dispatch_parse_to_worker(
     // Off-thread parse ONLY on a worker that is already MSL-`Ready` and free.
     // The worker pool is spawned lazily for compile/run and is not used to gate
     // the diagram: until a worker is genuinely warm, parsing stays on the main
-    // thread (caller's fallback when this returns `false`). This is what keeps
+    // thread (caller's bounded main-thread parse path when this returns
+    // `false`). This is what keeps
     // the diagram off the worker pool's (slow) startup path — it only ever uses
     // the main thread or an already-warm worker, never a booting one. Once the
     // pool is warm (post first compile/run), reparses ride the free worker so
@@ -1383,8 +1526,7 @@ pub fn install_msl_in_worker(parsed: &[(String, rumoca_compile::parsing::StoredD
 /// than the ~165 MB decoded one, so the post-OOM re-seed is far lighter too.
 ///
 /// Returns the number of workers the bundle was shipped to (`0` when no pool is
-/// installed — the inline fallback path, in which case the caller must decode
-/// the bundle on the main thread itself).
+/// installed — the caller must use the bounded main-thread MSL decode path).
 pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     // Serialize an envelope for one worker. Only the primary (worker 0) is asked
     // to ship the decoded bytes back to main (`provide_to_main`); the rest decode
@@ -1408,8 +1550,8 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     // Retain ONE `provide_to_main = false` envelope (~16 MB), reused for both
     // secondary seeding (`seed_secondary_workers`) and crash-respawn re-seed
     // (`pump_worker_respawns`). `false` is correct for every (re)seed: main gets
-    // the decoded bundle from worker 0's boot ship below (or the main-thread
-    // fallback decode if worker 0 dies first), so no (re)seeded worker needs to
+    // the decoded bundle from worker 0's boot ship below (or the bounded
+    // deadline decode path if worker 0 dies first), so no (re)seeded worker needs to
     // re-ship ~165 MB to main. Pre-serialized once here so the seed path doesn't
     // clone+serialize the bundle on the `MslReady` callback.
     if MSL_WIRE.get().is_none() {
@@ -1422,7 +1564,7 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     // worker saturates the whole pool and starves the freshly-opened model's
     // parse — the reported "no diagram until MSL downloads" bug (and with a
     // 4-worker pool the parallel decodes even blew the worker-decode deadline,
-    // forcing a main-thread fallback decode). Worker 0 decodes alone (a full
+    // forcing the bounded deadline decode path). Worker 0 decodes alone (a full
     // core, so faster) and ships the decoded bytes back to main; the
     // secondaries stay free to parse and are seeded later, once worker 0
     // reports `MslReady`. Zero-copy transfer (single recipient, so detaching

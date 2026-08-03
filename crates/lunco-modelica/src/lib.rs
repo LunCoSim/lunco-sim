@@ -36,6 +36,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use lunco_assets::msl_dir;
 use rumoca_compile::{Session, SessionConfig};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
 /// Typed identity for a Modelica class across the workbench.
@@ -121,11 +122,10 @@ pub mod icon_memo;
 /// destination screen rect, mapping Modelica diagram coordinates
 /// (+Y up) to egui screen coordinates (+Y down).
 // `icon_paint` lives under `ui/` — it's a UI/rendering concern, not
-// a model-semantics one. Re-exported here so the previous flat path
-// (`lunco_modelica::icon_paint::*`) keeps compiling for any external
-// consumer that hardcoded it.
+// a model-semantics one. Keep a crate-private root alias for the UI modules;
+// external callers use the owning `ui::icon_paint` module.
 #[cfg(feature = "ui")]
-pub use ui::icon_paint;
+pub(crate) use ui::icon_paint;
 
 /// Single 2×3 affine transform per node from Modelica icon-local
 /// coords to canvas world coords. Replaces the scattered
@@ -864,8 +864,8 @@ impl ModelicaCompiler {
         //
         // Wasm note: `std::thread::spawn` panics on wasm32-unknown-unknown
         // (single-threaded target). The compile already runs on the main
-        // task there via the inline worker, so the user sees the freeze
-        // anyway — heartbeat would just be cosmetic. Skip it.
+        // task there via the chunked browser-load path, so a heartbeat thread
+        // would be unavailable and purely cosmetic. Skip it.
         use std::sync::atomic::{AtomicBool, Ordering};
         let still_compiling = std::sync::Arc::new(AtomicBool::new(true));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1706,18 +1706,6 @@ fn build_modelica_core(app: &mut App) {
         });
     }
 
-    // On wasm we still hold the inline worker resource as a fallback for
-    // pages that haven't loaded the off-thread worker bundle (e.g. local
-    // dev where the worker JS file is missing). The Web Worker transport,
-    // when wired up by the binary's startup code via
-    // `worker_transport::install_worker`, takes precedence — it intercepts
-    // commands via its own pump system and ships them to the worker
-    // bundle, bypassing the inline path entirely.
-    #[cfg(target_arch = "wasm32")]
-    {
-        app.insert_resource(worker::InlineWorker::default());
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     app.insert_resource(ModelicaChannels {
         tx: tx_cmd,
@@ -1848,25 +1836,16 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Command dispatch on wasm. `pump_commands_to_worker` is the primary
-        // drainer: on a queued command it lazily spawns the worker pool and
-        // ships the command off-thread. It is ordered BEFORE
-        // `inline_worker_process` so that, whenever the pool spawns, the inline
-        // fallback sees an empty queue and no-ops. The inline (main-thread)
-        // path only does work when `pump_commands_to_worker` declines — i.e.
-        // the worker bundle failed to spawn — so a missing/blocked worker still
-        // compiles (just on the main thread).
-        app.add_systems(
-            Update,
-            worker_transport::pump_commands_to_worker.before(worker::inline_worker_process),
-        );
+        // Command dispatch on wasm always goes through the Web Worker. If the
+        // bundle cannot start, the transport drains commands into explicit
+        // errors; it never runs Modelica on the page's main thread.
+        app.add_systems(Update, worker_transport::pump_commands_to_worker);
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.
         app.add_systems(Update, |_world: &mut World| {
             worker_transport::pump_worker_respawns();
         });
-        app.add_systems(Update, worker::inline_worker_process);
         app.add_systems(Update, crate::state::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on
@@ -2014,7 +1993,7 @@ pub struct FrameTimeProbe {
 }
 
 // ---------------------------------------------------------------------------
-// Re-export AST extraction for public API compatibility
+// Public AST extraction API
 // ---------------------------------------------------------------------------
 // These functions live in `ast_extract` but are re-exported here so external
 // callers (workbench binaries, UI panels) can import from the crate root.

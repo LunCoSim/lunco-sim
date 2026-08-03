@@ -62,10 +62,11 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use bevy::render::{
     batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
+    extract_resource::{ExtractResource, ExtractResourcePlugin},
     init_gpu_resource,
     renderer::{RenderAdapterInfo, RenderDevice},
     settings::WgpuSettings,
-    RenderApp, RenderStartup,
+    Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_egui::{egui, EguiContexts};
 
@@ -211,6 +212,20 @@ pub struct RenderHealthHandle(pub Arc<RenderHealth>);
 pub struct RenderGaveUp {
     /// Human-readable reason presentation was abandoned.
     pub reason: String,
+}
+
+/// Cross-world gate for the render schedule. Camera deactivation prevents view
+/// extraction, but Bevy still runs the render graph and egui/pipeline systems
+/// when another camera or a non-camera pass remains. This resource is extracted
+/// into the render world and gates every render-stage set, so presentation and
+/// GPU submission actually stop while the main simulation/API keeps running.
+#[derive(Resource, Clone, Copy, Default, ExtractResource)]
+pub(crate) struct PresentationState {
+    pub stopped: bool,
+}
+
+fn presentation_is_active(state: Option<Res<PresentationState>>) -> bool {
+    state.is_none_or(|state| !state.stopped)
 }
 
 /// Persistent presentation warning shown while the simulation is still alive.
@@ -383,10 +398,34 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     let health = Arc::new(RenderHealth::default());
     app.insert_resource(RenderHealthHandle(health.clone()));
     app.init_resource::<Ladder>();
+    app.init_resource::<PresentationState>();
+    app.add_plugins(ExtractResourcePlugin::<PresentationState>::default());
     app.add_systems(Update, escalate_render_recovery);
 
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
+    // Once the presentation decision is terminal, stop all render-stage work,
+    // including `render_system`, whose only caller presents the swapchain.
+    // Extraction may run one final time to propagate this resource; no render
+    // schedule work is submitted after the gate becomes visible there.
+    render_app.configure_sets(
+        Render,
+        (
+            RenderSystems::ExtractCommands,
+            RenderSystems::PrepareAssets,
+            RenderSystems::PrepareMeshes,
+            RenderSystems::CreateViews,
+            RenderSystems::Specialize,
+            RenderSystems::PrepareViews,
+            RenderSystems::Queue,
+            RenderSystems::PhaseSort,
+            RenderSystems::Prepare,
+            RenderSystems::Render,
+            RenderSystems::Cleanup,
+            RenderSystems::PostCleanup,
+        )
+            .run_if(presentation_is_active),
+    );
     render_app.add_systems(RenderStartup, set_error_handler);
     // This runs after Bevy has probed the adapter and initialized the resource.
     // It affects only the known-bad Quadro/Vulkan combination above.
@@ -587,16 +626,17 @@ fn set_error_handler(
 }
 
 /// Main-world escalation: read the shared tallies, advance the [`Ladder`], apply
-/// whatever it decided.
+/// whatever it decided, and publish the cross-world presentation gate.
 ///
 /// In the main world rather than the render world because both remedies are
 /// main-world state — `DirectionalLight::shadow_maps_enabled` and
-/// `Camera::is_active` are extracted to the render world each frame, so setting
-/// them here is what actually stops the work being submitted.
+/// `Camera::is_active` are extracted to the render world each frame. The
+/// terminal presentation gate additionally stops the render schedule itself.
 fn escalate_render_recovery(
     health: Res<RenderHealthHandle>,
     mut ladder: ResMut<Ladder>,
     time: Res<Time>,
+    mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
     warning: Option<Res<RenderWarning>>,
     mut dir: Query<&mut bevy::light::DirectionalLight>,
@@ -650,6 +690,7 @@ fn escalate_render_recovery(
         }
         Action::GiveUp => {
             h.presentation_stopped.store(true, Ordering::Relaxed);
+            presentation.stopped = true;
             let mut n = 0;
             for mut c in &mut cameras {
                 c.is_active = false;

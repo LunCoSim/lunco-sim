@@ -1016,7 +1016,8 @@ pub fn apply_sync_command(
         // field). Verify the value is fully constructible first so a malformed
         // *wire* command logs and is dropped instead of killing the host. Mirrors
         // the same guard in `lunco-api`'s `api_command_dispatcher`. (Types without
-        // a registered `ReflectFromReflect` keep the legacy path.)
+        // a registered `ReflectFromReflect` use Bevy's normal reflected-event
+        // construction path; the metadata is optional for those event types.)
         let constructible = registration
             .data::<bevy::reflect::ReflectFromReflect>()
             .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())

@@ -852,7 +852,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // The store fills asynchronously, so a scene not yet read simply
         // shows no tooltip this frame and gets one on the next redraw.
         let descs: Vec<Option<String>> = {
-            let store = world.resource::<lunco_luncosim_edit::catalog::AssetMetaStore>();
+            let store = world.resource::<lunco_scene_commands::catalog::AssetMetaStore>();
             assets
                 .iter()
                 .map(|a| store.description(&a.asset_path).map(str::to_string))

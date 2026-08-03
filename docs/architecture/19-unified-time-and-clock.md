@@ -179,9 +179,9 @@ mission, combined to two-part only when calling the ephemeris.
 - **Pure projection fns** `epoch(tick, mission)`, `utc(..)`, `met(..)`, `gmst(..)`, … — free
   functions, `#[cfg(test)]`-covered with fixtures. *Not* methods on a fat resource.
 
-`CelestialClock.epoch` / `TimeWarpState` become **driven views** a shim-system writes each frame
-from the projections, so existing readers (`ephemeris_update_system`, telemetry, UI) are untouched
-during migration.
+`WorldTime` is the read projection consumed by existing readers
+(`ephemeris_update_system`, telemetry, UI), while `TimeTransport` and the clock tree are the
+only write authorities. There is no intermediate mirror or bridge clock.
 
 ### 3d. The clock tree — many clocks, done right
 
@@ -414,8 +414,8 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
   `rate`, so one knob drives epoch+physics together. The `luncosim` slow-mo toggle writes
   `TimeTransport.rate` directly. The `paused → physics_enabled=true` inconsistency is gone (folded
   into the regime: paused ⇒ not running ⇒ tick+physics frozen).
-- **`CelestialClock` removed.** The T1 compat shim was retired once the migration was
-  complete: the struct (`lunco-core`) and the three bridge systems
+- **`CelestialClock` removed.** Once T1 was complete, the struct (`lunco-core`) and the three
+  bridge systems
   (`sync_transport_from_celestial`/`sync_celestial_from_world`/`get_default_celestial_clock`) are
   deleted. Every `.epoch` reader now takes `Res<WorldTime>` (`.epoch_jd`); every
   `.speed_multiplier`/`.paused` writer now takes `ResMut<TimeTransport>` (`.rate`/`.mode`). The

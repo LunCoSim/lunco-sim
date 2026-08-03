@@ -554,9 +554,8 @@ just controls the default.
   dirty`. No per-domain logic in the renderer.
 - `RenameModelicaClass` no longer needs to touch
   `WorkspaceResource` directly — the title-derive system picks up
-  the AST change. (Today's implementation does write the entry
-  manually as a compatibility shim; remove once the derive system
-  lands.)
+  the AST change. The title is derived in the Modelica UI projection from
+  the document index and origin.
 
 ## 8. New-model workflow (target)
 

@@ -203,7 +203,20 @@ impl CurriculumRoot {
             "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
             "twin" => {
                 let (_twin, rel) = rest.split_once('/')?;
-                lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (self, _twin, rel);
+                    // This synchronous curriculum reader has no browser byte
+                    // source. Twin lessons on wasm must arrive through the
+                    // async AssetServer/UsdLoader projection, just like their
+                    // curriculum layer; do not pretend a filesystem read is a
+                    // portable fallback.
+                    None
+                }
             }
             _ => None,
         }

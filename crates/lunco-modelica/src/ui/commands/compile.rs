@@ -1584,11 +1584,6 @@ fn param_map_from_mods(
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
 /// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
 /// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
-// `resolve_setup_bounds` is UI-free (reads document/runner state) and lives in
-// `crate::model_commands` so the headless API server resolves sim bounds too.
-// Re-exported here for the local callers below.
-pub(crate) use crate::model_commands::resolve_setup_bounds;
-
 fn dispatch_experiment(
     world: &mut World,
     raw: DocumentId,
@@ -1811,7 +1806,7 @@ fn dispatch_experiment(
         // no per-surface divergence. The annotation cache seeding above is
         // what makes the cache layer here resolve without a prior
         // interactive compile.
-        let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
+        let mut bounds = crate::model_commands::resolve_setup_bounds(world, doc, &model_ref);
 
         // Parameter overrides / inputs from the draft, with command-supplied
         // values winning. Empty maps (the FastRunActiveModel path) = no-op.

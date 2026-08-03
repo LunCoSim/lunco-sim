@@ -1,8 +1,8 @@
-// Web Worker entry shim for the off-thread DEM bake bundle.
+// Web Worker entry adapter for the off-thread DEM bake bundle.
 //
 // `wasm-bindgen --target web` produces an ES module that EXPORTS an `init`
 // function but does NOT auto-instantiate the wasm. When the main page does
-// `new Worker(URL, { type: 'module' })` the browser loads this shim first; we
+// `new Worker(URL, { type: 'module' })` the browser loads this adapter first; we
 // pull in `dem_worker.js` and call `init()` so `#[wasm_bindgen(start)] fn run()`
 // fires and installs `self.onmessage`.
 //

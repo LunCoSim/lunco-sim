@@ -29,7 +29,7 @@ pub struct ScriptDocument {
     #[serde(default = "default_origin")]
     pub origin: DocumentOrigin,
     /// Metadata about expected input pins (e.g., "battery_voltage"). Drives the
-    /// cosim port graph (`lunco-usd-sim`) for legacy Python scripted models.
+    /// cosim port graph (`lunco-usd-sim`) for Python scripted models.
     #[serde(default)]
     pub inputs: Vec<String>,
     /// Metadata about expected output pins (e.g., "motor_current").

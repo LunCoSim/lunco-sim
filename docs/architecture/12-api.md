@@ -152,7 +152,7 @@ store only while the script is running; it is not an API endpoint.
 ```rust
 // One source-of-truth list at module scope. Alphabetical for diff hygiene.
 // Entries may be bare idents or `module::fn` paths — the path form lets
-// observers live in split submodules without per-fn `use` shims.
+// observers live in split submodules without per-function import boilerplate.
 register_commands!(
     on_open_file,
     on_compile_model,

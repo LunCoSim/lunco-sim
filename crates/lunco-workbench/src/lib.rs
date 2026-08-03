@@ -3243,7 +3243,7 @@ fn render_layout(
                             // target. egui menus right-align after \t.
                             let label = format!("{display}\tCtrl+N");
                             if ui.button(label).clicked() {
-                                world.trigger(file_ops::NewDocument { kind });
+                                world.trigger(lunco_doc_bevy::NewDocument { kind });
                                 ui.close();
                             }
                         }
@@ -3329,7 +3329,7 @@ fn render_layout(
                                     .on_hover_text(path.display().to_string())
                                     .clicked()
                                 {
-                                    world.trigger(file_ops::OpenFile {
+                                    world.trigger(lunco_doc_bevy::OpenFile {
                                         path: path.display().to_string(),
                                     });
                                     ui.close();

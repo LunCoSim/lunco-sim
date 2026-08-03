@@ -40,7 +40,7 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
   a networked Client (which receives behaviour via replication).
 
 Python scenarios run via `PythonScenarioRuntime` implementing the same
-`ScenarioRuntime` trait — not the legacy `inputs`/`outputs` dict path.
+`ScenarioRuntime` trait; they do not use the retired dictionary bridge.
 
 ---
 

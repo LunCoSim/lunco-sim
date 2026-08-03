@@ -270,7 +270,7 @@ pub struct SaveDocument {
 
 /// Request the owning domain persist the document **to a new location**.
 ///
-/// `path` semantics mirror [`OpenFile`](lunco_workbench::file_ops::OpenFile):
+/// `path` semantics mirror [`OpenFile`]:
 ///
 /// - **Empty** → the observer fires
 ///   [`lunco_workbench::picker::PickHandle`](../lunco_workbench/picker/struct.PickHandle.html)
