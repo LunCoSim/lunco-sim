@@ -88,6 +88,9 @@ This skill is the *assembly* layer over the single-domain skills:
 [`author-scenario`](../author-scenario/SKILL.md) (behaviour),
 [`run-modelica`](../run-modelica/SKILL.md) (the `.mo` models),
 [`inspect-simulation`](../inspect-simulation/SKILL.md) (verify the chain).
+For architecture decisions and standard-schema checks, read
+[`luncosim-architecture`](../luncosim-architecture/SKILL.md). It is the gate
+against special-case Rust, duplicate USD vocabulary, and compatibility paths.
 
 ## The Twin (on-disk mission unit)
 
@@ -123,7 +126,7 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian po
         float inputs:altitude.connect     = </Lander.outputs:height>
         float inputs:descent_rate.connect = </Lander.outputs:velocity_y>
         float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>
-        float inputs:g = 1.62                                           # a parameter is an input with a constant
+        float inputs:g = 1.62                                           # only if the Modelica contract declares a runtime input
     }
     def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@

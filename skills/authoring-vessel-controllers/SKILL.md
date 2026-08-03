@@ -26,6 +26,11 @@ description: >
 
 # Authoring vessel controllers
 
+Read [`luncosim-architecture`](../luncosim-architecture/SKILL.md) before
+adding a sensor, actuator, generated network, or custom USD field. This skill
+owns the vessel-controller recipe; the architecture skill owns the
+standard-schema and no-compatibility gate.
+
 A vessel that drives itself (a GNC, an autopilot) is built from **three layers,
 each in the language that fits it**. Never blur them.
 
@@ -119,8 +124,16 @@ live (they reach the solver). Physical constants a model needs (mass, inertia) c
 the body's own ports (`inputs:vehicle_mass.connect = </Lander.outputs:mass>`,
 `inputs:inertia_xx.connect = …`) — USD-derived, not magic numbers.
 
-A **parameter** is an input with a constant instead of a connection:
-`float inputs:kv = 1.2`. Wire it later and nothing about the model changes.
+A **Modelica parameter** is authored as a typed USD constant and is placed in
+the compile-time parameter set by contract classification. A runtime Modelica
+`input` is a live signal and needs a native USD connection or an explicit
+runtime writer; do not infer its kind from the USD spelling alone.
+
+Rust publishes only generic built-in observations. The sensor asset and USD
+connections identify placement and topology; Modelica performs filtering,
+frame conversion, navigation, and control. Do not add a semantic sensor
+registry, a world-coordinate force special case, or a fallback port when the
+parsed Modelica contract does not match the authored scene.
 
 ## 4. Control authority → the `piloted` signal + possession
 

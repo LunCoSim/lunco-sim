@@ -773,7 +773,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | Rust `SimPort.connector`, `SimConnection.{start,end}_connector` | already SSP `Connector` | **keep** |
 | Rust `SimComponent.{inputs,outputs,parameters}` | already FMI causality | **keep** |
 
-> Two duplications to collapse: `lunco:scale`/`offset` exist as *both* USD attrs and `SimConnection`
+> Two duplications to collapse: `lunco:factor`/`offset` exist as *both* USD attrs and `SimConnection`
 > fields — the authored USD connection metadata (`lunco:factor`/`lunco:offset`) is the single truth;
 > `SimConnection.{scale,offset}` is its runtime projection. The OBC's `Port` is the one port type,
 > resolved through the same `SimPort`/`SimConnection` model — one connectable-port concept, not two.

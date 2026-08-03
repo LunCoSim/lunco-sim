@@ -15,6 +15,7 @@ one directly when doing that kind of task by hand.
 |---|---|
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
+| [**luncosim-architecture**](luncosim-architecture/SKILL.md) | Design or review a reusable feature across USD, Modelica, Avian, Rust, and Rhai; adopt standard USD schemas and remove legacy paths |
 
 ## Author the world & its behaviour
 
@@ -37,7 +38,6 @@ one directly when doing that kind of task by hand.
 | [**run-modelica**](run-modelica/SKILL.md) | Run / compile / sweep Modelica models over the HTTP API |
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
-| **produce-episode** (in `lunco-marketing/.claude/skills/`) | Cut a finished campaign video from a take — narration, Kdenlive assembly, master, grade |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
 | [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` — does it parse, and is it *right*? — in seconds, with no app, window or GPU; plus `RunLint` for the loaded scene and where lint rules are authored |
 

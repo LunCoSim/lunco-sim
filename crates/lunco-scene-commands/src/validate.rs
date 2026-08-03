@@ -716,7 +716,7 @@ mod tests {
         let mut s = String::from("#usda 1.0\n\ndef \"RoverControls\"\n{\n");
         for i in intents {
             s.push_str(&format!(
-                "    def \"{i}\"\n    {{\n        uniform string lunco:port = \"throttle\"\n        uniform double lunco:scale = 1\n    }}\n"
+                "    def \"{i}\"\n    {{\n        uniform string lunco:port = \"throttle\"\n        uniform double lunco:factor = 1\n    }}\n"
             ));
         }
         s.push_str("}\n");

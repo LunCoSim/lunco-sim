@@ -239,7 +239,7 @@ mod inherits_compose_tests {
     #[test]
     fn inherits_from_class_brings_child_prims_into_flattened_data() {
         let usda = "#usda 1.0\n\
-class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:scale = 1\n        }\n    }\n}\n\
+class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:factor = 1\n        }\n    }\n}\n\
 def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         let stage =
             build_stage_from_closure(&crate::StageRecipe::from_source("inherits.usda", usda))
@@ -251,7 +251,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             Some("throttle"),
             "inherited Controls child must appear under /Rover with its attrs"
         );
-        assert_eq!(view.value::<f64>(&fwd, "lunco:scale"), Some(1.0));
+        assert_eq!(view.value::<f64>(&fwd, "lunco:factor"), Some(1.0));
     }
 
     /// The real delivery mechanism: a vessel in one file pulls a control-profile
@@ -264,7 +264,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("control_profiles.usda"),
-            "#usda 1.0\nclass \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:scale = 1\n        }\n    }\n}\n",
+            "#usda 1.0\nclass \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:factor = 1\n        }\n    }\n}\n",
         )
         .unwrap();
         let rover = dir.join("rover.usda");
@@ -298,7 +298,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             Some("throttle"),
             "skid_rover must inherit the rover control profile's Controls scope"
         );
-        assert_eq!(view.value::<f64>(&fwd, "lunco:scale"), Some(1.0));
+        assert_eq!(view.value::<f64>(&fwd, "lunco:factor"), Some(1.0));
     }
 
     /// The two harder composition paths, on the real `lander_ops.usda`, where both

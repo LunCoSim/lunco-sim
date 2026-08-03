@@ -30,6 +30,12 @@ the importer (`crates/lunco-usd-bevy/src/units.rs:172`) — never branch on them
 
 Background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
 [`50-usd-driven-visuals.md`](../../docs/architecture/50-usd-driven-visuals.md).
+Before adding a schema or property, read
+[`60-clean-architecture-and-usd-standards.md`](../../docs/architecture/60-clean-architecture-and-usd-standards.md)
+and run its standard-schema gate. Use `UsdGeom`, `UsdPhysics`, `UsdShade`, and
+`UsdLux` where they own the concept; add a LunCo field only for semantics USD
+does not define, then delete any overlapping old field and reader in the same
+cutover.
 Related skills: [`use-asset-library`](../use-asset-library/SKILL.md) (where the
 file goes, how it is discovered, the `lunco://` scheme),
 [`build-usd-scene`](../build-usd-scene/SKILL.md) (assemble),

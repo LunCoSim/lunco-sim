@@ -1258,7 +1258,7 @@ fn instantiate_usd_prim_read(
 
         // Per-vessel intent→port control map (stage 2 of control), authored as a
         // `Controls` child scope: each child prim's NAME is the intent, with
-        // `string lunco:port` + `double lunco:scale`. Authored inline OR pulled in
+        // `string lunco:port` + `double lunco:factor`. Authored inline OR pulled in
         // from a shared profile class (`inherits = </_RoverControl>`); either way
         // it's already composed into this flattened data. When absent, the
         // controller stamps a topology default at possess. Fully data-driven: a
@@ -1274,7 +1274,7 @@ fn instantiate_usd_prim_read(
                 .filter_map(|bind| {
                     let intent = bind.name()?.to_string();
                     let port = reader.scalar::<String>(&bind, "lunco:port")?;
-                    let scale = reader.real(&bind, "lunco:scale")?;
+                    let scale = reader.real(&bind, "lunco:factor")?;
                     Some((intent, port, scale))
                 })
                 .collect();

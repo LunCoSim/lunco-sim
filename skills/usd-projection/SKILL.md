@@ -17,6 +17,14 @@ description: >
 
 # USD → ECS projection
 
+Before adding a field or reader branch, use
+[`luncosim-architecture`](../luncosim-architecture/SKILL.md) and the
+[standard-schema boundary](../../docs/architecture/60-clean-architecture-and-usd-standards.md).
+Prefer the OpenUSD schema that owns the concept. A migration is a clean
+cutover: update the authored source and all readers, delete the old spelling
+and compatibility branch, regenerate schema artifacts, and add a negative
+test. Never make the ECS projection a second source of truth.
+
 **USD is the source of truth. The ECS is a projection of it.** Every entity you
 see is a rendering of a prim. Nothing is authoritative because it is in the
 world; it is in the world because it is in the document.

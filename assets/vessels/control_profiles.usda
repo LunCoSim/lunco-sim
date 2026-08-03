@@ -11,7 +11,7 @@
     A vessel adds a child `def "Controls" (references = @lunco://vessels/control_profiles.usda@</RoverControls>)`
     to receive this intent->port scope. The entity translator walks
     `<Vessel>/Controls/<intent>` (child prim NAME = intent, `string lunco:port` +
-    `double lunco:scale`) and builds a `lunco_core::ControlBinding`. Delivered as a
+    `double lunco:factor`) and builds a `lunco_core::ControlBinding`. Delivered as a
     child `references` arc (NOT root subLayers + inherits) so it composes through a
     spawn/reference exactly like a wheel component does — the arc that empirically
     survives runtime instantiation. Authoring the profile ONCE here keeps every
@@ -31,27 +31,27 @@ def "RoverControls"
     def "forward"
     {
         uniform string lunco:port = "throttle"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
     def "backward"
     {
         uniform string lunco:port = "throttle"
-        uniform double lunco:scale = -1
+        uniform double lunco:factor = -1
     }
     def "left"
     {
         uniform string lunco:port = "steer"
-        uniform double lunco:scale = -1
+        uniform double lunco:factor = -1
     }
     def "right"
     {
         uniform string lunco:port = "steer"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
     def "action"
     {
         uniform string lunco:port = "brake"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
 }
 
@@ -70,43 +70,43 @@ def "LanderControls"
     def "forward"
     {
         uniform string lunco:port = "pitch"
-        uniform double lunco:scale = -1
+        uniform double lunco:factor = -1
     }
     def "backward"
     {
         uniform string lunco:port = "pitch"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
     def "left"
     {
         uniform string lunco:port = "roll"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
     def "right"
     {
         uniform string lunco:port = "roll"
-        uniform double lunco:scale = -1
+        uniform double lunco:factor = -1
     }
     def "yaw_left"
     {
         uniform string lunco:port = "yaw"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
     def "yaw_right"
     {
         uniform string lunco:port = "yaw"
-        uniform double lunco:scale = -1
+        uniform double lunco:factor = -1
     }
     def "action"
     {
         uniform string lunco:port = "external_throttle"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
     # release/detach (G) → the dock-release actuator port; on the rising edge it
     # detaches the fixed joint attaching this vessel to another body.
     def "release"
     {
         uniform string lunco:port = "release"
-        uniform double lunco:scale = 1
+        uniform double lunco:factor = 1
     }
 }

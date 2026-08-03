@@ -1,8 +1,8 @@
 //! Script sources, addressed by canonical asset id.
 //!
-//! A script that lives outside the engine repo — a campaign scenario in
-//! `lunco-marketing`, a policy synced from a peer and mounted as a Twin root over
-//! its cache dir (`twin://<id>/`) — is
+//! A script that lives outside the engine repo — for example a campaign
+//! scenario or a policy synced from a peer and mounted as a Twin root over its
+//! cache dir (`twin://<id>/`) — is
 //! reached the same way every other asset is: through an [`AssetSource`] scheme,
 //! resolved by [`crate::asset_path::canonicalize`]. This registry is where the
 //! loaded TEXT of those scripts lands, keyed by that canonical id.

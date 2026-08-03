@@ -220,7 +220,7 @@ pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
 /// each intent *actuates* on this vessel, so a rover and a lander share the
 /// intent vocabulary while binding different ports. It is authored purely from
 /// USD as a `Controls` child scope (intent-named `def` prims with
-/// `lunco:port`+`lunco:scale`, built via
+/// `lunco:port`+`lunco:factor`, built via
 /// [`from_intent_entries`](ControlBinding::from_intent_entries)) — there is NO
 /// hardcoded Rust default. It is delivered as a child `references` arc to a
 /// shared profile in `control_profiles.usda` (the same arc kind wheels use), so
@@ -243,7 +243,7 @@ pub struct ControlBinding {
 impl ControlBinding {
     /// Build from `(intent_name, port, scale)` triples the USD reader collects by
     /// walking a vessel's `Controls` scope — each child prim's NAME is the intent
-    /// (`parse_user_intent`), with `string lunco:port` + `double lunco:scale`.
+    /// (`parse_user_intent`), with `string lunco:port` + `double lunco:factor`.
     /// Unknown intents are skipped with a warning; returns `None` when nothing
     /// valid parsed, so the caller can fall back to a topology default.
     pub fn from_intent_entries(entries: &[(String, String, f64)]) -> Option<ControlBinding> {

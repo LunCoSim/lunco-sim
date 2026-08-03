@@ -1889,7 +1889,7 @@ pub fn rewire_usd_connections(
             // offset`. Authored on the sink prim, keyed by the consuming port
             // (`lunco:factor:<port>` / `:offset:<port>`), so each input carries its
             // own scaling. Absent ⇒ identity (1, 0), matching the pre-migration
-            // `lunco:scale` default. The transform is invariant across the fan-in
+            // `lunco:factor` default. The transform is invariant across the fan-in
             // sources, so it is read once per sink port, above the source loop.
             // Tolerant of `float` or `double` authoring — a wire naturally matches
             // the `float`-typed port it scales, so a strict `double` read would
