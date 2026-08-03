@@ -675,6 +675,13 @@ pub fn resolve_camera_paths(
                 // avatar side honours it (guards + strip system).
                 lunco_core::CinematicCameraLock,
             ));
+        // `InteractionEased` is a second Transform owner: it interpolates
+        // stepped avatar poses in PostUpdate. A path owns the complete pose and
+        // must remove that history atomically when the lock is installed, or
+        // its spawn-pose sample can overwrite the first path sample.
+        commands
+            .entity(camera)
+            .remove::<lunco_time::InteractionEased>();
         info!(
             "[camera-path] {} → {:?} ({:?}, {} pts, {}s, {})",
             prim.path,

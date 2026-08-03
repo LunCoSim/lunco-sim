@@ -834,11 +834,25 @@ fn sync_avatar_easing(
             Entity,
             Has<SpringArmCamera>,
             Has<lunco_time::InteractionEased>,
+            Has<lunco_core::CinematicCameraLock>,
         ),
         With<Avatar>,
     >,
 ) {
-    for (entity, spring_arm, eased) in q.iter() {
+    for (entity, spring_arm, eased, cinematic_lock) in q.iter() {
+        // A cinematic driver owns the complete camera pose. It must never
+        // acquire render-rate interaction easing: that component is itself a
+        // Transform writer and its initial spawn-pose history can overwrite a
+        // path sample in the same PostUpdate. Remove a marker that was added
+        // before the lock arrived, then leave the path camera alone.
+        if cinematic_lock {
+            if eased {
+                commands
+                    .entity(entity)
+                    .remove::<lunco_time::InteractionEased>();
+            }
+            continue;
+        }
         match (spring_arm, eased) {
             (true, true) => {
                 commands
@@ -4710,6 +4724,36 @@ mod tests {
                 .get::<lunco_time::InteractionEased>(avatar)
                 .is_some(),
             "stepped camera modes must regain interaction-rate easing"
+        );
+    }
+
+    #[test]
+    fn cinematic_camera_owns_render_pose_without_interaction_easing() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_avatar_easing);
+
+        let avatar = app
+            .world_mut()
+            .spawn((Avatar, lunco_core::CinematicCameraLock))
+            .id();
+
+        app.update();
+        assert!(
+            app.world()
+                .get::<lunco_time::InteractionEased>(avatar)
+                .is_none(),
+            "cinematic cameras must not acquire the avatar interpolation writer"
+        );
+
+        app.world_mut()
+            .entity_mut(avatar)
+            .insert(lunco_time::InteractionEased::default());
+        app.update();
+        assert!(
+            app.world()
+                .get::<lunco_time::InteractionEased>(avatar)
+                .is_none(),
+            "a cinematic lock must remove stale avatar interpolation history"
         );
     }
 

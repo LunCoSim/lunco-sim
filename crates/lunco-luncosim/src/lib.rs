@@ -3581,6 +3581,7 @@ fn activate_offscreen_camera(
         &bevy::camera::RenderTarget,
         bevy::ecs::query::Has<Camera3d>,
         bevy::ecs::query::Has<lunco_render::SceneCamera>,
+        bevy::ecs::query::Has<lunco_usd_bevy::camera_path::CameraPathDriven>,
         bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
     )>,
     mut commands: Commands,
@@ -3594,25 +3595,52 @@ fn activate_offscreen_camera(
     // That is the source of the sky-only first frame and the apparent sky/ground
     // flicker in the marketing take.
     //
-    // Prefer an already-active authored camera so a live camera switch survives
-    // this reconciliation.  If several are active, the entity order makes the
-    // result deterministic and the loop below turns all others off.
-    let active_authored = cameras
+    // A path-driven camera is the authored presentation owner. It must win over
+    // an interactive/avatar camera even when that camera was active while the
+    // USD scene was loading: the path writer and capture owner must be the same
+    // entity or the take contains alternating views. This uses the existing
+    // camera-role component, not an episode-specific camera name.
+    let active_path = cameras
         .iter()
-        .filter(|(_, c, target, has_pipeline, has_scene, _)| {
+        .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
             c.is_active
                 && *has_pipeline
                 && *has_scene
+                && *has_path
                 && matches!(target, bevy::camera::RenderTarget::Image(_))
         })
         .map(|(entity, ..)| entity)
         .min();
-    let selected = active_authored.or_else(|| {
+    let path_driven = cameras
+        .iter()
+        .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
+            *has_pipeline
+                && *has_scene
+                && *has_path
+                && matches!(target, bevy::camera::RenderTarget::Image(_))
+        })
+        .map(|(entity, ..)| entity)
+        .min();
+    // If no cinematic path owns the presentation, preserve an explicit active
+    // authored camera before falling back to the lowest authored candidate.
+    let active_authored = cameras
+        .iter()
+        .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+            c.is_active
+                && *has_pipeline
+                && *has_scene
+                && !*has_path
+                && matches!(target, bevy::camera::RenderTarget::Image(_))
+        })
+        .map(|(entity, ..)| entity)
+        .min();
+    let selected = active_path.or(path_driven).or(active_authored).or_else(|| {
         cameras
             .iter()
-            .filter(|(_, _, target, has_pipeline, has_scene, _)| {
+            .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
                 *has_pipeline
                     && *has_scene
+                    && !*has_path
                     && matches!(target, bevy::camera::RenderTarget::Image(_))
             })
             .map(|(entity, ..)| entity)
@@ -3620,7 +3648,16 @@ fn activate_offscreen_camera(
     });
 
     let mut has_image_camera = false;
-    for (entity, mut camera, target, has_pipeline, has_scene, has_lod_origin) in &mut cameras {
+    for (
+        entity,
+        mut camera,
+        target,
+        has_pipeline,
+        has_scene,
+        _has_path,
+        has_lod_origin,
+    ) in &mut cameras
+    {
         let is_image_camera =
             has_pipeline && matches!(target, bevy::camera::RenderTarget::Image(_));
         if !is_image_camera {
