@@ -1911,11 +1911,11 @@ pub fn clear_kinematic_pulse_velocity(
 /// just add a `match` arm. Drive it from curl after a screenshot to iterate:
 ///
 /// ```jsonc
-/// {"command":"SetObjectProperty",
+/// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
-/// {"command":"SetObjectProperty",
+/// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
-/// {"command":"SetObjectProperty",
+/// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"cell_a","value":"0.1,0.8,0.2"}}
 /// ```
 ///
@@ -2953,8 +2953,8 @@ fn install_shader(
 /// optionally bind it to a target entity — all live, no restart.
 ///
 /// ```json
-/// {"command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
-/// {"command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
+/// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
+/// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
 /// ```
 #[Command(default)]
 pub struct CreateShader {
@@ -3009,7 +3009,7 @@ pub fn on_create_shader(
 /// must be prop-fillable per the engine-param registry.
 ///
 /// ```json
-/// {"command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+/// {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
 /// ```
 #[Command(default)]
 pub struct ImportShader {
@@ -3172,7 +3172,7 @@ pub fn on_rescan_shaders(
 /// Entities currently using it keep their in-memory material for the session.
 ///
 /// ```json
-/// {"command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+/// {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
 /// ```
 #[Command(default)]
 pub struct DeleteShader {

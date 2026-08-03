@@ -55,11 +55,11 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 
 - **API / MCP / scripts:** the `RunScenario { target, source }` command
   (`crates/lunco-scripting/src/commands.rs`). MCP tool: **`run_scenario`**
-  (`mcp/src/index.js`). HTTP: `{"command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}`.
+  (`mcp/src/index.js`). HTTP: `{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}`.
   Idempotent + **hot-reload**: re-running on the same entity recompiles in place
   (bumps `ScriptDocument.generation`).
 - **One-shot eval (no attach):** the `RunRhai { code }` command — runs once with
-  full World access; stdout returned via `QueryCommandResult`.
+  full World access; stdout is returned in the original deferred response.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
@@ -158,7 +158,7 @@ Representative commands already covering the user's surface:
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
-| Queries (return data) | `QueryEntity`, `ListEntities`, `DiscoverSchema`, `QueryCommandResult` (`lunco-api/src/executor.rs` — `ApiRequest` variants, not commands) |
+| Queries (return data) | `QueryEntity`, `ListEntities`, `DiscoverSchema` (all use the tagged `ExecuteCommand` envelope where applicable) |
 
 ---
 
@@ -347,8 +347,8 @@ The system is organized into four layers, each building on the one below:
 The command bus is the right channel for **writes that must be authoritative,
 replicated, RBAC-gated, undoable, and audited**. It is the wrong channel for
 **reads** and **fine-grained state** — which a per-tick `on_tick` callback needs
-constantly. Evidence: commands return via async `QueryCommandResult` polling
-(`executor.rs:587`); `QueryEntity` returns only a fixed blob
+constantly. Commands that need a result use the original deferred response
+(`executor.rs`); `QueryEntity` returns only a fixed blob
 (pos/rot/name/type, `executor.rs:535`) — no arbitrary component fields, no
 cosim/Modelica values; reflect-dispatch JSON-(de)serializes per call. And the
 intended read bridge (`python/reflect.rs` `EntityProxy`) is a **stub** — it
@@ -361,7 +361,7 @@ So tighter integration IS needed, as a **second, complementary channel**:
 | Direction | writes | reads (+ scoped local writes) |
 | Mechanism | `cmd()` → `ReflectEvent::trigger` | `AppTypeRegistry` + `ReflectComponent` get/set |
 | Use for | SetPorts, LoadScene, Spawn, SetObjectProperty — anything authoritative/replicated/undoable | position, heading, sensors, cosim/Modelica vars, arbitrary `#[reflect]` fields, entity iteration |
-| Latency | async (poll result) | **synchronous** during eval |
+| Latency | request/response or deferred result | **synchronous** during eval |
 | Replicated? | yes (CommandBus SyncChannel) | no (local read) |
 | Cost | JSON+reflect+observer per call | direct reflected field access (no JSON) |
 
@@ -474,7 +474,7 @@ Service/Topic trichotomy. Mapping:
 | ROS2 | lunco |
 |---|---|
 | Topic (pub/sub) | event bus / `ControlStream` / telemetry |
-| Service (req/resp) | command + `Ack` (poll `QueryCommandResult`) |
+| Service (req/resp) | command + `Ack` on the original request |
 | **Action (goal/feedback/result/cancel)** | **scenario objective/goal** |
 
 Constraints to honor NOW so we don't repaint later:

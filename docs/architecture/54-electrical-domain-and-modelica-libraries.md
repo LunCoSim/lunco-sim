@@ -234,7 +234,7 @@ The mesh and the presence of a `SolarPanel` entity are not enough. A useful live
 ```bash
 curl -sS -X POST http://127.0.0.1:4101/api/commands \
   -H 'Content-Type: application/json' \
-  -d '{"command":"ReadPorts","params":{"api_id":<electrical-api-id>}}' \
+  -d '{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":<electrical-api-id>}}' \
   | jq '.data.ports[] | select(.name == "solar_power" or .name == "solar_incidence" or .name == "soc" or (.name | test("SolarPanel\\.(power_out|generated_current_a)")))'
 ```
 

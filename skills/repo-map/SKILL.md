@@ -83,7 +83,7 @@ The windowed apps that embed the API bridge (`luncosim`, `lunica`, and anything 
 - `--scene <path>` — (`luncosim`) load a USD scene on boot; path is relative to the
   `assets/` root (do **not** prefix with `assets/`).
 
-Drive it: `POST /api/commands` with `{"command":"<Name>","params":{...}}`; discover
+Drive it: `POST /api/commands` with `{"type":"ExecuteCommand","command":"<Name>","params":{...}}`; discover
 the live command set with `DiscoverSchema` (it's introspected, never hard-coded). Full
 recipe in the [`run-modelica`](../run-modelica/SKILL.md) / [`test-via-api`](../test-via-api/SKILL.md) skills.
 

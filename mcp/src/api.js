@@ -68,10 +68,13 @@ export async function listEntities() {
  */
 export async function queryEntity(apiId) {
   return apiRequest({
-    type: 'QueryEntity',
-    // Ids are numbers on the wire (GlobalEntityId is ≤53-bit, JSON-number-safe).
-    // Coerce in case a tool arg arrives as a string.
-    id: Number(apiId),
+    type: 'ExecuteCommand',
+    command: 'QueryEntity',
+    params: {
+      // Ids are numbers on the wire (GlobalEntityId is ≤53-bit, JSON-number-safe).
+      // Coerce in case a tool arg arrives as a string.
+      id: Number(apiId),
+    },
   });
 }
 

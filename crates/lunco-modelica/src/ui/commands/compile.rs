@@ -81,7 +81,7 @@ pub struct CompileModel {
 /// this to lay out an imported model cleanly in one click.
 ///
 /// Exposed to the LunCo API: `POST /api/commands` with
-/// `{"command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
+/// `{"type":"ExecuteCommand","command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
 /// `doc = 0` targets the currently-active tab. Kept as a raw `u64`
 /// (not `DocumentId`) so the generic `lunco-doc` crate stays free of
 /// the bevy-reflect dependency required to cross the API boundary.

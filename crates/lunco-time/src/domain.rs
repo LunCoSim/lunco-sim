@@ -642,7 +642,7 @@ fn spawn_animation_preview(mut commands: Commands) {
 }
 
 /// Drive the [`AnimationPreview`] transport. Each field is optional so one verb
-/// covers run / pause / scroll(seek) / rate / loop — `{"command":"ControlAnimation",
+/// covers run / pause / scroll(seek) / rate / loop — `{"type":"ExecuteCommand","command":"ControlAnimation",
 /// "params":{"playing":false}}` pauses, `{"seek_secs":3.0}` scrubs to 3 s,
 /// `{"rate":2.0}` doubles speed, `{"looping":true}` loops. Headless-safe: it only
 /// writes the preview domain's [`Playback`], never any UI or render resource.
@@ -715,7 +715,7 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 
 /// Drive the LIVE-WORLD transport (physics/tick clock), distinct from
 /// [`ControlAnimation`] which drives the keyframe preview. Each field optional so
-/// one verb covers pause / play / rate — `{"command":"SetTimeTransport",
+/// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
 /// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
 /// `{"rate":4.0}` runs it 4× realtime. This is THE pause command: exposed on the
 /// API/MCP and wrapped by the rhai prelude verbs `pause()`/`play()`/`set_rate()`,
@@ -754,7 +754,7 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
 }
 
 /// Re-anchor the world clock at an absolute epoch (Julian Date, TDB) —
-/// `{"command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
+/// `{"type":"ExecuteCommand","command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
 /// the mission origin and the calendar anchor at the CURRENT tick, so the sim
 /// jumps to that date without a tick discontinuity. This is how a scene picks
 /// its date: a site-anchored USD stage authors `double lunco:time:epochJd` on
@@ -822,7 +822,7 @@ pub enum ClockParent {
 }
 
 /// Re-point, rate-scale or seek one clock —
-/// `{"command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
+/// `{"type":"ExecuteCommand","command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
 /// runs the sky 1000× **while the simulation stays paused**.
 ///
 /// One verb covers every case, because in an affine tree they are the same case:

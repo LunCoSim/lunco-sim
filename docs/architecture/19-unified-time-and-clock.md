@@ -554,7 +554,7 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
   domain (`lunco-time`, spawned by `TimePlugin`) that USD-animated entities auto-bind to
   (`bind_animated_to_preview` in `lunco-usd-bevy`, `Added<UsdAnimated>` + `Without<TimeBinding>`). It
   advances with the sim while playing, but its `Playback` is paused / seeked / rate-scaled by the
-  `ControlAnimation` command (headless, API + MCP: `{"command":"ControlAnimation","params":{...}}`)
+  `ControlAnimation` command (headless, API + MCP: `{"type":"ExecuteCommand","command":"ControlAnimation","params":{...}}`)
   and the Inspector **Animation** section — without touching the physics clock (`TimeTransport`).
 - **Planned authoring UX:** domain-per-project wiring; selection→domain command (bind an arbitrary
   selection to its own scrubbable domain — the preview domain is the global default).
@@ -567,7 +567,7 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
 
 ### T7 — Transport UI + preview-scrub (feeds ConOps)
 - **Animation preview transport:** the `ControlAnimation` command (headless,
-  API + MCP — `{"command":"ControlAnimation","params":{"playing"|"seek_secs"|"rate"}}`) and the
+  API + MCP — `{"type":"ExecuteCommand","command":"ControlAnimation","params":{"playing"|"seek_secs"|"rate"}}`) and the
   Inspector **Animation** section drive the singleton `AnimationPreview` `Playback`
   (play/pause/scrub/rate), scrubbing authored USD animation independently of the physics clock. Scrub
   range tracks the bound clips' authored span (`animated_time_range`).

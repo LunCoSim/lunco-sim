@@ -129,7 +129,7 @@ grep -q "scenario manifest received" "$CLIENT_LOG" || fail "client never receive
 echo "==> resuming host sim, then asserting host scene graph via rhai"
 python3 - "$HOST_API" <<'PY'
 import json, sys, urllib.request
-body = json.dumps({"command": "ControlAnimation", "params": {"playing": True}}).encode()
+body = json.dumps({"type":"ExecuteCommand","command": "ControlAnimation", "params": {"playing": True}}).encode()
 req = urllib.request.Request(f"http://127.0.0.1:{sys.argv[1]}/api/commands", data=body,
                             headers={"Content-Type": "application/json"})
 urllib.request.urlopen(req, timeout=5).read()

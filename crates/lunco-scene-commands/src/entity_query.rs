@@ -15,8 +15,8 @@
 //! back, and the object does not move — a property this pair could not have had
 //! while they lived in different crates with different ideas about frames.
 //!
-//! The wire is unchanged: `{"type":"QueryEntity","id":…}` still works, because
-//! `lunco-api`'s envelope maps that shape onto this provider.
+//! The wire uses the canonical command envelope:
+//! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
 
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;

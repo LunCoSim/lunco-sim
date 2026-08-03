@@ -10,7 +10,7 @@
 //!
 //! ```text
 //!   cmd("RunLint", #{})                       // rhai, incl. every tick for a live check
-//!   {"command":"RunLint","params":{}}         // HTTP / MCP
+//!   {"type":"ExecuteCommand","command":"RunLint","params":{}} // HTTP / MCP
 //! ```
 //!
 //! and a scenario that wants continuous linting simply calls it on a cadence.

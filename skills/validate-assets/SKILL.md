@@ -67,11 +67,11 @@ rendered, no window opens, no port is bound. Run it anywhere, any time.
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
+  -d '{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
 Only one param: **`path`** (string). It is a **query provider**, so the data
-comes back in the response body — you do **not** poll `QueryCommandResult`.
+comes back in the response body — no secondary result request is needed.
 
 **Answered by luncosim binaries only.** `ValidateAsset` is registered in
 `SpawnCommandPlugin` (`crates/lunco-scene-commands/src/commands.rs:2923`), which
@@ -224,7 +224,7 @@ cmd("RunLint", #{});        // lints every loaded stage, same rules, same facts
 query("LintReport");        // { errors, warnings, findings[] }
 ```
 
-or `{"command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load —
+or `{"type":"ExecuteCommand","command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load —
 deliberately. A scenario calling that pair on a cadence *is* a live linter, and
 
 ```rhai

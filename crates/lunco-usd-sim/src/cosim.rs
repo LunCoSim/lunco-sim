@@ -2123,7 +2123,7 @@ fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option
 /// `ListPorts` — enumerate exposed ports. With `{"api_id": N}`, lists that
 /// entity's ports; without, lists every registered entity that has any port.
 ///
-/// `curl … {"command":"ListPorts","params":{"api_id":12345}}`
+/// `curl … {"type":"ExecuteCommand","command":"ListPorts","params":{"api_id":12345}}`
 pub struct ListPortsProvider;
 
 impl lunco_api::ApiQueryProvider for ListPortsProvider {
@@ -2165,7 +2165,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
 
 /// `GetPort` — read one port value.
 ///
-/// `curl … {"command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
+/// `curl … {"type":"ExecuteCommand","command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
 pub struct GetPortProvider;
 
 impl lunco_api::ApiQueryProvider for GetPortProvider {
@@ -2200,8 +2200,8 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
 
 /// `SetPort` — hold one input port at a setpoint.
 ///
-/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
-/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
+/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
+/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
 ///
 /// The write is a HOLD, not a poke: it outranks the wiring fabric for its
 /// duration ([`lunco_cosim::PortHolds`]). Writing the slot alone worked only on
@@ -2266,7 +2266,7 @@ impl lunco_api::ApiQueryProvider for SetPortProvider {
 /// `ReleasePort` — end a [`SetPortProvider`] hold early, handing the port back to
 /// whatever drives it.
 ///
-/// `curl … {"command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
+/// `curl … {"type":"ExecuteCommand","command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
 ///
 /// Holds expire on their own, so this is for the caller who is DONE rather than
 /// the caller who crashed: releasing a throttle at the end of a manoeuvre returns
@@ -2297,7 +2297,7 @@ impl lunco_api::ApiQueryProvider for ReleasePortProvider {
     }
 }
 
-/// API query provider: `curl … {"command":"CosimStatus","params":{}}`
+/// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
 /// state, and propagated cosim values. Lets you probe the running
 /// binary without polling logs.
@@ -2663,7 +2663,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 
 /// Reload (or load) a USD scene at runtime via the API.
 ///
-/// `curl … {"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
+/// `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
 ///
 /// - `path`: USD asset path relative to the asset root.
 /// - `root_prim`: optional override for the SDF path of the prim to

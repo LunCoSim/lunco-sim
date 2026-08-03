@@ -4792,7 +4792,7 @@ mod tests {
 /// `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
 /// `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
 /// the `SessionRegistry` currently records an owner (⇒ `piloted = 1`). Logs one
-/// `[inspect]` line per vessel at INFO. API-driven: `{"command":"InspectVessels"}`.
+/// `[inspect]` line per vessel at INFO. API-driven: `{"type":"ExecuteCommand","command":"InspectVessels"}`.
 #[lunco_core::Command(default)]
 pub struct InspectVessels {}
 

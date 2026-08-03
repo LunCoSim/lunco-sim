@@ -1846,8 +1846,8 @@ mod tests {
             path: tmp_path.to_string_lossy().to_string(),
         });
         // Flush the queued world-command (spawns the async read task),
-        // then poll the drain system across a few ticks until the read
-        // completes and the document is allocated.
+        // then advance a few ticks until the read completes and the document
+        // is allocated.
         for _ in 0..5 {
             app.update();
         }

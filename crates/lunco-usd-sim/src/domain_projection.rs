@@ -1040,7 +1040,7 @@ pub fn publish_generated_sources(
 /// `GeneratedModelicaSource` — read back the exact Modelica text a projected
 /// network was compiled from.
 ///
-/// `curl … {"command":"GeneratedModelicaSource","params":{}}` lists every
+/// `curl … {"type":"ExecuteCommand","command":"GeneratedModelicaSource","params":{}}` lists every
 /// projected network; `{"network_root":"/Rover/Electrical"}` returns one. This
 /// is the read path for the `generated://…` documents the compiler reports
 /// errors against, and the only way to see what USD actually emitted.

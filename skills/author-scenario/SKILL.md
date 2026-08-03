@@ -312,13 +312,13 @@ Prefer the HTTP API (curl-first; canonical port **4101** — launch per the
 
 ```jsonc
 // attach + run (idempotent hot-reload); source is inline rhai OR an asset path
-{"command":"RunScenario","params":{"target":<gid>,"source":"<rhai or path>","params":"{\"speed\":1.5}"}}
-{"command":"SetScenarioPaused","params":{"target":<gid>,"paused":true}}
-{"command":"StopScenario","params":{"target":<gid>}}
+{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai or path>","params":"{\"speed\":1.5}"}}
+{"type":"ExecuteCommand","command":"SetScenarioPaused","params":{"target":<gid>,"paused":true}}
+{"type":"ExecuteCommand","command":"StopScenario","params":{"target":<gid>}}
 ```
 - `params` is a JSON-object string; the script reads it as the read-only `params` constant.
 - **Debug:** `ScriptStatus {target}` → compile/runtime health + located errors; `ScriptInspect {target}` → live `this`, hooks, generation, running/paused. `print(...)` goes to the process log.
-- One-shot (no attach): `RunRhai {code}` — full world access, stdout via `QueryCommandResult`.
+- One-shot (no attach): `RunRhai {code}` — full world access, stdout in the original deferred response.
 
 ## 7. Persistence — bake into the scene (USD)
 

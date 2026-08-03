@@ -79,8 +79,8 @@ impl Plugin for ScreenshotPlugin {
     fn build(&self, app: &mut App) {
         // Registers the TYPE (so `DiscoverSchema` sees it, and so a binary without this
         // plugin cleanly reports "command not found") AND marks it deferred (so the executor
-        // holds the HTTP response open for the PNG instead of answering `command_accepted`
-        // and making the caller poll).
+        // holds the HTTP response open for the PNG instead of answering with a
+        // provisional acknowledgement.
         app.register_deferred_command::<CaptureScreenshot>()
             .add_observer(deliver_screenshot);
 

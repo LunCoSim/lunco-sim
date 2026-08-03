@@ -1976,26 +1976,27 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 // ── One-shot drain (RunRhai) ───────────────────────────────────────────────
 
-/// Queue of `(command_id, code, authority)` snippets submitted by `RunRhai`,
-/// waiting to run inside the exclusive [`drain_world_scripts`] system where
-/// `&mut World` is available. The `command_id` is the request id so the outcome
-/// can be recorded in [`CommandResults`] for the caller to poll. `authority` is
-/// the submitting session (the wire origin captured by the handler) the
-/// snippet's `cmd()`s are gated against — `None` for a local/host launch (§3.4).
+/// Queue of `(internal_id, code, authority, correlation_id)` snippets submitted
+/// by `RunRhai`, waiting to run inside the exclusive [`drain_world_scripts`]
+/// system where `&mut World` is available. `correlation_id` is present only
+/// for a transport request that is waiting for the completed response.
+/// `authority` is the submitting session (the wire origin captured by the
+/// handler) the snippet's `cmd()`s are gated against — `None` for a
+/// local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
-    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>)>,
+    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>, Option<u64>)>,
 }
 
-/// Exclusive system: run every queued snippet against the live World and record
-/// its real stdout (or error) under the originating command id, overwriting the
-/// provisional "queued" outcome the `RunRhai` handler recorded.
+/// Exclusive system: run every queued snippet against the live World, record
+/// its internal result, and resolve any waiting API request with the completed
+/// stdout or error.
 pub fn drain_world_scripts(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<PendingWorldScripts>().queue);
     if pending.is_empty() {
         return;
     }
-    for (id, code, authority) in pending {
+    for (id, code, authority, correlation_id) in pending {
         let outcome = match eval_with_world_as(world, &code, authority) {
             Ok(stdout) => {
                 let mut ack = Ack::new(OpId::new());
@@ -2004,7 +2005,29 @@ pub fn drain_world_scripts(world: &mut World) {
             }
             Err(e) => Err(e),
         };
-        // `id == 0` means an in-process trigger with no pollable request id.
+        if let Some(correlation_id) = correlation_id {
+            let response = match &outcome {
+                Ok(ack) => {
+                    let data = if ack.assigned.is_null() {
+                        serde_json::json!({ "accepted": true })
+                    } else {
+                        ack.assigned.clone()
+                    };
+                    lunco_api::schema::ApiResponse::ok(data)
+                }
+                Err(error) => lunco_api::schema::ApiResponse::error(
+                    lunco_api::schema::ApiErrorCode::InternalError,
+                    error.clone(),
+                ),
+            };
+            world
+                .commands()
+                .trigger(lunco_api::executor::ApiResponseEvent {
+                    correlation_id,
+                    response,
+                });
+        }
+        // `id == 0` means an in-process trigger with no internal result key.
         if id != 0 {
             world.resource_mut::<CommandResults>().record(id, outcome);
         }

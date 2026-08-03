@@ -133,7 +133,7 @@ fn submit(port: u16, code: &str) {
 /// a localhost dev tool, not a general HTTP client.
 fn post(port: u16, code: &str) -> io::Result<String> {
     let body = format!(
-        r#"{{"command":"RunRhai","params":{{"code":{}}}}}"#,
+        r#"{{"type":"ExecuteCommand","command":"RunRhai","params":{{"code":{}}}}}"#,
         json_str(code)
     );
     let req = format!(
