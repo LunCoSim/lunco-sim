@@ -380,17 +380,22 @@ The rule for adding to this table: if an asset authors it and the engine ignores
 it, it belongs here — or the authoring should be deleted. Silence is the failure
 mode, in both directions.
 
-### Sensors
+### Physics observations and sensor conversion
 
-`lunco:sensor:*` markers on a rigid-body prim attach `lunco-cosim` sensors that
-expose telemetry ports (see [`22-domain-cosim.md`](22-domain-cosim.md)):
+The engine exposes Avian's native rigid-body facts directly: position, linear
+velocity, quaternion, angular velocity, mass/inertia, and collider contact.
+Those ports are not semantic flight sensors and are available because the
+physical component exists.
 
-| Attribute | Sensor | Ports |
-|---|---|---|
-| `bool lunco:sensor:imu` | IMU | `accel_{x,y,z}` (world lin. accel), `spec_force_{x,y,z}` (body-frame `a−g`) |
-| `bool lunco:sensor:range` (+ `token :rangeAxis`, `float :rangeMax`) | range finder | `range` (raycast distance along a body-local axis, default `-Y`) |
-| `bool lunco:sensor:contact` | contact | `contact` (0/1), `contact_force` (N) |
-| `float3 lunco:sensor:offset` | (shared) | body-local mount point — IMU lever-arm + range origin |
+A mounted single ray applies the LunCoRaycastAPI. Rust performs only the
+required Avian spatial query and publishes raw distance, validity, hit position,
+hit normal, and sample time. A miss remains invalid; it is never converted to
+ideal altitude or another fallback.
+
+IMU, altimeter, attitude estimator, and touchdown logic are ordinary Modelica
+programs. USD authors their connections to the raw Avian ports and environment
+probe outputs. This keeps the engine generic: adding a new conversion changes a
+Modelica asset and its USD topology, not a Rust sensor registry.
 
 ### Cameras
 

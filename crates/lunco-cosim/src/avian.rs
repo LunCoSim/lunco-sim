@@ -54,6 +54,11 @@ pub const BODY_FORCE_PORTS: &[&str] = &[
     "torque_z",
 ];
 
+/// Input ports that drive generic physical actuators. These are separate from
+/// [`BODY_FORCE_PORTS`]: an actuator is a child prim, while the accumulator and
+/// Avian rigid body live on its owning body.
+pub const ACTUATOR_FORCE_PORTS: &[&str] = &["force_command", "torque_command"];
+
 /// Per-entity force accumulator written by `force_*` input ports and drained
 /// into avian each physics tick by [`apply_pending_forces`].
 ///
@@ -73,6 +78,45 @@ pub struct PendingForces {
     /// World-space torque (N·m) to apply this tick (e.g. reaction wheel,
     /// thrust-vector moment expressed in world frame).
     pub torque: DVec3,
+}
+
+/// A generic force actuator authored by a USD prim.
+///
+/// The local position is measured from the owning rigid-body origin, not from
+/// its render transform. The direction is the force ON the body, in the body's
+/// local frame; exhaust visuals may point in the opposite direction. The
+/// component is metadata only. The live command is kept separately in
+/// [`PendingActuatorCommand`] so port writes do not mutate the authored
+/// description. An RCS nozzle and a translation thruster use this same type.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct ForceActuator {
+    /// Mount position relative to the owning rigid-body origin (m).
+    pub local_position: Vec3,
+    /// Unit force direction in the owning body's local frame.
+    pub direction_local: Vec3,
+    /// Maximum accepted thrust for this nozzle (N).
+    pub max_force_n: f64,
+}
+
+/// A generic torque actuator. A reaction wheel, control-moment gyro, or any
+/// other torque source uses this same type.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct TorqueActuator {
+    /// Torque axis in the owning body's local frame.
+    pub axis_local: Vec3,
+    /// Maximum torque magnitude (N·m).
+    pub max_torque_nm: f64,
+}
+
+/// One tick's command for a [`ForceActuator`] or [`TorqueActuator`].
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct PendingActuatorCommand {
+    /// Commanded magnitude in the actuator's physical unit. The actuator
+    /// clamps it to its authored limit before Avian integration.
+    pub value: f64,
 }
 
 /// Ensure `entity` carries [`PendingForces`], then mutate it. The `force_*`
@@ -96,14 +140,29 @@ fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut Pending
     }
 }
 
+/// Ensure an actuator command exists, then update it from the port write.
+fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) -> bool {
+    let Ok(mut em) = world.get_entity_mut(entity) else {
+        return false;
+    };
+    if !em.contains::<PendingActuatorCommand>() {
+        em.insert(PendingActuatorCommand::default());
+    }
+    if let Some(mut command) = em.get_mut::<PendingActuatorCommand>() {
+        command.value = value;
+        true
+    } else {
+        false
+    }
+}
+
 /// Whether a collider is touching anything, and the total contact normal force
 /// (N) on it — computed from avian's own contact graph.
 ///
 /// THE one contact computation in the engine. The [`COLLIDER_CONTACT_GROUP`]
-/// ports call it through [`contact_from_world`]; the touchdown-switch instrument
-/// in [`crate::sensors`] calls it from its per-tick system with the graph it
-/// already holds. A sensor reads physics — it does not re-derive it, or the two
-/// answers drift and the one you are looking at is a coin toss.
+/// ports call it through [`contact_from_world`]. Modelica touchdown conversion
+/// reads the same native contact fact; it does not re-derive it, or the two
+/// answers could drift.
 ///
 /// The force is `Σ warm-start normal impulse / substep_dt`. Warm-start impulses
 /// are what the solver carries between substeps, so the sum is
@@ -165,9 +224,9 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
 /// behaviour behind an instrument would mean hardware that responds only if
 /// someone remembered to install a switch.
 ///
-/// Flight software is the other layer and reads [`crate::sensors::ContactSensor`]
-/// instead: an authored touchdown probe, with a mount point and (in time) a
-/// threshold and failure modes. Both answers come from [`contact_of`].
+/// Flight software reads these primitive contact facts through an authored
+/// Modelica conversion when it needs a touchdown signal. Both answers come
+/// from [`contact_of`].
 ///
 /// Read on demand from the contact graph — no mirror component, no per-tick sync
 /// system, matching every other port in this module.
@@ -203,6 +262,30 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
             write: None,
         },
     ],
+};
+
+/// A USD-authored force actuator. Its command is scalar force; position and
+/// direction are structural facts read from the USD prim.
+pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| w.get::<ForceActuator>(e).is_some(),
+    ports: &[AvianPort {
+        name: "force_command",
+        dir: PortDirection::In,
+        read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
+        write: Some(|w, e, value| with_pending_actuator_command(w, e, value)),
+    }],
+};
+
+/// A USD-authored torque actuator. Its command is scalar torque; its axis and
+/// limit are structural facts read from the USD prim.
+pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| w.get::<TorqueActuator>(e).is_some(),
+    ports: &[AvianPort {
+        name: "torque_command",
+        dir: PortDirection::In,
+        read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
+        write: Some(|w, e, value| with_pending_actuator_command(w, e, value)),
+    }],
 };
 
 /// The rigid-body port group: position/velocity outputs + force inputs.
@@ -566,6 +649,12 @@ pub fn apply_pending_forces(
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut forces: Query<Forces, lunco_physics::Integrable>,
+    mut actuator_commands: ParamSet<(
+        Query<(Entity, &ForceActuator, &mut PendingActuatorCommand)>,
+        Query<(Entity, &TorqueActuator, &mut PendingActuatorCommand)>,
+    )>,
+    q_parents: Query<&ChildOf>,
+    q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
 ) {
     for (e, mut pf) in &mut q_pending {
         if !pf.f.is_finite() || !pf.f_local.is_finite() || !pf.torque.is_finite() {
@@ -606,4 +695,126 @@ pub fn apply_pending_forces(
         pf.f_local = DVec3::ZERO;
         pf.torque = DVec3::ZERO;
     }
+
+    // Generic force-actuator commands are drained only after ordinary body
+    // force ports. Each actuator is resolved through the live ECS hierarchy to
+    // the nearest rigid body, then Avian receives the actual world-space force
+    // and point. Avian owns the resulting r×F torque calculation and the live
+    // center of mass.
+    for (actuator_entity, actuator, mut command) in actuator_commands.p0().iter_mut() {
+        let force_n = command.value;
+        command.value = 0.0;
+        if !force_n.is_finite()
+            || !actuator.local_position.is_finite()
+            || !actuator.direction_local.is_finite()
+            || !actuator.max_force_n.is_finite()
+        {
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            if let Some(faults) = faults.as_deref_mut() {
+                if faults.raise(
+                    "cosim-nonfinite-force-actuator",
+                    Some(actuator_entity),
+                    "ForceActuator",
+                    format!(
+                        "command={force_n:?}, position={:?}, direction={:?}, max_force={:?}",
+                        actuator.local_position, actuator.direction_local, actuator.max_force_n
+                    ),
+                ) {
+                    error!(
+                        "[cosim] terminal runtime failure: non-finite force actuator command on {actuator_entity:?}"
+                    );
+                }
+            }
+            continue;
+        }
+        let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_poses) else {
+            // The actuator may arrive one frame before its body. Propagation will
+            // issue the command again on the next tick; dropping this value is
+            // preferable to applying it to a guessed body.
+            continue;
+        };
+        let Ok((_, position, rotation)) = q_poses.get(body) else {
+            continue;
+        };
+        let Ok(mut body_forces) = forces.get_mut(body) else {
+            continue;
+        };
+        let direction = actuator.direction_local.normalize_or_zero().as_dvec3();
+        if direction == DVec3::ZERO || actuator.max_force_n <= 0.0 {
+            continue;
+        }
+        let thrust = force_n.clamp(0.0, actuator.max_force_n);
+        if thrust == 0.0 {
+            continue;
+        }
+        let local_position = actuator.local_position.as_dvec3();
+        let world_point = position.0 + rotation.0 * local_position;
+        let world_force = rotation.0 * (direction * thrust);
+        body_forces.apply_force_at_point(world_force, world_point);
+    }
+
+    // Torque actuators (reaction wheels, CMGs, and future devices) use the
+    // same description-driven command path. Avian owns the torque integration;
+    // no actuator-specific Rust or Modelica r×F calculation is involved.
+    for (actuator_entity, actuator, mut command) in actuator_commands.p1().iter_mut() {
+        let torque_nm = command.value;
+        command.value = 0.0;
+        if !torque_nm.is_finite()
+            || !actuator.axis_local.is_finite()
+            || !actuator.max_torque_nm.is_finite()
+        {
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            if let Some(faults) = faults.as_deref_mut() {
+                if faults.raise(
+                    "cosim-nonfinite-torque-actuator",
+                    Some(actuator_entity),
+                    "TorqueActuator",
+                    format!(
+                        "command={torque_nm:?}, axis={:?}, max_torque={:?}",
+                        actuator.axis_local, actuator.max_torque_nm
+                    ),
+                ) {
+                    error!(
+                        "[cosim] terminal runtime failure: non-finite torque actuator command on {actuator_entity:?}"
+                    );
+                }
+            }
+            continue;
+        }
+        let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_poses) else {
+            continue;
+        };
+        let Ok(mut body_forces) = forces.get_mut(body) else {
+            continue;
+        };
+        let axis = actuator.axis_local.normalize_or_zero().as_dvec3();
+        if axis == DVec3::ZERO || actuator.max_torque_nm <= 0.0 {
+            continue;
+        }
+        let torque = torque_nm.clamp(-actuator.max_torque_nm, actuator.max_torque_nm);
+        if torque != 0.0 {
+            let (_, _, rotation) = q_poses.get(body).expect("body found in pose query");
+            body_forces.apply_torque(rotation.0 * (axis * torque));
+        }
+    }
+}
+
+/// Find the nearest rigid-body ancestor of a physical mount.
+fn nearest_rigid_body(
+    start: Entity,
+    parents: &Query<&ChildOf>,
+    bodies: &Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
+) -> Option<Entity> {
+    let mut current = start;
+    for _ in 0..64 {
+        if bodies.get(current).is_ok() {
+            return Some(current);
+        }
+        current = parents.get(current).ok()?.parent();
+    }
+    None
 }

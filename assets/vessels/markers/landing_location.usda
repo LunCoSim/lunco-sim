@@ -18,6 +18,8 @@ def Xform "LandingLocationMarker" (
 {
     uniform bool lunco:spawnable = true
     custom string lunco:landingLocation = "true"
+    custom string lunco:interaction:left = "pass_through"
+    custom string lunco:interaction:right = "context"
 
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
     # UsdGeomGprim primvars and stay on the geometry; USD has no "display
@@ -42,6 +44,8 @@ def Xform "LandingLocationMarker" (
     # below the surface and is hidden. Purely visual — no collider.
     def Sphere "Dome"
     {
+        custom string lunco:interaction:left = "pass_through"
+        custom string lunco:interaction:right = "context"
         double radius = 2.5
         rel material:binding = </LandingLocationMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.95, 0.2, 0.2)]

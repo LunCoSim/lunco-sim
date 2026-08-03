@@ -243,17 +243,15 @@ fn sandbox_scene_asset_wiring_migrated() {
     );
 }
 
-/// The lander in a scene is TWO arcs: the airframe
-/// (`vessels/landers/descent_lander.usda`) and the guidance component
-/// (`components/gnc/descent_guidance.usda`). Their wiring only exists once both are
-/// composed, and `build_from_source` builds a lone in-memory layer that cannot resolve
-/// `@../../vessels/...@` — so compose the file with its real layer closure.
+/// The lander in a scene is two arcs: the airframe
+/// (`vessels/landers/descent_lander.usda`) and the position-PID guidance component
+/// (`components/gnc/position_pid_guidance.usda`). Their wiring only exists once both
+/// are composed, and `build_from_source` builds a lone in-memory layer that cannot
+/// resolve the asset closure — so compose the scene with its real layer closure.
 ///
-/// This is what proves the asset-local `.connect` targets rebase through their arcs:
-/// the airframe's `</DescentLander.outputs:force_y>` and the component's
-/// `</DescentGuidance/Altimeter.outputs:range>` both land on `/LanderTest/Lander`,
-/// even though neither file knows that name — and the component's targets point at
-/// prims the OTHER arc contributed.
+/// This proves both sides of the current contract. Asset-local sensor connections
+/// rebase through the two reference arcs, while the mission scene owns the live
+/// landing-target and estimator-initialization connections.
 #[test]
 fn lander_asset_wiring_migrated() {
     let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -263,15 +261,22 @@ fn lander_asset_wiring_migrated() {
     let lander = SdfPath::new("/LanderTest/Lander").unwrap();
     let gnc = SdfPath::new("/LanderTest/Lander/GNC").unwrap();
 
-    // The airframe's own loop: the flight-control program's outputs are the body's
-    // force inputs, and the body's state is the program's inputs.
+    // The airframe's local actuator contract: the controller emits normalized
+    // throttle and body-frame torque demands, and the USD-composed networks consume
+    // those outputs.
     assert_eq!(
-        view.connections(&lander, "inputs:force_y"),
-        ["/LanderTest/Lander.outputs:force_y"]
+        view.connections(
+            &SdfPath::new("/LanderTest/Lander/MainPropulsion").unwrap(),
+            "inputs:valve_opening"
+        ),
+        ["/LanderTest/Lander.outputs:throttle"]
     );
     assert_eq!(
-        view.connections(&lander, "inputs:q_w"),
-        ["/LanderTest/Lander.outputs:quat_w"]
+        view.connections(
+            &SdfPath::new("/LanderTest/Lander/AttitudeActuation").unwrap(),
+            "inputs:desired_torque_x"
+        ),
+        ["/LanderTest/Lander.outputs:torque_x"]
     );
 
     // The autopilot, composed on by the SCENE. The airframe authors no descent law and
@@ -281,16 +286,59 @@ fn lander_asset_wiring_migrated() {
         ["/LanderTest/Lander/GNC.outputs:throttle_cmd"]
     );
 
-    // The guidance reads what a lander SENSES: the airframe's altimeter (a prim the
-    // OTHER arc supplied) and the body's vertical speed.
+    // The guidance reads Modelica conversions of the airframe's raw Avian
+    // observations. The vehicle and mission layers author these edges.
     assert_eq!(
-        view.connections(&gnc, "inputs:altitude"),
-        ["/LanderTest/Lander/Altimeter.outputs:range"]
+        view.connections(&gnc, "inputs:altimeter_range"),
+        ["/LanderTest/Lander/Altimeter/Model.outputs:range_m"]
     );
     assert_eq!(
-        view.connections(&gnc, "inputs:descent_rate"),
+        view.connections(&gnc, "inputs:altimeter_range_rate"),
+        ["/LanderTest/Lander/Altimeter/Model.outputs:range_rate_mps"]
+    );
+    assert_eq!(
+        view.connections(&gnc, "inputs:imu_coordinate_accel_local_y"),
+        ["/LanderTest/Lander/IMU.outputs:coordinate_accel_local_y"]
+    );
+    assert_eq!(
+        view.connections(
+            &SdfPath::new("/LanderTest/Lander/IMU").unwrap(),
+            "inputs:raw_velocity_y"
+        ),
         ["/LanderTest/Lander.outputs:velocity_y"]
     );
+    assert_eq!(
+        view.connections(
+            &SdfPath::new("/LanderTest/Lander/AttitudeReference").unwrap(),
+            "inputs:specific_force_y"
+        ),
+        ["/LanderTest/Lander/IMU.outputs:specific_force_y"]
+    );
+    assert!(
+        view.connections(
+            &SdfPath::new("/LanderTest/Lander/AttitudeReference").unwrap(),
+            "inputs:quat_w"
+        )
+        .is_empty(),
+        "attitude estimator must not receive truth quaternion"
+    );
+
+    // The scene selects the live landing target and initializes the sensor-only
+    // estimator from the authored spawn condition.
+    assert_eq!(
+        view.connections(&gnc, "inputs:target_x"),
+        ["/LanderTest/LandingTarget.outputs:position_x"]
+    );
+    assert_eq!(
+        view.connections(&gnc, "inputs:target_y"),
+        ["/LanderTest/LandingTarget.outputs:position_y"]
+    );
+    assert!(
+        view.connections(&gnc, "inputs:initial_vel_y").is_empty(),
+        "initial estimator conditions must not be a live body-state feedback edge"
+    );
+    assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_x"), Some(-5.0));
+    assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_z"), Some(-5.0));
 }
 
 /// The airframe ALONE has no autopilot — nothing wires `guidance_throttle`, so it is

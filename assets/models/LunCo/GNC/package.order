@@ -3,4 +3,6 @@ GravityTurnGuidance
 ThrusterMapper
 LanderPID
 PIDAxis
+AccelerationLimiter
 PositionPID3D
+LanderNavigation

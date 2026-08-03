@@ -19,7 +19,7 @@ model PoweredDescentGuidance
 
   // Target landing site coordinates
   input Real target_x = 0.0 "Target landing position X, m";
-  input Real target_y = 0.0 "Target landing position Y, m";
+  input Real guidance_target_y = 0.0 "Target landing position Y, m";
   input Real target_z = 0.0 "Target landing altitude Z, m";
 
   // Guidance outputs to main engine & attitude thrusters
@@ -33,7 +33,7 @@ model PoweredDescentGuidance
   Real dist_to_target "Distance to target site, m";
   Real speed "Current lander speed, m/s";
 equation
-  dist_to_target = sqrt(max(0.01, (target_x - pos_x)^2 + (target_y - pos_y)^2 + (target_z - pos_z)^2));
+  dist_to_target = sqrt(max(0.01, (target_x - pos_x)^2 + (guidance_target_y - pos_y)^2 + (target_z - pos_z)^2));
   speed = sqrt(max(0.01, vel_x^2 + vel_y^2 + vel_z^2));
 
   // Time-to-go estimation: t_go = 2 * dist / max(1.0, speed)

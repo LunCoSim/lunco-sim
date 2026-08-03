@@ -51,6 +51,9 @@ const KNOWN_GRAVITY_INPUTS: &[&str] = &["g", "gravity", "grav_accel"];
 /// gravity flows through an ordinary output→input [`crate::SimConnection`] like
 /// any other signal — correct on the Moon, Earth, or any body.
 pub const GRAVITY_SOURCE_CONNECTOR: &str = "gravity_accel";
+pub const GRAVITY_X_SOURCE_CONNECTOR: &str = "gravity_x";
+pub const GRAVITY_Y_SOURCE_CONNECTOR: &str = "gravity_y";
+pub const GRAVITY_Z_SOURCE_CONNECTOR: &str = "gravity_z";
 
 /// SimComponent output connectors carrying the unit direction **toward the
 /// Sun** in the consumer's authored mount frame.  The convention is shared with
@@ -79,6 +82,9 @@ pub const EARTH_MOUNT_Z_CONNECTOR: &str = "earth_mount_z";
 /// environment domain fills and ordinary USD connections consume.
 pub const ENVIRONMENT_PROBE_OUTPUTS: &[&str] = &[
     GRAVITY_SOURCE_CONNECTOR,
+    GRAVITY_X_SOURCE_CONNECTOR,
+    GRAVITY_Y_SOURCE_CONNECTOR,
+    GRAVITY_Z_SOURCE_CONNECTOR,
     SUN_MOUNT_X_CONNECTOR,
     SUN_MOUNT_Y_CONNECTOR,
     SUN_MOUNT_Z_CONNECTOR,

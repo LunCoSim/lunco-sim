@@ -220,10 +220,11 @@ pub struct RealtimeSafe;
 /// body around? These are the ONLY ports whose writer can desync a
 /// client-predicted body, so they are what the [`RealtimeSafe`] gate guards.
 ///
-/// The set is [`crate::avian::BODY_FORCE_PORTS`], declared beside the port table
-/// that implements it — NOT matched by spelling here.
+/// The sets are declared beside the port tables that implement them — NOT
+/// matched by spelling here.
 pub fn is_physics_force_port(port: &str) -> bool {
     crate::avian::BODY_FORCE_PORTS.contains(&port)
+        || crate::avian::ACTUATOR_FORCE_PORTS.contains(&port)
 }
 
 #[cfg(test)]
@@ -237,6 +238,8 @@ mod realtime_gate_tests {
         // Body-frame thrust pushes a body just as hard as world-frame thrust.
         assert!(is_physics_force_port("force_local_x"));
         assert!(!is_physics_force_port("throttle"));
+        assert!(is_physics_force_port("force_command"));
+        assert!(is_physics_force_port("torque_command"));
         assert!(!is_physics_force_port("angle"));
         // A gearbox's MECHANICAL shaft torque is not a body force: it drives a
         // reduction, not a rigid body, so it must not demand a realtime promise.

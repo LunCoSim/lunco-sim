@@ -44,6 +44,20 @@ def Xform "LanderTest" (
 
     uniform bool lunco:spawnable = false
 
+    # The lander carries an Earth-tracking communications subsystem. Celestial
+    # content and the lunar site frame are therefore part of this mission scene,
+    # not an implicit Rust default.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
@@ -90,9 +104,10 @@ def Xform "LanderTest" (
     # ── The powered-descent lander ────────────────────────────────────────────
     # TWO arcs, and the second one is the mission. The airframe — engine, altimeter,
     # flame, legs, avionics — arrives on the first; on its own it flies nowhere,
-    # because an airframe has no reason to want to land. The DESCENT GUIDANCE is a
-    # component this scene bolts on, wiring included (it reads the airframe's own
-    # altimeter and commands its throttle — see the component for the diagram).
+    # because an airframe has no reason to want to land. The position-PID AUTOPILOT
+    # is a component this scene bolts on, wiring included: it reads the airframe's
+    # sensor ports and commands the throttle and attitude guidance (see the
+    # Modelica component for the diagram).
     #
     # Drop the second arc and you have a lander you must fly yourself. That is the
     # only difference between a vehicle and a mission.
@@ -103,13 +118,52 @@ def Xform "LanderTest" (
     def "Lander" (
         prepend references = [
             @lunco://vessels/landers/descent_lander.usda@</DescentLander>,
-            @lunco://components/gnc/descent_guidance.usda@</DescentGuidance>,
+            @lunco://components/gnc/position_pid_guidance.usda@</PositionPIDGuidance>,
         ]
     )
     {
         double3 xformOp:translate = (0, 60.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         double3 physics:velocity = (-5.0, 0.0, -5.0)
+
+        # The guidance component exposes its Modelica inputs below this child.
+        # The scene owns the initial estimator state and live target wiring.
+        over "GNC"
+        {
+            # The airframe's touchdown output feeds the actual guidance model
+            # boundary. The reusable guidance component keeps this input on its
+            # Modelica `GNC` prim; the composed root is a visual/component
+            # namespace, not a runtime scalar owner.
+            float inputs:touchdown.connect = </LanderTest/Lander.outputs:touchdown>
+
+            # The estimator starts from these mission-authored initial conditions;
+            # after initialization it propagates from IMU and altimeter telemetry.
+            # They intentionally mirror the authored spawn velocity above. Keeping
+            # initialization as constants avoids making an initial-equation value a
+            # live ground-truth feedback edge.
+            float inputs:initial_pos_x = 0.0
+            float inputs:initial_pos_y = 0.0
+            float inputs:initial_pos_z = 0.0
+            float inputs:initial_vel_x = -5.0
+            float inputs:initial_vel_y = 0.0
+            float inputs:initial_vel_z = -5.0
+            float inputs:vehicle_mass = 2000.0
+
+            # Mission-owned sensor topology. The reusable guidance component
+            # does not assume sibling names or invent a sensor provider.
+            float inputs:altimeter_range.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_m>
+            float inputs:altimeter_range_rate.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_rate_mps>
+            float inputs:altimeter_valid.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_valid>
+            float inputs:imu_coordinate_accel_local_x.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_x>
+            float inputs:imu_coordinate_accel_local_y.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_y>
+            float inputs:imu_coordinate_accel_local_z.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_z>
+
+            # The mission target is a live kinematic USD body. Moving it in the
+            # Inspector changes the guidance setpoint through the normal USD graph.
+            float inputs:target_x.connect = </LanderTest/LandingTarget.outputs:position_x>
+            float inputs:target_y.connect = </LanderTest/LandingTarget.outputs:position_y>
+            float inputs:target_z.connect = </LanderTest/LandingTarget.outputs:position_z>
+        }
     }
 
     # ── The rover attached to the lander ──
@@ -171,13 +225,13 @@ def Xform "LanderTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # Visual touchdown target. The lander's GNC descends on its altimeter, not on a
-    # commanded pad pose, so this marker is a landmark for the player, not a wire.
-    def Xform "LandingLocation" (
-        prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker>
+    # Kinematic touchdown target. The child dome is visual-only and pass-through;
+    # the root body is the live navigation source consumed by the GNC component.
+    def Xform "LandingTarget" (
+        prepend references = @lunco://components/gnc/landing_target.usda@</LandingTarget>
     )
     {
-        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (0.0, 5.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

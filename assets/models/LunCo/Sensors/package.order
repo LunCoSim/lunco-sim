@@ -1,5 +1,7 @@
 Altimeter
 IMUSensor
+AttitudeReference
+FilteredDerivative
 ThermalSensor
 ElectricalSensor
 StarTracker

@@ -54,7 +54,7 @@ use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
-use lunco_usd_avian::{PendingJointAdmission, ShouldBeDynamic};
+use lunco_usd_avian::{AuthoredInitialVelocity, PendingJointAdmission, ShouldBeDynamic};
 use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
@@ -69,7 +69,10 @@ use lunco_controller::get_avatar_input_map;
 use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_cosim::{ports::PORT_NAME, SimConnection};
+use lunco_cosim::{
+    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, SimConnection,
+    TorqueActuator,
+};
 use lunco_hardware::{MotorActuator, MotorReadback, MotorReadbackTarget, SteeringActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
@@ -128,6 +131,140 @@ pub struct NoRenderVisuals;
 
 pub struct UsdSimPlugin;
 
+const FORCE_ACTUATOR_API: &str = "LunCoForceActuatorAPI";
+const FORCE_DIRECTION_ATTR: &str = "lunco:forceActuator:direction";
+const FORCE_MAX_ATTR: &str = "lunco:forceActuator:maxForce";
+const TORQUE_ACTUATOR_API: &str = "LunCoTorqueActuatorAPI";
+const TORQUE_AXIS_ATTR: &str = "lunco:torqueActuator:axis";
+const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
+
+/// Find the USD rigid-body frame that owns a physical actuator. Ownership is
+/// structural: the actuator is a prim under the body, just like a collider or
+/// a joint endpoint. No vessel name or subsystem slot is embedded in Rust.
+fn actuator_body_path(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    actuator_path: &SdfPath,
+) -> Option<SdfPath> {
+    let mut current = actuator_path.parent();
+    while let Some(path) = current {
+        if path.is_abs_root() {
+            return None;
+        }
+        if reader.has_api_schema(&path, "PhysicsRigidBodyAPI") {
+            return Some(path);
+        }
+        current = path.parent();
+    }
+    None
+}
+
+/// Read a force actuator's generic description. Position comes from the
+/// composed prim transform; direction and force capacity are authored
+/// properties on the same prim.
+pub(crate) fn force_actuator_from_usd(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    actuator_path: &SdfPath,
+) -> Option<ForceActuator> {
+    if !reader.has_api_schema(actuator_path, FORCE_ACTUATOR_API) {
+        return None;
+    }
+    let Some(body_path) = actuator_body_path(reader, actuator_path) else {
+        warn!(
+            "[usd-cosim] force actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
+            actuator_path
+        );
+        return None;
+    };
+    let Some(relative) =
+        lunco_usd_avian::transform_in_body_frame(reader, &body_path, actuator_path)
+    else {
+        warn!(
+            "[usd-cosim] force actuator {} could not derive its body-frame transform",
+            actuator_path
+        );
+        return None;
+    };
+    let direction = reader
+        .scalar::<[f32; 3]>(actuator_path, FORCE_DIRECTION_ATTR)
+        .or_else(|| {
+            reader
+                .scalar::<[f64; 3]>(actuator_path, FORCE_DIRECTION_ATTR)
+                .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+        })
+        .map(Vec3::from_array)
+        .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
+    let Some(direction_local) = direction else {
+        warn!(
+            "[usd-cosim] force actuator {} has no finite non-zero {}",
+            actuator_path, FORCE_DIRECTION_ATTR
+        );
+        return None;
+    };
+    let Some(max_force_n) = reader
+        .real(actuator_path, FORCE_MAX_ATTR)
+        .filter(|v| v.is_finite() && *v > 0.0)
+    else {
+        warn!(
+            "[usd-cosim] force actuator {} has no positive {}",
+            actuator_path, FORCE_MAX_ATTR
+        );
+        return None;
+    };
+    Some(ForceActuator {
+        local_position: relative.translation,
+        direction_local,
+        max_force_n,
+    })
+}
+
+/// Read a torque actuator's generic description. Reaction wheels and control
+/// moment gyros use the same scalar torque command and axis contract.
+pub(crate) fn torque_actuator_from_usd(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    actuator_path: &SdfPath,
+) -> Option<TorqueActuator> {
+    if !reader.has_api_schema(actuator_path, TORQUE_ACTUATOR_API) {
+        return None;
+    }
+    if actuator_body_path(reader, actuator_path).is_none() {
+        warn!(
+            "[usd-cosim] torque actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
+            actuator_path
+        );
+        return None;
+    }
+    let axis = reader
+        .scalar::<[f32; 3]>(actuator_path, TORQUE_AXIS_ATTR)
+        .or_else(|| {
+            reader
+                .scalar::<[f64; 3]>(actuator_path, TORQUE_AXIS_ATTR)
+                .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+        })
+        .map(Vec3::from_array)
+        .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
+    let Some(axis_local) = axis else {
+        warn!(
+            "[usd-cosim] torque actuator {} has no finite non-zero {}",
+            actuator_path, TORQUE_AXIS_ATTR
+        );
+        return None;
+    };
+    let Some(max_torque_nm) = reader
+        .real(actuator_path, TORQUE_MAX_ATTR)
+        .filter(|v| v.is_finite() && *v > 0.0)
+    else {
+        warn!(
+            "[usd-cosim] torque actuator {} has no positive {}",
+            actuator_path, TORQUE_MAX_ATTR
+        );
+        return None;
+    };
+    Some(TorqueActuator {
+        axis_local,
+        max_torque_nm,
+    })
+}
+
 /// Ordered phases of the USD-to-simulation projection.
 ///
 /// The application assembly uses [`UsdSimSet::ActivateDynamicBodies`] to place
@@ -148,6 +285,10 @@ struct StageJointTopology {
     canonical_generation: Option<u64>,
     projection_revision: Option<u64>,
     joint_targets: HashMap<String, String>,
+    /// Supported authored joints and their body endpoints. This is a
+    /// composition fact, not an ECS observation: the body entities can be
+    /// promoted before the joint observer's deferred command has landed.
+    authored_joints: HashMap<String, (String, String)>,
     articulation_roots: HashSet<String>,
     wheel_attachment_targets: HashMap<String, String>,
 }
@@ -179,6 +320,7 @@ impl JointTopologyIndex {
             return;
         }
         topology.joint_targets.clear();
+        topology.authored_joints.clear();
         topology.articulation_roots.clear();
         topology.wheel_attachment_targets.clear();
         collect_joint_scan_read(reader, topology);
@@ -657,7 +799,36 @@ fn collect_joint_scan_read(
     topology: &mut StageJointTopology,
 ) {
     for path in reader.prim_paths() {
-        if reader.type_name(&path).as_deref() == Some("PhysicsRevoluteJoint") {
+        let joint_type = reader.type_name(&path);
+        if matches!(
+            joint_type.as_deref(),
+            Some(
+                "PhysicsFixedJoint"
+                    | "PhysicsRevoluteJoint"
+                    | "PhysicsPrismaticJoint"
+                    | "PhysicsSphericalJoint"
+                    | "PhysicsDistanceJoint"
+            )
+        ) {
+            let body0 = reader
+                .rel_target(&path, "physics:body0")
+                .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
+                .unwrap_or_default();
+            let body1 = reader
+                .rel_target(&path, "physics:body1")
+                .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
+                .unwrap_or_default();
+            debug!(
+                "USD authored joint topology: {} -> ({}, {})",
+                path.as_str(),
+                body0,
+                body1
+            );
+            topology
+                .authored_joints
+                .insert(path.as_str().to_string(), (body0, body1));
+        }
+        if joint_type.as_deref() == Some("PhysicsRevoluteJoint") {
             if let Some(body1) = reader.rel_target(&path, "physics:body1") {
                 debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
                 let is_vehicle_wheel = SdfPath::new(&body1)
@@ -789,6 +960,28 @@ fn process_usd_sim_prim_read(
     if reader.text(&sdf_path, "lunco:waypoint").as_deref() == Some("true") {
         commands.entity(entity).try_insert(marker::WaypointMarker);
     }
+    // Pointer behavior is scene intent, not a picking-backend concern.  The
+    // render-free USD projection records it here; the GUI layer later maps the
+    // primary-button pass-through part to Bevy's `Pickable` component.  This
+    // keeps transparent markers usable by every scene and preserves the same
+    // contract for future marker assets.
+    if let Some(policy) = lunco_core::ScenePointerPolicy::from_usd(
+        reader.text(&sdf_path, "lunco:interaction:left").as_deref(),
+        reader.text(&sdf_path, "lunco:interaction:right").as_deref(),
+    ) {
+        commands.entity(entity).try_insert(policy);
+    }
+
+    // Physical actuators are generic USD descriptions. A force actuator and a
+    // torque actuator publish ordinary scalar input ports; the cosim backend
+    // later resolves those commands to Avian's force/torque writer. RCS names,
+    // reaction-wheel names, and controller ownership do not appear here.
+    if let Some(actuator) = force_actuator_from_usd(reader, &sdf_path) {
+        commands.entity(entity).try_insert(actuator);
+    }
+    if let Some(actuator) = torque_actuator_from_usd(reader, &sdf_path) {
+        commands.entity(entity).try_insert(actuator);
+    }
     // Screen-constant marker, keyed on the size that IS the request: a prim
     // authoring no `angularSizeDeg` is not a half-declared marker, it is simply
     // not one. Same opt-in shape as the billboard above.
@@ -855,64 +1048,39 @@ fn process_usd_sim_prim_read(
         }
     }
 
-    // USD-authored sensors → cosim telemetry ports (lunco-cosim::sensors).
-    // Each marker turns the body's port surface on for that sensor kind; the
-    // sensor systems fill the values each tick. `lunco:sensor:offset` is the
-    // shared body-local mount point (lever arm from the COM).
-    let sensor_offset = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:sensor:offset")
-        .map(|v| DVec3::new(v[0], v[1], v[2]))
-        .unwrap_or(DVec3::ZERO);
-    if reader
-        .scalar::<bool>(&sdf_path, "lunco:sensor:imu")
-        .is_some()
-    {
-        commands
-            .entity(entity)
-            .try_insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
-    }
-    if reader
-        .scalar::<bool>(&sdf_path, "lunco:sensor:range")
-        .is_some()
-    {
-        let axis = match reader.text(&sdf_path, "lunco:sensor:rangeAxis").as_deref() {
-            Some("X") => DVec3::X,
-            Some("-X") => DVec3::NEG_X,
-            Some("Y") => DVec3::Y,
-            Some("Z") => DVec3::Z,
-            Some("-Z") => DVec3::NEG_Z,
-            // Default and explicit "-Y": a downward altimeter.
-            _ => DVec3::NEG_Y,
-        };
-        let max_distance = reader
-            .real(&sdf_path, "lunco:sensor:rangeMax")
-            .unwrap_or(100.0);
-        let out_of_range_mode = match reader
-            .text(&sdf_path, "lunco:sensor:rangeOutOfRangeMode")
-            .as_deref()
-        {
-            Some("NegativeOne") => lunco_cosim::sensors::OutOfRangeMode::NegativeOne,
-            Some("NaN") => lunco_cosim::sensors::OutOfRangeMode::NaN,
-            Some("IdealAltitude") => lunco_cosim::sensors::OutOfRangeMode::IdealAltitude,
-            _ => lunco_cosim::sensors::OutOfRangeMode::MaxDistance,
-        };
-        commands
-            .entity(entity)
-            .try_insert(lunco_cosim::sensors::RangeSensor {
-                offset: sensor_offset,
+    // A raw Avian ray query is projected from its generic USD API. IMU,
+    // altimeter, and contact conversions are ordinary Modelica/Avian wires;
+    // this layer does not identify semantic sensor kinds.
+    // A raycast prim is a generic Avian query description. It does not claim
+    // that the result is an altimeter, range sensor, or touchdown detector;
+    // those conversions are ordinary Modelica scopes authored in USD.
+    if reader.has_api_schema(&sdf_path, "LunCoRaycastAPI") {
+        let axis = reader.text(&sdf_path, "lunco:raycast:axis").and_then(|axis| {
+            match axis.as_str() {
+                "X" => Some(DVec3::X),
+                "-X" => Some(DVec3::NEG_X),
+                "Y" => Some(DVec3::Y),
+                "-Y" => Some(DVec3::NEG_Y),
+                "Z" => Some(DVec3::Z),
+                "-Z" => Some(DVec3::NEG_Z),
+                _ => None,
+            }
+        });
+        let max_distance = reader.real(&sdf_path, "lunco:raycast:maxDistance");
+        if let (Some(axis), Some(max_distance)) = (axis, max_distance) {
+            let offset =
+                lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:raycast:offset")
+                    .map(|v| DVec3::new(v[0], v[1], v[2]))
+                    .unwrap_or_default();
+            commands.entity(entity).try_insert(RaycastObservation {
+                offset,
                 axis,
                 max_distance,
-                distance: max_distance,
-                out_of_range_mode,
                 ..default()
             });
-    }
-    if reader
-        .scalar::<bool>(&sdf_path, "lunco:sensor:contact")
-        .is_some()
-    {
-        commands
-            .entity(entity)
-            .try_insert(lunco_cosim::sensors::ContactSensor::default());
+        } else {
+            warn!("USD raycast {} is missing a valid axis or maxDistance", sdf_path);
+        }
     }
 
     // (Link/celestial vocabulary is projected by the independent
@@ -3027,10 +3195,24 @@ fn activate_dynamic_bodies(
     mut commands: Commands,
     ground_pending: Res<GroundColliderPending>,
     mut activation: ResMut<GroundActivationInFlight>,
-    q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
+    q_kinematic: Query<
+        (Entity, &UsdPrimPath, Option<&AuthoredInitialVelocity>),
+        With<ShouldBeDynamic>,
+    >,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_admissions: Query<&PendingJointAdmission>,
+    q_joint_states: Query<(
+        &UsdPrimPath,
+        Option<&lunco_usd_avian::PendingUsdJoint>,
+        Option<&PendingJointAdmission>,
+        Has<RevoluteJoint>,
+        Has<PrismaticJoint>,
+        Has<FixedJoint>,
+        Has<SphericalJoint>,
+        Has<DistanceJoint>,
+    )>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
+    topology_index: Res<JointTopologyIndex>,
     // Physical wheels arm their joint-connected assembly for one-time
     // drop-onto-terrain placement. Free dynamic bodies (balloons, etc.) must
     // not be pinned to the ground. Probe-based models publish their own
@@ -3038,23 +3220,79 @@ fn activate_dynamic_bodies(
     q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
     let mut promoted = false;
-    for (entity, path) in q_kinematic.iter() {
+    for (entity, path, authored_velocity) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints
             .iter()
             .any(|j_path| j_path.stage_handle == path.stage_handle);
         let has_pending_admission = q_pending_admissions
             .iter()
             .any(|pending| pending.body0 == entity || pending.body1 == entity);
+        let has_unready_authored_joint =
+            topology_index
+                .get(path.stage_handle.id())
+                .is_some_and(|topology| {
+                    topology
+                        .authored_joints
+                        .iter()
+                        .any(|(joint_path, (body0, body1))| {
+                            if body0 != &path.path && body1 != &path.path {
+                                return false;
+                            }
+                            let joint_ready = q_joint_states
+                                .iter()
+                                .find(|(joint, ..)| {
+                                    joint.stage_handle == path.stage_handle
+                                        && joint.path == *joint_path
+                                })
+                                .is_some_and(
+                                    |(
+                                        _,
+                                        pending_usd,
+                                        pending_native,
+                                        revolute,
+                                        prismatic,
+                                        fixed,
+                                        spherical,
+                                        distance,
+                                    )| {
+                                        pending_usd.is_none()
+                                            && pending_native.is_none()
+                                            && (revolute
+                                                || prismatic
+                                                || fixed
+                                                || spherical
+                                                || distance)
+                                    },
+                                );
+                            !joint_ready
+                        })
+                });
         let has_pending_diff = q_pending_diffs
             .iter()
             .any(|d_path| d_path.stage_handle == path.stage_handle);
-        if !ground_pending.0 && !has_pending_joint && !has_pending_admission && !has_pending_diff {
+        if !ground_pending.0
+            && !has_pending_joint
+            && !has_pending_admission
+            && !has_unready_authored_joint
+            && !has_pending_diff
+        {
             // Despawn-safe: scene-load churn / doc-backed reload can despawn a
             // ShouldBeDynamic entity between this queue and `apply_deferred`; a plain
             // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
             // no-op at apply time if the entity is gone (a `get_entity` guard here
             // would not help — it only proves validity at queue time, not apply).
             commands.entity(entity).try_insert(RigidBody::Dynamic);
+            if let Some(velocity) = authored_velocity {
+                if let Some(linear) = velocity.linear {
+                    commands.entity(entity).try_insert(LinearVelocity(linear));
+                }
+                if let Some(angular) = velocity.angular {
+                    commands.entity(entity).try_insert(AngularVelocity(angular));
+                }
+                commands
+                    .entity(entity)
+                    .try_remove::<AuthoredInitialVelocity>();
+            }
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
             // A physical wheel is part of the chassis' joint-connected assembly,
             // so marking it moves the whole vehicle as one.
@@ -3161,6 +3399,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
+            .init_resource::<JointTopologyIndex>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
@@ -3218,6 +3457,82 @@ mod dynamic_activation_tests {
             "dynamic promotion resumes after joint admission"
         );
         assert!(app.world().get::<ShouldBeDynamic>(body).is_none());
+    }
+
+    #[test]
+    fn authored_joint_topology_holds_bodies_before_joint_observer_state_lands() {
+        let mut app = App::new();
+        app.init_resource::<GroundColliderPending>()
+            .init_resource::<GroundActivationInFlight>()
+            .init_resource::<JointTopologyIndex>()
+            .add_systems(Update, activate_dynamic_bodies);
+
+        let stage = Handle::<UsdStageAsset>::default();
+        let chassis = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Rover/Chassis".into(),
+                },
+                RigidBody::Kinematic,
+                ShouldBeDynamic,
+            ))
+            .id();
+        let link = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Rover/Link".into(),
+                },
+                RigidBody::Kinematic,
+                ShouldBeDynamic,
+            ))
+            .id();
+        let joint = app
+            .world_mut()
+            .spawn(UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/Rover/Joint".into(),
+            })
+            .id();
+
+        let mut topology = StageJointTopology::default();
+        topology.authored_joints.insert(
+            "/Rover/Joint".into(),
+            ("/Rover/Chassis".into(), "/Rover/Link".into()),
+        );
+        app.world_mut()
+            .resource_mut::<JointTopologyIndex>()
+            .by_stage
+            .insert(stage.id(), topology);
+
+        // The canonical stage already names the joint, but its observer command
+        // has not yet added PendingUsdJoint to the joint entity. Neither body may
+        // receive a dynamic physics step in that gap.
+        app.update();
+        assert_eq!(
+            app.world().get::<RigidBody>(chassis),
+            Some(&RigidBody::Kinematic)
+        );
+        assert_eq!(
+            app.world().get::<RigidBody>(link),
+            Some(&RigidBody::Kinematic)
+        );
+
+        app.world_mut()
+            .entity_mut(joint)
+            .insert(RevoluteJoint::new(chassis, link));
+        app.update();
+        assert_eq!(
+            app.world().get::<RigidBody>(chassis),
+            Some(&RigidBody::Dynamic)
+        );
+        assert_eq!(
+            app.world().get::<RigidBody>(link),
+            Some(&RigidBody::Dynamic)
+        );
     }
 }
 

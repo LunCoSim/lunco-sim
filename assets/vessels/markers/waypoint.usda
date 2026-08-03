@@ -21,6 +21,8 @@ def Xform "WaypointMarker" (
 {
     uniform bool lunco:spawnable = true
     custom string lunco:waypoint = "true"
+    custom string lunco:interaction:left = "pass_through"
+    custom string lunco:interaction:right = "context"
 
     # Arrival is session state on the vessel's `ReachedWaypoints` component.
     # The marker remains authored geometry and is never rewritten or deleted
@@ -54,6 +56,8 @@ def Xform "WaypointMarker" (
     # below the surface and is hidden. Purely visual — no collider.
     def Sphere "Dome"
     {
+        custom string lunco:interaction:left = "pass_through"
+        custom string lunco:interaction:right = "context"
         double radius = 2.5
         # The marker origin is the terrain contact point. Lift the visual
         # centre by one radius so the complete dome is above the surface;

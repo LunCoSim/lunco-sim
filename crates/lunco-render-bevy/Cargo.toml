@@ -20,7 +20,7 @@ description = "The bevy_pbr binding layer for LunCoSim. Domain crates state appe
 # `bevy_gizmos` + `bevy_gizmos_render` are here for the range-sensor beams
 # (`sensor_beams.rs`). They pull `bevy_render`, which is exactly why they belong on
 # THIS side of the boundary: `lunco-cosim` casts the ray and declares
-# `RangeSensor::visualize`, and never names `Gizmos` — that is what kept
+# the raw ray observation driver, and never names `Gizmos` — that is what kept
 # bevy_gizmos → wgpu out of the `--no-ui` server.
 # `area_light_luts`: the LTC lookup textures `RectLight` samples. `RectLight` the
 # COMPONENT lives in `bevy_light` (render-free, so `lunco-usd-bevy` can author one
@@ -47,7 +47,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 # (`env_light.rs`) — moved HERE, which is what let `lunco-environment` drop wgpu.
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
-# `RangeSensor` — the sensing is simulation (it must run headless, so `lunco-cosim`
+# the raw ray query — the sensing is simulation (it must run headless, so `lunco-cosim`
 # is render-free and never names `Gizmos`); the BEAM is not. `sensor_beams.rs` draws
 # it from the sensor's already-stored result, re-casting nothing.
 lunco-cosim = { path = "../lunco-cosim" }

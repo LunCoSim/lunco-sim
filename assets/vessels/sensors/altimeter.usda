@@ -12,18 +12,15 @@
 #   def "Altimeter" (prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>)
 #   { double3 xformOp:translate = (0, -3.3, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 #
-# Backed by `lunco_cosim::sensors::RangeSensor` (gated on `lunco:sensor:range`). It
-# casts a ray along `rangeAxis` (body-local, rotated by attitude) and reports the
-# distance to geometry on the `range` port — the altitude a GNC reads. Beyond
-# `rangeMax` it reports per `rangeOutOfRangeMode` (`IdealAltitude` = sensor world Y,
-# so guidance stays sane above the sensor's reach). Honours `lunco:sensor:offset`.
+# Backed by a generic raw Avian ray observation plus the Modelica Altimeter
+# conversion. A miss is invalid and is never replaced by ideal altitude.
 #
-# `lunco:sensor:*` and not Omniverse's `OmniLidar`, deliberately. `OmniLidar` models a
+# The single-ray LunCoRaycastAPI is used rather than Omniverse's `OmniLidar`, deliberately.
+# `OmniLidar` models a
 # SCANNING lidar — firing patterns, emitter-state arrays, per-line ray counts — and a
 # radar altimeter does not scan. NVIDIA ships no single-ray configuration to copy.
-# Reading an `OmniLidar` prim later is additive and costs this file nothing: the ray is
-# `RangeSensor` either way, so an Omniverse-authored sensor only needs a second reader
-# mapping `omni:sensor:Core:farRangeM` and friends onto the same component.
+# Reading an `OmniLidar` prim later is additive: an Omniverse-authored ray only
+# needs a reader that maps its raw query configuration onto the same observation.
 # NOT `lunco:spawnable`. An altimeter alone on the regolith measures nothing — it is a
 # component that arrives through a `references` arc onto a vessel, never a part the
 # palette offers to place. That also keeps `SelectableRoot` off it (the flag does double
@@ -31,13 +28,35 @@
 # than stopping at its instrument.
 def Xform "Altimeter" (
     kind = "component"
+    prepend apiSchemas = ["LunCoRaycastAPI"]
 )
 {
-    custom bool lunco:sensor:range = true
-    custom token lunco:sensor:rangeAxis = "-Y"
-    custom float lunco:sensor:rangeMax = 150.0
-    custom token lunco:sensor:rangeOutOfRangeMode = "IdealAltitude"
-    custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)
+    token lunco:raycast:axis = "-Y"
+    float lunco:raycast:maxDistance = 150.0
+    double3 lunco:raycast:offset = (0.0, 0.0, 0.0)
+
+    # This is a Modelica conversion attached to the raw ray query. The
+    # connections are local to this reusable sensor, while the vehicle owns
+    # the final connection from range_m to its guidance computer.
+    def Scope "Model" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/Altimeter.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:ray_distance_m.connect = </Altimeter.outputs:ray_distance>
+        float inputs:ray_hit_valid.connect = </Altimeter.outputs:ray_hit_valid>
+        float inputs:ray_sample_time.connect = </Altimeter.outputs:ray_sample_time>
+        # The differentiator bandwidth is authored with the reusable sensor so
+        # each vehicle can choose its measurement dynamics in USD.
+        float inputs:range_filter_time_constant_s = 0.02
+        float outputs:range_m
+        float outputs:range_rate_mps
+        float outputs:range_valid
+        float outputs:range_rate_valid
+        float outputs:sample_time_s
+    }
 
     # The beam the sensor draws. There is no `rangeVisualize` flag: this prim IS the
     # intent, and turning it off is `token visibility = "invisible"` here — USD's own

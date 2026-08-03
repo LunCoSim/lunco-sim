@@ -193,7 +193,12 @@ fn rollback_replay_propagates() {
     let mut app = app_with_role(None);
     let target = wire_ports(&mut app, ());
 
-    // NOT `app.update()` — replay runs this schedule and `PhysicsSchedule` only.
+    // Admit the authored topology through the normal binding transaction, then
+    // clear the value so only the replay schedule can satisfy the assertion.
+    app.update();
+    app.world_mut().get_mut::<Port>(target).unwrap().value = 0.0;
+
+    // Replay runs this schedule and `PhysicsSchedule` only after admission.
     app.world_mut().run_schedule(lunco_core::RollbackReplay);
 
     assert_eq!(
@@ -211,6 +216,8 @@ fn rollback_replay_skips_replicated_only_target() {
     let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
     let target = wire_ports(&mut app, lunco_core::NetReplicate);
 
+    app.update();
+    app.world_mut().get_mut::<Port>(target).unwrap().value = 0.0;
     app.world_mut().run_schedule(lunco_core::RollbackReplay);
 
     assert_eq!(value_of(&app, target), 0.0);

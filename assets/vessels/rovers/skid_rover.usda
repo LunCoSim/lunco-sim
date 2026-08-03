@@ -399,13 +399,56 @@ def Xform "SkidRover" (
 
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law (which decides how commands become drive) and
-    # `drivetrain` (how wheels are realized): `infinite` is EMPTY — the absence
-    # of a battery is today's drive-forever behavior. `battery` composes the
-    # electrical netlist onto the root. Its one generated Modelica DAE solves
-    # the battery and motor loads together; the `alive` boundary output
-    # browns out the drive ports over the last ~2% of charge.
+    # `drivetrain` (how wheels are realized): `infinite` composes an ideal
+    # voltage source with the motors. It is still a real generated Modelica
+    # network, but it has no finite storage limit. `battery` replaces that
+    # source with the battery state model; its one generated DAE solves the
+    # battery and motor loads together.
     variantSet "power" = {
         "infinite" {
+            def Xform "PowerSource" (
+                prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
+            )
+            {
+            }
+            def Scope "Electrical" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+            )
+            {
+                float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
+                float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
+                float outputs:bus_voltage.connect = </SkidRover/PowerSource.outputs:terminal_voltage_v>
+                float outputs:bus_current.connect = </SkidRover/PowerSource.outputs:terminal_current_a>
+                float outputs:bus_power.connect = </SkidRover/PowerSource.outputs:terminal_power_w>
+                float outputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
+                float outputs:motor_heat_FR.connect = </SkidRover/Motor_FR.outputs:heat>
+                float outputs:motor_heat_RL.connect = </SkidRover/Motor_RL.outputs:heat>
+                float outputs:motor_heat_RR.connect = </SkidRover/Motor_RR.outputs:heat>
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </SkidRover/PowerSource>,
+                    </SkidRover/Motor_FL>,
+                    </SkidRover/Motor_FR>,
+                    </SkidRover/Motor_RL>,
+                    </SkidRover/Motor_RR>,
+                ]
+            }
+            over "Motor_FL" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+            }
+            over "Motor_FR" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+            }
+            over "Motor_RL" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+            }
+            over "Motor_RR" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+            }
         }
 
         "battery" {

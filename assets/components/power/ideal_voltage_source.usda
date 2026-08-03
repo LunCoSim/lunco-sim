@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "IdealVoltageSource"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A reusable ideal electrical rail. It has no geometry and is deliberately not
+# spawnable: it is a circuit component composed into a vessel's electrical
+# CollectionAPI network. The network, not Rust, decides which loads receive it.
+def Xform "IdealVoltageSource" (
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/IdealVoltageSource.mo@
+
+    # The bus value is exposed on the component so Inspector and generated
+    # Modelica source see the same authored parameter.
+    float inputs:voltage = 48.0
+    float outputs:terminal_voltage_v
+    float outputs:terminal_current_a
+    float outputs:terminal_power_w
+    custom token connectors:p
+}

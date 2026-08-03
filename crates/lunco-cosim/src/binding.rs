@@ -8,9 +8,7 @@
 use bevy::prelude::*;
 use lunco_core::ports::PortRegistry;
 
-use crate::{
-    diagnostics::BrokenConnection, CosimDiagnostics, DeclaredOutputPorts, SimConnection, SimStatus,
-};
+use crate::{diagnostics::BrokenConnection, CosimDiagnostics, SimConnection, SimStatus};
 
 /// Runtime lifecycle of a port-owning endpoint.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
@@ -135,20 +133,11 @@ pub fn bind_connections(world: &mut World) {
         // before their first sample (the environment probe is the current
         // example).
         let source_ok = if spec.start_is_input {
-            registry
-                .read_input_port(world, spec.start_element, &spec.start_connector)
-                .is_some()
+            registry.has_input_port(world, spec.start_element, &spec.start_connector)
         } else {
-            registry
-                .read_output_port(world, spec.start_element, &spec.start_connector)
-                .is_some()
-                || world
-                    .get::<DeclaredOutputPorts>(spec.start_element)
-                    .is_some_and(|declared| declared.names.contains(&spec.start_connector))
+            registry.has_output_port(world, spec.start_element, &spec.start_connector)
         };
-        let target_ok = registry
-            .read_input_port(world, spec.end_element, &spec.end_connector)
-            .is_some();
+        let target_ok = registry.has_input_port(world, spec.end_element, &spec.end_connector);
         // `EndpointLifecycle` is an opt-in wait for asynchronous participants
         // (Modelica assets, deferred USD prims). It is deliberately NOT a
         // prerequisite for every port owner: a hardware `Port` is created

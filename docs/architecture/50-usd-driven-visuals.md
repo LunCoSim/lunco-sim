@@ -252,7 +252,7 @@ the value, not the pixels.
 | rhai drives visibility | `Visibility` is registered but is an enum; `apply_dynamic` has no enum arm. Scripts work around this by scaling to zero. |
 | `inventory` for the registry | Forces stateless bare `fn`s, adds link-time surface near the clang limit that already forced `reflect_auto_register` off, and `asset_sources.rs` steers explicitly toward a runtime resource for scriptable dispatch. |
 | `register_commands!` | Dispatches by type, needs a Rust type per id, gives no string key. |
-| A bespoke `lunco:sensor:beam*` attribute | One-off. The next visualization needs another attribute and another system — the taxonomy every new behaviour must edit, which `kernels.rs` exists to avoid. |
+| A bespoke ray-beam attribute | One-off. The raw ray query owns the value; authored geometry and its driver own presentation. |
 | A `lunco:*` name where a vendor already has one | `primvars:doNotCastShadows` is the worked example: a `LunCoRenderAPI` was written, then deleted, because Omniverse had already named the thing. Check Omniverse and core USD before minting. |
 
 ## Isaac Sim does the opposite, deliberately

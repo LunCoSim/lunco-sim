@@ -40,13 +40,13 @@
 use bevy::prelude::*;
 
 pub mod avian;
+pub mod avian_queries;
 pub mod binding;
 pub mod component;
 pub mod connection;
 pub mod diagnostics;
 pub mod joint;
 pub mod ports;
-pub mod sensors;
 pub mod suggestion;
 pub mod systems;
 pub mod telemetry;
@@ -126,11 +126,12 @@ impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
+            .register_type::<ForceActuator>()
+            .register_type::<TorqueActuator>()
+            .register_type::<PendingActuatorCommand>()
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()
-            .register_type::<sensors::ImuSensor>()
-            .register_type::<sensors::RangeSensor>()
-            .register_type::<sensors::ContactSensor>();
+            .register_type::<avian_queries::RaycastObservation>();
 
         // The shared port substrate (in `lunco-core`, below every participant).
         // The cosim engine owns the avian/joint/Modelica/hardware backends and
@@ -162,6 +163,7 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
             .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
+            .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
         app.add_systems(
@@ -238,9 +240,9 @@ impl Plugin for CoSimPlugin {
             (
                 systems::propagate::propagate_connections
                     .in_set(systems::propagate::CosimSet::Propagate),
-                // The single avian force consumer: drains `PendingForces` (filled
-                // by propagation's `force_*` writes) into avian's `Forces`. Joint
-                // motors are driven inline by the `angle` input port's write
+                // The single avian force consumer: drains net force/torque ports
+                // and USD-authored point-force mounts into avian's `Forces`.
+                // Joint motors are driven inline by the `angle` input port's write
                 // closure during propagation, so no separate joint-drive system.
                 // Additionally gated on `physics_is_live`: this is the one system
                 // here that writes into avian's FORCE ACCUMULATOR, which only the
@@ -280,41 +282,26 @@ impl Plugin for CoSimPlugin {
             ),
         );
 
-        // Avian outputs (position/velocity, joint twist) are read on demand
-        // through the resolver — avian's state is stable between physics steps,
-        // so no per-tick snapshot system is needed.
-
-        // Sensors refresh their cached outputs before propagation so a wire
-        // reading `accel_*`/`range`/`contact*` sees this tick's value. They only
-        // touch entities carrying the corresponding sensor component.
+        // Avian outputs (position/velocity, attitude, angular velocity, and
+        // contacts) are read on demand through the resolver. They are native
+        // solver facts, so no semantic sensor snapshot is maintained.
         //
-        // The IMU sensor needs only `Time<Fixed>` (a core resource), so it runs
-        // unconditionally. Range + contact sensors read avian-only system params
-        // (`SpatialQuery`, `Collisions` / `SubstepCount` / `Time<Physics>`), which
-        // only exist when `PhysicsPlugins` is added. Bevy 0.18 turns a missing
-        // `Res`/param into a hard error via the default handler (older versions
-        // silently skipped the system), so gate them on physics being active —
-        // headless cosim without avian (e.g. integration tests) then just skips
-        // them instead of panicking.
+        // A raw ray is the one exception: the query API must run after Avian
+        // writeback. It is sampled in FixedPostUpdate and consumed by the next
+        // co-simulation propagation tick. The physics resource gate keeps
+        // headless cosim without Avian safe.
         app.add_systems(
-            FixedUpdate,
-            sensors::update_imu_sensors.before(systems::propagate::CosimSet::Propagate),
-        );
-        app.add_systems(
-            FixedUpdate,
-            (
-                sensors::update_range_sensors,
-                sensors::update_contact_sensors,
-            )
+            FixedPostUpdate,
+            avian_queries::sample_raycast_observations
                 .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
-                .before(systems::propagate::CosimSet::Propagate),
+                .after(avian3d::prelude::PhysicsSystems::Writeback),
         );
 
-        // The range-sensor BEAM is drawn by `lunco-render-bevy`'s `sensor_beams`,
+        // The authored ray BEAM is drawn by `lunco-render-bevy`'s `sensor_beams`,
         // not here: naming `Gizmos`/`GizmoConfigStore` dragged
         // `bevy_gizmos → bevy_render → wgpu + naga` into every build, including the
-        // `--no-ui` server and the wasm worker. The SENSING (`update_range_sensors`,
-        // a `SpatialQuery` raycast) is simulation, must run headless, and stays here
+        // `--no-ui` server and the wasm worker. The raw Avian query is simulation,
+        // must run headless, and stays here
         // — the render layer reads its stored result and re-casts nothing.
         // See `docs/architecture/render-decoupling.md`.
 

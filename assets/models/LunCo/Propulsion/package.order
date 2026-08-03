@@ -1,3 +1,9 @@
 BellNozzle
 PlumePhotometry
+FluidPort
 RCSThruster
+RCSJet
+PropellantTank
+Turbopump
+CombustionChamber
+PropellantStatus

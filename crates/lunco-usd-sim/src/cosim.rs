@@ -772,6 +772,13 @@ fn modelica_port_contract_error(
     let missing_inputs: Vec<_> = contract
         .inputs
         .difference(&model.compiled_input_names)
+        // An unconnected USD `inputs:` value is also the authored parameter
+        // boundary for a Modelica participant. Parameters are compile-time
+        // values, not causal solver inputs, so the compiler correctly omits
+        // them from `compiled_input_names`. Keep the contract check about
+        // actual runtime wires; parameter admission is handled by the shared
+        // USD-default projection below.
+        .filter(|name| !model.parameters.contains_key(*name))
         // A single USD prim may be both a Modelica program and a physical
         // endpoint. In that shape `inputs:force_y` is the Avian body sink,
         // while `output Real force_y` is the Modelica actuator source. The
@@ -881,6 +888,7 @@ pub fn dispatch_loaded_modelica_sources(
         &PendingModelicaSource,
         &UsdPrimPath,
         &mut SimComponent,
+        Option<&UsdInputDefaults>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -906,9 +914,9 @@ pub fn dispatch_loaded_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _), (_, _, b, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _), (_, _, b, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component) in pending {
+    for (entity, pending, prim_path, mut component, usd_defaults) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -936,8 +944,30 @@ pub fn dispatch_loaded_modelica_sources(
         // the port surface a wire writes to.
         let interface = parse_model_interface(&src.text, "cosim-dispatch.mo");
         let model_name = interface.model_name.unwrap_or_else(|| "Model".into());
-        let parameters = interface.parameters;
-        let inputs = interface.inputs;
+        let mut parameters = interface.parameters;
+        let mut inputs = interface.inputs;
+        // USD is the instance-authoring boundary. Apply its unconnected
+        // scalar values to the correct Modelica variability class before the
+        // first compile: parameters stay compile-time parameters, while
+        // `input Real` values remain live solver inputs. This classification
+        // is source-driven and reusable for every Modelica asset; it does not
+        // encode sensor- or vehicle-specific names.
+        if let Some(defaults) = usd_defaults {
+            for (name, value) in &defaults.0 {
+                if let Some(parameter) = parameters.get_mut(name) {
+                    *parameter = *value;
+                } else if let Some(input) = inputs.get_mut(name) {
+                    *input = *value;
+                } else {
+                    warn!(
+                        "[usd-cosim] {}: `inputs:{}` is authored but the Modelica source ({}) declares no parameter or input — the value is ignored",
+                        prim_path.path,
+                        name,
+                        model_name,
+                    );
+                }
+            }
+        }
         let usd_documentation = canonical
             .get(prim_path.stage_handle.id())
             .and_then(|stage| {
@@ -1008,6 +1038,8 @@ pub fn dispatch_loaded_modelica_sources(
         commands
             .entity(entity)
             .try_insert(CosimOutputMetadata { outputs });
+        component.parameters = parameters.clone();
+        component.inputs = inputs.clone();
         commands.entity(entity).try_insert(ModelicaModel {
             model_path: PathBuf::from(&pending.asset_path),
             model_name: model_name.clone(),
@@ -2062,20 +2094,52 @@ pub struct UsdInputDefaults(pub HashMap<String, f64>);
 ///
 /// A key the model does not declare is dropped by the port backend, so a typo'd
 /// parameter is not a silent no-op: it is named here.
-pub fn seed_usd_input_defaults(
+pub(crate) fn seed_usd_input_defaults(
     mut q: Query<
-        (&UsdInputDefaults, &mut SimComponent, &UsdPrimPath),
-        Or<(Added<SimComponent>, Changed<UsdInputDefaults>)>,
+        (
+            &UsdInputDefaults,
+            &mut SimComponent,
+            &UsdPrimPath,
+            Option<&mut ModelicaModel>,
+            Option<&UsdModelicaPortContract>,
+        ),
+        Or<(
+            Added<SimComponent>,
+            Added<ModelicaModel>,
+            Changed<UsdInputDefaults>,
+        )>,
     >,
 ) {
-    for (defaults, mut sim, prim_path) in q.iter_mut() {
+    for (defaults, mut sim, prim_path, model, modelica_contract) in q.iter_mut() {
+        let mut model = model;
         for (port, value) in &defaults.0 {
-            if sim.inputs.contains_key(port) {
+            if let Some(model) = model.as_deref_mut() {
+                if model.parameters.contains_key(port) {
+                    model.parameters.insert(port.clone(), *value);
+                    sim.parameters.insert(port.clone(), *value);
+                } else if model.inputs.contains_key(port) {
+                    model.inputs.insert(port.clone(), *value);
+                    sim.inputs.insert(port.clone(), *value);
+                } else {
+                    warn!(
+                        "[usd-cosim] {}: `inputs:{}` is authored but the Modelica model ({}) declares no parameter or input — the value is ignored",
+                        prim_path.path,
+                        port,
+                        sim.model_name,
+                    );
+                }
+            } else if modelica_contract.is_some() {
+                // The Modelica source has not arrived yet. The USD-declared
+                // placeholder interface intentionally does not decide whether
+                // a name is a parameter or a runtime input; dispatch applies
+                // the value once the parsed source contract is authoritative.
+                continue;
+            } else if sim.inputs.contains_key(port) {
+                // Non-Modelica solvers retain the generic USD input surface.
                 sim.inputs.insert(port.clone(), *value);
             } else {
                 warn!(
-                    "[usd-cosim] {}: `inputs:{}` is authored but the model ({}) declares no such \
-                     input — the value is ignored. Check the port name against the model.",
+                    "[usd-cosim] {}: `inputs:{}` is authored but the program ({}) declares no such input — the value is ignored",
                     prim_path.path, port, sim.model_name,
                 );
             }
@@ -3703,6 +3767,20 @@ mod tests {
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
         model.variables.insert("thrust".into(), 42.0);
+
+        assert_eq!(modelica_port_contract_error(&contract, &model), None);
+    }
+
+    #[test]
+    fn compiled_interface_accepts_usd_parameter_defaults() {
+        let contract = UsdModelicaPortContract {
+            inputs: ["filter_time_constant_s".to_string()].into_iter().collect(),
+            outputs: BTreeSet::new(),
+        };
+        let mut model = dispatched_but_unsolved();
+        model
+            .parameters
+            .insert("filter_time_constant_s".into(), 0.02);
 
         assert_eq!(modelica_port_contract_error(&contract, &model), None);
     }

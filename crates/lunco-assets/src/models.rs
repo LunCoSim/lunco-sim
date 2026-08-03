@@ -1,4 +1,9 @@
 //! Embedded Modelica example models — every `*.mo` under `assets/models/`.
+//! The source module is intentionally touched when the shipped model contract
+//! changes so Cargo rebuilds the include_dir snapshot used by headless runs.
+//! The reusable PositionPID3D/PIDAxis/AccelerationLimiter signal boundaries are
+//! part of that contract; reusable signal blocks publish explicit output aliases
+//! and the guidance exposes the bounded vertical channel.
 //!
 //! Why this lives HERE: `lunco-assets` owns every asset interaction. The
 //! bundled models must be present at compile time on EVERY target — wasm has no

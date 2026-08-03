@@ -48,7 +48,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 | **Retention / ring buffer** | `lunco_viz::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal** (default 2000), `push_scalar()` drops non-finite, `SignalMeta { unit, provenance }`, deterministic per-path plot colour | **Use as-is.** Only producer today is the Modelica worker; its docs already anticipate other producers. Routing `SampledParameter → push_scalar` buys retention **and plotting** in one wire-up. |
 | **FPS / frame stats** | `bevy::diagnostic::Diagnostic` — named `DiagnosticPath` + ring buffer + `history_len` + `smoothed()` + `is_enabled`. Used in **exactly one file** (`perf_hud.rs`), which then **hand-rolls its own** `frame_history: VecDeque<f32>` (`FRAME_HISTORY_LEN = 240`) on top of it | **A `Diagnostic` IS a telemetry channel** (f64-only). Expose it as a channel *source*; delete perf_hud's duplicate buffer. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
-| **Sensors from USD** | `lunco-cosim/src/sensors.rs` — `ImuSensor` / `RangeSensor` / `ContactSensor`, authored from `lunco:sensor:imu` / `:range` / `:contact` (`lunco-usd-sim:594`), **and they already surface as ports** | **Nothing to build.** A USD sensor is *already* a telemetry source. |
+| **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
 | **Command shape** | `ControlAnimation { playing: Option<bool>, seek_secs: Option<f64>, rate: Option<f64> }` — one verb, all-`Option`, each field a distinct control | **Copy this idiom exactly.** One `ControlTelemetry`, not five verbs. |
 | **Settings** | `SettingsSection` trait (`const KEY`) → `~/.lunco/settings.json` (see `PerfHudSettings`, `ExperimentSettings`) | Add one `TelemetrySettings` section. |
@@ -240,7 +240,8 @@ Two decisions that make that possible:
 
 ## 8. USD authoring
 
-Follows the `lunco:sensor:*` convention exactly (`lunco-usd-sim:594`):
+Follows the ordinary USD port convention; raw ray configuration uses
+LunCoRaycastAPI and semantic conversion is authored as Modelica:
 
 ```usda
 bool   lunco:telemetry           = true
@@ -263,8 +264,9 @@ engine-global, not a property of a prim. `lunco-telemetry` publishes those itsel
 `--no-ui` run, which links `bevy_diagnostic` but never adds `FrameTimeDiagnosticsPlugin`,
 publishes no always-silent FPS channel to clutter the catalog.
 
-USD sensors (`lunco:sensor:imu` etc.) **already emit ports**, so tagging one for telemetry is
-just a `lunco:telemetry:port` pointing at it. No new sensor machinery.
+Avian observations and Modelica conversion outputs already emit ordinary ports,
+so tagging one for telemetry is just a lunco:telemetry:port pointing at it.
+No separate sensor telemetry machinery exists.
 
 ---
 
@@ -331,9 +333,9 @@ These are the gaps the requirements didn't name and that will bite:
     needs a routed transport.
   - Still open from this phase: retiring the MCP `watch_ports` JS poll loop
     (`mcp/src/index.js:810`) in favour of the real query surface.
-- **Phase 4 — DONE.** `lunco:telemetry:*` USD authoring (same convention as
-  `lunco:sensor:*`, and since USD sensors already emit ports, tagging one for telemetry is
-  just `lunco:telemetry:port` naming it). Recording = `ExportTelemetryRecording`.
+- **Phase 4 — DONE.** `lunco:telemetry:*` USD authoring. Avian observations and
+  Modelica conversion outputs are ordinary ports, so tagging one for telemetry
+  is just `lunco:telemetry:port` naming it. Recording = `ExportTelemetryRecording`.
 - **Phase 5 — DONE.** `ChannelSource::Diagnostic` makes FPS/frame-time real channels; the
   hand-rolled `frame_history` ring buffer in `perf_hud` is **deleted** — `bevy::Diagnostic`
   already IS a named ring buffer with a configurable depth, and `PerfStats` was shadowing

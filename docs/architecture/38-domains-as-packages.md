@@ -435,8 +435,8 @@ radius. Ordered by leverage.
 
 ### A8 — Sensors: converge on Isaac/USD sensor shapes
 
-- Re-shape `lunco:sensor:*` (`RangeSensor`/`ImuSensor`, `lunco-usd-sim:494`) to **mirror NVIDIA's Isaac
-  sensor schema** attribute names/structure; use core `UsdGeomCamera` for cameras. Comms/celestial LOS
+- Keep the generic LunCoRaycastAPI raw-query shape aligned with NVIDIA's Isaac
+  sensor schema where useful; keep IMU, range, and attitude meaning in Modelica. Use core `UsdGeomCamera` for cameras. Comms/celestial LOS
   sensors (doc 36) become our **extension over** that base, not a private parallel. Convergent, not
   committal (the standard is still forming).
 
@@ -800,8 +800,8 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
   schemas already in use where they cover it; keep `lunco:` only for what PhysX lacks. The
   rocker-bogie differential is authored as a standard **`PhysxPhysicsGearJoint`** over the two
   chassis↔rocker hinges (no bespoke `lunco:differential:*`).
-- **Sensors** (`lunco:sensor:imu/range/contact`) — **mirror NVIDIA/Isaac sensor schema** shapes/names
-  (doc §8.5); camera → `UsdGeomCamera`. Convergent-not-committal.
+- **Physics observations** (LunCoRaycastAPI plus native Avian ports) — mirror
+  NVIDIA/Isaac raw-query shapes where useful; semantic conversions remain Modelica.
 
 ### 14.4 Keep `lunco:` (LunCo-specific — USD has no name), just tidy the namespaces
 
@@ -895,7 +895,7 @@ volume. Nothing to promote to, so it is now declared properly as `LunCoLightAPI`
 
 **`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:light:range`, `lunco:link:*`, `lunco:celestial:*`,
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/`nextScene`/
-`triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:avatar` (role), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo
+`triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:avatar` (role), LunCoRaycastAPI (raw physics queries), `lunco:terrain:*`/`shadow:*` (LunCo
 render params — a partial `UsdRenderSettings` alignment is possible but not standard), `info:*`
 (the SysML **allocation** / USD+FMI-future binding).
 

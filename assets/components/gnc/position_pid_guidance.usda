@@ -16,7 +16,6 @@ def Xform "PositionPIDGuidance"
     float inputs:guidance_pitch.connect = </PositionPIDGuidance/GNC.outputs:pitch_cmd>
     float inputs:guidance_roll.connect = </PositionPIDGuidance/GNC.outputs:roll_cmd>
     float inputs:guidance_yaw.connect = </PositionPIDGuidance/GNC.outputs:yaw_cmd>
-
     def Scope "GNC" (
         prepend apiSchemas = ["LunCoProgramAPI"]
         doc = "Three-axis position PID navigation and thrust-vector guidance."
@@ -25,20 +24,39 @@ def Xform "PositionPIDGuidance"
         uniform asset info:sourceAsset = @lunco://models/LunCo/GNC/PositionPID3D.mo@
         uniform bool lunco:program:realtimeSafe = true
 
-        # The rigid-body state is an engine-owned Avian output surface.  No copy
-        # of position or velocity is maintained in Rhai or in the scene.
-        float inputs:pos_x.connect = </PositionPIDGuidance.outputs:position_x>
-        float inputs:pos_y.connect = </PositionPIDGuidance.outputs:position_y>
-        float inputs:pos_z.connect = </PositionPIDGuidance.outputs:position_z>
-        float inputs:vel_x.connect = </PositionPIDGuidance.outputs:velocity_x>
-        float inputs:vel_y.connect = </PositionPIDGuidance.outputs:velocity_y>
-        float inputs:vel_z.connect = </PositionPIDGuidance.outputs:velocity_z>
-        float inputs:vehicle_mass.connect = </PositionPIDGuidance.outputs:mass>
-        float inputs:piloted.connect = </PositionPIDGuidance.outputs:piloted>
+        # These are the public flight-computer inputs. The component does not
+        # guess where a mounted sensor lives: the vehicle or mission layer
+        # authors every USD connection to its own IMU and raw-ray conversion.
+        float inputs:altimeter_range = 0.0
+        float inputs:altimeter_range_rate = 0.0
+        float inputs:altimeter_valid = 0.0
+        float inputs:imu_coordinate_accel_local_x = 0.0
+        float inputs:imu_coordinate_accel_local_y = 0.0
+        float inputs:imu_coordinate_accel_local_z = 0.0
+        float inputs:vehicle_mass = 2000.0
+        float inputs:piloted = 0.0
+        float inputs:touchdown = 0.0
 
-        # Target position and velocity are mission inputs.  A scene may connect
+        # Mission-initialized navigation state. These are authored once at the
+        # start of an experiment; after initialization the estimator moves from
+        # IMU measurements and never reads the body's pose on each tick.
+        float inputs:initial_pos_x = 0.0
+        float inputs:initial_pos_y = 0.0
+        float inputs:initial_pos_z = 0.0
+        float inputs:initial_vel_x = 0.0
+        float inputs:initial_vel_y = 0.0
+        float inputs:initial_vel_z = 0.0
+        float inputs:altimeter_mount_offset = 3.3 (
+            customData = { double min = 0.0 double max = 10.0 string unit = "m" }
+        )
+        float inputs:vertical_velocity_correction_gain = 2.0 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "1/s" }
+        )
+
+        # Target position and velocity are mission inputs. A scene may connect
         # them to a kinematic target body's live position outputs, or leave the
-        # authored origin/zero defaults for a fixed landing site.
+        # authored origin/zero defaults for a fixed landing site. Target velocity
+        # remains zero for a manually moved kinematic point.
         float inputs:target_x = 0.0
         float inputs:target_y = 5.0
         float inputs:target_z = 0.0
@@ -61,10 +79,13 @@ def Xform "PositionPIDGuidance"
         float inputs:kp_y = 0.18 (
             customData = { double min = 0.0 double max = 1.0 string unit = "1/s2" }
         )
-        float inputs:ki_y = 0.006 (
+        # Vertical descent is derivative-dominated: an integral term accumulates
+        # the deliberate long coast above the landing site and delays braking.
+        # Keep it exposed for experiments, but ship the stable default at zero.
+        float inputs:ki_y = 0.0 (
             customData = { double min = 0.0 double max = 0.1 string unit = "1/s3" }
         )
-        float inputs:kd_y = 1.20 (
+        float inputs:kd_y = 2.0 (
             customData = { double min = 0.0 double max = 5.0 string unit = "1/s" }
         )
         float inputs:kp_z = 0.08 (
@@ -76,7 +97,7 @@ def Xform "PositionPIDGuidance"
         float inputs:kd_z = 0.75 (
             customData = { double min = 0.0 double max = 5.0 string unit = "1/s" }
         )
-        float inputs:integral_limit = 12.0 (
+        float inputs:position_integral_limit = 12.0 (
             customData = { double min = 0.0 double max = 100.0 string unit = "state" }
         )
         float inputs:anti_windup_gain = 1.0 (
@@ -93,6 +114,15 @@ def Xform "PositionPIDGuidance"
         )
         float inputs:max_thrust = 60000.0 (
             customData = { double min = 1.0 double max = 1000000.0 string unit = "N" }
+        )
+        float inputs:minimum_positive_mass_kg = 0.000001 (
+            customData = { double min = 0.000001 double max = 100.0 string unit = "kg" }
+        )
+        float inputs:minimum_vertical_accel_mps2 = 0.000001 (
+            customData = { double min = 0.000001 double max = 1.0 string unit = "m/s2" }
+        )
+        float inputs:minimum_thrust_accel_mps2 = 0.000001 (
+            customData = { double min = 0.000001 double max = 1.0 string unit = "m/s2" }
         )
         float inputs:engage = 1.0 (
             customData = { double min = 0.0 double max = 1.0 string unit = "bool" }

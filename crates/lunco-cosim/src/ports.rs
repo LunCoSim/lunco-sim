@@ -51,7 +51,7 @@ pub struct AvianPort {
 /// A group of avian ports gated on a component's presence — one avian kind
 /// (rigid body, revolute joint, prismatic joint, …). Declared in
 /// [`crate::avian`] / [`crate::joint`] and folded into the avian [`PortBackend`]
-/// below. Adding a kind (a sensor, a D6 joint, …) is one entry in [`AVIAN`] plus
+/// below. Adding a kind (a raw physics query, a D6 joint, …) is one entry in [`AVIAN`] plus
 /// its group declaration — no new struct, observer, or system.
 pub struct AvianGroup {
     /// Does `entity` belong to this group (carry the gating component)?
@@ -71,12 +71,12 @@ pub struct AvianGroup {
 /// ports share one computation (`crate::avian::contact_of`).
 pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
+    crate::avian::FORCE_ACTUATOR_GROUP,
+    crate::avian::TORQUE_ACTUATOR_GROUP,
     crate::avian::COLLIDER_CONTACT_GROUP,
     crate::joint::REVOLUTE_JOINT_GROUP,
     crate::joint::PRISMATIC_JOINT_GROUP,
-    crate::sensors::IMU_SENSOR_GROUP,
-    crate::sensors::RANGE_SENSOR_GROUP,
-    crate::sensors::CONTACT_SENSOR_GROUP,
+    crate::avian_queries::RAYCAST_GROUP,
 ];
 
 fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {

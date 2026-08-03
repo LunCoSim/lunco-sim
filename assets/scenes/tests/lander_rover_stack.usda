@@ -30,6 +30,20 @@ def Xform "LanderRoverStack" (
 
     uniform bool lunco:spawnable = false
 
+    # The reusable lander includes an Earth tracker; the stack test declares
+    # the celestial source and lunar frame rather than leaving that dependency
+    # to a runtime fallback.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

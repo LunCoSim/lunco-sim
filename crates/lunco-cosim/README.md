@@ -6,7 +6,8 @@ route named outputs to named inputs, following the FMI/SSP pattern.
 
 ## Architecture at a glance
 
-Every participant — Modelica/FMU model, Avian rigid body, joint, sensor, or
+Every participant — Modelica/FMU model, Avian rigid body, joint, raw physics
+query, or
 hardware signal — exposes its state as **named scalar ports** through one shared
 surface, the **`PortRegistry`** (defined in `lunco-core::ports`, *below* every
 participant so wires, the HTTP API, the inspector, rhai, and Python all read/write
@@ -19,11 +20,12 @@ registers the built-in backends (`ports::register_builtin_port_backends`):
 | **Avian rigid body** (`RIGID_BODY_GROUP`) | **out:** `position_{x,y,z}`, `height`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}` · **in:** `force_{x,y,z}` (world), `force_local_{x,y,z}` (body-frame), `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
 | **Avian revolute joint** (`REVOLUTE_JOINT_GROUP`) | `angle` — out (measured twist) + in (drives the `AngularMotor`) |
 | **Avian prismatic joint** (`PRISMATIC_JOINT_GROUP`) | `displacement` — out (slider offset) + in (drives the `LinearMotor`) |
-| **Sensors** (`sensors.rs`, gated on a marker component) | IMU → `accel_{x,y,z}` (world lin. accel) + `spec_force_{x,y,z}` (body-frame, = `a − g`); range → `range`; contact → `contact` (0/1) + `contact_force` (N) |
+| **Avian observations** | Native rigid-body/contact facts plus RaycastObservation → ray_distance, ray_hit_valid, hit point/normal, and sample time |
+| **Modelica sensor conversions** | IMU, altimeter, attitude, and touchdown semantics are ordinary Modelica inputs/outputs wired in USD |
 | **Hardware** (`Port`) | `value` (f64) |
 
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
-(`ports.rs`) — adding a kind (a new joint or sensor) is one `AvianGroup` entry,
+(`ports.rs`) — adding a kind (a new joint or raw physics query) is one AvianGroup entry,
 no observer or sync system. **Adding a port group:** declare the `AvianGroup`
 (present-predicate + `AvianPort`s with read/write closures) and list it in `AVIAN`.
 

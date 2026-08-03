@@ -118,7 +118,8 @@ pub enum ChannelSource {
     /// [`ResolvedPort`](crate::ports::ResolvedPort) and thereafter read by slot with
     /// no name lookup. Uniformly covers every simulated subsystem that exposes ports
     /// — Modelica variables, Avian rigid bodies, joints, FSW signals, and the USD
-    /// sensors (`lunco:sensor:imu` / `:range` / `:contact`), which are already ports.
+    /// raw Avian query observations and Modelica sensor conversions, which are
+    /// already ordinary ports.
     ///
     /// `f64` only — that is the port currency.
     Port(String),

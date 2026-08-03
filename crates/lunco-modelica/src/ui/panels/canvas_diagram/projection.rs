@@ -133,6 +133,49 @@ pub(super) fn recover_edges_from_ast(
             }
             diagram.add_edge(src_id, src_port, tgt_id, tgt_port);
         }
+        // Generated USD networks use ordinary scalar Modelica inputs and
+        // outputs, so their causal wires are equations (`pump.in = tank.out`)
+        // rather than acausal `connect()` equations. Treat a direct
+        // component-to-component equality as a directed signal edge only
+        // when the two endpoints are authored input/output ports. Internal
+        // constitutive equations (`thrust = flow * velocity`) remain part of
+        // the component and do not become misleading diagram wires.
+        for eq in &class.equations {
+            let rumoca_compile::parsing::ast::Equation::Simple { lhs, rhs } = eq else {
+                continue;
+            };
+            let Some((lhs_component, lhs_port)) = simple_signal_reference(lhs) else {
+                continue;
+            };
+            let Some((rhs_component, rhs_port)) = simple_signal_reference(rhs) else {
+                continue;
+            };
+            let (Some(&lhs_id), Some(&rhs_id)) =
+                (index.get(&lhs_component), index.get(&rhs_component))
+            else {
+                continue;
+            };
+            let lhs_kind = diagram
+                .get_node(lhs_id)
+                .and_then(|node| node.component_def.ports.iter().find(|p| p.name == lhs_port))
+                .map(|port| port.kind);
+            let rhs_kind = diagram
+                .get_node(rhs_id)
+                .and_then(|node| node.component_def.ports.iter().find(|p| p.name == rhs_port))
+                .map(|port| port.kind);
+            let (source_id, source_port, target_id, target_port) = match (lhs_kind, rhs_kind) {
+                (
+                    Some(crate::visual_diagram::PortKind::Input),
+                    Some(crate::visual_diagram::PortKind::Output),
+                ) => (rhs_id, rhs_port, lhs_id, lhs_port),
+                (
+                    Some(crate::visual_diagram::PortKind::Output),
+                    Some(crate::visual_diagram::PortKind::Input),
+                ) => (lhs_id, lhs_port, rhs_id, rhs_port),
+                _ => continue,
+            };
+            diagram.add_edge(source_id, source_port, target_id, target_port);
+        }
         for nested in class.classes.values() {
             walk(nested, diagram, index, existing);
         }
@@ -140,6 +183,25 @@ pub(super) fn recover_edges_from_ast(
     for class in ast.classes.values() {
         walk(class, diagram, &index, &existing);
     }
+}
+
+/// Extract the only equality shape that represents a visual causal wire:
+/// `component.port = other_component.port`. A bare model variable, literal,
+/// function call, or arithmetic expression is deliberately not a topology
+/// edge.
+fn simple_signal_reference(
+    expression: &rumoca_compile::parsing::ast::Expression,
+) -> Option<(String, String)> {
+    let rumoca_compile::parsing::ast::Expression::ComponentReference(reference) = expression else {
+        return None;
+    };
+    let mut parts = reference
+        .parts
+        .iter()
+        .map(|part| part.ident.text.to_string());
+    let component = parts.next()?;
+    let port = parts.collect::<Vec<_>>().join(".");
+    (!port.is_empty()).then_some((component, port))
 }
 
 pub(super) fn project_scene(

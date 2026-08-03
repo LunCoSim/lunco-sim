@@ -96,7 +96,7 @@ impl Plugin for UsdAvianPlugin {
         //   stage is loaded and Mesh3d/Transform exist.
         // `build_usd_physics_joints`: stays a per-frame system because
         //   it's a deferred state-machine waiting on Avian to admit
-        //   both bodies into its island graph (FixedUpdate-driven).
+        //   both bodies into its island graph (physics-schedule-driven).
         //   `run_if(any pending)` makes it idle when no joints await.
         // `PhysicsSceneGravity` records which prim set the world's gravity, which
         // is only meaningful while that scene is loaded — carried into the next
@@ -125,19 +125,19 @@ impl Plugin for UsdAvianPlugin {
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
-            // The joint builder is preparation, not integration. It therefore runs
-            // in the enclosing fixed schedule, after the bridge's read pass. This
-            // remains live while a world-readiness hold pauses Avian's nested
-            // PhysicsSchedule, allowing the binding transaction to finish without
-            // stepping the solver. `attach_joint` parks the constructed constraint
-            // as `PendingJoint`; `JointAttachPlugin` admits it later, only after
-            // Avian has placed both bodies in its island graph.
+            // The joint builder is preparation, not integration. It runs in the
+            // same nested physics schedule as the bridge's read pass, so it sees
+            // the composed authored pose and seats the bodies before Avian's
+            // first physics step. `attach_joint` parks the constructed
+            // constraint as `PendingJoint`; `JointAttachPlugin` admits it later,
+            // only after Avian has placed both bodies in its island graph.
             .add_systems(
-                FixedPostUpdate,
+                avian3d::schedule::PhysicsSchedule,
                 build_usd_physics_joints
                     .in_set(avian3d::prelude::PhysicsSystems::Prepare)
+                    .after(avian3d::prelude::PhysicsSystems::First)
                     .after(big_space_bridge::PhysicsBridgeSystems::Read)
-                    .before(avian3d::prelude::PhysicsSystems::StepSimulation)
+                    .before(avian3d::schedule::PhysicsStepSystems::First)
                     .run_if(any_with_component::<PendingUsdJoint>),
             )
             .add_systems(
@@ -781,6 +781,16 @@ fn nearest_body_path(reader: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> 
     None
 }
 
+/// Resolve a USD joint relationship target to the rigid-body prim that owns the
+/// endpoint. The relationship may name a mechanism child inside a referenced
+/// component; the joint contract attaches to that child's nearest body ancestor.
+/// Keep this resolution in the Avian USD reader so topology consumers cannot
+/// accidentally compare an unresolved authored path with a resolved ECS path.
+pub fn resolve_joint_body_path(reader: &StageView<'_>, target: &str) -> Option<String> {
+    let path = SdfPath::new(target).ok()?;
+    nearest_body_path(reader, &path).map(|resolved| resolved.to_string())
+}
+
 /// Terrain prims whose collider is built from a loaded `Mesh3d` — a glTF DEM
 /// brought in via `lunco:assetMode = "mesh"` (e.g. the Shackleton ridge).
 ///
@@ -1283,7 +1293,7 @@ fn apply_collision_groups(
 /// (translate + rotate + **scale**) of every prim from the stage root down to it, so
 /// an ancestor's scale is baked into a descendant's world position — exactly how the
 /// renderer places it. Missing xform ops compose as identity.
-pub(crate) fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
+pub fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
     let mut chain = Vec::new();
     let mut cur = Some(path.clone());
     while let Some(p) = cur {
@@ -1298,6 +1308,29 @@ pub(crate) fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transfo
         acc = acc.mul_transform(local_transform_at(reader, p, 0.0).unwrap_or(Transform::IDENTITY));
     }
     acc
+}
+
+/// Compose a prim's transform in the local frame of an authored body.
+///
+/// Physical mount points use the body origin and rotation, never the render
+/// world's `GlobalTransform`. The relative transform is derived from the live
+/// composed USD hierarchy so nested component references and intermediate Xforms
+/// remain valid without repeating the mount position in another description.
+pub fn transform_in_body_frame(
+    reader: &StageView<'_>,
+    body_path: &SdfPath,
+    prim_path: &SdfPath,
+) -> Option<Transform> {
+    let body = world_transform(reader, body_path);
+    let prim = world_transform(reader, prim_path);
+    let inv = body.rotation.inverse();
+    Some(Transform {
+        translation: inv * (prim.translation - body.translation),
+        rotation: (inv * prim.rotation).normalize(),
+        // Scale is not part of an Avian body frame. The position above already
+        // contains authored ancestor scale, while force directions are vectors.
+        scale: Vec3::ONE,
+    })
 }
 
 /// Derive a joint's local anchors from the composed transform hierarchy, for the
@@ -2426,10 +2459,14 @@ impl Plugin for JointAttachPlugin {
         // constraint it carries, so a new joint kind is one line HERE and
         // nothing else anywhere.
         //
-        // `PhysicsSystems::Prepare`, the same window `build_usd_physics_joints`
-        // uses and for the same reason: after avian has admitted the frame's new
-        // bodies, and ahead of the broad/narrow phase, so the joint is in the
-        // graph before anything could put its bodies in contact.
+        // Admission belongs to Avian's nested solver schedule. The USD builder
+        // runs in the enclosing FixedPostUpdate schedule and seats a joint
+        // before the nested physics step; this system must therefore run after Avian has
+        // created the corresponding solver bodies but before Avian prepares
+        // joint constraints. Ordering against the outer `PhysicsSystems` set
+        // is insufficient: that set is not part of the nested
+        // `PhysicsSchedule`, so a parked joint could survive one whole physics
+        // tick and the body would move away from its authored seat.
         app.add_systems(
             avian3d::schedule::PhysicsSchedule,
             (
@@ -2445,9 +2482,8 @@ impl Plugin for JointAttachPlugin {
                     .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
             )
                 .in_set(JointAdmission)
-                .in_set(avian3d::prelude::PhysicsSystems::Prepare)
-                .after(avian3d::prelude::PhysicsSystems::First)
-                .before(avian3d::schedule::PhysicsStepSystems::First),
+                .after(avian3d::dynamics::solver::schedule::SolverSystems::PrepareSolverBodies)
+                .before(avian3d::dynamics::solver::schedule::SolverSystems::PrepareJoints),
         );
     }
 }
@@ -2772,19 +2808,34 @@ fn apply_rigid_body_mass_props(
     // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
     // then carry them into the world frame through the body's composed rotation
     // — avian's velocity components are world-frame.
-    if read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY).is_some()
-        || read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY).is_some()
-    {
+    let authored_linear = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY).map(|vel| {
         let world_rot = world_transform(reader, sdf_path).rotation.as_dquat();
-        if let Some(vel) = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY) {
-            commands
-                .entity(entity)
-                .try_insert(LinearVelocity(world_rot * conv.point_d(vel)));
-        }
-        if let Some(ang) = read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY) {
-            commands.entity(entity).try_insert(AngularVelocity(
-                world_rot * (conv.dir_d(ang) * std::f64::consts::PI / 180.0),
-            ));
+        world_rot * conv.point_d(vel)
+    });
+    let authored_angular =
+        read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY).map(|ang| {
+            let world_rot = world_transform(reader, sdf_path).rotation.as_dquat();
+            world_rot * (conv.dir_d(ang) * std::f64::consts::PI / 180.0)
+        });
+    if authored_linear.is_some() || authored_angular.is_some() {
+        let dynamic = reader
+            .scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED)
+            .unwrap_or(true)
+            && !reader
+                .scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED)
+                .unwrap_or(false);
+        if dynamic {
+            commands.entity(entity).try_insert(AuthoredInitialVelocity {
+                linear: authored_linear,
+                angular: authored_angular,
+            });
+        } else {
+            if let Some(vel) = authored_linear {
+                commands.entity(entity).try_insert(LinearVelocity(vel));
+            }
+            if let Some(ang) = authored_angular {
+                commands.entity(entity).try_insert(AngularVelocity(ang));
+            }
         }
     }
 }
@@ -2919,6 +2970,22 @@ pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<P
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct ShouldBeDynamic;
+
+/// Initial velocity authored on a USD body that is waiting for joint admission.
+///
+/// Avian integrates a kinematic body's `LinearVelocity` as a commanded motion,
+/// so merely changing the body type to `Kinematic` does not freeze a body that
+/// already received `physics:velocity`. Dynamic bodies therefore keep their
+/// authored initial condition here until the USD simulation projector promotes
+/// them. This component is the lifecycle contract between USD extraction and
+/// dynamic admission; it is not a model-specific workaround.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AuthoredInitialVelocity {
+    /// World-frame linear velocity, if authored.
+    pub linear: Option<DVec3>,
+    /// World-frame angular velocity, if authored.
+    pub angular: Option<DVec3>,
+}
 
 // USDA fixtures are written to a temp dir and composed from disk. Native-only
 // test code: the `disallowed_methods` ban on `std::fs` guards wasm *runtime*

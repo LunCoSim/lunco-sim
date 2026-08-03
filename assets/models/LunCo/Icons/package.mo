@@ -74,6 +74,53 @@ package Icons "Semantic icons for the LunCo Modelica library"
   partial model Propulsion
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={Polygon(points={{-58,50},{48,25},{72,-25},{-58,-50},{-25,0},{-58,50}}, lineColor={105,105,115}, fillColor={185,190,205}, fillPattern=FillPattern.Solid), Polygon(points={{-58,30},{-95,0},{-58,-30},{-38,0},{-58,30}}, lineColor={220,75,25}, fillColor={250,150,45}, fillPattern=FillPattern.Solid)}));
   end Propulsion;
+  partial model RCSJet
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
+      Polygon(points={{-58,42},{42,25},{66,0},{42,-25},{-58,-42},{-28,0},{-58,42}}, lineColor={95,95,105}, fillColor={180,185,200}, fillPattern=FillPattern.Solid),
+      Polygon(points={{-58,26},{-96,0},{-58,-26},{-36,0},{-58,26}}, lineColor={220,70,20}, fillColor={255,150,35}, fillPattern=FillPattern.Solid),
+      Line(points={{-86,0},{-100,0}}, color={255,225,125}, thickness=2),
+      Text(extent={{-88,-88},{88,-68}}, textString=DynamicSelect("RCS", "RCS " + String(activity)), textColor={160,65,20}, fontSize=10)}));
+  end RCSJet;
+  partial model RCSThruster
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
+      Rectangle(extent={{-58,34},{52,-34}}, lineColor={95,95,105}, fillColor={180,185,200}, fillPattern=FillPattern.Solid, radius=7),
+      Polygon(points={{52,25},{92,0},{52,-25},{52,25}}, lineColor={220,70,20}, fillColor={255,150,35}, fillPattern=FillPattern.Solid),
+      Line(points={{-88,0},{-58,0}}, color={95,95,105}, thickness=2),
+      Text(extent={{-88,-88},{88,-68}}, textString=DynamicSelect("THRUSTER", "THRUSTER " + String(thrust_n) + " N"), textColor={160,65,20}, fontSize=9)}));
+  end RCSThruster;
+  partial model PropellantTank
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
+      Rectangle(extent={{-58,-60},{58,60}}, lineColor={45,85,135}, fillColor={105,165,220}, fillPattern=FillPattern.Solid, radius=16),
+      Ellipse(extent={{-58,38},{58,76}}, lineColor={45,85,135}, fillColor={145,200,240}, fillPattern=FillPattern.Solid),
+      Line(points={{-35,-22},{35,-22}}, color={225,245,255}, thickness=2),
+      Line(points={{-35,10},{35,10}}, color={225,245,255}, thickness=2),
+      Line(points={{0,-78},{0,-60}}, color={45,85,135}, thickness=2),
+      Text(extent={{-85,-92},{85,-74}}, textString=DynamicSelect("TANK", "TANK " + String(mass_kg) + " kg"), textColor={45,85,135}, fontSize=10)}));
+  end PropellantTank;
+  partial model Turbopump
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
+      Ellipse(extent={{-62,-62},{62,62}}, lineColor={105,65,30}, fillColor={225,155,65}, fillPattern=FillPattern.Solid),
+      Ellipse(extent={{-25,-25},{25,25}}, lineColor={105,65,30}, fillColor={245,220,150}, fillPattern=FillPattern.Solid),
+      Line(points={{-92,0},{-62,0}}, color={105,65,30}, thickness=2),
+      Line(points={{62,0},{92,0}}, color={105,65,30}, thickness=2),
+      Polygon(points={{-18,0},{12,18},{12,-18},{-18,0}}, lineColor={105,65,30}, fillColor={180,90,35}, fillPattern=FillPattern.Solid),
+      Text(extent={{-88,-92},{88,-74}}, textString=DynamicSelect("PUMP", "PUMP " + String(speed_fraction)), textColor={105,65,30}, fontSize=10)}));
+  end Turbopump;
+  partial model CombustionChamber
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
+      Polygon(points={{-55,55},{38,38},{72,0},{38,-38},{-55,-55},{-22,0},{-55,55}}, lineColor={130,55,20}, fillColor={225,100,45}, fillPattern=FillPattern.Solid),
+      Polygon(points={{-55,25},{-92,0},{-55,-25},{-35,0},{-55,25}}, lineColor={210,70,20}, fillColor={255,175,55}, fillPattern=FillPattern.Solid),
+      Line(points={{38,0},{92,0}}, color={110,110,120}, thickness=2),
+      Text(extent={{-95,-92},{95,-74}}, textString=DynamicSelect("CHAMBER", "CHAMBER " + String(activity)), textColor={130,55,20}, fontSize=9)}));
+  end CombustionChamber;
+  partial model PropellantStatus
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
+      Rectangle(extent={{-72,-58},{72,58}}, lineColor={85,70,130}, fillColor={175,155,220}, fillPattern=FillPattern.Solid, radius=10),
+      Line(points={{-48,-25},{-48,28}}, color={245,245,255}, thickness=3),
+      Line(points={{-48,-25},{35,-25}}, color={245,245,255}, thickness=3),
+      Line(points={{35,-25},{35,25}}, color={245,245,255}, thickness=3),
+      Text(extent={{-88,-90},{88,-70}}, textString="STATUS", textColor={85,70,130}, fontSize=10)}));
+  end PropellantStatus;
   partial model Sensor
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={Rectangle(extent={{-60,-60},{60,60}}, lineColor={30,120,145}, fillColor={105,200,215}, fillPattern=FillPattern.Solid, radius=10), Ellipse(extent={{-30,-30},{30,30}}, lineColor={235,255,255}, fillColor={35,105,135}, fillPattern=FillPattern.Solid), Line(points={{0,65},{0,88}}, color={30,120,145}, thickness=1), Line(points={{0,-65},{0,-88}}, color={30,120,145}, thickness=1)}));
   end Sensor;

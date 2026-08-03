@@ -22,9 +22,9 @@ this geometry — see [`49-connectivity-link-kernel.md`](49-connectivity-link-ke
 | Camera stack | `lunco-avatar`: `OrbitCamera`/`SurfaceCamera`/`FreeFlightCamera`, **`FrameBlend`** smooth transition, `FocusTarget`/`FollowTarget` commands | Smooth view changes ride `FrameBlend` |
 | Georef anchor vocabulary | `lunco:anchor:lat/lon/height` + `metersPerUnit` → `TerrainGeoref` (`lunco-terrain-surface/georef.rs`), read by the USD→DEM bridge | Pure data; no lat/lon→cartesian math yet |
 | Absolute positions | `lunco_core::coords::world_position_seeded` → DVec3 in the big_space root frame | Used by gravity/SOI/visuals |
-| Ports | `lunco-core/ports.rs` `PortRegistry` + fn-pointer `PortBackend`; group pattern `lunco-cosim/ports.rs` (`AvianGroup`, e.g. `RANGE_SENSOR_GROUP`) | New scalar ports = new backend or new group |
+| Ports | `lunco-core/ports.rs` `PortRegistry` + fn-pointer `PortBackend`; group pattern `lunco-cosim/ports.rs` (`AvianGroup`, e.g. `RAYCAST_GROUP`) | New scalar ports = new backend or new group |
 | Discrete events | `lunco-core/telemetry.rs` `TelemetryEvent` (observer bus) | AOS/LOS edges go here |
-| USD→component bridge | `lunco-usd-sim/lib.rs` `process_usd_sim_prim_read<R: UsdRead>` attr branches (e.g. `lunco:sensor:range` → `RangeSensor`) | Exact shape to clone for comms/orbit/anchor attrs |
+| USD→component bridge | `lunco-usd-sim/lib.rs` `process_usd_sim_prim_read<R: UsdRead>` generic LunCoRaycastAPI projection | Query configuration only; semantic conversion is authored Modelica |
 | USD wiring | native `connectionPaths` (`rewire_usd_connections`), journaled `ApplyUsdOp` | Components wire ports without new Rust |
 | Attr write-back for UI | `luncosim-edit inspector apply_usd_attribute_change` → `UsdOp::SetAttribute` (journaled) | Generic; only widgets are missing |
 | Moonbase twin | `~/Documents/models/moonbase/twin/moonbase_scene.usda` — Shackleton connecting-ridge glb (16×16 km), structures incl. `comms_mast.usda`, skid/ackermann rovers | No georef anchor authored yet |

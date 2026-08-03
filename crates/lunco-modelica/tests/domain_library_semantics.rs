@@ -35,7 +35,7 @@ fn mass_memory_converts_gigabits_to_gigabytes() {
 fn signal_checks_are_reusable_and_branch_free() {
     let source = model("Logic/AboveThreshold.mo");
     assert!(source.contains("input Real value"));
-    assert!(source.contains("parameter Real threshold"));
+    assert!(source.contains("input Real threshold"));
     assert!(source.contains("max(0.0, min(1.0,"));
     assert!(!source.contains(" if "));
     assert!(!source.contains("when "));

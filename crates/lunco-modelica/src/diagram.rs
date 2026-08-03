@@ -210,6 +210,65 @@ impl ModelicaComponentBuilder {
                     }
                 }
             }
+
+            // Generated USD networks use causal scalar ports. Their topology
+            // is represented by direct equalities rather than `connect()`;
+            // preserve those signal links in the shared graph as directed
+            // edges while leaving component-internal equations private.
+            for eq in &class.equations {
+                let Equation::Simple { lhs, rhs } = eq else {
+                    continue;
+                };
+                let Some((lhs_node, lhs_port)) = simple_signal_reference(lhs) else {
+                    continue;
+                };
+                let Some((rhs_node, rhs_port)) = simple_signal_reference(rhs) else {
+                    continue;
+                };
+                let (Some(&lhs_id), Some(&rhs_id)) =
+                    (name_to_id.get(&lhs_node), name_to_id.get(&rhs_node))
+                else {
+                    continue;
+                };
+                let lhs_kind = graph
+                    .get_node(lhs_id)
+                    .and_then(|node| node.ports.iter().find(|port| port.name == lhs_port))
+                    .map(|port| port.direction);
+                let rhs_kind = graph
+                    .get_node(rhs_id)
+                    .and_then(|node| node.ports.iter().find(|port| port.name == rhs_port))
+                    .map(|port| port.direction);
+                let (source_id, source_port, target_id, target_port) = match (lhs_kind, rhs_kind) {
+                    (
+                        Some(crate::diagram_model::PortDirection::Input),
+                        Some(crate::diagram_model::PortDirection::Output),
+                    ) => (rhs_id, rhs_port, lhs_id, lhs_port),
+                    (
+                        Some(crate::diagram_model::PortDirection::Output),
+                        Some(crate::diagram_model::PortDirection::Input),
+                    ) => (lhs_id, lhs_port, rhs_id, rhs_port),
+                    _ => continue,
+                };
+                let Some(source_index) = graph
+                    .get_node(source_id)
+                    .and_then(|node| node.port_index(&source_port))
+                else {
+                    continue;
+                };
+                let Some(target_index) = graph
+                    .get_node(target_id)
+                    .and_then(|node| node.port_index(&target_port))
+                else {
+                    continue;
+                };
+                graph.connect(
+                    source_id,
+                    source_index,
+                    target_id,
+                    target_index,
+                    EdgeKind::Signal,
+                );
+            }
         }
 
         graph
@@ -1018,6 +1077,19 @@ fn parse_connect_reference(
             (comp, port)
         }
     }
+}
+
+fn simple_signal_reference(expression: &Expression) -> Option<(String, String)> {
+    let Expression::ComponentReference(reference) = expression else {
+        return None;
+    };
+    let mut parts = reference
+        .parts
+        .iter()
+        .map(|part| part.ident.text.to_string());
+    let component = parts.next()?;
+    let port = parts.collect::<Vec<_>>().join(".");
+    (!port.is_empty()).then_some((component, port))
 }
 
 /// Extract all top-level class names from an AST, including nested classes.

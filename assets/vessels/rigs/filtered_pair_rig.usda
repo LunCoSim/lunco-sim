@@ -74,9 +74,8 @@ def Xform "FilteredPairRig" (
         float physics:mass = 5.0
         bool physics:collisionEnabled = true
 
-        # The instrument: whether this pair is in contact is read directly,
-        # rather than inferred from how far anything moved afterwards.
-        custom bool lunco:sensor:contact = true
+        # Contact is read from the collider's native Avian contact ports. The
+        # rig does not need to install a semantic contact component.
     }
 
     def PhysicsFixedJoint "HullToArm"

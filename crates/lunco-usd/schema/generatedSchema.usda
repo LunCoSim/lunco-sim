@@ -1301,39 +1301,24 @@ class "LunCoNetAPI" (
     )
 }
 
-class "LunCoSensorAPI" (
+class "LunCoRaycastAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """Sensor mounts on a body — the prim declares WHICH sensors it carries
-    and where; the sensor systems fill the values each tick and publish them as
-    `outputs:` ports for programs to wire."""
+    doc = """A mounted single-ray Avian query. The runtime publishes only the
+    raw hit observation; Modelica or another authored consumer decides what that
+    observation means."""
 )
 {
-    bool lunco:sensor:imu = false (
-        doc = "Mount an IMU (specific force + angular rate) at the shared offset."
+    double3 lunco:raycast:offset = (0, 0, 0) (
+        doc = "Ray origin offset in the mounted prim's local frame, metres."
     )
-    bool lunco:sensor:range = false (
-        doc = "Mount a raycast range finder (altimeter) at the shared offset."
+    float lunco:raycast:maxDistance = 100 (
+        doc = "Maximum distance passed to the Avian ray query, metres."
     )
-    bool lunco:sensor:contact = false (
-        doc = "Mount a contact sensor (touchdown detection)."
-    )
-    double3 lunco:sensor:offset = (0, 0, 0) (
-        doc = """Shared body-local mount point — the lever arm from the centre of
-        mass, metres."""
-    )
-    float lunco:sensor:rangeMax = 100 (
-        doc = "Range finder maximum distance, metres."
-    )
-    token lunco:sensor:rangeAxis = "-Y" (
-        doc = "Body-local ray direction. `-Y` is a downward altimeter."
+    token lunco:raycast:axis = "-Y" (
+        doc = "Body-local direction of the single Avian ray."
         allowedTokens = ["X", "-X", "Y", "-Y", "Z", "-Z"]
-    )
-    token lunco:sensor:rangeOutOfRangeMode = "MaxDistance" (
-        doc = """What the range output reports past `rangeMax`: clamp to the max,
-        `-1`, NaN, or the ideal altitude above the reference surface."""
-        allowedTokens = ["MaxDistance", "NegativeOne", "NaN", "IdealAltitude"]
     )
 }
 

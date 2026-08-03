@@ -42,6 +42,23 @@ fn stage(fixture: &str) -> lunco_usd_bevy::CanonicalStage {
     lunco_usd_bevy::CanonicalStage::from_stage(composed, path.to_string_lossy().to_string())
 }
 
+fn fixture_classes() -> MemberClasses {
+    let mut classes = MemberClasses::default();
+    classes.declare(
+        "lunco://models/LunCo/Electrical/Battery.mo",
+        "LunCo.Electrical.Battery",
+    );
+    classes.declare(
+        "lunco://models/LunCo/Electrical/DCMotor.mo",
+        "LunCo.Electrical.DCMotor",
+    );
+    classes.declare(
+        "lunco://models/LunCo/Electrical/SolarPanel.mo",
+        "LunCo.Electrical.SolarPanel",
+    );
+    classes
+}
+
 #[test]
 fn a_rhai_policy_can_be_the_synthesizer() {
     lunco_hooks_rhai::register_rhai_hook("synth.test-emit", "emit", POLICY, true)
@@ -57,7 +74,7 @@ fn a_rhai_policy_can_be_the_synthesizer() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
-    let classes = MemberClasses::path_derived_only();
+    let classes = fixture_classes();
     let ctx = SynthContext { classes: &classes };
 
     let outcome = synthesizer
@@ -93,7 +110,7 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
-    let classes = MemberClasses::path_derived_only();
+    let classes = fixture_classes();
     let ctx = SynthContext { classes: &classes };
 
     let errors = synthesizer
@@ -112,7 +129,7 @@ fn facts_describe_the_whole_graph() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
-    let network = read_network(&view, &root, &MemberClasses::path_derived_only())
+    let network = read_network(&view, &root, &fixture_classes())
         .expect("well-formed")
         .expect("a network");
 

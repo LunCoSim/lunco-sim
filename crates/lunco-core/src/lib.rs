@@ -404,6 +404,55 @@ pub struct Spacecraft {
 #[derive(Component)]
 pub struct SelectableRoot;
 
+/// Button-specific interaction intent authored by a USD prim.
+///
+/// This deliberately lives in the render-free core.  USD loading can describe
+/// the interaction contract without depending on Bevy's picking backend, while
+/// the GUI picking layer can translate `PassThrough` into `Pickable` behavior.
+/// Keeping the two policies independent is what lets a transparent marker pass
+/// through a primary click and still receive a secondary-click context menu.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PointerInteraction {
+    /// The prim is the normal target and blocks lower hits.
+    #[default]
+    Block,
+    /// The prim may receive an event, but does not block geometry behind it.
+    PassThrough,
+    /// The prim remains a target for a context-menu observer.
+    Context,
+}
+
+/// USD-authored pointer behavior for a scene prim or its visual mesh.
+#[derive(Component, Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScenePointerPolicy {
+    pub left: PointerInteraction,
+    pub right: PointerInteraction,
+}
+
+impl ScenePointerPolicy {
+    /// Parse the small stable vocabulary used by USD `lunco:interaction:*`
+    /// attributes. Unknown values intentionally fall back to `Block`: an
+    /// authoring typo must not make an object accidentally click-through.
+    pub fn from_usd(left: Option<&str>, right: Option<&str>) -> Option<Self> {
+        fn parse(value: Option<&str>) -> Option<PointerInteraction> {
+            match value {
+                Some("pass_through") => Some(PointerInteraction::PassThrough),
+                Some("context") => Some(PointerInteraction::Context),
+                Some("block") => Some(PointerInteraction::Block),
+                Some(_) => Some(PointerInteraction::Block),
+                None => None,
+            }
+        }
+
+        let left = parse(left);
+        let right = parse(right);
+        (left.is_some() || right.is_some()).then(|| Self {
+            left: left.unwrap_or_default(),
+            right: right.unwrap_or_default(),
+        })
+    }
+}
+
 /// Marker component for terrain/ground entities that should be excluded
 /// from vessel possession and editing interactions.
 #[derive(Component)]

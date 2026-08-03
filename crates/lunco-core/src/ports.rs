@@ -252,6 +252,44 @@ impl PortRegistry {
             .find_map(|b| (b.read_input)(world, entity, name))
     }
 
+    /// Whether an output port is declared by an owning backend, independently
+    /// of whether it has produced a sample yet.
+    ///
+    /// Port identity and sample availability are different facts. A physics
+    /// body owns its velocity port before the first writeback, and a Modelica
+    /// participant owns a declared output while it is still compiling. Using
+    /// `read_output_port` as an existence test turns both lifecycle states into
+    /// a dangling-wire fault. Backends with a resolver (such as Avian) answer
+    /// from their component contract; the ordinary list surface covers
+    /// map-backed and authored-output participants.
+    pub fn has_output_port(&self, world: &World, entity: Entity, name: &str) -> bool {
+        self.backends.iter().any(|backend| {
+            let mut ports = Vec::new();
+            (backend.list)(world, entity, &mut ports);
+            ports.iter().any(|port| {
+                port.name == name
+                    && matches!(port.direction, PortDirection::Out | PortDirection::InOut)
+            }) || backend
+                .resolve_output
+                .is_some_and(|resolve| resolve(world, entity, name).is_some())
+        })
+    }
+
+    /// Whether an input port is declared by an owning backend, independently of
+    /// its current value.
+    pub fn has_input_port(&self, world: &World, entity: Entity, name: &str) -> bool {
+        self.backends.iter().any(|backend| {
+            let mut ports = Vec::new();
+            (backend.list)(world, entity, &mut ports);
+            ports.iter().any(|port| {
+                port.name == name
+                    && matches!(port.direction, PortDirection::In | PortDirection::InOut)
+            }) || backend
+                .resolve_input
+                .is_some_and(|resolve| resolve(world, entity, name).is_some())
+        })
+    }
+
     /// Write `value` to **input** port `name`. Returns `true` if such an input
     /// existed and was written. Strict: an undeclared name is rejected (never
     /// silently created) — what lets the API and propagation master report

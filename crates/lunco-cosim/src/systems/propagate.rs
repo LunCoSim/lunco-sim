@@ -773,15 +773,18 @@ mod wire_order_tests {
             let sink = world.spawn_empty().id();
 
             for gid in spawn_order {
-                world.spawn(SimConnection {
-                    start_element: src[gid],
-                    start_connector: format!("out_{gid}"),
-                    start_is_input: false,
-                    end_element: sink,
-                    end_connector: "force_y".into(),
-                    scale: 1.0,
-                    offset: 0.0,
-                });
+                world.spawn((
+                    SimConnection {
+                        start_element: src[gid],
+                        start_connector: format!("out_{gid}"),
+                        start_is_input: false,
+                        end_element: sink,
+                        end_connector: "force_y".into(),
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                    BoundConnection,
+                ));
             }
 
             let mut compiled = CompiledWiring::default();
@@ -844,15 +847,18 @@ mod wire_order_tests {
                 ..Default::default()
             })
             .id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "demand".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "demand".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         let demand = |world: &World| -> f64 {
             world
@@ -901,15 +907,18 @@ mod wire_order_tests {
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         // Sink has an id but no port backend of any kind.
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "nonexistent_port".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "nonexistent_port".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
 
@@ -965,15 +974,18 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "not_yet_loaded".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "not_yet_loaded".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
 
@@ -1004,20 +1016,29 @@ mod wire_order_tests {
                 GlobalEntityId::from_raw(20),
                 crate::SimComponent {
                     model_name: "GeneratedElectricalIsland".into(),
+                    // The generated model publishes part of its interface while
+                    // compiling.  That makes the missing `drive_left` name a
+                    // terminal contract fault once the model reaches Running,
+                    // rather than an entity that has not exposed any port
+                    // surface yet.
+                    inputs: std::collections::HashMap::from([("existing".into(), 0.0)]),
                     status: crate::SimStatus::Compiling,
                     ..Default::default()
                 },
             ))
             .id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "drive_left".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "drive_left".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
@@ -1051,15 +1072,18 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "angle".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         // Stand in for "this wire wrote successfully on an earlier tick", which
         // is all `landed` records. Reaching a real port backend would need a
@@ -1081,15 +1105,18 @@ mod wire_order_tests {
     }
 
     fn wire(world: &mut World, src: Entity, out: &str, dst: Entity, inp: &str) {
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: out.into(),
-            start_is_input: false,
-            end_element: dst,
-            end_connector: inp.into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: out.into(),
+                start_is_input: false,
+                end_element: dst,
+                end_connector: inp.into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
     }
 
     fn loop_faults(world: &World) -> Vec<String> {

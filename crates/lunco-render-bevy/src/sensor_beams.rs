@@ -1,4 +1,4 @@
-//! The `range_beam` program driver — the render half of `lunco_cosim::RangeSensor`.
+//! The `range_beam` program driver — the render half of a raw Avian ray query.
 //!
 //! `lunco-cosim` is a render-free simulation crate: it casts the ray and stores the
 //! result (`distance`, `hit`). It never names a mesh or a material — doing so pulled
@@ -24,7 +24,7 @@
 
 use bevy::prelude::*;
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
-use lunco_cosim::sensors::RangeSensor;
+use lunco_cosim::avian_queries::RaycastObservation;
 use lunco_render::PbrLook;
 
 /// The `info:id` the beam driver answers to.
@@ -82,7 +82,7 @@ fn drive_range_hit(
         &mut Visibility,
         Option<&lunco_core::ScriptParams>,
     )>,
-    q_sensors: Query<&RangeSensor>,
+    q_sensors: Query<&RaycastObservation>,
 ) {
     for (id, parent, mut tf, mut vis, params) in q_hits.iter_mut() {
         if id.0 != HIT_DRIVER_ID {
@@ -101,7 +101,7 @@ fn drive_range_hit(
         // and a zero-scaled mesh still costs a draw call and still answers a raycast.
         //
         // Guarded: `DerefMut` marks it `Changed` and re-propagates the visibility tree.
-        let want = if s.hit {
+        let want = if s.hit_valid {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -109,7 +109,7 @@ fn drive_range_hit(
         if *vis != want {
             *vis = want;
         }
-        if !s.hit {
+        if !s.hit_valid {
             continue;
         }
 
@@ -135,7 +135,7 @@ fn drive_range_hit(
 /// Stretch an authored beam to the distance its sensor reported.
 ///
 /// The beam prim is a child of the sensor, so this walks up one link to find the
-/// `RangeSensor` — a beam belongs to the instrument that reports the range, so
+/// `RaycastObservation` — a beam belongs to the instrument that reports the raw hit, so
 /// the owner is where the number is.
 fn drive_range_beam(
     mut q_beams: Query<(
@@ -145,7 +145,7 @@ fn drive_range_beam(
         Option<&lunco_core::ScriptParams>,
         Option<&mut PbrLook>,
     )>,
-    q_sensors: Query<&RangeSensor>,
+    q_sensors: Query<&RaycastObservation>,
 ) {
     for (id, parent, mut tf, params, look) in q_beams.iter_mut() {
         if id.0 != DRIVER_ID {
@@ -163,7 +163,7 @@ fn drive_range_beam(
         // The stored `distance` when the cast hit, else the full range — so the beam
         // shows what the sensor actually REPORTED, not a fresh cast that could
         // disagree with the value the simulation is using.
-        let len = if s.hit { s.distance } else { s.max_distance };
+        let len = if s.hit_valid { s.distance } else { s.max_distance };
         let half_width = param("width", DEFAULT_HALF_WIDTH);
 
         // The authored prim is a UNIT cylinder (`radius = 1`, `height = 1`), because
@@ -192,7 +192,7 @@ fn drive_range_beam(
         // for a value that varies continuously, and would otherwise mint one cached
         // material per frame, forever).
         if let Some(mut look) = look {
-            let want = if s.hit {
+            let want = if s.hit_valid {
                 param("hitAlpha", DEFAULT_HIT_ALPHA)
             } else {
                 param("missAlpha", DEFAULT_MISS_ALPHA)

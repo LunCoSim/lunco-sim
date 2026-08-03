@@ -17,8 +17,8 @@
 // Over-applied, it filters pairs nobody asked it to and contacts a mechanism
 // depends on quietly stop existing. Neither says anything on screen.
 //
-// So the CONTACT is read directly, off the Pad's `lunco:sensor:contact`, rather
-// than inferred from how far anything moved. The Pad is authored 0.5 m inside the
+// So the CONTACT is read directly from the Pad's native Avian collider ports,
+// rather than inferred from how far anything moved. The Pad is authored 0.5 m inside the
 // Hull and is two joints away from it, so `JointCollisionDisabled` does not reach
 // the pair and nothing but the authored rel can filter it.
 //

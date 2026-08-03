@@ -13,9 +13,9 @@
 # `filtered_pairs_unfiltered.usda`, references the same rig and authors no
 # filtering — so the `over` below is the ONLY difference between the two scenes.
 #
-# What is measured is the CONTACT, not its aftermath: the Pad carries
-# `lunco:sensor:contact`, so the test reads whether the pair exists rather than
-# guessing from how far something moved.
+# What is measured is the CONTACT, not its aftermath: the Pad's collider
+# exposes native Avian contact facts, so the test reads whether the pair exists
+# rather than guessing from how far something moved.
 #
 # Read live:  ListPorts -> Rig/Pad exposes `contact` and `contact_force`.
 # Loaded by `sandbox --scene scenes/tests/filtered_pairs.usda`.

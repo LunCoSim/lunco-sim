@@ -300,42 +300,26 @@ from standard UsdPhysics prims:
   — the wheel revolute joint moved out of `lunco-usd-sim::setup_physical_wheel`
   into `lunco_usd_avian::wheel_revolute_joint` (one home for joint-building).
 
-### G10 — USD-authored sensors (IMU / range / contact)  **[DONE]**
-Telemetry was limited to a body's own kinematic state + joint DOFs — no *sensor*
-concept. `lunco-cosim/src/sensors.rs` adds three USD-authorable sensor kinds, each
-a component with cached outputs filled by a small system and surfaced through the
-same port mechanism as the rigid body (gated on the marker, so unsensed bodies pay
-nothing). Authored in `lunco-usd-sim` from `lunco:sensor:*`:
-- **`lunco:sensor:imu`** → `ImuSensor` → ports `accel_x/y/z` (world-frame linear
-  acceleration) **and `spec_force_x/y/z`** (body-frame specific force `a − g` — a
-  real accelerometer, reads +1 g up at rest). Both include the rigid-body
-  lever-arm `α×r + ω×(ω×r)` when mounted off the COM. Pairs with `angvel_*` +
-  `quat_*` for a full 9-DOF IMU. Gravity comes from `lunco-environment`'s
-  authoritative `LocalGravity` (fed into the sensor by
-  `feed_gravity_into_imu_sensors` — avian's own `Gravity` resource is zero here,
-  gravity being an explicit force).
-- **`lunco:sensor:range`** (+ `:rangeAxis` token, `:rangeMax`) → `RangeSensor` →
-  port `range`. A raycast altimeter/lidar from the mount point along the
-  body-local axis (default `-Y`).
-- **`lunco:sensor:contact`** → `ContactSensor` → ports `contact` (0/1) +
-  `contact_force` (N). From avian's `Collisions`, converted with `Time<Physics>`
-  (the solver's own clock).
-- **All three honor `lunco:sensor:offset`** (float3, body-local) — a sensor that
-  isn't at the body origin reports from its true mount point.
-- **`contact_force` — physically grounded, no tuned constant:** the obvious
-  `total_normal_impulse / dt` does **not** give Newtons. avian's
-  `ContactPoint::normal_impulse` is a solver *accumulator* (its own doc: summed
-  "across substeps **and restitution**", over both the biased `solve_contacts::
-  <true>` and unbiased relax `solve_contacts::<false>` passes), so it over-reads
-  ≈2× at rest and more with restitution. Instead `contact_force` sums
-  `ContactPoint::warm_start_normal_impulse` — *"the clamped accumulated impulse
-  from the last substep"*, i.e. the real per-substep contact impulse — and divides
-  by the substep duration `dt / SubstepCount` (read at runtime). This is robust to
-  substep count and restitution, not a fitted divisor.
-- **Verified live** on `assets/scenes/tests/sensor.usda` (boxes at rest,
-  sensors mounted +0.3 m): `spec_force_y = 9.81` (1 g up), `accel ≈ 0`, `range =
-  0.800` (0.5 centre-to-ground + 0.3 offset), `contact = 1`, and **`contact_force
-  = 980.8 N` for a 100 kg box / `490.2 N` for 50 kg** (= m·g to within 0.07%).
+### G10 — Avian observations and Modelica sensor conversions  **[DONE]**
+Flight software is not a Rust semantic-sensor special case.
+
+- Avian rigid-body and collider ports expose native solver facts directly:
+  position, velocity, quaternion, angular velocity, mass/inertia, contact, and
+  contact force.
+- LunCoRaycastAPI is the one generic query description needed because Modelica
+  cannot access Avian collision geometry. Rust samples raw distance, validity,
+  hit point, hit normal, and physics sample time after Avian writeback.
+- LunCo.Sensors.IMUSensor converts raw Avian kinematics plus the environment
+  gravity vector into local coordinate acceleration, specific force, and gyro
+  outputs. Altimeter converts raw ray distance and validity without a miss
+  fallback. AttitudeReference estimates upright direction from IMU signals and
+  has no body quaternion input.
+- USD authors the complete topology. The airframe mounts the Modelica IMU and
+  raw ray, the mission connects them to guidance, and environment probes publish
+  gravity as ordinary source ports.
+
+There is no semantic Rust sensor registry, no IdealAltitude path, no direct
+truth-quaternion edge, and no production Rhai tick computation.
 
 ### G11 — Single-track / lean wheel (bikes, motorcycles)  **[DONE]**
 The raycast wheel decomposed traction in a flat wheel basis (forward `-Z`/right

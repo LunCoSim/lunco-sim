@@ -191,6 +191,7 @@ pub struct SynthesizerRegistry(
 impl Default for SynthesizerRegistry {
     fn default() -> Self {
         let mut registry = Self(Default::default());
+        registry.register(ActuatorWrenchSynthesizer);
         registry.register(AcausalNetworkSynthesizer);
         registry
     }
@@ -211,6 +212,443 @@ impl SynthesizerRegistry {
     }
 }
 
+/// Name of the built-in description-driven actuator network synthesizer.
+pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = "actuator-wrench";
+
+/// One force or torque actuator admitted by an actuator network collection.
+/// The physical description is read from USD once during projection. The
+/// generated Modelica model then owns only the live command equations; Avian
+/// still owns the actual force-at-point or torque integration.
+#[derive(Clone, Debug)]
+struct WrenchActuator {
+    path: String,
+    column: [f64; 6],
+    signed: bool,
+    command_output: String,
+    activity_output: Option<String>,
+}
+
+/// Generate a causal Modelica wrapper for generic USD actuators.
+///
+/// This is deliberately a projection-time operation, not a fixed-step Rust
+/// controller. USD supplies each actuator's body-frame geometry and the output
+/// ports it is wired to. A regularized pseudo-inverse is generated once from
+/// that geometry; the resulting scalar commands are evaluated by Modelica at
+/// runtime and consumed by the generic Avian actuator ports.
+pub struct ActuatorWrenchSynthesizer;
+
+/// Numerical tolerances for the projection-time geometry factorisation. These
+/// are solver-independent projection policy, not live vehicle parameters.
+const ACTUATOR_REGULARIZATION: f64 = 1.0e-9;
+const ACTUATOR_PIVOT_TOLERANCE: f64 = 1.0e-12;
+
+impl DomainSynthesizer for ActuatorWrenchSynthesizer {
+    fn name(&self) -> &'static str {
+        ACTUATOR_WRENCH_SYNTHESIZER
+    }
+
+    fn synthesize(
+        &self,
+        view: &lunco_usd_bevy::StageView<'_>,
+        root: &SdfPath,
+        model_name: &str,
+        _ctx: &SynthContext<'_>,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        let members = view
+            .collection_members(root, "components")
+            .map_err(|error| {
+                vec![DomainProjectionError {
+                    path: root.to_string(),
+                    message: format!("could not read actuator collection: {error}"),
+                }]
+            })?;
+        let root_string = root.to_string();
+        let mut actuators = Vec::new();
+        let mut errors = Vec::new();
+
+        for member in members {
+            if member.is_property_path() || member.is_prim_variant_selection_path() {
+                continue;
+            }
+            let force = view.has_api_schema(&member, "LunCoForceActuatorAPI");
+            let torque = view.has_api_schema(&member, "LunCoTorqueActuatorAPI");
+            if !force && !torque {
+                continue;
+            }
+            if force && torque {
+                errors.push(DomainProjectionError {
+                    path: member.to_string(),
+                    message:
+                        "an actuator network member cannot apply both force and torque schemas"
+                            .into(),
+                });
+                continue;
+            }
+
+            let (column, signed) = if force {
+                let Some(description) = crate::force_actuator_from_usd(view, &member) else {
+                    errors.push(DomainProjectionError {
+                        path: member.to_string(),
+                        message: "force actuator metadata is incomplete; direction, limit, body, and transform are required".into(),
+                    });
+                    continue;
+                };
+                let direction = description.direction_local.normalize_or_zero();
+                let moment = description.local_position.cross(direction);
+                (
+                    [
+                        direction.x as f64 * description.max_force_n,
+                        direction.y as f64 * description.max_force_n,
+                        direction.z as f64 * description.max_force_n,
+                        moment.x as f64 * description.max_force_n,
+                        moment.y as f64 * description.max_force_n,
+                        moment.z as f64 * description.max_force_n,
+                    ],
+                    false,
+                )
+            } else {
+                let Some(description) = crate::torque_actuator_from_usd(view, &member) else {
+                    errors.push(DomainProjectionError {
+                        path: member.to_string(),
+                        message: "torque actuator metadata is incomplete; axis, limit, and body are required".into(),
+                    });
+                    continue;
+                };
+                let axis = description.axis_local.normalize_or_zero();
+                (
+                    [
+                        0.0,
+                        0.0,
+                        0.0,
+                        axis.x as f64 * description.max_torque_nm,
+                        axis.y as f64 * description.max_torque_nm,
+                        axis.z as f64 * description.max_torque_nm,
+                    ],
+                    true,
+                )
+            };
+
+            let Some(command_output) = view
+                .value_str(&member, "lunco:forceActuator:commandOutput")
+                .or_else(|| view.value_str(&member, "lunco:torqueActuator:commandOutput"))
+                .filter(|name| !name.is_empty())
+            else {
+                errors.push(DomainProjectionError {
+                    path: member.to_string(),
+                    message: "actuator must author lunco:*Actuator:commandOutput with the normalized valve/torque command port".into(),
+                });
+                continue;
+            };
+            let activity_output = if force {
+                view.value_str(&member, "lunco:forceActuator:activityOutput")
+                    .filter(|name| !name.is_empty())
+            } else {
+                None
+            };
+            actuators.push(WrenchActuator {
+                path: member.to_string(),
+                column,
+                signed,
+                command_output,
+                activity_output,
+            });
+        }
+
+        if actuators.is_empty() && errors.is_empty() {
+            errors.push(DomainProjectionError {
+                path: root_string.clone(),
+                message: "actuator-wrench network contains no force or torque actuators".into(),
+            });
+        }
+
+        let attrs = view.attr_names(root);
+        let inputs: BTreeSet<String> = attrs
+            .iter()
+            .filter_map(|attr| attr.strip_prefix("inputs:").map(str::to_string))
+            .collect();
+        let outputs: BTreeSet<String> = attrs
+            .iter()
+            .filter_map(|attr| attr.strip_prefix("outputs:").map(str::to_string))
+            .collect();
+        for name in inputs.iter().chain(outputs.iter()) {
+            if !is_modelica_identifier(name) {
+                errors.push(DomainProjectionError {
+                    path: root_string.clone(),
+                    message: format!(
+                        "actuator network port `{name}` is not a valid Modelica identifier"
+                    ),
+                });
+            }
+        }
+        for actuator in &actuators {
+            if !outputs.contains(&actuator.command_output) {
+                errors.push(DomainProjectionError {
+                    path: actuator.path.clone(),
+                    message: format!(
+                        "actuator command output `{}` is not declared on `{root_string}`",
+                        actuator.command_output
+                    ),
+                });
+            }
+            if let Some(activity) = &actuator.activity_output {
+                if !outputs.contains(activity) {
+                    errors.push(DomainProjectionError {
+                        path: actuator.path.clone(),
+                        message: format!(
+                            "actuator activity output `{activity}` is not declared on `{root_string}`"
+                        ),
+                    });
+                }
+            }
+        }
+        let duplicate_outputs: BTreeSet<String> = actuators
+            .iter()
+            .flat_map(|actuator| {
+                std::iter::once(actuator.command_output.clone())
+                    .chain(actuator.activity_output.clone())
+            })
+            .fold(BTreeMap::<String, usize>::new(), |mut counts, output| {
+                *counts.entry(output).or_default() += 1;
+                counts
+            })
+            .into_iter()
+            .filter_map(|(name, count)| (count > 1).then_some(name))
+            .collect();
+        for output in duplicate_outputs {
+            errors.push(DomainProjectionError {
+                path: root_string.clone(),
+                message: format!("actuator output `{output}` is driven by more than one actuator"),
+            });
+        }
+        let known_outputs: BTreeSet<String> = actuators
+            .iter()
+            .flat_map(|actuator| {
+                std::iter::once(actuator.command_output.clone())
+                    .chain(actuator.activity_output.clone())
+            })
+            .collect();
+        for output in outputs.difference(&known_outputs) {
+            errors.push(DomainProjectionError {
+                path: format!("{root_string}.outputs:{output}"),
+                message: "actuator-wrench outputs must be connected to an authored actuator input"
+                    .into(),
+            });
+        }
+        for required in ["desired_torque_x", "desired_torque_y", "desired_torque_z"] {
+            if !inputs.contains(required) {
+                errors.push(DomainProjectionError {
+                    path: root_string.clone(),
+                    message: format!("actuator-wrench network requires input `{required}`"),
+                });
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let columns: Vec<[f64; 6]> = actuators.iter().map(|actuator| actuator.column).collect();
+        let pseudo_inverse = match wrench_pseudoinverse(&columns) {
+            Ok(value) => value,
+            Err(message) => {
+                return Err(vec![DomainProjectionError {
+                    path: root_string,
+                    message,
+                }]);
+            }
+        };
+        let source =
+            emit_actuator_wrench_model(&inputs, &outputs, &actuators, &pseudo_inverse, model_name);
+        Ok(SynthOutcome::Ready(Synthesized {
+            source,
+            inputs,
+            outputs,
+            component_paths: actuators
+                .iter()
+                .map(|actuator| actuator.path.clone())
+                .collect(),
+            members: actuators
+                .iter()
+                .map(|actuator| {
+                    (
+                        actuator.path.clone(),
+                        "usd://generic-actuator".into(),
+                        if actuator.signed {
+                            "LunCo.GeneratedTorqueActuator".into()
+                        } else {
+                            "LunCo.GeneratedForceActuator".into()
+                        },
+                    )
+                })
+                .collect(),
+        }))
+    }
+}
+
+fn wrench_pseudoinverse(columns: &[[f64; 6]]) -> Result<Vec<[f64; 6]>, String> {
+    if columns.is_empty() {
+        return Err("cannot synthesize an actuator network with no actuator columns".into());
+    }
+    let mut gram = [[0.0_f64; 6]; 6];
+    for column in columns {
+        for row in 0..6 {
+            for col in 0..6 {
+                gram[row][col] += column[row] * column[col];
+            }
+        }
+    }
+    // A small Tikhonov term keeps a deliberately redundant actuator layout
+    // projectable while preserving the authored geometry as the dominant term.
+    for i in 0..6 {
+        gram[i][i] += ACTUATOR_REGULARIZATION;
+    }
+    let inverse = invert_symmetric_6x6(gram)?;
+    Ok(columns
+        .iter()
+        .map(|column| {
+            let mut row = [0.0; 6];
+            for i in 0..6 {
+                row[i] = (0..6).map(|j| column[j] * inverse[j][i]).sum();
+            }
+            row
+        })
+        .collect())
+}
+
+fn invert_symmetric_6x6(matrix: [[f64; 6]; 6]) -> Result<[[f64; 6]; 6], String> {
+    let mut augmented = [[0.0_f64; 12]; 6];
+    for row in 0..6 {
+        for col in 0..6 {
+            augmented[row][col] = matrix[row][col];
+        }
+        augmented[row][6 + row] = 1.0;
+    }
+    for pivot in 0..6 {
+        let (pivot_row, pivot_value) = (pivot..6)
+            .map(|row| (row, augmented[row][pivot].abs()))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .unwrap();
+        if pivot_value < ACTUATOR_PIVOT_TOLERANCE {
+            return Err(
+                "actuator geometry does not provide a numerically usable wrench basis".into(),
+            );
+        }
+        augmented.swap(pivot, pivot_row);
+        let scale = augmented[pivot][pivot];
+        for value in &mut augmented[pivot] {
+            *value /= scale;
+        }
+        for row in 0..6 {
+            if row == pivot {
+                continue;
+            }
+            let factor = augmented[row][pivot];
+            for col in 0..12 {
+                augmented[row][col] -= factor * augmented[pivot][col];
+            }
+        }
+    }
+    let mut inverse = [[0.0; 6]; 6];
+    for row in 0..6 {
+        inverse[row].copy_from_slice(&augmented[row][6..12]);
+    }
+    Ok(inverse)
+}
+
+fn emit_actuator_wrench_model(
+    inputs: &BTreeSet<String>,
+    outputs: &BTreeSet<String>,
+    actuators: &[WrenchActuator],
+    pseudo_inverse: &[[f64; 6]],
+    model_name: &str,
+) -> String {
+    // This wrapper only instantiates the reusable Modelica allocator and maps
+    // its vector command output to the scalar USD actuator ports. The equations
+    // live in LunCo.Actuation.WrenchAllocator, not in this projection layer.
+    let model_name = modelica_identifier(model_name);
+    let mut source = format!("model {model_name}\n");
+    for name in inputs {
+        source.push_str(&format!("  input Real {};\n", modelica_identifier(name)));
+    }
+    for name in outputs {
+        source.push_str(&format!("  output Real {};\n", modelica_identifier(name)));
+    }
+
+    source.push_str(&format!(
+        "  LunCo.Actuation.WrenchAllocator allocator(actuator_count = {},\n",
+        actuators.len()
+    ));
+    source.push_str("    allocation_pinv = [");
+    for (row, coefficients) in pseudo_inverse.iter().enumerate() {
+        if row > 0 {
+            source.push(';');
+        }
+        for (column, coefficient) in coefficients.iter().enumerate() {
+            if column > 0 {
+                source.push(',');
+            }
+            source.push_str(&format!("{coefficient:.17e}"));
+        }
+    }
+    source.push_str("],\n    lower_command = {");
+    for (index, actuator) in actuators.iter().enumerate() {
+        if index > 0 {
+            source.push(',');
+        }
+        if actuator.signed {
+            source.push_str("-1.0");
+        } else {
+            source.push_str("0.0");
+        }
+    }
+    source.push_str("},\n    upper_command = {");
+    for (index, _actuator) in actuators.iter().enumerate() {
+        if index > 0 {
+            source.push(',');
+        }
+        source.push_str("1.0");
+    }
+    source.push_str("});\n");
+
+    source.push_str("equation\n");
+    for name in [
+        "desired_force_x",
+        "desired_force_y",
+        "desired_force_z",
+        "desired_torque_x",
+        "desired_torque_y",
+        "desired_torque_z",
+    ] {
+        let expression = inputs
+            .contains(name)
+            .then(|| modelica_identifier(name))
+            .unwrap_or_else(|| "0.0".to_string());
+        source.push_str(&format!("  allocator.{name} = {expression};\n"));
+    }
+    for (index, actuator) in actuators.iter().enumerate() {
+        source.push_str(&format!(
+            "  {} = allocator.command[{}];\n",
+            modelica_identifier(&actuator.command_output),
+            index + 1
+        ));
+        if let Some(activity) = &actuator.activity_output {
+            source.push_str(&format!(
+                "  {} = allocator.command[{}];\n",
+                modelica_identifier(activity),
+                index + 1
+            ));
+        }
+    }
+    // Keep generated networks first-class Modelica documents. The wrapper
+    // carries a compact assembly icon and a diagram banner, while every
+    // instantiated component retains its own authored Icon and Placement.
+    // This makes a projected USD network inspectable in the same Modelica
+    // canvas as a hand-authored model instead of rendering as an anonymous
+    // source blob.
+    source.push_str(&format!(
+        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {model_name};\n"
+    ));
+    source
+}
 /// A synthesizer whose EMIT policy is authored, not compiled in.
 ///
 /// The house split, applied to synthesis: **facts in Rust, rules in rhai.** The
@@ -706,7 +1144,12 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             }
         }
     }
-    source.push_str(&format!("end {model_name};\n"));
+    // Generated networks are ordinary Modelica documents. Their assembly
+    // annotation provides a stable canvas banner; component Icons and
+    // Placement annotations remain the source of the actual network picture.
+    source.push_str(&format!(
+        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {model_name};\n"
+    ));
     source
 }
 
@@ -1156,10 +1599,9 @@ pub fn read_network(
             );
             continue;
         }
-        // The path-derived name is the FALLBACK; the file's own `within` + class
-        // is the answer, once `resolve_member_classes` has read it. A member with
-        // no verdict yet leaves the whole network pending rather than compiling a
-        // guess.
+        // The file's own `within` + class is authoritative. A member with no
+        // verdict yet leaves the whole network pending; a failed source becomes
+        // an explicit authoring error rather than a guessed class.
         let derived = match modelica_member_class(view, &path) {
             Ok(class) => class,
             Err(issue) => {
@@ -1171,8 +1613,15 @@ pub fn read_network(
             }
         };
         let source_asset = view.asset(&path, "info:sourceAsset").unwrap_or_default();
-        let Some(model_class) = classes.resolve(&source_asset, &derived) else {
-            pending_sources = true;
+        let Some(model_class) = classes.resolve(&source_asset) else {
+            if let Some(reason) = classes.failure(&source_asset) {
+                extraction_errors.push(DomainProjectionError {
+                    path: format!("{path}.info:sourceAsset"),
+                    message: format!("Modelica source resolution failed: {reason}"),
+                });
+            } else {
+                pending_sources = true;
+            }
             continue;
         };
         if model_class != derived {
@@ -1693,19 +2142,16 @@ fn wrapper_output_groups(view: &impl UsdRead, root: &str) -> Vec<(String, String
 pub enum MemberClass {
     /// Read from the file: `within` + the class it declares.
     Declared(String),
-    /// The file could not be read (a failed fetch, an unparseable source) or did
-    /// not resolve within [`CLASS_RESOLVE_MAX_SECS`]. The path-derived name is
-    /// used instead — the old behaviour, kept as the FALLBACK so an unreachable
-    /// source degrades to a guess rather than freezing the projection.
-    Unavailable,
+    /// The file could not be read or parsed. A failed source is an authoring
+    /// error; its path is never used as a substitute for the declared class.
+    Failed(String),
 }
 
-/// How long a member source may stay unresolved before the projector stops
-/// waiting for it and falls back to the path-derived class.
+/// How long a member source may stay unresolved before the projector reports a
+/// source-resolution error instead of compiling an invented class name.
 ///
-/// Same reasoning as `cosim::SCENE_LOAD_MAX_SECS`: on the web a fetch can 404
-/// without ever reporting a failure, and a projection that waits forever is
-/// strictly worse than one that compiles a guess and says so.
+/// A source that never becomes available is an authoring error, not permission
+/// to compile a guessed class.
 const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 
 /// The class each member source declares — the ONE authority on what a generated
@@ -1729,21 +2175,9 @@ pub struct MemberClasses {
     metadata:
         HashMap<String, HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
-    path_only: bool,
 }
 
 impl MemberClasses {
-    /// An index that never resolves anything and always answers with the
-    /// path-derived name — for callers with no asset loading at all (the reader
-    /// tests, a tool reading a stage offline). Production uses the default,
-    /// which waits for [`resolve_member_classes`] to read the files.
-    pub fn path_derived_only() -> Self {
-        Self {
-            path_only: true,
-            ..Default::default()
-        }
-    }
-
     /// State a verdict directly, bypassing the loader.
     pub fn declare(&mut self, asset: impl Into<String>, class: impl Into<String>) {
         self.known
@@ -1757,14 +2191,20 @@ impl MemberClasses {
         self.metadata.get(asset)
     }
 
-    /// The class to instantiate for `asset`, given the name derived from its
-    /// path. `None` = not resolved yet: the caller must wait, not guess.
-    pub fn resolve(&self, asset: &str, derived: &str) -> Option<String> {
+    /// The class to instantiate for `asset`. `None` means the source has not
+    /// resolved or has failed; the caller must wait or report the failure.
+    pub fn resolve(&self, asset: &str) -> Option<String> {
         match self.known.get(asset) {
             Some(MemberClass::Declared(class)) => Some(class.clone()),
-            Some(MemberClass::Unavailable) => Some(derived.to_string()),
-            None if self.path_only => Some(derived.to_string()),
-            None => None,
+            Some(MemberClass::Failed(_)) | None => None,
+        }
+    }
+
+    /// Explain a settled source failure to the projection reader.
+    pub fn failure(&self, asset: &str) -> Option<&str> {
+        match self.known.get(asset) {
+            Some(MemberClass::Failed(reason)) => Some(reason.as_str()),
+            _ => None,
         }
     }
 
@@ -1791,10 +2231,9 @@ pub struct ProjectionDirty(pub bool);
 /// file.
 ///
 /// A source that fails to load, cannot be parsed, or simply never resolves
-/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Unavailable`], and
-/// the path-derived name is used after all. Waiting forever on an unreachable
-/// asset would be worse than compiling the guess: the scene would have no
-/// electrical domain and nothing to say about why.
+/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Failed`]. The
+/// network reports the source asset as the authoring error; no path-derived
+/// class is invented.
 pub fn resolve_member_classes(
     prims: Query<&UsdPrimPath>,
     added: Query<(), Added<UsdPrimPath>>,
@@ -1891,13 +2330,12 @@ pub fn resolve_member_classes(
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
             None => {
-                warn!(
-                    "[domain-projection] could not read the class declared by `{asset}` (load \
-                     failed, unparseable, or not resolved within {CLASS_RESOLVE_MAX_SECS:.0}s) — \
-                     falling back to the class its PATH implies. If the compiler then reports an \
-                     unknown class, that guess is why."
+                let reason = format!(
+                    "could not read a declared Modelica class (load failed, source was \
+                     unparseable, or it did not resolve within {CLASS_RESOLVE_MAX_SECS:.0}s)"
                 );
-                classes.known.insert(asset, MemberClass::Unavailable);
+                warn!("[domain-projection] `{asset}`: {reason}");
+                classes.known.insert(asset, MemberClass::Failed(reason));
             }
         }
         // The projection that was waiting on this member has no other reason to

@@ -38,7 +38,8 @@ per kind), not a mirror component. The available ports:
 | **Rigid body** | out: `position_{x,y,z}`, `height`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}`; in: `force_{x,y,z}`, `force_local_{x,y,z}`, `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
 | **Revolute joint** | `angle` (out = measured, in = drives `AngularMotor`) |
 | **Prismatic joint** | `displacement` (out = slider offset, in = drives `LinearMotor`) |
-| **Sensors** (USD `lunco:sensor:*`) | IMU `accel_{x,y,z}` + `spec_force_{x,y,z}`; range `range`; contact `contact` + `contact_force` |
+| **Avian observations** | Native rigid-body/contact ports plus generic ray ray_distance, ray_hit_valid, hit point/normal, and sample time |
+| **Modelica sensor conversions** | IMU, altimeter, attitude estimator, and touchdown models with authored inputs/outputs wires |
 | **Modelica / hardware** | model `input`/`output` vars; `value` / `raw` |
 
 Full closures + the "add a kind = one `AvianGroup` entry" pattern live in
@@ -63,6 +64,7 @@ FixedUpdate:
 
 FixedPostUpdate:
   6. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
+  7. raw Avian ray observations     — query after writeback; consumed by the next FixedUpdate
                                        (Avian outputs — Position / LinearVelocity — read on demand
                                         via PortRegistry; no separate read_avian_outputs snapshot system)
 

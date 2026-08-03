@@ -18,13 +18,30 @@ fn stage(fixture: &str) -> lunco_usd_bevy::CanonicalStage {
     lunco_usd_bevy::CanonicalStage::from_stage(composed, path.to_string_lossy().to_string())
 }
 
+fn fixture_classes() -> MemberClasses {
+    let mut classes = MemberClasses::default();
+    classes.declare(
+        "lunco://models/LunCo/Electrical/Battery.mo",
+        "LunCo.Electrical.Battery",
+    );
+    classes.declare(
+        "lunco://models/LunCo/Electrical/DCMotor.mo",
+        "LunCo.Electrical.DCMotor",
+    );
+    classes.declare(
+        "lunco://models/LunCo/Electrical/SolarPanel.mo",
+        "LunCo.Electrical.SolarPanel",
+    );
+    classes
+}
+
 #[test]
 fn reads_a_composed_collection_into_one_generated_model() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let network = read_network(&view, &root, &MemberClasses::path_derived_only())
+    let network = read_network(&view, &root, &fixture_classes())
         .expect("a well-formed network is not an error")
         .expect("a scope with a component collection is a network");
 
@@ -74,7 +91,7 @@ fn a_boundary_output_published_through_an_omitted_part_drops_with_it() {
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let network = read_network(&view, &root, &MemberClasses::path_derived_only())
+    let network = read_network(&view, &root, &fixture_classes())
         .expect(
             "an unwired part must not reject the network — this is the failure that took a \
              rover's whole electrical domain offline",
@@ -98,7 +115,7 @@ fn the_class_a_file_declares_beats_the_one_its_path_implies() {
     // What `resolve_member_classes` reads out of the `.mo` — here the battery's
     // file declares a class its directory layout does NOT imply, which is what a
     // renamed folder or a hand-written `within` looks like.
-    let mut classes = MemberClasses::path_derived_only();
+    let mut classes = fixture_classes();
     classes.declare(
         "lunco://models/LunCo/Electrical/Battery.mo",
         "Vendor.Power.Cell",
@@ -143,8 +160,8 @@ fn rejects_members_whose_opinions_cannot_be_generated() {
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
 
-    let errors = read_network(&view, &root, &MemberClasses::path_derived_only())
-        .expect_err("unusable authoring is an error");
+    let errors =
+        read_network(&view, &root, &fixture_classes()).expect_err("unusable authoring is an error");
     assert!(
         errors
             .iter()

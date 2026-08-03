@@ -9,12 +9,12 @@
 # what it is told and nothing else: possess it and the stick flies it; spawn it and it
 # sits, because nothing is commanding it.
 #
-# It has no autopilot. Guidance is a component a SCENE composes onto it:
+# It has no mission-specific autopilot. Guidance is a component a SCENE composes onto it:
 #
 #   def "Lander" (
 #       prepend references = [
 #           @lunco://vessels/landers/descent_lander.usda@</DescentLander>,
-#           @lunco://components/gnc/descent_guidance.usda@</DescentGuidance>,
+#           @lunco://components/gnc/position_pid_guidance.usda@</PositionPIDGuidance>,
 #       ]
 #   )
 #   { double3 xformOp:translate = (0, 60.0, 0) }
@@ -27,9 +27,12 @@
 #   possession  ──(piloted)───► Lander.mo  authority gate
 #   session stick ──────────────► pitch/roll/yaw/external_throttle
 #   guidance program (if any) ──► guidance_throttle   ◄── UNWIRED = 0 = does not fly itself
-#   Avian body ──(quat, mass, inertia)──► Lander.mo
-#                                    │  force/torque (world frame)
-#                                    ▼
+#   Avian body ──(inertia, IMU, attitude reference)──► Lander.mo
+#                                  │  local valve / body torque demands
+#                                  ▼
+#                         USD propulsion + actuator networks
+#                                  │  authored mounts and directions
+#                                  ▼
 #                              Avian body
 #
 # Gravity is applied by lunco-environment; the model must NOT re-apply it. Thrust is
@@ -65,6 +68,473 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
+    # The body model publishes demands; these scopes choose the physical
+    # actuation topology. The generated Modelica wrapper is rebuilt from the
+    # actuator prims and their authored transforms whenever this composition
+    # changes.
+    def Scope "MainPropulsion" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        # The engine is a generated Modelica network. Every connection below
+        # is USD topology; the reusable component files own only equations.
+        float inputs:valve_opening.connect = </DescentLander.outputs:throttle>
+        float outputs:thrust_n.connect = </DescentLander/MainPropulsion/MainChamber.outputs:thrust_n>
+        float outputs:activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
+        float outputs:propellant_flow.connect = </DescentLander/MainPropulsion/MainChamber.outputs:propellant_flow>
+        float outputs:propellant_mass.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_mass_kg>
+        float outputs:propellant_used.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_used_kg>
+        float outputs:low_fuel.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:low_fuel>
+        float outputs:depleted.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:depleted>
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </DescentLander/MainPropulsion/FuelTank>,
+            </DescentLander/MainPropulsion/OxidizerTank>,
+            </DescentLander/MainPropulsion/FuelPump>,
+            </DescentLander/MainPropulsion/OxidizerPump>,
+            </DescentLander/MainPropulsion/MainChamber>,
+            </DescentLander/MainPropulsion/PropellantStatus>,
+        ]
+
+        def Scope "FuelTank" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PropellantTank.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:initial_mass_kg = 1000.0
+            float inputs:nominal_pressure_pa = 2500000.0
+            float inputs:pressure_headroom_pa = 500000.0
+            float inputs:low_fuel_mass_kg = 100.0
+            float inputs:depleted_mass_kg = 0.5
+            float inputs:minimum_mass_kg = 0.000001
+            float inputs:event_transition_width_kg = 0.01
+            custom token connectors:outlet.connect = </DescentLander/MainPropulsion/FuelPump.connectors:inlet>
+            float outputs:mass_kg
+            float outputs:pressure_pa
+            float outputs:mass_out_flow_kgs
+            float outputs:low_fuel
+            float outputs:depleted
+        }
+        def Scope "OxidizerTank" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PropellantTank.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:initial_mass_kg = 1000.0
+            float inputs:nominal_pressure_pa = 2500000.0
+            float inputs:pressure_headroom_pa = 500000.0
+            float inputs:low_fuel_mass_kg = 100.0
+            float inputs:depleted_mass_kg = 0.5
+            float inputs:minimum_mass_kg = 0.000001
+            float inputs:event_transition_width_kg = 0.01
+            custom token connectors:outlet.connect = </DescentLander/MainPropulsion/OxidizerPump.connectors:inlet>
+            float outputs:mass_kg
+            float outputs:pressure_pa
+            float outputs:mass_out_flow_kgs
+            float outputs:low_fuel
+            float outputs:depleted
+        }
+        def Scope "FuelPump" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/Turbopump.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:maximum_flow_kgs = 8.0
+            float inputs:nominal_tank_pressure_pa = 2500000.0
+            float inputs:discharge_pressure_pa = 8000000.0
+            float inputs:spool_tau = 0.08
+            float inputs:pump_efficiency = 0.72
+            float inputs:speed_rpm_max = 30000.0
+            float inputs:propellant_density_kg_m3 = 810.0
+            float inputs:minimum_pressure_pa = 1.0
+            float inputs:minimum_efficiency = 0.000001
+            float inputs:minimum_time_constant_s = 0.000001
+            float inputs:minimum_available_mass_kg = 0.000001
+            float inputs:availability_transition_mass_kg = 0.01
+            float inputs:available_mass_kg.connect = </DescentLander/MainPropulsion/FuelTank.outputs:mass_kg>
+            float inputs:valve_opening.connect = </DescentLander/MainPropulsion.inputs:valve_opening>
+            custom token connectors:inlet.connect = </DescentLander/MainPropulsion/FuelTank.connectors:outlet>
+            custom token connectors:outlet.connect = </DescentLander/MainPropulsion/MainChamber.connectors:fuel_in>
+            float outputs:mass_flow_kgs
+            float outputs:outlet_pressure_pa
+            float outputs:speed_fraction
+            float outputs:speed_rpm
+            float outputs:activity
+            float outputs:shaft_power_w
+        }
+        def Scope "OxidizerPump" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/Turbopump.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:maximum_flow_kgs = 21.0
+            float inputs:nominal_tank_pressure_pa = 2500000.0
+            float inputs:discharge_pressure_pa = 8000000.0
+            float inputs:spool_tau = 0.08
+            float inputs:pump_efficiency = 0.72
+            float inputs:speed_rpm_max = 30000.0
+            float inputs:propellant_density_kg_m3 = 1140.0
+            float inputs:minimum_pressure_pa = 1.0
+            float inputs:minimum_efficiency = 0.000001
+            float inputs:minimum_time_constant_s = 0.000001
+            float inputs:minimum_available_mass_kg = 0.000001
+            float inputs:availability_transition_mass_kg = 0.01
+            float inputs:available_mass_kg.connect = </DescentLander/MainPropulsion/OxidizerTank.outputs:mass_kg>
+            float inputs:valve_opening.connect = </DescentLander/MainPropulsion.inputs:valve_opening>
+            custom token connectors:inlet.connect = </DescentLander/MainPropulsion/OxidizerTank.connectors:outlet>
+            custom token connectors:outlet.connect = </DescentLander/MainPropulsion/MainChamber.connectors:oxidizer_in>
+            float outputs:mass_flow_kgs
+            float outputs:outlet_pressure_pa
+            float outputs:speed_fraction
+            float outputs:speed_rpm
+            float outputs:activity
+            float outputs:shaft_power_w
+        }
+        def Scope "MainChamber" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/CombustionChamber.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:oxidizer_to_fuel_ratio = 2.6
+            float inputs:characteristic_velocity_mps = 1550.0
+            float inputs:throat_area_m2 = 0.0045
+            float inputs:effective_exhaust_velocity_mps = 2940.0
+            float inputs:combustion_efficiency = 0.96
+            float inputs:nominal_flow_kgs = 29.0
+            float inputs:chamber_temperature_full_k = 3300.0
+            float inputs:minimum_flow_kgs = 0.000001
+            float inputs:minimum_throat_area_m2 = 0.000000001
+            float inputs:minimum_mixture_ratio = 0.000001
+            float inputs:fuel_energy_j_kg = 40000000.0
+            custom token connectors:fuel_in
+            custom token connectors:oxidizer_in
+            float outputs:fuel_flow_kgs
+            float outputs:oxidizer_flow_kgs
+            float outputs:propellant_flow
+            float outputs:mixture_ratio
+            float outputs:mixture_ratio_error
+            float outputs:mixture_efficiency
+            float outputs:chamber_pressure_pa
+            float outputs:ideal_chamber_pressure_pa
+            float outputs:chamber_temperature_k
+            float outputs:thrust_n
+            float outputs:activity
+            float outputs:heat_release_w
+        }
+        def Scope "PropellantStatus" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PropellantStatus.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:low_fuel_mass_kg = 200.0
+            float inputs:depleted_mass_kg = 1.0
+            float inputs:initial_propellant_mass_kg = 2000.0
+            float inputs:minimum_mass_kg = 0.000001
+            float inputs:event_transition_width_kg = 0.01
+            float inputs:fuel_mass_kg.connect = </DescentLander/MainPropulsion/FuelTank.outputs:mass_kg>
+            float inputs:oxidizer_mass_kg.connect = </DescentLander/MainPropulsion/OxidizerTank.outputs:mass_kg>
+            float outputs:propellant_mass_kg
+            float outputs:propellant_used_kg
+            float outputs:low_fuel
+            float outputs:depleted
+        }
+    }
+
+    def Scope "AttitudeActuation" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token lunco:synthesizer = "actuator-wrench"
+        float inputs:desired_torque_x.connect = </DescentLander.outputs:torque_x>
+        float inputs:desired_torque_y.connect = </DescentLander.outputs:torque_y>
+        float inputs:desired_torque_z.connect = </DescentLander.outputs:torque_z>
+
+        float outputs:pitch_pos_a_valve
+        float outputs:pitch_pos_b_valve
+        float outputs:pitch_neg_a_valve
+        float outputs:pitch_neg_b_valve
+        float outputs:roll_pos_a_valve
+        float outputs:roll_pos_b_valve
+        float outputs:roll_neg_a_valve
+        float outputs:roll_neg_b_valve
+        float outputs:yaw_pos_a_valve
+        float outputs:yaw_pos_b_valve
+        float outputs:yaw_neg_a_valve
+        float outputs:yaw_neg_b_valve
+
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </DescentLander/RcsPitchPos>,
+            </DescentLander/RcsPitchPosB>,
+            </DescentLander/RcsPitchNeg>,
+            </DescentLander/RcsPitchNegB>,
+            </DescentLander/RcsRollPos>,
+            </DescentLander/RcsRollPosB>,
+            </DescentLander/RcsRollNeg>,
+            </DescentLander/RcsRollNegB>,
+            </DescentLander/RcsYawPos>,
+            </DescentLander/RcsYawPosB>,
+            </DescentLander/RcsYawNeg>,
+            </DescentLander/RcsYawNegB>,
+        ]
+    }
+
+    # The allocator above emits valve openings. This separate generated
+    # network owns reusable RCS thrust/flow equations, so a physical nozzle
+    # receives the thrust produced by its own Modelica engine model and its
+    # flame receives that model's activity output.
+    def Scope "AttitudePropulsion" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        float inputs:pitch_pos_a_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_pos_a_valve>
+        float inputs:pitch_pos_b_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_pos_b_valve>
+        float inputs:pitch_neg_a_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_neg_a_valve>
+        float inputs:pitch_neg_b_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_neg_b_valve>
+        float inputs:roll_pos_a_valve.connect = </DescentLander/AttitudeActuation.outputs:roll_pos_a_valve>
+        float inputs:roll_pos_b_valve.connect = </DescentLander/AttitudeActuation.outputs:roll_pos_b_valve>
+        float inputs:roll_neg_a_valve.connect = </DescentLander/AttitudeActuation.outputs:roll_neg_a_valve>
+        float inputs:roll_neg_b_valve.connect = </DescentLander/AttitudeActuation.outputs:roll_neg_b_valve>
+        float inputs:yaw_pos_a_valve.connect = </DescentLander/AttitudeActuation.outputs:yaw_pos_a_valve>
+        float inputs:yaw_pos_b_valve.connect = </DescentLander/AttitudeActuation.outputs:yaw_pos_b_valve>
+        float inputs:yaw_neg_a_valve.connect = </DescentLander/AttitudeActuation.outputs:yaw_neg_a_valve>
+        float inputs:yaw_neg_b_valve.connect = </DescentLander/AttitudeActuation.outputs:yaw_neg_b_valve>
+
+        float outputs:pitch_pos_a_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsPitchPosModel.outputs:thrust_n>
+        float outputs:pitch_pos_a_activity.connect = </DescentLander/AttitudePropulsion/RcsPitchPosModel.outputs:activity>
+        float outputs:pitch_pos_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsPitchPosBModel.outputs:thrust_n>
+        float outputs:pitch_pos_b_activity.connect = </DescentLander/AttitudePropulsion/RcsPitchPosBModel.outputs:activity>
+        float outputs:pitch_neg_a_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsPitchNegModel.outputs:thrust_n>
+        float outputs:pitch_neg_a_activity.connect = </DescentLander/AttitudePropulsion/RcsPitchNegModel.outputs:activity>
+        float outputs:pitch_neg_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsPitchNegBModel.outputs:thrust_n>
+        float outputs:pitch_neg_b_activity.connect = </DescentLander/AttitudePropulsion/RcsPitchNegBModel.outputs:activity>
+        float outputs:roll_pos_a_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsRollPosModel.outputs:thrust_n>
+        float outputs:roll_pos_a_activity.connect = </DescentLander/AttitudePropulsion/RcsRollPosModel.outputs:activity>
+        float outputs:roll_pos_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsRollPosBModel.outputs:thrust_n>
+        float outputs:roll_pos_b_activity.connect = </DescentLander/AttitudePropulsion/RcsRollPosBModel.outputs:activity>
+        float outputs:roll_neg_a_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsRollNegModel.outputs:thrust_n>
+        float outputs:roll_neg_a_activity.connect = </DescentLander/AttitudePropulsion/RcsRollNegModel.outputs:activity>
+        float outputs:roll_neg_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsRollNegBModel.outputs:thrust_n>
+        float outputs:roll_neg_b_activity.connect = </DescentLander/AttitudePropulsion/RcsRollNegBModel.outputs:activity>
+        float outputs:yaw_pos_a_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsYawPosModel.outputs:thrust_n>
+        float outputs:yaw_pos_a_activity.connect = </DescentLander/AttitudePropulsion/RcsYawPosModel.outputs:activity>
+        float outputs:yaw_pos_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsYawPosBModel.outputs:thrust_n>
+        float outputs:yaw_pos_b_activity.connect = </DescentLander/AttitudePropulsion/RcsYawPosBModel.outputs:activity>
+        float outputs:yaw_neg_a_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:thrust_n>
+        float outputs:yaw_neg_a_activity.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:activity>
+        float outputs:yaw_neg_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:thrust_n>
+        float outputs:yaw_neg_b_activity.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:activity>
+
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </DescentLander/AttitudePropulsion/RcsPitchPosModel>,
+            </DescentLander/AttitudePropulsion/RcsPitchPosBModel>,
+            </DescentLander/AttitudePropulsion/RcsPitchNegModel>,
+            </DescentLander/AttitudePropulsion/RcsPitchNegBModel>,
+            </DescentLander/AttitudePropulsion/RcsRollPosModel>,
+            </DescentLander/AttitudePropulsion/RcsRollPosBModel>,
+            </DescentLander/AttitudePropulsion/RcsRollNegModel>,
+            </DescentLander/AttitudePropulsion/RcsRollNegBModel>,
+            </DescentLander/AttitudePropulsion/RcsYawPosModel>,
+            </DescentLander/AttitudePropulsion/RcsYawPosBModel>,
+            </DescentLander/AttitudePropulsion/RcsYawNegModel>,
+            </DescentLander/AttitudePropulsion/RcsYawNegBModel>,
+        ]
+
+        def Scope "RcsPitchPosModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_pos_a_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsPitchPosBModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_pos_b_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsPitchNegModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_neg_a_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsPitchNegBModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_neg_b_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsRollPosModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_pos_a_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsRollPosBModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_pos_b_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsRollNegModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_neg_a_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsRollNegBModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_neg_b_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsYawPosModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_pos_a_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsYawPosBModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_pos_b_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsYawNegModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_neg_a_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+        def Scope "RcsYawNegBModel" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:f_nom_n = 2500.0
+            float inputs:isp_sec = 220.0
+            float inputs:g0 = 9.80665
+            float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_neg_b_valve>
+            float outputs:thrust_n
+            float outputs:mass_flow_kgs
+            float outputs:activity
+        }
+    }
+
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
     # UsdGeomGprim primvars and stay on the geometry, but USD has no "display
     # emissive" — so every glow here is a UsdPreviewSurface `inputs:emissiveColor`
@@ -156,6 +626,51 @@ def Xform "DescentLander" (
                 # Shallower than the shroud's: the core is the denser, steadier
                 # part of the jet and a hard shimmer on it reads as a bug.
                 float inputs:flicker = 0.5
+                token outputs:surface
+            }
+        }
+
+        # RCS jets use the same bounded-volume plume shader as the main engine,
+        # but with a compact blue-white look that reads as cold-gas / hypergolic
+        # attitude control.  The throttle on every nozzle is a live Modelica
+        # torque signal, so these are real visual consequences of the vehicle's
+        # stabiliser rather than a scripted blink.
+        def Material "RcsFlame_Mat"
+        {
+            token outputs:surface.connect = </DescentLander/Looks/RcsFlame_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
+                color3f inputs:core_color = (0.35, 2.8, 7.0)
+                color3f inputs:edge_color = (0.03, 0.35, 1.8)
+                float inputs:throttle = 0
+                float inputs:flicker = 0.8
+                float inputs:flicker_speed = 11.0
+                float inputs:flicker_scale = 10.0
+                float inputs:density = 14.0
+                float inputs:steps = 18.0
+                token outputs:surface
+            }
+        }
+
+        def Material "RcsFlameCore_Mat"
+        {
+            token outputs:surface.connect = </DescentLander/Looks/RcsFlameCore_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
+                color3f inputs:core_color = (1.5, 6.0, 12.0)
+                color3f inputs:edge_color = (0.2, 1.2, 4.0)
+                float inputs:throttle = 0
+                float inputs:flicker = 0.35
+                float inputs:flicker_speed = 9.0
+                float inputs:flicker_scale = 8.0
+                float inputs:density = 18.0
+                float inputs:steps = 18.0
                 token outputs:surface
             }
         }
@@ -277,14 +792,15 @@ def Xform "DescentLander" (
     # Vacuum: no aerodynamic drag. Linear damping is a tiny numerical settle only;
     # there is deliberately NO angular damping — angular momentum is conserved, so
     # a spin persists until a torque stops it. Arresting rotation is the job of the
-    # reaction-control system (RCS), to be added as a Modelica/rhai attitude-hold
-    # script that reads `angvel_*` and commands counter-`torque_*`. Until then the
-    # lander keeps whatever spin the pilot gives it — as a real one would.
+    # reaction-control system (RCS), authored in the Modelica attitude-hold
+    # stabiliser. Its signed hold torque also drives the side-nozzle visuals, so
+    # the animation is a consequence of the vehicle model, never a separate script.
     float physxRigidBody:linearDamping = 0.02
 
     # ── Flight control system (the airframe's own avionics) ──────────────────
-    # The control LAW a pilot flies through: it turns a command into world force and
-    # torque and burns propellant for it. No altitude, no setpoint, no descent law —
+    # The control LAW a pilot flies through: it turns a command into a normalized
+    # main-valve request and body-local torque demand. Propellant and physical
+    # actuator placement belong to the USD-composed networks. No altitude, no setpoint, no descent law —
     # see `models/Lander.mo`. Its `inputs:` are the vessel's control surface: the
     # control profile writes `external_throttle` / `pitch` / `roll` / `yaw` into them
     # when a session possesses this prim.
@@ -294,48 +810,45 @@ def Xform "DescentLander" (
     # promise it steps fast enough to be trusted with a force.
     uniform bool lunco:program:realtimeSafe = true
 
-    # Co-sim wiring — native USD `connectionPaths`. A self-loop on this prim: the
-    # model's outputs are the body's force inputs, and the body's state is the model's
-    # inputs.
-    float inputs:force_x.connect = </DescentLander.outputs:force_x>
-    float inputs:force_y.connect = </DescentLander.outputs:force_y>
-    float inputs:force_z.connect = </DescentLander.outputs:force_z>
-    float inputs:torque_x.connect = </DescentLander.outputs:torque_x>
-    float inputs:torque_y.connect = </DescentLander.outputs:torque_y>
-    float inputs:torque_z.connect = </DescentLander.outputs:torque_z>
-    float inputs:q_w.connect = </DescentLander.outputs:quat_w>
-    float inputs:q_x.connect = </DescentLander.outputs:quat_x>
-    float inputs:q_y.connect = </DescentLander.outputs:quat_y>
-    float inputs:q_z.connect = </DescentLander.outputs:quat_z>
+    # Co-sim wiring — native USD `connectionPaths`. The controller emits local
+    # actuator demands; physical actuation is composed by the networks above.
+    float inputs:spool_tau = 0.35
+    float inputs:authority_filter_tau_s = 0.02
+    float inputs:minimum_time_constant_s = 0.000001
+    float inputs:authority_initial = 0.6
+    float inputs:command_lower_bound = 0.0
+    float inputs:command_upper_bound = 1.0
+    float inputs:touchdown_force_threshold_n = 250.0
+    float inputs:touchdown_transition_width_n = 100.0
     float inputs:inertia_xx.connect = </DescentLander.outputs:inertia_xx>
     float inputs:inertia_yy.connect = </DescentLander.outputs:inertia_yy>
     float inputs:inertia_zz.connect = </DescentLander.outputs:inertia_zz>
     float inputs:piloted.connect = </DescentLander.outputs:piloted>
-    float inputs:throttle.connect = </DescentLander.outputs:throttle>
-
-    # Angular rate feedback for the attitude stabiliser below. State in, torque out —
-    # the same self-loop shape as the quaternion wires above.
-    float inputs:omega_x.connect = </DescentLander.outputs:angvel_x>
-    float inputs:omega_y.connect = </DescentLander.outputs:angvel_y>
-    float inputs:omega_z.connect = </DescentLander.outputs:angvel_z>
+    float inputs:gyro_x.connect = </DescentLander/IMU.outputs:gyro_x>
+    float inputs:gyro_y.connect = </DescentLander/IMU.outputs:gyro_y>
+    float inputs:gyro_z.connect = </DescentLander/IMU.outputs:gyro_z>
+    float inputs:attitude_error_x.connect = </DescentLander/AttitudeReference.outputs:error_x>
+    float inputs:attitude_error_y.connect = </DescentLander/AttitudeReference.outputs:error_y>
+    float inputs:attitude_error_z.connect = </DescentLander/AttitudeReference.outputs:error_z>
 
     # `guidance_throttle` and the `guidance_pitch/roll/yaw` attitude wires are
     # deliberately NOT connected. Unwired, they are 0, and the lander commands nothing
     # of its own. A scene that wants it to fly itself composes
-    # `components/gnc/descent_guidance.usda`, which authors the wires.
+    # `components/gnc/position_pid_guidance.usda`, which authors the wires.
 
     # A parameter is an input with a constant instead of a connection.
     # Attitude authority = angular ACCELERATION (rad/s^2) per unit stick. With no
     # damping this is a pure α: hold the stick and the rate ramps; release and the
-    # rate holds (momentum conserved — an RCS script stops it later). Kept low so a
+    # rate holds (momentum conserved — the USD-composed RCS network stops it). Kept low so a
     # tap is a gentle nudge, not a violent tumble.
     float inputs:ang_authority = 0.6
 
     # RCS stability augmentation ON. A powered-descent lander has attitude control
-    # thrusters; a vehicle that cannot hold its own attitude is not a lander, it is a
-    # brick with an engine. Concretely: without this, any tilt is permanent, and since
-    # thrust points along body +Y the vehicle then flies its own tilt — one bad spawn
-    # transient is unrecoverable and the descent diverges.
+    # authority; a vehicle that cannot hold its own attitude is not a lander, it is a
+    # brick with an engine. The Modelica law requests body torque and the USD
+    # actuator network decides which authored RCS devices provide it. Concretely:
+    # without this, any tilt is permanent, and since thrust points along body +Y the
+    # vehicle then flies its own tilt — one bad spawn transient is unrecoverable.
     #
     # This is the VEHICLE's stabiliser, so it holds whoever is commanding — pilot,
     # guidance program, or nobody. It only holds attitude; it never touches throttle,
@@ -358,23 +871,27 @@ def Xform "DescentLander" (
             string unit = "rad/s"
         }
     )
-    float inputs:leg_force_px.connect = </DescentLander/LegPX_Spring.outputs:force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX_Spring.outputs:force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ_Spring.outputs:force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ_Spring.outputs:force>
+    # Touchdown is a flight-software contact measurement, not the spring drive's
+    # commanded reaction. The spring force remains available on each joint for
+    # strut-load visualization; the controller reads the actual pad/terrain
+    # contact force from the collider that carries the load.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
 
     # ── Propellant events ────────────────────────────────────────────────────
     # Conditions are equations in Lander.mo. These prims only bind the model's
     # discrete outputs to names on the shared engine event bus.
     def LunCoEvent "LowFuel"
     {
-        float inputs:trigger.connect = </DescentLander.outputs:low_fuel>
+        float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:low_fuel>
         uniform token lunco:event:name = "lander_low_fuel"
         uniform token lunco:event:severity = "warning"
     }
     def LunCoEvent "Depleted"
     {
-        float inputs:trigger.connect = </DescentLander.outputs:depleted>
+        float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:depleted>
         uniform token lunco:event:name = "lander_depleted"
         uniform token lunco:event:severity = "warning"
     }
@@ -443,6 +960,49 @@ def Xform "DescentLander" (
     {
         double3 xformOp:translate = (0.0, 0.0, 0.0) # at CoM
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:raw_velocity_x.connect = </DescentLander.outputs:velocity_x>
+        float inputs:raw_velocity_y.connect = </DescentLander.outputs:velocity_y>
+        float inputs:raw_velocity_z.connect = </DescentLander.outputs:velocity_z>
+        float inputs:raw_angvel_x.connect = </DescentLander.outputs:angvel_x>
+        float inputs:raw_angvel_y.connect = </DescentLander.outputs:angvel_y>
+        float inputs:raw_angvel_z.connect = </DescentLander.outputs:angvel_z>
+        float inputs:raw_quat_w.connect = </DescentLander.outputs:quat_w>
+        float inputs:raw_quat_x.connect = </DescentLander.outputs:quat_x>
+        float inputs:raw_quat_y.connect = </DescentLander.outputs:quat_y>
+        float inputs:raw_quat_z.connect = </DescentLander.outputs:quat_z>
+        float inputs:gravity_x.connect = </DescentLander/Environment.outputs:gravity_x>
+        float inputs:gravity_y.connect = </DescentLander/Environment.outputs:gravity_y>
+        float inputs:gravity_z.connect = </DescentLander/Environment.outputs:gravity_z>
+    }
+
+    # Environment is a source of local gravity facts. It is not a sensor
+    # implementation and the IMU conversion reads its vector through USD wires.
+    def "Environment" (
+        prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Frame conversion is a sensor/estimator responsibility. The flight
+    # controller consumes this local error and never receives world pose.
+    def Scope "AttitudeReference" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/AttitudeReference.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:specific_force_x.connect = </DescentLander/IMU.outputs:specific_force_x>
+        float inputs:specific_force_y.connect = </DescentLander/IMU.outputs:specific_force_y>
+        float inputs:specific_force_z.connect = </DescentLander/IMU.outputs:specific_force_z>
+        float inputs:gyro_x.connect = </DescentLander/IMU.outputs:gyro_x>
+        float inputs:gyro_y.connect = </DescentLander/IMU.outputs:gyro_y>
+        float inputs:gyro_z.connect = </DescentLander/IMU.outputs:gyro_z>
+        float outputs:error_x
+        float outputs:error_y
+        float outputs:error_z
     }
 
     # ── Visual-only structure ──
@@ -523,7 +1083,9 @@ def Xform "DescentLander" (
     # rational 4-arc form, √2/2 on the diagonals, doubled interior knots), v
     # walks the bell contour from throat to exit — (0.35, 0) → (0.52, -0.55) →
     # (0.86, -1.15) → (1.35, -1.90).
-    def NurbsPatch "Nozzle"
+    def NurbsPatch "Nozzle" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
     {
         # Same thin-shell reasoning as the dish: a bell is a contoured skin, and
         # the camera passes under it on the landing shot, where a single-sided
@@ -558,6 +1120,12 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </DescentLander/Looks/Nozzle_Mat>
         bool physics:collisionEnabled = false
+        # The force is applied at this authored engine mount. The allocator
+        # supplies the scalar thrust; Avian rotates the direction and applies
+        # the force at the live mount point.
+        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        custom double lunco:forceActuator:maxForce = 60000.0
+        float inputs:force_command.connect = </DescentLander/MainPropulsion.outputs:thrust_n>
 
         # ── The bell's DESIGN, and what it is worth ─────────────────────────
         # The control points above are the drawn shape; these inputs are what
@@ -906,11 +1474,12 @@ def Xform "DescentLander" (
     # ── RCS quads — the attitude authority the flight model exercises ──────
     # Four thruster blocks on the upper hull diagonals. The Modelica airframe
     # applies attitude torque every shot (the righting in shot 1, the banks in
-    # shot 4); these give that force a visible source. Display-only.
+    # shot 4); these give that force a visible source. The compact plume volumes
+    # below are driven by the stabiliser's six signed torque channels.
     def Cube "RcsQuadPXPZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (1.8, 1.15, 1.8)
+        double3 xformOp:translate = (1.8, 0, 1.8)
         double3 xformOp:rotateXYZ = (0, 45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -920,7 +1489,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadNXPZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.8, 1.15, 1.8)
+        double3 xformOp:translate = (-1.8, 0, 1.8)
         double3 xformOp:rotateXYZ = (0, -45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -930,7 +1499,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadPXNZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (1.8, 1.15, -1.8)
+        double3 xformOp:translate = (1.8, 0, -1.8)
         double3 xformOp:rotateXYZ = (0, -45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -940,12 +1509,430 @@ def Xform "DescentLander" (
     def Cube "RcsQuadNXNZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.8, 1.15, -1.8)
+        double3 xformOp:translate = (-1.8, 0, -1.8)
         double3 xformOp:rotateXYZ = (0, 45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.28, 0.28, 0.32)]
         bool physics:collisionEnabled = false
+    }
+
+    # Each nozzle has an outer halo and a smaller hot core.  The cones are fixed
+    # bounding volumes; plume.wgsl changes their visible length, width and
+    # shimmer from the live Modelica signal.  They are deliberately non-solid
+    # and do not cast shadows.
+    def Cone "RcsPitchPos" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "pitch_pos_a_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
+    }
+    def Cone "RcsPitchPosCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
+    }
+    def Cone "RcsPitchNeg" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "pitch_neg_a_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
+    }
+    def Cone "RcsPitchNegCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
+    }
+    def Cone "RcsRollPos" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "roll_pos_a_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
+    }
+    def Cone "RcsRollPosCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
+    }
+    def Cone "RcsRollNeg" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "roll_neg_a_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
+    }
+    def Cone "RcsRollNegCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
+    }
+    def Cone "RcsYawPos" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:scale = (0.16, 0.62, 0.16)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 0, -1)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "yaw_pos_a_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
+    }
+    def Cone "RcsYawPosCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:scale = (0.08, 0.38, 0.08)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
+    }
+    def Cone "RcsYawNeg" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:scale = (0.16, 0.62, 0.16)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 0, -1)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "yaw_neg_a_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_activity>
+    }
+    def Cone "RcsYawNegCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:scale = (0.08, 0.38, 0.08)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_activity>
+    }
+
+    # The second nozzle in each torque pair.  These are separate physical
+    # exhaust locations, not a duplicated animation: the Modelica cluster
+    # fires both members of a pair with the same pulse so translation cancels
+    # and the two moment arms add.
+    def Cone "RcsPitchPosB" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "pitch_pos_b_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
+    }
+    def Cone "RcsPitchPosBCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
+    }
+    def Cone "RcsPitchNegB" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "pitch_neg_b_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
+    }
+    def Cone "RcsPitchNegBCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
+    }
+    def Cone "RcsRollPosB" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "roll_pos_b_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
+    }
+    def Cone "RcsRollPosBCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
+    }
+    def Cone "RcsRollNegB" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.18, 0.72, 0.18)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "roll_neg_b_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
+    }
+    def Cone "RcsRollNegBCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.09, 0.45, 0.09)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
+    }
+    def Cone "RcsYawPosB" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:scale = (0.16, 0.62, 0.16)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 0, 1)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "yaw_pos_b_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
+    }
+    def Cone "RcsYawPosBCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:scale = (0.08, 0.38, 0.08)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
+    }
+    def Cone "RcsYawNegB" (
+        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:scale = (0.16, 0.62, 0.16)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        custom float3 lunco:forceActuator:direction = (0, 0, 1)
+        custom double lunco:forceActuator:maxForce = 2500.0
+        custom string lunco:forceActuator:commandOutput = "yaw_neg_b_valve"
+        float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_thrust_n>
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_activity>
+    }
+    def Cone "RcsYawNegBCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:scale = (0.08, 0.38, 0.08)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+        float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_activity>
     }
 
     # ── Landing legs with footpads ──

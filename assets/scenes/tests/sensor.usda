@@ -5,13 +5,9 @@
     metersPerUnit = 1
 )
 
-# Verifies USD-authored sensor telemetry ports (lunco-cosim::sensors).
-# A 100 kg box rests on the ground carrying all three sensor kinds:
-#   - lunco:sensor:imu     -> accel_x/y/z   (≈0 at rest; world-frame lin. accel)
-#   - lunco:sensor:range   -> range         (downward altimeter; ≈0.8 m to ground —
-#                                           the SENSOR's height: box centre 0.5 plus its
-#                                           authored lunco:sensor:offset of 0.3)
-#   - lunco:sensor:contact -> contact (=1), contact_force (≈ mass·g ≈ 981 N)
+# Verifies the native Avian-to-Modelica sensor boundary.
+# A 100 kg box rests on the ground carrying an IMU conversion and a raw ray
+# conversion. Collider contact remains a native Avian body fact.
 #
 # Read live:  ListPorts -> the Box entity exposes accel_*, range, contact,
 #   contact_force alongside its rigid-body ports.
@@ -63,13 +59,40 @@ def Xform "SandboxScene" (
         float physics:mass = 100.0
         bool physics:collisionEnabled = true
 
-        # --- Sensors (mounted 0.3 m above the box centre) ---
-        custom double3 lunco:sensor:offset = (0.0, 0.3, 0.0)
-        custom bool lunco:sensor:imu = true
-        custom bool lunco:sensor:range = true
-        custom token lunco:sensor:rangeAxis = "-Y"
-        custom float lunco:sensor:rangeMax = 10.0
-        custom bool lunco:sensor:contact = true
+        # The Modelica IMU conversion consumes only the body's raw Avian
+        # kinematics and the local gravity source.
+        def "IMU" (
+            prepend references = @lunco://vessels/sensors/imu.usda@</Imu>
+        )
+        {
+            float inputs:raw_velocity_x.connect = </SandboxScene/Box.outputs:velocity_x>
+            float inputs:raw_velocity_y.connect = </SandboxScene/Box.outputs:velocity_y>
+            float inputs:raw_velocity_z.connect = </SandboxScene/Box.outputs:velocity_z>
+            float inputs:raw_angvel_x.connect = </SandboxScene/Box.outputs:angvel_x>
+            float inputs:raw_angvel_y.connect = </SandboxScene/Box.outputs:angvel_y>
+            float inputs:raw_angvel_z.connect = </SandboxScene/Box.outputs:angvel_z>
+            float inputs:raw_quat_w.connect = </SandboxScene/Box.outputs:quat_w>
+            float inputs:raw_quat_x.connect = </SandboxScene/Box.outputs:quat_x>
+            float inputs:raw_quat_y.connect = </SandboxScene/Box.outputs:quat_y>
+            float inputs:raw_quat_z.connect = </SandboxScene/Box.outputs:quat_z>
+            float inputs:gravity_y.connect = </SandboxScene/Box/Environment.outputs:gravity_y>
+        }
+
+        # A downward raw Avian ray is mounted 0.3 m above the box centre. Its
+        # Model child turns hit distance and validity into range outputs.
+        def "Environment" (
+            prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+        )
+        {
+        }
+        def "Altimeter" (
+            prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.3, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float lunco:raycast:maxDistance = 10.0
+        }
     }
 
     # Second box, 50 kg, far from the first — to check the contact-force ratio
@@ -84,7 +107,6 @@ def Xform "SandboxScene" (
         color3f[] primvars:displayColor = [(0.2, 0.8, 0.9)]
         float physics:mass = 50.0
         bool physics:collisionEnabled = true
-        custom bool lunco:sensor:contact = true
     }
 
     def Scope "Scenario"

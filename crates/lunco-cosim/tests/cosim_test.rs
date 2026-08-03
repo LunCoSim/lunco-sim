@@ -22,8 +22,14 @@ fn ports() -> PortRegistry {
 fn build_test_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.add_plugins(bevy::diagnostic::DiagnosticsPlugin);
     app.add_plugins(PhysicsPlugins::default());
     app.add_plugins(CoSimPlugin);
+    // Avian's collider-cache systems consume AssetEvent<Mesh> during a normal
+    // app update; initialize the mesh asset/event channel in this headless
+    // fixture just as the executable does.
+    app.init_asset::<Mesh>();
     app
 }
 
@@ -164,6 +170,8 @@ fn test_propagate_sim_component_to_sim_component() {
         offset: 0.0,
     });
 
+    app.update();
+
     // Run wire propagation
     app.world_mut()
         .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
@@ -205,6 +213,8 @@ fn test_propagate_with_scale() {
         scale: 0.5,
         offset: 0.0,
     });
+
+    app.update();
 
     app.world_mut()
         .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
@@ -248,6 +258,8 @@ fn test_propagate_avian_to_sim_component() {
         scale: 1.0,
         offset: 0.0,
     });
+
+    app.update();
 
     // Propagate — the source `height` is read live from Position (no snapshot
     // system needed); avian state is stable until a physics step runs.
@@ -330,6 +342,8 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         scale: 1.0,
         offset: 0.0,
     });
+
+    app.update();
 
     // Propagate — both wires sum into the force_y input, which lands in
     // `PendingForces.f.y` (readable through the resolver's input side).
