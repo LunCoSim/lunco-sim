@@ -21,7 +21,7 @@ use lunco_time::WorldTime;
 
 use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisResource;
-use crate::geo::{solar_position_of_geodetic, solar_tangent_frame, GeodeticAnchor, SiteAnchor};
+use crate::geo::{solar_tangent_frame, GeodeticAnchor, SiteAnchor};
 use crate::kepler::KeplerOrbit;
 use crate::link::LinkNode;
 use crate::registry::CelestialBodyRegistry;
@@ -104,6 +104,85 @@ impl SolarFramePose {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Placement {
+    Geodetic {
+        entity: Entity,
+        anchor: GeodeticAnchor,
+    },
+    Orbit {
+        entity: Entity,
+        orbit: KeplerOrbit,
+    },
+    Libration {
+        entity: Entity,
+        anchor: LibrationAnchor,
+    },
+}
+
+/// Find the nearest authored placement, including ancestors. Link endpoints are
+/// normally several prims below a ground station's geodetic anchor, so checking
+/// only the endpoint silently places an Earth feed at the lunar site origin.
+fn nearest_placement(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_anchor: &Query<&GeodeticAnchor>,
+    q_orbit: &Query<&KeplerOrbit>,
+    q_libration: &Query<&LibrationAnchor>,
+) -> Option<Placement> {
+    std::iter::successors(Some(entity), |e| {
+        q_parents.get(*e).ok().map(|child| child.parent())
+    })
+    .find_map(|candidate| {
+        q_anchor
+            .get(candidate)
+            .ok()
+            .copied()
+            .map(|anchor| Placement::Geodetic {
+                entity: candidate,
+                anchor,
+            })
+            .or_else(|| {
+                q_orbit
+                    .get(candidate)
+                    .ok()
+                    .copied()
+                    .map(|orbit| Placement::Orbit {
+                        entity: candidate,
+                        orbit,
+                    })
+            })
+            .or_else(|| {
+                q_libration
+                    .get(candidate)
+                    .ok()
+                    .copied()
+                    .map(|anchor| Placement::Libration {
+                        entity: candidate,
+                        anchor,
+                    })
+            })
+    })
+}
+
+/// Offset a descendant from its placement prim in the local scene frame. The
+/// placement's own transform establishes the origin for its descendants.
+fn placement_offset(
+    entity: Entity,
+    placement: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<DVec3> {
+    if entity == placement {
+        return Some(DVec3::ZERO);
+    }
+    let (entity_pos, _) = lunco_core::coords::world_pose(entity, q_parents, q_grids, q_spatial)?;
+    let (placement_pos, _) =
+        lunco_core::coords::world_pose(placement, q_parents, q_grids, q_spatial)?;
+    Some(entity_pos.0 - placement_pos.0)
+}
+
 /// Refresh [`SolarFramePose`] for every tracked entity. Headless-safe; a no-op
 /// until `WorldTime` + ephemeris + registry exist.
 #[allow(clippy::too_many_arguments)]
@@ -112,12 +191,7 @@ pub fn update_solar_poses(
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Option<Res<CelestialBodyRegistry>>,
     q_tracked: Query<
-        (
-            Entity,
-            Option<&GeodeticAnchor>,
-            Option<&KeplerOrbit>,
-            Option<&LibrationAnchor>,
-        ),
+        Entity,
         Or<(
             With<GeodeticAnchor>,
             With<KeplerOrbit>,
@@ -131,6 +205,8 @@ pub fn update_solar_poses(
     // feed aperture, six prims under the ground station), so its own entity carries
     // no anchor. Looked up by ancestry below.
     q_anchor: Query<&GeodeticAnchor>,
+    q_orbit: Query<&KeplerOrbit>,
+    q_libration: Query<&LibrationAnchor>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -179,49 +255,82 @@ pub fn update_solar_poses(
         None => None,
     };
 
-    for (entity, anchor, orbit, libration) in q_tracked.iter() {
+    for entity in q_tracked.iter() {
         // ONE RULE: a node is placed by the nearest placement in its ancestry,
-        // INCLUDING itself. Its horizon belongs to that placement's body.
-        //
-        // The ancestry half is not an edge case — it is the normal shape. A link
-        // node is the feed aperture six prims below the dish, so the anchor sits on
-        // the ground station and never on the node. Only the POSITION comes down the
-        // transform hierarchy; the horizon has to come from the placement, or the
-        // node measures its elevation against whatever ground the scene happens to
-        // be standing on.
-        let (pos, horizon) = if let Some(a) = anchor {
-            let Some(desc) = body_of(a.body) else {
-                continue;
-            };
-            // No ephemeris ⇒ no pose. Skipping beats reporting a pose at the Sun's centre.
-            let Some(center) = body_center(a.body, &mut centers) else {
-                continue;
-            };
-            let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
-            let up = (pos - center).normalize_or_zero();
-            (pos, Horizon::Surface { body: a.body, up })
-        } else if let Some(o) = orbit {
-            let Some(desc) = body_of(o.body) else {
-                continue;
-            };
-            let Some(center) = body_center(o.body, &mut centers) else {
-                continue;
-            };
-            (
-                center + o.elements.position_bevy_m(desc.gm, jd),
-                Horizon::Free { body: o.body },
-            )
-        } else if let Some(l) = libration {
-            // A libration point of a PAIR — Earth–Moon L1/L2 for a relay. Resolved by
-            // the CR3BP solver in `transform`, which needs both bodies' positions and
-            // masses; `None` if either is missing, and we skip rather than invent one.
-            //
-            // `body` is the SECONDARY — the body the point is parked near, which is
-            // what a range/occultation test wants to know about.
-            let Some(pos) = tree.libration_in_solar(l.primary, l.secondary, l.point) else {
-                continue;
-            };
-            (pos.raw(), Horizon::Free { body: l.secondary })
+        // INCLUDING itself. Its horizon belongs to that placement's body. This
+        // is the normal shape for a ground station: the link feed is several
+        // prims below the station's GeodeticAnchor.
+        let placement = nearest_placement(entity, &q_parents, &q_anchor, &q_orbit, &q_libration);
+        let (pos, horizon) = if let Some(placement) = placement {
+            match placement {
+                Placement::Geodetic {
+                    entity: anchor_entity,
+                    anchor,
+                } => {
+                    let Some(desc) = body_of(anchor.body) else {
+                        continue;
+                    };
+                    let Some(center) = body_center(anchor.body, &mut centers) else {
+                        continue;
+                    };
+                    let Some(offset) =
+                        placement_offset(entity, anchor_entity, &q_parents, &q_grids, &q_spatial)
+                    else {
+                        continue;
+                    };
+                    let frame = solar_tangent_frame(desc, &anchor.geodetic, center, jd);
+                    let pos = frame.to_frame(offset);
+                    let up = (pos - center).normalize_or_zero();
+                    (
+                        pos,
+                        Horizon::Surface {
+                            body: anchor.body,
+                            up,
+                        },
+                    )
+                }
+                Placement::Orbit {
+                    entity: orbit_entity,
+                    orbit,
+                } => {
+                    let Some(desc) = body_of(orbit.body) else {
+                        continue;
+                    };
+                    let Some(center) = body_center(orbit.body, &mut centers) else {
+                        continue;
+                    };
+                    let Some(offset) =
+                        placement_offset(entity, orbit_entity, &q_parents, &q_grids, &q_spatial)
+                    else {
+                        continue;
+                    };
+                    (
+                        center + orbit.elements.position_bevy_m(desc.gm, jd) + offset,
+                        Horizon::Free { body: orbit.body },
+                    )
+                }
+                Placement::Libration {
+                    entity: anchor_entity,
+                    anchor,
+                } => {
+                    let Some(pos) =
+                        tree.libration_in_solar(anchor.primary, anchor.secondary, anchor.point)
+                    else {
+                        continue;
+                    };
+                    let Some(offset) =
+                        placement_offset(entity, anchor_entity, &q_parents, &q_grids, &q_spatial)
+                    else {
+                        continue;
+                    };
+                    (
+                        pos.raw() + offset,
+                        Horizon::Free {
+                            body: anchor.secondary,
+                        },
+                    )
+                }
+            }
         } else if let Some((site_body, frame)) = &site {
             // Scene-local: the position is wherever the transform hierarchy puts it.
             let Ok((cell, tf)) = q_spatial.get(entity) else {
@@ -232,34 +341,13 @@ pub fn update_solar_poses(
                 entity, &cell, tf, &q_parents, &q_grids, &q_spatial,
             );
             let pos = frame.to_frame(local.0);
-            // The horizon, however, belongs to the nearest ANCHORED ancestor — the
-            // scene's own site frame only when nothing above this node claims a body.
-            let ancestor_body =
-                std::iter::successors(Some(entity), |e| q_parents.get(*e).ok().map(|c| c.parent()))
-                    .find_map(|e| q_anchor.get(e).ok().map(|a| a.body));
-            let horizon = match ancestor_body {
-                // Derived from THIS node's own position, not the ancestor's: a dish on
-                // a mast and its feed aperture stand on the same ground but not at the
-                // same point, and the vertical is a property of the point.
-                Some(body) => {
-                    // No ephemeris ⇒ no pose, exactly as every branch above. Calling
-                    // it free-flying would be a lie about the placement, and the
-                    // alternative — a zero vertical — is the sentinel this type
-                    // exists to delete.
-                    let Some(center) = body_center(body, &mut centers) else {
-                        continue;
-                    };
-                    Horizon::Surface {
-                        body,
-                        up: (pos - center).normalize_or_zero(),
-                    }
-                }
-                None => Horizon::Surface {
+            (
+                pos,
+                Horizon::Surface {
                     body: *site_body,
                     up: frame.up,
                 },
-            };
-            (pos, horizon)
+            )
         } else {
             continue;
         };
