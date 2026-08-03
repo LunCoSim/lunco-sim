@@ -184,19 +184,17 @@ pub fn render_pin_header(
         ui.label(text);
     });
     if toggle {
-        ctx.defer(move |world| {
-            if let Some(mut state) = world.get_resource_mut::<DocPinState>() {
-                let slot = match kind {
-                    PinKind::Telemetry => &mut state.telemetry,
-                    PinKind::Inspector => &mut state.inspector,
-                    PinKind::Experiments => &mut state.experiments,
-                };
-                *slot = match *slot {
-                    Some(_) => None,
-                    None => active,
-                };
-            }
-        });
+        let mut state = ctx.resource::<DocPinState>().cloned().unwrap_or_default();
+        let slot = match kind {
+            PinKind::Telemetry => &mut state.telemetry,
+            PinKind::Inspector => &mut state.inspector,
+            PinKind::Experiments => &mut state.experiments,
+        };
+        *slot = match *slot {
+            Some(_) => None,
+            None => active,
+        };
+        ctx.set_resource(state);
     }
 }
 

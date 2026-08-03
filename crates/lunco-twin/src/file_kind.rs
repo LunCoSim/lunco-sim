@@ -10,6 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::DocumentKindId;
+
 /// A file discovered inside a Twin, with its classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEntry {
@@ -35,34 +37,11 @@ pub struct FileEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileKind {
     /// An editable structured Document.
-    Document(DocumentKind),
+    Document(DocumentKindId),
     /// An opaque file the Twin references but does not edit.
     FileReference,
     /// Extension not recognized by the current classifier.
     Unknown,
-}
-
-/// Which kind of Document (which domain owns the parser).
-///
-/// Open-ended: `Other(String)` carries an extension we *recognize as a
-/// domain Document* but for which no built-in classifier entry exists
-/// yet. Domain crates in the future may register additional recognizers,
-/// but the baseline set here covers everything LunCoSim knows about today.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DocumentKind {
-    /// Modelica source — `.mo`.
-    Modelica,
-    /// USD stage — `.usda`, `.usdc`, `.usd`.
-    Usd,
-    /// SysML v2 source — `.sysml`.
-    Sysml,
-    /// Mission script — `.mission.ron`, `.mission.yaml`.
-    Mission,
-    /// Plain RON/YAML/TOML data Document not matching a more specific kind.
-    Data,
-    /// Reserved escape hatch for extensions added by domain crates in
-    /// the future without breaking this enum.
-    Other(String),
 }
 
 impl FileKind {
@@ -75,7 +54,7 @@ impl FileKind {
             .and_then(|s| s.to_str())
             .unwrap_or("");
         if name.ends_with(".mission.ron") || name.ends_with(".mission.yaml") {
-            return FileKind::Document(DocumentKind::Mission);
+            return FileKind::Document(DocumentKindId::new("mission"));
         }
 
         let ext = relative_path
@@ -86,10 +65,10 @@ impl FileKind {
 
         match ext.as_str() {
             // ── Document extensions ───────────────────────────────────
-            "mo" => FileKind::Document(DocumentKind::Modelica),
-            "usda" | "usdc" | "usd" => FileKind::Document(DocumentKind::Usd),
-            "sysml" => FileKind::Document(DocumentKind::Sysml),
-            "ron" | "yaml" | "yml" => FileKind::Document(DocumentKind::Data),
+            "mo" => FileKind::Document(DocumentKindId::new("modelica")),
+            "usda" | "usdc" | "usd" => FileKind::Document(DocumentKindId::new("usd")),
+            "sysml" => FileKind::Document(DocumentKindId::new("sysml")),
+            "ron" | "yaml" | "yml" => FileKind::Document(DocumentKindId::new("data")),
 
             // ── File references (opaque) ─────────────────────────────
             // Textures
@@ -126,7 +105,7 @@ mod tests {
     fn classifies_modelica() {
         assert_eq!(
             classify("rover.mo"),
-            FileKind::Document(DocumentKind::Modelica)
+            FileKind::Document(DocumentKindId::new("modelica"))
         );
     }
 
@@ -134,20 +113,23 @@ mod tests {
     fn classifies_usd_variants() {
         assert_eq!(
             classify("scene.usda"),
-            FileKind::Document(DocumentKind::Usd)
+            FileKind::Document(DocumentKindId::new("usd"))
         );
         assert_eq!(
             classify("scene.usdc"),
-            FileKind::Document(DocumentKind::Usd)
+            FileKind::Document(DocumentKindId::new("usd"))
         );
-        assert_eq!(classify("scene.usd"), FileKind::Document(DocumentKind::Usd));
+        assert_eq!(
+            classify("scene.usd"),
+            FileKind::Document(DocumentKindId::new("usd"))
+        );
     }
 
     #[test]
     fn classifies_sysml() {
         assert_eq!(
             classify("system.sysml"),
-            FileKind::Document(DocumentKind::Sysml)
+            FileKind::Document(DocumentKindId::new("sysml"))
         );
     }
 
@@ -155,11 +137,11 @@ mod tests {
     fn classifies_mission_compound_extensions() {
         assert_eq!(
             classify("day1.mission.ron"),
-            FileKind::Document(DocumentKind::Mission)
+            FileKind::Document(DocumentKindId::new("mission"))
         );
         assert_eq!(
             classify("launch.mission.yaml"),
-            FileKind::Document(DocumentKind::Mission)
+            FileKind::Document(DocumentKindId::new("mission"))
         );
     }
 
@@ -168,7 +150,7 @@ mod tests {
         // A bare `.ron` without the `.mission.` suffix is a data doc.
         assert_eq!(
             classify("config.ron"),
-            FileKind::Document(DocumentKind::Data)
+            FileKind::Document(DocumentKindId::new("data"))
         );
     }
 
@@ -200,7 +182,7 @@ mod tests {
     fn extension_is_case_insensitive() {
         assert_eq!(
             classify("MODEL.MO"),
-            FileKind::Document(DocumentKind::Modelica)
+            FileKind::Document(DocumentKindId::new("modelica"))
         );
         assert_eq!(classify("TEX.PNG"), FileKind::FileReference);
     }
@@ -215,7 +197,7 @@ mod tests {
     fn nested_paths_classify_the_same() {
         assert_eq!(
             classify("models/subsystems/battery.mo"),
-            FileKind::Document(DocumentKind::Modelica)
+            FileKind::Document(DocumentKindId::new("modelica"))
         );
     }
 }

@@ -59,9 +59,13 @@ pub use theme::CanvasThemeSnapshot;
 // `__register_on_auto_arrange_diagram` is the registrar `#[on_command]` generates
 // next to the handler; `register_commands!` in `ui::commands` names the observer by
 // path, so the generated helper has to travel with it through this re-export.
+pub(crate) use loads::on_drill_into_class_requested;
+pub(crate) use loads::DrillIntoClassRequested;
+pub(crate) use ops::on_apply_ops_requested;
+pub(crate) use ops::ApplyOpsRequested;
 pub use ops::{
     __register_on_auto_arrange_diagram, active_class_for_doc, active_class_for_doc_ctx,
-    apply_ops_public, on_auto_arrange_diagram,
+    apply_ops_public,
 };
 // Op-application core moved to the egui-free `crate::doc_ops` module.
 pub use crate::doc_ops::{apply_one_op_as, drain_pending_structural_ops, PendingStructuralOps};
@@ -400,15 +404,14 @@ impl Default for CanvasDocState {
 /// Per-panel state carried across frames. Stored as a Bevy resource
 /// so the panel's `render` can pull it out via `world.resource_mut`.
 ///
-/// State is sharded per-document — each open model tab has its own
-/// [`crate::ui::panels::canvas_diagram::CanvasDocState`] entry so viewport/selection/projection/context
-/// menu never bleed between tabs. `fallback` is used only when no
-/// document is bound (startup, every tab closed).
 /// Per-tab key for [`CanvasDiagramState`]. Each tab owns its own
 /// `CanvasDocState` (viewport, selection, scene, projection task)
 /// so two tabs viewing the same `(doc, drilled_class)` can pan,
 /// zoom, and select independently.
 pub type CanvasKey = crate::model_tabs_types::TabId;
+/// Reserved key for the singleton diagram panel when no model-tab render
+/// context is installed. Model tabs allocate ids from one upward.
+const SINGLETON_TAB_KEY: CanvasKey = 0;
 
 #[derive(Resource, Default)]
 pub struct CanvasDiagramState {
@@ -416,7 +419,11 @@ pub struct CanvasDiagramState {
     /// Doc-id sidecar for fast `drop_doc(doc)` and `iter_doc_ids`.
     /// Updated on every `get_mut_for_tab` insert.
     tab_doc: std::collections::HashMap<CanvasKey, lunco_doc::DocumentId>,
-    fallback: CanvasDocState,
+    /// Canvas state for the mounted diagram before it has a document.
+    /// This is intentionally separate from document state so an empty
+    /// workbench cannot accidentally mutate or display another document's
+    /// scene.
+    unbound: CanvasDocState,
     /// Parse→project handoff slot. When a driver (duplicate, drill-in,
     /// file-load) resolves its parse task, it moves its `StatusBus`
     /// `BusyHandle` here so the bus stays busy for `Document(doc_id)`
@@ -452,7 +459,7 @@ impl CanvasDiagramState {
         self.pending_projection_handoff.insert(doc, handle);
     }
 
-    /// Mark every open tab (and the shared fallback) for a one-shot
+    /// Mark every document-bound tab for a one-shot
     /// re-projection. Called when the MSL standard library becomes resident so
     /// diagrams projected before its icons were available re-resolve them
     /// (otherwise standard-library components stay as blank boxes until the
@@ -461,7 +468,6 @@ impl CanvasDiagramState {
         for st in self.per_tab.values_mut() {
             st.force_reproject = true;
         }
-        self.fallback.force_reproject = true;
     }
 
     /// Drop the handoff handle for `doc`, if any. Called from
@@ -472,33 +478,11 @@ impl CanvasDiagramState {
         self.pending_projection_handoff.remove(&doc);
     }
 
-    /// Legacy single-doc lookup. Resolves to the first tab viewing
-    /// `doc`, or the shared fallback when `doc` is `None` /
-    /// no tab has been opened yet. Non-render callers (event
-    /// observers, ops layer) still use this; the canvas render path
-    /// keys explicitly by `get_for_tab`.
-    pub fn get(&self, doc: Option<lunco_doc::DocumentId>) -> &CanvasDocState {
-        match doc.and_then(|d| self.first_tab_for(d)) {
-            Some(tab_id) => self.per_tab.get(&tab_id).unwrap_or(&self.fallback),
-            None => &self.fallback,
-        }
-    }
-
-    /// Legacy mutable lookup; routes to the first tab viewing
-    /// `doc`. **Does not allocate** on a `None`/missing-doc path —
-    /// returns the fallback. Callers that *need* an entry should
-    /// pass an explicit `tab_id` via `get_mut_for_tab`.
-    pub fn get_mut(&mut self, doc: Option<lunco_doc::DocumentId>) -> &mut CanvasDocState {
-        match doc.and_then(|d| self.first_tab_for(d)) {
-            Some(tab_id) => self.per_tab.get_mut(&tab_id).unwrap_or(&mut self.fallback),
-            None => &mut self.fallback,
-        }
-    }
-
-    /// Read-only view scoped to a specific tab. Returns the
-    /// fallback when `tab_id` has no entry yet — first-render path.
+    /// Read-only view scoped to a specific tab.
     pub fn get_for_tab(&self, tab_id: CanvasKey) -> &CanvasDocState {
-        self.per_tab.get(&tab_id).unwrap_or(&self.fallback)
+        self.per_tab
+            .get(&tab_id)
+            .expect("canvas tab state must be initialized before reading")
     }
 
     /// Mutable per-tab view, creating the entry on first access.
@@ -521,6 +505,39 @@ impl CanvasDiagramState {
         entry
     }
 
+    /// Read the state owned by the render tab. An unbound tab has an
+    /// independent empty canvas until a document is attached.
+    pub fn get_for_render(
+        &self,
+        render_tab_id: Option<CanvasKey>,
+        doc: Option<lunco_doc::DocumentId>,
+    ) -> &CanvasDocState {
+        match doc {
+            Some(_) => {
+                let tab_id = render_tab_id.unwrap_or(SINGLETON_TAB_KEY);
+                self.get_for_tab(tab_id)
+            }
+            None => &self.unbound,
+        }
+    }
+
+    /// Mutably access the state owned by the render tab, creating it at the
+    /// first paint. Document-bound state records its document identity;
+    /// unbound state remains outside the document index.
+    pub fn get_mut_for_render(
+        &mut self,
+        render_tab_id: Option<CanvasKey>,
+        doc: Option<lunco_doc::DocumentId>,
+    ) -> &mut CanvasDocState {
+        match doc {
+            Some(doc) => {
+                let tab_id = render_tab_id.unwrap_or(SINGLETON_TAB_KEY);
+                self.get_mut_for_tab(tab_id, doc)
+            }
+            None => &mut self.unbound,
+        }
+    }
+
     /// Stash a hot-exit-restored [`lunco_canvas::Viewport`] for `doc`.
     /// Applied to the doc's first tab when it's created (see
     /// [`get_mut_for_tab`](Self::get_mut_for_tab)). Called by the Modelica
@@ -536,52 +553,9 @@ impl CanvasDiagramState {
         self.tab_doc.iter().map(|(&tab, &doc)| (tab, doc))
     }
 
-    /// Render-context lookup: route to the active tab when one is in
-    /// scope (during a panel render), fall back to first-tab
-    /// semantics otherwise (observers, off-render systems).
-    ///
-    /// This is the canonical lookup for code that runs inside the
-    /// canvas render path or any UI handler called from it
-    /// (right-click menus, palette drop, etc.). Outside render the
-    /// `TabRenderContext.tab_id` is `None` and we fall back to the
-    /// first-tab path — matches the legacy single-tab behaviour
-    /// per-doc, which is what observer-time code wants.
-    pub fn get_for_render(
-        &self,
-        render_tab_id: Option<CanvasKey>,
-        doc: Option<lunco_doc::DocumentId>,
-    ) -> &CanvasDocState {
-        match render_tab_id {
-            Some(t) => self.get_for_tab(t),
-            None => self.get(doc),
-        }
-    }
-
-    /// Mutable counterpart of `get_for_render`. When both
-    /// `render_tab_id` and `doc` are populated, allocates a per-tab
-    /// entry; otherwise routes through the legacy first-tab path.
-    pub fn get_mut_for_render(
-        &mut self,
-        render_tab_id: Option<CanvasKey>,
-        doc: Option<lunco_doc::DocumentId>,
-    ) -> &mut CanvasDocState {
-        match (render_tab_id, doc) {
-            (Some(t), Some(d)) => self.get_mut_for_tab(t, d),
-            _ => self.get_mut(doc),
-        }
-    }
-
-    // `get_for(doc, drilled)` / `get_mut_for(doc, drilled)` migration
-    // shims deleted. The `drilled` argument was always ignored
-    // (drilled scopes are independent tabs since the Phase-1 tab
-    // refactor) and no callers remained outside test code. Use
-    // `get_for_render` / `get_mut_for_render` for tab-aware lookups
-    // or `get` / `get_mut` for the legacy first-tab fallback.
-
     /// First TabId viewing `doc`. Determinism is best-effort
-    /// (HashMap iteration); non-render callers don't care which
-    /// tab they get because the underlying scene/source is
-    /// identical across tabs of the same `(doc, drilled)`.
+    /// (HashMap iteration); use only for document-scoped operations
+    /// that intentionally fan out to one representative tab.
     fn first_tab_for(&self, doc: lunco_doc::DocumentId) -> Option<CanvasKey> {
         self.tab_doc
             .iter()
@@ -631,13 +605,19 @@ impl CanvasDiagramState {
         self.first_tab_for(doc).and_then(|t| self.per_tab.get(&t))
     }
 
+    /// Mutable state for one document, when a tab for that document exists.
+    /// Callers that create UI state must use [`Self::get_mut_for_tab`] with
+    /// the owning tab id instead of silently allocating a shared document
+    /// state.
+    pub fn get_mut_for_doc(&mut self, doc: lunco_doc::DocumentId) -> Option<&mut CanvasDocState> {
+        let tab = self.first_tab_for(doc)?;
+        self.per_tab.get_mut(&tab)
+    }
+
     /// Has any tab on this doc ever been projected?
     pub fn has_entry(&self, doc: lunco_doc::DocumentId) -> bool {
         self.first_tab_for(doc).is_some()
     }
-
-    // `has_entry_for(doc, drilled)` migration shim deleted.
-    // No callers; use `has_entry(doc)` directly.
 
     /// Has *this specific tab* ever been projected? Renders the
     /// canvas use this to force a first-paint projection on a

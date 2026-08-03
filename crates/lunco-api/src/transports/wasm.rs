@@ -34,7 +34,7 @@ pub fn set_wasm_bridge(bridge: HttpBridge) {
     WASM_BRIDGE.with(|b| *b.borrow_mut() = Some(bridge));
 }
 
-/// JS-callable command bridge. Accepts the same `{"command"|"type", ...}`
+/// JS-callable command bridge. Accepts the same `{"command","params"}`
 /// envelope as the HTTP API and returns the JSON response envelope as a
 /// string. Resolves a Promise on the JS side.
 #[wasm_bindgen]
@@ -47,7 +47,8 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
 
     let req: ApiRequest = serde_json::from_str::<ApiRequestUnified>(&json)
         .map_err(|e| JsValue::from_str(&format!("lunco_api: bad request JSON: {e}")))?
-        .into();
+        .try_into()
+        .map_err(|e| JsValue::from_str(&format!("lunco_api: invalid request: {e}")))?;
 
     let resp = bridge
         .execute(req)

@@ -40,7 +40,7 @@ use std::thread;
 
 /// Typed identity for a Modelica class across the workbench.
 ///
-/// Replaces the legacy string ID schemes (`msl_path:`, `bundled://…#`,
+/// Replaces the former string ID schemes (`msl_path:`, `bundled://…#`,
 /// raw file paths, `mem://`) with a single `ClassRef { library, path }`
 /// value that flows through opening, drill-in, tab dedup, projection
 /// target lookup, and documentation lookup. See module docs for the
@@ -1755,7 +1755,7 @@ fn build_modelica_core(app: &mut App) {
     // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
     // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
     // adds core first, so the GUI still gets them. Guarded/idempotent so the
-    // UI's own `WorkbenchState`/registry init (a legacy safety net) is a no-op.
+    // UI and headless hosts share the same idempotent initialization.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
     app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
@@ -2013,20 +2013,6 @@ pub struct FrameTimeProbe {
     post_update_ms: f64,
     last_edit: Option<web_time::Instant>,
 }
-
-// ---------------------------------------------------------------------------
-// Re-export AST extraction for public API compatibility
-// ---------------------------------------------------------------------------
-// These functions live in `ast_extract` but are re-exported here so external
-// callers (workbench binaries, UI panels) can import from the crate root.
-pub use ast_extract::{
-    extract_input_names_from_ast, extract_inputs_with_defaults,
-    extract_inputs_with_defaults_from_ast, extract_model_name, extract_model_name_from_ast,
-    extract_parameters, extract_parameters_from_ast, hash_content, parse_model_interface,
-    ModelInterface,
-};
-// `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
-// above and is available publicly through the `pub mod ast_extract` declaration.
 
 // ---------------------------------------------------------------------------
 // Re-export diagram types for public API

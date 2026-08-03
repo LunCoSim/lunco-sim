@@ -52,7 +52,7 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::{ChildOf, Entity, Name};
+use bevy::prelude::{ChildOf, Entity, Event, Name, On};
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_usd_bevy::UsdPrimPath;
@@ -68,6 +68,21 @@ use crate::{LINE_PLOT_KIND, VIZ_PANEL_KIND};
 /// Panel id — new id, not the deleted stub's `"telemetry"`, so stale
 /// saved layouts referencing the tombstone don't resurrect over us.
 pub const TELEMETRY_BROWSER_PANEL_ID: PanelId = PanelId("telemetry_browser");
+
+/// Insert a newly configured visualization after the browser has finished
+/// painting. The panel emits the domain operation; the observer owns the
+/// registry mutation.
+#[derive(Event)]
+pub(crate) struct OpenVisualizationRequested {
+    pub(crate) config: VisualizationConfig,
+}
+
+pub(crate) fn on_open_visualization_requested(
+    trigger: On<OpenVisualizationRequested>,
+    mut registry: bevy::prelude::ResMut<VisualizationRegistry>,
+) {
+    registry.insert(trigger.config.clone());
+}
 
 // ── Drag payload + canvas-host doors ─────────────────────────────────
 
@@ -1078,9 +1093,7 @@ impl Panel for TelemetryBrowserPanel {
                 style: serde_json::Value::Null,
             };
             let instance = cfg.id.raw();
-            ctx.defer(move |world| {
-                world.resource_mut::<VisualizationRegistry>().insert(cfg);
-            });
+            ctx.trigger(OpenVisualizationRequested { config: cfg });
             ctx.trigger(OpenTab {
                 kind: VIZ_PANEL_KIND,
                 instance,

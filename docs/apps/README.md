@@ -58,7 +58,8 @@ Launch with `--api` and drive the sim over HTTP (POST to `/api/commands`) or via
 the MCP server for AI agents.
 
 - **Command format:** `{"command":"<Name>","params":{...}}`. Meta queries use
-  `{"type":"DiscoverSchema"}` / `{"type":"ListEntities"}` / `{"type":"QueryEntity","id":<n>}`.
+  `{"command":"DiscoverSchema","params":{}}`, `{"command":"ListEntities","params":{}}`,
+  and `{"command":"QueryEntity","params":{"id":<n>}}`.
 - **The command set is discovered, not hard-coded.** New `#[Command]` types
   self-register; enumerate the live surface with `DiscoverSchema` (HTTP) or the
   `discover_schema` MCP tool. Built-in read queries: `ListEntities`,

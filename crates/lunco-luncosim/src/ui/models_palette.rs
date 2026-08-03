@@ -115,11 +115,7 @@ fn models_palette_content(
             ); // A bit brighter than background
             ui.label(egui::RichText::new(p.title()).strong());
             if ui.button("Cancel").clicked() {
-                ctx.defer(|world| {
-                    if let Some(mut s) = world.get_resource_mut::<AttachState>() {
-                        *s = AttachState::Idle;
-                    }
-                });
+                ctx.set_resource(AttachState::Idle);
             }
         });
         ui.label(
@@ -155,11 +151,7 @@ fn models_palette_content(
             } else {
                 AttachState::Pending(item)
             };
-            ctx.defer(move |world| {
-                if let Some(mut s) = world.get_resource_mut::<AttachState>() {
-                    *s = new_state;
-                }
-            });
+            ctx.set_resource(new_state);
         }
     }
 

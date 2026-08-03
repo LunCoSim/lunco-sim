@@ -14,6 +14,23 @@ use crate::state::ModelicaDocumentRegistry;
 use crate::ui::document_openings::{DocumentOpenings, OpeningState};
 use bevy::prelude::*;
 
+/// Open a Modelica class selected in a canvas node through the asynchronous
+/// domain loader. The panel only carries the qualified class name.
+#[derive(Event)]
+pub(crate) struct DrillIntoClassRequested {
+    pub(crate) qualified: String,
+}
+
+pub(crate) fn on_drill_into_class_requested(
+    trigger: On<DrillIntoClassRequested>,
+    mut commands: Commands,
+) {
+    let qualified = trigger.qualified.clone();
+    commands.queue(move |world: &mut World| {
+        drill_into_class(world, &qualified);
+    });
+}
+
 /// Tab-to-class binding for drill-in tabs whose document hasn't
 /// been installed in the registry yet. Stored in
 /// [`crate::ui::document_openings::DocumentOpenings`] under

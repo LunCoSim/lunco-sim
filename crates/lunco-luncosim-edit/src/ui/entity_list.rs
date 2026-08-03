@@ -475,23 +475,10 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // + toggle (multi-select), plain click = replace. The Inspector reads the
     // updated `SelectedEntities` later in this same egui pass.
     if let Some((entity, shift_held)) = to_select {
-        ctx.defer(move |world| {
-            let old: Vec<Entity> = world
-                .query_filtered::<Entity, With<crate::selection::Selected>>()
-                .iter(world)
-                .collect();
-            world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
-                let mut commands = world.commands();
-                crate::selection::apply_selection(
-                    &mut commands,
-                    &mut selected,
-                    old,
-                    entity,
-                    shift_held,
-                    shift_held,
-                );
-            });
-            world.flush();
+        ctx.trigger(crate::selection::SelectEntityTarget {
+            target: entity,
+            extend: shift_held,
+            toggle: shift_held,
         });
     }
 
@@ -499,17 +486,15 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // command the API exposes. Works for anything with an API id — no collider
     // required (this is list-driven, not a viewport raycast).
     if let Some(entity) = to_focus {
-        ctx.defer(move |world| {
-            if let Some(id) = world
-                .get_resource::<lunco_api::registry::ApiEntityRegistry>()
-                .and_then(|r| r.api_id_for(entity))
-                .map(|g| g.get())
-            {
-                world.trigger(crate::commands::FocusEntityById {
-                    entity_id: id,
-                    distance: 0.0,
-                });
-            }
-        });
+        let id = ctx
+            .resource::<lunco_api::registry::ApiEntityRegistry>()
+            .and_then(|r| r.api_id_for(entity))
+            .map(|g| g.get());
+        if let Some(id) = id {
+            ctx.trigger(crate::commands::FocusEntityById {
+                entity_id: id,
+                distance: 0.0,
+            });
+        }
     }
 }

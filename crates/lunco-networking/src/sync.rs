@@ -1015,12 +1015,11 @@ pub fn apply_sync_command(
         // PANICKING when none apply (e.g. a struct still missing a no-`Default`
         // field). Verify the value is fully constructible first so a malformed
         // *wire* command logs and is dropped instead of killing the host. Mirrors
-        // the same guard in `lunco-api`'s `api_command_dispatcher`. (Types without
-        // a registered `ReflectFromReflect` keep the legacy path.)
+        // the same guard in `lunco-api`'s `api_command_dispatcher`. A command
+        // without a registered constructor is not safe to trigger and is dropped.
         let constructible = registration
             .data::<bevy::reflect::ReflectFromReflect>()
-            .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
-            .unwrap_or(true);
+            .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
         if !constructible {
             warn!("[sync] command '{type_name}' not constructible from params (missing/invalid fields); dropped");
             return;

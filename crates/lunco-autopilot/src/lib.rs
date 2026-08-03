@@ -203,11 +203,9 @@ pub struct DriveCtx {
 }
 
 // `ToolInvocation` and `ToolFired` are the shared tool-call vocabulary. They
-// live in `lunco-core` (see `lunco_core::tools`) so that handler crates can
-// observe `ToolFired` without depending on this crate — instruments must not
-// depend on the driver. Re-exported here so existing `lunco_autopilot::`
-// references keep resolving.
-pub use lunco_core::tools::{ToolFired, ToolInvocation};
+// live in `lunco-core` so handler crates can observe `ToolFired` without
+// depending on this driver crate.
+use lunco_core::tools::{ToolFired, ToolInvocation};
 
 /// Data description of an autopilot behaviour tree — authored as rhai/JSON DATA
 /// (the glue), compiled by [`build_tree`] into a [`lunco_behavior`] tree whose
@@ -235,10 +233,9 @@ pub use lunco_core::tools::{ToolFired, ToolInvocation};
 /// engine injects them into the compiled tree (see `build_patrol`). rhai/JSON
 /// authors *data*, not trees.
 ///
-/// **Backward-compat serde:** a bare `[x, y, z]` array deserializes into a
-/// waypoint at that position with no actions and no dwell, so the legacy
-/// `waypoints: [[x,y,z], ...]` shape (used by `patrol.rhai` and Alt+LMB)
-/// keeps working unchanged.
+/// **Compact-form serde:** a bare `[x, y, z]` array deserializes into a
+/// waypoint at that position with no actions and no dwell. Use the object
+/// form when a waypoint needs `dwell` or `on_arrival` actions.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PatrolWaypoint {
     /// World-space position `[x, y, z]`.
@@ -280,12 +277,8 @@ pub enum WaypointAction {
     },
 }
 
-// A bare `[x, y, z]` array deserializes to a no-action `PatrolWaypoint`. This is
-// NOT a compat shim to be swept away: it is the shorthand `patrol.rhai` documents
-// and every scenario that just wants positions uses (`engage_patrol(rover,
-// [[10,0,0], [10,0,10]])`). The object shape is what you reach for only when a
-// waypoint carries `dwell` or `on_arrival`. Deleting this arm breaks authored
-// scenarios, not old files.
+// A bare `[x, y, z]` array is the compact no-action waypoint form. The object
+// shape is used when a waypoint carries `dwell` or `on_arrival`.
 //
 // NOTE: this dual-shape (array vs object) handling is JSON-only — it peeks at
 // `serde_json::Value` to pick the branch, so it won't work with bincode or other
@@ -309,7 +302,7 @@ impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
         //  2. `{pos: [...], dwell?, on_arrival?}` — full struct.
         let v = serde_json::Value::deserialize(d)?;
         if v.is_array() {
-            // Bare-array legacy form.
+            // Compact bare-array form.
             let p: [f32; 3] = serde_json::from_value(v).map_err(D::Error::custom)?;
             return Ok(PatrolWaypoint::at(p));
         }
@@ -377,9 +370,9 @@ pub enum BehaviorSpec {
     /// node. See [`build_tree`].
     Patrol {
         /// Ordered waypoints. Each carries a position + optional per-waypoint
-        /// dwell and arrival actions (e.g. `take_photo`). Accepts the legacy
-        /// `[[x,y,z], ...]` bare-array shape (no actions) for backward compat
-        /// with existing rhai/JSON — see [`PatrolWaypoint`]'s serde impl.
+        /// dwell and arrival actions (e.g. `take_photo`). Accepts the compact
+        /// `[[x,y,z], ...]` bare-array shape (no actions) — see
+        /// [`PatrolWaypoint`]'s serde implementation.
         waypoints: Vec<PatrolWaypoint>,
         /// Cruise speed `[0, 1]`.
         #[serde(default = "default_speed")]

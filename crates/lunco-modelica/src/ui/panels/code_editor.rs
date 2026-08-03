@@ -82,6 +82,50 @@ pub(crate) fn on_editor_settings_changed(
     buffer.auto_indent = trigger.event().auto_indent;
 }
 
+/// Mirror the current text buffer into the workbench view-model after paint.
+#[derive(Event)]
+pub(crate) struct EditorBufferChanged {
+    pub(crate) text: String,
+}
+
+/// Flush a debounced editor buffer through the canonical Modelica operation
+/// path. The observer owns the domain mutation; the panel only emits the doc id.
+#[derive(Event, Clone, Copy)]
+pub(crate) struct CommitEditorBufferRequested {
+    pub(crate) doc: lunco_doc::DocumentId,
+}
+
+/// Ensure the editor state resource exists when a host starts without the
+/// Modelica UI plugin's normal startup insertion.
+#[derive(Event, Clone, Copy, Default)]
+pub(crate) struct EnsureEditorBufferState;
+
+pub(crate) fn on_editor_buffer_changed(
+    trigger: On<EditorBufferChanged>,
+    mut state: ResMut<WorkbenchState>,
+) {
+    if state.editor_buffer != trigger.text {
+        state.editor_buffer = trigger.text.clone();
+    }
+}
+
+pub(crate) fn on_commit_editor_buffer_requested(
+    trigger: On<CommitEditorBufferRequested>,
+    mut commands: Commands,
+) {
+    let doc = trigger.doc;
+    commands.queue(move |world: &mut World| {
+        commit_pending_buffer(world, doc);
+    });
+}
+
+pub(crate) fn on_ensure_editor_buffer_state(
+    _trigger: On<EnsureEditorBufferState>,
+    mut commands: Commands,
+) {
+    commands.init_resource::<EditorBufferState>();
+}
+
 /// Tracks which model the editor buffer belongs to, to detect model switches.
 #[derive(Resource)]
 pub struct EditorBufferState {
@@ -411,10 +455,7 @@ impl Panel for CodeEditorPanel {
                 }
                 None => (None, false, 0),
             };
-            let (compilation_error, selected_entity, is_loading) = {
-                let entity = ctx
-                    .resource::<WorkbenchState>()
-                    .and_then(|s| s.selected_entity);
+            let (compilation_error, is_loading) = {
                 // Any in-flight stage on the bus for this doc — covers
                 // file-load, drill-in, duplicate, reparse. Same predicate
                 // the canvas overlay uses; no per-panel loading-state
@@ -435,7 +476,7 @@ impl Panel for CodeEditorPanel {
                     ctx.resource::<lunco_doc_bevy::DocumentDiagnostics>()
                         .and_then(|cs| cs.error_message(d).map(str::to_string))
                 });
-                (err, entity, loading)
+                (err, loading)
             };
 
             if is_loading {
@@ -535,21 +576,9 @@ impl Panel for CodeEditorPanel {
             // `apply_document_undo` / `apply_document_redo` below).
             let _ = (display_name, compilation_error);
 
-            // Resolve the DocumentId for the currently-shown model so the
-            // focus-loss commit below writes into it. Active document
-            // wins (this *is* a per-tab editor — it's looking at the
-            // focused doc by definition); fall back to the legacy
-            // `selected_entity → document_of(entity)` lookup only when
-            // there's no active document, which covers the brief window
-            // before workspace state is initialised.
             // Use this tab's resolved doc (TabRenderContext-aware) so a
             // split-Text edit commits into the right document.
-            let doc_id = tab_target.or_else(|| {
-                selected_entity.and_then(|e| {
-                    ctx.resource::<ModelicaDocumentRegistry>()
-                        .and_then(|r| r.document_of(e))
-                })
-            });
+            let doc_id = tab_target;
 
             // ── Settings menu (gear button) ──
             //
@@ -1113,12 +1142,8 @@ impl Panel for CodeEditorPanel {
                 buf_state.pending_commit_at = Some(now);
 
                 let workbench_buffer = new_text.clone();
-                ctx.defer(move |world| {
-                    if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
-                        if state.editor_buffer != workbench_buffer {
-                            state.editor_buffer = workbench_buffer;
-                        }
-                    }
+                ctx.trigger(EditorBufferChanged {
+                    text: workbench_buffer,
                 });
 
                 // Egui doesn't repaint a stationary UI on its own. When
@@ -1154,17 +1179,13 @@ impl Panel for CodeEditorPanel {
                     // reinserted when this scope returns, BEFORE deferred
                     // closures run — so the deferred commit re-reads the
                     // up-to-date `EditorBufferState` from the world.
-                    ctx.defer(move |world| {
-                        crate::ui::panels::code_editor::commit_pending_buffer(world, doc);
-                    });
+                    ctx.trigger(CommitEditorBufferRequested { doc });
                 }
             }
         });
 
         if present.is_none() {
-            ctx.defer(|w| {
-                w.init_resource::<EditorBufferState>();
-            });
+            ctx.trigger(EnsureEditorBufferState);
         }
     }
 }

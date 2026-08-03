@@ -876,7 +876,7 @@ mod tests {
     }
 
     /// Per-perspective docks round-trip through serde, and the written form
-    /// carries NO legacy single-`dock` field (one form). In-memory — avoids
+    /// carries no single-`dock` field. In-memory — avoids
     /// the process-global `LUNCOSIM_CONFIG` env var the disk test above
     /// uses, so it can run in parallel with it.
     #[test]

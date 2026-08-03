@@ -100,7 +100,7 @@ pub fn preferred_wgpu_settings() -> WgpuSettings {
             // every native backend (including DX12) was still enabled. DX12
             // needs indirect-call validation, but Vulkan does not; leaving it
             // on makes wgpu create an internal compute pipeline during device
-            // creation. Some legacy Vulkan drivers lose the device at exactly
+            // creation. Some older Vulkan drivers lose the device at exactly
             // that pipeline, before our render-health recovery can start.
             //
             // Keep an explicit diagnostic override intact. This mirrors Bevy's
@@ -396,7 +396,7 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     );
 }
 
-/// Override an optimistic feature probe for the one legacy adapter on which the
+/// Override an optimistic feature probe for the one older adapter on which the
 /// first GPU-preprocessing/material frame loses the device.
 fn force_cpu_preprocessing(
     adapter: Res<RenderAdapterInfo>,

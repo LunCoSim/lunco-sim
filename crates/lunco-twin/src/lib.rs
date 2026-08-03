@@ -72,7 +72,7 @@ mod manifest;
 pub use document_kind_registry::DocumentKindRegistryPlugin;
 pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 pub use error::TwinError;
-pub use file_kind::{DocumentKind, FileEntry, FileKind};
+pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
     glob_matches, JournalManifest, TwinChildRef, TwinManifest, UsdManifest, DEFAULT_SCENE_GLOBS,
     MANIFEST_FILENAME,

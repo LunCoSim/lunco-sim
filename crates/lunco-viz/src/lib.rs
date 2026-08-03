@@ -96,6 +96,10 @@ impl Plugin for LuncoVizPlugin {
         .register_visualization::<LinePlot>()
         .register_instance_panel(VizPanel::default())
         .register_panel(TelemetryBrowserPanel::default())
+        .add_observer(kinds::line_plot::on_line_plot_edit_requested)
+        .add_observer(kinds::line_plot::on_line_plot_fit_requested)
+        .add_observer(panel::on_bind_channel_requested)
+        .add_observer(telemetry_browser::on_open_visualization_requested)
         // A plot config survives scene replacement; its Bevy entity does not.
         // Reconcile after the scene has had a chance to publish replacement
         // content IDs, before the next UI frame reads the config.

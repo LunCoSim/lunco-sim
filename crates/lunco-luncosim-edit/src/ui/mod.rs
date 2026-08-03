@@ -404,6 +404,20 @@ impl Plugin for SandboxEditUiPlugin {
         // (which `PanelCtx` can't gather in paint) from `InspectorView`,
         // produced each frame by an exclusive system before the egui pass.
         app.init_resource::<inspector::InspectorView>();
+        app.init_resource::<inspector::ShaderSchemaCache>();
+        app.add_observer(inspector::on_inspector_component_edit)
+            .add_observer(inspector::on_projection_edit_requested)
+            .add_observer(inspector::on_usd_attribute_edit_requested)
+            .add_observer(inspector::on_usd_variant_edit_requested)
+            .add_observer(inspector::on_mount_snap_requested)
+            .add_observer(inspector::on_shader_swap_requested)
+            .add_observer(inspector::on_shader_create_requested)
+            .add_observer(inspector::on_shader_import_requested)
+            .add_observer(inspector::on_shader_parameters_requested)
+            .add_observer(inspector::on_pbr_material_requested)
+            .add_observer(inspector::on_modelica_parameter_requested);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_observer(inspector::on_attach_at_socket_requested);
         app.add_view_model(
             inspector::populate_inspector_view,
             inspector::inspector_inputs_changed,
@@ -430,6 +444,8 @@ impl Plugin for SandboxEditUiPlugin {
         // behaviour spec. The canvas's layout only rebuilds when that source
         // changes, never while the simulation is ticking.
         app.init_resource::<autopilot_canvas::AutopilotCanvasState>();
+        app.add_observer(autopilot_canvas::on_write_mission_requested)
+            .add_observer(autopilot_canvas::on_create_mission_requested);
         app.add_view_model_every_frame(autopilot_canvas::produce_autopilot_canvas);
 
         // USD prim tree: same main-thread producer pattern (the stage is

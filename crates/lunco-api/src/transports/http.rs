@@ -1,12 +1,12 @@
 use crate::{
-    schema::{ApiRequest, ApiResponse},
+    schema::{ApiErrorCode, ApiRequest, ApiResponse},
     transports::envelope::{ApiRequestUnified, ApiResponseEnvelope},
     transports::HttpBridge,
 };
 use axum::{
     extract::{Json, State},
     http::{header, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use std::time::Duration;
 
@@ -22,9 +22,21 @@ const SYNC_POLL_INTERVAL: Duration = Duration::from_millis(15);
 pub async fn handle_api_commands(
     State(bridge): State<HttpBridge>,
     Json(req): Json<ApiRequestUnified>,
-) -> impl IntoResponse {
-    let api_req: ApiRequest = req.into();
-    execute_api_request(bridge, api_req).await
+) -> Response {
+    let api_req: ApiRequest = match req.try_into() {
+        Ok(req) => req,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ApiResponseEnvelope::from(ApiResponse::error(
+                    ApiErrorCode::DeserializationError,
+                    error,
+                ))),
+            )
+                .into_response();
+        }
+    };
+    execute_api_request(bridge, api_req).await.into_response()
 }
 
 /// Map a serialized [`lunco_core::CommandOutcome`] to a terminal status string.

@@ -80,7 +80,8 @@ use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_workbench::{
-    Panel, PanelCtx, PanelId, PanelRects, PanelSlot, ScenePickGate, SceneTarget, WorkbenchAppExt,
+    Panel, PanelCtx, PanelId, PanelRect, PanelRects, PanelSlot, ScenePickGate, SceneTarget,
+    WorkbenchAppExt,
 };
 
 use crate::document::UsdDocument;
@@ -129,6 +130,8 @@ impl Plugin for UsdViewportPlugin {
         app.add_observer(on_doc_opened_for_viewport);
         app.add_observer(on_doc_changed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
+        app.add_observer(on_viewport_measured);
+        app.add_observer(on_viewport_orbit_input);
         app.add_systems(
             Update,
             (propagate_preview_render_layer, resize_viewport_image),
@@ -231,6 +234,56 @@ pub struct UsdViewportState {
     /// Pointer-driven orbit pose. Pushed onto the camera each input
     /// frame the panel receives drag / scroll input.
     pub orbit: OrbitCamera,
+}
+
+/// UI measurement emitted by the viewport panel after egui lays out its body.
+/// The observer owns the workbench interaction resources; the panel only
+/// publishes this narrow fact.
+#[derive(Event, Clone, Copy, Debug)]
+struct UsdViewportMeasured {
+    rect: PanelRect,
+    over_scene: bool,
+}
+
+/// Pointer input emitted by the viewport panel. Camera state and the camera
+/// entity are updated by the observer, outside the egui paint borrow.
+#[derive(Event, Clone, Copy, Debug)]
+struct UsdViewportOrbitInput {
+    drag: egui::Vec2,
+    scroll_y: f32,
+}
+
+fn on_viewport_measured(
+    trigger: On<UsdViewportMeasured>,
+    mut rects: ResMut<PanelRects>,
+    mut gate: ResMut<ScenePickGate>,
+) {
+    rects.record(USD_VIEWPORT_PANEL_ID, trigger.event().rect);
+    gate.record_scene_leaf(
+        SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
+        trigger.event().over_scene,
+    );
+}
+
+fn on_viewport_orbit_input(
+    trigger: On<UsdViewportOrbitInput>,
+    mut state: ResMut<UsdViewportState>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let input = trigger.event();
+    if input.drag == egui::Vec2::ZERO && input.scroll_y == 0.0 {
+        return;
+    }
+    if input.drag != egui::Vec2::ZERO {
+        state.orbit.apply_drag(input.drag);
+    }
+    if input.scroll_y != 0.0 {
+        state.orbit.apply_zoom(input.scroll_y);
+    }
+    let Some(camera) = state.camera else { return };
+    if let Ok(mut transform) = transforms.get_mut(camera) {
+        *transform = state.orbit.transform();
+    }
 }
 
 impl UsdViewportState {
@@ -698,14 +751,9 @@ impl Panel for UsdViewportPanel {
         // `resize_viewport_image` can match the offscreen Image's
         // pixel dimensions to it next tick. Measured here from the
         // read-only `ui` (before any widgets draw, so the rect reflects
-        // the full panel body) and written after paint via `defer` —
-        // the panel has no `&mut World`.
+        // the full panel body) and emitted after paint via a typed event —
+        // the panel has no domain-world access.
         let panel_rect = PanelRects::panel_rect_from_ui(ui);
-        ctx.defer(move |world| {
-            if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
-                rects.record(USD_VIEWPORT_PANEL_ID, panel_rect);
-            }
-        });
 
         let (tex_id, active_doc) = ctx
             .resource::<UsdViewportState>()
@@ -753,10 +801,9 @@ impl Panel for UsdViewportPanel {
         // panel's `available_rect_before_wrap()` up front, as the workbench viewport
         // leaf does, would have put this panel's title row inside its "scene".)
         let over_scene = ui.rect_contains_pointer(response.rect);
-        ctx.defer(move |world| {
-            if let Some(mut gate) = world.get_resource_mut::<ScenePickGate>() {
-                gate.record_scene_leaf(SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID), over_scene);
-            }
+        ctx.trigger(UsdViewportMeasured {
+            rect: panel_rect,
+            over_scene,
         });
 
         // Orbit: drag spins yaw/pitch, scroll zooms.
@@ -768,27 +815,7 @@ impl Panel for UsdViewportPanel {
             0.0
         };
         if drag != egui::Vec2::ZERO || scroll_y != 0.0 {
-            // Apply the orbit input after the egui pass — mutation needs
-            // `&mut World`, which the panel never holds during paint.
-            ctx.defer(move |world| {
-                let (camera_entity, transform) = {
-                    let mut state = world.resource_mut::<UsdViewportState>();
-                    if drag != egui::Vec2::ZERO {
-                        state.orbit.apply_drag(drag);
-                    }
-                    if scroll_y != 0.0 {
-                        state.orbit.apply_zoom(scroll_y);
-                    }
-                    (state.camera, state.orbit.transform())
-                };
-                if let Some(cam) = camera_entity {
-                    if let Ok(mut entity) = world.get_entity_mut(cam) {
-                        if let Some(mut tf) = entity.get_mut::<Transform>() {
-                            *tf = transform;
-                        }
-                    }
-                }
-            });
+            ctx.trigger(UsdViewportOrbitInput { drag, scroll_y });
         }
     }
 }

@@ -10,6 +10,17 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use crate::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
 use crate::SpawnState;
 
+/// Replace the spawn-palette state after the panel's paint pass.
+#[derive(Event)]
+pub(crate) struct SpawnStateRequested(pub(crate) SpawnState);
+
+pub(crate) fn on_spawn_state_requested(
+    trigger: On<SpawnStateRequested>,
+    mut state: ResMut<SpawnState>,
+) {
+    *state = trigger.0.clone();
+}
+
 /// Spawn palette panel — lists spawnable objects by category.
 pub struct SpawnPalette;
 
@@ -72,11 +83,7 @@ fn spawn_palette_content(
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("Placing: {id}")).color(tokens.success));
                 if ui.button("Cancel").clicked() {
-                    ctx.defer(|world| {
-                        if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
-                            *state = SpawnState::Idle;
-                        }
-                    });
+                    ctx.trigger(SpawnStateRequested(SpawnState::Idle));
                 }
             });
             ui.separator();
@@ -139,24 +146,16 @@ fn spawn_palette_content(
 
                     if response.clicked() {
                         let entry_id = entry.id.clone();
-                        ctx.defer(move |world| {
-                            if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
-                                if selected {
-                                    *state = SpawnState::Idle;
-                                } else {
-                                    *state = SpawnState::Selecting { entry_id };
-                                }
-                            }
-                        });
+                        ctx.trigger(SpawnStateRequested(if selected {
+                            SpawnState::Idle
+                        } else {
+                            SpawnState::Selecting { entry_id }
+                        }));
                     }
 
                     if response.drag_started() {
                         let entry_id = entry.id.clone();
-                        ctx.defer(move |world| {
-                            if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
-                                *state = SpawnState::Selecting { entry_id };
-                            }
-                        });
+                        ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
                     }
                 }
             });
@@ -169,10 +168,6 @@ fn spawn_palette_content(
 
     // Escape key handling
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) && is_selecting {
-        ctx.defer(|world| {
-            if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
-                *state = SpawnState::Idle;
-            }
-        });
+        ctx.trigger(SpawnStateRequested(SpawnState::Idle));
     }
 }

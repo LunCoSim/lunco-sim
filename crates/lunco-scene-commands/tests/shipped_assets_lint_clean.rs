@@ -229,7 +229,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         // that is absent aborts `lint_usd` — taking every OTHER rule down with it,
         // and reporting as an empty findings list. A fixture that omits keys is
         // testing a fact table we do not ship.
-        ("legacy_program_prims", empty()),
+        ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
     ]);
 
@@ -266,7 +266,7 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
         ("network_scopes", empty()),
-        ("legacy_program_prims", empty()),
+        ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
     ]);
 

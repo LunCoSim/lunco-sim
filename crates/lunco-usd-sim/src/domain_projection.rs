@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use lunco_modelica::{
-    parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice,
-    NoticeLevel,
+    ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    ModelicaNotice, NoticeLevel,
 };
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;

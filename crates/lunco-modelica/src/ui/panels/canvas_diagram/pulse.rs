@@ -346,7 +346,9 @@ pub fn drive_pending_api_focus(
         // Use first-tab projection to test "does this name resolve
         // *somewhere* yet?". The actual per-tab node id is
         // re-resolved in the fan-out.
-        let docstate = state.get(Some(entry.doc));
+        let Some(docstate) = state.get_for_doc(entry.doc) else {
+            continue;
+        };
         let resolved = docstate
             .canvas
             .scene

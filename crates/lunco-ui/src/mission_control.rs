@@ -8,7 +8,21 @@ use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
 use lunco_core::ControlBinding;
 use lunco_core::{Avatar, Spacecraft};
-use lunco_time::{TimeTransport, TransportMode, WorldTime};
+use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
+
+/// Change the host's possession arbitration policy from Mission Control.
+#[derive(Event, Clone, Copy)]
+pub struct SetPossessionPolicy {
+    /// The policy to apply to future claims.
+    pub policy: lunco_core::PossessionPolicy,
+}
+
+pub fn on_set_possession_policy(
+    trigger: On<SetPossessionPolicy>,
+    mut registry: ResMut<lunco_core::SessionRegistry>,
+) {
+    registry.set_policy(trigger.policy);
+}
 
 /// Mission Control panel — everything in one place.
 pub struct MissionControl;
@@ -31,8 +45,7 @@ impl Panel for MissionControl {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        // ── Snapshot all derived/resource state up front so every `ctx`
-        //    read borrow ends before any `ctx.defer` below. The panel reads
+        // ── Snapshot all derived/resource state up front. The panel reads
         //    the change-gated `MissionControlView` (no per-frame scans) plus
         //    O(1) networking resources.
         let theme = ctx.resource::<lunco_theme::Theme>().cloned();
@@ -116,7 +129,7 @@ impl Panel for MissionControl {
             ui.style_mut().visuals = t.to_visuals();
         }
 
-        // ── Intents collected during paint, emitted via `ctx.defer` after. ──
+        // ── Intents collected during paint, emitted after the read pass. ──
         let mut focus: Option<Entity> = None;
         let mut teleport_body_bits: Option<u64> = None;
         let mut possess: Option<Entity> = None;
@@ -331,67 +344,47 @@ impl Panel for MissionControl {
         // ── Emit collected intent after paint (read borrows released). ──
         if let Some(av) = avatar_ent {
             if let Some(target) = focus {
-                ctx.defer(move |world| {
-                    world.trigger(FocusTarget {
-                        avatar: Some(av),
-                        target,
-                    });
+                ctx.trigger(FocusTarget {
+                    avatar: Some(av),
+                    target,
                 });
             }
             if let Some(body_entity) = teleport_body_bits {
-                ctx.defer(move |world| {
-                    world.trigger(TeleportToSurface {
-                        target: av,
-                        body_entity,
-                    });
+                ctx.trigger(TeleportToSurface {
+                    target: av,
+                    body_entity,
                 });
             }
             if let Some(target) = possess {
-                ctx.defer(move |world| {
-                    world.trigger(PossessVessel {
-                        avatar: Some(av),
-                        target,
-                        bind_camera: true,
-                    });
+                ctx.trigger(PossessVessel {
+                    avatar: Some(av),
+                    target,
+                    bind_camera: true,
                 });
             }
             if release {
-                ctx.defer(move |world| {
-                    world.trigger(ReleaseVessel { target: av });
-                });
+                ctx.trigger(ReleaseVessel { target: av });
             }
             if leave_surface && gravity_body.is_some() {
-                ctx.defer(move |world| {
-                    world.trigger(LeaveSurface { target: av });
-                });
+                ctx.trigger(LeaveSurface { target: av });
             }
         }
 
         if toggle_pause {
             let cur = clock_state.map(|(_, p, _)| p).unwrap_or(false);
-            ctx.defer(move |world| {
-                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                    t.mode = if cur {
-                        TransportMode::Playing
-                    } else {
-                        TransportMode::Paused
-                    };
-                }
+            ctx.trigger(SetTimeTransport {
+                playing: Some(cur),
+                rate: None,
             });
         }
         if let Some(m) = set_speed {
-            ctx.defer(move |world| {
-                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                    t.rate = m;
-                }
+            ctx.trigger(SetTimeTransport {
+                playing: None,
+                rate: Some(m),
             });
         }
         if let Some(p) = set_policy {
-            ctx.defer(move |world| {
-                if let Some(mut reg) = world.get_resource_mut::<lunco_core::SessionRegistry>() {
-                    reg.set_policy(p);
-                }
-            });
+            ctx.trigger(SetPossessionPolicy { policy: p });
         }
     }
 }

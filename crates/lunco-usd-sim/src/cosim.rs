@@ -36,7 +36,9 @@ use lunco_cosim::{
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel};
+use lunco_modelica::{
+    ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+};
 use lunco_render::SceneCamera;
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{

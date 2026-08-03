@@ -53,6 +53,8 @@ pub struct CommandDeckView {
     pub is_patrol: bool,
     /// Behavour kind label when not a patrol (e.g. "brake", "cruise").
     pub behaviour_kind: String,
+    /// Authored behaviour spec forwarded to the typed engage command.
+    pub spec_json: String,
 }
 
 /// Producer for [`CommandDeckView`]. Runs every `Update` (cheap O(1) reads).
@@ -93,8 +95,10 @@ pub fn populate_command_deck_view(
     view.patrol.clear();
     view.patrol_actions.clear();
     view.behaviour_kind.clear();
+    view.spec_json.clear();
     if let Some(v) = sel {
         if let Ok(spec) = q_spec.get(v) {
+            view.spec_json = spec.to_json().unwrap_or_default();
             match &spec.0 {
                 BehaviorSpec::Patrol { waypoints, .. } => {
                     view.is_patrol = true;
@@ -194,19 +198,15 @@ impl Panel for CommandDeck {
             if view.driving {
                 if ui.button("Release control").clicked() {
                     let v = vessel;
-                    ctx.defer(move |world| {
-                        world.trigger(lunco_avatar::ReleaseVessel { target: v });
-                    });
+                    ctx.trigger(lunco_avatar::ReleaseVessel { target: v });
                 }
             } else {
                 if ui.button("🏁 Take control").clicked() {
                     let v = vessel;
-                    ctx.defer(move |world| {
-                        world.trigger(lunco_avatar::PossessVessel {
-                            avatar: None,
-                            target: v,
-                            bind_camera: true,
-                        });
+                    ctx.trigger(lunco_avatar::PossessVessel {
+                        avatar: None,
+                        target: v,
+                        bind_camera: true,
                     });
                 }
             }
@@ -233,33 +233,22 @@ impl Panel for CommandDeck {
             let v = vessel;
             if view.autopilot_engaged {
                 if ui.button("Disengage autopilot").clicked() {
-                    ctx.defer(move |world| {
-                        // Disengage: brake the tree but KEEP the patrol data
-                        // (distinct from ClearPatrol, which wipes it). A later
-                        // re-engage restores the route.
-                        world.trigger(lunco_autopilot::DisengageAutopilot { vessel: v });
-                    });
+                    // Disengage: brake the tree but KEEP the patrol data
+                    // (distinct from ClearPatrol, which wipes it). A later
+                    // re-engage restores the route.
+                    ctx.trigger(lunco_autopilot::DisengageAutopilot { vessel: v });
                 }
             } else {
                 if ui.button("Engage autopilot").clicked() {
-                    ctx.defer(move |world| {
-                        // Engage with the vessel's OWN behaviour — the patrol this
-                        // panel is displaying. Read the spec mirror off the vessel
-                        // and pass it.
-                        let spec_json = world
-                            .get::<AutopilotBehaviorSpec>(v)
-                            .and_then(|s| s.to_json().ok())
-                            .unwrap_or_default();
-                        // NO throttle. "Engage autopilot" means "run your route" —
-                        // it never means "drive forward". A vessel with no route
-                        // holds; sending a cruise setpoint from here made a
-                        // routeless rover leave in a straight line.
-                        world.trigger(lunco_autopilot::EngageAutopilot {
-                            vessel: v,
-                            index: 0,
-                            throttle: 0.0,
-                            spec_json,
-                        });
+                    // NO throttle. "Engage autopilot" means "run your route" —
+                    // it never means "drive forward". A vessel with no route
+                    // holds; sending a cruise setpoint from here made a
+                    // routeless rover leave in a straight line.
+                    ctx.trigger(lunco_autopilot::EngageAutopilot {
+                        vessel: v,
+                        index: 0,
+                        throttle: 0.0,
+                        spec_json: view.spec_json.clone(),
                     });
                 }
             }

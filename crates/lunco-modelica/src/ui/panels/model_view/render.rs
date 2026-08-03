@@ -20,6 +20,112 @@ pub struct ModelViewPanel {
     canvas: CanvasDiagramPanel,
 }
 
+/// Synchronize the active tab projection after panel paint.
+#[derive(Event)]
+pub(crate) struct SyncModelTabRequested {
+    pub(crate) doc: DocumentId,
+    pub(crate) drilled: Option<String>,
+}
+
+pub(crate) fn on_sync_model_tab_requested(
+    trigger: On<SyncModelTabRequested>,
+    mut commands: Commands,
+) {
+    let doc = trigger.doc;
+    let drilled = trigger.drilled.clone();
+    commands.queue(move |world: &mut World| {
+        sync_active_tab_to_doc(world, doc, drilled.as_deref());
+    });
+}
+
+/// Prepare the fast-run setup modal from the authoritative document state.
+#[derive(Event, Clone, Copy)]
+pub(crate) struct FastRunSetupRequested {
+    pub(crate) doc: DocumentId,
+}
+
+pub(crate) fn on_fast_run_setup_requested(
+    trigger: On<FastRunSetupRequested>,
+    mut commands: Commands,
+) {
+    let doc = trigger.doc;
+    commands.queue(move |world: &mut World| {
+        let model_ref = crate::sim_default::default_simulation_class(world, doc)
+            .map(lunco_experiments::ModelRef);
+        if let Some(model_ref) = model_ref {
+            let bounds = crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
+            let overrides_count = world
+                .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
+                .unwrap_or(0);
+            let detected = world
+                .get_resource::<ModelicaDocumentRegistry>()
+                .and_then(|r| r.host(doc))
+                .and_then(|h| {
+                    crate::ast_extract::find_class_by_short_name(
+                        h.document().syntax().ast(),
+                        crate::ast_extract::short_name(&model_ref.0),
+                    )
+                    .map(crate::experiments_runner::detect_top_level_inputs)
+                })
+                .unwrap_or_default();
+            let prefilled = world
+                .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
+                .unwrap_or_default();
+            let inputs = detected
+                .into_iter()
+                .map(|d| {
+                    let value_text = prefilled
+                        .get(&lunco_experiments::ParamPath(d.name.clone()))
+                        .map(|v| match v {
+                            lunco_experiments::ParamValue::Real(x) => format!("{x}"),
+                            lunco_experiments::ParamValue::Int(x) => format!("{x}"),
+                            lunco_experiments::ParamValue::Bool(b) => b.to_string(),
+                            lunco_experiments::ParamValue::String(s)
+                            | lunco_experiments::ParamValue::Enum(s) => s.clone(),
+                            lunco_experiments::ParamValue::RealArray(_) => "(array)".into(),
+                        })
+                        .unwrap_or_default();
+                    crate::ui::commands::FastRunInput {
+                        name: d.name,
+                        type_name: d.type_name,
+                        value_text,
+                    }
+                })
+                .collect();
+            let candidates = world
+                .get_resource::<ModelicaDocumentRegistry>()
+                .and_then(|r| r.host(doc))
+                .map(|h| h.document().index().simulation_candidates())
+                .unwrap_or_default();
+            if let Some(mut setup) =
+                world.get_resource_mut::<crate::ui::commands::FastRunSetupState>()
+            {
+                setup.0 = Some(crate::ui::commands::FastRunSetupEntry {
+                    doc,
+                    model_ref,
+                    candidates,
+                    bounds,
+                    overrides_count,
+                    inputs,
+                });
+            }
+        } else {
+            world.trigger(crate::ui::commands::FastRunActiveModel {
+                doc,
+                class: None,
+                t_end: None,
+                dt: None,
+                n_intervals: None,
+                tolerance: None,
+                solver: None,
+                h0: None,
+            });
+        }
+    });
+}
+
 impl Default for ModelViewPanel {
     fn default() -> Self {
         Self {
@@ -78,7 +184,10 @@ impl InstancePanel for ModelViewPanel {
         };
 
         let drilled_for_sync = drilled.clone();
-        ctx.defer(move |world| sync_active_tab_to_doc(world, doc, drilled_for_sync.as_deref()));
+        ctx.trigger(SyncModelTabRequested {
+            doc,
+            drilled: drilled_for_sync,
+        });
 
         let view_mode = ctx
             .resource::<ModelTabs>()
@@ -94,13 +203,13 @@ impl InstancePanel for ModelViewPanel {
                     .map(|b| b.pending_commit_at.is_some())
                     .unwrap_or(false);
                 if pending {
-                    ctx.defer(move |world| {
-                        crate::ui::panels::code_editor::commit_pending_buffer(world, doc);
-                    });
+                    ctx.trigger(
+                        crate::ui::panels::code_editor::CommitEditorBufferRequested { doc },
+                    );
                 }
             }
-            ctx.defer(move |world| {
-                if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
+            let _ = ctx.resource_scope::<ModelTabs, _>(|_, tabs| {
+                if let Some(state) = tabs.get_mut(tab_id) {
                     state.view_mode = new_view_mode;
                 }
             });
@@ -167,8 +276,8 @@ impl InstancePanel for ModelViewPanel {
             .button(if pinned { "📌 Unpin" } else { "📌 Pin tab" })
             .clicked()
         {
-            ctx.defer(move |world| {
-                if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
+            let _ = ctx.resource_scope::<ModelTabs, _>(|_, tabs| {
+                if let Some(state) = tabs.get_mut(tab_id) {
                     state.pinned = !pinned;
                 }
             });
@@ -178,13 +287,13 @@ impl InstancePanel for ModelViewPanel {
         ui.separator();
 
         if ui.button("🪟 Open in new view").clicked() {
-            ctx.defer(move |world| {
-                let new_id = world.resource_mut::<ModelTabs>().open_new(doc, drilled);
-                world.trigger(lunco_workbench::OpenTab {
+            let new_id = ctx.resource_scope::<ModelTabs, _>(|_, tabs| tabs.open_new(doc, drilled));
+            if let Some(new_id) = new_id {
+                ctx.trigger(lunco_workbench::OpenTab {
                     kind: MODEL_VIEW_KIND,
                     instance: new_id,
                 });
-            });
+            }
             ui.close();
         }
 
@@ -197,46 +306,40 @@ impl InstancePanel for ModelViewPanel {
         // prompt to Save before they vanish.
         use crate::ui::commands::TabCloseScope;
         if ui.button("Close").clicked() {
-            ctx.defer(move |world| {
-                world
-                    .resource_mut::<lunco_workbench::PendingTabCloses>()
-                    .push(lunco_workbench::TabId::Instance {
-                        kind: MODEL_VIEW_KIND,
-                        instance,
-                    });
+            let _ = ctx.resource_scope::<lunco_workbench::PendingTabCloses, _>(|_, pending| {
+                pending.push(lunco_workbench::TabId::Instance {
+                    kind: MODEL_VIEW_KIND,
+                    instance,
+                });
             });
             ui.close();
         }
         if ui.button("Close Others").clicked() {
-            ctx.defer(move |world| {
-                world
-                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                    .push(instance, TabCloseScope::Others);
-            });
+            let _ =
+                ctx.resource_scope::<crate::ui::commands::PendingTabCloseScopes, _>(|_, scopes| {
+                    scopes.push(instance, TabCloseScope::Others)
+                });
             ui.close();
         }
         if ui.button("Close to the Right").clicked() {
-            ctx.defer(move |world| {
-                world
-                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                    .push(instance, TabCloseScope::Right);
-            });
+            let _ =
+                ctx.resource_scope::<crate::ui::commands::PendingTabCloseScopes, _>(|_, scopes| {
+                    scopes.push(instance, TabCloseScope::Right)
+                });
             ui.close();
         }
         if ui.button("Close Saved").clicked() {
-            ctx.defer(move |world| {
-                world
-                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                    .push(instance, TabCloseScope::Saved);
-            });
+            let _ =
+                ctx.resource_scope::<crate::ui::commands::PendingTabCloseScopes, _>(|_, scopes| {
+                    scopes.push(instance, TabCloseScope::Saved)
+                });
             ui.close();
         }
         if ui.button("Close All").clicked() {
-            ctx.defer(move |world| {
-                world
-                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                    .push(instance, TabCloseScope::All);
-            });
+            let _ =
+                ctx.resource_scope::<crate::ui::commands::PendingTabCloseScopes, _>(|_, scopes| {
+                    scopes.push(instance, TabCloseScope::All)
+                });
             ui.close();
         }
     }
@@ -495,10 +598,8 @@ fn render_unified_toolbar(
     });
 
     if dismiss_error {
-        ctx.defer(move |world| {
-            if let Some(mut cs) = world.get_resource_mut::<DocumentDiagnostics>() {
-                cs.clear_error(doc);
-            }
+        let _ = ctx.resource_scope::<DocumentDiagnostics, _>(|_, diagnostics| {
+            diagnostics.clear_error(doc);
         });
     }
     if focus_diagnostics {
@@ -538,12 +639,10 @@ fn render_unified_toolbar(
         ctx.trigger(crate::ui::commands::AutoArrangeDiagram { doc });
     }
     if fast_run_clicked {
-        // The whole setup-resolution path reads + writes several resources
-        // and calls `&mut World` helpers (`resolve_setup_bounds`); defer it
-        // as one unit so it runs with full world access after paint. It
-        // only fires on a click, so the one-frame delay is invisible.
-        ctx.defer(move |world| {
-            // Drilled-in pin → tier-ranked simulation root (shared precedence,
+        // The whole setup-resolution path is owned by the typed observer and
+        // only fires on a click.
+        ctx.trigger(FastRunSetupRequested { doc });
+        /*// Drilled-in pin → tier-ranked simulation root (shared precedence,
             // so the Fast Run popup never disagrees with the Experiments Setup
             // form about which class is the default runnable system).
             let model_ref = crate::sim_default::default_simulation_class(world, doc)
@@ -636,7 +735,7 @@ fn render_unified_toolbar(
                     h0: None,
                 });
             }
-        });
+        });*/
     }
     if compile_clicked {
         ctx.trigger(crate::ui::commands::CompileModel {

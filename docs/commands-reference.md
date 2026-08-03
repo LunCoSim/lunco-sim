@@ -2553,7 +2553,7 @@ type and literal, journals the edit, and re-composes the live stage.
  keep their current value. So a curl that just lowers the sun looks like:
 
  ```jsonc
- {"type":"SetEnvironmentLight","sun_pitch":-0.15}
+ {"command":"SetEnvironmentLight","params":{"sun_pitch":-0.15}}
  ```
 
  - **`sun_yaw` / `sun_pitch`** — direction of the single `DirectionalLight`

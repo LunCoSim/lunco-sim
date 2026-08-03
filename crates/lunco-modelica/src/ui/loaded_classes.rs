@@ -1,11 +1,9 @@
 //! Helpers for the Modelica class browser surfaces.
 //!
-//! The legacy `LoadedClass` trait + `LoadedModelicaClasses` registry
-//! were removed in PR4 of the architecture unification — the Twin
-//! panel's `ModelicaSection` now reads `PackageTreeCache::roots` +
-//! `ModelicaDocumentRegistry` directly. What remains here is the
-//! `is_icon_only_class` heuristic, which other crates (projection,
-//! drill-in loads, palette) still consult.
+//! Shared Modelica class presentation predicates. The Twin Browser reads
+//! `PackageTreeCache` and `ModelicaDocumentRegistry` directly; this module
+//! only contains the icon-only classification used by projection and palette
+//! surfaces.
 
 /// Heuristic: is this a graphics-only "Icons" class?
 ///

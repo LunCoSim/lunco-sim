@@ -108,6 +108,9 @@ impl Plugin for SandboxEditPlugin {
         // the one selection mutation so the Inspector follows the controlled
         // rover without inventing a second inspector-target mechanism.
         app.add_systems(Update, selection::select_possessed_vessel);
+        app.add_observer(ui::spawn_palette::on_spawn_state_requested);
+        app.add_observer(ui::terrain_tools::on_terrain_ui_action);
+        app.add_observer(selection::on_select_entity_target);
         app.add_systems(Update, selection::handle_deselect_keys);
         // Selection → telemetry focus is NOT here: it moved down to the command
         // layer beside `SelectedEntities` itself
@@ -277,7 +280,7 @@ impl Plugin for SandboxEditPlugin {
 }
 
 /// Current state of the spawn system.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub enum SpawnState {
     /// No spawn in progress.
     #[default]

@@ -162,10 +162,8 @@ pub struct WorkbenchState {
 // events — the canonical `JournalResource` records them all.
 
 // ---------------------------------------------------------------------------
-// B.3 phase 6 helpers — drop-in replacements for `OpenModel` field
-// reads. Derive each field from the document registry so the legacy
-// `WorkbenchState.open_model` cache can be retired one reader at a
-// time.
+// Document-derived view helpers. Read these values from the document
+// registry instead of maintaining a second cache in `WorkbenchState`.
 // ---------------------------------------------------------------------------
 
 /// Detected top-level model name for `doc`. Replaces

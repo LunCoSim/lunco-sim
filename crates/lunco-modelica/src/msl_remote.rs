@@ -1674,9 +1674,9 @@ mod web {
         //     compressed blobs. The drain ships the parsed one to the worker
         //     (off-thread decode) and starts the chunked main-thread decode;
         //     the source bundle is untarred lazily on first drill-in.
-        //   • fallback (no pre-parsed bundle): no worker decode possible, so
-        //     untar the source here and let the per-frame chunked *parser*
-        //     build the AST (slow legacy path; our bundles always ship parsed).
+        //   • source-bundle path (no pre-parsed bundle): no worker decode
+        //     possible, so untar the source here and let the per-frame
+        //     chunked parser build the AST.
         if parsed_bytes.is_some() {
             set_state(
                 slot,

@@ -3168,7 +3168,7 @@ fn report_terrain_stream_status(
     // const's docs for why this must not be a local literal.
     const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
     if status.wanted > 0 && status.resident < status.wanted {
-        bus.push_progress(
+        bus.set_progress(
             SOURCE,
             format!(
                 "streaming terrain tiles {}/{}",
@@ -3178,7 +3178,7 @@ fn report_terrain_stream_status(
             status.wanted as u64,
         );
     } else {
-        bus.clear_progress(SOURCE);
+        bus.remove_progress(SOURCE);
     }
 }
 
@@ -3215,11 +3215,11 @@ fn report_scene_spawn_status(
     if let Some(g) = in_flight {
         // `total = 0` is the bus's "indeterminate" encoding — the number of prims
         // a scene will spawn is not known until it has spawned them.
-        bus.push_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
+        bus.set_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
     } else if pending > 0 {
-        bus.push_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
+        bus.set_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
     } else {
-        bus.clear_progress(SOURCE);
+        bus.remove_progress(SOURCE);
     }
 }
 
@@ -3253,21 +3253,21 @@ fn report_modelica_status(
         .count();
 
     if pending > 0 {
-        bus.push_progress(
+        bus.set_progress(
             SOURCE,
             format!("loading {pending} Modelica source(s)"),
             0,
             0,
         );
     } else if compiling > 0 {
-        bus.push_progress(
+        bus.set_progress(
             SOURCE,
             format!("compiling {compiling} Modelica participant(s)"),
             0,
             0,
         );
     } else {
-        bus.clear_progress(SOURCE);
+        bus.remove_progress(SOURCE);
     }
 }
 

@@ -49,9 +49,8 @@ pub enum ApiRequest {
     // `lunco-scene-commands` as an `ApiQueryProvider`, reporting the same
     // grid-absolute frame that command accepts. As a built-in it read
     // `GlobalTransform` — the render frame — and reported a position that shifted
-    // with the floating origin and could not be fed back. The `{"type":
-    // "QueryEntity"}` wire shape is unchanged; the envelope maps it to the
-    // provider.
+    // with the floating origin and could not be fed back. The command envelope
+    // maps `QueryEntity` to the provider.
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry {

@@ -35,9 +35,6 @@
 //!
 //! - The Modelica-specific class-tree section — that ships in
 //!   `lunco-modelica` as `ModelicaSection`, registered by its plugin.
-//! - The legacy `package_browser.rs` panel keeps running side-by-side
-//!   until the Modelica section reaches feature parity, at which point
-//!   the old panel is removed in one cutover commit.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -301,14 +298,9 @@ impl BrowserActions {
 
 /// Read-side context passed to a section's `render`.
 ///
-/// Holds the open Twin (if any), the action outbox, and the full
-/// `&mut World`. Sections that just need Twin + actions ignore the
-/// world ref; sections that surface domain state (open documents,
-/// selection, drill-in target) read it from their own resources via
-/// `world`.
-///
-/// `world` is mutable for the duration of one section's render so
-/// sections can run light queries without separate system plumbing.
+/// Holds the open Twin (if any), the action outbox, and the
+/// capability-narrowed panel context. Sections read view-models and emit
+/// typed intents through it.
 /// They MUST NOT remove or replace `BrowserSectionRegistry`,
 /// `BrowserActions`, or `WorkspaceResource` — those are extracted by
 /// the panel for the duration of the render and inserting them here
@@ -316,10 +308,10 @@ impl BrowserActions {
 pub struct BrowserCtx<'a, 'w> {
     /// Outbox the section pushes user actions into.
     pub actions: &'a mut BrowserActions,
-    /// Capability-narrowed world access (reads + deferred mutations).
+    /// Capability-narrowed panel access (reads + typed intents).
     /// Sections read domain state via [`resource`](Self::resource) /
     /// [`get`](Self::get) (e.g. the active Twin from `WorkspaceResource`)
-    /// and emit changes via [`defer`](Self::defer) / [`trigger`](Self::trigger).
+    /// and emit changes via [`trigger`](Self::trigger).
     panel: &'a mut PanelCtx<'w>,
 }
 
@@ -343,9 +335,26 @@ impl<'a, 'w> BrowserCtx<'a, 'w> {
         self.panel.get::<T>(entity)
     }
 
-    /// Queue a world mutation to apply after the egui pass.
-    pub fn defer(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
-        self.panel.defer(f);
+    /// Replace an existing browser view-model resource after the egui pass.
+    pub fn set_resource<T: Resource<Mutability = bevy::ecs::component::Mutable>>(
+        &mut self,
+        value: T,
+    ) {
+        self.panel.set_resource(value);
+    }
+
+    /// Temporarily scope one resource without exposing the world itself.
+    pub fn resource_scope<R: Resource, T>(
+        &mut self,
+        f: impl FnOnce(&mut BrowserCtx<'_, 'w>, &mut R) -> T,
+    ) -> Option<T> {
+        // The nested context shares the section action outbox and retains the
+        // same capability boundary while the selected resource is removed.
+        let actions = &mut *self.actions;
+        self.panel.resource_scope(move |panel, resource| {
+            let mut scoped = BrowserCtx { actions, panel };
+            f(&mut scoped, resource)
+        })
     }
 
     /// Emit an event after the egui pass.
@@ -432,7 +441,7 @@ impl Panel for TwinBrowserPanel {
         // `&mut` to the registry's trait objects — no raw `&mut World`).
         // Sections read domain state (the active Twin via
         // `WorkspaceResource`, …) through `BrowserCtx::resource` and emit
-        // changes via `defer`/`actions`.
+        // changes via typed events/actions.
         let present = ctx.resource_scope::<BrowserSectionRegistry, _>(|ctx, registry| {
             // Precompute each section's `order()` in a single walk; sorting
             // by an `nth(i)` re-walk inside the comparator was O(n²)/frame.

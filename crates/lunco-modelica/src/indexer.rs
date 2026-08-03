@@ -253,7 +253,7 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
 /// `Modelica.Blocks.Blocks.Examples.BooleanNetwork1`.
 ///
 /// Two cases qualify:
-///  1. `name == "package"` — legacy / hand-written files that
+///  1. `name == "package"` — files that
 ///     literally named the class `package`.
 ///  2. `is_package_file` AND the leaf segment of `current_path`
 ///     matches `name` — the MSL-typical case.

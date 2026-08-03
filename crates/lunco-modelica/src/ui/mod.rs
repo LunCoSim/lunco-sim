@@ -118,12 +118,8 @@ pub mod session_codec;
 use crate::ModelicaModel;
 
 /// Shadow-sync observer: Modelica doc opened → register entry in the
-/// Workspace session.
-///
-/// Runs alongside (not instead of) the existing open paths during the
-/// 5b.1 migration. Once step 5c retires the legacy `ModelicaDocumentRegistry`
-/// / `ModelTabs` / the registry-by-doc lookup triad, this observer
-/// becomes the sole population point for the Workspace's document list.
+/// Workspace session. The Workspace list is populated from the Modelica
+/// document lifecycle, while the Modelica registry remains the domain owner.
 /// Invalidate every source-derived memo when any doc changes — the merged icons in
 /// `ModelicaEngine` and the decoded bitmap textures on the paint side.
 ///
@@ -301,7 +297,7 @@ fn sync_workspace_on_doc_opened(
     let title = origin.display_name();
     ws.add_document(lunco_workspace::DocumentEntry {
         id,
-        kind: lunco_workspace::DocumentKind::Modelica,
+        kind: lunco_workspace::DocumentKindId::new("modelica"),
         origin,
         // Default to `None`; when the UI supports "New Model from
         // active Twin" the caller will set this explicitly before the
@@ -553,13 +549,9 @@ impl Perspective for AnalyzePerspective {
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Side dock = Twin Browser only. The legacy
-        // `PackageBrowserPanel` stays registered (View → Panels can
-        // re-dock it) but is not docked by default — its remaining
-        // unique features (MSL palette, drag-to-instantiate) will
-        // migrate into the Twin Browser as a future `MslSection`.
-        // Side-by-side dock would just present users with two
-        // browsers solving the same job.
+        // Side dock = Twin Browser only. Modelica contributes its library
+        // section to that browser, so there is one authoritative browse
+        // surface for workspace classes and standard libraries.
         // Two sibling tabs in the side dock — Twin (everything you
         // browse by name: workspace classes, MSL, bundled, future
         // USD/SysML — matches Dymola/OMEdit's single-Package-Browser
@@ -745,6 +737,28 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::code_editor::EditorBufferState>()
             .add_observer(panels::code_editor::on_editor_settings_changed)
             .add_observer(panels::code_editor::on_code_editor_menu_action)
+            .add_observer(panels::code_editor::on_editor_buffer_changed)
+            .add_observer(panels::code_editor::on_commit_editor_buffer_requested)
+            .add_observer(panels::code_editor::on_ensure_editor_buffer_state)
+            .add_observer(panels::canvas_diagram::on_apply_ops_requested)
+            .add_observer(panels::canvas_diagram::on_drill_into_class_requested)
+            .add_observer(crate::ui::commands::sim::on_set_model_input_requested)
+            .add_observer(panels::palette::on_clear_component_drag_payload)
+            .add_observer(panels::palette::on_place_component_requested)
+            .add_observer(panels::console::on_clear_console_requested)
+            .add_observer(panels::diagnostics::on_clear_diagnostics_requested)
+            .add_observer(panels::diagnostics::on_diagnostic_jump_requested)
+            .add_observer(panels::package_browser::on_open_package_class_requested)
+            .add_observer(panels::experiments::on_load_experiment_requested)
+            .add_observer(panels::experiments::on_export_experiment_requested)
+            .add_observer(panels::experiments::on_rerun_experiment_requested)
+            .add_observer(panels::experiments::on_set_experiment_run_target_requested)
+            .add_observer(panels::inspector::on_plot_binding_requested)
+            .add_observer(panels::inspector::on_plot_title_requested)
+            .add_observer(panels::inspector::on_diagram_text_requested)
+            .add_observer(panels::graphs::on_export_graph_requested)
+            .add_observer(panels::model_view::on_sync_model_tab_requested)
+            .add_observer(panels::model_view::on_fast_run_setup_requested)
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical
@@ -898,7 +912,6 @@ impl Plugin for ModelicaUiPlugin {
                     ),
                 ),
             )
-            .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(lunco_workbench::TwinBrowserPanel)
             .register_panel(lunco_workbench::FilesPanel)
             .insert_resource(panels::welcome::LearningPathRegistry::with_builtins())
