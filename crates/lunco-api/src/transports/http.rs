@@ -8,16 +8,6 @@ use axum::{
     http::{header, StatusCode},
     response::IntoResponse,
 };
-use std::time::Duration;
-
-/// How long the synchronous path waits for a fire-and-forget command's terminal
-/// outcome before giving up and returning `status: "pending"` (the caller can
-/// still poll `QueryCommandResult`). Generous: covers a normal command flush plus
-/// any observer that reports a frame or two later.
-const SYNC_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-/// Poll cadence while waiting for the outcome. Small enough to feel synchronous,
-/// large enough not to hammer the command funnel.
-const SYNC_POLL_INTERVAL: Duration = Duration::from_millis(15);
 
 pub async fn handle_api_commands(
     State(bridge): State<HttpBridge>,
@@ -25,61 +15,6 @@ pub async fn handle_api_commands(
 ) -> impl IntoResponse {
     let api_req: ApiRequest = req.into();
     execute_api_request(bridge, api_req).await
-}
-
-/// Map a serialized [`lunco_core::CommandOutcome`] to a terminal status string.
-/// `null` (unknown id) and `"Pending"` are NOT terminal → keep waiting.
-fn terminal_status(outcome: &serde_json::Value) -> Option<&'static str> {
-    if outcome.get("Succeeded").is_some() {
-        Some("succeeded")
-    } else if outcome.get("Failed").is_some() {
-        Some("failed")
-    } else if outcome.get("Rejected").is_some() {
-        Some("rejected")
-    } else {
-        None
-    }
-}
-
-/// Synchronous path: a fire-and-forget command was accepted (its `command_id` is
-/// known but no data came back). Poll `QueryCommandResult` until the observer
-/// records a terminal outcome, then return it inline so the HTTP reply is
-/// authoritative. On timeout, return `status: "pending"` — the command was
-/// accepted; a handler that never reports (the one bounded ambiguity) shouldn't
-/// hang the request forever.
-async fn await_command_outcome(bridge: &HttpBridge, id: u64) -> ApiResponse {
-    let max_polls = (SYNC_WAIT_TIMEOUT.as_millis() / SYNC_POLL_INTERVAL.as_millis().max(1)).max(1);
-    for _ in 0..max_polls {
-        if let Ok(ApiResponse::Ok {
-            data: Some(data), ..
-        }) = bridge.execute(ApiRequest::QueryCommandResult { id }).await
-        {
-            let outcome = data
-                .get("outcome")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            if let Some(status) = terminal_status(&outcome) {
-                return ApiResponse::Ok {
-                    command_id: Some(id),
-                    data: Some(serde_json::json!({
-                        "command_id": id,
-                        "status": status,
-                        "outcome": outcome,
-                    })),
-                };
-            }
-        }
-        tokio::time::sleep(SYNC_POLL_INTERVAL).await;
-    }
-    ApiResponse::Ok {
-        command_id: Some(id),
-        data: Some(serde_json::json!({
-            "command_id": id,
-            "status": "pending",
-            "note": "no terminal outcome recorded within the sync-wait window; \
-                     the command was accepted — poll QueryCommandResult for its outcome",
-        })),
-    }
 }
 
 /// `GET /api/health` — liveness. Answers from the transport thread without
@@ -150,19 +85,6 @@ pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> imp
         },
     };
 
-    // Always synchronous: a fire-and-forget command answers with
-    // `command_accepted` (a `command_id`, no data). Wait for its terminal outcome
-    // so the reply is authoritative instead of merely "queued". Query providers
-    // and deferred commands already return their real payload inline, so they
-    // never enter this branch.
-    let response = match response {
-        ApiResponse::Ok {
-            command_id: Some(id),
-            data: None,
-        } => await_command_outcome(&bridge, id).await,
-        other => other,
-    };
-
     // Screenshot responses return raw PNG bytes directly.
     if let ApiResponse::Screenshot { png_bytes } = response {
         return (
@@ -182,24 +104,4 @@ pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> imp
         None => StatusCode::OK,
     };
     (status, Json(envelope)).into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::terminal_status;
-    use serde_json::{json, Value};
-
-    #[test]
-    fn terminal_status_maps_outcome_variants() {
-        // Externally-tagged `CommandOutcome`: terminal variants are objects.
-        assert_eq!(
-            terminal_status(&json!({"Succeeded": {}})),
-            Some("succeeded")
-        );
-        assert_eq!(terminal_status(&json!({"Failed": "boom"})), Some("failed"));
-        assert_eq!(terminal_status(&json!({"Rejected": {}})), Some("rejected"));
-        // Not terminal — keep waiting.
-        assert_eq!(terminal_status(&json!("Pending")), None);
-        assert_eq!(terminal_status(&Value::Null), None);
-    }
 }

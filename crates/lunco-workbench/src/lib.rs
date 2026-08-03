@@ -3980,12 +3980,10 @@ fn render_layout(
                             .on_hover_text("Run the simulation (physics included) at this rate")
                             .clicked()
                         {
-                            if let Some(mut t) =
-                                world.get_resource_mut::<lunco_time::TimeTransport>()
-                            {
-                                t.rate = m;
-                                t.mode = lunco_time::TransportMode::Playing;
-                            }
+                            world.trigger(lunco_time::SetTimeTransport {
+                                playing: Some(true),
+                                rate: Some(m),
+                            });
                         }
                     }
                 });
@@ -4035,13 +4033,10 @@ fn render_layout(
                 let btn_resp = ui.button(glyph).on_hover_text(hover);
                 anchor_rects.push(("toolbar.run", btn_resp.rect));
                 if btn_resp.clicked() {
-                    if let Some(mut t) = world.get_resource_mut::<lunco_time::TimeTransport>() {
-                        t.mode = if paused {
-                            lunco_time::TransportMode::Playing
-                        } else {
-                            lunco_time::TransportMode::Paused
-                        };
-                    }
+                    world.trigger(lunco_time::SetTimeTransport {
+                        playing: Some(paused),
+                        ..default()
+                    });
                 }
 
                 // PAUSE/RESUME AND NOTHING ELSE. The rate selector used to sit here

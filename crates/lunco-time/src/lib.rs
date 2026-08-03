@@ -104,8 +104,8 @@ pub enum TimeRegime {
 }
 
 /// The transport authority: the single internal source of truth for play state
-/// and rate. UI (the Time Control / mission-control panels and the avatar pause
-/// hotkey) writes this directly — it is the sole play/rate authority.
+/// and rate. UI and input surfaces dispatch [`SetTimeTransport`], which updates
+/// this resource — it is the sole play/rate authority.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct TimeTransport {

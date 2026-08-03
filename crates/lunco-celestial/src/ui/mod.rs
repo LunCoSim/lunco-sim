@@ -6,7 +6,7 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
 use crate::commands::TeleportToSurface;
 use lunco_core::{Avatar, CelestialBody};
-use lunco_time::{TimeTransport, TransportMode, WorldTime};
+use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
@@ -54,13 +54,10 @@ impl Panel for CelestialTimePanel {
                 .clicked()
             {
                 ctx.defer(move |world| {
-                    if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                        t.mode = if paused {
-                            TransportMode::Playing
-                        } else {
-                            TransportMode::Paused
-                        };
-                    }
+                    world.trigger(SetTimeTransport {
+                        playing: Some(paused),
+                        ..default()
+                    });
                 });
             }
         });
@@ -69,9 +66,10 @@ impl Panel for CelestialTimePanel {
             for &m in multipliers.iter() {
                 if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
                     ctx.defer(move |world| {
-                        if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                            t.rate = m;
-                        }
+                        world.trigger(SetTimeTransport {
+                            playing: Some(true),
+                            rate: Some(m),
+                        });
                     });
                 }
             }

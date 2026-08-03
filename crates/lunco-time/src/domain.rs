@@ -723,8 +723,12 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 #[Command(default)]
 pub struct SetTimeTransport {
     /// Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it.
+    #[serde(default)]
+    #[reflect(default)]
     pub playing: Option<bool>,
     /// Speed multiplier vs realtime (1.0 = realtime); `None` leaves it.
+    #[serde(default)]
+    #[reflect(default)]
     pub rate: Option<f64>,
 }
 
@@ -733,7 +737,10 @@ fn on_set_time_transport(
     trigger: On<SetTimeTransport>,
     mut transport: ResMut<crate::TimeTransport>,
 ) {
-    let cmd = trigger.event();
+    apply_time_transport(&mut transport, trigger.event());
+}
+
+fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTransport) {
     if let Some(playing) = cmd.playing {
         transport.mode = if playing {
             crate::TransportMode::Playing
@@ -765,33 +772,24 @@ fn on_set_mission_epoch(
     tick: Res<crate::SimTick>,
     mut clock: ResMut<crate::MissionClock>,
     clocks: Option<Res<Clocks>>,
-    resolved: Res<ResolvedDomains>,
+    real: Res<Time<Real>>,
     mut q: Query<&mut TimeDomain>,
 ) {
     let jd = trigger.event().epoch_jd;
     *clock = crate::MissionClock::anchored(jd, tick.0);
 
-    // The epoch is TWO terms — `mission_epoch0_jd + celestial_t / 86400` (see
-    // `write_epoch_from_celestial_clock`) — so re-anchoring alone does not set
-    // the date. It moves the first term and leaves the second holding whatever
-    // the celestial clock had accumulated, or an `offset` a previous seek solved
-    // against the PREVIOUS anchor. That residue lands on the sky as a jump: a
-    // twin whose stage authors JD 2461007.66944 rendered at 2460926.74 — 81 days
-    // early, so the wrong sun, the wrong shadows and the wrong Earth — and at
-    // 100 000× the same residue reappeared multiplied, moving the epoch 80 694
-    // days in one step.
-    //
-    // Zeroing the clock's local time here is what makes the command mean what it
-    // says: with `celestial_t == 0`, `epoch_jd == jd` exactly, this frame.
-    // `offset -= local_t` works for a derived clock and a detached (root) one
-    // alike — it cancels the resolved local time without needing to know which
-    // source feeds it.
+    // `epoch_jd = mission_epoch0_jd + celestial_t / 86400`. Re-anchoring the
+    // mission alone leaves the celestial domain's old affine offset in place.
+    // Solve that offset against the NEW source time so a previous 100 000x
+    // seek cannot be projected onto the new mission date.
     if let Some(clocks) = clocks {
         if let Ok(mut domain) = q.get_mut(clocks.celestial) {
-            let local_t = resolved.get(clocks.celestial).unwrap_or(0.0);
-            if local_t != 0.0 {
-                domain.offset -= local_t;
-            }
+            // The sim/epoch roots restart at zero at this tick; only a sky
+            // detached onto the wall root has a non-zero new source time.
+            let source_t = (domain.parent == Some(clocks.real))
+                .then(|| real.elapsed_secs_f64())
+                .unwrap_or(0.0);
+            domain.offset = -domain.scale * source_t;
         }
     }
     bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4} (celestial clock zeroed)");
@@ -986,6 +984,8 @@ fn on_reset_time(
     mut q_playback: Query<&mut Playback>,
     preview: Option<Res<AnimationPreview>>,
     mut transport: ResMut<crate::TimeTransport>,
+    mut resolved: ResMut<ResolvedDomains>,
+    mut last: ResMut<LastClockT>,
     mut commands: Commands,
 ) {
     let Some(clocks) = clocks else { return };
@@ -1013,6 +1013,12 @@ fn on_reset_time(
 
     // Transport: a reloaded scene starts playing at realtime.
     *transport = crate::TimeTransport::default();
+
+    // Clock entities persist across scene loads, so clear their sample history
+    // too. The new scene must not emit a giant negative dt from the previous
+    // scene's 100 000x celestial clock.
+    *resolved = ResolvedDomains::default();
+    *last = LastClockT::default();
 
     bevy::log::info!("[time] clock tree reset to defaults (scene load)");
 }
@@ -1218,6 +1224,23 @@ mod tests {
             ..default()
         };
         assert!((step_playhead(&held, 10.0) - 3.5).abs() < EPS);
+    }
+
+    #[test]
+    fn transport_rate_command_resumes_a_paused_transport() {
+        let mut transport = crate::TimeTransport {
+            mode: TransportMode::Paused,
+            rate: 1.0,
+        };
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                playing: Some(true),
+                rate: Some(8.0),
+            },
+        );
+        assert_eq!(transport.mode, TransportMode::Playing);
+        assert_eq!(transport.rate, 8.0);
     }
 
     #[test]

@@ -41,6 +41,14 @@ use serde::{Deserialize, Serialize};
 /// tolerance is converted through the tighter of the two.
 const MAX_BODY_DEG_PER_DAY: f64 = 13.2;
 
+/// Upper bound for the expensive celestial presentation solve.
+///
+/// The epoch itself remains exact at every frame. This floor only limits how
+/// often the five-system pose/light cluster is allowed to consume the frame at
+/// extreme warp rates; without it, 100 000x opens the angular-error gate every
+/// frame and starves input and API command processing.
+const MIN_CELESTIAL_SOLVE_INTERVAL_SECS: f64 = 1.0 / 30.0;
+
 /// How much celestial angular error is acceptable before the tree is re-solved.
 ///
 /// Persisted, so it shows up in the workbench **Settings** menu next to every
@@ -94,6 +102,9 @@ pub struct CelestialSolvedEpoch {
     /// [`CelestialInputsRevision`] at that solve — a structural change moves this
     /// and forces one re-solve regardless of the epoch.
     pub revision: u64,
+    /// Wall time of the last expensive solve, used only to bound extreme-warp
+    /// presentation work.
+    pub last_solve_wall_secs: f64,
 }
 
 impl Default for CelestialSolvedEpoch {
@@ -101,6 +112,7 @@ impl Default for CelestialSolvedEpoch {
         Self {
             jd: f64::NEG_INFINITY,
             revision: 0,
+            last_solve_wall_secs: f64::NEG_INFINITY,
         }
     }
 }
@@ -206,6 +218,7 @@ pub(crate) fn celestial_needs_solve(
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
+    real: Res<Time<Real>>,
 ) -> bool {
     if revision.0 != solved.revision {
         return true;
@@ -217,6 +230,14 @@ pub(crate) fn celestial_needs_solve(
     let step = settings
         .map(|s| s.max_epoch_step_jd())
         .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
+    // EXACT is the deterministic scene-test contract. Production extreme warp
+    // uses the angular budget but cannot spend an expensive full-cluster solve
+    // on every render frame.
+    if step > 0.0
+        && real.elapsed_secs_f64() - solved.last_solve_wall_secs < MIN_CELESTIAL_SOLVE_INTERVAL_SECS
+    {
+        return false;
+    }
     // `>=` with a 0.0 step: any epoch, including an unchanged one, re-solves.
     // That is what `EXACT` promises, and it is why the comparison is not `>`.
     (world.epoch_jd - solved.jd).abs() >= step
@@ -233,6 +254,7 @@ pub fn commit_celestial_epoch(
     world: Option<Res<WorldTime>>,
     settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
+    real: Res<Time<Real>>,
     mut solved: ResMut<CelestialSolvedEpoch>,
     mut solves: Local<u64>,
 ) {
@@ -288,4 +310,5 @@ pub fn commit_celestial_epoch(
         );
     }
     solved.revision = revision.0;
+    solved.last_solve_wall_secs = real.elapsed_secs_f64();
 }
