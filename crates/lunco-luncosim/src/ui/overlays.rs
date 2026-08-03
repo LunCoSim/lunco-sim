@@ -55,8 +55,8 @@ pub(crate) fn register_time_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_time_menu(|ui, world| {
-        super::celestial_time::sky_clock_menu_ui(ui, world);
+    layout.register_time_menu(|ui, ctx| {
+        super::celestial_time::sky_clock_menu_ui(ui, ctx);
 
         ui.separator();
         ui.label(egui::RichText::new("Viewport overlays").weak().small());
@@ -64,7 +64,10 @@ pub(crate) fn register_time_menu(world: &mut World) {
         // the resource changed on any deref, and the settings writer persists on
         // change — so drawing the menu would rewrite settings.json every frame the
         // menu is open.
-        let mut edited = *world.resource::<OverlaySettings>();
+        let Some(mut edited) = ctx.resource::<OverlaySettings>().copied() else {
+            return;
+        };
+        let original = edited;
         ui.checkbox(&mut edited.sky_clock, "Sky clock (top-left)")
             .on_hover_text(
                 "Floating pill showing the celestial epoch and its clock coupling. \
@@ -76,8 +79,8 @@ pub(crate) fn register_time_menu(world: &mut World) {
                 "Surface / Moon / Earth pill. The highlighted chip is the body the \
                  camera is currently focused on.",
             );
-        if edited != *world.resource::<OverlaySettings>() {
-            *world.resource_mut::<OverlaySettings>() = edited;
+        if edited != original {
+            ctx.set_resource(edited);
         }
     });
 }

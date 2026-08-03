@@ -1,4 +1,4 @@
-//! Entity list panel — WorkbenchPanel implementation.
+//! Entity list panel — `lunco-workbench::Panel` implementation.
 //!
 //! A hierarchy tree of scene objects: top-level objects (rovers, props,
 //! terrain, cosim blocks) with their sub-parts (wheels, body) nested beneath,
@@ -50,9 +50,11 @@ pub(crate) fn register_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Entity list").weak().small());
-        let current = world.resource::<EntityListSettings>().show_system;
+        let current = ctx
+            .resource::<EntityListSettings>()
+            .map_or(false, |s| s.show_system);
         let mut next = current;
         ui.checkbox(&mut next, "Show system entities")
             .on_hover_text(
@@ -61,7 +63,7 @@ pub(crate) fn register_settings_menu(world: &mut World) {
                  the list shows authored scene objects only.",
             );
         if next != current {
-            world.resource_mut::<EntityListSettings>().show_system = next;
+            ctx.set_resource(EntityListSettings { show_system: next });
         }
     });
 }

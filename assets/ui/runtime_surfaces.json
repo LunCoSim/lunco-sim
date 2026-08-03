@@ -1,6 +1,7 @@
 {
   "surfaces": [
     {
+      "id": "rover-hud",
       "template": "ui/rover_hud.html",
       "stylesheet": "ui/rover_hud.css",
       "namespace": "driven-vessel",
@@ -8,6 +9,7 @@
       "placement": { "mode": "viewport" }
     },
     {
+      "id": "celestial-view",
       "template": "ui/view_mode.html",
       "stylesheet": "ui/view_mode.css",
       "namespace": "celestial-view",
@@ -86,6 +88,7 @@
       }
     },
     {
+      "id": "terrain-progress",
       "template": "ui/terrain_progress.html",
       "stylesheet": "ui/terrain_progress.css",
       "namespace": "terrain-progress",
@@ -105,6 +108,7 @@
       }
     },
     {
+      "id": "scenario-download",
       "template": "ui/scenario_download.html",
       "stylesheet": "ui/scenario_download.css",
       "namespace": "scenario-download",

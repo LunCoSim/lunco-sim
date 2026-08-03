@@ -1,4 +1,4 @@
-//! Tools palette panel — WorkbenchPanel implementation.
+//! Tools palette panel — `lunco-workbench::Panel` implementation.
 //!
 //! A dockable "🛠 Tools" view holding the in-scene editing tools. Today it hosts
 //! the terrain-sculpt brushes; new tools slot in as further sections. Pure

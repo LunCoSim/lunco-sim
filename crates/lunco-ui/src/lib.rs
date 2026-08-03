@@ -57,7 +57,6 @@ pub mod prelude {
     pub use crate::diagrams::{time_series_plot, ChartSeries};
     pub use crate::widget;
     pub use crate::Label3D;
-    pub use crate::UiContext;
     pub use crate::UiSelection;
     pub use crate::WidgetCache;
     pub use crate::WidgetId;

@@ -6,11 +6,8 @@
 
 ## What lunco-ui Provides
 
-> **Note:** the external `bevy_workbench` crate was replaced by the in-house
-> `lunco-workbench` (path dep). The panel trait is now `Panel` (with `PanelCtx` /
-> `PanelId`), *not* `WorkbenchPanel`. Some code snippets below still show the old
-> trait name and are illustrative — check `lunco-workbench/src/panel.rs` for the
-> current API.
+> The workbench panel boundary is the in-house `lunco-workbench` `Panel` trait
+> with `PanelCtx` and `PanelId`; domain UI code should use that current API.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -299,7 +296,7 @@ crates/lunco-ui/
 └── src/
     ├── lib.rs               # LuncoUiPlugin + theme
     ├── widget.rs            # WidgetSystem + WidgetId + caching
-    ├── context.rs           # UiContext + UiSelection
+    ├── context.rs           # UiSelection
     ├── helpers.rs           # collapsing tree row helpers
     ├── components.rs        # WorldPanel + Label3D
     ├── mission_control.rs   # mission-control panel widget

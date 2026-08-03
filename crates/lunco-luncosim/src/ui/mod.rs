@@ -18,6 +18,7 @@ use big_space::prelude::*;
 use lunco_avatar::{FreeFlightCamera, ProvisionalAvatarCamera};
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_render::SceneCamera;
+use lunco_workbench::MenuCtx;
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
@@ -374,8 +375,8 @@ fn on_runtime_ui_action(
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     mut commands: Commands,
 ) {
-    match trigger.event().action.as_str() {
-        "view.surface" => {
+    match trigger.event().action {
+        runtime_exposure::RuntimeUiActionKind::ViewSurface => {
             if !orbital_pin.is_some_and(|pin| pin.active) {
                 return;
             }
@@ -388,10 +389,15 @@ fn on_runtime_ui_action(
                 commands.trigger(lunco_avatar::ReleaseVessel { target });
             }
         }
-        "view.body.moon" => runtime_focus_body(301, &q_bodies, &mut commands),
-        "view.body.earth" => runtime_focus_body(399, &q_bodies, &mut commands),
-        "overlay.terrain.dismiss" => commands.trigger(DismissTerrainOverlay),
-        action => warn!("unknown runtime UI action `{action}`"),
+        runtime_exposure::RuntimeUiActionKind::ViewBodyMoon => {
+            runtime_focus_body(301, &q_bodies, &mut commands)
+        }
+        runtime_exposure::RuntimeUiActionKind::ViewBodyEarth => {
+            runtime_focus_body(399, &q_bodies, &mut commands)
+        }
+        runtime_exposure::RuntimeUiActionKind::DismissTerrainOverlay => {
+            commands.trigger(DismissTerrainOverlay)
+        }
     }
 }
 
@@ -599,9 +605,13 @@ fn register_downloadable_assets_settings(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings_submenu("Data & libraries", |ui, world| {
+    layout.register_settings_submenu("Data & libraries", |ui, ctx| {
         ui.label(egui::RichText::new("Downloadable data").weak().small());
-        if let Some(mut settings) = world.get_resource_mut::<lunco_settings::DownloadSettings>() {
+        let Some(mut settings) = ctx.resource::<lunco_settings::DownloadSettings>().cloned() else {
+            return;
+        };
+        let original_settings = settings.clone();
+        {
             ui.horizontal(|ui| {
                 ui.label("Max parallel downloads:");
                 ui.add(egui::Slider::new(
@@ -611,7 +621,10 @@ fn register_downloadable_assets_settings(world: &mut World) {
             });
             ui.add_space(8.0);
         }
-        let Some(registry) = world.get_resource::<DatasetRegistry>() else {
+        if settings != original_settings {
+            ctx.set_resource(settings);
+        }
+        let Some(registry) = ctx.resource::<DatasetRegistry>() else {
             ui.label(
                 egui::RichText::new("(dataset registry not installed)")
                     .weak()
@@ -627,7 +640,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
             );
             return;
         }
-        // Snapshot: the rows below need `&mut World` to request a download.
+        // Snapshot: the rows below emit a typed request after painting.
         //
         // The heading is WHO declared it — the LunCo library that owns the
         // dataset ("celestial", "ephemeris", "modelica") or the twin's own
@@ -702,9 +715,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
                 });
         }
         if let Some(key) = requested {
-            if let Some(mut registry) = world.get_resource_mut::<DatasetRegistry>() {
-                registry.request(&key);
-            }
+            ctx.trigger(lunco_assets::datasets::RequestDataset { key });
         }
     });
 }
@@ -713,15 +724,15 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_custom_menu("Scenarios", |ui, world| {
-        let has_scene = world.get_resource::<CurrentScenePath>().is_some();
+    layout.register_custom_menu("Scenarios", |ui, ctx| {
+        let has_scene = ctx.resource::<CurrentScenePath>().is_some();
 
         ui.add_enabled_ui(has_scene, |ui| {
             if ui.button("🔄 Restart Scenario").clicked() {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
-                world.trigger(lunco_usd::RestartScene::default());
+                ctx.trigger(lunco_usd::RestartScene::default());
                 ui.close();
             }
         });
@@ -734,7 +745,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // tutorial by id via `StartTutorial`, which loads its scene + attaches
         // the orchestrator script. Hovering an entry reveals its blurb — the
         // plain-language "what does this teach" tip.
-        render_tutorials_submenu(ui, world);
+        render_tutorials_submenu(ui, ctx);
 
         // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
         // Twins fetched from a server into the local cache — loadable offline
@@ -743,8 +754,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         #[cfg(feature = "networking")]
         {
             use lunco_networking::scenario_sync::CachedTwinsRegistry;
-            let entries = world
-                .get_resource::<CachedTwinsRegistry>()
+            let entries = ctx
+                .resource::<CachedTwinsRegistry>()
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
             ui.menu_button(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
@@ -766,7 +777,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                         if let Some(scene) = entry.default_scene.clone() {
                             // Mounts the cache dir as this twin's root and yields the
                             // same `twin://<name>/<rel>` the host uses for the scene.
-                            let twins = world
+                            let twins = ctx
                                 .resource::<lunco_assets::twin_source::TwinRoots>()
                                 .clone();
                             let path = lunco_networking::scenario_sync::mount_scenario_twin(
@@ -775,7 +786,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                 &entry.name,
                                 &scene,
                             );
-                            world.trigger(lunco_usd::LoadScene {
+                            ctx.trigger(lunco_usd::LoadScene {
                                 path,
                                 root_prim: String::new(),
                             });
@@ -788,7 +799,10 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 
         ui.separator();
 
-        let Some(roots) = world.get_resource::<lunco_assets::twin_source::TwinRoots>() else {
+        let Some(roots) = ctx
+            .resource::<lunco_assets::twin_source::TwinRoots>()
+            .cloned()
+        else {
             ui.label(
                 bevy_egui::egui::RichText::new("(no TwinRoots resource)")
                     .weak()
@@ -797,7 +811,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         };
 
-        let Some(manifest) = world.get_resource::<lunco_assets::discovery::AssetManifest>() else {
+        let Some(manifest) = ctx.resource::<lunco_assets::discovery::AssetManifest>() else {
             return;
         };
         // On the web the listing arrives by fetch. "Not loaded yet" is not "no
@@ -815,9 +829,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // project's answer, not this menu's: each Twin declares `[usd] scenes`
         // in its `twin.toml`, the engine library uses its own `scenes/` layout.
         // See `discovery::list_scene_assets` for why the menu stopped deciding.
-        let mut assets = lunco_assets::discovery::list_scene_assets(manifest, roots);
-        // Names copied out here: `roots`/`manifest` borrow the world, and every
-        // click below needs `&mut World` to trigger the load.
+        let mut assets = lunco_assets::discovery::list_scene_assets(manifest, &roots);
+        // Names copied out here so every click can dispatch through `MenuCtx`.
         let twin_names = roots.names();
 
         // Test scenes are hidden unless the user asks for them: they are rigs
@@ -826,8 +839,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // above — a project's `scenes` pattern says what IS a scene, this says
         // which of them this menu offers. The pref is one checkbox in the
         // Settings menu, so a test scene is never unreachable.
-        let show_tests = world
-            .get_resource::<lunco_luncosim_edit::ui::asset_visibility::AssetVisibilitySettings>()
+        let show_tests = ctx
+            .resource::<lunco_luncosim_edit::ui::asset_visibility::AssetVisibilitySettings>()
             .is_some_and(|s| s.show_test_assets);
         if !show_tests {
             assets.retain(|asset| !lunco_assets::discovery::is_test_asset(&asset.rel));
@@ -852,7 +865,9 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // The store fills asynchronously, so a scene not yet read simply
         // shows no tooltip this frame and gets one on the next redraw.
         let descs: Vec<Option<String>> = {
-            let store = world.resource::<lunco_luncosim_edit::catalog::AssetMetaStore>();
+            let Some(store) = ctx.resource::<lunco_luncosim_edit::catalog::AssetMetaStore>() else {
+                return;
+            };
             assets
                 .iter()
                 .map(|a| store.description(&a.asset_path).map(str::to_string))
@@ -861,7 +876,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 
         let render =
             |ui: &mut bevy_egui::egui::Ui,
-             world: &mut World,
+             ctx: &mut MenuCtx,
              items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
                 for (asset, desc) in items {
                     let label = clean_scene_name(&asset.stem);
@@ -873,7 +888,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                         None => resp,
                     };
                     if resp.clicked() {
-                        world.trigger(lunco_usd::LoadScene {
+                        ctx.trigger(lunco_usd::LoadScene {
                             path: asset.asset_path.clone(),
                             root_prim: String::new(),
                         });
@@ -908,7 +923,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 continue;
             }
             ui.menu_button(format!("🌍 {name}  ({})", group.len()), |ui| {
-                render(ui, world, &group);
+                render(ui, ctx, &group);
             });
         }
 
@@ -919,7 +934,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .collect();
         if !library.is_empty() {
             ui.menu_button(format!("📚 Library  ({})", library.len()), |ui| {
-                render(ui, world, &library);
+                render(ui, ctx, &library);
             });
         }
         if show_tests {
@@ -932,7 +947,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                             .italics(),
                     );
                 } else {
-                    render(ui, world, &tests);
+                    render(ui, ctx, &tests);
                 }
             });
         }
@@ -943,14 +958,12 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 /// registered tutorial with a completion tick, a difficulty chip, and its blurb
 /// on hover; clicking starts it. Kept next to the scenes list so the menu is the
 /// single place to launch either a raw scene or a guided lesson.
-fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
+fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
 
-    let registry = world
-        .get_resource::<lunco_tutorial::TutorialRegistry>()
-        .cloned();
-    let progress = world
-        .get_resource::<lunco_tutorial::TutorialProgress>()
+    let registry = ctx.resource::<lunco_tutorial::TutorialRegistry>().cloned();
+    let progress = ctx
+        .resource::<lunco_tutorial::TutorialProgress>()
         .cloned()
         .unwrap_or_default();
 
@@ -985,7 +998,7 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
             // Hover tip: the plain-language "what this teaches" blurb.
             let resp = resp.on_hover_text(meta.blurb.as_str());
             if resp.clicked() {
-                world.trigger(lunco_tutorial::StartTutorial {
+                ctx.trigger(lunco_tutorial::StartTutorial {
                     id: meta.id.to_string(),
                 });
                 ui.close();

@@ -130,14 +130,14 @@ impl Plugin for PerspectiveHelpPlugin {
 /// so each subsystem contributes its *own* menu item at the point it
 /// registers its perspective — the workbench never hardcodes a list.
 pub(crate) fn register_help_menu_item(layout: &mut WorkbenchLayout, id: PerspectiveId) {
-    layout.register_help_menu(move |ui, world, _layout| {
-        let label = world
+    layout.register_help_menu(move |ui, ctx| {
+        let label = ctx
             .resource::<PerspectiveHelpRegistry>()
-            .get(id)
+            .and_then(|registry| registry.get(id))
             .map(|h| format!("📖 {} Help", h.title));
         if let Some(label) = label {
             if ui.button(label).clicked() {
-                world.resource_mut::<HelpPopup>().0 = Some(id);
+                ctx.set_resource(HelpPopup(Some(id)));
                 ui.close();
             }
         }

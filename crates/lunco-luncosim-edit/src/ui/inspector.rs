@@ -1,4 +1,4 @@
-//! Inspector panel — WorkbenchPanel implementation.
+//! Inspector panel — `lunco-workbench::Panel` implementation.
 //!
 //! Migrates the old standalone egui window to use bevy_workbench docking.
 //! Provides editable sliders for transform, physics, and wheel parameters.

@@ -26,7 +26,7 @@
 //! ## What this crate ships today
 //!
 //! - [`Panel`] trait: minimal render contract (`id`, `title`,
-//!   `default_slot`, `render(&mut Ui, &mut World)`)
+//!   `default_slot`, `render(&mut Ui, &mut PanelCtx)`)
 //! - [`WorkbenchLayout`] resource wrapping `egui_dock::DockState`
 //! - Perspective presets (slot-assignment DSL) — see [`Perspective`]
 //! - Auto-add of `bevy_egui::EguiPlugin` if the host hasn't
@@ -46,10 +46,7 @@
 //!   *perspective* preset, not arbitrary user split rearrangements
 //!   (egui_dock's tree isn't serialized; `TabId`/`PanelId` hold
 //!   `&'static str`).
-//! - **Document auto-reopen** — open paths are persisted but not yet
-//!   replayed on launch (needs per-domain open commands).
 //! - **Command palette** — `Ctrl+P` unbound.
-//! - **Theming / keybinds** — egui defaults only.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -64,6 +61,7 @@ use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
 mod editor_tabs;
+mod menu;
 mod panel;
 mod perspective;
 mod perspective_help;
@@ -118,6 +116,7 @@ pub use workspace_state::{
     WorkspaceStatePlugin,
 };
 
+pub use menu::{MenuCtx, UndoProbeCtx};
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot,
     TabId,
@@ -879,14 +878,15 @@ pub struct WorkbenchLayout {
     /// the closure is invoked each time the user opens the Settings
     /// drop-down. Keeps editor prefs / theme toggles / etc. in one
     /// discoverable place instead of scattered gear buttons.
-    pub(crate) settings_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) settings_menu:
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Named, scrollable groups within Settings.  Use this for a coherent
     /// feature area with enough rows that keeping it in the root menu would
     /// obscure unrelated preferences.
     pub(crate) settings_submenus: Vec<(
         String,
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
     )>,
 
     /// App-wide Edit menu contributions. Same pattern as
@@ -895,7 +895,7 @@ pub struct WorkbenchLayout {
     /// the global Edit menu can host domain-specific verbs (e.g. the
     /// code editor's Cut/Copy/Paste) without each plugin scattering its
     /// own toolbar.
-    pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Undo/redo availability probes. Domain plugins push a closure via
     /// [`WorkbenchLayout::register_undo_probe`] at Startup; each probe
@@ -906,22 +906,21 @@ pub struct WorkbenchLayout {
     /// the `EditorIntent` resolvers. With no probe answering, the menu
     /// falls back to "a document is active" so a domain without a probe
     /// keeps working Undo/Redo entries.
-    pub(crate) undo_probes: Vec<Box<dyn Fn(&World) -> Option<(bool, bool)> + Send + Sync>>,
+    pub(crate) undo_probes: Vec<Box<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>>,
 
     /// App-wide Help menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
     /// closure via [`WorkbenchLayout::register_help_menu`] at Startup
     /// so the Help drop-down can host tour / docs / about entries
     /// without each domain inventing its own help button.
-    pub(crate) help_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync>>,
+    pub(crate) help_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// App-wide File menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
     /// closure via [`WorkbenchLayout::register_file_menu`] at Startup so
     /// the File menu can host domain-specific verbs (e.g. Load Example)
     /// without hardcoding them in `lunco-workbench`.
-    pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// App-wide Time menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
@@ -929,12 +928,12 @@ pub struct WorkbenchLayout {
     /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
     /// live under ONE discoverable menu instead of on the toolbar and in
     /// floating overlays. The toolbar keeps pause/resume and nothing else.
-    pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Dynamic top-level menus contributed by domain plugins.
     pub(crate) custom_menus: Vec<(
         &'static str,
-        Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>,
+        Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>,
     )>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
@@ -1436,13 +1435,16 @@ impl WorkbenchLayout {
     /// runs immediately to seed the initial layout.
     /// Register a closure that contributes rows to the app-wide
     /// Settings drop-down in the menu bar. Called once per open of the
-    /// menu; the closure may read/write Bevy resources via `world`.
+    /// menu; the closure reads through [`MenuCtx`] and queues typed intent for
+    /// application after painting.
     ///
     /// Intended for domain plugins to expose editor / theme / pane
-    /// preferences without each plugin inventing its own gear button.
+    /// preferences without each plugin inventing its own gear button. Callbacks
+    /// may emit typed events or replace an existing resource through `MenuCtx`;
+    /// they cannot receive a raw `World` mutation closure.
     pub fn register_settings<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.settings_menu.push(Box::new(callback));
     }
@@ -1452,7 +1454,7 @@ impl WorkbenchLayout {
     /// another; the label is the single grouping key.
     pub fn register_settings_submenu<F>(&mut self, label: impl Into<String>, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         let label = label.into();
         if let Some((_, callbacks)) = self
@@ -1471,7 +1473,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_edit_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.edit_menu.push(Box::new(callback));
     }
@@ -1479,13 +1481,13 @@ impl WorkbenchLayout {
     /// Register an undo/redo availability probe for the global Edit menu.
     ///
     /// The probe returns `Some((can_undo, can_redo))` for documents its
-    /// domain owns (read the domain registry off `&World`), `None` for
+    /// domain owns (read the domain registry off [`UndoProbeCtx`]), `None` for
     /// anything else. First registered probe to answer wins — mirror of
     /// the `EditorIntent` resolver contract, so register exactly one per
     /// domain, next to [`register_edit_menu`](Self::register_edit_menu).
     pub fn register_undo_probe<F>(&mut self, probe: F)
     where
-        F: Fn(&World) -> Option<(bool, bool)> + Send + Sync + 'static,
+        F: Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync + 'static,
     {
         self.undo_probes.push(Box::new(probe));
     }
@@ -1494,7 +1496,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_help_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.help_menu.push(Box::new(callback));
     }
@@ -1503,7 +1505,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_file_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.file_menu.push(Box::new(callback));
     }
@@ -1517,7 +1519,7 @@ impl WorkbenchLayout {
     /// user cannot turn off.
     pub fn register_time_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.time_menu.push(Box::new(callback));
     }
@@ -1525,7 +1527,7 @@ impl WorkbenchLayout {
     /// Register a custom top-level menu button.
     pub fn register_custom_menu<F>(&mut self, name: &'static str, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.custom_menus.push((name, Box::new(callback)));
     }
@@ -2995,6 +2997,21 @@ fn menu_item(
         .on_disabled_hover_text(disabled_hint)
 }
 
+/// Run one contributed menu callback behind the capability-limited
+/// [`MenuCtx`], then apply its typed intent while the workbench layout is
+/// still temporarily removed from the world.
+fn run_menu_callback(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    callback: &(dyn Fn(&mut egui::Ui, &mut MenuCtx) + Send + Sync),
+) {
+    let mut menu = MenuCtx::new(world);
+    callback(ui, &mut menu);
+    for intent in menu.into_intents() {
+        intent.apply(world);
+    }
+}
+
 fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
@@ -3410,7 +3427,7 @@ fn render_layout(
                 let callbacks = std::mem::take(&mut layout.file_menu);
                 if !callbacks.is_empty() {
                     for cb in &callbacks {
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                     ui.separator();
                 }
@@ -3439,7 +3456,7 @@ fn render_layout(
                 let (can_undo, can_redo) = layout
                     .undo_probes
                     .iter()
-                    .find_map(|probe| probe(world))
+                    .find_map(|probe| probe(&UndoProbeCtx::new(world)))
                     .unwrap_or((has_active, has_active));
                 let undo_hint = if has_active {
                     "Nothing to undo"
@@ -3465,12 +3482,13 @@ fn render_layout(
                 // Domain plugins (e.g. the Modelica code editor)
                 // contribute Cut/Copy/Paste/Select-All here via
                 // `register_edit_menu`. Same extraction pattern as the
-                // Settings menu so callbacks can take `&mut World`.
+                // Settings menu so callbacks receive the capability-limited
+                // `MenuCtx`.
                 let callbacks = std::mem::take(&mut layout.edit_menu);
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.edit_menu = callbacks;
@@ -3682,7 +3700,7 @@ fn render_layout(
                 };
 
                 let r_custom = ui.menu_button(text, |ui| {
-                    cb(ui, world);
+                    run_menu_callback(ui, world, cb.as_ref());
                 });
 
                 if highlight {
@@ -3715,9 +3733,8 @@ fn render_layout(
                 }
                 ui.separator();
 
-                // Take the callbacks out so we can pass &mut World into
-                // them while the layout is still extracted. Restored
-                // at the end of the block.
+                // Take the callbacks out while the layout is still extracted;
+                // each callback receives `MenuCtx` and is restored below.
                 let callbacks = std::mem::take(&mut layout.settings_menu);
                 if callbacks.is_empty() {
                     ui.label(
@@ -3730,7 +3747,7 @@ fn render_layout(
                         if i > 0 {
                             ui.separator();
                         }
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.settings_menu = callbacks;
@@ -3749,7 +3766,7 @@ fn render_layout(
                                     if i > 0 {
                                         ui.separator();
                                     }
-                                    callback(ui, world);
+                                    run_menu_callback(ui, world, callback.as_ref());
                                 }
                             });
                     });
@@ -3768,7 +3785,7 @@ fn render_layout(
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world, layout);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.help_menu = callbacks;
@@ -4010,7 +4027,7 @@ fn render_layout(
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.time_menu = callbacks;
@@ -4737,35 +4754,40 @@ fn register_terrain_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Terrain").weak().small());
-        if let Some(mut settings) = world.get_resource_mut::<lunco_settings::TerrainSettings>() {
-            ui.checkbox(
-                &mut settings.enable_shaders,
-                "Enable high-quality procedural shaders",
-            )
-            .on_hover_text(
-                "Enable dynamic micro-relief normal mapping and albedo mottle. \
-                     Turning this off improves WebAssembly/browser frame rate. \
-                     Persisted to ~/.lunco/settings.json.",
-            );
-            ui.add(
-                egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
-                    .text("Camera detail radius (m)"),
-            )
-            .on_hover_text(
-                "Distance around each active terrain camera that requests the finest \
-                 available terrain geometry. Persisted to ~/.lunco/settings.json.",
-            );
-            ui.add(
-                egui::Slider::new(&mut settings.visual_detail_hysteresis_m, 0.0..=200.0)
-                    .text("Camera detail retention (m)"),
-            )
-            .on_hover_text(
-                "Extra distance that keeps already-refined tiles resident while the \
-                 camera moves away, preventing fine-to-coarse-to-fine flicker. \
+        let Some(mut settings) = ctx.resource::<lunco_settings::TerrainSettings>().cloned() else {
+            return;
+        };
+        let original = settings.clone();
+        ui.checkbox(
+            &mut settings.enable_shaders,
+            "Enable high-quality procedural shaders",
+        )
+        .on_hover_text(
+            "Enable dynamic micro-relief normal mapping and albedo mottle. \
+                 Turning this off improves WebAssembly/browser frame rate. \
                  Persisted to ~/.lunco/settings.json.",
-            );
+        );
+        ui.add(
+            egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
+                .text("Camera detail radius (m)"),
+        )
+        .on_hover_text(
+            "Distance around each active terrain camera that requests the finest \
+             available terrain geometry. Persisted to ~/.lunco/settings.json.",
+        );
+        ui.add(
+            egui::Slider::new(&mut settings.visual_detail_hysteresis_m, 0.0..=200.0)
+                .text("Camera detail retention (m)"),
+        )
+        .on_hover_text(
+            "Extra distance that keeps already-refined tiles resident while the \
+             camera moves away, preventing fine-to-coarse-to-fine flicker. \
+             Persisted to ~/.lunco/settings.json.",
+        );
+        if settings != original {
+            ctx.set_resource(settings);
         }
     });
 }

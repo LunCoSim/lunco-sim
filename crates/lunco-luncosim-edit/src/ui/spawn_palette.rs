@@ -1,4 +1,4 @@
-//! Spawn palette panel — WorkbenchPanel implementation.
+//! Spawn palette panel — `lunco-workbench::Panel` implementation.
 //!
 //! Migrates the old standalone egui window to use bevy_workbench docking.
 //! The panel lists spawnable objects by category and supports click/drag to select.

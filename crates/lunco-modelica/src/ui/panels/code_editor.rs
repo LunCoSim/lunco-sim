@@ -42,6 +42,46 @@ pub struct CodeEditorMenuRequest {
     pub select_all: bool,
 }
 
+/// One-shot edit verb raised by the global Edit menu. The editor owns the
+/// request outbox because only it has the focused text selection and clipboard
+/// context needed to execute the verb.
+#[derive(Event, Clone, Copy, Debug)]
+pub enum CodeEditorMenuAction {
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+pub(crate) fn on_code_editor_menu_action(
+    trigger: On<CodeEditorMenuAction>,
+    mut request: ResMut<CodeEditorMenuRequest>,
+) {
+    match *trigger.event() {
+        CodeEditorMenuAction::Cut => request.cut = true,
+        CodeEditorMenuAction::Copy => request.copy = true,
+        CodeEditorMenuAction::Paste => request.paste = true,
+        CodeEditorMenuAction::SelectAll => request.select_all = true,
+    }
+}
+
+/// Settings-menu update for the live editor buffer. The menu cannot mutate
+/// the buffer in place because it is an editor-owned state machine; this
+/// event keeps the mutation at the editor boundary.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct EditorSettingsChanged {
+    pub word_wrap: bool,
+    pub auto_indent: bool,
+}
+
+pub(crate) fn on_editor_settings_changed(
+    trigger: On<EditorSettingsChanged>,
+    mut buffer: ResMut<EditorBufferState>,
+) {
+    buffer.word_wrap = trigger.event().word_wrap;
+    buffer.auto_indent = trigger.event().auto_indent;
+}
+
 /// Tracks which model the editor buffer belongs to, to detect model switches.
 #[derive(Resource)]
 pub struct EditorBufferState {

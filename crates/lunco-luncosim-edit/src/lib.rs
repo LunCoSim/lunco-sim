@@ -61,7 +61,7 @@ pub mod spawn;
 #[cfg(feature = "ui")]
 pub mod terrain_tools;
 
-/// UI panels — WorkbenchPanel implementations (for editor mode).
+/// UI panels — `lunco-workbench::Panel` implementations (for editor mode).
 #[cfg(feature = "ui")]
 pub mod ui;
 

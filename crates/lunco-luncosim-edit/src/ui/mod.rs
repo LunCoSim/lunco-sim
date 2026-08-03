@@ -605,14 +605,26 @@ fn register_debug_viz_settings(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Debug Visualization").weak().small());
-        let mut settings = world.resource_mut::<crate::joint_viz::JointVizSettings>();
+        let Some(mut settings) = ctx
+            .resource::<crate::joint_viz::JointVizSettings>()
+            .copied()
+        else {
+            return;
+        };
+        let original_settings = settings;
+        let Some(mut gizmo) = ctx
+            .resource::<crate::physics_gizmo::PhysicsGizmoSettings>()
+            .copied()
+        else {
+            return;
+        };
+        let original_gizmo = gizmo;
         ui.checkbox(&mut settings.show_joints, "Show joints")
             .on_hover_text("Draw anchor dots + axis lines for every Avian joint");
         ui.checkbox(&mut settings.show_wheel_forces, "Show wheel forces")
             .on_hover_text("Draw a force box + arrow at every wheel");
-        let mut gizmo = world.resource_mut::<crate::physics_gizmo::PhysicsGizmoSettings>();
         ui.checkbox(&mut gizmo.show_mass, "Selected-body mass")
             .on_hover_text(
                 "CoM marker + inertia ellipsoid/axes for the selected \
@@ -628,6 +640,12 @@ fn register_debug_viz_settings(world: &mut World) {
                 "XYZ frame triads (RGB = XYZ) + revolute anchors for the \
                  selected vessel's rigid-body parts",
             );
+        if settings != original_settings {
+            ctx.set_resource(settings);
+        }
+        if gizmo != original_gizmo {
+            ctx.set_resource(gizmo);
+        }
     });
 }
 

@@ -137,15 +137,21 @@ fn register_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Performance HUD").weak().small());
-        let mut settings = world.resource_mut::<PerfHudSettings>();
+        let Some(mut settings) = ctx.resource::<PerfHudSettings>().copied() else {
+            return;
+        };
+        let original = settings;
         ui.checkbox(&mut settings.enabled, "Show FPS / frame time in status bar")
             .on_hover_text(
                 "Bottom-right of the status bar shows live FPS, frame \
                  time, and physics step time when an avian-aware crate \
                  is loaded. Persisted to ~/.lunco/settings.json.",
             );
+        if settings != original {
+            ctx.set_resource(settings);
+        }
     });
 }
 

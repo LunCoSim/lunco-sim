@@ -691,6 +691,17 @@ fn kick_web_msl_fetcher(slot: Res<MslLoadSlot>, mut kicked: Local<bool>) {
 /// Plugin that owns MSL asset loading. Add once during app build.
 pub struct MslRemotePlugin;
 
+/// User intent for the MSL installer. UI emits this typed event; the MSL
+/// owner performs cancellation, cache operations, and task replacement here.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Event, Clone, Copy, Debug)]
+pub enum MslInstallAction {
+    Cancel,
+    Reinstall,
+    ClearCache,
+    OpenCacheFolder,
+}
+
 /// Whether the native MSL installer may contact the network at startup.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MslNetworkAccess(pub bool);
@@ -704,6 +715,9 @@ impl Plugin for MslRemotePlugin {
         // of truth.
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<crate::msl_settings::MslSettings>();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_observer(on_msl_install_action);
 
         // (The MSL-state → status-bus mirror is a UI reactive observer; it
         // lives in `ui::core_observers` and is registered by the UI plugin.
@@ -1102,8 +1116,8 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
 /// Cancels any in-flight task, wipes the cache, clears the published
 /// source, reseeds the cancel flag and slot, and spawns a fresh task.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn reinstall_msl(world: &mut World) {
-    if let Some(old) = world.get_resource::<MslInstallCancel>() {
+fn reinstall_msl(commands: &mut Commands, old: Option<&MslInstallCancel>) {
+    if let Some(old) = old {
         old.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let dir = lunco_assets::cache_subdir("msl");
@@ -1112,17 +1126,69 @@ pub fn reinstall_msl(world: &mut World) {
             bevy::log::warn!("[MSL] could not clear cache at {}: {e}", dir.display());
         }
     }
-    world.insert_resource(MslLoadState::Loading {
+    commands.insert_resource(MslLoadState::Loading {
         phase: MslLoadPhase::FetchingBundle,
         bytes_done: 0,
         bytes_total: 0,
     });
     let slot: NativeInstallSlot = Arc::new(Mutex::new(NativeInstallSlotInner::default()));
     let cancel = MslInstallCancel::default();
-    world.insert_resource(NativeMslInstallSlot(slot.clone()));
-    world.insert_resource(cancel.clone());
+    commands.insert_resource(NativeMslInstallSlot(slot.clone()));
+    commands.insert_resource(cancel.clone());
     spawn_native_install(slot, cancel.0);
     bevy::log::info!("[MSL] reinstall requested by user");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn on_msl_install_action(
+    trigger: On<MslInstallAction>,
+    mut commands: Commands,
+    cancel: Option<Res<MslInstallCancel>>,
+) {
+    match *trigger.event() {
+        MslInstallAction::Cancel => {
+            if let Some(cancel) = cancel.as_ref() {
+                cancel.0.store(true, std::sync::atomic::Ordering::Relaxed);
+                info!("[MSL] cancel requested by user");
+            }
+        }
+        MslInstallAction::Reinstall => reinstall_msl(&mut commands, cancel.as_deref()),
+        MslInstallAction::ClearCache => {
+            let dir = lunco_assets::cache_subdir("msl");
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => info!("[MSL] cleared {}", dir.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!("[MSL] could not clear {}: {e}", dir.display()),
+            }
+        }
+        MslInstallAction::OpenCacheFolder => {
+            let dir = lunco_assets::cache_subdir("msl");
+            if let Err(e) = open_in_file_manager(&dir) {
+                warn!("[MSL] could not open {}: {e}", dir.display());
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(path).spawn()?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer").arg(path).spawn()?;
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
