@@ -201,7 +201,7 @@ pub struct StatusEvent {
     /// Wall-clock time the event was pushed, used for ordering and decay.
     pub at: Instant,
     /// Opaque id when this event is the active progress for a [`BusyHandle`].
-    /// `None` for discrete events and for legacy [`StatusBus::push_progress`].
+    /// `None` for discrete events and direct global progress events.
     pub busy_id: Option<BusyId>,
     /// Optional cancellation flag shared with the originating task.
     /// Indicators rendered for an entry whose `cancel` is `Some` show
@@ -249,6 +249,11 @@ pub const SCENE_SOURCE: &str = "scene";
 /// the offline recorder waits on the same lifecycle that holds a not-yet-
 /// runnable vehicle out of physics.
 pub const MODELICA_SOURCE: &str = "modelica";
+
+/// The status source for the Modelica editor's active document/compiler.
+/// Kept separate from [`MODELICA_SOURCE`], which reports USD-driven runtime
+/// participants, so editor transitions cannot clear or replace scene status.
+pub const MODELICA_EDITOR_SOURCE: &str = "modelica-editor";
 
 /// Workbench-wide status bus. Insert via [`StatusBusPlugin`].
 ///
@@ -376,8 +381,9 @@ impl StatusBus {
         self.seq = self.seq.wrapping_add(1);
     }
 
-    /// Drop the active progress tick for `(BusyScope::Global, source)`.
-    /// Legacy entry point — prefer [`BusyHandle`] drop for new code.
+    /// Remove an externally-owned progress tick for `(BusyScope::Global, source)`.
+    /// Work with an explicit lifetime should use [`BusyHandle`] so dropping the
+    /// handle clears its own scoped entry automatically.
     pub fn clear_progress(&mut self, source: &'static str) {
         if self
             .active_progress
@@ -833,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_push_progress_targets_global_scope() {
+    fn global_push_progress_targets_global_scope() {
         let mut bus = StatusBus::default();
         bus.push_progress("MSL", "loading", 1, 10);
         assert!(bus.is_busy(BusyScope::Global));

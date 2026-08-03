@@ -37,8 +37,7 @@ pub async fn handle_health() -> impl IntoResponse {
 /// a scene load / program compile / participant init. Answers `200` with the
 /// structured status either way — "not ready" is a valid state, not an error.
 pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse {
-    // A query provider — returns data inline, never `command_accepted` — so the
-    // sync-wait path is a no-op here.
+    // The query provider returns its data inline.
     execute_api_request(
         bridge,
         ApiRequest::ExecuteCommand {
@@ -55,8 +54,7 @@ pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse
 /// structural/still-loading. `200` with the report either way — "some broken" is
 /// a valid state to report, not a request error.
 pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoResponse {
-    // A query provider — returns data inline, never `command_accepted` — so the
-    // sync-wait path is a no-op here.
+    // The query provider returns its data inline.
     execute_api_request(
         bridge,
         ApiRequest::ExecuteCommand {
@@ -71,8 +69,7 @@ pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoRe
 /// Same data the MCP tool list is built from; a GET so it is trivially
 /// browsable and scriptable.
 pub async fn handle_schema(State(bridge): State<HttpBridge>) -> impl IntoResponse {
-    // A query — it returns data directly, never `command_accepted` — so the
-    // sync-wait path is a no-op here.
+    // DiscoverSchema returns its data inline.
     execute_api_request(bridge, ApiRequest::DiscoverSchema).await
 }
 

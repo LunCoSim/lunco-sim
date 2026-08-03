@@ -872,8 +872,6 @@ pub struct WorkbenchLayout {
     pub(crate) right_inspector: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 
-    pub(crate) status: Option<StatusContent>,
-
     /// App-wide Settings menu contributions. Domain plugins push a
     /// closure via [`WorkbenchLayout::register_settings`] at Startup;
     /// the closure is invoked each time the user opens the Settings
@@ -1017,7 +1015,6 @@ impl Default for WorkbenchLayout {
             active_center_tab: 0,
             right_inspector: Vec::new(),
             bottom: Vec::new(),
-            status: None,
             settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
             edit_menu: Vec::new(),
@@ -1424,11 +1421,6 @@ impl WorkbenchLayout {
     /// Toggle visibility of the activity bar on the far left.
     pub fn toggle_activity_bar(&mut self) {
         self.activity_bar = !self.activity_bar;
-    }
-
-    /// Set a single-line string rendered in the status bar.
-    pub fn set_status(&mut self, text: impl Into<String>) {
-        self.status = Some(StatusContent::Text(text.into()));
     }
 
     /// Register a perspective and store it in the switcher. If this is the
@@ -2455,12 +2447,6 @@ impl WorkbenchLayout {
             .filter(|id| self.panels.contains_key(id))
             .all(|id| in_dock.contains(id))
     }
-}
-
-/// Content options for the status bar.
-pub enum StatusContent {
-    /// A simple single-line string.
-    Text(String),
 }
 
 /// Extension trait on [`App`] for ergonomic panel + perspective registration.
@@ -4114,11 +4100,9 @@ fn render_layout(
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
-    // Falls back to the legacy `layout.status` text when the bus is
-    // empty so existing callers keep working during the migration.
     egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
-        render_status_bar_inner(ui, world, layout, theme);
+        render_status_bar_inner(ui, world, theme);
     });
 
     // ── Activity bar ────────────────────────────────────────────────
@@ -4392,12 +4376,7 @@ fn render_layout(
 /// Render the bottom status strip. Reads from [`status_bus::StatusBus`]
 /// (cross-cutting; populated by MSL load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
-fn render_status_bar_inner(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    layout: &WorkbenchLayout,
-    theme: &lunco_theme::Theme,
-) {
+fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
     use status_bus::{StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
@@ -4480,18 +4459,7 @@ fn render_status_bar_inner(
                         );
                     }
                 } else {
-                    // Bus is empty — fall back to whatever a panel
-                    // pushed via the legacy `layout.status_bar(...)`
-                    // API so existing call sites keep working.
-                    match layout.status.as_ref() {
-                        Some(StatusContent::Text(s)) => {
-                            let text = egui::RichText::new(s).small();
-                            ui.add(egui::Label::new(text).truncate());
-                        }
-                        None => {
-                            ui.label(egui::RichText::new("ready").small().weak());
-                        }
-                    }
+                    ui.label(egui::RichText::new("ready").small().weak());
                 }
             })
             .response

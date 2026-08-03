@@ -40,7 +40,8 @@ fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
 }
 
 fn parse(source: &str) -> Option<StoredDefinition> {
-    Some(parse_recovered(source, "model.mo"))
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+    (!syntax.has_errors()).then(|| syntax.best_effort().clone())
 }
 
 // ---------------------------------------------------------------------------

@@ -857,7 +857,7 @@ pub struct SetClock {
 /// `local_t` and the seek branch to `0.0`, both of which are wrong for a ROOT
 /// clock — and the celestial clock (the one users actually scale) is a root.
 ///
-/// The cost was measured, not theoretical. With the fallback, the first rate
+/// The cost was measured, not theoretical. With the old source-time guess, the first rate
 /// click happens to be continuous (while `scale == 1, offset == 0` a root's
 /// `local_t` equals its source), and every later click jumps by
 /// `scale · (scale_prev − 1) · Δt`: the sky moved −17 d at 1000×, +169 637 d at

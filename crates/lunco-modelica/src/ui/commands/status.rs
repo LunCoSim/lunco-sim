@@ -1,6 +1,6 @@
-//! Periodic update/sync systems: StatusBar and UnsavedDocs.
+//! Periodic update/sync systems: status-bus and UnsavedDocs.
 
-use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentDiagnostics;
 
@@ -38,17 +38,17 @@ pub fn publish_unsaved_modelica_docs(
 }
 
 pub fn update_status_bar(
-    workbench: Res<WorkbenchState>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     compile_states: Res<DocumentDiagnostics>,
-    layout: Option<ResMut<lunco_workbench::WorkbenchLayout>>,
     registry: Res<ModelicaDocumentRegistry>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut last: Local<Option<String>>,
 ) {
-    let Some(mut layout) = layout else { return };
-    let any_change = workbench.is_changed()
-        || compile_states.is_changed()
+    let Some(mut bus) = bus else { return };
+    let any_change = compile_states.is_changed()
+        || registry.is_changed()
         || workspace.as_ref().map(|w| w.is_changed()).unwrap_or(false);
-    if !any_change && !layout.is_added() {
+    if !any_change && last.is_some() {
         return;
     }
     let active_doc = workspace.as_ref().and_then(|w| w.active_document);
@@ -64,14 +64,45 @@ pub fn update_status_bar(
         })
         .unwrap_or_else(|| "(untitled)".to_string());
 
-    let text = match active_doc {
-        None => "ready".to_string(),
+    let (text, level, compiling) = match active_doc {
+        None => (
+            "ready".to_string(),
+            lunco_workbench::status_bus::StatusLevel::Info,
+            false,
+        ),
         Some(doc) => match compile_states.state_of(doc) {
-            lunco_doc::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
-            lunco_doc::CompileState::Error => format!("⚠ Compile error in {model_name}"),
-            lunco_doc::CompileState::Ready => format!("✓ Compiled {model_name}"),
-            lunco_doc::CompileState::Idle => format!("● {model_name}"),
+            lunco_doc::CompileState::Compiling => (
+                format!("⏳ Compiling {model_name}…"),
+                lunco_workbench::status_bus::StatusLevel::Progress,
+                true,
+            ),
+            lunco_doc::CompileState::Error => (
+                format!("⚠ Compile error in {model_name}"),
+                lunco_workbench::status_bus::StatusLevel::Error,
+                false,
+            ),
+            lunco_doc::CompileState::Ready => (
+                format!("✓ Compiled {model_name}"),
+                lunco_workbench::status_bus::StatusLevel::Info,
+                false,
+            ),
+            lunco_doc::CompileState::Idle => (
+                format!("● {model_name}"),
+                lunco_workbench::status_bus::StatusLevel::Info,
+                false,
+            ),
         },
     };
-    layout.set_status(text);
+    if last.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    *last = Some(text.clone());
+
+    const SOURCE: &str = lunco_workbench::status_bus::MODELICA_EDITOR_SOURCE;
+    if compiling {
+        bus.push_progress(SOURCE, text, 0, 0);
+    } else {
+        bus.clear_progress(SOURCE);
+        bus.push(SOURCE, level, text);
+    }
 }
