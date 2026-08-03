@@ -5,9 +5,9 @@
     metersPerUnit = 1
 )
 
-# Two authoring faults the reader must REJECT rather than emit: a member whose
-# asset names no Modelica class (no `models/` package root, no subIdentifier),
-# and a non-finite constant that would be spelled `NaN` in generated source.
+# Two authoring faults the reader must REJECT rather than emit: a member without
+# the source asset required for asynchronous class resolution, and a non-finite
+# constant that would be spelled `NaN` in generated source.
 def Xform "Rig"
 {
     def Scope "Electrical" (
@@ -26,7 +26,6 @@ def Xform "Rig"
     )
     {
         uniform token info:implementationSource = "sourceAsset"
-        uniform asset info:sourceAsset = @twin://parts/Battery.mo@
         float outputs:soc_out
         custom token connectors:p.connect = </Rig/Motor.connectors:p>
     }

@@ -1,21 +1,17 @@
 //! The USD side of a **Modelica program facet** — one reader, shared by every
 //! consumer of that authoring contract.
 //!
-//! Three places used to answer "is this prim a Modelica component, and what
-//! class does it instantiate?" independently: the runtime network projector
-//! (`lunco-usd-sim`), the per-prim program binder (same crate), and the lint
-//! fact producer (`lunco-usd-avian`). They disagreed — the lint accepted any
-//! `.mo` asset while the projector additionally needed a `models/` root to
-//! invent the class name — so an asset could lint clean and be rejected at
-//! load with a different message. The contract lives here now, and the callers
-//! read it.
+//! The runtime network projector resolves the Modelica class from the loaded
+//! source file. This module owns only the composed-USD contract that must hold
+//! before that asynchronous source resolution can begin; the lint fact producer
+//! and the runtime projector call the same validator.
 //!
 //! Modelica lexical rules (identifiers, keywords, the mangling used to spell a
 //! USD path as an identifier) live here for the same reason: the authoring
 //! check and the code emitter must use ONE definition of "valid member name",
 //! and this is the crate both sides already depend on.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 // `StageView` rather than `impl UsdRead`: the composed reads this needs
 // (`value_str`, `collection_members`) are the view's own, and every caller —
@@ -33,23 +29,25 @@ pub struct ProgramSourceIssue {
     pub message: String,
 }
 
-/// The Modelica class a program facet instantiates, or why it has none.
+/// The source reference authored by a Modelica program facet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelicaSourceRef {
+    /// The asset containing the Modelica source.
+    pub asset: String,
+    /// An optional fully-qualified definition selected inside the source file.
+    pub sub_identifier: Option<String>,
+}
+
+/// Why a prim that claims to be a Modelica program facet cannot enter source
+/// resolution.
 ///
-/// `info:sourceAsset:subIdentifier` wins when authored — that is USD's own way
-/// of naming one entity inside a source file, and it is the only correct answer
-/// for a `package.mo`. Otherwise the class is derived from the asset path below
-/// its `models/` root, which is the layout the shipped library uses (`within
-/// LunCo.Electrical;` in `models/LunCo/Electrical/Battery.mo`).
-///
-/// The `.mo` itself is NOT parsed here: this runs inside stage reads on the web
-/// too, where the file is an unfetched HTTP resource. A path whose package root
-/// cannot be established is therefore a hard, named error asking for the
-/// `subIdentifier` rather than a guess — a guessed class surfaces much later as
-/// an unattributable "class not found" from the compiler.
-pub fn modelica_member_class(
+/// The `.mo` itself is deliberately NOT parsed here: this runs inside stage
+/// reads on the web too, where the file may still be unfetched. The loaded
+/// source resolver is the only authority for the class name.
+pub fn modelica_source_ref(
     view: &StageView<'_>,
     prim: &SdfPath,
-) -> Result<String, ProgramSourceIssue> {
+) -> Result<ModelicaSourceRef, ProgramSourceIssue> {
     let implementation = view
         .value_str(prim, "info:implementationSource")
         .unwrap_or_default();
@@ -60,7 +58,7 @@ pub fn modelica_member_class(
                 .into(),
         });
     }
-    let Some(source) = view.asset(prim, "info:sourceAsset") else {
+    let Some(asset) = view.asset(prim, "info:sourceAsset") else {
         return Err(ProgramSourceIssue {
             property: format!("{prim}.info:sourceAsset"),
             message: "a Modelica program facet must author a .mo info:sourceAsset".into(),
@@ -69,39 +67,18 @@ pub fn modelica_member_class(
     let sub_identifier = view
         .value_str(prim, "info:sourceAsset:subIdentifier")
         .filter(|value| !value.is_empty());
-    model_class_from_asset(&source, sub_identifier.as_deref()).ok_or(ProgramSourceIssue {
-        property: format!("{prim}.info:sourceAsset"),
-        message: format!(
-            "`{source}` does not name a Modelica class: point it at a `.mo` under a `models/` \
-             root, or author info:sourceAsset:subIdentifier with the fully-qualified class name"
-        ),
-    })
-}
-
-/// The class named by an asset path (+ optional `subIdentifier`), or `None`.
-///
-/// `rsplit_once` deliberately: the package root is the LAST `models/` segment on
-/// the path, so a twin cached under `…/models/cache/models/LunCo/…` still
-/// resolves to `LunCo.…` instead of `cache.models.LunCo.…`.
-pub fn model_class_from_asset(asset: &str, sub_identifier: Option<&str>) -> Option<String> {
-    if let Some(class) = sub_identifier {
-        return is_modelica_class_name(class).then(|| class.to_string());
+    if let Some(class) = sub_identifier.as_deref() {
+        if class.is_empty() || !class.split('.').all(is_modelica_identifier) {
+            return Err(ProgramSourceIssue {
+                property: format!("{prim}.info:sourceAsset:subIdentifier"),
+                message: format!("`{class}` is not a fully-qualified Modelica class name"),
+            });
+        }
     }
-    let path = asset
-        .strip_prefix("lunco://")
-        .or_else(|| asset.strip_prefix("twin://"))
-        .unwrap_or(asset);
-    let model_path = match path.rsplit_once("models/") {
-        Some((_, tail)) => tail,
-        None => return None,
-    };
-    let class = model_path.strip_suffix(".mo")?;
-    let class = class.replace('/', ".");
-    is_modelica_class_name(&class).then_some(class)
-}
-
-pub fn is_modelica_class_name(class: &str) -> bool {
-    !class.is_empty() && class.split('.').all(is_modelica_identifier)
+    Ok(ModelicaSourceRef {
+        asset,
+        sub_identifier,
+    })
 }
 
 /// Is `prim` the root of a projected domain network — i.e. does it carry the
@@ -134,6 +111,65 @@ pub fn network_member_paths(view: &StageView<'_>) -> HashSet<String> {
         members.extend(paths.into_iter().map(|path| path.to_string()));
     }
     members
+}
+
+/// The undirected topology used to derive synthesis units from a composed
+/// program graph.
+///
+/// Both acausal `connectors:*` edges and internal causal output-to-input edges
+/// are represented here. The graph deliberately carries no domain vocabulary:
+/// electrical, thermal, harness, and future synthesizers all need the same
+/// deterministic connected-component operation, while the rules for emitting
+/// a component remain owned by the selected synthesizer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProgramGraph {
+    nodes: BTreeSet<String>,
+    edges: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl ProgramGraph {
+    /// Add a program facet, including an isolated facet as a one-node unit.
+    pub fn add_node(&mut self, node: impl Into<String>) {
+        let node = node.into();
+        self.nodes.insert(node.clone());
+        self.edges.entry(node).or_default();
+    }
+
+    /// Add an undirected relation between two program facets.
+    pub fn connect(&mut self, left: impl Into<String>, right: impl Into<String>) {
+        let left = left.into();
+        let right = right.into();
+        self.add_node(left.clone());
+        self.add_node(right.clone());
+        self.edges
+            .entry(left.clone())
+            .or_default()
+            .insert(right.clone());
+        self.edges.entry(right).or_default().insert(left);
+    }
+
+    /// Return stable connected units, sorted by their first composed path.
+    pub fn connected_components(&self) -> Vec<Vec<String>> {
+        let mut unseen = self.nodes.clone();
+        let mut units = Vec::new();
+        while let Some(seed) = unseen.iter().next().cloned() {
+            let mut pending = vec![seed];
+            let mut unit = Vec::new();
+            while let Some(current) = pending.pop() {
+                if !unseen.remove(&current) {
+                    continue;
+                }
+                unit.push(current.clone());
+                if let Some(neighbors) = self.edges.get(&current) {
+                    pending.extend(neighbors.iter().cloned());
+                }
+            }
+            unit.sort();
+            units.push(unit);
+        }
+        units.sort_by(|left, right| left.first().cmp(&right.first()));
+        units
+    }
 }
 
 /// The Modelica keywords a generated or authored member name may not be.
@@ -248,45 +284,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn derives_qualified_class_from_model_asset_path() {
-        assert_eq!(
-            model_class_from_asset("lunco://models/LunCo/Electrical/Battery.mo", None),
-            Some("LunCo.Electrical.Battery".into())
-        );
-        assert_eq!(
-            model_class_from_asset(
-                "lunco://models/vendor/package.mo",
-                Some("Vendor.Power.CustomBattery")
-            ),
-            Some("Vendor.Power.CustomBattery".into())
-        );
-        assert_eq!(
-            model_class_from_asset("lunco://models/vendor/package.mo", Some("bad-class")),
-            None
-        );
-    }
-
-    #[test]
-    fn package_root_is_the_last_models_segment() {
-        assert_eq!(
-            model_class_from_asset("twin://cache/models/twin/models/Site/Rover.mo", None),
-            Some("Site.Rover".into())
-        );
-    }
-
-    #[test]
-    fn a_source_outside_a_models_root_needs_a_sub_identifier() {
-        assert_eq!(
-            model_class_from_asset("twin://parts/Battery.mo", None),
-            None
-        );
-        assert_eq!(
-            model_class_from_asset("twin://parts/Battery.mo", Some("Twin.Parts.Battery")),
-            Some("Twin.Parts.Battery".into())
-        );
-    }
-
-    #[test]
     fn generated_identifiers_are_injective_and_avoid_keywords() {
         assert_ne!(
             modelica_path_identifier("Motor-A"),
@@ -295,5 +292,26 @@ mod tests {
         assert_eq!(modelica_identifier("model"), "usd_model");
         assert_eq!(modelica_identifier("3phase"), "usd_3phase");
         assert!(is_modelica_identifier(&modelica_identifier("left/right")));
+    }
+
+    #[test]
+    fn program_graph_returns_stable_units_for_acausal_and_causal_edges() {
+        let mut graph = ProgramGraph::default();
+        graph.add_node("/Rover/Thermal/LeftMass");
+        graph.connect("/Rover/Thermal/LeftMass", "/Rover/Thermal/LeftRadiator");
+        graph.connect("/Rover/Thermal/LeftLoad", "/Rover/Thermal/LeftMass");
+        graph.add_node("/Rover/Thermal/RightMass");
+
+        assert_eq!(
+            graph.connected_components(),
+            vec![
+                vec![
+                    "/Rover/Thermal/LeftLoad".to_string(),
+                    "/Rover/Thermal/LeftMass".to_string(),
+                    "/Rover/Thermal/LeftRadiator".to_string(),
+                ],
+                vec!["/Rover/Thermal/RightMass".to_string()],
+            ]
+        );
     }
 }

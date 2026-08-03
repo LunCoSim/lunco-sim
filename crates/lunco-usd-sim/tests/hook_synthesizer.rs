@@ -30,7 +30,7 @@ fn emit(net) {
     }
     src += "equation\n";
     src += "end " + net.model_name + ";\n";
-    src
+    #{ source: src }
 }
 "#;
 
@@ -40,6 +40,23 @@ fn stage(fixture: &str) -> lunco_usd_bevy::CanonicalStage {
         .join(fixture);
     let composed = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose fixture");
     lunco_usd_bevy::CanonicalStage::from_stage(composed, path.to_string_lossy().to_string())
+}
+
+fn declared_classes() -> MemberClasses {
+    let mut classes = MemberClasses::default();
+    classes.declare(
+        "lunco://models/LunCo/Electrical/Battery.mo",
+        "LunCo.Electrical.Battery",
+    );
+    classes.declare(
+        "lunco://models/LunCo/Electrical/DCMotor.mo",
+        "LunCo.Electrical.DCMotor",
+    );
+    classes.declare(
+        "lunco://models/LunCo/Electrical/SolarPanel.mo",
+        "LunCo.Electrical.SolarPanel",
+    );
+    classes
 }
 
 #[test]
@@ -57,7 +74,7 @@ fn a_rhai_policy_can_be_the_synthesizer() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
-    let classes = MemberClasses::path_derived_only();
+    let classes = declared_classes();
     let ctx = SynthContext { classes: &classes };
 
     let outcome = synthesizer
@@ -93,7 +110,7 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
-    let classes = MemberClasses::path_derived_only();
+    let classes = declared_classes();
     let ctx = SynthContext { classes: &classes };
 
     let errors = synthesizer
@@ -102,7 +119,7 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
     assert!(
         errors[0]
             .message
-            .contains("must return the Modelica source"),
+            .contains("must return a map with a Modelica `source` key"),
         "the report has to name what the policy did wrong, not blame the scene: {errors:?}"
     );
 }
@@ -112,7 +129,8 @@ fn facts_describe_the_whole_graph() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
-    let network = read_network(&view, &root, &MemberClasses::path_derived_only())
+    let classes = declared_classes();
+    let network = read_network(&view, &root, &classes)
         .expect("well-formed")
         .expect("a network");
 

@@ -142,13 +142,6 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(
         lint_errors
             .iter()
-            .any(|e| e.contains("disconnected-component-network")),
-        "lint_selftest.usda must prove disconnected domain networks are rejected — \
-         got {lint_errors:?}"
-    );
-    assert!(
-        lint_errors
-            .iter()
             .any(|e| e.contains("dangling-network-connector")),
         "lint_selftest.usda must prove out-of-network connectors are rejected — \
          got {lint_errors:?}"
@@ -206,7 +199,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
             "collection_error",
             H::str("OpenUSD membership query failed"),
         ),
-        ("island_count", H::Int(0)),
+        ("units", empty()),
         ("dangling_connectors", empty()),
         ("invalid_program_sources", empty()),
         ("invalid_causal_properties", empty()),

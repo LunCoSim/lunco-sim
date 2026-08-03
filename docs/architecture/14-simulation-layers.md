@@ -498,8 +498,9 @@ future contributors don't relitigate:
    FMU / Python / GMAT is a crate, not a core patch.
 5. **Participants are ECS entities** with backend marker components. Trait
    is a discovery contract, not a dispatch layer.
-6. **Acausal connections must stay in one island**. No silent fallback to
-   causal — hard error.
+6. **Acausal connections must stay in one synthesized unit**. A Scope may
+   contain several disconnected units, but no generated `connect()` may cross
+   a unit boundary; cross-domain values use explicit causal Scope ports.
 7. **Partitioner runs at Run-start**, caches the flattened DAE per scenario
    revision. Matches Dymola's "translate then simulate" workflow.
 8. **Same Run, same mode, same pipeline regardless of realtime / batch /

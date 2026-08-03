@@ -28,7 +28,7 @@ imply forty times that) has no equation to catch the contradiction; nobody reads
 number, so nothing objects. Moving the value into a model turns a silent lie into a
 checkable claim. That is the whole reason the split exists — not tidiness.
 
-## 2. USD assembles components; runtime projects one acausal model
+## 2. USD assembles components; the synthesizer projects a composite model
 
 Each physical component applies `LunCoProgramAPI` and names its reusable Modelica class.
 Compiler-network members explicitly author
@@ -39,7 +39,11 @@ Its causal boundary uses `inputs:`/`outputs:`; its acausal Modelica connector me
 `connectors:`. Ordinary USD property connections author topology. There is no electrical
 USD schema and no exposed `Pin` prim. An ordinary network `Scope` applies the standard
 multiple-apply `CollectionAPI:components`; that collection is the explicit working set
-for one projected Modelica model.
+for one projected Modelica root model. The selected synthesizer builds a deterministic
+program graph from that working set, partitions connected subgraphs into named
+composite units, and emits those units below the root. The Scope remains one runtime
+participant with one public boundary; generated child models are not extra ECS
+entities or an alternate wiring path.
 
 A circuit is not directional. It is acausal, and Modelica exists precisely to express
 that: a `Pin` with a `flow` variable, connected with `connect()`, makes the tool write
@@ -68,12 +72,12 @@ projector. (The synthesizer body is Rust today; moving the netlist-mapping POLIC
 needs an emit surface that does not exist yet.)
 
 At runtime `lunco-usd-sim` asks OpenUSD to compute the collection's included prims, then
-projects every included Modelica program facet into one generated Modelica wrapper.
-Acausal facets contribute `connect()` equations; causal-only blocks participate through
-their `inputs:`/`outputs:` connections. The wrapper instantiates the qualified classes
-and emits the equations. It exists
-only at runtime; USD remains the authored source of assembly truth and Modelica remains
-the equation language.
+projects every included Modelica program facet into one generated composite Modelica
+root. Acausal facets contribute `connect()` equations; causal-only blocks participate
+through their `inputs:`/`outputs:` connections. The synthesizer's connected units
+preserve independent equation subgraphs and route their public inputs/outputs through
+the root. The generated source exists only at runtime; USD remains the authored source
+of assembly truth and Modelica remains the equation language.
 
 ```usd
 def Xform "Battery" (
@@ -106,22 +110,22 @@ def Scope "Electrical" (
 Acausal inside the generated DAE; causal at the Scope boundary, where cosim crosses to
 physics, environment, controls, and telemetry. The actual part prims remain where the
 vehicle assembly needs them; the collection groups them without duplicating them below a
-network proxy hierarchy. Separate electrical islands use separate Scopes and collections.
-Their path namespaces give generated instances stable unique names even when the same
-component appears more than once.
+network proxy hierarchy. Independent units share the root's stable path namespace, so
+generated instances remain unique even when the same component appears more than once.
 
-The projector rejects, and `lint.usd` reports, a scope containing multiple disconnected
-acausal islands or a connector targeting a component outside the collection. This is
-intentional failure isolation: one independently compiled network has one explicit USD
-scope. USD multi-target connections remain multi-way Modelica `connect()` equations;
+The projector rejects a connector targeting a component outside the collection, but a
+scope containing multiple disconnected units is valid: the synthesizer owns that graph
+partition and emits a composite model. Electrical reference checks are evaluated per
+generated unit, so two independent buses do not get falsely diagnosed as one
+over-determined bus. USD multi-target connections remain multi-way Modelica `connect()` equations;
 the projector never selects only the first target. Causal scalar properties instead
 require at most one source (and network outputs exactly one); multi-source authoring is
 an error rather than an implicit first-source choice.
 
-When the `.mo` contains one conventionally named class, its package-qualified class is
-derived from the path. When a source contains several definitions, author the standard
-`info:sourceAsset:subIdentifier` property on the program facet; it is the authoritative
-Modelica class name.
+The Modelica class is resolved from the loaded `.mo` source (`within` plus its declared
+class). `info:sourceAsset:subIdentifier` selects a definition when a source contains
+several; no class name is guessed from an asset path. A source that is still loading
+keeps the network pending, and a source that fails becomes a terminal projection error.
 
 ## 2a. Authoring a device model: the four rules that are not obvious
 
@@ -186,56 +190,53 @@ current flows. A test that only asserts an island *steps* will not see it — wh
 `scenarios/tests/solar_domain_nested_ref.rhai` drives its rovers and asserts a non-zero
 motor draw, rather than reading ports at rest.
 
-### `output Real`, or nothing can read it
+### `output Real`, or nothing can leave a synthesized unit
 
-The domain projection publishes a member's **`output`** variables as ports on the island.
-A plain `Real` is computed every step and observable by nobody — no scenario, no HUD, no
-telemetry channel. `DCMotor.electrical_power` was a plain `Real` for exactly this reason
-and read back as an absent port, which is indistinguishable from an island that failed to
-publish.
+The domain projection exposes a component quantity only when the Scope authors a
+boundary `outputs:<name>.connect` to that member output. A plain `Real` is computed
+inside a child unit and is observable only in the generated-source diagnostic/API view;
+it is not a runtime port. Marking a reported quantity `output` is **not** a causality
+claim about the circuit: `p.v` and `p.i` are still solved acausally by the connection
+set. It says that the quantity may be projected through an authored Scope boundary.
 
-Marking a reported quantity `output` is **not** a causality claim about the circuit: `p.v`
-and `p.i` are still solved acausally by the connection set. It says only that the number
-leaves the model.
+Runtime callers read the stable boundary name (`get(thermal, "motor_temp_left")`,
+`ReadPorts` name `soc`). They do not address generated child instances or their
+internal member paths. The generated source/API still uses an injective spelling for
+those internal instances; this is diagnostic metadata rather than another write or
+wiring surface:
 
-### Port names are the MANGLED prim path, and the mangling is total
-
-A member's variable surfaces on the island as `<mangled member prim path>.<var>`. The
-escaping (`instance_identifier` → `modelica_path_identifier`) is injective, not cosmetic:
-
-| in the prim path | in the port name |
+| in the prim path | in generated-source instance name |
 |---|---|
 | `/` | `_x2f_` |
 | `_` | `__` (doubled) |
 | any other non-alphanumeric | `_x<hex>_` |
 
-So `/Rover/RockerL/Motor_FL` reads as `Rover_x2f_RockerL_x2f_Motor__FL` — **two**
-underscores in `Motor__FL`. Prims without an underscore in their name (`Battery`,
-`SolarPanel`) hide this rule completely; every motor trips it. A misspelled port name
-returns absent, which reads exactly like a broken island, so check the spelling before
-believing the island.
+So `/Rover/RockerL/Motor_FL` is emitted as `Rover_x2f_RockerL_x2f_Motor__FL` — **two**
+underscores in `Motor__FL`. This spelling is useful when inspecting generated source,
+but it is intentionally not a public runtime port name.
 
-The network's own authored `outputs:soc` is a *boundary* name and is not how a member's
-interior variable is addressed — `get(elec, "soc")` reads nothing.
+The network's own authored `outputs:soc` is the runtime contract — `get(elec, "soc")`
+reads the value forwarded from the child unit.
 
 ### 2b. Prove a photovoltaic source reaches the battery
 
 For a fixed rover panel, the minimum end-to-end acceptance is:
 
 1. the `Electrical` scope compiles from the explicit battery/panel/load collection;
-2. the panel publishes a positive `power_out` under a lit environment;
-3. the same island publishes `cos_incidence` and `Battery.soc_out`; and
+2. the panel publishes a positive authored boundary output such as `solar_power` under
+   a lit environment;
+3. the same root publishes `solar_incidence` and `soc`; and
 4. the battery reports charging current, or its state of charge changes during a
    parked observation.
 
 The mesh and the presence of a `SolarPanel` entity are not enough. A useful live
-`ReadPorts` filter includes the scope boundaries and the member paths:
+`ReadPorts` filter addresses only the Scope boundary:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4101/api/commands \
   -H 'Content-Type: application/json' \
   -d '{"command":"ReadPorts","params":{"api_id":<electrical-api-id>}}' \
-  | jq '.data.ports[] | select(.name == "solar_power" or .name == "solar_incidence" or .name == "soc" or (.name | test("SolarPanel\\.(power_out|generated_current_a)")))'
+  | jq '.data.ports[] | select(.name == "solar_power" or .name == "solar_incidence" or .name == "soc")'
 ```
 
 The API id comes from `ListEntities` for the composed `…/Rover/Electrical`
