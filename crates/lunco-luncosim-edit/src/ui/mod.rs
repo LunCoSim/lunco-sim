@@ -548,6 +548,7 @@ impl Plugin for SandboxEditUiPlugin {
                 (
                     // The route line is real 3D geometry, not an egui overlay stroke.
                     checkpoint_click::sync_waypoint_path_mesh,
+                    checkpoint_click::sync_waypoint_marker_visuals,
                     checkpoint_click::handle_autopilot_toggle_hotkey,
                     // Grabbing the controls takes the vessel back from its autopilot.
                     checkpoint_click::manual_input_disengages_autopilot,
