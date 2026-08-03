@@ -254,7 +254,7 @@ pub const RECV_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// refusal from a public dataset host must not turn an otherwise healthy
 /// build into a missing-asset failure, while a permanently unavailable URL
 /// must still fail after a bounded amount of time.
-pub const DOWNLOAD_RETRIES: usize = 3;
+pub const DOWNLOAD_RETRIES: usize = 5;
 
 /// Returns whether a failed request is worth trying again.
 #[cfg(not(target_arch = "wasm32"))]
@@ -280,7 +280,9 @@ fn download_retry_delay(retry_number: usize) -> std::time::Duration {
     let seconds = match retry_number {
         1 => 1,
         2 => 16,
-        _ => 32,
+        3 => 32,
+        4 => 64,
+        _ => 128,
     };
     std::time::Duration::from_secs(seconds)
 }
@@ -1036,11 +1038,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transient_downloads_use_three_bounded_retries() {
-        assert_eq!(DOWNLOAD_RETRIES, 3);
+    fn transient_downloads_use_five_bounded_retries() {
+        assert_eq!(DOWNLOAD_RETRIES, 5);
         assert_eq!(download_retry_delay(1), std::time::Duration::from_secs(1));
         assert_eq!(download_retry_delay(2), std::time::Duration::from_secs(16));
         assert_eq!(download_retry_delay(3), std::time::Duration::from_secs(32));
+        assert_eq!(download_retry_delay(4), std::time::Duration::from_secs(64));
+        assert_eq!(download_retry_delay(5), std::time::Duration::from_secs(128));
         assert!(is_retryable_download_error(&ureq::Error::ConnectionFailed));
         assert!(is_retryable_download_error(&ureq::Error::StatusCode(503)));
         assert!(!is_retryable_download_error(&ureq::Error::StatusCode(404)));
