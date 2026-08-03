@@ -735,7 +735,7 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<workspace_state::WorkspaceStatePlugin>() {
             app.add_plugins(workspace_state::WorkspaceStatePlugin);
         }
-        // Plugin-driven registry of `DocumentKind`s. Domain crates
+        // Plugin-driven registry of document kinds. Domain crates
         // (modelica, future julia/usd/sysml/...) register their kinds
         // here; consumers iterate the registry rather than matching
         // a fixed enum. Idempotent — domain plugins can also call
@@ -3487,7 +3487,7 @@ fn render_layout(
                 // Each row is a checkbox showing whether the panel is currently
                 // in the dock; clicking a closed one re-docks it in its default
                 // slot. `Hidden` panels never appear (fixtures like the
-                // viewport, legacy entries, instance-tab facets).
+                // viewport, layout-only entries, instance-tab facets).
                 struct ViewPanelEntry {
                     group: PanelMenuGroup,
                     title: String,

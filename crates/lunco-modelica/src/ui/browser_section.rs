@@ -84,8 +84,8 @@ impl BrowserSection for ModelicaSection {
         //     same tree the Package Browser panel renders);
         //   * workspace docs come from `ModelicaDocumentRegistry`
         //     filtered for writable / untitled origins.
-        // No parallel `LoadedModelicaClasses` registry, no observer
-        // wiring — what's in the cache + registry IS what we show.
+        // The cache plus document registry are the complete read sources for
+        // this section; there is no separate UI-owned class list.
 
         // ── System library roots ─────────────────────────────────
         // Pull `(id, name)` pairs first so we can re-borrow `world`
@@ -474,7 +474,7 @@ fn render_workspace_doc_row(
 }
 
 /// Render the class tree of one writable / Untitled workspace
-/// document. Called by [`crate::ui::loaded_classes::WorkspaceClass`] —
+/// document. Called by the Modelica browser section —
 /// the outer `CollapsingHeader` row carrying this doc's name has
 /// already been drawn; we just paint the children inline.
 ///

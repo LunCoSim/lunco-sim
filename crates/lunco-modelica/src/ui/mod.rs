@@ -82,11 +82,11 @@ pub mod model_share;
 pub mod rename_chain;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
+pub mod class_display;
 pub mod icon_paint;
 pub mod image_loader;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;
-pub mod loaded_classes;
 pub mod panels;
 pub mod solver_picker;
 pub mod text_node;
@@ -118,10 +118,9 @@ use crate::ModelicaModel;
 /// Shadow-sync observer: Modelica doc opened → register entry in the
 /// Workspace session.
 ///
-/// Runs alongside (not instead of) the existing open paths during the
-/// 5b.1 migration. Once step 5c retires the legacy `ModelicaDocumentRegistry`
-/// / `ModelTabs` / the registry-by-doc lookup triad, this observer
-/// becomes the sole population point for the Workspace's document list.
+/// The document registry and Modelica tab registry are the authoritative
+/// sources for the Workspace's document list; this observer mirrors their
+/// lifecycle into the workspace session.
 /// Invalidate every source-derived memo when any doc changes — the merged icons in
 /// `ModelicaEngine` and the decoded bitmap textures on the paint side.
 ///
@@ -252,8 +251,6 @@ fn close_drilled_tabs_on_class_removed(
     watermark.0.insert(doc, highest_gen);
 }
 
-// `mirror_open_model_on_doc_changed` deleted cleanup.
-
 // `world` module deleted as part of the A2 single-struct migration:
 // `ClassEntry` is now the canonical class record consumed everywhere,
 // and per-doc `ModelicaIndex.classes` already holds it, so a separate
@@ -299,7 +296,7 @@ fn sync_workspace_on_doc_opened(
     let title = origin.display_name();
     ws.add_document(lunco_workspace::DocumentEntry {
         id,
-        kind: lunco_workspace::DocumentKind::Modelica,
+        kind: lunco_workspace::DocumentKindId::new("modelica"),
         origin,
         // Default to `None`; when the UI supports "New Model from
         // active Twin" the caller will set this explicitly before the
@@ -551,13 +548,8 @@ impl Perspective for AnalyzePerspective {
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Side dock = Twin Browser only. The legacy
-        // `PackageBrowserPanel` stays registered (View → Panels can
-        // re-dock it) but is not docked by default — its remaining
-        // unique features (MSL palette, drag-to-instantiate) will
-        // migrate into the Twin Browser as a future `MslSection`.
-        // Side-by-side dock would just present users with two
-        // browsers solving the same job.
+        // Side dock = Twin Browser only. It is the single browser for
+        // workspace classes, MSL, bundled models, and future domains.
         // Two sibling tabs in the side dock — Twin (everything you
         // browse by name: workspace classes, MSL, bundled, future
         // USD/SysML — matches Dymola/OMEdit's single-Package-Browser
@@ -820,16 +812,6 @@ impl Plugin for ModelicaUiPlugin {
             // `drain_document_changes` + the A3 journal-wire auto-bridge moved
             // to `ModelicaCorePlugin` (so headless journals too).
             .add_systems(Update, commands::drain_open_file_results)
-            // Mirror the active document's volatile fields (source,
-            // detected_name) into the registry-by-doc lookup
-            // B.3 phase 6 (2026-05-08): the
-            // `mirror_active_open_model` Update system + the
-            // `mirror_open_model_on_doc_changed` observer were
-            // deleted with the `OpenModel` cache. All readers now
-            // derive source/metadata from
-            // `ModelicaDocumentRegistry::host(doc).document()`
-            // directly — no mirror needed.
-            //
             // Workspace shadow-sync: keep `WorkspaceResource` populated
             // from the existing document-registry lifecycle.
             .add_observer(sync_workspace_on_doc_opened)
@@ -860,9 +842,6 @@ impl Plugin for ModelicaUiPlugin {
             )
             .init_resource::<DocTitleGenCache>()
             .add_systems(Update, derive_doc_title)
-            // Twin panel reads docs directly from `ModelicaDocumentRegistry`
-            // now (PR4); no separate `LoadedModelicaClasses` registry +
-            // observer pair to keep in sync.
             // Kick off a background scan whenever the workbench
             // announces a new Twin (Open Folder / Open Twin / "Save
             // as Twin" promotion). The scan populates the package
@@ -894,7 +873,6 @@ impl Plugin for ModelicaUiPlugin {
                     ),
                 ),
             )
-            .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(lunco_workbench::TwinBrowserPanel)
             .register_panel(lunco_workbench::FilesPanel)
             .insert_resource(panels::welcome::LearningPathRegistry::with_builtins())

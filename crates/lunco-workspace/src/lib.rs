@@ -57,7 +57,7 @@ pub use session::{
 
 pub use lunco_doc::{DocumentId, DocumentOrigin};
 pub use lunco_storage::StorageHandle;
-pub use lunco_twin::{DocumentKind, FileKind, Twin, TwinMode};
+pub use lunco_twin::{DocumentKindId, FileKind, Twin, TwinMode};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TwinId
@@ -137,7 +137,7 @@ pub struct DocumentEntry {
     /// Coarse classification (Modelica model, USD stage, …). Lets the
     /// Workspace route tab-opening to the right panel renderer without
     /// inspecting the document itself.
-    pub kind: DocumentKind,
+    pub kind: DocumentKindId,
     /// Persistence state of the Document (Untitled vs File, writable).
     pub origin: DocumentOrigin,
     /// Optional pin to a Twin — used by Untitled docs to remember the
@@ -430,7 +430,7 @@ version = "0.1.0"
 
         ws.add_document(DocumentEntry {
             id: DocumentId::new(1),
-            kind: DocumentKind::Modelica,
+            kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&model_path),
             context_twin: None,
             title: "Rover.mo".into(),
@@ -452,7 +452,7 @@ version = "0.1.0"
 
         ws.add_document(DocumentEntry {
             id: DocumentId::new(10),
-            kind: DocumentKind::Modelica,
+            kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::untitled("Untitled-1"),
             context_twin: Some(tid),
             title: "● Untitled-1".into(),
@@ -484,7 +484,7 @@ version = "0.1.0"
 
         ws.add_document(DocumentEntry {
             id: DocumentId::new(1),
-            kind: DocumentKind::Modelica,
+            kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&model),
             context_twin: Some(b),
             title: "shared.mo".into(),
@@ -508,7 +508,7 @@ version = "0.1.0"
         let tid = ws.add_twin(twin);
         ws.add_document(DocumentEntry {
             id: DocumentId::new(1),
-            kind: DocumentKind::Modelica,
+            kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::writable_file(&model),
             context_twin: None,
             title: "m.mo".into(),
@@ -528,7 +528,7 @@ version = "0.1.0"
         let id = DocumentId::new(42);
         ws.add_document(DocumentEntry {
             id,
-            kind: DocumentKind::Modelica,
+            kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::untitled("U"),
             context_twin: None,
             title: "U".into(),

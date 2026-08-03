@@ -1,8 +1,8 @@
 //! Loaded USD stages — the live set of stage roots the user has
 //! access to in this session.
 //!
-//! Mirrors `lunco_modelica::ui::loaded_classes::LoadedModelicaClasses`:
-//! a flat registry of [`crate::ui::loaded_stages::LoadedStage`] entries surfaced as siblings in
+//! Mirrors the Modelica browser's document registry: a flat registry of
+//! [`crate::ui::loaded_stages::LoadedStage`] entries surfaced as siblings in
 //! the Twin browser's Models scope, regardless of where they came
 //! from. Workspace docs, future bundled stages, future Twin externals
 //! — all show up the same way.

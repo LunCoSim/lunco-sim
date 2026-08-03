@@ -35,9 +35,6 @@
 //!
 //! - The Modelica-specific class-tree section — that ships in
 //!   `lunco-modelica` as `ModelicaSection`, registered by its plugin.
-//! - The legacy `package_browser.rs` panel keeps running side-by-side
-//!   until the Modelica section reaches feature parity, at which point
-//!   the old panel is removed in one cutover commit.
 
 use bevy::prelude::*;
 use bevy_egui::egui;

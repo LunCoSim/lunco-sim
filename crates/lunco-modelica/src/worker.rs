@@ -213,15 +213,15 @@ pub enum ModelicaCommand {
         extra_sources: Vec<(String, String)>,
         /// Lock-free snapshot handle the worker publishes into after
         /// every successful Step (Phase A of the multi-sim arch).
-        /// `None` = legacy path; main thread still receives per-sample
-        /// data via `ModelicaResult.outputs` and pushes it into
+        /// `None` = main-thread transport; it receives per-sample data via
+        /// `ModelicaResult.outputs` and pushes it into
         /// `SignalRegistry`. When `Some`, the worker updates the
         /// stream directly and the main-thread handler can skip the
         /// per-sample push loop.
         ///
         /// Skipped by serde: the `Arc<ArcSwap<_>>` only makes sense
         /// inside one address space. On wasm (Web Worker transport)
-        /// this is always serialized as `None`, forcing the legacy
+        /// this is always serialized as `None`, selecting the
         /// outputs-via-result path. Native is unaffected.
         #[serde(skip)]
         stream: Option<SimStream>,

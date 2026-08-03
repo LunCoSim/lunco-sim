@@ -472,7 +472,7 @@ impl CanvasDiagramState {
         self.pending_projection_handoff.remove(&doc);
     }
 
-    /// Legacy single-doc lookup. Resolves to the first tab viewing
+    /// Document-scoped lookup. Resolves to the first tab viewing
     /// `doc`, or the shared fallback when `doc` is `None` /
     /// no tab has been opened yet. Non-render callers (event
     /// observers, ops layer) still use this; the canvas render path
@@ -484,7 +484,7 @@ impl CanvasDiagramState {
         }
     }
 
-    /// Legacy mutable lookup; routes to the first tab viewing
+    /// Document-scoped mutable lookup; routes to the first tab viewing
     /// `doc`. **Does not allocate** on a `None`/missing-doc path —
     /// returns the fallback. Callers that *need* an entry should
     /// pass an explicit `tab_id` via `get_mut_for_tab`.
@@ -544,7 +544,7 @@ impl CanvasDiagramState {
     /// canvas render path or any UI handler called from it
     /// (right-click menus, palette drop, etc.). Outside render the
     /// `TabRenderContext.tab_id` is `None` and we fall back to the
-    /// first-tab path — matches the legacy single-tab behaviour
+    /// first-tab path — matches the document-scoped observer behaviour
     /// per-doc, which is what observer-time code wants.
     pub fn get_for_render(
         &self,
@@ -559,7 +559,7 @@ impl CanvasDiagramState {
 
     /// Mutable counterpart of `get_for_render`. When both
     /// `render_tab_id` and `doc` are populated, allocates a per-tab
-    /// entry; otherwise routes through the legacy first-tab path.
+    /// entry; otherwise routes through the document-scoped first-tab path.
     pub fn get_mut_for_render(
         &mut self,
         render_tab_id: Option<CanvasKey>,
@@ -570,13 +570,6 @@ impl CanvasDiagramState {
             _ => self.get_mut(doc),
         }
     }
-
-    // `get_for(doc, drilled)` / `get_mut_for(doc, drilled)` migration
-    // shims deleted. The `drilled` argument was always ignored
-    // (drilled scopes are independent tabs since the Phase-1 tab
-    // refactor) and no callers remained outside test code. Use
-    // `get_for_render` / `get_mut_for_render` for tab-aware lookups
-    // or `get` / `get_mut` for the legacy first-tab fallback.
 
     /// First TabId viewing `doc`. Determinism is best-effort
     /// (HashMap iteration); non-render callers don't care which
@@ -635,9 +628,6 @@ impl CanvasDiagramState {
     pub fn has_entry(&self, doc: lunco_doc::DocumentId) -> bool {
         self.first_tab_for(doc).is_some()
     }
-
-    // `has_entry_for(doc, drilled)` migration shim deleted.
-    // No callers; use `has_entry(doc)` directly.
 
     /// Has *this specific tab* ever been projected? Renders the
     /// canvas use this to force a first-paint projection on a

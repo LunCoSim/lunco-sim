@@ -1,7 +1,6 @@
-//! Plugin-driven registry of `DocumentKind`s.
+//! Plugin-driven registry of document kinds.
 //!
-//! Replaces the closed [`DocumentKind`](crate::DocumentKind) enum with
-//! an open registry: each domain crate (`lunco-modelica`, future
+//! Each domain crate (`lunco-modelica`, future
 //! `lunco-julia`, `lunco-usd`, …) registers its own kind on plugin
 //! `build()`, and consumers iterate the registry rather than matching
 //! a fixed enum.
@@ -14,12 +13,6 @@
 //! pattern as [`UriRegistry`](../../lunco_workbench/uri/struct.UriRegistry.html)
 //! and the [`BackendRegistry`](https://docs.rs/lunco-cosim) for cosim.
 //!
-//! ## Migration
-//!
-//! The legacy [`DocumentKind`](crate::DocumentKind) enum stays for now
-//! — every place that pattern-matches on it still works. New code
-//! reads the registry. As consumers migrate, the enum retires.
-
 use std::collections::HashMap;
 use std::path::Path;
 

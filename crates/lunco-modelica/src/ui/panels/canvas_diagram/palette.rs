@@ -52,7 +52,7 @@ impl MslPackageNode {
 #[derive(Resource, Debug, Clone)]
 pub struct PaletteSettings {
     /// When `true`, pure-icon classes (matched by
-    /// [`crate::ui::loaded_classes::is_icon_only_class`]) appear in the
+    /// [`crate::ui::class_display::is_icon_only_class`]) appear in the
     /// MSL add-component submenus. Default `false` — matches
     /// Dymola's "hide `.Icons.*`" default.
     pub show_icon_only_classes: bool,
@@ -153,7 +153,7 @@ pub(super) fn finalize_tree(node: &mut MslPackageNode) {
     let mut any_visible = node
         .classes
         .iter()
-        .any(|c| !crate::ui::loaded_classes::is_icon_only_class(&c.name));
+        .any(|c| !crate::ui::class_display::is_icon_only_class(&c.name));
     for child in node.subpackages.values_mut() {
         finalize_tree(child);
         any_visible = any_visible || child.has_non_icon_class;
@@ -213,7 +213,7 @@ pub(super) fn render_msl_package_menu(
         // Hide icon-only classes unless the user explicitly enabled
         // them in Settings. Path-based detection via `is_icon_only_class`
         // (currently `.Icons.` subpackage check).
-        if !show_icons && crate::ui::loaded_classes::is_icon_only_class(&comp.name) {
+        if !show_icons && crate::ui::class_display::is_icon_only_class(&comp.name) {
             continue;
         }
         // Display: icon character (if any) + short name. The

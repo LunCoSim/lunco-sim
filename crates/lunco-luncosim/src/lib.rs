@@ -3162,23 +3162,28 @@ fn report_terrain_stream_status(
     // RUNTIME choice on the same binary — the workbench (and its `StatusBus`)
     // is simply not added there, and a bare `ResMut` panics the whole app.
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut busy: Local<Option<lunco_workbench::status_bus::BusyHandle>>,
 ) {
     let Some(mut bus) = bus else { return };
     // Shared with the screenshot readiness gate's `VISUAL_BUSY_SOURCES` — see the
     // const's docs for why this must not be a local literal.
     const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
     if status.wanted > 0 && status.resident < status.wanted {
-        bus.push_progress(
-            SOURCE,
-            format!(
-                "streaming terrain tiles {}/{}",
-                status.resident, status.wanted
-            ),
-            status.resident as u64,
-            status.wanted as u64,
+        let label = format!(
+            "streaming terrain tiles {}/{}",
+            status.resident, status.wanted
         );
-    } else {
-        bus.clear_progress(SOURCE);
+        let handle = busy.get_or_insert_with(|| {
+            bus.begin(
+                lunco_workbench::status_bus::BusyScope::Global,
+                SOURCE,
+                label.clone(),
+            )
+        });
+        bus.with_label(handle, label);
+        bus.with_progress(handle, status.resident as u64, status.wanted as u64);
+    } else if let Some(handle) = busy.take() {
+        drop(handle);
     }
 }
 
@@ -3208,6 +3213,7 @@ fn report_scene_spawn_status(
     // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
     // choice on a binary that still has the `ui` feature compiled in.
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut busy: Local<Option<lunco_workbench::status_bus::BusyHandle>>,
 ) {
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_workbench::status_bus::SCENE_SOURCE;
@@ -3215,11 +3221,29 @@ fn report_scene_spawn_status(
     if let Some(g) = in_flight {
         // `total = 0` is the bus's "indeterminate" encoding — the number of prims
         // a scene will spawn is not known until it has spawned them.
-        bus.push_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
+        let label = format!("spawning scene {}", g.path);
+        let handle = busy.get_or_insert_with(|| {
+            bus.begin(
+                lunco_workbench::status_bus::BusyScope::Global,
+                SOURCE,
+                label.clone(),
+            )
+        });
+        bus.with_label(handle, label);
+        bus.with_progress(handle, 0, 0);
     } else if pending > 0 {
-        bus.push_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
-    } else {
-        bus.clear_progress(SOURCE);
+        let label = format!("spawning {pending} prims");
+        let handle = busy.get_or_insert_with(|| {
+            bus.begin(
+                lunco_workbench::status_bus::BusyScope::Global,
+                SOURCE,
+                label.clone(),
+            )
+        });
+        bus.with_label(handle, label);
+        bus.with_progress(handle, 0, 0);
+    } else if let Some(handle) = busy.take() {
+        drop(handle);
     }
 }
 
@@ -3236,6 +3260,7 @@ fn report_modelica_status(
         With<lunco_usd_sim::cosim::UsdSourcedCosim>,
     >,
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut busy: Local<Option<lunco_workbench::status_bus::BusyHandle>>,
 ) {
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
@@ -3253,21 +3278,29 @@ fn report_modelica_status(
         .count();
 
     if pending > 0 {
-        bus.push_progress(
-            SOURCE,
-            format!("loading {pending} Modelica source(s)"),
-            0,
-            0,
-        );
+        let label = format!("loading {pending} Modelica source(s)");
+        let handle = busy.get_or_insert_with(|| {
+            bus.begin(
+                lunco_workbench::status_bus::BusyScope::Global,
+                SOURCE,
+                label.clone(),
+            )
+        });
+        bus.with_label(handle, label);
+        bus.with_progress(handle, 0, 0);
     } else if compiling > 0 {
-        bus.push_progress(
-            SOURCE,
-            format!("compiling {compiling} Modelica participant(s)"),
-            0,
-            0,
-        );
-    } else {
-        bus.clear_progress(SOURCE);
+        let label = format!("compiling {compiling} Modelica participant(s)");
+        let handle = busy.get_or_insert_with(|| {
+            bus.begin(
+                lunco_workbench::status_bus::BusyScope::Global,
+                SOURCE,
+                label.clone(),
+            )
+        });
+        bus.with_label(handle, label);
+        bus.with_progress(handle, 0, 0);
+    } else if let Some(handle) = busy.take() {
+        drop(handle);
     }
 }
 

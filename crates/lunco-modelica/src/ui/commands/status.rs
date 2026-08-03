@@ -43,6 +43,7 @@ pub fn update_status_bar(
     registry: Res<ModelicaDocumentRegistry>,
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
     mut last: Local<Option<String>>,
+    mut busy: Local<Option<lunco_workbench::status_bus::BusyHandle>>,
 ) {
     let Some(mut bus) = bus else { return };
     let any_change = compile_states.is_changed()
@@ -100,9 +101,24 @@ pub fn update_status_bar(
 
     const SOURCE: &str = lunco_workbench::status_bus::MODELICA_EDITOR_SOURCE;
     if compiling {
-        bus.push_progress(SOURCE, text, 0, 0);
+        let handle = busy.get_or_insert_with(|| {
+            bus.begin(
+                lunco_workbench::status_bus::BusyScope::Global,
+                SOURCE,
+                text.clone(),
+            )
+        });
+        bus.with_label(handle, text);
+        bus.with_progress(handle, 0, 0);
     } else {
-        bus.clear_progress(SOURCE);
+        if let Some(mut handle) = busy.take() {
+            if level == lunco_workbench::status_bus::StatusLevel::Error {
+                handle.set_outcome(lunco_workbench::status_bus::BusyOutcome::Failed(
+                    text.clone(),
+                ));
+            }
+            drop(handle);
+        }
         bus.push(SOURCE, level, text);
     }
 }

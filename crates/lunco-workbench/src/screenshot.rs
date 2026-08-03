@@ -898,7 +898,7 @@ const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500)
 /// An ALLOWLIST, not "is anything busy at all". The bus is shared with work that has
 /// nothing to do with what the camera sees — a Modelica compile, a document save, an
 /// MCP request — and the MSL download in particular re-pushes progress every frame
-/// from boot (see `status_bus::tests::push_progress_preserves_start_time_…`). Gating
+/// from boot (see `status_bus::tests::with_progress_preserves_start_time_…`). Gating
 /// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
 /// minutes to an episode and burying the timeout `warn!` under false positives.
 ///

@@ -9,21 +9,15 @@ use std::path::PathBuf;
 pub mod render;
 
 // The egui-free package-tree backend (data types, scanner, cache,
-// library-tree builder) moved to the ungated `crate::package_tree`
+// library-tree builder) lives in the ungated `crate::package_tree`
 // module so the headless/server build can resolve packages without
-// egui. This panel renders that backend; pull the names it uses into
-// scope (not re-exported — callers reach them via `crate::package_tree`).
+// egui. This module supplies the Modelica section's loading and
+// rendering helpers.
 use crate::package_tree::{PackageNode, PackageTreeCache};
-pub use render::PackageBrowserPanel;
 
-// NOTE: there is deliberately no `PackageBrowserPlugin`. The package-browser
-// wiring (cache resource, `handle_package_loading_tasks`,
-// `reconcile_library_roots_on_ready`, and the `on_msl_became_ready` observer)
-// is registered directly in `crate::ui` plugin build, because the cache must be
-// seeded via `PackageTreeCache::new()` (native fs roots) — not the `Default`
-// impl an `init_resource` would use. A standalone plugin previously existed but
-// was never added to the app, so its observer never ran and MSL-ready never
-// re-projected open tabs.
+// The cache resource and its loading systems are registered directly by the
+// Modelica UI plugin because the cache must be seeded via
+// `PackageTreeCache::new()` (native filesystem roots), not `Default`.
 
 /// Fill in library roots that only become known after the MSL bundle loads
 /// (web: third-party libs carried in the parsed bundle). Native is already
@@ -233,7 +227,7 @@ pub fn render_root_subtree(
     }
 
     // Spawn lazy scans for the categories that were requested this frame.
-    // Replicates `render_node_single`'s in-place scan, but deferred so it
+    // Replicates the mutable tree renderer's in-place scan, but deferred so it
     // runs with `&mut World` after the egui pass. `find_category_path` →
     // resolve by id; only spawns when still unscanned & not already
     // loading. The existing scan-task poller integrates `ScanResult` on a
@@ -330,8 +324,7 @@ fn find_category_scan_target<'a>(
 
 /// Single entry point for "open a Modelica class in the workbench".
 ///
-/// Replaces the legacy `open_model` / `open_bundled_in_world` /
-/// per-scheme branches with one dispatch on [`Library`]. Every UI
+/// Single dispatch for opening a Modelica class, selected by [`Library`]. Every UI
 /// gesture (tree click, palette drop, typed command, session
 /// restore) translates its intent into a [`ClassRef`] and calls
 /// this function — there is no second code path that can disagree
@@ -374,7 +367,7 @@ pub(crate) fn open_class(world: &mut World, class: ClassRef, pinned: bool) {
     }
 }
 
-/// Resolve a legacy `mem://<name>` tree id to a [`ClassRef`] by
+/// Resolve a serialized in-memory tree id to a [`ClassRef`] by
 /// consulting [`PackageTreeCache::in_memory_models`]. Lives here
 /// rather than in [`ClassRef::parse_tree_id`] because the mapping
 /// from name → `DocumentId` requires world state the parser doesn't

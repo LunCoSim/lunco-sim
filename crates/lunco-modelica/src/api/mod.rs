@@ -21,7 +21,7 @@ use util::{resolve_doc, strip_same_package_prefix};
 pub struct ModelicaApiEditPlugin;
 
 // Observers live in split submodules; the path form resolves their
-// generated registration helpers without per-fn `use` shims.
+// generated registration helpers without importing each function separately.
 register_commands!(
     doc::on_set_document_source,
     component::on_add_modelica_component,

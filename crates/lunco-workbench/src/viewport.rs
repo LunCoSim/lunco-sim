@@ -960,8 +960,8 @@ pub fn auto_tag_workbench_3d_cameras(
 /// Sentinel — runs once a couple of seconds after startup and verifies
 /// there's exactly one `PrimaryEguiContext` in the world.
 ///
-/// The grace period covers binaries that prefer to spawn the host
-/// themselves (legacy paths) — they'll have done so by the time this
+/// The grace period covers binaries that spawn the host asynchronously —
+/// they'll have done so by the time this
 /// fires. After that, anything other than 1 is a bug worth panicking
 /// over in debug builds.
 pub(crate) fn check_host_invariant_once(

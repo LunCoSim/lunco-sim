@@ -968,17 +968,17 @@ fn on_set_clock(
 ///   so a sky left running at 100 000× stops the instant the scene reloads);
 /// * **interaction** → wall-rooted identity (its default);
 /// * **animation preview** → playhead 0, playing, 1×;
-/// * **transport** → Playing at 1×.
-///
-/// It does NOT touch `MissionClock` — the new scene authors its own epoch via
-/// `SetMissionEpoch` on load (`double lunco:time:epochJd`), which is the right owner
-/// of "what date is it", and re-anchoring here would fight that.
+/// * **transport** → Playing at 1×;
+/// * **mission calendar** → the authored mission origin, with any kinematic warp
+///   preview cleared. The mission origin itself is preserved so a scene load can
+///   apply its `SetMissionEpoch` afterward.
 #[Command(default)]
 pub struct ResetTime {}
 
 #[on_command(ResetTime)]
 fn on_reset_time(
     _trigger: On<ResetTime>,
+    mut mission: ResMut<crate::MissionClock>,
     clocks: Option<Res<Clocks>>,
     mut q_domain: Query<&mut TimeDomain>,
     mut q_playback: Query<&mut Playback>,
@@ -988,31 +988,39 @@ fn on_reset_time(
     mut last: ResMut<LastClockT>,
     mut commands: Commands,
 ) {
-    let Some(clocks) = clocks else { return };
+    if let Some(clocks) = clocks {
+        // Celestial: restore the `Epoch` root and clear any `SetClock`
+        // re-parent/scale/seek. `SetClock` removes `ClockRoot` when it gives
+        // the clock a parent, so re-insert it.
+        if let Ok(mut d) = q_domain.get_mut(clocks.celestial) {
+            *d = TimeDomain::default();
+        }
+        commands
+            .entity(clocks.celestial)
+            .try_insert(ClockRoot::Epoch);
 
-    // Celestial: restore the `Epoch` root and clear any `SetClock` re-parent/scale/seek.
-    // `SetClock` removes `ClockRoot` when it gives the clock a parent, so re-insert it.
-    if let Ok(mut d) = q_domain.get_mut(clocks.celestial) {
-        *d = TimeDomain::default();
-    }
-    commands
-        .entity(clocks.celestial)
-        .try_insert(ClockRoot::Epoch);
+        // Interaction: wall-rooted identity (what `spawn_well_known_clocks`
+        // builds).
+        if let Ok(mut d) = q_domain.get_mut(clocks.interaction) {
+            *d = TimeDomain::derived(Some(clocks.real), 0.0, 1.0);
+        }
 
-    // Interaction: wall-rooted identity (what `spawn_well_known_clocks` builds).
-    if let Ok(mut d) = q_domain.get_mut(clocks.interaction) {
-        *d = TimeDomain::derived(Some(clocks.real), 0.0, 1.0);
-    }
-
-    // Animation preview: rewind and play at 1×.
-    if let Some(preview) = preview {
-        if let Ok(mut pb) = q_playback.get_mut(preview.domain) {
-            *pb = Playback::default();
+        // Animation preview: rewind and play at 1x.
+        if let Some(preview) = preview {
+            if let Ok(mut pb) = q_playback.get_mut(preview.domain) {
+                *pb = Playback::default();
+            }
         }
     }
 
     // Transport: a reloaded scene starts playing at realtime.
     *transport = crate::TimeTransport::default();
+
+    // The clock tree is only one half of celestial time. Restore the calendar
+    // anchor too; otherwise a 100 000x preview leaves the Sun at the warped date
+    // after the rate UI has returned to 1x, which can make a lunar scene appear
+    // completely black on its night side.
+    mission.reset_calendar();
 
     // Clock entities persist across scene loads, so clear their sample history
     // too. The new scene must not emit a giant negative dt from the previous

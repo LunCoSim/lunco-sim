@@ -40,11 +40,10 @@ use std::thread;
 
 /// Typed identity for a Modelica class across the workbench.
 ///
-/// Replaces the legacy string ID schemes (`msl_path:`, `bundled://…#`,
-/// raw file paths, `mem://`) with a single `ClassRef { library, path }`
-/// value that flows through opening, drill-in, tab dedup, projection
-/// target lookup, and documentation lookup. See module docs for the
-/// migration map.
+/// Converts serialized tree identifiers (`msl_path:`, `bundled://…#`, raw file
+/// paths, `mem://`) into one `ClassRef { library, path }` value that flows
+/// through opening, drill-in, tab dedup, projection target lookup, and
+/// documentation lookup.
 pub mod class_ref;
 
 /// Unified read-side metadata for Modelica classes — folds the
@@ -1754,8 +1753,8 @@ fn build_modelica_core(app: &mut App) {
     // funnel (`ModelicaApiEditPlugin` — already UI-free), the A3 journal-wire
     // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
     // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
-    // adds core first, so the GUI still gets them. Guarded/idempotent so the
-    // UI's own `WorkbenchState`/registry init (a legacy safety net) is a no-op.
+    // adds core first, so the GUI still gets them. Guarded/idempotent so a
+    // second UI initialization is a no-op.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
     app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {

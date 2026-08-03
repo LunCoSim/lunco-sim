@@ -1610,7 +1610,7 @@ mod web {
         //     the source bundle is untarred lazily on first drill-in.
         //   • fallback (no pre-parsed bundle): no worker decode possible, so
         //     untar the source here and let the per-frame chunked *parser*
-        //     build the AST (slow legacy path; our bundles always ship parsed).
+        //     build the AST when a pre-parsed bundle is unavailable.
         if parsed_bytes.is_some() {
             set_state(
                 slot,

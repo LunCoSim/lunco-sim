@@ -2435,11 +2435,10 @@ type and literal, journals the edit, and re-composes the live stage.
    so a sky left running at 100 000× stops the instant the scene reloads);
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
- * **transport** → Playing at 1×.
-
- It does NOT touch `MissionClock` — the new scene authors its own epoch via
- `SetMissionEpoch` on load (`double lunco:time:epochJd`), which is the right owner
- of "what date is it", and re-anchoring here would fight that.
+ * **transport** → Playing at 1×;
+ * **mission calendar** → the authored mission origin, with any kinematic warp
+   preview cleared. The mission origin is preserved so scene loading can apply
+   its `SetMissionEpoch` afterward.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 - *fields:* none — call with `ResetTime` (no params)
