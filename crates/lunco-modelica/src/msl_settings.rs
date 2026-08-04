@@ -7,7 +7,7 @@
 //!   tree (e.g. a system install, a checked-out Modelica repo). Wins
 //!   over the cached download.
 //! - `last_fetched_version` — bookkeeping populated from the Assets
-//!   manifest entry after a successful background download; surfaced
+//!   manifest entry after a successful user-requested download; surfaced
 //!   in the Assets settings panel so the user can tell what's on disk.
 
 use std::path::PathBuf;
@@ -22,12 +22,12 @@ pub struct MslSettings {
     /// User-supplied path to an MSL tree, e.g. a system install or a
     /// local checkout. When set and pointing at a directory that
     /// contains `Modelica/`, the workbench uses it directly and skips
-    /// the auto-download.
+    /// the explicit download.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_root_override: Option<PathBuf>,
 
     /// Version string from `Assets.toml` `[msl].version` after the
-    /// most recent successful background download. Read-only display.
+    /// most recent successful user-requested download. Read-only display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_fetched_version: Option<String>,
 }

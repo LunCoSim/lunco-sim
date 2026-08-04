@@ -504,7 +504,7 @@ impl ModelicaCompiler {
         //    already in memory (wasm chunked-decoder output, or a prior
         //    native load that populated the process-wide slot). Cheap
         //    install, no disk. Kept slot-only on purpose so a non-MSL
-        //    caller (sandbox/Balloon, `SkipMslAutoLoad`) never eagerly
+        //    caller (sandbox/Balloon) never eagerly
         //    reads the on-disk bundle here — the native disk read lives in
         //    branch 3, behind the `Filesystem`-source gate.
         if let Some(parsed) = msl_remote::global_parsed_msl() {

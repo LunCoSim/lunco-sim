@@ -10,7 +10,7 @@
 //!
 //! ## Web
 //!
-//! Spawns a `wasm_bindgen_futures::spawn_local` task that:
+//! The Settings menu can start a `wasm_bindgen_futures::spawn_local` task that:
 //!
 //! 1. `fetch`es `msl/manifest.json` (same-origin).
 //! 2. Parses it into [`lunco_assets::msl::MslManifest`].
@@ -126,10 +126,9 @@ pub fn parsed_msl_bundle(
 
 /// Kick the native `parsed-msl.bin` lazy decode onto a background thread so the
 /// first palette drill-in / class lookup is an in-memory hit instead of paying
-/// the ~1–3 s bincode decode inline. No-op if autoload is suppressed
-/// ([`SkipMslAutoLoad`]), the slot is already populated, or the bundle isn't on
-/// disk (indexer hasn't run). Detached: nothing awaits it — it just races to
-/// fill `GLOBAL_PARSED_MSL` before the user needs it.
+/// the ~1–3 s bincode decode inline. No-op if the slot is already populated or
+/// the bundle isn't on disk (indexer hasn't run). Detached: nothing awaits it —
+/// it just races to fill `GLOBAL_PARSED_MSL` before the user needs it.
 ///
 /// **Call this at first actual need, never from `Startup`.** It used to run as a
 /// startup system, and that quietly inverted the native design.
@@ -151,13 +150,13 @@ pub fn parsed_msl_bundle(
 /// TODO(msl-warm-callsites): **this currently has NO callers.** Removing the
 /// startup warm removed the cost; it also removed the pre-warm that Modelica
 /// scenes want, so they fall back to the lazy per-class path. Wire it at first
-/// actual need — Modelica document open, canvas open, and `compile_model` —
-/// passing `world.get_resource::<SkipMslAutoLoad>()`. Verify via the
+/// actual need — Modelica document open, canvas open, and `compile_model`.
+/// Verify via the
 /// `[EngineBootstrap]` log line: absent on a non-Modelica scene (the twin),
 /// present with `clone=`/`replace=` once a Modelica scene opens.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn warm_parsed_msl(skip: Option<&SkipMslAutoLoad>) {
-    if skip.is_some() || GLOBAL_PARSED_MSL.get().is_some() {
+pub fn warm_parsed_msl() {
+    if GLOBAL_PARSED_MSL.get().is_some() {
         return;
     }
     bevy::tasks::AsyncComputeTaskPool::get()
@@ -536,44 +535,22 @@ pub fn install_global_parsed_msl_pub(
     install_global_parsed_msl(parsed);
 }
 
-/// Marker resource. Insert **before** adding [`MslRemotePlugin`] (or
-/// [`ModelicaCorePlugin`], which adds it transitively) to suppress the
-/// auto-fetch of the MSL bundle on app start. The sandbox uses this on
-/// wasm — sandbox cosim doesn't load any Modelica.Library classes, so
-/// fetching `msl/manifest.json` produces a noisy 404 and a wasted
-/// parse pipeline.
-#[derive(Resource, Default, Clone, Copy)]
-pub struct SkipMslAutoLoad;
-
-/// Gate resource: while present, the **web** MSL bootstrap (network fetch AND
-/// worker-owned Modelica processing) is held off. Unlike [`SkipMslAutoLoad`] (which
-/// suppresses MSL entirely), this only *defers* it — remove the resource and the
-/// fetch kicks off, then the decode/parse chain runs.
-///
-/// The sandbox uses this on wasm to load **sequentially**: the single browser
-/// thread bakes the moonbase terrain first, THEN the ~2 MB MSL bundle downloads
-/// and its chunked decompress/deserialize runs — instead of the two contending
-/// for the main thread and stalling terrain generation. Insert before the app
-/// runs; remove once the terrain is baked (the sandbox watches its
-/// `TerrainGenStatus`). No-op on native (real threads; never inserted there).
-#[derive(Resource, Default, Clone, Copy)]
-pub struct DeferMslLoad;
-
-/// Run condition: the web MSL bootstrap may proceed (not gated by [`DeferMslLoad`]).
+/// Web: a Settings action requests one explicit async MSL fetch.
 #[cfg(target_arch = "wasm32")]
-fn msl_not_deferred(defer: Option<Res<DeferMslLoad>>) -> bool {
-    defer.is_none()
-}
-
-/// Web: kick the async MSL fetcher exactly once, the first frame the deferral
-/// gate is clear. Paired with [`msl_not_deferred`] as a `run_if`, so while
-/// [`DeferMslLoad`] is present this never runs and no download starts.
-#[cfg(target_arch = "wasm32")]
-fn kick_web_msl_fetcher(slot: Res<MslLoadSlot>, mut kicked: Local<bool>) {
-    if *kicked {
+fn kick_web_msl_fetcher(
+    slot: Res<MslLoadSlot>,
+    mut request: ResMut<WebMslInstallRequest>,
+    mut state: ResMut<MslLoadState>,
+) {
+    if !request.0 {
         return;
     }
-    *kicked = true;
+    request.0 = false;
+    *state = MslLoadState::Loading {
+        phase: MslLoadPhase::FetchingManifest,
+        bytes_done: 0,
+        bytes_total: 0,
+    };
     wasm_bindgen_futures::spawn_local(web::run_fetcher(slot.0.clone()));
 }
 
@@ -581,50 +558,49 @@ fn kick_web_msl_fetcher(slot: Res<MslLoadSlot>, mut kicked: Local<bool>) {
 pub struct MslRemotePlugin;
 
 /// User intent for the MSL installer. UI emits this typed event; the MSL
-/// owner performs cancellation, cache operations, and task replacement here.
-#[cfg(not(target_arch = "wasm32"))]
+/// owner performs the download only after an explicit Install/Reinstall
+/// action.
 #[derive(Event, Clone, Copy, Debug)]
 pub enum MslInstallAction {
+    /// Begin the first install without clearing an existing cache.
+    Install,
     Cancel,
     Reinstall,
     ClearCache,
     OpenCacheFolder,
 }
 
-/// Whether the native MSL installer may contact the network at startup.
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MslNetworkAccess(pub bool);
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+struct WebMslInstallRequest(bool);
 
 impl Plugin for MslRemotePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MslLoadState>();
-        // Persisted user settings (bundle URL, local-root override,
-        // last-fetched bookkeeping). Lives in settings.json so the
-        // Assets panel and the auto-download path see the same source
-        // of truth.
+        // Persisted user settings (local-root override and last-fetched
+        // bookkeeping). Lives in settings.json so the Settings menu and the
+        // explicit installer share one source of truth.
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<crate::msl_settings::MslSettings>();
 
-        #[cfg(not(target_arch = "wasm32"))]
         app.add_observer(on_msl_install_action);
+        // The installer is dormant until a Settings action inserts its slot.
+        // Register the native drain once so an explicit install also works
+        // when no local MSL tree existed at startup.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Update, drain_native_msl_install);
 
         // (The MSL-state → status-bus mirror is a UI reactive observer; it
         // lives in `ui::core_observers` and is registered by the UI plugin.
         // Core just owns `MslLoadState`.)
 
-        // Native: prefer an already-materialised tree (workspace dev
-        // cache, user-supplied override, or a previously-completed
-        // auto-download). If nothing is present, fall back to fetching
-        // the configured bundle URL into the cache dir. The fetch runs
-        // on `AsyncComputeTaskPool`; `drain_native_msl_fetch` promotes
-        // its result back into ECS state.
+        // Native: use an already-materialised tree (workspace dev cache,
+        // user-supplied override, or a previously-completed explicit
+        // install). Missing MSL is deliberately left NotStarted. Network
+        // installation is only entered by the Settings menu action below;
+        // opening a scene or launching the application never downloads MSL.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let network_allowed = app
-                .world()
-                .get_resource::<MslNetworkAccess>()
-                .map(|p| p.0)
-                .unwrap_or(true);
             let settings = app
                 .world()
                 .resource::<crate::msl_settings::MslSettings>()
@@ -664,7 +640,7 @@ impl Plugin for MslRemotePlugin {
                     });
                 } else {
                     info!(
-                        "[MSL] source root is present but its generated editor index is missing; +                         indexing in the background"
+                        "[MSL] source root is present but its generated editor index is missing; indexing in the background"
                     );
                     let slot: NativeInstallSlot =
                         Arc::new(Mutex::new(NativeInstallSlotInner::default()));
@@ -676,35 +652,11 @@ impl Plugin for MslRemotePlugin {
                     });
                     app.insert_resource(NativeMslInstallSlot(slot.clone()));
                     app.insert_resource(cancel.clone());
-                    app.add_systems(Update, drain_native_msl_install);
                     spawn_native_index(slot, cancel.0, root);
                 }
             } else {
-                if !network_allowed {
-                    info!("[MSL] no on-disk root and network access is disabled; skipping the MSL download");
-                    app.insert_resource(MslLoadState::Failed(
-                        "MSL unavailable offline: no local Modelica/ source root".into(),
-                    ));
-                    return;
-                }
-                // No tree on disk → kick off the existing
-                // downloader+indexer pipeline in the background. The
-                // `[msl]` entry in Assets.toml has the URL, version,
-                // and (once filled in) sha256. The indexer follows
-                // automatically after extract completes.
-                info!("[MSL] no on-disk root — starting background install");
-                let slot: NativeInstallSlot =
-                    Arc::new(Mutex::new(NativeInstallSlotInner::default()));
-                let cancel = MslInstallCancel::default();
-                app.insert_resource(MslLoadState::Loading {
-                    phase: MslLoadPhase::FetchingBundle,
-                    bytes_done: 0,
-                    bytes_total: 0,
-                });
-                app.insert_resource(NativeMslInstallSlot(slot.clone()));
-                app.insert_resource(cancel.clone());
-                app.add_systems(Update, drain_native_msl_install);
-                spawn_native_install(slot, cancel.0);
+                info!("[MSL] no on-disk root — waiting for an explicit install from Settings");
+                app.insert_resource(MslLoadState::NotStarted);
             }
 
             // NO startup warm — see `warm_parsed_msl`. Filling the
@@ -715,40 +667,23 @@ impl Plugin for MslRemotePlugin {
             // compile), which is also where a user has signalled they want it.
         }
 
-        // Web: kick off the async fetcher and have a system promote the
-        // shared `Mutex` slot into a Bevy resource once the task completes.
-        // Apps that don't ship an MSL bundle (sandbox) can pre-insert
-        // `SkipMslAutoLoad` to suppress the fetch entirely.
+        // Web: create the dormant fetch slot. The Settings menu inserts an
+        // explicit request; until then no network task is started.
         #[cfg(target_arch = "wasm32")]
         {
-            if app.world().contains_resource::<SkipMslAutoLoad>() {
-                app.insert_resource(MslLoadState::NotStarted);
-            } else {
-                let slot: SharedSlot = Arc::new(Mutex::new(SlotInner::default()));
-                app.insert_resource(MslLoadState::Loading {
-                    phase: MslLoadPhase::FetchingManifest,
-                    bytes_done: 0,
-                    bytes_total: 0,
-                });
-                app.insert_resource(MslLoadSlot(slot.clone()));
-                // The fetch and worker-owned Modelica work are all gated on the
-                // deferral: an app can insert `DeferMslLoad` to load MSL only after
-                // higher-priority startup work (the sandbox: after the terrain
-                // bakes). `kick_web_msl_fetcher` starts the download the first
-                // ungated frame; the decode/parse chain drains it. With no
-                // `DeferMslLoad` present (the default), the gate is open from frame
-                // one — identical timing to the previous unconditional fetch.
-                app.add_systems(
-                    Update,
-                    (
-                        kick_web_msl_fetcher,
-                        drain_msl_load_slot,
-                        drive_msl_main_decode,
-                    )
-                        .chain()
-                        .run_if(msl_not_deferred),
-                );
-            }
+            let slot: SharedSlot = Arc::new(Mutex::new(SlotInner::default()));
+            app.insert_resource(MslLoadState::NotStarted);
+            app.insert_resource(MslLoadSlot(slot));
+            app.init_resource::<WebMslInstallRequest>();
+            app.add_systems(
+                Update,
+                (
+                    kick_web_msl_fetcher,
+                    drain_msl_load_slot,
+                    drive_msl_main_decode,
+                )
+                    .chain(),
+            );
         }
     }
 }
@@ -979,18 +914,18 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
     .detach();
 }
 
-/// Restart the MSL install task. Used by Reinstall / Retry buttons.
-/// Cancels any in-flight task, wipes the cache, clears the published
-/// source, reseeds the cancel flag and slot, and spawns a fresh task.
+/// Start an explicit MSL install task from Settings.
 #[cfg(not(target_arch = "wasm32"))]
-fn reinstall_msl(commands: &mut Commands, old: Option<&MslInstallCancel>) {
+fn start_msl_install(commands: &mut Commands, old: Option<&MslInstallCancel>, clear_cache: bool) {
     if let Some(old) = old {
         old.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    let dir = lunco_assets::cache_subdir("msl");
-    if let Err(e) = std::fs::remove_dir_all(&dir) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            bevy::log::warn!("[MSL] could not clear cache at {}: {e}", dir.display());
+    if clear_cache {
+        let dir = lunco_assets::cache_subdir("msl");
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                bevy::log::warn!("[MSL] could not clear cache at {}: {e}", dir.display());
+            }
         }
     }
     commands.insert_resource(MslLoadState::Loading {
@@ -1003,7 +938,10 @@ fn reinstall_msl(commands: &mut Commands, old: Option<&MslInstallCancel>) {
     commands.insert_resource(NativeMslInstallSlot(slot.clone()));
     commands.insert_resource(cancel.clone());
     spawn_native_install(slot, cancel.0);
-    bevy::log::info!("[MSL] reinstall requested by user");
+    bevy::log::info!(
+        "[MSL] {} requested by user",
+        if clear_cache { "reinstall" } else { "install" }
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1019,7 +957,8 @@ fn on_msl_install_action(
                 info!("[MSL] cancel requested by user");
             }
         }
-        MslInstallAction::Reinstall => reinstall_msl(&mut commands, cancel.as_deref()),
+        MslInstallAction::Install => start_msl_install(&mut commands, cancel.as_deref(), false),
+        MslInstallAction::Reinstall => start_msl_install(&mut commands, cancel.as_deref(), true),
         MslInstallAction::ClearCache => {
             let dir = lunco_assets::cache_subdir("msl");
             match std::fs::remove_dir_all(&dir) {
@@ -1034,6 +973,16 @@ fn on_msl_install_action(
                 warn!("[MSL] could not open {}: {e}", dir.display());
             }
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn on_msl_install_action(trigger: On<MslInstallAction>, mut request: ResMut<WebMslInstallRequest>) {
+    if matches!(
+        *trigger.event(),
+        MslInstallAction::Install | MslInstallAction::Reinstall
+    ) {
+        request.0 = true;
     }
 }
 
@@ -1067,10 +1016,11 @@ fn set_install_state(slot: &NativeInstallSlot, state: MslLoadState) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn drain_native_msl_install(
-    slot: Res<NativeMslInstallSlot>,
+    slot: Option<Res<NativeMslInstallSlot>>,
     mut state: ResMut<MslLoadState>,
     mut settings: ResMut<crate::msl_settings::MslSettings>,
 ) {
+    let Some(slot) = slot else { return };
     let Ok(mut inner) = slot.0.lock() else { return };
     if let Some(new_state) = inner.pending_state.take() {
         match (&*state, &new_state) {

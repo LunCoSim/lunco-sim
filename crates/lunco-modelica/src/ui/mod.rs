@@ -1130,9 +1130,8 @@ fn register_settings_menu(world: &mut World) {
     layout.register_settings_submenu("Data & libraries", render_assets_settings);
 }
 
-/// Settings rows for the "Assets" section — MSL load state, bundle URL,
-/// local override, last-fetched bookkeeping, and quick actions
-/// (open cache folder, clear cache).
+/// Settings rows for the "Assets" section — MSL load state, local override,
+/// last-fetched bookkeeping, and explicit install/cache actions.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
     use lunco_assets::msl::{MslLoadPhase, MslLoadState};
@@ -1197,7 +1196,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         }
     }
 
-    // Resolved on-disk path. May be the auto-fetch destination, the
+    // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/msl/`, or a user-supplied override.
     let root = lunco_assets::msl_source_root_path();
     match root {
@@ -1212,7 +1211,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         }
     }
 
-    // Local-root override — wins over auto-download. Restart needed
+    // Local-root override — wins over an explicit download. Restart needed
     // for changes to take effect (the resolution happens once at
     // plugin build).
     let mut local = settings
@@ -1231,7 +1230,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             .on_hover_text(
                 "Absolute path to a Modelica Standard Library tree on \
                  disk. The directory must contain a `Modelica/` \
-                 subdirectory. Takes precedence over the auto-download. \
+                 subdirectory. Takes precedence over a downloaded copy. \
                  Restart required.",
             )
             .changed()
@@ -1269,12 +1268,11 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         Some(lunco_assets::msl::MslLoadState::Ready { .. })
     );
     ui.horizontal(|ui| {
-        // While an install is in flight, show Cancel. When it's
-        // finished (Ready/Failed) show Reinstall/Retry instead so the
-        // user can always pick "do it again" without restarting.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if install_running {
+        // While an install is in flight, show Cancel. Before the first
+        // install, show Install. Once finished, show Reinstall/Retry.
+        if install_running {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
                 if ctx
                     .resource::<crate::msl_remote::MslInstallCancel>()
                     .is_some()
@@ -1291,28 +1289,42 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                         ctx.trigger(crate::msl_remote::MslInstallAction::Cancel);
                     }
                 }
-            } else if install_failed {
-                if ui
-                    .button("Retry")
-                    .on_hover_text(
-                        "Re-run the MSL download + indexer. Clears the \
+            }
+        } else if matches!(
+            load_state,
+            Some(lunco_assets::msl::MslLoadState::NotStarted) | None
+        ) {
+            if ui
+                .button("Install MSL")
+                .on_hover_text(
+                    "Download and index the Modelica Standard Library. \
+                     Nothing is downloaded until you click this button.",
+                )
+                .clicked()
+            {
+                ctx.trigger(crate::msl_remote::MslInstallAction::Install);
+            }
+        } else if install_failed {
+            if ui
+                .button("Retry")
+                .on_hover_text(
+                    "Re-run the MSL download + indexer. Clears the \
                      previous cache so a partial install is wiped.",
-                    )
-                    .clicked()
-                {
-                    ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
-                }
-            } else if install_ready {
-                if ui
-                    .button("Reinstall")
-                    .on_hover_text(
-                        "Force-redownload MSL and rebuild the bincode cache. \
-                     Wipes the current cache directory first.",
-                    )
-                    .clicked()
-                {
-                    ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
-                }
+                )
+                .clicked()
+            {
+                ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
+            }
+        } else if install_ready {
+            if ui
+                .button("Reinstall")
+                .on_hover_text(
+                    "Force-redownload MSL and rebuild the bincode cache. \
+                 Wipes the current cache directory first.",
+                )
+                .clicked()
+            {
+                ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -1323,11 +1335,12 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         {
             ctx.trigger(crate::msl_remote::MslInstallAction::OpenCacheFolder);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if ui
             .button("Clear cache")
             .on_hover_text(
                 "Delete the MSL cache directory. Use when a previous \
-                 fetch left a partial tree. Restart to re-download.",
+                 install left a partial tree. Use Install to download it again.",
             )
             .clicked()
         {
