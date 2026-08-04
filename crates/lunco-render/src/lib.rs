@@ -14,12 +14,17 @@
 
 pub mod appearance;
 pub mod camera;
+pub mod quality;
 pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
 pub use camera::{
     scene_camera_look, usd_default_perspective_projection, BloomLook, MsaaLevel, SceneCamera,
     ToneMap, WorldLabel,
+};
+pub use quality::{
+    estimate_directional_shadow_bytes, GpuShadowBudget, RenderQualityProfile, RenderingQuality,
+    RenderingQualitySettings, ShadowMapSuppressed,
 };
 pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_DEG};
 

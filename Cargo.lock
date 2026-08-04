@@ -7686,6 +7686,8 @@ name = "lunco-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-settings",
+ "serde",
 ]
 
 [[package]]
@@ -8177,6 +8179,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-render",
  "lunco-settings",
  "lunco-storage",
  "lunco-theme",

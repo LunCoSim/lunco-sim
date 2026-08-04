@@ -30,7 +30,7 @@ Automatically maps the standard USD `primvars:displayColor` attribute to Bevy `S
 
 ### 5. Types
 *   **`UsdPrimPath`**: Component linking a Bevy entity to its source prim in the USD Stage.
-*   **`UsdStageAsset`**: Bevy `Asset` holding the composed + flattened `openusd` stage reader (`Arc<UsdData>`) for lookups.
+*   **`UsdStageAsset`**: Bevy `Asset` carrying the recipe for the live composed `openusd` stage used by runtime lookups.
 
 ## Usage
 Register `UsdBevyPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn entities tagged with `UsdPrimPath`; `sync_usd_visuals` populates meshes, transforms, and materials.

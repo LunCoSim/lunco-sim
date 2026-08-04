@@ -128,10 +128,10 @@ pub struct UsdStageRow {
     pub writable: bool,
     /// First-render expand state.
     pub default_open: bool,
-    /// Parsed reader for the prim-tree walk. `None` on parse failure
+    /// Parsed authored layer for the prim-tree walk. `None` on parse failure
     /// (see `parse_error`) or when the stage has no source yet. `Arc`
     /// so cloning the row is cheap.
-    pub reader: Option<Arc<UsdData>>,
+    pub data: Option<Arc<UsdData>>,
     /// Stashed parse error from the most recent failed parse, surfaced
     /// in the body so users see a malformed file instead of an empty
     /// tree.
@@ -217,9 +217,9 @@ pub struct WorkspaceStage {
 struct ParsedStage {
     /// Document generation the cache was built against.
     generation: u64,
-    /// Parsed reader. `Arc` so future viewport / property-inspector
+    /// Parsed authored layer data. `Arc` so future viewport / property-inspector
     /// consumers can share without re-parsing.
-    reader: Arc<UsdData>,
+    data: Arc<UsdData>,
 }
 
 impl WorkspaceStage {
@@ -249,7 +249,7 @@ impl WorkspaceStage {
             Ok(data) => {
                 self.parsed = Some(ParsedStage {
                     generation,
-                    reader: Arc::new(data),
+                    data: Arc::new(data),
                 });
                 self.parse_error = None;
             }
@@ -303,7 +303,7 @@ impl LoadedStage for WorkspaceStage {
             name,
             writable: true,
             default_open: true,
-            reader: self.parsed.as_ref().map(|p| p.reader.clone()),
+            data: self.parsed.as_ref().map(|p| p.data.clone()),
             parse_error: self.parse_error.clone(),
         })
     }
@@ -331,16 +331,16 @@ mod tests {
         assert!(stage.parsed.is_none());
 
         stage.ensure_parsed(TINY_USDA, 0);
-        let first = stage.parsed.as_ref().expect("parsed").reader.clone();
+        let first = stage.parsed.as_ref().expect("parsed").data.clone();
 
         // Same generation → no re-parse, Arc identity preserved.
         stage.ensure_parsed(TINY_USDA, 0);
-        let second = stage.parsed.as_ref().unwrap().reader.clone();
+        let second = stage.parsed.as_ref().unwrap().data.clone();
         assert!(Arc::ptr_eq(&first, &second));
 
         // Bumped generation → fresh parse, new Arc.
         stage.ensure_parsed(TINY_USDA, 1);
-        let third = stage.parsed.as_ref().unwrap().reader.clone();
+        let third = stage.parsed.as_ref().unwrap().data.clone();
         assert!(!Arc::ptr_eq(&first, &third));
     }
 
@@ -357,21 +357,19 @@ mod tests {
         assert!(stage.parse_error.is_some());
     }
 
-    /// Parsed reader exposes the top-level prim under `/`. Walks the
+    /// Authored layer data exposes the top-level prim under `/`. Walks the
     /// same path the `render_prim` recursion uses without needing
     /// egui plumbing.
     #[test]
     fn prim_children_walks_root_layer() {
         let mut stage = WorkspaceStage::new(DocumentId::new(3));
         stage.ensure_parsed(TINY_USDA, 0);
-        let reader = stage.parsed.as_ref().unwrap().reader.clone();
+        let data = stage.parsed.as_ref().unwrap().data.clone();
         let root = sdf::path("/").unwrap();
-        // TODO(usd-read-migration): switch to the generic UsdRead surface (`children`)
-        // instead of the legacy `prim_children`, matching production (doc 21).
-        let top = reader.prim_children(&root);
+        let top = data.prim_children(&root);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].name(), Some("World"));
-        let nested = reader.prim_children(&top[0]);
+        let nested = data.prim_children(&top[0]);
         assert_eq!(nested.len(), 1);
         assert_eq!(nested[0].name(), Some("Ball"));
     }

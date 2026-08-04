@@ -2317,7 +2317,7 @@ mod tests {
     }
 
     /// An empty viewport WITHOUT a recorded reason falls back to the generic
-    /// hint — the legacy behaviour, preserved for cold start / cleared scenes.
+    /// hint used for cold start / cleared scenes when no specific reason exists.
     #[test]
     fn empty_viewport_message_falls_back_to_generic_hint() {
         assert_eq!(

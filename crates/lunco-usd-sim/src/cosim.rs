@@ -3290,7 +3290,7 @@ pub fn spawn_scene_root_with_stage(
 ///
 /// The defaultPrim lookup is deliberately deferred rather than read
 /// here: this runs synchronously at command time, before the stage
-/// asset finishes loading. It is resolved from the parsed `TextReader`
+/// asset finishes loading. It is resolved from the parsed canonical `StageView`
 /// at instantiate time instead — correct on both native and web, and
 /// yielding the defaultPrim subtree rather than a whole-stage `/` mount.
 ///

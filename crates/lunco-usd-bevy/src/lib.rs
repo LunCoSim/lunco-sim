@@ -42,8 +42,8 @@ use bevy::prelude::*;
 // See docs/architecture/render-decoupling.md.
 use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 pub use openusd::sdf::Path as SdfPath;
-// openusd `main` removed `TextReader`. The composed stage is flattened to a
-// Send-safe `sdf::Data` (see `compose`), queried via the `usd_data` helpers.
+// `UsdData` remains the Send-safe authored-layer representation used by document
+// authoring helpers. Runtime scene reads use the live canonical `StageView`.
 pub use openusd::sdf::Data as UsdData;
 use openusd::sdf::Value;
 
@@ -306,7 +306,7 @@ impl Plugin for UsdBevyPlugin {
                     // recipe FIRST, so the same-frame `sync_usd_visuals` (and the
                     // physics observer it triggers via `UsdVisualSynced`) sees the
                     // `CanonicalStage` and instantiates off the LIVE stage rather
-                    // than racing it and falling back to the flattened snapshot.
+                    // before any visual or physics projection can consume it.
                     canonical::sync_canonical_stages.run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
                             AssetEvent<UsdStageAsset>,
@@ -466,7 +466,7 @@ impl AssetLoader for UsdLoader {
 /// A USD layer's **raw source text**, read through the `AssetServer` without
 /// composition.
 ///
-/// Distinct from [`UsdStageAsset`], which is the *composed + flattened* stage:
+/// Distinct from [`UsdStageAsset`], which is the live composed stage:
 /// this is just the bytes of one `.usda` layer, decoded to a `String`. E1b uses
 /// it to open a scene document's base layer **through the same asset source the
 /// live world loads from** (e.g. `twin://`) — so the read is web-ready (it rides
@@ -822,6 +822,8 @@ fn instantiate_usd_prim(
     canonical: &mut CanonicalStages,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
+    quality: lunco_render::RenderingQuality,
+    shadow_budget_bytes: u64,
 ) {
     let id = prim_path.stage_handle.id();
     if canonical.get(id).is_none() {
@@ -839,7 +841,7 @@ fn instantiate_usd_prim(
         );
         return;
     };
-    instantiate_usd_prim_read(
+    instantiate_usd_prim_from_stage(
         &cs.view(),
         entity,
         prim_path,
@@ -852,15 +854,16 @@ fn instantiate_usd_prim(
         commands,
         asset_server,
         meshes,
+        quality,
+        shadow_budget_bytes,
     );
 }
 
-/// The visual extractor body, generic over the read source ([`UsdRead`]) — it
-/// maps one composed USD prim to its Bevy visual components (mesh, material,
-/// light, camera, transform, and the authored `lunco:*` markers) off either the
-/// live canonical [`StageView`](crate::StageView) or the flattened `sdf::Data`.
+/// The visual extractor body over the live canonical [`StageView`](crate::StageView).
+/// It maps one composed USD prim to its Bevy visual components (mesh, material,
+/// light, camera, transform, and the authored `lunco:*` markers).
 #[allow(clippy::too_many_arguments)]
-fn instantiate_usd_prim_read(
+fn instantiate_usd_prim_from_stage(
     reader: &StageView<'_>,
     entity: Entity,
     prim_path: &UsdPrimPath,
@@ -873,6 +876,8 @@ fn instantiate_usd_prim_read(
     commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
+    quality: lunco_render::RenderingQuality,
+    shadow_budget_bytes: u64,
 ) {
     {
         // Deferred `defaultPrim` resolution. A scene-root spawned with an
@@ -982,6 +987,8 @@ fn instantiate_usd_prim_read(
             entity,
             asset_server,
             prim_path.stage_handle.id(),
+            quality,
+            shadow_budget_bytes,
         );
 
         // UsdGeomCamera (`def Camera`) → camera intent (see `camera.rs`). The
@@ -1260,7 +1267,7 @@ fn instantiate_usd_prim_read(
         // `Controls` child scope: each child prim's NAME is the intent, with
         // `string lunco:port` + `double lunco:scale`. Authored inline OR pulled in
         // from a shared profile class (`inherits = </_RoverControl>`); either way
-        // it's already composed into this flattened data. When absent, the
+        // it's already composed into this live stage. When absent, the
         // controller stamps a topology default at possess. Fully data-driven: a
         // vessel declares what its inputs actuate with no Rust change.
         if let Some(controls) = reader
@@ -1661,6 +1668,8 @@ fn on_usd_prim_added(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
 ) {
     let entity = trigger.entity;
     let Ok((prim_path, vis, tf, is_instance_root, member)) = q.get(entity) else {
@@ -1678,6 +1687,15 @@ fn on_usd_prim_added(
             .ok()
             .map_or(false, |c| q_high_precision.contains(c.parent()));
     let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
+    let requested_quality = quality
+        .as_deref()
+        .map_or(lunco_render::RenderingQuality::Auto, |settings| {
+            settings.quality
+        });
+    let budget_bytes = shadow_budget.as_deref().map_or(
+        lunco_render::GpuShadowBudget::default().limit_bytes,
+        |budget| budget.limit_bytes,
+    );
 
     instantiate_usd_prim(
         entity,
@@ -1693,6 +1711,8 @@ fn on_usd_prim_added(
         &mut canonical,
         &asset_server,
         &mut meshes,
+        requested_quality,
+        budget_bytes,
     );
 }
 
@@ -1756,6 +1776,8 @@ pub fn sync_usd_visuals(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
 ) {
     use bevy::asset::AssetId;
     let mut loaded: Vec<AssetId<UsdStageAsset>> = Vec::new();
@@ -1767,6 +1789,16 @@ pub fn sync_usd_visuals(
     if loaded.is_empty() {
         return;
     }
+
+    let requested_quality = quality
+        .as_deref()
+        .map_or(lunco_render::RenderingQuality::Auto, |settings| {
+            settings.quality
+        });
+    let budget_bytes = shadow_budget.as_deref().map_or(
+        lunco_render::GpuShadowBudget::default().limit_bytes,
+        |budget| budget.limit_bytes,
+    );
 
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
         if loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
@@ -1792,6 +1824,8 @@ pub fn sync_usd_visuals(
                 &mut canonical,
                 &asset_server,
                 &mut meshes,
+                requested_quality,
+                budget_bytes,
             );
         }
     }
@@ -2338,22 +2372,17 @@ fn apply_standard_material(
 /// `prim_attribute_value::<String>` covers `String`/`Token` only,
 /// so we go through `reader.get` for the attribute path directly
 /// to also catch `AssetPath`.
-/// Read the stage's `defaultPrim` metadata from the parsed pseudo-root.
-///
-/// This is the wasm-correct source for the default prim: it reads the
-/// already-parsed `TextReader` (populated through the `AssetServer`,
-/// which works on web) instead of re-reading the `.usda` file with
-/// `std::fs`, which silently returns `None` on wasm. Returns the bare
-/// prim name (no leading slash), or `None` when the stage declares no
-/// `defaultPrim`. The metadata lives on the pseudo-root spec at the
-/// absolute root path.
+/// Read the stage's `defaultPrim` metadata from the live composed
+/// [`StageView`] pseudo-root. Returns the bare prim name (no leading slash),
+/// or `None` when the stage declares no `defaultPrim`. The metadata lives on
+/// the pseudo-root spec at the absolute root path.
 /// The `defaultPrim` authored on a **layer** (`sdf::Data`), without composition.
 ///
 /// The authored-layer twin of [`stage_default_prim`], which reads the *composed*
 /// stage. A document's own root layer is the right place to ask "what prim do I
 /// mount?" when authoring into it — no references need resolving to answer that,
-/// and the two must not be conflated (the retired `sdf::Data` reader conflated
-/// exactly this by implementing the composed-stage trait over an authored layer).
+/// and the two must not be conflated: runtime reads the composed stage, while
+/// authoring asks the root layer directly.
 pub fn layer_default_prim(layer: &UsdData) -> Option<String> {
     let name = layer.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
     (!name.is_empty()).then(|| name.to_string())
@@ -2361,8 +2390,7 @@ pub fn layer_default_prim(layer: &UsdData) -> Option<String> {
 
 pub fn stage_default_prim(reader: &StageView<'_>) -> Option<String> {
     // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
-    // `UsdRead` impls read it uniformly: the flatten off the pseudo-root spec,
-    // the live stage via `Stage::default_prim`.
+    // `StageView` resolves it through the composed stage.
     reader.default_prim()
 }
 
@@ -2376,9 +2404,8 @@ pub fn stage_default_prim(reader: &StageView<'_>) -> Option<String> {
 /// that a reference might override.
 ///
 /// Reads the authored layer directly, NOT through [`UsdRead`]: `UsdRead` is the
-/// *composed-stage* contract (one impl, `StageView`), and this exists precisely
-/// because it does **not** want composition. Conflating the two is what the
-/// retired `sdf::Data` reader did.
+/// *composed-stage* contract (`StageView`), and this exists precisely because
+/// it does **not** want composition.
 ///
 /// Parse ONCE, read many. A caller wanting three attributes off the same prim
 /// (spawnable + lift + description) should not parse the file three times.
@@ -5287,7 +5314,7 @@ mod mesh_tests {
 
     /// Build a real composed stage. The extractors read through `StageView` — the
     /// live, PCP-composed stage — which is the ONLY read path now that the
-    /// flattened `sdf::Data` reader is retired. Tests read what the app reads.
+    /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
         CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
             .expect("build canonical stage")
@@ -5489,7 +5516,7 @@ mod animation_tests {
 
     /// Build a real composed stage. The extractors read through `StageView` — the
     /// live, PCP-composed stage — which is the ONLY read path now that the
-    /// flattened `sdf::Data` reader is retired. Tests read what the app reads.
+    /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
         CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
             .expect("build canonical stage")
@@ -5847,7 +5874,7 @@ mod stage_metrics_import_tests {
 
     /// Build a real composed stage. The extractors read through `StageView` — the
     /// live, PCP-composed stage — which is the ONLY read path now that the
-    /// flattened `sdf::Data` reader is retired. Tests read what the app reads.
+    /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
         CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
             .expect("build canonical stage")

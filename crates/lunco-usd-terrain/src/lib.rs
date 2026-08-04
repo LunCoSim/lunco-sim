@@ -792,13 +792,9 @@ fn resync_touches_terrain(changed: &str, terrain: &str) -> bool {
 /// projected asset — covering twin default and live-imported (`OpenFile`) scenes alike.
 fn refresh_docbacked_terrain_from_doc(
     registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
-    // The live, PCP-composed stage. The terrain layer stack used to be re-parsed
-    // from the DOCUMENT's merged `sdf::Data` layers, which meant the terrain
-    // parser had to be generic over both a composed stage and a raw authored
-    // layer — the very thing that kept the flattened reader alive. The
-    // `CanonicalStage` IS the composed document (twin_projection replays every op
-    // onto it), so there is one source, and it is the same one everything else
-    // projects from.
+    // The live PCP-composed stage. Terrain projection reads the same
+    // `CanonicalStage` as every other runtime projector; the stage is the
+    // composed document that twin_projection updates for every authored op.
     stages: NonSend<lunco_usd_bevy::CanonicalStages>,
     parser: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut terrains: Query<
@@ -975,10 +971,9 @@ fn on_obstacle_spec_authored(
             continue;
         };
         let doc = lunco_doc::DocumentId::new(td.doc);
-        // Enumerate the terrain's child layer prims from the composed (base ⊕ runtime)
-        // document — the stage asset no longer carries a flattened reader. `composed()`
-        // is owned, so the registry borrow ends here and `author_layer_attr` below can
-        // take it mutably.
+        // Enumerate the terrain's child layer prims from the composed
+        // (base ⊕ runtime) document. `composed()` is owned, so the registry
+        // borrow ends here and `author_layer_attr` below can take it mutably.
         let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else {
             continue;
         };
@@ -1329,9 +1324,9 @@ fn bridge_dem_prim_read(
     } else {
         attr_bool("colliderRing").unwrap_or(lod_viz)
     };
-    // (`detailUpsample` is retired: craters/edits are ANALYTIC modifiers on the
-    // surface oracle now, sampled at each consumer's own resolution — grid
-    // upscaling has nothing left to buy.)
+    // Craters and edits are analytic modifiers on the surface oracle, sampled
+    // at each consumer's own resolution; no separate grid-upsample control is
+    // part of the terrain projection contract.
 
     let layer_count = stack.0.len();
     commands.entity(entity).try_insert((

@@ -48,7 +48,7 @@ use lunco_usd::LoadScene;
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading systems read the LIVE canonical stage via `StageView`, which
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
-// AUTHORED layer; the retired flattened reader used to blur the two). Since the
+// AUTHORED layer). Since the
 // terrain projector moved to `lunco-usd-terrain`, the remaining readers are the
 // networking policy extractor and the UI terrain layer-map binding.
 use bevy::asset::AssetLoadFailedEvent;
@@ -127,45 +127,6 @@ pub fn run_headless() -> AppExit {
     run_with_mode(true)
 }
 
-/// The luncosim's process-start render choice. This stays in the binary shell:
-/// `lunco-render-bevy` owns how the policy is rendered, while the CLI owns how a
-/// user selects it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum SandboxRenderProfile {
-    #[default]
-    Standard,
-    Fast,
-}
-
-fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String> {
-    let mut profile = SandboxRenderProfile::Standard;
-    let mut index = 0;
-    while index < args.len() {
-        let value = if args[index] == "--render-profile" {
-            index += 1;
-            args.get(index)
-                .map(String::as_str)
-                .ok_or_else(|| "`--render-profile` needs one of: standard, fast".to_string())?
-        } else if let Some(value) = args[index].strip_prefix("--render-profile=") {
-            value
-        } else {
-            index += 1;
-            continue;
-        };
-        profile = match value {
-            "standard" => SandboxRenderProfile::Standard,
-            "fast" => SandboxRenderProfile::Fast,
-            _ => {
-                return Err(format!(
-                    "invalid render profile `{value}`; expected `standard` or `fast`"
-                ));
-            }
-        };
-        index += 1;
-    }
-    Ok(profile)
-}
-
 /// Read the one explicit startup-scene argument, if present.
 ///
 /// Startup has no scene default. Keeping this parser pure makes the empty-shell
@@ -207,34 +168,6 @@ mod startup_scene_tests {
     fn missing_scene_value_does_not_create_a_default() {
         let args = ["luncosim".to_string(), "--scene".to_string()];
         assert_eq!(startup_scene_arg(&args), None);
-    }
-}
-
-#[cfg(test)]
-mod render_profile_tests {
-    use super::*;
-
-    #[test]
-    fn parses_fast_profile_in_both_cli_forms() {
-        for args in [
-            vec![
-                "luncosim".to_string(),
-                "--render-profile".to_string(),
-                "fast".to_string(),
-            ],
-            vec!["luncosim".to_string(), "--render-profile=fast".to_string()],
-        ] {
-            assert_eq!(parse_render_profile(&args), Ok(SandboxRenderProfile::Fast));
-        }
-    }
-
-    #[test]
-    fn rejects_an_unknown_render_profile() {
-        assert!(parse_render_profile(&[
-            "luncosim".to_string(),
-            "--render-profile=turbo".to_string()
-        ])
-        .is_err());
     }
 }
 
@@ -301,10 +234,6 @@ NETWORKING:
         --key PATH       TLS private key, when --cert names a file.
 
 PERFORMANCE:
-        --render-profile MODE
-                         `standard` (default) preserves authored PBR rendering;
-                         `fast` uses unlit, texture-free materials and disables
-                         HDR, bloom and MSAA. Startup-only; restart to change it.
         --no-vsync       Uncap the frame rate (present without vsync).
         --no-throttle    Keep running at full rate while unfocused.
         --log-diag       Log FPS / frame-time / physics diagnostics.
@@ -379,14 +308,6 @@ fn run_with_mode(headless: bool) -> AppExit {
     let offscreen = cfg!(all(feature = "ui", feature = "lunco-api"))
         && !headless
         && std::env::args().any(|a| a == "--offscreen");
-    let args: Vec<String> = std::env::args().collect();
-    let render_profile = match parse_render_profile(&args) {
-        Ok(profile) => profile,
-        Err(error) => {
-            eprintln!("luncosim: {error}");
-            return AppExit::error();
-        }
-    };
     log_build_identity(headless, offscreen);
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
@@ -416,7 +337,7 @@ fn run_with_mode(headless: bool) -> AppExit {
         None
     };
 
-    let mut app = build_sim_app_with_profile(headless, offscreen, None, render_profile);
+    let mut app = build_sim_app_with_threads(headless, offscreen, None);
 
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     if let Some(inbox) = deeplink_inbox {
@@ -490,7 +411,7 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 );
 
 pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
-    build_sim_app_with_profile(headless, offscreen, None, SandboxRenderProfile::Standard)
+    build_sim_app_with_threads(headless, offscreen, None)
 }
 
 /// Build the production simulation app with an optional fixed compute-pool size.
@@ -501,19 +422,13 @@ pub fn build_sim_app_with_threads(
     offscreen: bool,
     compute_threads: Option<usize>,
 ) -> App {
-    build_sim_app_with_profile(
-        headless,
-        offscreen,
-        compute_threads,
-        SandboxRenderProfile::Standard,
-    )
+    build_sim_app_with_threads_inner(headless, offscreen, compute_threads)
 }
 
-fn build_sim_app_with_profile(
+fn build_sim_app_with_threads_inner(
     headless: bool,
     offscreen: bool,
     compute_threads: Option<usize>,
-    render_profile: SandboxRenderProfile,
 ) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
@@ -521,7 +436,7 @@ fn build_sim_app_with_profile(
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
-    let mut plugins = default_plugins_with_profile(headless, offscreen, render_profile);
+    let mut plugins = default_plugins_inner(headless, offscreen);
     if let Some(threads) = compute_threads {
         assert!(threads > 0, "compute_threads must be positive");
         plugins = plugins.set(bevy::app::TaskPoolPlugin {
@@ -540,10 +455,7 @@ fn build_sim_app_with_profile(
     app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(log_dedup::LogDedupPlugin);
-    app.add_plugins(SandboxCorePlugin {
-        headless,
-        render_profile,
-    });
+    app.add_plugins(SandboxCorePlugin { headless });
     app
 }
 
@@ -557,7 +469,6 @@ fn sandbox_window(
     title: String,
     present_mode: bevy::window::PresentMode,
     vertical: bool,
-    render_profile: SandboxRenderProfile,
 ) -> Window {
     let mut window = Window {
         // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
@@ -569,12 +480,7 @@ fn sandbox_window(
         // Centralized merged-titlebar chrome + persisted geometry.
         ..lunco_workbench::restored_window(title)
     };
-    if render_profile == SandboxRenderProfile::Fast {
-        // A smaller default framebuffer is the largest predictable saving on
-        // legacy GPUs. The user can still resize the window; the profile does
-        // not alter authored scene units or simulation precision.
-        window.resolution = bevy::window::WindowResolution::new(960, 540);
-    } else if vertical {
+    if vertical {
         window.resolution = bevy::window::WindowResolution::new(540, 960);
     } else {
         window.resolution = bevy::window::WindowResolution::new(1280, 720);
@@ -629,7 +535,6 @@ mod window_tests {
             "luncosim test".to_string(),
             bevy::window::PresentMode::Fifo,
             false,
-            super::SandboxRenderProfile::Standard,
         );
 
         assert!(
@@ -645,14 +550,10 @@ mod window_tests {
 /// needs a different plugin set — but prefer `build_sim_app`, which also does the
 /// asset-source prelude this function cannot do (it returns a group, not an `App`).
 pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
-    default_plugins_with_profile(headless, offscreen, SandboxRenderProfile::Standard)
+    default_plugins_inner(headless, offscreen)
 }
 
-fn default_plugins_with_profile(
-    headless: bool,
-    offscreen: bool,
-    render_profile: SandboxRenderProfile,
-) -> bevy::app::PluginGroupBuilder {
+fn default_plugins_inner(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
     // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
     // bevy_render at all (that is the point of the render decoupling), so every
     // `bevy::render::*` path below must be gated — an ungated one does not merely link a
@@ -664,7 +565,7 @@ fn default_plugins_with_profile(
     // `headless`/`offscreen` only select render/window config in `ui` builds; a
     // no-`ui` build is always windowless, so the params are unused there.
     #[cfg(not(feature = "ui"))]
-    let _ = (headless, offscreen, render_profile);
+    let _ = (headless, offscreen);
 
     // Window title (advertises the `--api` port so side-by-side instances are
     // distinguishable) + present mode are windowed-only and must be known at
@@ -784,12 +685,7 @@ fn default_plugins_with_profile(
             .disable::<bevy::winit::WinitPlugin>()
     } else {
         group.set(WindowPlugin {
-            primary_window: Some(sandbox_window(
-                window_title,
-                present_mode,
-                vertical,
-                render_profile,
-            )),
+            primary_window: Some(sandbox_window(window_title, present_mode, vertical)),
             ..default()
         })
     };
@@ -2221,7 +2117,6 @@ mod policy_projection_tests {
 /// `backends: None`.
 pub struct SandboxCorePlugin {
     pub headless: bool,
-    render_profile: SandboxRenderProfile,
 }
 
 /// The luncosim's one physics configuration.
@@ -2296,16 +2191,6 @@ impl Plugin for SandboxCorePlugin {
 
         #[cfg(feature = "ui")]
         if !self.headless {
-            if self.render_profile == SandboxRenderProfile::Fast {
-                // This resource must exist before the binding plugin registers
-                // its observers: scene projection can begin on the first app
-                // update, so changing it later would produce a mixed-material
-                // scene until every entity were rebuilt.
-                app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
-                info!(
-                    "[render] fast profile: unlit texture-free PBR, HDR/bloom/MSAA disabled, window 960x540"
-                );
-            }
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
         }
 

@@ -71,7 +71,7 @@ These are the recurring shapes of per-frame regressions. Prefer the
 
 | Make it impossible | …instead of relying on |
 |--------------------|------------------------|
-| Don't `impl Clone` for heavy, shared, read-only containers (e.g. a USD `TextReader`); share via `Arc` and borrow `&*arc`. Provide a loud `deep_copy()` only for the rare real need. | "remember not to write `(*arc).clone()`" |
+| Don't deep-clone heavy, shared, read-only containers; share via `Arc` and borrow the value. Provide a loud `deep_copy()` only for the rare real need. | "remember not to write `(*arc).clone()`" |
 | Do once-per-entity setup in an **observer** (`OnAdd<T>`) — the framework runs it exactly once. | a polling `run_if(Without<Marker>)` system that re-scans forever if any code path forgets to insert the marker |
 | If you must poll, mark **every** examined entity (all `else { continue }` paths), or use a combinator that owns the insert. | hand-inserting the marker on only the success path |
 | Gate per-frame systems on change (`Changed<T>`, `is_changed()`, a generation cursor) per `AGENTS.md §7`. | unconditional `Update` work for state that's stable most frames |

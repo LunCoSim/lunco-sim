@@ -818,7 +818,7 @@ impl Plugin for WorkbenchPlugin {
             bevy::prelude::Update,
             (maintain_dock_widths, drain_pending_panel_focus),
         )
-        .add_systems(Startup, register_terrain_settings_menu);
+        .add_systems(Startup, register_graphics_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -4695,12 +4695,34 @@ fn render_panel_solo(
     }
 }
 
-fn register_terrain_settings_menu(world: &mut World) {
+fn register_graphics_settings_menu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings_submenu("Graphics", |ui, world| {
+        ui.label(egui::RichText::new("Rendering").weak().small());
+        if let Some(mut settings) =
+            world.get_resource_mut::<lunco_render::RenderingQualitySettings>()
+        {
+            egui::ComboBox::from_id_salt("graphics.rendering_quality")
+                .selected_text(settings.quality.label())
+                .show_ui(ui, |ui| {
+                    for quality in lunco_render::RenderingQuality::all() {
+                        ui.selectable_value(&mut settings.quality, quality, quality.label());
+                    }
+                });
+            ui.label(
+                egui::RichText::new(
+                    "Auto caps shadow-map resolution/cascades to the detected GPU budget. \
+                     Changing this setting safely re-arms a previous shadow fallback.",
+                )
+                .weak()
+                .small(),
+            );
+        }
+
+        ui.separator();
         ui.label(egui::RichText::new("Terrain").weak().small());
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::TerrainSettings>() {
             ui.checkbox(

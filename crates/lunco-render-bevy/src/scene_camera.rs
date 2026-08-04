@@ -12,11 +12,8 @@ use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
 
-use crate::RenderProfile;
-
 pub(crate) fn build(app: &mut App) {
-    app.init_resource::<RenderProfile>()
-        .add_observer(bind_scene_camera)
+    app.add_observer(bind_scene_camera)
         .add_systems(Update, rebind_changed_scene_camera);
 }
 
@@ -44,20 +41,13 @@ fn msaa_of(m: MsaaLevel) -> Msaa {
 /// non-HDR target is a no-op that still pays for a downsample/upsample chain, which
 /// is precisely the bug (`R4`) four crates in this repo shipped. Here it is refused,
 /// loudly, instead of silently wasting the passes.
-fn apply(
-    commands: &mut Commands,
-    e: Entity,
-    cam: &SceneCamera,
-    profile: RenderProfile,
-    initial_inactive: bool,
-) {
+fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, initial_inactive: bool) {
     let mut ec = commands.entity(e);
-    let (tonemapping, msaa) = if profile.is_fast() {
-        (Tonemapping::None, Msaa::Off)
-    } else {
-        (tonemapping_of(cam.tone_map), msaa_of(cam.msaa))
-    };
-    ec.try_insert((Camera3d::default(), tonemapping, msaa));
+    ec.try_insert((
+        Camera3d::default(),
+        tonemapping_of(cam.tone_map),
+        msaa_of(cam.msaa),
+    ));
 
     // SPACE IS BLACK. The global `ClearColor` is the WINDOW's colour and is set to the
     // workbench panel fill (`0x1a1a1a`) so the chrome has no seam; a `Camera3d` that
@@ -82,24 +72,21 @@ fn apply(
 
     // `Hdr` is a marker component in `bevy_camera` — render-FREE. So "this camera is
     // HDR" is expressible headless too; only the pipeline that acts on it is not.
-    if cam.hdr && !profile.is_fast() {
+    if cam.hdr {
         ec.try_insert(Hdr);
     } else {
         ec.remove::<Hdr>();
     }
 
-    match (cam.bloom, cam.hdr, profile) {
-        (_, _, RenderProfile::Fast) => {
-            ec.remove::<Bloom>();
-        }
-        (Some(b), true, _) => {
+    match (cam.bloom, cam.hdr) {
+        (Some(b), true) => {
             ec.try_insert(Bloom {
                 intensity: b.intensity,
                 low_frequency_boost: b.low_frequency_boost,
                 ..Bloom::default()
             });
         }
-        (Some(_), false, _) => {
+        (Some(_), false) => {
             warn!(
                 "SceneCamera on {e:?} asks for bloom without hdr — refusing. Bloom on a \
                  non-HDR target renders nothing and still pays for the downsample chain. \
@@ -107,31 +94,25 @@ fn apply(
             );
             ec.remove::<Bloom>();
         }
-        (None, _, _) => {
+        (None, _) => {
             ec.remove::<Bloom>();
         }
     }
 }
 
-fn bind_scene_camera(
-    add: On<Add, SceneCamera>,
-    cams: Query<&SceneCamera>,
-    profile: Res<RenderProfile>,
-    mut commands: Commands,
-) {
+fn bind_scene_camera(add: On<Add, SceneCamera>, cams: Query<&SceneCamera>, mut commands: Commands) {
     let e = add.entity;
     let Ok(cam) = cams.get(e) else { return };
-    apply(&mut commands, e, cam, *profile, true);
+    apply(&mut commands, e, cam, true);
 }
 
 /// Re-apply when the look is retuned live (the render-settings panel).
 fn rebind_changed_scene_camera(
     changed: Query<(Entity, &SceneCamera), Changed<SceneCamera>>,
-    profile: Res<RenderProfile>,
     mut commands: Commands,
 ) {
     for (e, cam) in &changed {
-        apply(&mut commands, e, cam, *profile, false);
+        apply(&mut commands, e, cam, false);
     }
 }
 
@@ -208,22 +189,5 @@ mod tests {
         a.update();
         assert!(a.world().entity(e).contains::<Bloom>());
         assert!(a.world().entity(e).contains::<Hdr>(), "bloom implies hdr");
-    }
-
-    #[test]
-    fn fast_profile_turns_off_hdr_bloom_and_msaa() {
-        let mut a = app();
-        a.insert_resource(RenderProfile::Fast);
-        let e = a
-            .world_mut()
-            .spawn(SceneCamera::default().with_bloom(BloomLook::default()))
-            .id();
-        a.update();
-
-        let entity = a.world().entity(e);
-        assert_eq!(entity.get::<Msaa>(), Some(&Msaa::Off));
-        assert_eq!(entity.get::<Tonemapping>(), Some(&Tonemapping::None));
-        assert!(!entity.contains::<Hdr>());
-        assert!(!entity.contains::<Bloom>());
     }
 }

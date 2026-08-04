@@ -24,7 +24,7 @@
 //! UsdDocument source text
 //!         │
 //!         ▼  (on DocumentOpened / DocumentChanged for an active doc)
-//! openusd::usda::parser  →  TextReader  →  UsdStageAsset
+//! authored layer → canonical composition → UsdStageAsset
 //!         │
 //!         ▼  (Assets<UsdStageAsset>::get_mut, in-place swap)
 //! Handle<UsdStageAsset>
@@ -61,11 +61,9 @@
 //!   today; orbit lands as a follow-up that reads egui pointer
 //!   events.
 //! - Multiple simultaneous viewports / split views.
-//! - USD composition (`UsdComposer::flatten`). Sublayers /
-//!   references resolve only when the canonical asset loader is
-//!   used (i.e. drag-drop / `asset_server.load`); workbench-driven
-//!   docs walk only the root layer until the composer is wired into
-//!   the in-place rebuild path.
+//! - The viewport does not compose source text itself. The canonical stage
+//!   projection owns sublayers, references, payloads, and variants; this panel
+//!   only selects the document whose live stage is projected.
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ImageRenderTarget, RenderTarget};

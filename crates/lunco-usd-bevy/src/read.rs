@@ -64,14 +64,11 @@ fn dict_string(dict: &openusd::sdf::Dictionary, key: &str) -> Option<String> {
     dict.get(key).and_then(|v| v.clone().get::<String>())
 }
 
-/// Composed, default-time reads that both the flattened `sdf::Data` and a live
-/// `StageView` can serve. Generic (`<R: UsdRead>`) so extractors are written
-/// once and read either source.
+/// Composed, default-time reads served by the live canonical `StageView`.
+/// Extractors depend on this seam rather than reaching into OpenUSD directly.
 pub trait UsdRead {
     /// Composed `typeName` of the prim at `prim` (e.g. `"Cube"`, `"Mesh"`).
-    /// Named `type_name` (not `prim_type_name`) to avoid colliding with
-    /// [`UsdDataExt::prim_type_name`](crate::usd_data::UsdDataExt) when both
-    /// traits are in scope on `sdf::Data`.
+    /// Named `type_name` to distinguish it from authoring-layer helpers.
     fn type_name(&self, prim: &SdfPath) -> Option<String>;
 
     /// The default-time composed value of attribute `name` on `prim`, owned.
@@ -83,7 +80,7 @@ pub trait UsdRead {
     fn documentation(&self, prim: &SdfPath) -> Option<String>;
 
     /// Typed default-time read of attribute `name` on `prim`, via the SAME
-    /// `TryFrom<Value>` conversion the flattened reader uses. Provided.
+    /// `TryFrom<Value>` conversion used by the live reader. Provided.
     fn scalar<T>(&self, prim: &SdfPath, name: &str) -> Option<T>
     where
         T: TryFrom<Value>,
@@ -305,14 +302,13 @@ pub trait UsdRead {
 
     /// Every live composed prim path (active, defined, non-abstract), in
     /// traversal order — the set a per-stage scan iterates. On the live stage
-    /// this is `Stage::traverse`; on the flatten it is the `Prim`-typed specs.
+    /// this is `Stage::traverse`.
     fn prim_paths(&self) -> Vec<SdfPath>;
 
     /// The leaf names of every authored property on `prim` (e.g.
     /// `"primvars:baseColor"`, `"xformOp:translate"`) — the set the shader
     /// authoring pass enumerates to apply arbitrary `primvars:*`. On the live
-    /// stage this is `Prim::property_names`; on the flatten it is the child
-    /// specs directly under `<prim>.`.
+    /// stage this is `Prim::property_names`.
     fn attr_names(&self, prim: &SdfPath) -> Vec<String>;
 
     /// Whether `prim` authors ANY property whose name begins with `prefix` —
@@ -360,8 +356,7 @@ pub trait UsdRead {
     /// Whether a prim exists at `prim` in the composed scene — the existence
     /// test the incremental structural reconcile uses to tell a spawn (present in
     /// the stage, no live entity) from a remove (absent, but a live entity
-    /// survives). On the live stage this is `Prim::is_valid`; on the flatten it
-    /// is a spec lookup.
+    /// survives). On the live stage this is `Prim::is_valid`.
     fn has_prim(&self, prim: &SdfPath) -> bool;
 
     /// The stage's `defaultPrim`, root-relative (no leading slash), or `None`
@@ -376,10 +371,8 @@ pub trait UsdRead {
     /// The parsed `customData` UI hint on attribute `name` of `prim` — the
     /// `{ double min; double max; string unit; string type }` bag a bounded
     /// parameter control reads. Returns `None` when the attribute authors no
-    /// `customData`. Default returns `None`; only the live-stage reader
-    /// ([`StageView`](crate::view::StageView)) overrides it, since the flattened
-    /// backend has no consumer for attribute metadata. The parse stays here (not
-    /// in callers) so consumers never touch `openusd` value types.
+    /// `customData`. The live reader parses it here (not in callers), so consumers
+    /// never touch `openusd` value types.
     fn attr_ui_hint(&self, _prim: &SdfPath, _name: &str) -> Option<AttrUiHint> {
         None
     }
@@ -391,10 +384,8 @@ pub trait UsdRead {
     fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool;
 
     /// The stage's `timeCodesPerSecond` — seconds × this = time code (USD maps a
-    /// time code `t` to `t / tcps` seconds). On `StageView` this is the composed
-    /// stage metadata; on the flatten it is the pseudo-root `timeCodesPerSecond`
-    /// field. Defaults to 24.0 (USD spec) when unauthored; callers apply their
-    /// own non-positive guard.
+    /// time code `t` to `t / tcps` seconds). Defaults to 24.0 (USD spec) when
+    /// unauthored; callers apply their own non-positive guard.
     fn time_codes_per_second(&self) -> f64;
 
     /// The authored `timeSamples` time codes of attribute `name` on `prim`,
