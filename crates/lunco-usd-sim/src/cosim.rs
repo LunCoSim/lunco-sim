@@ -597,23 +597,23 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
-    // …and the converse. A part with acausal pins that NO network owns cannot be
-    // solved at all: its `.mo` is a component class whose pins only mean
+    // …and the converse. A part with an acausal pin that NO network owns cannot
+    // be solved at all: its `.mo` is a component class whose pins only mean
     // something inside a `connect()` set, so there is nothing to run standalone.
-    // Silence here is how a battery dropped into a rover with no `Electrical`
-    // scope simply fails to exist — the pin reads as connected in USD while the
-    // circuit it belongs to was never generated.
-    if reader
-        .attr_names(sdf_path)
-        .iter()
-        .any(|name| name.starts_with("connectors:"))
-    {
-        warn!(
-            "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
-             CollectionAPI:components network, so no Modelica model is generated for it and it \
-             does not simulate. Add it to a network scope's `collection:components:includes`.",
-            prim_path.path
-        );
+    // A bare `connectors:p` is only the component's interface declaration. It is
+    // valid on a catalogue part such as a motor selected with `power = "infinite"`
+    // and makes no topology claim until a `.connect` opinion is authored. Skip
+    // both forms here; report only the connected form because that one is an
+    // actionable topology error.
+    if has_acausal_connector(reader, sdf_path) {
+        if has_connected_acausal_connector(reader, sdf_path) {
+            warn!(
+                "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
+                 CollectionAPI:components network, so no Modelica model is generated for it and it \
+                 does not simulate. Add it to a network scope's `collection:components:includes`.",
+                prim_path.path
+            );
+        }
         commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
@@ -761,6 +761,26 @@ fn process_usd_cosim_prim_read(
         prim_path.path,
         source.as_deref().unwrap_or("<none>"),
     );
+}
+
+/// A `connectors:*` property declares an acausal Modelica interface. Such a
+/// program is only executable as a member of a component network.
+fn has_acausal_connector(reader: &lunco_usd_bevy::StageView<'_>, sdf_path: &SdfPath) -> bool {
+    reader
+        .attr_names(sdf_path)
+        .iter()
+        .any(|name| name.starts_with("connectors:"))
+}
+
+/// A bare `connectors:*` property declares an interface; only its connection
+/// list makes an authoring claim about circuit topology.
+fn has_connected_acausal_connector(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    sdf_path: &SdfPath,
+) -> bool {
+    reader.attr_names(sdf_path).iter().any(|name| {
+        name.starts_with("connectors:") && !reader.connections(sdf_path, name).is_empty()
+    })
 }
 
 /// Return an actionable discrepancy between USD's public causal boundary and
@@ -3586,6 +3606,22 @@ mod tests {
                 .copied()
                 .collect::<BTreeSet<_>>()
         );
+    }
+
+    #[test]
+    fn bare_acausal_interface_is_not_treated_as_an_unowned_wire() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/electrical_network.usda");
+        let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose fixture");
+        let view = lunco_usd_bevy::StageView::new(&stage);
+
+        let bare_motor = SdfPath::new("/Rig/Motor").expect("motor path");
+        let wired_battery = SdfPath::new("/Rig/Battery").expect("battery path");
+        let bare_panel = SdfPath::new("/Rig/SolarPanel").expect("panel path");
+
+        assert!(!has_connected_acausal_connector(&view, &bare_motor));
+        assert!(has_connected_acausal_connector(&view, &wired_battery));
+        assert!(!has_connected_acausal_connector(&view, &bare_panel));
     }
 
     /// A model that has been parsed and dispatched but not yet solved:
