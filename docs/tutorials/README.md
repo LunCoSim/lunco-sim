@@ -11,12 +11,12 @@ Two things share this name — don't confuse them:
 
 ## The in-app tutorial system
 
-**One source, one launcher.** A tutorial is a single `.rhai` scenario; the shared
-launcher (`crates/lunco-tutorial`) runs it on a host entity via `RunScenario`. The
-scenario sets up its *own* environment in `on_start` — `load_scene("scenes/…")`
-for a 3D lesson, `cmd("OpenClass", …)` for a modeling lesson — so there is **no
-scene-vs-script split**. The coach card / spotlight / objectives come from the
-shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
+**One catalog, one launcher.** A lesson is declared by a USD curriculum prim:
+its script is `info:sourceAsset` and its optional world is a `payload`. The
+shared launcher (`crates/lunco-tutorial`) mounts that world through the typed
+scene lifecycle, waits for the completion edge, and only then starts the script
+on a host entity. The coach card / spotlight / objectives come from the shared
+HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
 
 - **Where they live**: `assets/tutorials/<app>/<name>.rhai` (`lunica/…`,
   `luncosim/…`). Native reads them fresh from disk each launch (edit → replay, no

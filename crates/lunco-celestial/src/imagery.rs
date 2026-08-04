@@ -132,9 +132,8 @@ fn load_body_image(
 /// Telemetry event published when a body's imagery is given up on.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
-/// error-telemetry observer surfaces it, the same arrangement
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
-/// use. Silent give-up is indistinguishable from "this body simply has no
+/// error-telemetry observer surfaces it. Silent give-up is indistinguishable
+/// from "this body simply has no
 /// imagery declared", which is a legitimate state — the user has to be told
 /// which it is. The payload is a human-readable string naming the dataset and
 /// the body.

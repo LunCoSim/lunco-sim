@@ -1831,16 +1831,6 @@ pub fn sync_usd_visuals(
     }
 }
 
-/// Telemetry event name published when a stage asset a prim was waiting on
-/// failed to load. The load is over and it did not happen; anything that
-/// treated "still awaiting" as "still might work" learns otherwise here.
-///
-/// Consumers deliberately reach for this rather than for the asset event:
-/// `AssetLoadFailedEvent` is per-asset and says nothing about whether the
-/// failure mattered, while this fires only when a prim was actually parked on
-/// the asset — i.e. only when a mount really was lost.
-pub const SCENE_LOAD_FAILED: &str = "SCENE_LOAD_FAILED";
-
 /// Terminal asset failure recorded by the USD asset boundary until the scene
 /// transaction consumes it. Keeping the stage identity here prevents the
 /// generic readiness/scene reconciler from mistaking a failed load for a
@@ -1848,18 +1838,8 @@ pub const SCENE_LOAD_FAILED: &str = "SCENE_LOAD_FAILED";
 #[derive(Resource, Debug, Clone)]
 pub struct FailedSceneLoad {
     pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    pub path: String,
+    pub error: String,
 }
-
-/// Telemetry event name published when a real scene transition begins.
-///
-/// This is a lifecycle edge, not a UI notification: tutorial/script owners use
-/// it to wind down outgoing behaviour before scene entities are reclaimed.
-pub const SCENE_LOAD_STARTED: &str = "SCENE_LOAD_STARTED";
-
-/// Telemetry event name published when the requested stage has finished
-/// instantiating its parked prims. The payload is the canonical scene path.
-pub const SCENE_LOAD_COMPLETED: &str = "SCENE_LOAD_COMPLETED";
 
 /// Makes a failed stage load TERMINAL for the prims parked on it.
 ///
@@ -1871,9 +1851,9 @@ pub const SCENE_LOAD_COMPLETED: &str = "SCENE_LOAD_COMPLETED";
 ///
 /// A parked prim whose stage will never arrive cannot become anything, so it is
 /// despawned rather than left as an inert husk that later passes for a mounted
-/// scene. The failure is loud (`error!`) and published as [`SCENE_LOAD_FAILED`]
-/// so callers that requested the mount can react — see `lunco_tutorial`, where
-/// a lesson whose scene never loaded must not go on to report success.
+/// scene. The failure is loud (`error!`) and consumed by the scene transaction
+/// owner, which publishes the typed `SceneTransitionFailed` edge after the
+/// parked entities have been reclaimed.
 fn fail_awaiting_stage_prims(
     mut ev: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>,
     q: Query<(Entity, &UsdPrimPath), With<UsdAwaitingStage>>,
@@ -1904,14 +1884,7 @@ fn fail_awaiting_stage_prims(
         }
         commands.insert_resource(FailedSceneLoad {
             stage_id: failure.id,
-            path: failure.path.to_string(),
-        });
-        commands.trigger(lunco_core::TelemetryEvent {
-            name: SCENE_LOAD_FAILED.into(),
-            source: 0,
-            severity: lunco_core::Severity::Error,
-            data: lunco_core::TelemetryValue::String(failure.path.to_string()),
-            timestamp: 0.0,
+            error: failure.error.to_string(),
         });
     }
 }

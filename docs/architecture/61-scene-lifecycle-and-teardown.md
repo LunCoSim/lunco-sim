@@ -27,6 +27,20 @@ needing to know what a celestial scene contains.
 `clear_scene_entities` (`lunco-usd-sim::cosim`) drives this, and is shared by
 `LoadScene` (clear-before-reload) and `ClearScene` (clear-to-empty).
 
+## One transition boundary
+
+`lunco-core::SceneTransitionIntent` is the typed in-process request boundary.
+Higher-level domains such as tutorials emit `Load`, `Clear`, or `Restart`
+intents; `lunco-usd` is the only owner that translates them into the concrete
+USD commands and resolves scene identity. No subsystem sends a command name or
+JSON payload to another subsystem.
+
+The owner publishes `SceneTransitionStarted` before teardown and publishes
+`SceneTransitionCompleted` or `SceneTransitionFailed` from the authoritative
+transaction. All three scene commands—`LoadScene`, `ClearScene`, and
+`RestartScene`—use this boundary, so tutorial/runtime owners cannot miss a
+transition merely because it entered through a different command.
+
 ## Everything else — the `SceneTeardown` schedule
 
 Resources, caches and worker-side handles are not entities and are not covered

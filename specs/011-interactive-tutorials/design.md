@@ -277,8 +277,9 @@ share a relative path.
 `lunco-tutorial` depends on `openusd` **directly**, never on `lunco-usd-bevy`:
 that crate pulls `lunco-render`, and cargo unifies features across the graph, so
 the dependency would relink the GPU stack into the `--no-ui` server. Mounting is
-a named `ApiCommandEvent { command: "LoadScene" }`, the same arrangement
-`SCENE_LOAD_FAILED` uses in the other direction.
+a typed `SceneTransitionIntent`; the scene owner resolves the asset and
+publishes typed started/completed/failed lifecycle edges. Tutorial code does not
+manufacture command names or parse scene telemetry.
 
 ### What stays OUT of USD
 

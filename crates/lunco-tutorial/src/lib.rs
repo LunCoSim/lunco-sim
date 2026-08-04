@@ -107,8 +107,7 @@ pub struct TrackMeta {
 /// human-readable string naming the tutorial/lesson and the cause.
 ///
 /// Published at [`Severity::Error`] so the workbench status bar's error
-/// telemetry observer surfaces it — the same arrangement
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` uses. A student who clicks a lesson and
+/// telemetry observer surfaces it. A student who clicks a lesson and
 /// sees nothing happen must be told WHY in the UI, not only in a terminal they
 /// are not watching.
 pub const TUTORIAL_FAILED: &str = "TUTORIAL_FAILED";
@@ -646,18 +645,10 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 source,
                 world: scene.clone(),
             });
-            world.trigger(lunco_api::ApiCommandEvent {
-                command: "LoadScene".to_string(),
-                params: serde_json::json!({ "path": scene }),
-                id: 0,
-            });
+            world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
         } else {
             if outgoing_world.is_some() {
-                world.trigger(lunco_api::ApiCommandEvent {
-                    command: "ClearScene".to_string(),
-                    params: serde_json::Value::Null,
-                    id: 0,
-                });
+                world.trigger(lunco_core::SceneTransitionIntent::clear());
             }
             start_tutorial_scenario(world, id, source, None);
         }
@@ -681,11 +672,7 @@ fn on_skip_tutorial(_t: On<SkipTutorial>, mut commands: Commands) {
             // A tutorial that declared a world owns that world. Stopping it
             // therefore winds the viewport down through the normal scene
             // command, while a UI-only tour deliberately leaves the world.
-            world.trigger(lunco_api::ApiCommandEvent {
-                command: "ClearScene".to_string(),
-                params: serde_json::Value::Null,
-                id: 0,
-            });
+            world.trigger(lunco_core::SceneTransitionIntent::clear());
         }
     });
 }
@@ -764,27 +751,23 @@ fn on_mission_complete(
     }
 }
 
-/// Wind down an active lesson before any other scene is mounted. The scene
-/// lifecycle emits this edge from the authoritative LoadScene command, so raw
-/// scene selection and API/script scene loads have the same cleanup semantics.
-fn on_scene_load_started(
-    trigger: On<TelemetryEvent>,
+/// Wind down an active lesson before any scene transition is applied. The
+/// lifecycle owner emits this edge for Load, Clear, and Restart, so every
+/// scene entry path has identical tutorial cleanup semantics.
+fn on_scene_transition_started(
+    trigger: On<lunco_core::SceneTransitionStarted>,
     mut progress: ResMut<TutorialProgress>,
     mut pending: ResMut<PendingTutorialStart>,
     mut session: ResMut<TutorialSession>,
     mut commands: Commands,
 ) {
-    if trigger.event().name != "SCENE_LOAD_STARTED" {
-        return;
-    }
-    let path = match &trigger.event().data {
-        TelemetryValue::String(path) => path,
-        _ => return,
+    let belongs_to_pending = match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, .. } => pending
+            .0
+            .as_ref()
+            .is_some_and(|request| request.world.as_str() == path.as_str()),
+        lunco_core::SceneTransition::Clear | lunco_core::SceneTransition::Restart { .. } => false,
     };
-    let belongs_to_pending = pending
-        .0
-        .as_ref()
-        .is_some_and(|request| request.world.as_str() == path.as_str());
     if !belongs_to_pending {
         pending.0 = None;
     }
@@ -802,11 +785,11 @@ fn on_scene_load_started(
 /// Attach a declared tutorial scenario only after its scene transaction has
 /// completed. This closes the old race where the script started while the
 /// viewport was still empty or still belonged to the outgoing scene.
-fn on_scene_load_completed(trigger: On<TelemetryEvent>, mut commands: Commands) {
-    if trigger.event().name != "SCENE_LOAD_COMPLETED" {
-        return;
-    }
-    let TelemetryValue::String(path) = &trigger.event().data else {
+fn on_scene_transition_completed(
+    trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut commands: Commands,
+) {
+    let lunco_core::SceneTransition::Load { path, .. } = &trigger.event().transition else {
         return;
     };
     let path = path.clone();
@@ -825,8 +808,8 @@ fn on_scene_load_completed(trigger: On<TelemetryEvent>, mut commands: Commands) 
 /// Abandon the running lesson when a scene load fails, so it cannot go on to
 /// report success it did not earn.
 ///
-/// A lesson's first act is almost always `load_scene(...)`, and nothing after
-/// that checks whether the scene arrived. A coach-mark tour in particular
+/// A lesson may have a declared world, and nothing after its mount should run
+/// unless that world arrived. A coach-mark tour in particular
 /// advances on the user pressing Next, so against an empty viewport it walks
 /// its whole step list, emits `MISSION_COMPLETE`, records a completion and
 /// starts its successor — the observed failure, where a tutorial wrote
@@ -842,23 +825,20 @@ fn on_scene_load_completed(trigger: On<TelemetryEvent>, mut commands: Commands) 
 /// Deliberately not filtered to "the scene THIS lesson asked for": a lesson has
 /// no way to declare that, and any scene failing to mount while a lesson is
 /// running means the lesson is not showing what it claims to. The event is
-/// published by `lunco_usd_bevy::SCENE_LOAD_FAILED`, matched by name here
-/// because the tutorial crate sits above USD and does not depend on it — the
-/// same arrangement `MISSION_COMPLETE` already uses in the other direction.
-fn on_scene_load_failed(
-    trigger: On<TelemetryEvent>,
+/// published by the typed scene owner, so the tutorial does not parse a
+/// telemetry name or JSON payload to decide whether its world failed.
+fn on_scene_transition_failed(
+    trigger: On<lunco_core::SceneTransitionFailed>,
     mut progress: ResMut<TutorialProgress>,
     mut pending_advance: ResMut<PendingAdvance>,
     mut pending_start: ResMut<PendingTutorialStart>,
     mut session: ResMut<TutorialSession>,
     mut commands: Commands,
 ) {
-    if trigger.event().name != "SCENE_LOAD_FAILED" {
-        return;
-    }
-    let path = match &trigger.event().data {
-        TelemetryValue::String(path) => Some(path.as_str()),
-        _ => None,
+    let path = match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, .. }
+        | lunco_core::SceneTransition::Restart { path, .. } => Some(path.as_str()),
+        lunco_core::SceneTransition::Clear => None,
     };
     let matches_pending = path.is_some_and(|path| {
         pending_start
@@ -872,12 +852,12 @@ fn on_scene_load_failed(
         error!(
             "[tutorial] abandoning '{}' — its scene failed to load ({:?})",
             request.id,
-            trigger.event().data
+            trigger.event().error
         );
         commands.trigger(tutorial_failed(format!(
             "abandoning '{}' — its scene failed to load ({:?})",
             request.id,
-            trigger.event().data
+            trigger.event().error
         )));
         return;
     }
@@ -893,12 +873,12 @@ fn on_scene_load_failed(
     error!(
         "[tutorial] abandoning '{}' — its scene failed to load ({:?})",
         id,
-        trigger.event().data
+        trigger.event().error
     );
     commands.trigger(tutorial_failed(format!(
         "abandoning '{}' — its scene failed to load ({:?})",
         id,
-        trigger.event().data
+        trigger.event().error
     )));
 }
 
@@ -1416,9 +1396,9 @@ impl Plugin for TutorialCorePlugin {
         app.register_settings_section::<TutorialSeen>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
-        app.add_observer(on_scene_load_started);
-        app.add_observer(on_scene_load_completed);
-        app.add_observer(on_scene_load_failed);
+        app.add_observer(on_scene_transition_started);
+        app.add_observer(on_scene_transition_completed);
+        app.add_observer(on_scene_transition_failed);
         app.add_observer(resolve_show_tutorial_intent);
         app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);
@@ -1513,6 +1493,19 @@ mod tests {
             Some("/Test/Lesson")
         );
 
+        // External scene controls use the same lifecycle edge as LoadScene.
+        // The active lesson must wind down before the outgoing world changes.
+        app.world_mut().trigger(lunco_core::SceneTransitionStarted {
+            transition: lunco_core::SceneTransition::clear(),
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Lesson".into(),
+        });
+        app.update();
+
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
@@ -1524,7 +1517,7 @@ mod tests {
     #[test]
     fn world_lesson_waits_for_mount_and_cancels_cleanly() {
         #[derive(Resource, Default)]
-        struct CommandsSeen(Vec<String>);
+        struct TransitionsSeen(Vec<lunco_core::SceneTransition>);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1543,10 +1536,10 @@ mod tests {
             next: None,
             source: CurriculumSource::Bundled,
         });
-        app.insert_resource(CommandsSeen::default());
+        app.insert_resource(TransitionsSeen::default());
         app.add_observer(
-            |trigger: On<lunco_api::ApiCommandEvent>, mut seen: ResMut<CommandsSeen>| {
-                seen.0.push(trigger.event().command.clone());
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
+                seen.0.push(trigger.event().transition.clone());
             },
         );
 
@@ -1555,16 +1548,37 @@ mod tests {
         });
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
-        assert_eq!(app.world().resource::<CommandsSeen>().0, vec!["LoadScene"]);
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![lunco_core::SceneTransition::load(
+                "lunco://tutorials/sandbox/first_drive.usda",
+                "",
+            )]
+        );
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/WorldLesson")
+        );
 
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
-        assert!(app
-            .world()
-            .resource::<CommandsSeen>()
-            .0
-            .ends_with(&["LoadScene".into(), "ClearScene".into()]));
+        assert!(app.world().resource::<TransitionsSeen>().0.ends_with(&[
+            lunco_core::SceneTransition::load("lunco://tutorials/sandbox/first_drive.usda", "",),
+            lunco_core::SceneTransition::Clear,
+        ]));
     }
 
     /// Starting an unknown tutorial id must publish [`TUTORIAL_FAILED`] — the

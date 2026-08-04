@@ -551,7 +551,7 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
                 .flat_map(|component| component.inputs.values())
                 .filter_map(|target| network_boundary_for_target(network, target))
                 .collect();
-            let outputs = network
+            let mut outputs: BTreeSet<String> = network
                 .outputs
                 .iter()
                 .filter_map(|(name, target)| {
@@ -559,6 +559,12 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
                     members.contains(target_prim).then(|| name.clone())
                 })
                 .collect();
+            outputs.extend(
+                generated_member_outputs(network)
+                    .into_iter()
+                    .filter(|(member, _, _)| members.contains(member.as_str()))
+                    .map(|(_, _, alias)| alias),
+            );
             let first = component_paths
                 .first()
                 .expect("connected component always has a seed");
@@ -828,7 +834,12 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             ));
         }
     }
-    source.push_str(&format!("end {root_name};\n\n"));
+    // The wrapper is an ordinary Modelica class. Keep its annotation and end
+    // marker with the wrapper equations; generated unit classes follow it as
+    // separate top-level classes.
+    source.push_str(&format!(
+        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {root_name};\n\n"
+    ));
 
     for unit in &units {
         source.push_str(&format!("model {}\n", unit.name));
@@ -939,6 +950,17 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
                 ));
             }
         }
+        for (member, member_output, alias) in member_outputs
+            .iter()
+            .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
+        {
+            let instance = &names[member.as_str()];
+            source.push_str(&format!(
+                "  {} = {instance}.{};\n",
+                modelica_identifier(alias),
+                modelica_identifier(member_output),
+            ));
+        }
         source.push_str(&format!("end {};\n\n", unit.name));
     }
 
@@ -953,17 +975,6 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
                 .is_some_and(|unit| unit.outputs.contains(output)));
         }
     }
-    for (member, output, alias) in member_outputs {
-        if let Some(instance) = names.get(member.as_str()) {
-            source.push_str(&format!("  {alias} = {instance}.{output};\n"));
-        }
-    }
-    // Generated networks are ordinary Modelica documents. Their assembly
-    // annotation provides a stable canvas banner; component Icons and
-    // Placement annotations remain the source of the actual network picture.
-    source.push_str(&format!(
-        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {model_name};\n"
-    ));
     source
 }
 
@@ -2299,6 +2310,7 @@ mod tests {
         assert!(source.contains("output Real __member_RcsJet_light_radius;"));
         assert!(source.contains("__member_RcsJet_light_intensity = RcsJet.light_intensity;"));
         assert!(source.contains("__member_RcsJet_light_radius = RcsJet.light_radius;"));
+        assert_eq!(source.matches("end Propulsion;").count(), 1);
     }
 
     #[test]

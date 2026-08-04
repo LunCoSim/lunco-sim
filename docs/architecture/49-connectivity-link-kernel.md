@@ -235,21 +235,17 @@ the standard does not, and namespace it.
 Scenes: `link.usda` (orbital smoke), `comms_wall.usda` (occlusion — a rover, a
 mast, and a wall between them), `comms_demo.usda` (the full DSN demo).
 
-## 7. Known issue: scene reload and avian
+## 7. Scene reload and avian
 
-Reloading a scene with live physics used to crash. It is fixed, but one half of the fix
-is a **workaround, not a repair**:
+Reloading a scene with live physics is an ownership teardown. Scene entities and
+their Avian graph membership are retired while the outgoing entities still
+exist, then the complete scene subtree is reclaimed through fallible deferred
+operations. This removes the stale-island crash at its owner boundary; there is
+no debug-profile assertion suppression or reload-specific fallback.
 
-- `[profile.dev.package.avian3d] debug-assertions = false` masks an upstream avian 0.7
-  assert (`island.contact_count == 0`, islands/mod.rs:1372) that a batch despawn trips.
-  It is debug-only (release never had it) and fires on an island avian deletes on the
-  next line. Verified benign: after reload the rover stays finite, rests on terrain, and
-  keeps simulating. **Do not attempt to fix it by reordering the teardown** — six
-  orderings were tried and all still panic. See `clear_scene_entities` for the analysis.
-- The other half was ours and is a real fix: systems touching scene entities through
-  `Commands` across a `LoadScene` must use the FALLIBLE forms
-  (`try_despawn`/`try_remove`/`try_insert`), because their queries are built before the
-  despawn flushes. A plain `remove` panics in `apply_deferred`.
+The same teardown path is used by `LoadScene`, `ClearScene`, and
+`RestartScene`, and the focused Avian regression suite covers live jointed-body
+despawn followed by construction of a fresh rig.
 
 ## 8. What is deliberately NOT here
 

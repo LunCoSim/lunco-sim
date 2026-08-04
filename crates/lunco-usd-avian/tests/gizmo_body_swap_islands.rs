@@ -142,8 +142,8 @@ fn spawn_rig(world: &mut World) -> Rig {
         ))
         .id();
 
-    world.spawn(RevoluteJoint::new(rig, rocker_l).with_aligned_axis(DVec3::Z));
-    world.spawn(RevoluteJoint::new(rig, rocker_r).with_aligned_axis(DVec3::Z));
+    world.spawn(RevoluteJoint::new(rig, rocker_l).with_hinge_axis(DVec3::Z));
+    world.spawn(RevoluteJoint::new(rig, rocker_r).with_hinge_axis(DVec3::Z));
 
     Rig { rocker_l, rocker_r }
 }

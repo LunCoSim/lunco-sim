@@ -92,6 +92,7 @@ impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
+        app.add_observer(on_scene_transition_intent);
 
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
@@ -142,19 +143,18 @@ impl Plugin for UsdCommandsPlugin {
         // viewport as a deliberate clear. `on_load_scene` cleared the reason on
         // the way in (a load was committed), so without this the placeholder
         // says nothing and the tester sees a blank window with the explanation
-        // only in the log. `lunco_usd_bevy::SCENE_LOAD_FAILED` carries the path.
+        // only in the log. The typed transition failure carries the cause.
         app.add_observer(
-            |trigger: On<lunco_core::TelemetryEvent>,
+            |trigger: On<lunco_core::SceneTransitionFailed>,
              mut empty_reason: ResMut<EmptyViewportReason>| {
-                if trigger.event().name != lunco_usd_bevy::SCENE_LOAD_FAILED {
-                    return;
-                }
-                let lunco_core::TelemetryValue::String(path) = &trigger.event().data else {
+                let (lunco_core::SceneTransition::Load { path, .. }
+                | lunco_core::SceneTransition::Restart { path, .. }) = &trigger.event().transition
+                else {
                     return;
                 };
                 empty_reason.set(format!(
-                    "`{path}` could not be loaded. Check that the file exists and is \
-                     readable — see the log for the underlying asset error."
+                    "`{path}` could not be loaded: {}",
+                    trigger.event().error
                 ));
             },
         );
@@ -218,6 +218,32 @@ impl Plugin for UsdCommandsPlugin {
                 .run_if(resource_exists::<Assets<lunco_usd_bevy::UsdSourceText>>),
         );
         register_all_commands(app);
+    }
+}
+
+/// Route the dependency-light in-process scene intent to the typed USD command
+/// that owns path resolution and scene mounting. This is the single adapter
+/// between higher-level domains and the USD command surface; it carries typed
+/// data all the way through and never parses a command name or JSON payload.
+fn on_scene_transition_intent(
+    trigger: On<lunco_core::SceneTransitionIntent>,
+    mut commands: Commands,
+) {
+    match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, root_prim } => {
+            commands.trigger(LoadScene {
+                path: path.clone(),
+                root_prim: root_prim.clone(),
+            });
+        }
+        lunco_core::SceneTransition::Clear => {
+            commands.trigger(ClearScene {});
+        }
+        lunco_core::SceneTransition::Restart { reset_document, .. } => {
+            commands.trigger(RestartScene {
+                reset_document: *reset_document,
+            });
+        }
     }
 }
 
@@ -450,8 +476,8 @@ fn update_viewport_placeholder(
 /// composed `base ⊕ runtime` — the runtime layer carries placed waypoints,
 /// runtime spawns and moved transforms, and it is published as the overlay on the
 /// scene's `twin://` source. Mounting the raw file instead re-reads the base
-/// `.usda` from disk and silently drops all of it, so a second
-/// `load_scene("scenes/…/scene.usda")` for an already-open scene would wipe every
+/// `.usda` from disk and silently drops all of it, so a second `LoadScene` for an
+/// already-open scene would wipe every
 /// live edit. Asking the registry (rather than pattern-matching the path against
 /// twin roots) makes that an authoritative answer: the mount diverts exactly when
 /// a document exists to divert to.
@@ -577,12 +603,8 @@ fn on_load_scene(
             "[load-scene] `{}` @ `{}` already loaded — no-op",
             path, root_prim
         );
-        commands.trigger(lunco_core::TelemetryEvent {
-            name: lunco_usd_bevy::SCENE_LOAD_COMPLETED.into(),
-            source: 0,
-            severity: lunco_core::Severity::Info,
-            data: lunco_core::TelemetryValue::String(path),
-            timestamp: 0.0,
+        commands.trigger(lunco_core::SceneTransitionCompleted {
+            transition: lunco_core::SceneTransition::load(path.clone(), root_prim.clone()),
         });
         return;
     }
@@ -595,14 +617,11 @@ fn on_load_scene(
     commands.insert_resource(SceneLoadInFlight {
         path: path.clone(),
         root_prim: root_prim.clone(),
+        transition: lunco_core::SceneTransition::load(path.clone(), root_prim.clone()),
         stage_id: new_id,
     });
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: lunco_usd_bevy::SCENE_LOAD_STARTED.into(),
-        source: 0,
-        severity: lunco_core::Severity::Info,
-        data: lunco_core::TelemetryValue::String(path.clone()),
-        timestamp: 0.0,
+    commands.trigger(lunco_core::SceneTransitionStarted {
+        transition: lunco_core::SceneTransition::load(path.clone(), root_prim.clone()),
     });
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).

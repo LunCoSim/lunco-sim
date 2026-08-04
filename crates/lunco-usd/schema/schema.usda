@@ -1176,8 +1176,8 @@ class "LunCoTutorialAPI" (
     - its PRESENTATION is the properties below.
 
     THE WORLD IS A PAYLOAD, not a property, and this is the whole point of the
-    schema. A lesson used to set its world by calling `load_scene(...)` as the
-    first statement of `on_start`, so a lesson that forgot was indistinguishable
+    schema. A lesson declares its world as a payload instead of opening it from
+    `on_start`, so a lesson that forgot was indistinguishable
     from a lesson that has no world on purpose (a pure UI tour legitimately has
     none) — the absent environment was unrepresentable and therefore
     unverifiable, and the observed failure was a lesson drawing its coach marks

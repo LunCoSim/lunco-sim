@@ -41,9 +41,8 @@ use wasm_bindgen::JsCast;
 /// payload is a human-readable string naming the site/DEM and the cause.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
-/// error telemetry observer surfaces it — the same arrangement
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
-/// use. Terrain IS the world here: a `warn!` in a terminal nobody is reading
+/// error telemetry observer surfaces it. Terrain IS the world here: a `warn!`
+/// in a terminal nobody is reading
 /// leaves the user staring at an empty scene with a clean status bar, unable to
 /// tell "still loading" from "never coming".
 pub const DEM_BUILD_FAILED: &str = "DEM_BUILD_FAILED";

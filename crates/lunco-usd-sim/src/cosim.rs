@@ -28,7 +28,8 @@ use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::telemetry::{ChannelSource, Parameter};
 use lunco_core::{
-    on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, WorldGrid,
+    on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, SceneTransition,
+    SceneTransitionCompleted, SceneTransitionFailed, WorldGrid,
 };
 use lunco_cosim::{
     CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts, SimComponent, SimConnection,
@@ -76,8 +77,7 @@ struct UsdTelemetryProjected;
 /// `SimStatus::Compiling` is waiting for will never be attempted.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
-/// error-telemetry observer surfaces it, the same arrangement
-/// [`lunco_usd_bevy::SCENE_LOAD_FAILED`] uses. A scene whose models silently
+/// error-telemetry observer surfaces it. A scene whose models silently
 /// never step is indistinguishable from a scene that is merely still compiling;
 /// the difference has to reach the UI, not just the log.
 pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
@@ -206,6 +206,9 @@ pub struct SceneLoadInFlight {
     /// Concrete root identity, so another root in the same stage is a real
     /// transition rather than an accidental no-op.
     pub root_prim: String,
+    /// The command-level transition whose completion or failure this load
+    /// publishes. Restart uses the same transaction as an ordinary load.
+    pub transition: SceneTransition,
     /// Stage asset id of the in-flight load. The clearing system watches
     /// for the last UsdAwaitingStage entity carrying this id to leave the
     /// awaiting pool.
@@ -274,15 +277,15 @@ fn clear_scene_load_in_flight(
         .as_deref()
         .is_some_and(|failure| failure.stage_id == g.stage_id);
     if recorded_failure || asset_server.load_state(g.stage_id).is_failed() {
-        if !recorded_failure {
-            commands.trigger(lunco_core::TelemetryEvent {
-                name: lunco_usd_bevy::SCENE_LOAD_FAILED.into(),
-                source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(g.path.clone()),
-                timestamp: 0.0,
-            });
-        }
+        let error = failed
+            .as_deref()
+            .filter(|failure| failure.stage_id == g.stage_id)
+            .map(|failure| failure.error.clone())
+            .unwrap_or_else(|| format!("stage `{}` failed to load", g.path));
+        commands.trigger(SceneTransitionFailed {
+            transition: g.transition.clone(),
+            error,
+        });
         commands.remove_resource::<SceneLoadInFlight>();
         commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
         return;
@@ -312,12 +315,8 @@ fn clear_scene_load_in_flight(
             g.path
         );
     }
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: lunco_usd_bevy::SCENE_LOAD_COMPLETED.into(),
-        source: 0,
-        severity: lunco_core::Severity::Info,
-        data: lunco_core::TelemetryValue::String(g.path.clone()),
-        timestamp: 0.0,
+    commands.trigger(SceneTransitionCompleted {
+        transition: g.transition.clone(),
     });
     commands.remove_resource::<SceneLoadInFlight>();
     commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
@@ -3036,6 +3035,18 @@ fn on_restart_scene(
     // Restart is an explicit replacement transaction. Cancel the old load
     // identity before reclaiming its parked entities.
     commands.remove_resource::<SceneLoadInFlight>();
+    let transition = SceneTransition::Restart {
+        path: label.clone(),
+        root_prim: String::new(),
+        reset_document: trigger.event().reset_document,
+    };
+    commands.insert_resource(SceneLoadInFlight {
+        path: label.clone(),
+        root_prim: String::new(),
+        transition: transition.clone(),
+        stage_id: handle.id(),
+    });
+    commands.trigger(lunco_core::SceneTransitionStarted { transition });
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
     // Every scene-authored entity (incl. the Avatar camera) carries `UsdPrimPath`,
@@ -3084,11 +3095,19 @@ fn on_clear_scene(
         return;
     }
     info!("[clear-scene] clearing viewport");
+    commands.trigger(lunco_core::SceneTransitionStarted {
+        transition: SceneTransition::Clear,
+    });
     // Clearing is also cancellation: a parked stage must not arrive later and
     // repopulate a viewport the caller explicitly emptied.
     commands.remove_resource::<SceneLoadInFlight>();
     commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
     clear_scene_entities(&mut commands, &scene);
+    commands.queue(|world: &mut World| {
+        world.trigger(SceneTransitionCompleted {
+            transition: SceneTransition::Clear,
+        });
+    });
 }
 
 /// Despawn the current scene's USD entities, synthesized physics entities, and
@@ -3693,10 +3712,10 @@ pub(crate) fn install(app: &mut App) {
 
     app.add_systems(
         Update,
-        // Drain the single-flight guard the frame after the last prim of
-        // the in-flight scene leaves the awaiting pool. Cheap (one
-        // `Option<Res>` + a bounded `Query::iter` only when a guard is
-        // set); no per-frame cost in steady state.
+        // Reconcile the active scene transaction after the last prim leaves
+        // the awaiting pool. Cheap (one `Option<Res>` + a bounded
+        // `Query::iter` only while a transaction is active); no per-frame
+        // cost in steady state.
         clear_scene_load_in_flight.after(lunco_usd_bevy::sync_usd_visuals),
     );
 
