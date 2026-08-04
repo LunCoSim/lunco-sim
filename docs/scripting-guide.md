@@ -260,10 +260,10 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 
 Add helpers freely — the prelude is loaded **from disk at startup** on native
 (`assets/scripting/prelude/*.rhai`): edit a helper, restart the app, no rebuild.
-The compiled-in copy is the fallback (missing directory, or a disk file that
-fails to parse — the app logs the error and boots on the embedded prelude
-rather than bricking) and the source of truth on wasm, so a rebuild still
-refreshes it for installed/web builds.
+The compiled-in copy is used when the editable directory is absent and is the
+source of truth on wasm, so a rebuild still refreshes it for installed/web
+builds. Once a native disk source set is selected, a parse error is reported
+and the app does not silently run stale embedded helpers.
 
 ## C. Scenario parameters
 

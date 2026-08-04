@@ -76,7 +76,7 @@ inside the compiler and no caller can forget it**.
 It did not always live there, and the cost of that was steep: an audit at the
 0.9.20 bump found the strip missing on the *entire* experiments/FastRun surface
 (native `experiments_runner.rs` **and** the wasm `lunica_worker.rs` twin), on the
-worker's disk-fallback compile, and in `modelica_tester` — i.e. the sweep feature
+worker's disk-backed compile, and in `modelica_tester` — i.e. the sweep feature
 whose whole purpose is overriding inputs was silently demoting every bound input
 it swept. Moving the strip into the chokepoint fixed all four at once. Don't move
 it back out.

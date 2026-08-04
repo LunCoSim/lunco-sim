@@ -458,7 +458,7 @@ if let Some(port) = parse_api_port() {
     app.add_plugins(lunco_api::LunCoApiPlugin::new(lunco_api::LunCoApiConfig {
         http_config: Some(lunco_api::transports::HttpServerConfig { port }),
     }));
-    eprintln!("🌐 API server enabled on http://0.0.0.0:{}", port);
+    eprintln!("🌐 API server enabled on http://127.0.0.1:{}", port);
 }
 
 app.run();

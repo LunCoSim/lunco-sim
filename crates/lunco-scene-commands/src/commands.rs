@@ -527,6 +527,7 @@ pub fn on_spawn_entity_command(
         lunco_core::NetSpawn {
             entry_id: cmd.entry_id.clone(),
             position,
+            rotation,
         },
     ));
 }
@@ -558,18 +559,12 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
-        // for ease of debugging. `NetSpawn` carries no rotation, so replicated
-        // spawns always land at `Quat::IDENTITY`; a host-side non-identity
-        // orientation is wrong on clients until the first transform snapshot
-        // (static props may never be corrected). Revisit before multiplayer
-        // hardening (INDEPENDENT-REVIEW-2026-07-19_agy.md SCENE-1).
         let result = spawn_usd_entry(
             &mut commands,
             &asset_server,
             entry,
             pos,
-            Quat::IDENTITY,
+            job.rotation,
             SpawnAnchor::scene_root(scene_root),
         );
         // Pin the host id; mark runtime instance + replication target. Forced

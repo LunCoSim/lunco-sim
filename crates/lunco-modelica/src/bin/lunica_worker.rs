@@ -29,13 +29,11 @@
 //! That handoff is WIRED: `worker_transport::WireMessage` wraps every
 //! `ModelicaCommand` and carries two extra variants —
 //! `InstallParsedMslCompressed { bytes, provide_to_main }` (the boot path: the
-//! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread)
-//! and `InstallParsedMsl(Vec<(uri, StoredDefinition)>)` (the already-decoded
-//! form). The worker installs it and answers `WireResult::MslReady`; with
+//! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread).
+//! The worker installs it and answers `WireResult::MslReady`; with
 //! `provide_to_main` it also hands the decoded bytes back to the page
 //! (`msl_remote::ingest_worker_decoded_msl`), so the main thread never pays the
-//! decode. (The old `TODO(arch-msl-handoff)` here described this as unbuilt —
-//! it has been built; the note is kept only to say where to look.)
+//! decompression.
 
 // Wasm32-only binary; the desktop stub below keeps `cargo build` for the
 // host target passing without producing a meaningful executable.
@@ -531,19 +529,6 @@ mod wasm {
                         }
                     }
                 }
-                WireMessage::InstallParsedMsl(parsed) => {
-                    let count = parsed.len();
-                    let started = web_time::Instant::now();
-                    lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
-                    post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
-                    post_log(
-                        &scope_for_cb,
-                        format!(
-                            "installed MSL: {count} docs in {:.2}s",
-                            started.elapsed().as_secs_f64()
-                        ),
-                    );
-                }
                 WireMessage::InstallParsedMslCompressed {
                     bytes,
                     provide_to_main,
@@ -600,7 +585,7 @@ mod wasm {
                     bytes,
                     provide_to_main,
                 } => {
-                    // Tag-mismatch fallback: untar + reparse the `.mo` sources here
+                    // Tag-mismatch source recovery: untar + reparse the `.mo` sources here
                     // in the worker (off the main thread) into a fresh parsed bundle
                     // whose keys match the build-time bundle. If we're the primary
                     // (`provide_to_main`), bincode-encode it and transfer it back so

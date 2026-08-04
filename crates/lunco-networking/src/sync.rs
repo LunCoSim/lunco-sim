@@ -207,6 +207,7 @@ pub struct SpawnReplicationMsg {
     pub gid: u64,
     pub entry_id: String,
     pub position: [f32; 3],
+    pub rotation: [f32; 4],
 }
 
 /// Host → clients: the networked entity with this id was removed on the host;
@@ -235,11 +236,12 @@ pub struct DespawnReplicationMsg {
 ///
 /// The handshake is the host's first reliable message, so a mismatched peer is
 /// rejected before it can apply a single snapshot.
-pub const WIRE_VERSION: u32 = 1;
+pub const WIRE_VERSION: u32 = 2;
 
-/// Host → a freshly-connected client: the **wire version**, your **server-assigned**
-/// session id, and the current tick. The session id is allocated from server entropy
-/// (the client cannot pick or guess it — review H4/H5).
+/// Host → a freshly-connected client: the **wire version**, the **server-assigned**
+/// session id, the connection-bound journal author, and the current tick. The
+/// session id and journal author are allocated by the server (the client cannot
+/// pick or guess either — review H4/H5/S7).
 ///
 /// The former `token` field is **gone** (review N6): it was stored by the client and
 /// never read again by any code path. Authority is bound to the CONNECTION (the host
@@ -251,6 +253,8 @@ pub const WIRE_VERSION: u32 = 1;
 pub struct HandshakeMsg {
     pub session: u64,
     pub tick: u64,
+    /// Canonical author used for entries this connection contributes to the journal.
+    pub journal_author: String,
     /// Sender's [`WIRE_VERSION`]. A client whose value differs refuses the session.
     pub wire_version: u32,
 }
@@ -294,7 +298,7 @@ pub struct InboundClientCtx<'w> {
     // Canonical Twin journal — a client applies host-sent entries here via
     // `append_remote` (merge). `Option` so the drain still runs in a build with
     // no journal (e.g. a minimal networking-only test); host arm is a no-op.
-    journal: Option<Res<'w, JournalResource>>,
+    journal: Option<ResMut<'w, JournalResource>>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -917,6 +921,13 @@ fn is_control_command(type_name: &str) -> bool {
     matches!(type_name, "SetPorts")
 }
 
+fn is_declared_wire_command(channels: &SyncChannelRegistry, type_name: &str) -> bool {
+    matches!(
+        channels.0.get(type_name),
+        Some(SyncChannel::CommandBus | SyncChannel::ControlStream | SyncChannel::BulkData)
+    )
+}
+
 /// Apply an inbound command through the *same* reflect-trigger path as a local /
 /// HTTP command, with dedupe + authority + an echo guard.
 pub fn apply_sync_command(
@@ -929,10 +940,23 @@ pub fn apply_sync_command(
     // Empty unless a mission declares a blackout, so the gate is unchanged for
     // every app that never uses it.
     control_paths: Res<lunco_core::session::ControlPathRegistry>,
+    channels: Res<SyncChannelRegistry>,
     role: Res<NetworkRole>,
     mut dedup: ResMut<SyncDedup>,
 ) {
     let ev = trigger.event();
+    // The channel registry is the authoritative wire surface. A forged type
+    // name must not reach the reflection registry merely because that type is
+    // present in the host process: undeclared and Local commands are local-only.
+    // This check belongs on the host, where the untrusted envelope first becomes
+    // an ECS event; the client trusts the host's already-filtered relay.
+    if role.is_host() && !is_declared_wire_command(&channels, &ev.type_name) {
+        warn!(
+            "[sync] rejected undeclared/local wire command '{}' from {}",
+            ev.type_name, ev.origin
+        );
+        return;
+    }
     // Host authorizes against ownership; a client trusts the host. The dedupe
     // slot is claimed AFTER this gate (below): a rejected command must not burn
     // its `(origin, op_id)`, or a later legitimately-authorized retry of the
@@ -1197,6 +1221,7 @@ pub fn drain_sync_inbox(
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,
                     position: Vec3::from_array(spawn.position),
+                    rotation: Quat::from_array(spawn.rotation).normalize(),
                 });
             }
             SyncEnvelope::Despawn(d) => {
@@ -1238,12 +1263,14 @@ pub fn drain_sync_inbox(
                     }
                     local.0 = SessionId(h.session);
                     tick.0 = h.tick;
-                    // NOTE: the journal author is NOT (re)stamped here anymore. It's
-                    // set once at startup to a stable per-install id
-                    // (`journal_plane::stamp_local_journal_author`) so a peer's own
-                    // offline edits keep the same author across reconnects and thus
-                    // upload + merge correctly (the session-scoped author dropped
-                    // them). See `journal_plane::local_author_id`.
+                    if let Some(journal) = ctx.journal.as_ref() {
+                        let author = lunco_twin_journal::AuthorId::new(h.journal_author.clone());
+                        if let Err(e) = journal.rebind_local_author(author) {
+                            error!("[journal-plane] could not rebind offline entries at join: {e}");
+                            commands.trigger(crate::client::LeaveServer {});
+                            continue;
+                        }
+                    }
                     info!("[net] handshake accepted: assigned session={}", h.session);
                 }
             }
@@ -1576,7 +1603,12 @@ pub fn drain_sync_inbox(
                         "[journal-plane] rejected journal edit from unauthorized session {sender}"
                     );
                 } else if let Some(journal) = ctx.journal.as_ref() {
-                    crate::journal_plane::apply_inbound_entry(journal, &msg);
+                    let author = role.is_host().then(|| {
+                        lunco_twin_journal::AuthorId::new(crate::journal_plane::author_for_session(
+                            sender,
+                        ))
+                    });
+                    crate::journal_plane::apply_inbound_entry(journal, &msg, author);
                 }
             }
             SyncEnvelope::RunStatus(msg) => {
@@ -1605,7 +1637,12 @@ pub fn drain_sync_inbox(
                     );
                 } else if let Some(journal) = ctx.journal.as_ref() {
                     for msg in &msgs {
-                        crate::journal_plane::apply_inbound_entry(journal, msg);
+                        let author = role.is_host().then(|| {
+                            lunco_twin_journal::AuthorId::new(
+                                crate::journal_plane::author_for_session(sender),
+                            )
+                        });
+                        crate::journal_plane::apply_inbound_entry(journal, msg, author);
                     }
                 }
             }
@@ -2003,7 +2040,7 @@ pub fn recompute_interest(
 }
 
 /// Host: when a runtime-spawned networked root gets its id minted, record its spawn
-/// catalog (`entry_id` + position) in [`ReplicationState::spawn_info`] (B4 Phase 2).
+/// catalog (`entry_id` + pose) in [`ReplicationState::spawn_info`] (B4 Phase 2).
 ///
 /// This **no longer broadcasts** the `Spawn` to `All` — the per-peer assembler
 /// (`assemble_and_send_snapshots`) sends each peer a `Spawn` the instant the body
@@ -2025,6 +2062,7 @@ pub fn track_spawn_info(
                 gid: gid.get(),
                 entry_id: spawn.entry_id.clone(),
                 position: spawn.position.to_array(),
+                rotation: spawn.rotation.to_array(),
             },
         );
     }
@@ -2860,11 +2898,8 @@ fn on_update_profile_rbac(
         return;
     }
     session.username = username;
-    if session.role == lunco_core::session::AuthorityRole::Observer {
-        session.role = lunco_core::session::AuthorityRole::Operator; // setting a name grants Operator
-    }
     info!(
-        "[net] RBAC: session {} set name '{}' (role {:?})",
+        "[net] RBAC: session {} set name '{}' (server-assigned role {:?})",
         origin.0, session.username, session.role
     );
 }
@@ -3313,6 +3348,16 @@ mod codec_roundtrip {
     }
 
     #[test]
+    fn wire_command_gate_rejects_undeclared_and_local_types() {
+        let mut channels = SyncChannelRegistry::default();
+        channels.0.insert("Allowed".into(), SyncChannel::CommandBus);
+        channels.0.insert("Local".into(), SyncChannel::Local);
+        assert!(is_declared_wire_command(&channels, "Allowed"));
+        assert!(!is_declared_wire_command(&channels, "Local"));
+        assert!(!is_declared_wire_command(&channels, "Exit"));
+    }
+
+    #[test]
     fn despawn_envelope_roundtrips() {
         // B5: the despawn-replication envelope must survive the wire codec.
         let env = SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 0x00AB_CDEF });
@@ -3340,6 +3385,7 @@ mod codec_roundtrip {
             discriminant_of(&SyncEnvelope::Handshake(HandshakeMsg {
                 session: 1,
                 tick: 2,
+                journal_author: "net-session-0000000000000001".into(),
                 wire_version: WIRE_VERSION,
             })),
             3,
@@ -3367,6 +3413,7 @@ mod codec_roundtrip {
         let env = SyncEnvelope::Handshake(HandshakeMsg {
             session: 42,
             tick: 7,
+            journal_author: "net-session-000000000000002a".into(),
             wire_version: WIRE_VERSION,
         });
         let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
@@ -3386,6 +3433,7 @@ mod codec_roundtrip {
         let stale = HandshakeMsg {
             session: 1,
             tick: 0,
+            journal_author: "net-session-0000000000000001".into(),
             wire_version: WIRE_VERSION - 1,
         };
         assert_ne!(

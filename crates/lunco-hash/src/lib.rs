@@ -78,13 +78,9 @@ impl Fnv1a {
     /// Fold a whole 64-bit word in one step. For numeric fields, feed
     /// `x.to_bits()` (floats) or the value directly (ints) — this is the idiom
     /// for "hash, don't serialize" structured cache keys.
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. Nothing at the type level stops a caller from building a
-    // wire-identity (tier-2) hash via this endianness-dependent path instead of
-    // `write_bytes`; on a big-endian peer such ids would silently diverge.
-    // Deferred fix: a `WireKey` newtype populatable only via `write_bytes`.
-    // Revisit before multiplayer hardening
-    // (INDEPENDENT-REVIEW-2026-07-19_agy.md HASH-1).
+    // This is intentionally a word-wise cache-key operation, not a byte-framed
+    // wire identity. Callers that cross a process or peer boundary use
+    // `write_bytes` with an explicit canonical encoding.
     pub fn write_u64(&mut self, x: u64) -> &mut Self {
         self.state ^= x;
         self.state = self.state.wrapping_mul(FNV1A_PRIME);

@@ -1,12 +1,12 @@
 //! The rhai prelude must PARSE. Nothing else checks this.
 //!
 //! `cargo check` never sees these files — they are assets, loaded from disk at
-//! runtime (embedded only as a fallback), which is exactly what makes them
+//! runtime (embedded when no editable asset tree is available), which is exactly what makes them
 //! editable without a rebuild. The cost of that is real: a syntax error in
 //! `links.rhai` is invisible to the compiler and to every Rust test, and surfaces
-//! as the whole prelude silently falling back to the embedded copy
-//! (`compile_prelude`) — so a scenario runs against STALE routing helpers and
-//! nobody is told.
+//! as a startup failure with a useful file-local diagnostic. The runtime uses
+//! the selected source set as authoritative rather than silently running stale
+//! embedded routing helpers.
 //!
 //! A parse test is cheap and catches that. It does not (and cannot) check that the
 //! host functions the prelude calls are registered — a call to a missing `query()`
@@ -39,8 +39,8 @@ fn prelude_files_all_parse() {
     }
 }
 
-/// The embedded fallback must parse too — it is what a disk-load failure lands on,
-/// so a broken fallback turns a recoverable problem into a dead prelude.
+/// The embedded source must parse too — it is the wasm and installed-build source
+/// when no editable asset directory is present.
 #[test]
 fn embedded_prelude_files_all_parse() {
     let engine = runtime_engine();

@@ -43,9 +43,9 @@ a transport layer that bridges the channels to the worker over
    them on `ModelicaChannels`, and registers the `tx_res` / `tx_cmd` handles
    with `worker_transport::register_result_sender` /
    `register_command_sender` so JS-side bridges can reach them.
-2. **Worker spawn.** `lunica::run` calls
-   `worker_transport::install_worker("./worker/worker_bootstrap.js")`. That
-   constructs a `web_sys::Worker` of `type=module`, attaches an
+2. **Worker spawn.** The first Modelica compile, document parse, or fast run
+   calls `worker_transport::ensure_pool_spawned`, which constructs a
+   `web_sys::Worker` of `type=module`, attaches an
    `onmessage` closure that decodes `WireResult` and pushes `Result` into
    `tx_res` and `Log` lines into `bevy::log::info!("[worker] …")`, and
    stashes the worker handle in a `OnceLock<WorkerHandle>`. The worker JS
@@ -53,14 +53,16 @@ a transport layer that bridges the channels to the worker over
 3. **Worker init.** Inside the Worker, `bin/lunica_worker.rs::run()` runs
    under `wasm_bindgen(start)`. It installs `self.onmessage`, posts back
    `WireResult::Log("ready")`, and parks.
-4. **MSL handoff.** When the main page's MSL fetcher decodes the
-   pre-parsed bundle (`msl_remote::drain_msl_load_slot`), it calls
-   `crate::worker_transport::install_msl_in_worker(&parsed_docs)` *before*
-   `install_global_parsed_msl(parsed_docs)`. That bincode-encodes a
-   `WireMessage::InstallParsedMsl(parsed.to_vec())` and posts it to the
-   worker via `post_message_with_transfer`, **moving** the `ArrayBuffer`
-   instead of cloning. The worker decodes and stores the bundle in *its*
-   `GLOBAL_PARSED_MSL`. ~165 MB wire, single message.
+4. **MSL handoff.** The main page's MSL fetcher keeps the downloaded
+   `parsed-*.bin.zst` or `sources-*.tar.zst` bytes compressed and gives them to
+   `msl_remote::drain_msl_load_slot`. The transport posts the compressed parsed
+   bundle to the worker as `InstallParsedMslCompressed`; the worker owns
+   decompression, bincode deserialization, and installation into its own
+   `GLOBAL_PARSED_MSL`. For source recovery it uses
+   `ParseSourceMslCompressed`, which also keeps untar and parsing off the page
+   thread. The primary worker transfers raw decoded bincode bytes back only so
+   the page can build its separate resolution/autocomplete index with chunked
+   deserialization; the page never decompresses, untars, or parses MSL.
 5. **Compile / Step / etc.** Bevy systems send `ModelicaCommand` via
    `channels.tx` exactly as on native. Each `Update` tick,
    `worker_transport::pump_commands_to_worker` drains `channels.rx_cmd`,
@@ -73,7 +75,10 @@ a transport layer that bridges the channels to the worker over
      This is the single wasm command-dispatch path.
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
-   - `InstallParsedMsl(parsed)` → `msl_remote::install_global_parsed_msl_pub(parsed)`.
+   - `InstallParsedMslCompressed(bytes)` → worker-owned decompress, deserialize,
+     and `msl_remote::install_global_parsed_msl_pub(parsed)`.
+   - `ParseSourceMslCompressed(bytes)` → worker-owned untar, parse, install,
+     and (for the primary) decoded-bundle transfer back to the page.
    - `Ping(tag)` → `WireResult::Log("pong: {tag} (msl={})")`.
 7. **Result fan-in.** Worker posts each `WireResult` back. Main's
    `onmessage` decodes:
@@ -89,7 +94,8 @@ a transport layer that bridges the channels to the worker over
 ```rust
 pub enum WireMessage {
     Command(ModelicaCommand),
-    InstallParsedMsl(Vec<(String, StoredDefinition)>),
+    InstallParsedMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
+    ParseSourceMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
     Ping(String),
 }
 pub enum WireResult {
@@ -183,9 +189,9 @@ test loops.
 | Phase                                      | Cost (cold)  | Notes                                              |
 |--------------------------------------------|--------------|----------------------------------------------------|
 | Worker wasm download + instantiate         | ~1–2 s       | parallel with main wasm                            |
-| MSL `bincode::serialize` on main           | ~1.0 s       | 165 MB output, main-thread blocking                |
-| MSL `post_message_with_transfer`           | ≈0           | `ArrayBuffer` ownership transferred, no clone     |
-| MSL `bincode::deserialize` in worker       | ~0.5 s       | off-thread, doesn't block UI                      |
+| MSL compressed bundle post                 | ≈0           | compressed bytes are transferred to the worker    |
+| MSL decompress + bincode deserialize worker| ~0.5 s       | off-thread, doesn't block UI                      |
+| MSL chunked deserialize on main            | bounded      | resolution index only; no decompress/untar/parse  |
 | Compile `Osc` (no MSL)                     | 0.07 s       | round-trip including pump + post + decode         |
 | Compile `AnnotatedRocketStage` (full MSL)  | ~3.4 s       | round-trip; native equivalent ~2 s                 |
 | Step                                       | ~50 µs RT    | post + structuredClone of small payload           |
@@ -196,13 +202,12 @@ serde. At 60 Hz that's ~0.3 % main-thread overhead.
 ## Memory
 
 Two wasm linear memories share the page. The worker bundle is ~13 MB
-compressed (28 MB wasm, slimmed by `wasm-opt -O2 --strip-debug`). The
-MSL bundle exists in *both* memories after install — main has the parsed
-`Vec` for `ModelicaCompiler::new` on its side, worker has its own copy.
-~165 MB extra heap. Future optimisation: ship the original
-`parsed-*.bin.zst` bytes (16 MB) to the worker and have it decompress +
-deserialize itself, removing the main-side cost entirely. Tracked but
-not blocking.
+compressed (28 MB wasm, slimmed by `wasm-opt -O2 --strip-debug`). The worker
+owns one installed parsed MSL bundle. The page also receives the worker's
+decoded bincode bytes and incrementally deserializes a separate copy for
+resolution/autocomplete, because wasm memories cannot be shared. Compressed
+source and parsed bundles remain compressed until the worker takes ownership;
+there is no page-thread untar/parse/decompression fallback.
 
 ## Failure modes & diagnostics
 
@@ -212,7 +217,7 @@ not blocking.
 | `[worker] PANIC during Compile X: ...`      | rumoca panic inside worker                    | Surfaced via `catch_unwind` + `WireResult::Log`                    |
 | `Simulation worker crashed and restarted`   | Result with `Entity::PLACEHOLDER` (test path) | Cosmetic; only fires from `__lc_test_dispatch_compile`              |
 | `[worker_transport] post_message failed`    | Worker died, browser refused message          | Browser DevTools → Application → Service Workers / Workers panel    |
-| UI stutters once at MSL install             | Main-side bincode + transfer of 165 MB        | Optimisation TODO above                                              |
+| UI stutters during MSL install              | Main-side chunked AST deserialization        | `msl_remote::drive_msl_main_decode`; no page-thread parse/decompress |
 
 The worker's own `web_sys::console::log_1` lines (e.g. `[lunica_worker]
 starting`) DO appear in the page console in Chrome — Chrome merges

@@ -272,20 +272,12 @@ fn apply_dynamic_fields(
 /// to that file (error locality). Both prelude uses — the global module and the
 /// per-scenario `prelude_ast` merge — go through here.
 pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
-    // Disk-first (edit -> restart, no rebuild); a disk prelude that fails to
-    // parse falls back to the EMBEDDED copy so a broken helper edit degrades
-    // to stock behaviour instead of bricking startup. The embedded copy is
-    // parse-tested in CI, so its failure is a real bug worth propagating.
-    match compile_prelude_set(engine, lunco_assets::scripting::prelude_files()) {
-        Ok(ast) => Ok(ast),
-        Err(e) => {
-            error!(
-                "[rhai] prelude failed to parse — falling back to the embedded prelude \
-                 (fix assets/scripting/prelude/ and restart): {e}"
-            );
-            compile_prelude_set(engine, lunco_assets::scripting::embedded_prelude_files())
-        }
-    }
+    // Disk-first (edit -> restart, no rebuild) on native; embedded is the
+    // authoritative source on wasm and installed builds without an asset tree.
+    // Once a source set is selected, an authored parse error is terminal for
+    // this engine construction. Running stale embedded helpers would make the
+    // visible source disagree with the policy actually executing.
+    compile_prelude_set(engine, lunco_assets::scripting::prelude_files())
 }
 
 /// Compile a script so its own top-level `const`s are visible inside its `fn`s.
@@ -724,15 +716,25 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // that id (the built-in `assets/scripting/policy/*` rules are just earlier
     // registrations), so a scenario re-shapes policy live, no rebuild — the
     // doc-37 §8 "policy = rhai" surface. `src` must define `fn <entry>(...)`;
-    // returns false (and logs why) on a compile error.
-    //
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. No allow-list on which hook ids a script may replace, and
-    // `deterministic` is hard-coded false. Revisit before multiplayer hardening
-    // (REVIEW-2026-07-19.md finding #4).
+    // returns false (and logs why) on a compile error. Replacing or removing a
+    // hook is itself a policy mutation and uses the same Operator-floor gate as
+    // other global script settings.
     engine.register_fn(
         "register_hook",
         |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> bool {
+            let authorized = bridge_core::with_world(|world| {
+                bridge_core::enforce_script_authority(
+                    world,
+                    bridge_core::capability::POLICY_MUTATE,
+                    None,
+                )
+                .is_ok()
+            })
+            .unwrap_or(false);
+            if !authorized {
+                bevy::log::warn!("[rhai] register_hook denied by script authority");
+                return false;
+            }
             match lunco_hooks_rhai::register_rhai_hook(
                 id.as_str(),
                 entry.as_str(),
@@ -757,6 +759,19 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // the original said, because "no hook" is always a valid, defined state (the
     // Rust seam's built-in). Returns whether a hook was actually removed.
     engine.register_fn("unregister_hook", |id: ImmutableString| -> bool {
+        let authorized = bridge_core::with_world(|world| {
+            bridge_core::enforce_script_authority(
+                world,
+                bridge_core::capability::POLICY_MUTATE,
+                None,
+            )
+            .is_ok()
+        })
+        .unwrap_or(false);
+        if !authorized {
+            bevy::log::warn!("[rhai] unregister_hook denied by script authority");
+            return false;
+        }
         let existed = lunco_hooks::get(id.as_str()).is_some();
         lunco_hooks::unregister(id.as_str());
         bevy::log::info!("[rhai] unregister_hook: '{id}' (was registered: {existed})");

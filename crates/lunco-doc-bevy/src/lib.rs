@@ -741,6 +741,13 @@ impl JournalResource {
         self.with_write(|j| j.set_local_author(author));
     }
 
+    /// Rebind offline local entries to the server-issued author at network join.
+    /// The journal rewrites all affected DAG references atomically; a collision
+    /// is returned instead of silently dropping an edit.
+    pub fn rebind_local_author(&self, author: AuthorId) -> Result<usize, String> {
+        self.with_write(|j| j.rebind_local_author(author))
+    }
+
     /// Run `f` with a change set open: every journal entry recorded inside it —
     /// by ANY recorder, at any depth, since they all append with
     /// `change_set: None` and inherit the ambient one — joins a single

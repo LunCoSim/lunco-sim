@@ -94,9 +94,10 @@ Everything else is **policy in rhai** — see the prelude
 `steer_to`/`nav_to` (closed-loop steering), `run_plan` (declarative waypoint/
 objective executor), `drive`/`brake`/`load_scene` wrappers. The prelude is loaded
 FROM DISK at startup on native (edit → restart, no rebuild), with the
-`include_dir!`-embedded copy as the fallback and the wasm source of truth
-(wasm-safe, no IO). A disk file that fails to parse logs and falls back to the
-embedded prelude, so a broken edit can't brick startup.
+`include_dir!`-embedded copy when no editable asset directory exists and the
+wasm source of truth (wasm-safe, no IO). Once a native disk source set is
+selected, a parse error is reported and startup does not silently switch to
+stale embedded policy.
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
 ### Events / pub-sub

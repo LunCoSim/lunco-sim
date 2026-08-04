@@ -220,8 +220,8 @@ fn on_show_open_file_picker(
     }
 
     if extensions.is_empty() {
-        // Fallback for Modelica if no kinds are registered yet.
-        extensions.push("mo".to_string());
+        warn!("[ShowOpenFilePicker] no document kinds registered with file extensions");
+        return;
     }
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();

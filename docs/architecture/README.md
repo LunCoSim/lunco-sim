@@ -122,7 +122,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 
 ## Open issues & posture
 
-- [`../reviews/open-rbac-not-enforced.md`](../reviews/open-rbac-not-enforced.md) — **the project does not enforce access control.** Trusted LAN only; never expose a host to an untrusted network
+- [`../reviews/open-rbac-not-enforced.md`](../reviews/open-rbac-not-enforced.md) — network command/session authorization is enforced; the loopback API remains a trusted local-authoring boundary and must not be exposed publicly
 - [`../reviews/`](../reviews/) — standing issues (`open-*.md`) and dated audit reports
 
 ## Research

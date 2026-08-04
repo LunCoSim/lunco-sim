@@ -649,6 +649,24 @@ fn process_usd_cosim_prim_read(
         return;
     }
 
+    // A Python source file is not a runnable cosim participant unless the
+    // embedded interpreter is available. Keep the authored USD visible, but
+    // stop at the owning boundary: do not publish a fake participant that
+    // reports `bound` and then silently produces no outputs. The ordinary
+    // scripting executor also checks this status, so this check keeps the USD
+    // projection and the execution layer honest with one source of truth.
+    if python_path.is_some()
+        && lunco_scripting::python::get_python_status()
+            != lunco_scripting::python::PythonStatus::Available
+    {
+        let source = source.as_deref().unwrap_or("<inline Python source>");
+        warn!(
+            "[usd-cosim] program {} not bound: Python runtime unavailable for {}",
+            prim_path.path, source,
+        );
+        return;
+    }
+
     // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
     //
     // NB: this stamps `UsdSimProcessed`, which makes `process_usd_sim_prims` skip this
@@ -1088,8 +1106,9 @@ pub fn dispatch_loaded_python_sources(
             })
             .unwrap_or_default();
 
-        // Offset doc id away from any Modelica-allocated ids on the same
-        // entity (legacy catalog Python balloon does the same).
+        // Offset the synthesized document id away from Modelica ids allocated
+        // for the same entity. This keeps the two document registries disjoint
+        // without inventing a second identity scheme for the script itself.
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
         // Route through the registry funnel so a journal recorder attaches (edits
         // to this cosim script record like any other domain).

@@ -380,7 +380,7 @@ impl ModelicaCompiler {
     /// the loaded tree from the members' own `within` declarations. Idempotent and
     /// cheap on repeat.
     ///
-    /// DISK FIRST, embedded only as the fallback. Both copies exist — `assets/models`
+    /// DISK FIRST on native; the embedded snapshot is the wasm source. Both copies exist — `assets/models`
     /// on the filesystem, and the `include_dir!` snapshot baked into the binary — and
     /// they drift the moment anyone edits a `.mo` without rebuilding. The disk tree is
     /// the one Bevy's AssetServer serves, so it is what `info:sourceAsset`
@@ -480,8 +480,8 @@ impl ModelicaCompiler {
     }
 
     /// If a process-wide MSL has been installed, preload it into the
-    /// session. Returns `true` when handled (caller skips the disk
-    /// fallback).
+    /// session. Returns `true` when handled (caller skips the native disk
+    /// source path).
     ///
     /// Two web-side fast paths, in priority order:
     ///
@@ -1637,15 +1637,10 @@ impl Plugin for ModelicaWorkbenchPlugin {
         app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
-        // inline rumoca *compile* (seconds for non-trivial models) freezes the
-        // render loop. The worker pool handles that heavy compile/run work — but
-        // it is NOT spawned here. Spawning it eagerly at boot is a cold compile
-        // of each ~60 MB worker bundle that can take tens of seconds on a weak
-        // machine, and the diagram must not wait on it. We only register the
-        // worker URL now; `worker_transport::ensure_pool_spawned` spawns the
-        // pool the first time a compile/run is requested. Parsing-for-diagram
-        // runs on the main thread until a worker is warm (see
-        // `dispatch_parse_to_worker`), so the model renders immediately.
+        // inline rumoca compile or parse (seconds for non-trivial models)
+        // freezes the render loop. The worker pool is started lazily when
+        // the first Modelica operation needs it; document parsing waits for
+        // that worker rather than falling back to the page's main thread.
         #[cfg(target_arch = "wasm32")]
         worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }

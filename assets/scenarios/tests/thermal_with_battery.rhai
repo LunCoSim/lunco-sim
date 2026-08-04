@@ -3,8 +3,8 @@
 // Runs against `scenes/tests/thermal_with_battery.usda`.
 //
 // WHAT IT GUARDS. With `power = "battery"` AND `thermal = "basic"`, the rover
-// carries two independent domain islands: `Scope "Electrical"` and
-// `Scope "Thermal"`, each its own generated Modelica DAE. The motors' solved
+// carries two domain islands: `Scope "Electrical"` and `Scope "Thermal"`, each
+// its own generated Modelica DAE. The motors' solved
 // `outputs:heat` is forwarded to the Electrical boundary, then read by the
 // Thermal island as a causal cross-domain SimConnection. This scenario proves:
 //

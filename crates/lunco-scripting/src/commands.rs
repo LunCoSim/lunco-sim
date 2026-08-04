@@ -928,6 +928,24 @@ pub(crate) fn register_command_policies(app: &mut App) {
         crate::bridge_core::capability::STRUCTURAL_MUTATE,
         CommandPolicy::OWNED_CONTROL,
     );
+    reg.register(
+        crate::bridge_core::capability::FIELD_MUTATE,
+        CommandPolicy::OWNED_CONTROL,
+    );
+    reg.register(
+        crate::bridge_core::capability::SETTING_MUTATE,
+        CommandPolicy {
+            min_role: AuthorityRole::Operator,
+            ownership_gated: false,
+        },
+    );
+    reg.register(
+        crate::bridge_core::capability::POLICY_MUTATE,
+        CommandPolicy {
+            min_role: AuthorityRole::Operator,
+            ownership_gated: false,
+        },
+    );
 }
 
 // Generates `register_all_commands` for the compiled-in script commands. One
