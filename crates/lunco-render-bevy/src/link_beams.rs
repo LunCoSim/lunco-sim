@@ -544,7 +544,8 @@ fn reconcile_link_beams(
 
 #[cfg(test)]
 mod tests {
-    use super::beam_len;
+    use super::{beam_len, beam_transform};
+    use bevy::prelude::Vec3;
 
     #[test]
     fn far_stub_uses_the_nearest_camera_endpoint() {
@@ -589,5 +590,16 @@ mod tests {
             beam_len(1.0e9, 50_000.0, 100_000.0, 0.0, Some((10.0, 1.0e9))),
             100_000.0
         );
+    }
+
+    #[test]
+    fn beam_transform_points_the_cylinder_axis_at_the_peer() {
+        let direction = Vec3::new(1.0, 0.0, 1.0).normalize();
+        let length = 12.0;
+        let transform = beam_transform(direction, length, 0.2);
+
+        assert!((transform.translation - direction * (length * 0.5)).length() < 1.0e-6);
+        assert_eq!(transform.scale, Vec3::new(0.2, length, 0.2));
+        assert!((transform.rotation * Vec3::Y - direction).length() < 1.0e-6);
     }
 }

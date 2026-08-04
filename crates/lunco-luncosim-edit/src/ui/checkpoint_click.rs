@@ -2149,6 +2149,21 @@ pub fn sync_waypoint_path_mesh(
 #[derive(Component, Clone, Debug)]
 pub(crate) struct WaypointVisualBase(PbrLook);
 
+/// Resolve the session-only appearance of a waypoint from its authored look and
+/// live visit state. Keeping this decision pure makes the visible visited-state
+/// contract testable without a renderer or a spawned USD subtree.
+fn waypoint_look_for_visit(base: &PbrLook, visited: bool) -> PbrLook {
+    if !visited {
+        return base.clone();
+    }
+
+    let mut target = base.clone();
+    target.base_color = LinearRgba::new(0.38, 0.38, 0.38, target.base_color.alpha);
+    target.emissive = LinearRgba::new(0.10, 0.10, 0.10, target.emissive.alpha);
+    target.unshared = true;
+    target
+}
+
 /// Tint visited waypoint domes from the live route state. The marker geometry and
 /// its authored material remain in USD; only the resolved render intent is changed
 /// for this session. `unshared` is required because the tint is animated state and
@@ -2244,11 +2259,7 @@ pub(crate) fn sync_waypoint_marker_visuals(
                 .insert(WaypointVisualBase(authored.clone()));
             authored
         };
-        if visited {
-            target.base_color = LinearRgba::new(0.38, 0.38, 0.38, target.base_color.alpha);
-            target.emissive = LinearRgba::new(0.10, 0.10, 0.10, target.emissive.alpha);
-            target.unshared = true;
-        }
+        target = waypoint_look_for_visit(&target, visited);
         if *look != target {
             *look = target;
         }
@@ -2262,9 +2273,11 @@ mod tests {
         ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
+    use bevy::prelude::LinearRgba;
     use lunco_autopilot::{
         btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
+    use lunco_render::PbrLook;
 
     #[test]
     fn runtime_click_creates_and_extends_patrol_without_usd() {
@@ -2448,5 +2461,37 @@ mod tests {
         let state = route_visual_state(&targets, None, None, true, false);
         assert_eq!(state.visited, vec![true, true]);
         assert_eq!(state.active_index, None);
+    }
+
+    #[test]
+    fn visited_waypoint_look_is_gray_and_private() {
+        let mut authored = PbrLook::matte(LinearRgba::new(0.12, 0.72, 0.34, 0.8));
+        authored.emissive = LinearRgba::new(0.02, 0.3, 0.08, 1.0);
+
+        let visited = super::waypoint_look_for_visit(&authored, true);
+
+        assert_eq!(visited.base_color.red, 0.38);
+        assert_eq!(visited.base_color.green, 0.38);
+        assert_eq!(visited.base_color.blue, 0.38);
+        assert_eq!(visited.base_color.alpha, authored.base_color.alpha);
+        assert_eq!(visited.emissive.red, 0.10);
+        assert_eq!(visited.emissive.green, 0.10);
+        assert_eq!(visited.emissive.blue, 0.10);
+        assert!(
+            visited.unshared,
+            "animated visit state must not share authored materials"
+        );
+    }
+
+    #[test]
+    fn unvisited_waypoint_look_preserves_authored_appearance() {
+        let mut authored = PbrLook::matte(LinearRgba::new(0.12, 0.72, 0.34, 0.8));
+        authored.emissive = LinearRgba::new(0.02, 0.3, 0.08, 1.0);
+
+        assert_eq!(
+            super::waypoint_look_for_visit(&authored, false),
+            authored,
+            "unvisited markers must keep the authored look"
+        );
     }
 }
