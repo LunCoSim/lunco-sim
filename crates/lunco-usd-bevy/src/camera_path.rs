@@ -123,7 +123,7 @@ pub struct CameraPath {
     /// This path's own driven clock (`TimeDomain` + `Playback`).
     pub domain: Entity,
     /// Aim track, sorted by time. Never empty — an unauthored track is a single
-    /// `Tangent` (or `Target`, when the legacy whole-path `lunco:path:lookAt` rel
+    /// `Tangent` (or `Target`, when the whole-path `lunco:path:lookAt` relation
     /// is authored) key at t=0, so the lookup below needs no special case.
     pub aim: Vec<AimKey>,
     /// The USD path behind every `Target` aim key, kept for the path's life.

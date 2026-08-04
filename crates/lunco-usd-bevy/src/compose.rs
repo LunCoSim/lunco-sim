@@ -346,7 +346,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         // Build the two-layer closure keyed exactly as the async loader's resolver
         // does (`canonicalize`), so the scene's `@wrapper.usda@` reference resolves
         // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
-        // storage-based compose path, not the deleted native-fs shim.
+        // storage-based compose path, not the removed native-fs path.
         let root_id = canonicalize_root("scene.usda");
         let wrapper_id = lunco_assets::asset_path::canonicalize("wrapper.usda", &root_id);
         let bytes = HashMap::from([

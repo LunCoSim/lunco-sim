@@ -19,9 +19,9 @@
 //!   The derived set is a pure cache of USD, rebuilt on stage change.
 //!
 //! No domain-specific markers (`BalloonModelMarker`, …) are inserted
-//! here. The legacy catalog/imperative spawn path in
-//! `lunco-luncosim-edit` keeps using its own markers; this translator
-//! is the authoritative path for USD-defined cosim entities.
+//! here. Catalog-created editor entities in `lunco-luncosim-edit` keep their
+//! own markers; this translator is the authoritative path for USD-defined
+//! cosim entities.
 
 use avian3d::prelude::PhysicsTime;
 use bevy::prelude::*;
@@ -40,6 +40,7 @@ use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
 };
 use lunco_render::SceneCamera;
+use lunco_scripting::python::{get_python_status, PythonStatus};
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
@@ -85,6 +86,17 @@ pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
 /// the same entity on the same tick.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// Scene-scoped diagnostics for Python programs that are authored in USD but
+/// cannot run in this binary. The prim itself carries the durable `Error`
+/// status; this resource only collects the paths so startup can report one
+/// actionable scene-level verdict instead of forcing a tester to find each
+/// per-prim warning in a long load log.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct PythonUnavailablePrograms {
+    paths: BTreeSet<String>,
+    reported: bool,
+}
 
 /// The scalar interface authored on a USD Modelica program.
 ///
@@ -380,7 +392,7 @@ fn clear_scene_load_in_flight(
     commands.remove_resource::<SceneLoadInFlight>();
 }
 
-pub fn process_usd_cosim_prims(
+pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -389,6 +401,7 @@ pub fn process_usd_cosim_prims(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut wiring_dirty: ResMut<WiringDirty>,
+    mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
     // Which prims a component collection already owns, per stage. Computed once
     // per run rather than per prim (it is a full stage walk), and NOT cached
@@ -468,8 +481,45 @@ pub fn process_usd_cosim_prims(
             members,
             &mut commands,
             &asset_server,
+            &mut wiring_dirty,
+            &mut python_unavailable,
         );
     }
+}
+
+/// Report Python availability once the scene's USD prims have finished
+/// materialising. This is deliberately separate from the per-prim bind
+/// diagnostic: the bind owns the precise error and durable component state,
+/// while this system gives the scene author one concise verdict.
+fn report_python_unavailable(
+    mut diagnostics: ResMut<PythonUnavailablePrograms>,
+    in_flight: Option<Res<SceneLoadInFlight>>,
+    unprocessed: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
+) {
+    if diagnostics.reported
+        || diagnostics.paths.is_empty()
+        || in_flight.is_some()
+        || !unprocessed.is_empty()
+    {
+        return;
+    }
+
+    diagnostics.reported = true;
+    let count = diagnostics.paths.len();
+    let examples = diagnostics
+        .paths
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    warn!(
+        "[usd-cosim] {count} Python program(s) in this scene are inert: the Python runtime is unavailable; affected prims: {examples}"
+    );
+}
+
+fn reset_python_unavailable(mut diagnostics: ResMut<PythonUnavailablePrograms>) {
+    *diagnostics = PythonUnavailablePrograms::default();
 }
 
 /// Project the standard LunCo telemetry declaration attributes into the shared
@@ -541,6 +591,8 @@ fn process_usd_cosim_prim_read(
     network_members: &BTreeSet<String>,
     commands: &mut Commands,
     asset_server: &AssetServer,
+    wiring_dirty: &mut WiringDirty,
+    python_unavailable: &mut PythonUnavailablePrograms,
 ) {
     if reader.type_name(sdf_path).as_deref() == Some("LunCoEvent") {
         let sources = reader.connections(sdf_path, "inputs:trigger");
@@ -649,6 +701,48 @@ fn process_usd_cosim_prim_read(
         .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
     if !has_ports {
         return;
+    }
+
+    // A Python source is not a usable cosim participant until its interpreter
+    // is available. Check at the authoritative USD bind boundary, before
+    // publishing a pending load or claiming the program is bound. This keeps
+    // the runtime contract honest on binaries built without the Python feature
+    // and on machines whose shared Python library cannot be loaded.
+    if let Some(asset_path) = python_path.as_deref() {
+        if get_python_status() != PythonStatus::Available {
+            let reason =
+                format!("Python runtime unavailable; cannot run `{asset_path}` in this binary");
+            python_unavailable.paths.insert(prim_path.path.clone());
+            let (inputs, outputs) = declared_interface(reader, sdf_path);
+            commands.entity(entity).try_insert((
+                UsdSimProcessed,
+                lunco_core::SelectableRoot,
+                lunco_core::NotPredictable,
+                SimComponent {
+                    model_name: format!("Python:{asset_path}"),
+                    inputs,
+                    outputs,
+                    status: SimStatus::Error(reason.clone()),
+                    ..default()
+                },
+            ));
+            warn!(
+                "[usd-cosim] program {} unavailable ({asset_path}): {reason}",
+                prim_path.path
+            );
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_DISPATCH_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(reason),
+                timestamp: 0.0,
+            });
+            // The terminal component still participates in topology resolution:
+            // declared wires must see its published interface and its Error status
+            // must be observable by the binding/readiness projection.
+            wiring_dirty.0 = true;
+            return;
+        }
     }
 
     // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
@@ -1090,8 +1184,8 @@ pub fn dispatch_loaded_python_sources(
             })
             .unwrap_or_default();
 
-        // Offset doc id away from any Modelica-allocated ids on the same
-        // entity (legacy catalog Python balloon does the same).
+        // Offset the Python document id away from any Modelica-allocated ids
+        // on the same entity.
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
         // Route through the registry funnel so a journal recorder attaches (edits
         // to this cosim script record like any other domain).
@@ -3343,6 +3437,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<WiringDirty>()
         .init_resource::<BindingEpochDirty>()
         .init_resource::<BindingModelStatuses>()
+        .init_resource::<PythonUnavailablePrograms>()
         .init_resource::<crate::domain_projection::MemberClasses>()
         .init_resource::<crate::domain_projection::ProjectionDirty>()
         // The open synthesizer registry (doc 37 §8): the acausal-network
@@ -3434,6 +3529,15 @@ pub(crate) fn install(app: &mut App) {
         )
             .chain()
             .in_set(CosimUpdateSet::Scene),
+    );
+
+    app.add_systems(
+        Update,
+        report_python_unavailable.after(CosimUpdateSet::Scene),
+    );
+    app.add_systems(
+        lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+        reset_python_unavailable,
     );
 
     app.add_systems(

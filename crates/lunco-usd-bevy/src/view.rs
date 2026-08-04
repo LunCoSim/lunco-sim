@@ -134,8 +134,7 @@ impl<'a> StageView<'a> {
             .map_err(|error| format!("could not expand collection membership: {error}"))
     }
 
-    /// Attribute `name` on `prim` as a 3-vector (`double3`/`float3`). Mirrors the
-    /// legacy `get_attribute_as_vec3` free helper.
+    /// Attribute `name` on `prim` as a 3-vector (`double3`/`float3`).
     pub fn value_vec3(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
         self.value::<[f64; 3]>(prim, name)
     }

@@ -770,10 +770,10 @@ impl Journal {
         &self.twin
     }
 
-    /// Re-stamp the Twin this journal belongs to. Used by the persistence
-    /// layer to bind a journal to a Twin's stable identity when it loads it
-    /// from that Twin's folder — normalising journals written before the
-    /// Twin had a stable id, so save/load routing keys off the right Twin.
+    /// Bind this journal to the Twin that owns its storage location. The
+    /// persistence layer applies the storage identity when it loads bytes so
+    /// save/load routing always uses the owning Twin rather than an embedded
+    /// stale identity.
     pub fn set_twin(&mut self, twin: TwinId) {
         self.twin = twin;
     }
@@ -1163,7 +1163,7 @@ impl Journal {
     pub fn begin_change_set(&mut self, label: impl Into<String>, author: AuthorTag) -> ChangeSetId {
         let label = label.into();
         if let Some(outer) = self.active_change_set {
-            eprintln!(
+            log::warn!(
                 "[journal] begin_change_set(\"{label}\"): nesting detected — replacing \
                  ambient change set {outer:?}; this un-groups the outer command's tail. \
                  Wrap only at the outermost handler."

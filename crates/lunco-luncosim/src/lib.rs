@@ -571,7 +571,7 @@ fn sandbox_window(
     };
     if render_profile == SandboxRenderProfile::Fast {
         // A smaller default framebuffer is the largest predictable saving on
-        // legacy GPUs. The user can still resize the window; the profile does
+        // integrated GPUs. The user can still resize the window; the profile does
         // not alter authored scene units or simulation precision.
         window.resolution = bevy::window::WindowResolution::new(960, 540);
     } else if vertical {

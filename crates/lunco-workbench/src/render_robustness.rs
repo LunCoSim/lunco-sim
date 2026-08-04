@@ -69,6 +69,13 @@ use bevy::render::{
 };
 use bevy_egui::{egui, EguiContexts};
 
+const INTEGRATED_DIRECTIONAL_SHADOW_SIZE: usize = 1024;
+const INTEGRATED_POINT_SHADOW_SIZE: usize = 512;
+const INTEGRATED_DIRECTIONAL_CASTERS: usize = 1;
+const INTEGRATED_DIRECTIONAL_CASCADES: usize = 2;
+const INTEGRATED_POINT_CASTERS: usize = 4;
+const INTEGRATED_SPOT_CASTERS: usize = 4;
+
 /// How long a failure must persist after the applicable recovery decision
 /// before presentation is abandoned.
 ///
@@ -158,6 +165,9 @@ pub struct RenderHealth {
     /// Last failure class observed by the callback. This keeps recovery aligned
     /// with the resource that actually failed instead of guessing from totals.
     last_failure_kind: AtomicU8,
+    /// Set by render startup so the main world can apply the integrated-adapter
+    /// shadow budget before the first scene reaches the render graph.
+    integrated_adapter: AtomicBool,
 }
 
 impl RenderHealth {
@@ -169,6 +179,15 @@ impl RenderHealth {
     }
     fn failure_kind(&self) -> FailureKind {
         FailureKind::from_u8(self.last_failure_kind.load(Ordering::Relaxed))
+    }
+
+    fn reset_for_scene(&self) {
+        self.total.store(0, Ordering::Relaxed);
+        self.shadow.store(0, Ordering::Relaxed);
+        self.oom.store(0, Ordering::Relaxed);
+        self.presentation_stopped.store(false, Ordering::Relaxed);
+        self.last_failure_kind
+            .store(FailureKind::Other as u8, Ordering::Relaxed);
     }
 }
 
@@ -296,6 +315,14 @@ pub(crate) struct Ladder {
     failure_kind: FailureKind,
 }
 
+/// Tracks the scene structure for the integrated-adapter preflight. A scene
+/// loads asynchronously, so the budget is re-applied whenever another light
+/// entity materialises, then remains dormant until the next teardown.
+#[derive(Resource, Default)]
+pub(crate) struct ShadowBudgetState {
+    light_count: Option<usize>,
+}
+
 const FAILURE_QUIET_SECS: f64 = 0.5;
 
 impl Ladder {
@@ -383,6 +410,11 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     let health = Arc::new(RenderHealth::default());
     app.insert_resource(RenderHealthHandle(health.clone()));
     app.init_resource::<Ladder>();
+    app.init_resource::<ShadowBudgetState>();
+    // Shadow allocation happens during render extraction. The preflight must
+    // observe the fully materialised scene in PostUpdate, after scene-load
+    // commands apply but before the render sub-app extracts lights.
+    app.add_systems(PostUpdate, apply_integrated_shadow_budget);
     app.add_systems(Update, escalate_render_recovery);
 
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
@@ -448,6 +480,10 @@ fn set_error_handler(
     // no access to the world, and adapter identity is exactly what triage needs
     // (the reported failures were specific to an integrated adapter).
     let info = &adapter.0;
+    health.0.integrated_adapter.store(
+        info.device_type == wgpu::DeviceType::IntegratedGpu,
+        Ordering::Relaxed,
+    );
     let adapter_desc = format!(
         "{} ({:?}, backend {:?}, driver {} {})",
         info.name, info.device_type, info.backend, info.driver, info.driver_info
@@ -586,6 +622,163 @@ fn set_error_handler(
         }));
 }
 
+/// Apply a conservative, deterministic shadow budget before Bevy's PBR render
+/// preparation allocates its depth textures. Integrated adapters share memory
+/// with the system and are the class that produced the observed directional
+/// atlas OOM; shedding quality up front keeps that failure out of the error
+/// ladder entirely.
+fn apply_integrated_shadow_budget(
+    health: Res<RenderHealthHandle>,
+    mut state: ResMut<ShadowBudgetState>,
+    mut commands: Commands,
+    warning: Option<Res<RenderWarning>>,
+    mut directional_shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
+    mut point_shadow_map: ResMut<bevy::light::PointLightShadowMap>,
+    cameras: Query<(&bevy::camera::Camera, &GlobalTransform), With<bevy::camera::Camera3d>>,
+    mut directionals: Query<(
+        Entity,
+        &mut bevy::light::DirectionalLight,
+        &mut bevy::light::CascadeShadowConfig,
+    )>,
+    mut points: Query<(Entity, &GlobalTransform, &mut bevy::light::PointLight)>,
+    mut spots: Query<(Entity, &GlobalTransform, &mut bevy::light::SpotLight)>,
+) {
+    if !health.0.integrated_adapter.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(camera_position) = cameras
+        .iter()
+        .find(|(camera, _)| camera.is_active)
+        .map(|(_, transform)| transform.translation())
+    else {
+        return;
+    };
+
+    let light_count = directionals.iter().count() + points.iter().count() + spots.iter().count();
+    if light_count == 0 || state.light_count == Some(light_count) {
+        return;
+    }
+    state.light_count = Some(light_count);
+
+    directional_shadow_map.size = directional_shadow_map
+        .size
+        .min(INTEGRATED_DIRECTIONAL_SHADOW_SIZE);
+    point_shadow_map.size = point_shadow_map.size.min(INTEGRATED_POINT_SHADOW_SIZE);
+
+    let mut directional_entities: Vec<Entity> = directionals
+        .iter_mut()
+        .filter_map(|(entity, light, _)| light.shadow_maps_enabled.then_some(entity))
+        .collect();
+    directional_entities.sort();
+    for entity in directional_entities
+        .iter()
+        .skip(INTEGRATED_DIRECTIONAL_CASTERS)
+        .copied()
+    {
+        if let Ok((_, mut light, _)) = directionals.get_mut(entity) {
+            light.shadow_maps_enabled = false;
+        }
+    }
+    let directional_shed = directional_entities.len() > INTEGRATED_DIRECTIONAL_CASTERS;
+    let directional_layers = directional_entities
+        .first()
+        .and_then(|entity| directionals.get_mut(*entity).ok())
+        .map(|(_, _, mut config)| {
+            config.bounds.truncate(INTEGRATED_DIRECTIONAL_CASCADES);
+            config.bounds.len()
+        })
+        .unwrap_or(0);
+
+    let mut point_entities: Vec<(f32, Entity)> = points
+        .iter_mut()
+        .filter_map(|(entity, transform, light)| {
+            light.shadow_maps_enabled.then_some((
+                transform.translation().distance_squared(camera_position),
+                entity,
+            ))
+        })
+        .collect();
+    point_entities.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    for (_, entity) in point_entities.iter().skip(INTEGRATED_POINT_CASTERS) {
+        if let Ok((_, _, mut light)) = points.get_mut(*entity) {
+            light.shadow_maps_enabled = false;
+        }
+    }
+    let point_shed = point_entities.len() > INTEGRATED_POINT_CASTERS;
+
+    let mut spot_entities: Vec<(f32, Entity)> = spots
+        .iter_mut()
+        .filter_map(|(entity, transform, light)| {
+            light.shadow_maps_enabled.then_some((
+                transform.translation().distance_squared(camera_position),
+                entity,
+            ))
+        })
+        .collect();
+    spot_entities.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    for (_, entity) in spot_entities.iter().skip(INTEGRATED_SPOT_CASTERS) {
+        if let Ok((_, _, mut light)) = spots.get_mut(*entity) {
+            light.shadow_maps_enabled = false;
+        }
+    }
+    let spot_shed = spot_entities.len() > INTEGRATED_SPOT_CASTERS;
+
+    let directional_bytes = (directional_shadow_map.size as u64)
+        .saturating_mul(directional_shadow_map.size as u64)
+        .saturating_mul(directional_layers as u64)
+        .saturating_mul(4);
+    let point_bytes = (point_shadow_map.size as u64)
+        .saturating_mul(point_shadow_map.size as u64)
+        .saturating_mul(point_entities.len().min(INTEGRATED_POINT_CASTERS) as u64)
+        .saturating_mul(6)
+        .saturating_mul(4);
+    let spot_bytes = (directional_shadow_map.size as u64)
+        .saturating_mul(directional_shadow_map.size as u64)
+        .saturating_mul(spot_entities.len().min(INTEGRATED_SPOT_CASTERS) as u64)
+        .saturating_mul(4);
+    let estimated_mib = (directional_bytes + point_bytes + spot_bytes) as f64 / (1024.0 * 1024.0);
+    warn!(
+        "integrated GPU shadow budget: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated depth allocation {:.1} MiB (directional {}px, point {}px)",
+        directional_entities.len().min(INTEGRATED_DIRECTIONAL_CASTERS),
+        directional_layers,
+        point_entities.len().min(INTEGRATED_POINT_CASTERS),
+        spot_entities.len().min(INTEGRATED_SPOT_CASTERS),
+        estimated_mib,
+        directional_shadow_map.size,
+        point_shadow_map.size,
+    );
+    if (directional_shed || point_shed || spot_shed) && warning.is_none() {
+        commands.insert_resource(RenderWarning {
+            message: format!(
+                "Integrated GPU shadow budget active: kept {} directional, {} point, and {} spot shadow caster(s); some shadows are intentionally disabled.",
+                directional_entities.len().min(INTEGRATED_DIRECTIONAL_CASTERS),
+                point_entities.len().min(INTEGRATED_POINT_CASTERS),
+                spot_entities.len().min(INTEGRATED_SPOT_CASTERS),
+            ),
+        });
+    }
+}
+
+/// Scene teardown is the explicit re-arm boundary for presentation recovery.
+/// A new scene gets fresh lights and cameras, so clearing the old ladder and
+/// shadow-budget bookkeeping is safe. A lost device remains terminal because
+/// no scene reload can recreate the adapter in-process.
+pub(crate) fn reset_render_recovery(
+    health: Res<RenderHealthHandle>,
+    mut ladder: ResMut<Ladder>,
+    mut budget: ResMut<ShadowBudgetState>,
+    mut commands: Commands,
+) {
+    if health.0.device_lost() {
+        return;
+    }
+    health.0.reset_for_scene();
+    *ladder = Ladder::default();
+    budget.light_count = None;
+    commands.remove_resource::<RenderWarning>();
+    commands.remove_resource::<RenderGaveUp>();
+}
+
 /// Main-world escalation: read the shared tallies, advance the [`Ladder`], apply
 /// whatever it decided.
 ///
@@ -640,9 +833,9 @@ fn escalate_render_recovery(
             warn!(
                 "GPU errors are not clearing ({shadow} naming a shadow map) \
                  — disabling shadow maps on {n} light(s) to release the shadow atlas and keep \
-                 rendering. Shadows are off for the rest of this session; reload after closing \
-                 some scene content to get them back. If the errors continue, presentation will \
-                 stop in {GIVE_UP_AFTER_SECS:.0}s."
+                 rendering. A scene reload re-arms the policy after closing \
+                 content; a lost GPU remains terminal. If the errors continue, \
+                 presentation will stop in {GIVE_UP_AFTER_SECS:.0}s."
             );
             commands.insert_resource(RenderWarning {
                 message: "Rendering recovered with shadow maps disabled. The simulation and API are still running.".to_string(),
@@ -789,6 +982,55 @@ mod tests {
             Some(Action::DisableShadowMaps)
         );
         assert_eq!(l.rung, Rung::ShadowMapsOff);
+    }
+
+    #[test]
+    fn integrated_shadow_budget_limits_casters_and_map_sizes() {
+        let health = Arc::new(RenderHealth::default());
+        health.integrated_adapter.store(true, Ordering::Relaxed);
+
+        let mut app = App::new();
+        app.insert_resource(RenderHealthHandle(health));
+        app.init_resource::<ShadowBudgetState>();
+        app.init_resource::<bevy::light::DirectionalLightShadowMap>();
+        app.init_resource::<bevy::light::PointLightShadowMap>();
+        app.add_systems(PostUpdate, apply_integrated_shadow_budget);
+        app.world_mut().spawn((
+            bevy::camera::Camera3d::default(),
+            GlobalTransform::default(),
+        ));
+        for index in 0..(INTEGRATED_POINT_CASTERS + 2) {
+            app.world_mut().spawn((
+                bevy::light::PointLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                GlobalTransform::from_xyz(index as f32, 0.0, 0.0),
+            ));
+        }
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<bevy::light::DirectionalLightShadowMap>()
+                .size,
+            INTEGRATED_DIRECTIONAL_SHADOW_SIZE
+        );
+        assert_eq!(
+            app.world()
+                .resource::<bevy::light::PointLightShadowMap>()
+                .size,
+            INTEGRATED_POINT_SHADOW_SIZE
+        );
+        let world = app.world_mut();
+        let mut query = world.query::<&bevy::light::PointLight>();
+        let enabled = query
+            .iter(&world)
+            .filter(|light| light.shadow_maps_enabled)
+            .count();
+        assert_eq!(enabled, INTEGRATED_POINT_CASTERS);
+        assert!(app.world().get_resource::<RenderWarning>().is_some());
     }
 
     /// The 339-fps null loop. Errors keep coming after the mitigation, so

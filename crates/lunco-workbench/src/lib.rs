@@ -100,6 +100,17 @@ pub use perspective_help::{
 pub use render_robustness::{
     preferred_wgpu_settings, RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning,
 };
+
+/// Register the render-recovery reset at the host application's scene-teardown
+/// boundary. The workbench owns GPU state but deliberately does not depend on
+/// the USD scene lifecycle crate; the composition root supplies its schedule
+/// label when both concerns are present.
+pub fn install_render_recovery_teardown<S: bevy::ecs::schedule::ScheduleLabel>(
+    app: &mut App,
+    schedule: S,
+) {
+    app.add_systems(schedule, render_robustness::reset_render_recovery);
+}
 pub use window_command::{
     merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
 };

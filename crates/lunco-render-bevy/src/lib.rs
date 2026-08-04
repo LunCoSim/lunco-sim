@@ -113,7 +113,7 @@ impl Plugin for LuncoRenderPlugin {
             // scene's authored `UsdPreviewSurface` intent in typed, render-free
             // form. Registering it is what turns that from an internal detail into
             // a UNIVERSAL read surface: one line, no new verb, no per-language
-            // shim — anything that wants to know what a surface looks like asks the
+            // adapter — anything that wants to know what a surface looks like asks the
             // component the loader already filled, rather than re-deriving it.
             .register_type::<PbrLook>()
             .add_observer(bind_pbr_look)

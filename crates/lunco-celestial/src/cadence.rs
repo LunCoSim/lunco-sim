@@ -206,7 +206,14 @@ pub(crate) fn celestial_needs_solve(
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
+    activity: Option<Res<lunco_core::gate::GateActivity>>,
 ) -> bool {
+    let step = settings
+        .map(|s| s.max_epoch_step_jd())
+        .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
+    if let Some(activity) = activity {
+        activity.expect_open("celestial_needs_solve", step <= 0.0);
+    }
     if revision.0 != solved.revision {
         return true;
     }
@@ -214,9 +221,6 @@ pub(crate) fn celestial_needs_solve(
     let Some(world) = world else {
         return true;
     };
-    let step = settings
-        .map(|s| s.max_epoch_step_jd())
-        .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
     // `>=` with a 0.0 step: any epoch, including an unchanged one, re-solves.
     // That is what `EXACT` promises, and it is why the comparison is not `>`.
     (world.epoch_jd - solved.jd).abs() >= step

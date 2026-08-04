@@ -32,6 +32,11 @@ use crate::geo::{
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
 
+/// Celestial scene entities are spawned asynchronously after a site anchor is
+/// observed. Require the missing solar grid to persist for a short settle
+/// window before declaring the authored scene broken.
+const SOLAR_FRAME_WARN_AFTER_FRAMES: u8 = 30;
+
 /// Orbital view MODE state. Since the traveling-origin change (doc 47 Phase
 /// 6) this resource no longer re-poses the world: the CAMERA — it carries the
 /// `FloatingOrigin` — migrates onto the focused body's inertial parent grid
@@ -108,9 +113,10 @@ pub fn anchor_solar_frame_to_site(
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
     // One-shot latch for the "declared a site but cannot anchor it" diagnostics
-    // below. Latched, not rate-limited: the condition is structural, so it would
-    // otherwise repeat every gated frame for the life of the scene.
+    // below. It is paired with a settle counter so asynchronous celestial
+    // bootstrap does not produce a permanent false alarm during scene load.
     mut warned: Local<bool>,
+    mut missing_solar_frames: Local<u8>,
 ) {
     // The diagnostics below latch so a structural fault doesn't repeat every
     // gated frame — but the latch belongs to the SCENE, not the process. A new
@@ -118,6 +124,7 @@ pub fn anchor_solar_frame_to_site(
     // scene inherits a spent latch and reports nothing at all.
     if !q_site_changed.is_empty() {
         *warned = false;
+        *missing_solar_frames = 0;
     }
     let Some(ephemeris) = ephemeris else { return };
     let anchor_opt = q_site.iter().next();
@@ -133,7 +140,8 @@ pub fn anchor_solar_frame_to_site(
     // renders the whole scene black. Say so once instead of letting a black
     // frame be the only symptom.
     let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else {
-        if !*warned {
+        *missing_solar_frames = missing_solar_frames.saturating_add(1);
+        if *missing_solar_frames >= SOLAR_FRAME_WARN_AFTER_FRAMES && !*warned {
             *warned = true;
             warn!(
                 "[celestial] site-anchored scene has {} Solar Grid entities (need exactly 1) — \
@@ -144,6 +152,17 @@ pub fn anchor_solar_frame_to_site(
         }
         return;
     };
+
+    if *missing_solar_frames > 0 {
+        if *warned {
+            info!(
+                "[celestial] Solar Grid became available after {} startup frames; site anchoring resumed",
+                *missing_solar_frames
+            );
+        }
+        *missing_solar_frames = 0;
+        *warned = false;
+    }
 
     let jd = world_time.epoch_jd;
     // Same cadence as the ephemeris projection + site edits; ordering after

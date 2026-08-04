@@ -463,18 +463,20 @@ mod tests {
     }
 
     #[test]
-    fn set_twin_rebinds_legacy_journal_to_stable_id() {
-        // A journal written before stable ids existed carries a placeholder id.
+    fn set_twin_rebinds_loaded_journal_to_storage_id() {
+        // The storage location is authoritative for the Twin identity when a
+        // journal is loaded, regardless of the id embedded in its bytes.
         let dir = tempfile::tempdir().unwrap();
-        let mut legacy = CanonicalJournal::new(JournalTwinId::new("local-twin"), AuthorId::local());
-        legacy.record_lifecycle(
+        let mut journal =
+            CanonicalJournal::new(JournalTwinId::new("local-twin"), AuthorId::local());
+        journal.record_lifecycle(
             AuthorTag::local_user(),
             DocumentId::new(1),
             LifecycleKind::Saved,
         );
 
-        // Loading it for `dir` re-stamps it so future saves route back here.
-        legacy.set_twin(journal_twin_id(dir.path()));
-        assert_eq!(legacy.twin(), &journal_twin_id(dir.path()));
+        // Binding it to `dir` makes future saves route through that Twin.
+        journal.set_twin(journal_twin_id(dir.path()));
+        assert_eq!(journal.twin(), &journal_twin_id(dir.path()));
     }
 }

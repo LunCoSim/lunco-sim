@@ -7976,6 +7976,7 @@ dependencies = [
 name = "lunco-twin-journal"
 version = "0.1.0"
 dependencies = [
+ "log",
  "lunco-doc",
  "lunco-hooks",
  "serde",

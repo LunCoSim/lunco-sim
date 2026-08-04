@@ -7,6 +7,7 @@ description = "Twin journal — append-only, author-scoped op log with per-user 
 
 [dependencies]
 lunco-doc = { path = "../lunco-doc" }
+log = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 web-time = "1"
