@@ -76,6 +76,17 @@ pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 #[reflect(Component)]
 pub struct EnvironmentProbe;
 
+/// Runtime projection of a composed USD fact: an environment probe has at least
+/// one connected Earth-vector output that a downstream model consumes.
+///
+/// This is deliberately separate from [`EnvironmentProbe`]. The probe publishes
+/// gravity and solar data for many models, but Earth direction is an opt-in
+/// demand. Keeping the demand as a projected component prevents the provider
+/// from treating every atmosphere/gravity probe as an Earth tracker.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct EarthDirectionRequired;
+
 /// Earth's direction as a co-simulation source (`LocalEarth` + the earth→cosim
 /// bridge) — what a high-gain antenna points at, the twin of [`solar`] for the
 /// other body in a lunar sky.
@@ -632,6 +643,7 @@ impl Plugin for EnvironmentPlugin {
         app.register_type::<LocalSolar>();
         app.register_type::<LocalEarth>();
         app.register_type::<EnvironmentProbe>();
+        app.register_type::<EarthDirectionRequired>();
         app.register_type::<Earthshine>();
         // Declared here, WRITTEN by lunco-celestial (which depends on this crate,
         // so the dependency cannot run the other way). Init'd unconditionally and

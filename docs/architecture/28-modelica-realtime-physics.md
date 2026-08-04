@@ -1,6 +1,6 @@
 # 28 — Modelica Realtime Physics (declarative custom physics, networked)
 
-> Status: Design · Audience: contributors planning declarative/networked Modelica physics (scopes Step 1)
+> Status: Design + enforced runtime contract · Audience: contributors planning declarative/networked Modelica physics (scopes Step 1)
 >
 > Goal: describe **most custom physics in Modelica** instead of hardcoding it
 > in Rust — with proper solvers, running in realtime, safe under multiplayer,
@@ -53,7 +53,7 @@ uniform bool lunco:program:realtimeSafe = true
 | Examples | chassis, contacts, joints, wheels, a lander's flight-control law — anything the player feels frame-to-frame | thermal, power/battery, chemistry, ECLSS, aero, orbital, a supervisory script, a cosmetic effect |
 | Solver requirement | **must be fixed-step deterministic** (explicit / semi-implicit, bounded step = sim tick) | an adaptive "proper" solver is **fine** |
 | Networking | client-predicted + rollback: both peers run the same stepper | server computes; **outputs replicated as wires**, clients never predict them (or purely local, and nothing crosses the wire) |
-| Modelica fit | only once rumoca emits a **fixed-step deterministic** backend — **hard, upstream work** | **sweet spot** — adaptive solvers belong here; precedent already exists (gravity Shape A, [`22-domain-cosim.md`](22-domain-cosim.md)) |
+| Modelica fit | the restricted **fixed-rk4** profile is available for continuous, event-free, external-table-free models; broader semantics remain explicitly unsupported | **sweet spot** — adaptive solvers belong here; precedent already exists (gravity Shape A, [`22-domain-cosim.md`](22-domain-cosim.md)) |
 
 Most "custom physics" a user wants to author never touches a predicted body — and that
 is exactly where adaptive Modelica solvers are *safe*, because clients **receive**
@@ -67,18 +67,18 @@ makes it needs a different solver class.
 
 ### 2a. Implementation status of the promise (read this before trusting §2)
 
-What is actually in the code, as of 2026-07-12 (finding `A4`):
+What is actually in the code:
 
 | Piece | Status |
 |---|---|
 | `uniform bool lunco:program:realtimeSafe`, read at prim-read time (`lunco-usd-sim/src/cosim.rs`) → the `RealtimeSafe` component (`crates/lunco-cosim/src/connection.rs`) | **implemented** |
 | Gate: a program **without** `RealtimeSafe` wiring a force/torque port on a client-predicted `Dynamic` body | **rejects the force loop at wire-build time** (`rewire_usd_connections`) and raises a terminal runtime fault |
-| Force-producing algebraic loop with every participant explicitly `RealtimeSafe` | **accepted with a one-fixed-step exchange delay**; physics is held while each worker step is pending |
-| Non-force algebraic loop | **diagnostic warning**; it does not enter the force safety gate |
+| Causal feedback in the explicit `SimConnection` fabric | **valid dynamic feedback**; the master performs one read/write transaction and does not pretend to solve an algebraic equation |
+| Acausal connection/island | **not accepted by the causal fabric**; it requires a typed backend island and partition before stepping |
 | `lunco:replication` → always-on `Replication` metadata (§5, §"declared in USD") | **not implemented** — no code reads it |
 | Promise ↔ solver/caps validation | **implemented** (2026-07-27) — `lunco_experiments::solver` resolves by capability and refuses an incapable pairing at stepper construction |
-| A fixed-step deterministic solver good enough to honour the promise | **not available** — see below |
-| Effect of the promise on live solver choice | **plumbed, currently inert** — `realtime_safe` reaches `resolve` as `RuntimeProfile::predicted`, but `rk45` is the only registered backend with `usable_live`, so every live model resolves to it either way. The wiring is what makes item 1 below a registration rather than a refactor; it changes no outcome until a second live-capable backend exists. |
+| A fixed-step deterministic Modelica solver good enough to honour the promise | **implemented as `fixed-rk4`** for the restricted continuous profile; construction rejects events, discrete assignments, clocks, and external tables |
+| Effect of the promise on live solver choice | **enforced** — `solver::resolve` admits prediction only for a backend declaring both `fixed_step` and `deterministic`; `fixed-rk4` is selected for qualified predicted Modelica programs while `rk45` remains authoritative-live only |
 
 ### Solver selection is resolved, not hardcoded (2026-07-27)
 
@@ -100,8 +100,8 @@ Both paths now call `lunco_experiments::solver::resolve`, from two facts — and
 
 - **`live`** — is it stepped inside the fixed-step frame loop, as opposed to an
   offline batch solve that owns its own time;
-- **`predicted`** — does it drive a client-predicted body, i.e. the declared
-  `RealtimeSafe` promise, carried to the worker on `ModelicaCommand::Compile`
+- **`predicted`** — does it drive a client-predicted body under the declared
+  `RealtimeSafe` contract, carried to the worker on `ModelicaCommand::Compile`
   because the worker thread has no ECS.
 
 There is deliberately **no** third fact for whether the model is *solvable*, and
@@ -143,37 +143,20 @@ What remains genuinely live-specific is stepping POLICY, not solver choice:
 - a fixed tolerance, **not** the model's `experiment(Tolerance=…)` annotation (an
   offline-accuracy knob must not reach into the realtime loop).
 
-A predicted model still resolves to the explicit backend, so that class's
-behaviour is unchanged — but it does so because that backend *declares*
-`realtime_tolerated`, not because a function body asserted it.
+The current `rk45` backend is an *embedded* RK45: its internal sub-step size is
+error-adapted, so it is not a fixed-step deterministic implementation. It is
+registered for authoritative live co-simulation only. The `fixed-rk4` backend
+owns an explicit four-stage integration loop over Rumoca's lowered derivative
+runtime, advances on one exact configured lattice, and is registered with the
+required prediction capabilities. It refuses unsupported model constructs at
+construction; there is no tolerance path that knowingly permits peer divergence.
+Adding events, discrete state, or external tables requires a new backend profile
+with its own deterministic semantics, not a fallback to adaptive stepping.
 
-**This is not yet determinism strong enough to honour the promise, and the doc will not
-pretend it is.**
-rumoca's `RkLike` backend is an *embedded* RK45: its internal sub-step size is
-still error-adapted (`adapt_step(h, error_norm)`), so a micro-step may split
-differently on two machines. rumoca exposes no fixed-tableau, error-control-free
-stepper today. Driving it at fixed micro-steps bounds the divergence to *within*
-one micro-step and pins the macro stop-times, which is as far as the client layer
-can go alone.
-
-The gap is now DATA rather than an assertion buried in a function: the `rk45`
-backend registers as `fixed_step: false, deterministic: false,
-realtime_tolerated: true`, and a test asserts that any backend which is genuinely
-fixed-step and deterministic outranks the tolerated one for a predicted model. So
-item 1 below closes by *registering the new backend* — no call-site edit, and the
-concession retires itself.
-
-> **TODO(A4)** — to close this properly:
-> 1. *Upstream (rumoca):* a fixed-step tableau with no error control — the
->    "Realtime profile" of §7. This is the load-bearing missing piece; until it
->    lands, no Modelica model can genuinely keep the promise it declares.
->    Landing it is now a registration in `lunco-modelica/src/solver_backends.rs`.
-> 2. *Enforcement:* promote the `rewire_usd_connections` warn to a **refusal**
->    (drop the wire, surface a diagnostic). Enforcement point:
->    `crates/lunco-usd-sim/src/cosim.rs::rewire_usd_connections` — the gate is the
->    presence of the `RealtimeSafe` component on the program's entity.
-> 3. *Replication:* wire `lunco:replication` (§5) to the promise, or delete it from
->    this doc — today it is authored nowhere and read nowhere.
+The USD wiring gate independently refuses a force/torque edge from a program
+without `RealtimeSafe` when the target is a client-predicted dynamic body. It
+raises `cosim-predicted-force-contract` and holds physics, so a rejected edge
+cannot leave a predicted body running with an unvalidated force path.
 
 ## 3. Realtime budget
 
@@ -281,9 +264,10 @@ Practicalities:
 - **Predicted** — both peers run the **same** stepper, so it requires (1) a
   fixed-step **deterministic** solver and (2) a determinism contract (same
   fold/step order on every peer, integer `SimTick` clock, no `Date::now`/`Math::random`
-  — mirrors the replicated state sync architecture identity rules). Until both exist,
-  predicted physics stays in deterministic Rust (avian + the mobility force laws),
-  with Modelica used only as an **offline oracle** (§8, Step 2).
+  — mirrors the replicated state sync architecture identity rules). The current
+  Modelica implementation satisfies that contract only for the restricted
+  continuous profile served by `fixed-rk4`; other Modelica programs stay
+  authoritative or offline.
 
 ## 6. Robotics-ready: custom solvers per model
 
@@ -351,27 +335,30 @@ stays fixed-step deterministic Rust; only the coefficients change, in lockstep.
 That is the practical "control vehicle physics at runtime" path available now.
 
 **Structural** vehicle change (swap the whole friction/suspension *model*, e.g. to
-a Modelica-described one) is the hot-swap on a predicted body: only once Step 3's
-fixed-step deterministic Modelica lands, and only at a quiesced tick boundary applied
-across all peers — never mid-rollback.
+a Modelica-described one) is the hot-swap on a predicted body: only once the
+selected fixed-step profile validates the replacement and only at a quiesced tick
+boundary applied across all peers — never mid-rollback.
 
 ## 7. The realtime Modelica profile (how the promise gets kept)
 
 The way to make predicted physics describable in Modelica is **not** to make rumoca's
-general adaptive solver deterministic. It is to define a **restricted profile** —
-a special fixed-step deterministic solver **plus limitations on the model**, with
-the model still authored in plain Modelica code. The compiler is the gate: a model
-either type-checks into the *Realtime profile* (and is then predictable +
-multiplayer-safe by construction) or it is rejected with a clear reason. This is
-how every realtime/HIL Modelica toolchain works (inline integration, fixed-step
-code-gen subsets).
+general adaptive solver deterministic. It is to use a **restricted profile** — a
+fixed-step deterministic solver **plus limitations on the model**, with the model
+still authored in plain Modelica code. The current profile is implemented by
+`lunco_modelica::fixed_step::FixedStepSession`; it is a deliberately small first
+profile, not a claim that every Modelica construct is prediction-safe. A model is
+admitted only when the backend can establish this profile at construction and is
+rejected with a diagnostic otherwise.
 
-**The special solver:** fixed-step, fixed work per step — semi-implicit (symplectic)
-Euler for the common non-stiff case (the same class as the gold-standard
-`wheel_spin.rs`), or a fixed-step **linearly-implicit** method (Rosenbrock-1 /
-implicit Euler with a *fixed* iteration count) for mild stiffness. Determinism comes
-from: fixed step count, fixed iteration count, fixed evaluation order, integer
-`SimTick` clock, no wall-clock / RNG, identical IEEE float ops on every peer.
+**The current special solver:** classical RK4 with exactly four derivative stages
+per configured step. It advances only when the caller supplies that exact step
+size; it neither adapts, subdivides, nor rounds a step. Determinism comes from the
+fixed operation sequence, fixed algebraic solve budget, fixed evaluation order,
+and the simulation clock—not from turning an adaptive session's nominal `dt` into
+a promise. The profile currently requires continuous, event-free,
+external-table-free models. Stability and bounded-state analysis are still model
+responsibilities; a future linearly-implicit backend may extend the profile for
+stiffer systems.
 
 **The property limitations** (compiler-enforced — the profile's "type system"):
 
@@ -380,9 +367,9 @@ from: fixed step count, fixed iteration count, fixed evaluation order, integer
   steps to stay stable at the chosen `dt` (or require the linearly-implicit solver).
 - **Bounded state** — guards against runaway (the responsive UI mandate
   invariant); a model that can diverge in finite ticks is rejected.
-- **Tick-quantized events** — zero-crossings/events resolve **at tick boundaries**,
-  not via intra-step root-finding (root-finding makes step timing data-dependent →
-  non-deterministic across peers).
+- **No event/discrete semantics yet** — root events, scheduled events, clocks, and
+  discrete assignments are rejected. They must acquire explicit tick-quantized
+  semantics in a future backend before they can enter prediction.
 - **Deterministic evaluation order** — fixed fold order, no wall-clock/random.
 
 This is the same profile **robots** want (§6): a controller / articulated-body
@@ -402,13 +389,12 @@ Robots and vehicles are the two canonical Realtime-profile citizens.
    testable functions in `lunco-mobility`). Modelica as **ground truth, out of the
    loop** — would have caught the explicit-Euler limit-cycles immediately. Validates
    the predicted Rust physics without committing to runtime Modelica.
-3. **Step 3 — into the prediction loop (the hard ask): the Realtime profile (§7).**
-   Build the special fixed-step deterministic solver + the compiler-enforced property
-   limitations, so a vehicle/robot model authored in (restricted) Modelica can honour
-   `realtimeSafe` and run *inside* the prediction loop. Highest risk; do last, once 1–2
-   have shown value. *Parameter* tuning of predicted physics (§7) is available well
-   before this — Step 3 is only needed to replace the force-law *structure* with
-   Modelica.
+3. **Step 3 — extend the prediction profile (§7).** The initial `fixed-rk4`
+   backend now lets a qualified continuous Modelica model honour `realtimeSafe`
+   inside the prediction loop. The remaining work is intentionally additive:
+   deterministic semantics for events/discrete state and a stiff, bounded-work
+   backend. *Parameter* tuning of predicted physics (§7) remains available without
+   changing the force-law structure.
 
 ## 9. Step 1 scope — an ECS-native, server-authoritative Modelica stepper
 
@@ -464,9 +450,10 @@ end RoverBattery;
 - Worker stepping never stalls the main loop (kill the worker → run fails, app
   survives — the responsive UI mandate invariant).
 
-**Explicitly out of scope for Step 1:** any realtime-safe model, rumoca fixed-step
-codegen, the offline oracle (Step 2), structural hot-swap, the full Twin /
-BackendRegistry formalisation.
+**Explicitly out of scope for Step 1:** the offline oracle (Step 2), structural
+hot-swap, and the full Twin / BackendRegistry formalisation. The initial
+`fixed-rk4` prediction profile is implemented separately from the
+server-authoritative Step 1 path.
 
 ## 10. Decision log
 
@@ -483,11 +470,12 @@ BackendRegistry formalisation.
    metadata at spawn, and the load-time promise ↔ solver/caps validation ("rejected on
    conflict"). Unauthored is **not** a promise: such a program may not drive predicted
    physics.
-3. **Keeping the promise in Modelica = a Realtime profile (§7): a special fixed-step
-   deterministic solver + compiler-enforced model limitations**, authored in plain
-   Modelica. Not "make the adaptive solver deterministic" — constrain the models
-   instead. Robots and vehicles are the canonical citizens. Until it exists, predicted
-   physics stays in deterministic Rust; Modelica serves it only as an offline oracle.
+3. **Keeping the promise in Modelica = a Realtime profile (§7): a fixed-step
+   deterministic solver + enforced model limitations**, authored in plain Modelica.
+   Not "make the adaptive solver deterministic" — constrain the models instead.
+   `fixed-rk4` is the first qualified profile; robots and vehicles are its canonical
+   citizens. Unsupported semantics remain rejected until a backend defines their
+   deterministic meaning.
 4. **The Modelica stepper is an ECS citizen**: instance = entity, ports =
    components, state = component, step = system, coupling = `SimConnection` wire,
    replication = the existing wire layer. No bespoke runtime.

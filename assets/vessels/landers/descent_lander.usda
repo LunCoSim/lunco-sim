@@ -290,9 +290,9 @@ def Xform "DescentLander" (
     # when a session possesses this prim.
     uniform asset info:sourceAsset = @lunco://models/Lander.mo@
 
-    # It drives thrust every solver step on a body the client predicts, so it must
-    # promise it steps fast enough to be trusted with a force.
-    uniform bool lunco:program:realtimeSafe = true
+    # This Modelica plant is authoritative co-simulation. It does not claim
+    # client prediction: rumoca's adaptive solver is not a fixed-step
+    # deterministic backend.
 
     # Co-sim wiring — native USD `connectionPaths`. A self-loop on this prim: the
     # model's outputs are the body's force inputs, and the body's state is the model's
@@ -592,7 +592,6 @@ def Xform "DescentLander" (
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/BellNozzle.mo@
-            uniform bool lunco:program:realtimeSafe = true
             float inputs:throat_radius = 0.35
             float inputs:exit_radius = 1.35
             float inputs:length = 1.90
@@ -680,7 +679,6 @@ def Xform "DescentLander" (
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
-            uniform bool lunco:program:realtimeSafe = true
             float inputs:throttle.connect = </DescentLander.outputs:throttle>
             float inputs:w_max = 0.5
             float inputs:l_max = 2.5

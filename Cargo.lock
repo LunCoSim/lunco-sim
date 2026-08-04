@@ -7573,6 +7573,8 @@ dependencies = [
  "rayon",
  "regex",
  "rumoca-compile",
+ "rumoca-eval-solve",
+ "rumoca-ir-solve",
  "rumoca-phase-parse",
  "rumoca-sim",
  "rumoca-tool-fmt",

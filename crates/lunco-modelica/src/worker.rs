@@ -13,13 +13,13 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
-use rumoca_sim::SimulationSession;
 use serde::{Deserialize, Serialize};
 
 use lunco_assets::modelica_dir;
 
 use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
 use crate::sim_stream::{SimSnapshot, SimStream};
+use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 
@@ -39,12 +39,11 @@ use lunco_experiments::solver;
 /// So the family comes from [`solver::resolve`], the same call the batch path
 /// makes, from where the model runs: stepped inside the frame loop, and whether
 /// it drives a client-predicted body. A live model resolves to a backend that
-/// declares `usable_live`, and a predicted one to a backend that declares
-/// `realtime_tolerated` — because those backends *declare* it, not because a
-/// function body asserts it.
+/// declares `usable_live`; a predicted one is admitted only by a backend that
+/// is both fixed-step and deterministic.
 fn live_stepper_options(
     profile: solver::RuntimeProfile,
-) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
+) -> Result<(solver::SolverSpec, rumoca_sim::SimOptions), solver::SolverError> {
     crate::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
@@ -55,29 +54,7 @@ fn live_stepper_options(
         authored: None,
     })?;
 
-    // A4: a predicted model just landed on a backend that is not fixed-step
-    // deterministic. It is eligible only because it declares
-    // `realtime_tolerated`, so two peers integrating the same inputs can take
-    // different substeps and diverge. Declaring the gap in the registry
-    // documents it; this is the one place that REPORTS it, because this is where
-    // a model is actually put on such a stepper. Once per process, keyed on
-    // nothing else: the condition is a property of what is registered, not of
-    // the model, so repeating it per compile would only teach the reader to
-    // scroll past it.
-    if solver::served_by_concession(&spec, &profile) {
-        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            bevy::log::warn!(
-                "[solver] client-predicted models are running on `{}`, which is not \
-                 fixed-step deterministic — it serves them only through the declared \
-                 A4 concession (`realtime_tolerated`), so peers can diverge. Registering \
-                 a genuinely fixed-step backend retires this with no call-site edit.",
-                spec.id
-            );
-        }
-    }
-
-    crate::solver_backends::rumoca_options(
+    let options = crate::solver_backends::rumoca_options(
         &spec,
         &solver::SolverParams {
             atol: LIVE_TOL,
@@ -91,7 +68,8 @@ fn live_stepper_options(
             t_start: 0.0,
             t_end: f64::from(u32::MAX),
         },
-    )
+    )?;
+    Ok((spec, options))
 }
 
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
@@ -111,9 +89,9 @@ fn live_stepper_options(
 /// producing nothing. That silence is what let broken islands ship.
 /// The realtime half of the solver request for one model.
 ///
-/// A model absent from the set is NOT predicted — which for every co-simulated
-/// prim is the truth by construction: they are stamped `NotPredictable`, so an
-/// adaptive implicit solver is not merely permitted but correct for them.
+/// A model absent from the set is NOT predicted. The live path still requires a
+/// frame-loop-usable backend; offline/batch paths are where adaptive implicit
+/// solvers are selected.
 fn profile_for(
     entity: Entity,
     realtime_models: &std::collections::HashSet<Entity>,
@@ -128,11 +106,11 @@ fn profile_for(
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
-) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    let opts = live_stepper_options(profile).map_err(|e| {
+) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
+    let (spec, opts) = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
-    crate::simulation_session::live(&comp_res.dae, opts)
+    crate::simulation_session::live(&comp_res.dae, &spec, opts)
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -189,11 +167,9 @@ pub enum ModelicaCommand {
         /// prim declare `lunco:program:realtimeSafe`?
         ///
         /// Carried on the command because the worker thread has no ECS: it is
-        /// the second of the two facts solver selection is made of (the first,
-        /// whether the model is implicit, is read off the compiled DAE). DECLARED
-        /// upstream, never inferred here — a worker that guessed this is exactly
-        /// how the explicit stepper ended up on co-simulated electrical islands
-        /// that cannot be solved with it.
+        /// the prediction fact solver selection needs. DECLARED upstream, never
+        /// inferred from the compiled DAE: solvability and backend lowering are
+        /// owned by the selected solver.
         realtime_safe: bool,
         /// Stable session URI for the primary document (the document's
         /// canonical identity from `DocumentOrigin::session_uri` — a file
@@ -556,8 +532,30 @@ fn rebuild_from_cache(
 /// plots NaN. Filtering out parameters / inputs happens downstream in
 /// [`handle_modelica_responses`]; we report everything here so the UI has
 /// the full picture and decides what goes into `model.variables`.
-pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(String, f64)> {
-    let Ok(state) = stepper.state() else {
+pub(crate) trait ObservableStepper {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError>;
+}
+
+impl ObservableStepper for LiveStepper {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
+        self.state()
+    }
+}
+
+impl ObservableStepper for rumoca_sim::SimulationSession {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
+        self.state()
+    }
+}
+
+pub(crate) fn collect_stepper_observables<S: ObservableStepper>(stepper: &S) -> Vec<(String, f64)> {
+    let Ok(state) = stepper.observable_state() else {
         return Vec::new();
     };
     state
@@ -569,7 +567,7 @@ pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(S
 
 /// Fixed solver tolerance on the LIVE path. Explicit, and deliberately NOT the
 /// model's `experiment(Tolerance=…)` annotation nor the batch runner's default —
-/// see [`live_stepper_options`] (A4).
+/// see [`live_stepper_options`] and the runtime solver capability contract.
 const LIVE_TOL: f64 = 1e-6;
 
 /// The LIVE path's **micro-step**: the one and only step size handed to the
@@ -622,7 +620,7 @@ fn micro_steps_for(dt: f64) -> u32 {
 /// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
 /// side reconciles any residual against the world clock next tick.
 fn integrate_macro_step(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     dt: f64,
 ) -> Result<(), rumoca_sim::SimulationDiagnosticError> {
     for _ in 0..micro_steps_for(dt) {
@@ -748,7 +746,7 @@ fn resolve_default_slots(known: &[String], name: &str, origin: DefaultOrigin) ->
 /// (primary document, sibling docs, seated library members) arrives here in the
 /// same map and is resolved by [`resolve_default_slots`].
 fn apply_input_defaults_validated(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     input_defaults: &HashMap<String, InputDefault>,
     ctx: &str,
 ) {
@@ -1048,7 +1046,7 @@ fn default_issue_message(issue: &InputDefaultIssue) -> String {
 /// is silently discarded forever — warn ONCE per (entity, name).
 #[cfg(not(target_arch = "wasm32"))]
 fn set_input_or_warn(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     rejected_inputs: &mut std::collections::HashSet<(Entity, String)>,
     entity: Entity,
     name: &str,
@@ -1195,11 +1193,11 @@ fn prune_entity_temp_dirs(
 /// than shipping calls that always `Err` in a browser.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
-    let mut steppers: HashMap<Entity, (u64, String, SimulationSession)> = HashMap::default();
+    let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // Which models declared the realtime promise, from `Compile`. Half of the
-    // solver-selection input (the other half is read off the compiled DAE), kept
-    // per entity because every later rebuild — Reset, parameter update, Step
+    // solver-selection input, kept per entity because every later rebuild — Reset,
+    // parameter update, Step
     // auto-init — must resolve the SAME solver as the original compile did.
     let mut realtime_models: std::collections::HashSet<Entity> = Default::default();
     // Inputs the SOLVER rejected, deduped per (entity, name). `set_input` used to
@@ -1843,7 +1841,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 }
                                 // Macro step: integrate the requested `dt` — the
                                 // gap between the model's clock and the world's —
-                                // as a fixed ladder of micro-steps (A3/A4).
+                                // as a fixed ladder of micro-steps.
                                 let step_err = integrate_macro_step(stepper, dt).err();
                                 if let Some(e) = step_err {
                                     let mut r = result_ok(entity, session_id);
@@ -2107,7 +2105,7 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 pub struct InlineWorkerInner {
-    steppers: HashMap<Entity, (u64, String, SimulationSession)>,
+    steppers: HashMap<Entity, (u64, String, LiveStepper)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiler: Option<ModelicaCompiler>,
@@ -2260,7 +2258,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                     for (name, val) in &inputs {
                         let _ = stepper.set_input(name, *val);
                     }
-                    // Same macro-step ladder as the native worker (A3/A4).
+                    // Same macro-step ladder as the native worker.
                     let step_err = integrate_macro_step(stepper, dt).err();
 
                     if let Some(e) = step_err {
@@ -3351,7 +3349,7 @@ pub fn handle_modelica_responses(
 }
 
 // ===========================================================================
-// The macro-step contract (A3/A4/A5)
+// The macro-step contract
 // ===========================================================================
 #[cfg(test)]
 mod macro_step_tests {
@@ -3499,7 +3497,7 @@ mod macro_step_tests {
     }
 
     /// The micro-step ladder is an integer function of `dt` alone — same on
-    /// every peer, clamped, and never zero for a positive `dt` (A4).
+    /// every peer, clamped, and never zero for a positive `dt`.
     #[test]
     fn micro_step_ladder_is_deterministic_and_clamped() {
         assert_eq!(micro_steps_for(0.0), 0);

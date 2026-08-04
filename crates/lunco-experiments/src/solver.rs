@@ -30,16 +30,6 @@
 //! everything replicated (thermal, power/battery, chemistry) may use an adaptive
 //! solver — but only where it is not being stepped by the frame loop.
 //!
-//! ## The A4 concession is data here, not a hidden constant
-//!
-//! No registered backend is honestly fixed-step and deterministic today —
-//! rumoca's `RkLike` is an embedded RK45 whose substep is error-adapted. Rather
-//! than let a function body quietly assert otherwise, a backend that may be used
-//! for predicted models without meeting the bar declares
-//! [`SolverCaps::realtime_tolerated`]. The gap is then one greppable field with
-//! an owner instead of an invisible default, and the day a real fixed-step
-//! tableau is registered it outranks the concession with no call-site edit.
-
 use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -90,10 +80,6 @@ pub struct SolverCaps {
     /// from `fixed_step`: a fixed-step method can still diverge through
     /// non-reproducible arithmetic.
     pub deterministic: bool,
-    /// May serve a predicted model despite failing the bar above. A DECLARED
-    /// concession, not a fallback the resolver invents — see the module docs on
-    /// A4. Ranked below any backend that genuinely qualifies.
-    pub realtime_tolerated: bool,
 }
 
 /// A registered solver.
@@ -176,8 +162,7 @@ impl std::error::Error for SolverError {}
 ///
 /// The two rules, in full:
 /// 1. A live model — stepped by the frame loop — needs a frame-loop-safe solver.
-/// 2. A predicted model needs a solver that is fixed-step AND deterministic, or
-///    one that explicitly declares the A4 concession.
+/// 2. A predicted model needs a solver that is fixed-step AND deterministic.
 fn satisfies(spec: &SolverSpec, req: &SolverRequest) -> Result<(), String> {
     if req.profile.live && !spec.caps.usable_live {
         return Err(format!(
@@ -186,38 +171,21 @@ fn satisfies(spec: &SolverSpec, req: &SolverRequest) -> Result<(), String> {
             spec.id
         ));
     }
-    if req.profile.predicted
-        && !(spec.caps.fixed_step && spec.caps.deterministic)
-        && !spec.caps.realtime_tolerated
-    {
+    if req.profile.predicted && !(spec.caps.fixed_step && spec.caps.deterministic) {
         return Err(format!(
-            "the model drives a client-predicted body and `{}` is neither fixed-step \
-             deterministic nor declared realtime-tolerated",
+            "the model drives a client-predicted body and `{}` is not fixed-step \
+             deterministic; prediction requires a backend with both capabilities",
             spec.id
         ));
     }
     Ok(())
 }
 
-/// Whether `spec` serves a predicted model ONLY through the A4 concession —
-/// i.e. it is not fixed-step deterministic and is eligible purely because it
-/// declares [`SolverCaps::realtime_tolerated`].
-///
-/// A FACT about the selection, computed where the selection is made. Client
-/// prediction on a backend whose substep is error-adapted is peers disagreeing
-/// by construction, so a caller that puts a model on one is entitled to know;
-/// declaring the gap in the registry only documents it, it does not report it.
-/// Returns false for any non-predicted profile, where the bar does not apply.
-pub fn served_by_concession(spec: &SolverSpec, profile: &RuntimeProfile) -> bool {
-    profile.predicted && !(spec.caps.fixed_step && spec.caps.deterministic)
-}
-
-/// Preference score among capable candidates. A genuinely realtime-qualified
-/// backend must beat a merely tolerated one for a predicted model, so that the
-/// concession retires by itself the day a real fixed-step tableau registers.
+/// Preference score among capable candidates. Capability filtering happens in
+/// [`satisfies`]; rank is only a tiebreak among backends that meet the contract.
 fn score(spec: &SolverSpec, req: &SolverRequest) -> u16 {
-    let qualified = req.profile.predicted && !served_by_concession(spec, &req.profile);
-    u16::from(qualified) * 256 + u16::from(spec.rank)
+    let _ = req;
+    u16::from(spec.rank)
 }
 
 /// The registry. Global rather than a Bevy `Resource` because both the ECS and
@@ -336,15 +304,12 @@ mod tests {
         usable_live: false,
         fixed_step: false,
         deterministic: false,
-        realtime_tolerated: false,
     };
-    /// The explicit backend: frame-loop safe, and the declared A4 concession for
-    /// predicted models.
+    /// The explicit backend: frame-loop safe, but not valid for prediction.
     const LIVE_EXPLICIT: SolverCaps = SolverCaps {
         usable_live: true,
         fixed_step: false,
         deterministic: false,
-        realtime_tolerated: true,
     };
 
     /// The two-backend world every test below reasons about: one adaptive
@@ -433,11 +398,10 @@ mod tests {
         );
     }
 
-    /// A genuinely fixed-step deterministic backend must outrank the A4
-    /// concession for a predicted model, however high the concession's rank —
-    /// otherwise registering the real thing upstream would change nothing.
+    /// A live backend without fixed-step deterministic guarantees is rejected
+    /// for prediction, even when a qualified backend is absent.
     #[test]
-    fn a_qualified_realtime_solver_outranks_the_tolerated_concession() {
+    fn a_predicted_model_rejects_an_adaptive_live_backend() {
         let specs = vec![
             spec("testrk", LIVE_EXPLICIT, 200),
             spec(
@@ -446,7 +410,6 @@ mod tests {
                     usable_live: true,
                     fixed_step: true,
                     deterministic: true,
-                    realtime_tolerated: false,
                 },
                 1,
             ),
@@ -462,47 +425,37 @@ mod tests {
                 ..Default::default()
             },
         )
-        .expect("both candidates serve a predicted model");
+        .expect("the qualified backend serves a predicted model");
 
         assert_eq!(
             chosen.id,
             SolverId::from("testfixed"),
-            "the tolerated concession won over a qualified backend"
+            "the fixed-step deterministic backend must serve prediction"
         );
     }
 
-    /// The concession is REPORTABLE, not merely declared: selecting a
-    /// tolerated-but-unqualified backend for a predicted model must be
-    /// distinguishable from selecting one that genuinely meets the bar, or a
-    /// caller cannot tell peers-may-diverge from peers-agree.
+    /// No backend is silently substituted when prediction has no qualifying
+    /// implementation. The caller receives an actionable capability error.
     #[test]
-    fn a_tolerated_backend_is_reported_as_a_concession_and_a_qualified_one_is_not() {
+    fn a_predicted_model_without_a_qualified_backend_errors() {
         let tolerated = spec("testrk", LIVE_EXPLICIT, 200);
-        let qualified = spec(
-            "testfixed",
-            SolverCaps {
-                usable_live: true,
-                fixed_step: true,
-                deterministic: true,
-                realtime_tolerated: false,
-            },
-            1,
-        );
         let predicted = RuntimeProfile {
             live: true,
             predicted: true,
         };
 
-        assert!(served_by_concession(&tolerated, &predicted));
-        assert!(!served_by_concession(&qualified, &predicted));
-
-        // A batch or non-predicted live model is not held to the realtime bar,
-        // so nothing it resolves to is a concession.
-        let replicated = RuntimeProfile {
-            live: true,
-            predicted: false,
-        };
-        assert!(!served_by_concession(&tolerated, &replicated));
+        let err = resolve_in(
+            &[tolerated],
+            &SolverRequest {
+                profile: predicted,
+                ..Default::default()
+            },
+        )
+        .expect_err("prediction must not run on an adaptive backend");
+        assert!(
+            matches!(err, SolverError::NoCapableSolver { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

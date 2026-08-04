@@ -31,7 +31,6 @@ pub fn ensure_builtin_solvers() {
                 usable_live: false,
                 fixed_step: false,
                 deterministic: false,
-                realtime_tolerated: false,
             },
             // Highest-ranked implicit backend: rumoca's own default, and the
             // most robust general-purpose stiff solver of the three.
@@ -46,7 +45,6 @@ pub fn ensure_builtin_solvers() {
                 usable_live: false,
                 fixed_step: false,
                 deterministic: false,
-                realtime_tolerated: false,
             },
             rank: 20,
             label: "ESDIRK34 (stiff, sharp transitions)".into(),
@@ -59,31 +57,42 @@ pub fn ensure_builtin_solvers() {
                 usable_live: false,
                 fixed_step: false,
                 deterministic: false,
-                realtime_tolerated: false,
             },
             rank: 25,
             label: "TR-BDF2 (stiff + events)".into(),
         });
 
-        // The explicit family. `realtime_tolerated` is the A4 concession, stated
-        // as data: rumoca's `RkLike` is an EMBEDDED RK45 whose substep is still
-        // error-adapted (`adapt_step(h, error_norm)`), so it is neither
-        // fixed-step nor peer-deterministic, and it is the only thing available
-        // for a client-predicted model today. Declaring that here — rather than
-        // asserting it inside a stepper function — is what makes the gap
-        // greppable and lets a real fixed-step tableau outrank it the day one is
-        // registered, with no call-site edit. See TODO(A4) in
-        // `docs/architecture/28-modelica-realtime-physics.md`.
+        // The explicit family is frame-loop usable for authoritative live
+        // co-simulation, but rumoca's `RkLike` is an embedded RK45 whose
+        // internal step remains error-adapted. It therefore cannot serve a
+        // client-predicted body. The qualified fixed-rk4 backend below owns that
+        // prediction contract; this adaptive family remains authoritative-only.
         solver::register(SolverSpec {
             id: SolverId::from("rk45"),
             caps: SolverCaps {
                 usable_live: true,
                 fixed_step: false,
                 deterministic: false,
-                realtime_tolerated: true,
             },
             rank: 10,
-            label: "RK45 / Tsit45 (non-stiff, realtime-tolerated)".into(),
+            label: "RK45 / Tsit45 (non-stiff, authoritative live)".into(),
+        });
+
+        // This is not Rumoca's adaptive RkLike session. The live construction
+        // boundary dispatches this capability to lunco-modelica's explicit RK4
+        // loop over Rumoca's lowered derivative runtime. Its qualified model
+        // contract is continuous, event-free, and external-table-free.
+        solver::register(SolverSpec {
+            id: SolverId::from("fixed-rk4"),
+            caps: SolverCaps {
+                usable_live: true,
+                fixed_step: true,
+                deterministic: true,
+            },
+            // Ordinary authoritative live models continue to use RK45. This
+            // backend is selected when prediction requires the stronger caps.
+            rank: 5,
+            label: "Fixed RK4 (prediction-safe continuous models)".into(),
         });
     });
 }
@@ -105,6 +114,10 @@ pub fn rumoca_options(
         "esdirk34" => (M::Bdf, D::Esdirk34),
         "trbdf2" => (M::Bdf, D::TrBdf2),
         "rk45" => (M::RkLike, D::Bdf),
+        // The fixed-rk4 session owns the integration loop. These options only
+        // carry the solver-neutral Rumoca lowering mode and tolerances into the
+        // common DAE-to-SolveModel path.
+        "fixedrk4" => (M::RkLike, D::Bdf),
         _ => {
             return Err(SolverError::Incapable {
                 asked: spec.id.clone(),
@@ -196,10 +209,10 @@ mod tests {
         );
     }
 
-    /// A predicted model resolves to the explicit stepper: the drive laws and
-    /// motor thermal models stay on the realtime-tolerated backend.
+    /// Prediction selects the explicitly fixed-step backend. Adaptive RK45 is
+    /// not admitted merely because it accepts a nominal output interval.
     #[test]
-    fn a_predicted_model_still_gets_the_realtime_tolerated_backend() {
+    fn a_predicted_model_selects_the_qualified_backend() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
             profile: RuntimeProfile {
@@ -208,8 +221,10 @@ mod tests {
             },
             authored: None,
         })
-        .expect("the realtime-tolerated backend is registered");
+        .expect("the fixed-step backend is valid for prediction");
 
-        assert_eq!(spec.id, SolverId::from("rk45"), "realtime class changed");
+        assert_eq!(spec.id, SolverId::from("fixed-rk4"));
+        assert!(spec.caps.fixed_step);
+        assert!(spec.caps.deterministic);
     }
 }

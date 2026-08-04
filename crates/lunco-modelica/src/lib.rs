@@ -148,6 +148,7 @@ pub mod doc_extract;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
+pub mod fixed_step;
 /// Default-simulation-class resolution + run-target overrides
 /// (was `ui::panels::model_view::context::default_simulation_class` & friends).
 /// The rumoca backends, registered into `lunco_experiments::solver`. Solver

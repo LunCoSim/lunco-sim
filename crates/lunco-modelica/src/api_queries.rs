@@ -139,7 +139,6 @@ impl ApiQueryProvider for ListSolversProvider {
                     "usable_live": s.caps.usable_live,
                     "fixed_step": s.caps.fixed_step,
                     "deterministic": s.caps.deterministic,
-                    "realtime_tolerated": s.caps.realtime_tolerated,
                 })
             })
             .collect();

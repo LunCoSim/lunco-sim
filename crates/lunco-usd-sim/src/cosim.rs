@@ -983,9 +983,9 @@ pub fn dispatch_loaded_modelica_sources(
     canonical: NonSend<CanonicalStages>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
-    // Half of the solver-selection input, and the half only the ECS knows: the
-    // DECLARED `lunco:program:realtimeSafe` promise. The worker derives the other
-    // half (does the model carry algebraic unknowns) from the compiled DAE.
+    // The solver-selection input only carries the authored prediction contract.
+    // Solver capability and Modelica lowering remain owned by the worker's
+    // backend registry; they are never inferred from a DAE shape here.
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
 ) {
     let Some(channels) = channels else { return };
@@ -1086,10 +1086,8 @@ pub fn dispatch_loaded_modelica_sources(
                 doc_uri: pending.asset_path.to_string(),
                 extra_sources: Vec::new(),
                 stream: None,
-                // Declared, never inferred. A program without the promise is not
-                // client-predicted, so an adaptive implicit solver is correct for
-                // it — which is exactly what a battery/solar electrical island
-                // needs.
+                // Declared, never inferred. A program without the promise is
+                // authoritative live co-simulation, not client prediction.
                 realtime_safe: q_realtime_safe.contains(entity),
             })
             .err()
@@ -1746,7 +1744,12 @@ pub fn rewire_usd_connections(
     >,
     mut removed: RemovedComponents<UsdPrimPath>,
     mut dirty: ResMut<WiringDirty>,
-    q_all: Query<(Entity, &UsdPrimPath, Has<ModelicaModel>)>,
+    q_all: Query<(
+        Entity,
+        &UsdPrimPath,
+        Has<ModelicaModel>,
+        Has<lunco_environment::EnvironmentProbe>,
+    )>,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
     // the same asset compose byte-IDENTICAL stage-relative paths (`/DescentLander`,
@@ -1763,8 +1766,11 @@ pub fn rewire_usd_connections(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     // The realtime gate: whether the SOURCE program promised it is realtime-safe,
     // and whether the SINK is a client-predicted dynamic body (a `RigidBody` NOT
-    // opted out of prediction). Absence of the promise is the dangerous case;
-    // absence of the body is the safe one.
+    // opted out of prediction). The network role is part of this contract: only
+    // a pure client predicts the body locally. Standalone and host processes are
+    // authoritative, so their live solver is not incorrectly classified as a
+    // prediction loop.
+    role: Option<Res<lunco_core::NetworkRole>>,
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
     q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
     q_defaults: Query<&UsdInputDefaults>,
@@ -1774,10 +1780,18 @@ pub fn rewire_usd_connections(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
+    let client_predicts = matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client));
+    let role_changed = role.as_ref().is_some_and(|role| role.is_changed());
+
     // `Added<ModelicaModel>` is the explicit endpoint-contract transition. This
     // pass no longer relies on accidentally deferred removal events to get an
     // extra rewire after a generated model appears.
-    let structural = !wiring_arrivals.is_empty() || removed.read().next().is_some();
+    let structural = !wiring_arrivals.is_empty()
+        || removed.read().next().is_some()
+        // Changing authority changes whether a force edge is admissible. Rebuild
+        // immediately on a standalone/host ↔ client transition instead of
+        // leaving the previous role's wiring decision cached.
+        || role_changed;
     if !structural && !dirty.0 {
         return;
     }
@@ -1793,7 +1807,11 @@ pub fn rewire_usd_connections(
     // keeps two spawns of one asset distinct: their identical stage-relative paths
     // now land under different instance keys instead of overwriting each other.
     let mut by_path: HashMap<(Option<u64>, String), Entity> = HashMap::new();
-    for (e, p, _) in q_all.iter() {
+    let environment_probe_entities: std::collections::HashSet<Entity> = q_all
+        .iter()
+        .filter_map(|(entity, _, _, is_probe)| is_probe.then_some(entity))
+        .collect();
+    for (e, p, _, _) in q_all.iter() {
         by_path.insert((instance_of(e), p.path.clone()), e);
     }
 
@@ -1801,6 +1819,16 @@ pub fn rewire_usd_connections(
     // Gathered in the same sweep that derives the wires, because "has no wire" is
     // exactly what makes an input a parameter.
     let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
+
+    // Earth demand is a composed-wire fact, not a property of every environment
+    // probe. Rebuild the projection from the same connection sweep below so a
+    // live wire edit removes demand as well as adding it.
+    for entity in &environment_probe_entities {
+        commands
+            .entity(*entity)
+            .remove::<lunco_environment::EarthDirectionRequired>();
+    }
+    let mut earth_direction_required = std::collections::HashSet::new();
 
     // Network membership, per stage — see the skip below. One stage walk per
     // rebuild, not per prim.
@@ -1814,7 +1842,7 @@ pub fn rewire_usd_connections(
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path, has_modelica) in q_all.iter() {
+    for (entity, prim_path, has_modelica, _) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -2031,6 +2059,18 @@ pub fn rewire_usd_connections(
                     .or_else(|| src_leaf.strip_prefix("inputs:"))
                     .unwrap_or(src_leaf);
 
+                if !start_is_input
+                    && environment_probe_entities.contains(&start_element)
+                    && matches!(
+                        src_conn,
+                        lunco_cosim::EARTH_MOUNT_X_CONNECTOR
+                            | lunco_cosim::EARTH_MOUNT_Y_CONNECTOR
+                            | lunco_cosim::EARTH_MOUNT_Z_CONNECTOR
+                    )
+                {
+                    earth_direction_required.insert(start_element);
+                }
+
                 // ── The SOURCE side of the actuator-port indirection ─────────
                 // A vessel's `outputs:drive_left` is not stored on the vessel
                 // prim: `ActuatorPorts` realises it as a child `Port` entity, and
@@ -2066,27 +2106,41 @@ pub fn rewire_usd_connections(
                 // loop, and the body diverges from the server every frame the solver
                 // runs late.
                 //
-                // Warn, don't refuse: cosim prims are stamped `NotPredictable` at
-                // prim-read time, so a scene that trips this gate has ALREADY
-                // routed around the guard some other way, and dropping the wire
-                // silently would leave a vehicle with no forces at all. The warn
-                // names the attribute and the prim so it is actionable.
-                if lunco_cosim::is_physics_force_port(sink_conn)
+                if client_predicts
+                    && lunco_cosim::is_physics_force_port(sink_conn)
                     && matches!(
                         q_predicted_body.get(entity),
                         Ok(avian3d::prelude::RigidBody::Dynamic)
                     )
                     && q_realtime_safe.get(start_element).is_err()
                 {
-                    warn!(
-                        "[usd-cosim] {}.{}: the program at {} drives a force/torque port on a \
-                         CLIENT-PREDICTED dynamic body without declaring \
-                         `lunco:program:realtimeSafe = true`. Its step sequence and cost are not \
-                         guaranteed identical across peers — the predicted body can diverge. \
-                         Declare it on the program prim (see \
-                         docs/architecture/28-modelica-realtime-physics.md).",
-                        prim_path.path, attr, src_prim,
+                    let source_prim = src_prim.to_string();
+                    let detail = format!(
+                        "{}.{} drives predicted dynamic body {} without \
+                         `lunco:program:realtimeSafe = true`; the force wire was not admitted",
+                        prim_path.path, attr, source_prim,
                     );
+                    error!("[usd-cosim] {detail}");
+                    commands.queue(move |world: &mut World| {
+                        let raised = world
+                            .get_resource_mut::<lunco_core::RuntimeFaults>()
+                            .is_some_and(|mut faults| {
+                                faults.raise(
+                                    "cosim-predicted-force-contract",
+                                    Some(entity),
+                                    source_prim,
+                                    detail,
+                                )
+                            });
+                        if raised {
+                            if let Some(mut holds) =
+                                world.get_resource_mut::<lunco_physics::PhysicsHolds>()
+                            {
+                                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                            }
+                        }
+                    });
+                    continue;
                 }
 
                 let (end_element, end_connector) = forward
@@ -2135,6 +2189,12 @@ pub fn rewire_usd_connections(
         if q_defaults.get(entity).map(|d| d.0 != map).unwrap_or(true) {
             commands.entity(entity).try_insert(UsdInputDefaults(map));
         }
+    }
+
+    for entity in earth_direction_required {
+        commands
+            .entity(entity)
+            .insert(lunco_environment::EarthDirectionRequired);
     }
 }
 
@@ -3551,23 +3611,39 @@ pub(crate) fn install(app: &mut App) {
             .in_set(CosimUpdateSet::Projection),
     );
 
+    // Wiring is derived from native `connectionPaths`: rebuilds the
+    // `SimConnection` set whenever prims spawn/despawn (structural) or a
+    // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
+    // Register the stages separately because `run_if` turns a system into a
+    // schedule config and cannot participate in this Bevy version's chained
+    // system tuple. The explicit dependencies retain the same ownership order
+    // without relying on tuple arity or a second compatibility path.
     app.add_systems(
         Update,
-        (
-            // Wiring is derived from native `connectionPaths`: rebuilds the
-            // `SimConnection` set whenever prims spawn/despawn (structural) or a
-            // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
-            rewire_usd_connections,
-            wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
-            // Parameters: the authored constants the wiring pass gathered off the
-            // unconnected `inputs:` ports, pushed into the model once it exists.
-            // After the wrap, because it needs the `SimComponent` to write into.
-            seed_usd_input_defaults,
-            // §6 opaque guard: once a body is cosim-driven, mark it unpredictable
-            // (after the SimComponent wrap above, so it sees freshly-wrapped bodies).
-            tag_cosim_opaque,
-        )
-            .chain()
+        rewire_usd_connections.in_set(CosimUpdateSet::Wiring),
+    );
+    app.add_systems(
+        Update,
+        wrap_modelica_into_simcomponent
+            .run_if(any_unwrapped_modelica)
+            .after(rewire_usd_connections)
+            .in_set(CosimUpdateSet::Wiring),
+    );
+    // Parameters: the authored constants the wiring pass gathered off the
+    // unconnected `inputs:` ports, pushed into the model once it exists. After
+    // the wrap, because it needs the `SimComponent` to write into.
+    app.add_systems(
+        Update,
+        seed_usd_input_defaults
+            .after(wrap_modelica_into_simcomponent)
+            .in_set(CosimUpdateSet::Wiring),
+    );
+    // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after
+    // the fresh SimComponent and authored defaults are visible.
+    app.add_systems(
+        Update,
+        tag_cosim_opaque
+            .after(seed_usd_input_defaults)
             .in_set(CosimUpdateSet::Wiring),
     );
 

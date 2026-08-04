@@ -41,10 +41,7 @@ fn capture_force_y(q: Query<&PendingForces>, mut witness: ResMut<ForceYWitness>)
         }
     }
 }
-use lunco_modelica::{
-    extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
-    ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
-};
+use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaCorePlugin, ModelicaModel};
 use lunco_scene_commands::catalog::BalloonModelMarker;
 
 fn balloon_mo() -> &'static str {
@@ -65,9 +62,10 @@ fn compile_balloon_model(
 ) {
     for (entity, name) in &q_new {
         let source = balloon_mo().to_string();
-        let model_name = extract_model_name(&source).unwrap_or_else(|| "Balloon".into());
-        let params = extract_parameters(&source);
-        let mut inputs = extract_inputs_with_defaults(&source);
+        let interface = lunco_modelica::ast_extract::parse_model_interface(&source, "balloon.mo");
+        let model_name = interface.model_name.unwrap_or_else(|| "Balloon".into());
+        let params = interface.parameters;
+        let mut inputs = interface.inputs;
         // THE SCENE STATES THE ATMOSPHERE. `Balloon.mo`'s `rho0` defaults to 0 —
         // "a body with no declared atmosphere is in vacuum, which is the correct
         // reading of the Moon" — and in vacuum buoyancy and drag are identically
@@ -99,8 +97,8 @@ fn compile_balloon_model(
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
-            // Not a client-predicted body: this balloon is stepped by the
-            // co-sim worker, so the solver choice comes off the DAE alone.
+            // Not a client-predicted body: this balloon is authoritative live
+            // co-simulation, so it does not claim the prediction contract.
             realtime_safe: false,
         });
 

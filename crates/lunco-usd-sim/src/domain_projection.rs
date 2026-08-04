@@ -1129,11 +1129,9 @@ pub fn project_domain_islands(
             stream: None,
             // A projected domain island is a NETWORK of components — a battery
             // bus, a thermal loop — not a program driving a client-predicted
-            // body. It is `NotPredictable` by construction, so it takes the
-            // replicated class's adaptive implicit solver. Handing it the
-            // realtime class's explicit stepper is what silently killed every
-            // solar rover: the island compiled, then failed every step with
-            // `algebraic refresh row 2 cannot be solved` and published nothing.
+            // body. It therefore carries no prediction promise and resolves
+            // through the authoritative-live capability profile. The worker,
+            // not this projector, owns backend selection and DAE lowering.
             realtime_safe: false,
         });
         info!(

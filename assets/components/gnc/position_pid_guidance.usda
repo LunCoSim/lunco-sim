@@ -23,8 +23,6 @@ def Xform "PositionPIDGuidance"
     )
     {
         uniform asset info:sourceAsset = @lunco://models/LunCo/GNC/PositionPID3D.mo@
-        uniform bool lunco:program:realtimeSafe = true
-
         # The rigid-body state is an engine-owned Avian output surface.  No copy
         # of position or velocity is maintained in Rhai or in the scene.
         float inputs:pos_x.connect = </PositionPIDGuidance.outputs:position_x>

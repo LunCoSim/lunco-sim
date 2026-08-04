@@ -14,6 +14,13 @@
 //! whole wiring fabric by extending the resolver alone — this system never
 //! changes. That also makes it front-end agnostic: an endpoint is an `Entity`
 //! plus a port name, so USD, the API, and runtime spawns all wire the same way.
+//!
+//! `SimConnection` is the explicit causal co-simulation boundary. The exchange
+//! is a single Jacobi/ZOH read-then-write transaction, so feedback between
+//! participants is a valid dynamic feedback loop: state advances between
+//! transactions and no algebraic convergence is claimed. A true acausal
+//! connection belongs to a typed backend island and must be partitioned before
+//! stepping; it must not be guessed from an SCC in this causal fabric.
 
 use std::collections::HashMap;
 
@@ -22,7 +29,7 @@ use bevy::prelude::*;
 use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
 
-use crate::{is_physics_force_port, BoundConnection, RealtimeSafe, SimConnection};
+use crate::{BoundConnection, SimConnection};
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,26 +115,6 @@ struct CompiledTarget {
     resolved: Option<ResolvedPort>,
 }
 
-/// Prefix of the synthetic "port name" an algebraic-loop fault is keyed under in
-/// [`crate::diagnostics::CosimDiagnostics::faults`]. No real port can carry this
-/// name, so a loop entry can never be retracted by a landing write — it is
-/// retracted only when a rebuild no longer finds the loop.
-pub const ALGEBRAIC_LOOP_PORT: &str = "<algebraic-loop>";
-
-/// One algebraic loop found at compile time (M6): a cycle in the wire graph
-/// spanning **two or more** participants. `port` is the full human-readable
-/// description (prefixed with [`ALGEBRAIC_LOOP_PORT`]) listing every wire on the
-/// loop; `entity` is a deterministic canonical member, so one loop is ONE ledger
-/// entry however many wires it comprises.
-#[derive(Clone)]
-struct DetectedLoop {
-    entity: Entity,
-    global_id: Option<lunco_core::GlobalEntityId>,
-    port: String,
-    force_producing: bool,
-    realtime_safe: bool,
-}
-
 /// The flattened wiring fabric — the "SignalBus" — cached inside
 /// [`propagate_connections`] and rebuilt only when the [`crate::SimConnection`]
 /// set actually changes.
@@ -142,9 +129,6 @@ pub struct CompiledWiring {
     wires: Vec<CompiledWire>,
     /// Distinct targets, one accumulator slot each.
     targets: Vec<CompiledTarget>,
-    /// Algebraic loops in THIS fabric (M6) — recomputed on every rebuild,
-    /// published into the faults ledger by [`propagate_connections`].
-    loops: Vec<DetectedLoop>,
 }
 
 impl CompiledWiring {
@@ -228,154 +212,6 @@ impl CompiledWiring {
                 .then_with(|| a.src_port.cmp(&b.src_port))
                 .then_with(|| a.src_entity.to_bits().cmp(&b.src_entity.to_bits()))
         });
-
-        self.detect_algebraic_loops(world);
-    }
-
-    /// M6 — algebraic-loop detection over the wire graph (nodes = participant
-    /// entities, one edge per wire), treating every participant as direct
-    /// feedthrough — conservative: the substrate has no causality metadata yet,
-    /// so any cycle MAY be an algebraic loop.
-    ///
-    /// The master is single-pass Jacobi with ZOH inputs: each feedthrough hop on
-    /// a cycle costs one fixed step of delay, and nothing iterates the loop to
-    /// convergence. That 1-step-delay behaviour is the documented contract and
-    /// is NOT changed here — a detected loop only lands one entry in the faults
-    /// ledger so the otherwise invisible coupling error is diagnosable.
-    ///
-    /// Single-entity self-wires (`netForce`→`force_y` on ONE entity — the
-    /// balloon pattern, an engine exchanging with its own body) are the intended
-    /// single-participant co-sim shape and are excluded: a reported cycle must
-    /// span ≥ 2 participants (an SCC of ≥ 2 nodes, via iterative Tarjan).
-    fn detect_algebraic_loops(&mut self, world: &World) {
-        self.loops.clear();
-
-        // Participant graph. Self-edges dropped (see doc above).
-        let mut node_ix: HashMap<Entity, usize> = HashMap::new();
-        let mut nodes: Vec<Entity> = Vec::new();
-        let mut edges: Vec<Vec<usize>> = Vec::new();
-        for w in &self.wires {
-            let dst = self.targets[w.dst_index].entity;
-            if w.src_entity == dst {
-                continue;
-            }
-            for e in [w.src_entity, dst] {
-                node_ix.entry(e).or_insert_with(|| {
-                    nodes.push(e);
-                    edges.push(Vec::new());
-                    nodes.len() - 1
-                });
-            }
-            let (s, d) = (node_ix[&w.src_entity], node_ix[&dst]);
-            if !edges[s].contains(&d) {
-                edges[s].push(d);
-            }
-        }
-
-        // Iterative Tarjan SCC (explicit frame stack — no recursion depth limit).
-        let n = nodes.len();
-        let mut index = vec![usize::MAX; n];
-        let mut low = vec![0usize; n];
-        let mut on_stack = vec![false; n];
-        let mut stack: Vec<usize> = Vec::new();
-        let mut next_index = 0usize;
-        let mut sccs: Vec<Vec<usize>> = Vec::new();
-        for root in 0..n {
-            if index[root] != usize::MAX {
-                continue;
-            }
-            let mut call: Vec<(usize, usize)> = vec![(root, 0)];
-            while let Some(frame) = call.last_mut() {
-                let v = frame.0;
-                if frame.1 == 0 {
-                    index[v] = next_index;
-                    low[v] = next_index;
-                    next_index += 1;
-                    stack.push(v);
-                    on_stack[v] = true;
-                }
-                if frame.1 < edges[v].len() {
-                    let w = edges[v][frame.1];
-                    frame.1 += 1;
-                    if index[w] == usize::MAX {
-                        call.push((w, 0));
-                    } else if on_stack[w] {
-                        low[v] = low[v].min(index[w]);
-                    }
-                } else {
-                    call.pop();
-                    if let Some(parent) = call.last_mut() {
-                        low[parent.0] = low[parent.0].min(low[v]);
-                    }
-                    if low[v] == index[v] {
-                        let mut comp = Vec::new();
-                        loop {
-                            let w = stack.pop().expect("Tarjan stack underflow");
-                            on_stack[w] = false;
-                            comp.push(w);
-                            if w == v {
-                                break;
-                            }
-                        }
-                        if comp.len() >= 2 {
-                            sccs.push(comp);
-                        }
-                    }
-                }
-            }
-        }
-
-        for comp in sccs {
-            let members: std::collections::HashSet<Entity> =
-                comp.iter().map(|&i| nodes[i]).collect();
-            // Every wire whose both endpoints sit inside the SCC IS the coupling;
-            // wires are already in P10 order, so the description is deterministic.
-            let mut parts: Vec<String> = Vec::new();
-            let mut force_producing = false;
-            for w in &self.wires {
-                let dst = &self.targets[w.dst_index];
-                // A participant can feed a body-force port on itself (the
-                // common Modelica-to-Avian projection), so the force edge is
-                // intentionally not part of the multi-entity SCC above.
-                // It still makes the SCC's control loop force-producing and
-                // therefore subject to the RealtimeSafe contract.
-                if members.contains(&w.src_entity) && is_physics_force_port(&dst.name) {
-                    force_producing = true;
-                }
-                if w.src_entity != dst.entity
-                    && members.contains(&w.src_entity)
-                    && members.contains(&dst.entity)
-                {
-                    parts.push(format!(
-                        "{:?}:{} -> {:?}:{}",
-                        w.src_entity, w.src_port, dst.entity, dst.name
-                    ));
-                }
-            }
-            // Canonical member: same network-stable key the P10 sort uses, so the
-            // ledger key does not depend on archetype order.
-            let entity = members
-                .iter()
-                .copied()
-                .min_by_key(|e| {
-                    (
-                        world.get::<lunco_core::GlobalEntityId>(*e).map(|g| g.get()),
-                        e.to_bits(),
-                    )
-                })
-                .expect("SCC has >= 2 members");
-            let realtime_safe = force_producing
-                && members
-                    .iter()
-                    .all(|member| world.get::<RealtimeSafe>(*member).is_some());
-            self.loops.push(DetectedLoop {
-                entity,
-                global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
-                port: format!("{ALGEBRAIC_LOOP_PORT} {}", parts.join(", ")),
-                force_producing,
-                realtime_safe,
-            });
-        }
     }
 }
 
@@ -484,76 +320,6 @@ pub fn propagate_connections(
                 diag.faults.remove(&key);
                 diag.landed.remove(&key);
             }
-        }
-
-        // M6 — publish this fabric's algebraic loops into the faults ledger.
-        // Loop entries are facts about THE CURRENT FABRIC (unlike never-landed
-        // wire faults, which are history), so a rewire retracts stale ones and
-        // re-asserts the current set. The synthetic key ([`ALGEBRAIC_LOOP_PORT`]
-        // prefix) keeps them out of the landed-retraction path — no real write
-        // can ever clear one. A force-producing loop is accepted only when every
-        // participant explicitly declares the realtime contract. Otherwise it is
-        // a terminal runtime fault and physics is held before force application.
-        world
-            .resource_mut::<crate::diagnostics::CosimDiagnostics>()
-            .faults
-            .retain(|(_, port), _| !port.starts_with(ALGEBRAIC_LOOP_PORT));
-        for l in &compiled.loops {
-            if l.force_producing && l.realtime_safe {
-                if reported.insert(l.port.clone()) {
-                    info!(
-                        "[cosim] force loop accepted under the declared realtime \
-                         lockstep contract (one fixed-step exchange delay): {}",
-                        l.port
-                    );
-                }
-                continue;
-            }
-            if reported.insert(l.port.clone()) {
-                if l.force_producing {
-                    error!(
-                        "[cosim] unsafe force-producing algebraic loop rejected: {}",
-                        l.port
-                    );
-                } else {
-                    warn!(
-                        "[cosim] algebraic loop in the wiring — co-simulated with a 1-step \
-                         delay per hop: {}",
-                        l.port
-                    );
-                }
-            }
-            if l.force_producing {
-                let raised = world
-                    .get_resource_mut::<lunco_core::RuntimeFaults>()
-                    .is_some_and(|mut faults| {
-                        faults.raise(
-                            "cosim-unsafe-force-loop",
-                            Some(l.entity),
-                            "co-simulation wiring",
-                            l.port.clone(),
-                        )
-                    });
-                if raised {
-                    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>()
-                    {
-                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-                    }
-                }
-            }
-            world
-                .resource_mut::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .insert(
-                    (l.entity, l.port.clone()),
-                    crate::diagnostics::BrokenConnection {
-                        entity: l.entity,
-                        global_id: l.global_id,
-                        port: l.port.clone(),
-                        has_port_surface: true,
-                        dropped_value: 0.0,
-                    },
-                );
         }
     }
 
@@ -773,15 +539,18 @@ mod wire_order_tests {
             let sink = world.spawn_empty().id();
 
             for gid in spawn_order {
-                world.spawn(SimConnection {
-                    start_element: src[gid],
-                    start_connector: format!("out_{gid}"),
-                    start_is_input: false,
-                    end_element: sink,
-                    end_connector: "force_y".into(),
-                    scale: 1.0,
-                    offset: 0.0,
-                });
+                world.spawn((
+                    SimConnection {
+                        start_element: src[gid],
+                        start_connector: format!("out_{gid}"),
+                        start_is_input: false,
+                        end_element: sink,
+                        end_connector: "force_y".into(),
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                    BoundConnection,
+                ));
             }
 
             let mut compiled = CompiledWiring::default();
@@ -844,15 +613,18 @@ mod wire_order_tests {
                 ..Default::default()
             })
             .id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "demand".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "demand".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         let demand = |world: &World| -> f64 {
             world
@@ -901,15 +673,18 @@ mod wire_order_tests {
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         // Sink has an id but no port backend of any kind.
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "nonexistent_port".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "nonexistent_port".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
 
@@ -965,15 +740,18 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "not_yet_loaded".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "not_yet_loaded".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
 
@@ -1004,20 +782,24 @@ mod wire_order_tests {
                 GlobalEntityId::from_raw(20),
                 crate::SimComponent {
                     model_name: "GeneratedElectricalIsland".into(),
+                    inputs: std::collections::HashMap::from([("ready_input".into(), 0.0)]),
                     status: crate::SimStatus::Compiling,
                     ..Default::default()
                 },
             ))
             .id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "drive_left".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "drive_left".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
@@ -1051,15 +833,18 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "angle".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         // Stand in for "this wire wrote successfully on an earlier tick", which
         // is all `landed` records. Reaching a real port backend would need a
@@ -1081,32 +866,25 @@ mod wire_order_tests {
     }
 
     fn wire(world: &mut World, src: Entity, out: &str, dst: Entity, inp: &str) {
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: out.into(),
-            start_is_input: false,
-            end_element: dst,
-            end_connector: inp.into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: out.into(),
+                start_is_input: false,
+                end_element: dst,
+                end_connector: inp.into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
     }
 
-    fn loop_faults(world: &World) -> Vec<String> {
-        world
-            .resource::<crate::diagnostics::CosimDiagnostics>()
-            .faults
-            .keys()
-            .filter(|(_, p)| p.starts_with(ALGEBRAIC_LOOP_PORT))
-            .map(|(_, p)| p.clone())
-            .collect()
-    }
-
-    /// M6: a feedthrough cycle spanning two participants is an algebraic loop —
-    /// the single-pass ZOH master cannot iterate it to convergence — and must
-    /// land exactly ONE entry in the faults ledger, naming the wires on it.
+    /// Causal feedback is a valid co-simulation topology. The single-pass
+    /// exchange is intentionally not an algebraic solver and must not invent a
+    /// safety fault merely because the participant graph contains a cycle.
     #[test]
-    fn a_two_entity_feedthrough_loop_is_recorded_as_one_fault() {
+    fn a_causal_feedback_cycle_does_not_create_an_algebraic_fault() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
@@ -1120,62 +898,25 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
 
-        let loops = loop_faults(&world);
-        assert_eq!(loops.len(), 1, "one loop, one ledger entry: {loops:?}");
         assert!(
-            loops[0].contains("out") && loops[0].contains("in"),
-            "the entry names the ports on the loop: {}",
-            loops[0]
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "causal feedback is not a missing-port fault"
         );
-
-        // Removing the back-edge dissolves the loop; the rebuild retracts it.
-        let conns: Vec<Entity> = {
-            let mut q = world.query_filtered::<Entity, With<SimConnection>>();
-            q.iter(&world).collect()
-        };
-        world.entity_mut(conns[1]).despawn();
-        world.run_system_once(propagate_connections).unwrap();
         assert!(
-            loop_faults(&world).is_empty(),
-            "a loop entry is a fact about the current fabric — retracted on rewire"
+            world
+                .get_resource::<lunco_core::RuntimeFaults>()
+                .is_none_or(|faults| !faults.active()),
+            "causal feedback must not hold physics as an algebraic-loop safety failure"
         );
     }
 
-    /// A control loop may reach a body force through a self-wired participant
-    /// edge rather than through an inter-entity edge in the SCC. The force
-    /// classification must still see it and accept it only when every loop
-    /// participant declares the realtime contract.
+    /// A self-coupled plant is the same causal boundary in the degenerate
+    /// one-participant case: it is not an algebraic equation solver.
     #[test]
-    fn realtime_safe_loop_with_self_wired_force_is_accepted() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.init_resource::<PortRegistry>();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
-
-        let a = world
-            .spawn((GlobalEntityId::from_raw(10), RealtimeSafe))
-            .id();
-        let b = world
-            .spawn((GlobalEntityId::from_raw(20), RealtimeSafe))
-            .id();
-        wire(&mut world, a, "out", b, "in");
-        wire(&mut world, b, "out", a, "in");
-        wire(&mut world, a, "force", a, "force_y");
-
-        world.run_system_once(propagate_connections).unwrap();
-
-        assert!(
-            loop_faults(&world).is_empty(),
-            "a declared realtime-safe force loop is accepted, not reported as a generic fault"
-        );
-    }
-
-    /// M6: an entity wired to ITSELF (`netForce`→`force_y` on one entity — the
-    /// balloon pattern) is the intended single-participant co-sim shape, not an
-    /// algebraic loop. Reporting it would false-positive every balloon scene.
-    #[test]
-    fn a_single_entity_self_wire_is_not_a_loop_fault() {
+    fn a_self_coupled_causal_plant_has_no_loop_diagnostic() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
@@ -1189,12 +930,15 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            loop_faults(&world).is_empty(),
-            "self-wires on one entity are the intended pattern, not a loop"
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "self-wires on one entity are causal feedback, not missing ports"
         );
     }
 
-    /// M6: an acyclic chain (with a fan-in for good measure) reports nothing.
+    /// An acyclic chain (with a fan-in for good measure) also reports nothing.
     #[test]
     fn an_acyclic_chain_is_not_a_loop_fault() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1213,8 +957,11 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            loop_faults(&world).is_empty(),
-            "no cycle across participants ⇒ no loop fault"
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "valid causal wires do not create synthetic loop faults"
         );
     }
 }
