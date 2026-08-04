@@ -31,6 +31,8 @@ pub mod programs;
 /// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
 /// applies; unit-tested without the avian/render build.
 pub mod reconcile;
+/// Typed requests and lifecycle edges for scene ownership and transitions.
+pub mod scene;
 /// Always-on networking **authority** substrate (no wire dependency):
 /// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
@@ -85,6 +87,10 @@ pub use markers::{
     NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
+pub use scene::{
+    SceneTransition, SceneTransitionCompleted, SceneTransitionFailed, SceneTransitionIntent,
+    SceneTransitionStarted,
+};
 pub use session::{
     authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle,
     BufferedClientInputs, InputFrame, LocalDriveInput, LocalSession, NetConnectRequest,

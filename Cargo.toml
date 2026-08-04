@@ -466,40 +466,12 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 3
 
-# ── avian3d dev profile: one upstream mask, and one guard rail ──────
-# TWO island-bookkeeping panics were seen tearing a live physics scene down
-# (`LoadScene`/`ClearScene`). They have DIFFERENT root causes and get DIFFERENT
-# treatment — only one is upstream's to fix.
-#
-# (1) `island.contact_count == 0` DEBUG-assert (islands/mod.rs:1372), fired from
-#     `BodyIslandNode::on_remove` when an island's last BODY leaves while a contact
-#     is still registered. Genuinely upstream and NOT fixable from our side: avian
-#     drains a collider's contacts ONLY on adding `ColliderDisabled`/`Disabled` or
-#     removing `ColliderMarker` (narrow_phase:155-156) — dropping the `Collider`
-#     component does neither (`ColliderMarker` is REQUIRED and survives it), and
-#     `remove_collider_on` early-returns on a non-TOUCHING edge without unlinking it.
-#     Every sanctioned teardown order was tried (remove RigidBody/Collider either way
-#     round; disable both; gather colliders via `RigidBodyColliders`; even step
-#     `PhysicsSchedule` mid-teardown) and each still left islands holding contacts.
-#     The assert is over-strict, not load-bearing: the island is dropped on the very
-#     next line (`remove_island`), so the stale count has no consumer. `debug-assertions
-#     = false` masks it in dev (release compiles it out already). An honest third-party
-#     mask, isolated to this crate's dev profile — revisit on an avian bump.
-#     See memory: project_avian_island_contact_count_reload_crash
-#
-# (2) `island.joint_count -= 1` underflow (islands/mod.rs:787) was OUR bug, now FIXED
-#     in code — not masked. It fired because the synthesized wheel joint was spawned
-#     detached (not in the scene subtree) and `reap_orphaned_wheel_joints` despawned
-#     it a frame AFTER its bodies, double-decrementing the island. Both are gone: the
-#     joint is now `ChildOf(chassis)` (dies once, with its bodies, in the recursive
-#     scene-clear) and the reaper is deleted. So `overflow-checks` stays ON — it now
-#     GUARDS that fix: any future detached-physics regression trips here loudly in dev
-#     instead of silently wrapping `joint_count` to ~4e9 and corrupting the solver
-#     (which is exactly what `overflow-checks = false` used to do — a mask that made a
-#     crash WORSE). Do not disable it to hide a bug you can fix at the source.
+# Keep Avian's overflow checks enabled in development. Physics teardown is
+# explicitly retired through Avian's graph-removal components above, so the
+# development profile must retain the engine's assertions as a real invariant
+# check rather than suppressing a crash.
 [profile.dev.package.avian3d]
 opt-level = 3
-debug-assertions = false
 overflow-checks = true
 
 # ── Release profile (native, speed-first) ────────────────────────────

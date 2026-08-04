@@ -10,8 +10,8 @@
       - BEHAVIOUR — `LunCoProgramAPI` + `info:sourceAsset`, this engine's
         existing way of binding a rhai program to a prim.
       - WORLD — a `payload` arc to the scene the lesson teaches in. Declared,
-        never called: a lesson used to open its world with `load_scene(...)` as
-        the first statement of `on_start`, so a lesson that forgot was
+        never called: a lesson declares its world as a payload instead of
+        opening it from `on_start`, so a lesson that forgot was
         indistinguishable from one that has no world on purpose. The launcher
         reads this arc and mounts it through `LoadScene` BEFORE running the
         script; the curriculum stage itself is opened with payloads unloaded, so

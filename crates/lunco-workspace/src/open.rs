@@ -27,9 +27,8 @@ use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 /// Telemetry event name published when an Open (Twin / Folder / Add) that the
 /// user actually asked for produces no workspace root.
 ///
-/// Published at [`Severity::Error`], the same shape and lane
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
-/// use, so it reaches every consumer of the shared telemetry bus: the black-box
+/// Published at [`Severity::Error`] on the shared telemetry bus, so it reaches
+/// every consumer: the black-box
 /// log, the API telemetry stream (any subscriber, incl. an automated client
 /// watching an Open it requested), and any host observer that cares. The scan
 /// runs off-thread, so by the time it fails the click is long gone — without

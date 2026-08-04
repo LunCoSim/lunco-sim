@@ -1831,33 +1831,29 @@ pub fn sync_usd_visuals(
     }
 }
 
-/// Telemetry event name published when a stage asset a prim was waiting on
-/// failed to load. The load is over and it did not happen; anything that
-/// treated "still awaiting" as "still might work" learns otherwise here.
-///
-/// Consumers deliberately reach for this rather than for the asset event:
-/// `AssetLoadFailedEvent` is per-asset and says nothing about whether the
-/// failure mattered, while this fires only when a prim was actually parked on
-/// the asset — i.e. only when a mount really was lost.
-pub const SCENE_LOAD_FAILED: &str = "SCENE_LOAD_FAILED";
+/// Terminal asset failure recorded by the USD asset boundary until the scene
+/// transaction consumes it. Keeping the stage identity here prevents the
+/// generic readiness/scene reconciler from mistaking a failed load for a
+/// successful drain.
+#[derive(Resource, Debug, Clone)]
+pub struct FailedSceneLoad {
+    pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    pub error: String,
+}
 
 /// Makes a failed stage load TERMINAL for the prims parked on it.
 ///
 /// [`sync_usd_visuals`] drains `UsdAwaitingStage` on `LoadedWithDependencies`,
 /// which is the only outcome it models. A stage that fails to load never emits
-/// that event, so without this its prims wait forever — and because
-/// "any prim still awaiting this stage" is what
-/// `lunco_usd_sim::cosim::clear_scene_load_in_flight` reads to decide the scene
-/// is still spawning, one missing file pinned `SceneLoadInFlight` for the rest
-/// of the process. That guard suppresses every later `LoadScene`, and the
-/// readiness ticket derived from it held the world until its 60 s deadline
-/// fired. One unreadable asset made the app unable to load ANY scene again.
+/// that event, so this boundary records the failure and closes the parked
+/// entities explicitly. The scene transaction can then publish its terminal
+/// failure and a later `LoadScene` can begin a new transaction.
 ///
 /// A parked prim whose stage will never arrive cannot become anything, so it is
 /// despawned rather than left as an inert husk that later passes for a mounted
-/// scene. The failure is loud (`error!`) and published as [`SCENE_LOAD_FAILED`]
-/// so callers that requested the mount can react — see `lunco_tutorial`, where
-/// a lesson whose scene never loaded must not go on to report success.
+/// scene. The failure is loud (`error!`) and consumed by the scene transaction
+/// owner, which publishes the typed `SceneTransitionFailed` edge after the
+/// parked entities have been reclaimed.
 fn fail_awaiting_stage_prims(
     mut ev: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>,
     q: Query<(Entity, &UsdPrimPath), With<UsdAwaitingStage>>,
@@ -1881,14 +1877,14 @@ fn fail_awaiting_stage_prims(
             parked.len()
         );
         for entity in parked {
-            commands.entity(entity).despawn();
+            // A replacement LoadScene/ClearScene may have reclaimed the
+            // parked prim in the same command flush. Failure cleanup is
+            // idempotent at the entity boundary.
+            commands.entity(entity).try_despawn();
         }
-        commands.trigger(lunco_core::TelemetryEvent {
-            name: SCENE_LOAD_FAILED.into(),
-            source: 0,
-            severity: lunco_core::Severity::Error,
-            data: lunco_core::TelemetryValue::String(failure.path.to_string()),
-            timestamp: 0.0,
+        commands.insert_resource(FailedSceneLoad {
+            stage_id: failure.id,
+            error: failure.error.to_string(),
         });
     }
 }

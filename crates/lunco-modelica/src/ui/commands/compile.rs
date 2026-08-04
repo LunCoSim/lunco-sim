@@ -39,9 +39,8 @@ use super::{entity_for_doc, resolve_doc_or_active};
 /// the channel is closed or the worker was never started.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
-/// error-telemetry observer surfaces it, the same arrangement
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
-/// use. This is a failure of the user's own click: pressing Compile and getting
+/// error-telemetry observer surfaces it. This is a failure of the user's own
+/// click: pressing Compile and getting
 /// nothing back is precisely the case that must not live only in a log.
 pub const COMPILE_DISPATCH_FAILED: &str = "COMPILE_DISPATCH_FAILED";
 
@@ -1238,9 +1237,8 @@ pub fn on_compile_model(
 ///    `spawn_modelica_requests` doesn't keep waiting on a reply that is not coming;
 /// 3. the console + Diagnostics log get the reason;
 /// 4. an Error-severity [`lunco_core::TelemetryEvent`] is published, which is
-///    what the workbench status bar's error observer fans to the status bar —
-///    the same mechanism `lunco_usd_bevy::SCENE_LOAD_FAILED` and
-///    `lunco_tutorial::TUTORIAL_FAILED` use. A `console.error` alone is a panel
+///    what the workbench status bar's error observer fans to the status bar.
+///    A `console.error` alone is a panel
 ///    the user may not have open.
 #[allow(clippy::too_many_arguments)]
 fn fail_compile_dispatch(

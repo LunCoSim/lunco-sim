@@ -11,8 +11,8 @@ description: >
   (For the agent mid-code: a `mission(me)` / `objective(...)`, `coach_step`,
   `hint` / `spotlight`, `requires_event:"cmd:*"`, `register_tutorial`,
   `StartTutorial`, `TutorialProgress`, or a file under `assets/tutorials/`.)
-  Project-specific and non-obvious: a tutorial IS a single `.rhai` scenario (no
-  scene-vs-script split), objectives advance on REAL user actions (a `cmd:*` bus
+  Project-specific and non-obvious: a lesson is declared by one curriculum USD
+  prim with a script and optional world payload, objectives advance on REAL user actions (a `cmd:*` bus
   event or a `done` predicate — never a timer), the HUD auto-publishes from
   `mission(me)`, and adding one is two steps (drop a `.rhai`, register a row) —
   no Rust per lesson. Builds on author-scenario (a tutorial is a scenario with a
@@ -22,11 +22,12 @@ description: >
 
 # Authoring tutorials
 
-**A tutorial is one thing: a `.rhai` scenario.** There is no scene-vs-script
-split. The shared launcher (`lunco-tutorial`) runs it on a host entity via
-`RunScenario`/`StartTutorial`; the scenario sets up its own environment in
-`on_start`. The coach card / spotlight / objectives come from the shared HUD +
-the rhai prelude — **no Rust per lesson.**
+**A lesson is one curriculum declaration.** Its USD prim supplies the `.rhai`
+script and, when needed, a world `payload`. The shared launcher
+(`lunco-tutorial`) mounts that payload through the scene lifecycle, waits for
+completion, and then runs the script on a host entity via
+`RunScenario`/`StartTutorial`. The coach card / spotlight / objectives come from
+the shared HUD + the rhai prelude — **no Rust per lesson.**
 
 This is [`author-scenario`](../author-scenario/SKILL.md) plus a teaching HUD —
 read that first for hooks, `this`-state, and verbs. Reference lesson:
@@ -67,8 +68,8 @@ The lesson's IDENTITY is its prim path, so `next` is a real relationship rather
 than an id string that nothing checks.
 
 **DECLARE THE WORLD, NEVER OPEN IT.** The launcher mounts the `payload` through
-`LoadScene` before running the script. A lesson used to call `load_scene(...)` as
-the first statement of `on_start`, which made a lesson that HAS no world (a UI
+`LoadScene` before running the script. The launcher owns this boundary, which
+means a lesson that HAS no world (a UI
 tour) indistinguishable from one that forgot — and lessons that share a world
 would reload it on every switch. Omitting the payload is a statement: this lesson
 leaves the viewport alone.
@@ -107,7 +108,6 @@ it. F1 (`EditorIntent::ShowTutorial`) and the 🎓 Tutorials panel also launch i
 
 ```rhai
 fn on_start(me) {
-    load_scene("tutorials/luncosim/first_drive.usda");   // or cmd("OpenClass", #{qualified}) for a model lesson
     hint("Welcome! Let's drive a rover on the Moon.");
     notify_kind("Tutorial: First Drive", "info");
 }
@@ -189,8 +189,9 @@ first. lunica ids include `modelica_experiments`, `modelica_inspector`,
   gate makes the lesson play itself in front of the student.
 - **Native edits are live** — `tutorial_source` reads from disk, so edit the
   `.rhai` and re-`StartTutorial` to see changes; no rebuild.
-- **3D lesson needs a world** → ship an env-only `.usda` next to it and
-  `load_scene` it in `on_start`; a model lesson just `cmd("OpenClass", …)`.
+- **3D lesson needs a world** → ship an env-only `.usda` next to it and declare
+  it as the lesson prim's `payload`; a model lesson can use its authored command
+  surface from the script.
 
 ## Autopilot and test closure
 

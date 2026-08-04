@@ -3831,9 +3831,9 @@ fn setup_sandbox(world: &mut World) {
     // ── Boot-entry policy (GUI only) ─────────────────────────────────────────
     // Before loading a startup scene, consult the shared boot policy
     // (`boot.rhai`, via `lunco_tutorial::consult_boot`). On a first interactive
-    // run it TAKES OVER — onboards with a tutorial that `load_scene`s its own
-    // environment — so we skip the default load and there's no load-then-replace
-    // race. Explicit `--scene` / `--api` → the policy stands down. With no
+    // run it TAKES OVER — onboards with a tutorial whose declared world is
+    // mounted by the shared scene lifecycle — so we skip the default load and
+    // there is no load-then-replace race. Explicit `--scene` / `--api` → the policy stands down. With no
     // scene, headless/API runs remain an empty world shell; GUI boot policy may
     // still choose an onboarding scene for an interactive first run.
     // The world shell above is set up regardless, so a taking-over tutorial scene

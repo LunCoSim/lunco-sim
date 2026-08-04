@@ -852,7 +852,6 @@ fn emit_modelica_with_classes(
         "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\n"
     ));
     source.push_str(&format!("end {root_name};\n\n"));
-
     for unit in &units {
         source.push_str(&format!("model {}\n", unit.name));
         for input in &unit.inputs {
@@ -2080,9 +2079,9 @@ pub enum MemberClass {
 /// How long a member source may stay unresolved before the projector reports a
 /// source-resolution error.
 ///
-/// Same reasoning as `cosim::SCENE_LOAD_MAX_SECS`: on the web a fetch can 404
-/// without ever reporting a failure, and a projection that waits forever is
-/// strictly worse than one that reports the source failure explicitly.
+/// A source-resolution transaction has its own explicit terminal state. It is
+/// intentionally independent of the scene-load transaction: a missing member
+/// source must not make the whole scene browser unavailable.
 const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 
 /// The class each member source declares — the ONE authority on what a generated
@@ -2362,6 +2361,7 @@ mod tests {
             issues.is_empty(),
             "generated wrapper must be parseable before compilation: {issues:?}\n{source}"
         );
+        assert_eq!(source.matches("end Propulsion;").count(), 1);
     }
 
     #[test]

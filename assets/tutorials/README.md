@@ -1,9 +1,10 @@
 # Tutorials — one source, one launcher
 
-A tutorial is **one thing: a `.rhai` scenario**. There is no scene-vs-script
-split. The shared launcher (`crates/lunco-tutorial`) runs it on a host entity via
-`RunScenario`; the scenario sets up whatever it needs in `on_start`. The coach
-card / spotlight / objectives come from the shared HUD + the rhai prelude.
+A lesson is declared by one curriculum prim: its `.rhai` script is the lesson
+logic and its optional USD `payload` is the lesson world. The shared launcher
+mounts that payload through the typed scene lifecycle, waits for completion,
+then starts the script on a host entity. The coach card / spotlight / objectives
+come from the shared HUD + the rhai prelude.
 
 ## Layout
 
@@ -37,7 +38,7 @@ own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
    - `mission(me)` with `objective(...)` — auto-published objectives that advance
      on real actions (`requires_event`, `done` predicates); emits `MISSION_COMPLETE`.
    - Setup: `cmd("OpenClass", #{ qualified })`, `set_subsystem(name, on)`.
-   - **NOT `load_scene(...)`** — the world is declared, see step 2.
+   - **No scene-opening call** — the world is declared, see step 2.
 
 2. Declare it in `tutorials/<track>/curriculum.usda` — **data, not Rust**:
 

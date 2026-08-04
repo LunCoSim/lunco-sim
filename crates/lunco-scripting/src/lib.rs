@@ -78,6 +78,17 @@ pub struct ScriptRegistry {
     journal: Option<lunco_doc_bevy::JournalResource>,
 }
 
+/// Marks a script document and runtime whose ownership belongs to a loaded USD
+/// scene. This covers authored Rhai scenarios and USD Python cosim documents.
+///
+/// Interactive/API scenarios deliberately have an independent document
+/// lifetime. USD-embedded scenarios do not: keeping their document or compiled
+/// state after the prim is gone lets a later scene observe the previous scene's
+/// state. The scene owner uses this marker at its teardown boundary to stop the
+/// program when applicable and close the scene-owned document.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct SceneOwnedScript;
+
 impl ScriptRegistry {
     /// Insert (or replace) a `ScriptDocument` host under `id`, attaching a journal
     /// recorder when a journal is wired. **The one insert funnel** — every attach
@@ -159,9 +170,12 @@ pub fn wire_scripting_journal_handle(
     registry.set_journal(journal.clone());
 }
 
-/// Drop a script doc's host on explicit close. Script documents follow the
-/// document-lifecycle doctrine: despawning a `ScriptedModel` entity (scene
-/// clear/reload) leaves the document open; only `CloseDocument` ends it.
+/// Drop an independent script document's host on explicit close. Interactive
+/// and API script documents follow the document-lifecycle doctrine: despawning
+/// their `ScriptedModel` entity leaves the document open until `CloseDocument`.
+/// Scene-authored scenario documents are the explicit exception: they carry
+/// [`SceneOwnedScript`] and the scene teardown owner closes them before the
+/// USD entities are reclaimed.
 pub fn on_close_script_document(
     trigger: On<lunco_doc_bevy::CloseDocument>,
     mut registry: ResMut<ScriptRegistry>,

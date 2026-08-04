@@ -1,15 +1,17 @@
 //! The unified tutorial launcher — for **every** workbench app (lunica, sandbox, …).
 //!
-//! ## One source: a tutorial is a `.rhai` scenario
+//! ## A lesson is an authored scenario plus an optional declared world
 //!
-//! There is no scene-vs-script duality. A tutorial is a single rhai scenario
-//! (`assets/tutorials/<script>`), and the launcher runs it by attaching it to a
-//! persistent **host entity** via [`RunScenario`](lunco_scripting::commands::RunScenario).
-//! Whatever environment the lesson needs, it sets up *itself* in `on_start`:
-//! `load_scene("scenes/…")` for a 3D lesson, `cmd("OpenClass", …)` for a modeling
-//! lesson, `set_subsystem(…)` for progressive fidelity, nothing for a pure UI
-//! tour. The coach card, spotlight, and objectives all come from the shared HUD
-//! (`lunco-workbench::tutorial_overlay`) + the rhai prelude.
+//! A tutorial is a single Rhai scenario (`assets/tutorials/<script>`) and an
+//! optional composed world declared by its curriculum metadata. The launcher
+//! owns a short-lived host entity: it mounts the declared world first, waits for
+//! the scene transaction's completion edge, and only then attaches the scenario
+//! through [`RunScenario`](lunco_scripting::commands::RunScenario). UI-only
+//! lessons omit the world and start immediately. Stopping or replacing a
+//! lesson winds down that host and, when the lesson owns a world, clears it
+//! through the normal scene lifecycle command. A lesson may still use
+//! `cmd("OpenClass", …)` or `set_subsystem(…)` for its authored teaching steps,
+//! but it does not own a second ad-hoc scene loader.
 //!
 //! So this crate is the thin **shell** shared by all apps:
 //! - [`TutorialRegistry`] — the catalog, composed from curriculum LAYERS
@@ -17,8 +19,9 @@
 //!   its own root, and apps may still add lessons via
 //!   [`TutorialAppExt::register_tutorial`].
 //! - a top-level **🎓 Tutorials** menu + a dockable [`TutorialsPanel`].
-//! - [`StartTutorial`] — load `<script>` and run it on the host (the single
-//!   launch path; menu, F1, HTTP API, MCP, and other scripts all funnel here).
+//! - [`StartTutorial`] — mount the declared world, then run `<script>` on the
+//!   host (the single launch path; menu, F1, HTTP API, MCP, and other scripts
+//!   all funnel here).
 //! - first-run onboarding ([`TutorialProgress::onboarded`]), completion ticks
 //!   (on `MISSION_COMPLETE`), a data-driven chain ([`TutorialMeta::next`]), F1
 //!   (via [`EditorIntent::ShowTutorial`](lunco_doc_bevy::EditorIntent)), and the
@@ -104,8 +107,7 @@ pub struct TrackMeta {
 /// human-readable string naming the tutorial/lesson and the cause.
 ///
 /// Published at [`Severity::Error`] so the workbench status bar's error
-/// telemetry observer surfaces it — the same arrangement
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` uses. A student who clicks a lesson and
+/// telemetry observer surfaces it. A student who clicks a lesson and
 /// sees nothing happen must be told WHY in the UI, not only in a terminal they
 /// are not watching.
 pub const TUTORIAL_FAILED: &str = "TUTORIAL_FAILED";
@@ -444,10 +446,30 @@ impl lunco_settings::SettingsSection for TutorialSeen {
     const KEY: &'static str = "tour_seen";
 }
 
-/// The persistent entity every tutorial scenario attaches to. Spawned lazily on
-/// the first launch; re-launching hot-reloads the scenario on it.
+/// The current tutorial host. It is recreated for each lesson and destroyed
+/// during wind-down, so a lesson's interpreter state cannot cross a scene or
+/// tutorial boundary.
 #[derive(Resource, Default)]
 struct TutorialHost(Option<Entity>);
+
+/// A lesson whose declared world is still being mounted. The script is held
+/// until the scene transaction publishes its completion edge.
+#[derive(Resource, Default)]
+struct PendingTutorialStart(Option<PendingTutorial>);
+
+struct PendingTutorial {
+    id: String,
+    source: String,
+    world: String,
+}
+
+/// The active lesson's ownership claim. A declared world is cleared when the
+/// lesson is explicitly stopped; a UI-only lesson leaves the current world
+/// alone.
+#[derive(Resource, Default)]
+struct TutorialSession {
+    world: Option<String>,
+}
 
 /// A completed tutorial is waiting on the user's confirmation before starting its
 /// declared successor. `Some(id)` while the [`draw_advance_prompt`] popup shows;
@@ -457,17 +479,20 @@ pub struct PendingAdvance(pub Option<String>);
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-/// Start a tutorial by id: load its `.rhai` and run it on the host entity, and
-/// record it as current. The single launch path — menu, F1, HTTP API, MCP, and
-/// other scripts (`cmd("StartTutorial", #{ id })`) all route here.
+/// Start a tutorial by id: resolve its authored scenario, mount its declared
+/// world if any, and run it on the host after the scene transaction completes.
+/// The single launch path — menu, F1, HTTP API, MCP, and other scripts
+/// (`cmd("StartTutorial", #{ id })`) all route here.
 #[Command(default)]
 pub struct StartTutorial {
     /// The [`TutorialMeta::id`] to start.
     pub id: String,
 }
 
-/// Stop the current tutorial: clear the HUD (hint, objectives, spotlight, coach
-/// card) and forget the current id. Leaves any loaded scene. `cmd("SkipTutorial")`.
+/// Stop the current tutorial: clear the HUD, synchronously stop its host, and
+/// clear a world declared by that lesson through the normal scene lifecycle.
+/// A UI-only lesson leaves an unrelated loaded world alone.
+/// `cmd("SkipTutorial")`.
 #[Command(default)]
 pub struct SkipTutorial {}
 
@@ -523,117 +548,139 @@ fn ensure_host(world: &mut World) -> Entity {
     e
 }
 
+/// Stop and destroy the current tutorial host synchronously.
+fn stop_tutorial_host(world: &mut World) {
+    let Some(host) = world.resource_mut::<TutorialHost>().0.take() else {
+        return;
+    };
+    lunco_scripting::scenario::ScenarioDriver::<
+        lunco_scripting::world_bridge::RhaiScenarioRuntime,
+    >::stop_entity(world, host);
+    if let Ok(entity) = world.get_entity_mut(host) {
+        entity.despawn();
+    }
+}
+
+fn start_tutorial_scenario(
+    world: &mut World,
+    id: String,
+    source: String,
+    world_path: Option<String>,
+) {
+    let host = ensure_host(world);
+    info!("[tutorial] starting '{}'", id);
+    world.trigger(lunco_scripting::commands::RunScenario {
+        target: host,
+        source,
+        params: String::new(),
+    });
+    world.resource_mut::<TutorialProgress>().current = Some(id);
+    world.resource_mut::<TutorialSession>().world = world_path;
+    if let Some(mut seen) = world.get_resource_mut::<TutorialSeen>() {
+        seen.onboarded = true;
+    }
+}
+
 #[on_command(StartTutorial)]
 fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
     let id = trigger.event().id.clone();
-    // `ensure_host` + `RunScenario` need `&mut World`; an observer only has
-    // `Commands`, so defer to an exclusive closure.
+    // Metadata and source resolution happen before wind-down. An invalid
+    // request must not destroy a currently running lesson.
     commands.queue(move |world: &mut World| {
-        // Starting a lesson OWNS the presentation reset: the outgoing lesson's
-        // hint, objectives, spotlight, coach card and "continue to next?" prompt
-        // all go, before this one publishes anything.
-        //
-        // It must happen HERE and not be left to the incoming lesson: a lesson
-        // only overwrites the parts it happens to set, so one that shows a coach
-        // card but no objectives would inherit the previous lesson's checklist,
-        // and a UI tour that mounts no world would inherit the whole overlay.
-        // Starting and stopping a lesson reset the same things.
-        clear_tutorial_hud(world);
-        world.resource_mut::<PendingAdvance>().0 = None;
         let Some(meta) = world.resource::<TutorialRegistry>().get(&id) else {
-            warn!("[tutorial] StartTutorial: unknown id '{id}'");
+            warn!("[tutorial] StartTutorial: unknown id '{}'", id);
             world.trigger(tutorial_failed(format!(
-                "StartTutorial: unknown id '{id}' — not in the composed curriculum"
+                "StartTutorial: unknown id '{}' — not in the composed curriculum",
+                id
             )));
             return;
         };
-        // A lesson's script resolves against the root that CONTRIBUTED it —
-        // provenance, not a search, so a twin's lesson and a bundled one can
-        // share a relative path without shadowing each other.
         let Some(root) = world
             .resource::<CurriculumRoots>()
             .0
             .iter()
-            .find(|r| r.source == meta.source)
+            .find(|root| root.source == meta.source)
             .cloned()
         else {
-            warn!("[tutorial] '{id}' came from a root that is no longer mounted");
+            warn!(
+                "[tutorial] '{}' came from a root that is no longer mounted",
+                id
+            );
             world.trigger(tutorial_failed(format!(
-                "'{id}' came from a curriculum root that is no longer mounted"
+                "'{}' came from a curriculum root that is no longer mounted",
+                id
             )));
             return;
         };
         let Some(source) = root.read(&meta.script) else {
-            warn!("[tutorial] no source for '{id}' ({})", meta.script);
+            warn!("[tutorial] no source for '{}' ({})", id, meta.script);
             world.trigger(tutorial_failed(format!(
-                "no lesson source for '{id}' ({})",
-                meta.script
+                "no lesson source for '{}' ({})",
+                id, meta.script
             )));
             return;
         };
-        // MOUNT THE DECLARED WORLD, if the lesson declares one.
-        //
-        // Declared rather than called, so `None` is a STATEMENT — this lesson
-        // has no world (a UI tour) — and distinguishable from a lesson that
-        // forgot one. The launcher acts on it: mount, or deliberately leave the
-        // viewport alone.
-        //
-        // Sent as a named command rather than a typed one because this crate
-        // sits above USD and does not depend on it — the same arrangement
-        // `SCENE_LOAD_FAILED` already uses in the other direction.
-        if let Some(scene) = &meta.world {
-            info!("[tutorial] '{}' declares world {scene}", meta.title);
-            world.trigger(lunco_api::ApiCommandEvent {
-                command: "LoadScene".to_string(),
-                params: serde_json::json!({ "path": scene }),
-                id: 0,
+
+        // The outgoing lesson owns its declared world until this boundary. A
+        // replacement lesson that has no world must explicitly release that
+        // ownership; otherwise a UI-only lesson would leave the previous
+        // lesson's simulation alive under a new tutorial host.
+        let outgoing_world = world
+            .resource::<TutorialSession>()
+            .world
+            .clone()
+            .or_else(|| {
+                world
+                    .resource::<PendingTutorialStart>()
+                    .0
+                    .as_ref()
+                    .map(|pending| pending.world.clone())
             });
-        }
-        let host = ensure_host(world);
-        info!("[tutorial] starting '{}' → {}", meta.title, meta.script);
-        world.trigger(lunco_scripting::commands::RunScenario {
-            target: host,
-            source,
-            params: String::new(),
-        });
-        world.resource_mut::<TutorialProgress>().current = Some(id);
-        if let Some(mut s) = world.get_resource_mut::<TutorialSeen>() {
-            s.onboarded = true;
+
+        clear_tutorial_hud(world);
+        world.resource_mut::<PendingAdvance>().0 = None;
+        stop_tutorial_host(world);
+        world.resource_mut::<TutorialProgress>().current = None;
+        world.resource_mut::<TutorialSession>().world = None;
+        world.resource_mut::<PendingTutorialStart>().0 = None;
+
+        if let Some(scene) = meta.world.clone() {
+            info!("[tutorial] '{}' declares world {}", meta.title, scene);
+            world.resource_mut::<PendingTutorialStart>().0 = Some(PendingTutorial {
+                id: id.clone(),
+                source,
+                world: scene.clone(),
+            });
+            world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
+        } else {
+            if outgoing_world.is_some() {
+                world.trigger(lunco_core::SceneTransitionIntent::clear());
+            }
+            start_tutorial_scenario(world, id, source, None);
         }
     });
-}
-
-#[on_command(SkipTutorial)]
-#[cfg(feature = "ui")]
-fn on_skip_tutorial(
-    _t: On<SkipTutorial>,
-    // OPTIONAL, because `ui` compiled in does not mean the workbench HUD is
-    // installed: `TutorialHud` belongs to `lunco_workbench`'s overlay plugin, and
-    // a host can run lessons without it (a `ui`-featured build driving the sim
-    // headlessly, and every test of this crate's own execution core). Required,
-    // this observer fails parameter validation and stopping a lesson PANICS —
-    // taking down an app whose only sin was not drawing a HUD.
-    hud: Option<ResMut<TutorialHud>>,
-    mut progress: ResMut<TutorialProgress>,
-    mut pending: ResMut<PendingAdvance>,
-) {
-    // The same reset starting a lesson performs.
-    reset_hud(hud);
-    progress.current = None;
-    pending.0 = None;
 }
 
 /// Headless runs have no presentation state to clear, but stopping a lesson
 /// must retain the same execution semantics as the UI command.
 #[on_command(SkipTutorial)]
-#[cfg(not(feature = "ui"))]
-fn on_skip_tutorial(
-    _t: On<SkipTutorial>,
-    mut progress: ResMut<TutorialProgress>,
-    mut pending: ResMut<PendingAdvance>,
-) {
-    progress.current = None;
-    pending.0 = None;
+fn on_skip_tutorial(_t: On<SkipTutorial>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        let clear_world = world.resource::<TutorialSession>().world.is_some()
+            || world.resource::<PendingTutorialStart>().0.is_some();
+        clear_tutorial_hud(world);
+        stop_tutorial_host(world);
+        world.resource_mut::<TutorialProgress>().current = None;
+        world.resource_mut::<PendingAdvance>().0 = None;
+        world.resource_mut::<PendingTutorialStart>().0 = None;
+        world.resource_mut::<TutorialSession>().world = None;
+        if clear_world {
+            // A tutorial that declared a world owns that world. Stopping it
+            // therefore winds the viewport down through the normal scene
+            // command, while a UI-only tour deliberately leaves the world.
+            world.trigger(lunco_core::SceneTransitionIntent::clear());
+        }
+    });
 }
 
 #[on_command(SetSubsystemEnabled)]
@@ -684,6 +731,13 @@ fn on_mission_complete(
     let Some(id) = progress.current.take() else {
         return;
     };
+    // Completion ends execution even when the authored world remains visible
+    // for review. The host is not allowed to keep ticking against a completed
+    // lesson or leak its interpreter state into the next one.
+    commands.queue(|world: &mut World| {
+        stop_tutorial_host(world);
+        world.resource_mut::<TutorialSession>().world = None;
+    });
     if !progress.is_completed(&id) {
         info!("[tutorial] completed '{id}'");
         progress.completed.push(id.clone());
@@ -703,11 +757,65 @@ fn on_mission_complete(
     }
 }
 
+/// Wind down an active lesson before any scene transition is applied. The
+/// lifecycle owner emits this edge for Load, Clear, and Restart, so every
+/// scene entry path has identical tutorial cleanup semantics.
+fn on_scene_transition_started(
+    trigger: On<lunco_core::SceneTransitionStarted>,
+    mut progress: ResMut<TutorialProgress>,
+    mut pending: ResMut<PendingTutorialStart>,
+    mut session: ResMut<TutorialSession>,
+    mut commands: Commands,
+) {
+    let belongs_to_pending = match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, .. } => pending
+            .0
+            .as_ref()
+            .is_some_and(|request| request.world.as_str() == path.as_str()),
+        lunco_core::SceneTransition::Clear | lunco_core::SceneTransition::Restart { .. } => false,
+    };
+    if !belongs_to_pending {
+        pending.0 = None;
+    }
+    if progress.current.is_none() && session.world.is_none() {
+        return;
+    }
+    progress.current = None;
+    session.world = None;
+    commands.queue(|world: &mut World| {
+        clear_tutorial_hud(world);
+        stop_tutorial_host(world);
+    });
+}
+
+/// Attach a declared tutorial scenario only after its scene transaction has
+/// completed. This closes the old race where the script started while the
+/// viewport was still empty or still belonged to the outgoing scene.
+fn on_scene_transition_completed(
+    trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut commands: Commands,
+) {
+    let lunco_core::SceneTransition::Load { path, .. } = &trigger.event().transition else {
+        return;
+    };
+    let path = path.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(request) = world.resource_mut::<PendingTutorialStart>().0.take() else {
+            return;
+        };
+        if request.world != path {
+            world.resource_mut::<PendingTutorialStart>().0 = Some(request);
+            return;
+        }
+        start_tutorial_scenario(world, request.id, request.source, Some(request.world));
+    });
+}
+
 /// Abandon the running lesson when a scene load fails, so it cannot go on to
 /// report success it did not earn.
 ///
-/// A lesson's first act is almost always `load_scene(...)`, and nothing after
-/// that checks whether the scene arrived. A coach-mark tour in particular
+/// A lesson may have a declared world, and nothing after its mount should run
+/// unless that world arrived. A coach-mark tour in particular
 /// advances on the user pressing Next, so against an empty viewport it walks
 /// its whole step list, emits `MISSION_COMPLETE`, records a completion and
 /// starts its successor — the observed failure, where a tutorial wrote
@@ -723,34 +831,60 @@ fn on_mission_complete(
 /// Deliberately not filtered to "the scene THIS lesson asked for": a lesson has
 /// no way to declare that, and any scene failing to mount while a lesson is
 /// running means the lesson is not showing what it claims to. The event is
-/// published by `lunco_usd_bevy::SCENE_LOAD_FAILED`, matched by name here
-/// because the tutorial crate sits above USD and does not depend on it — the
-/// same arrangement `MISSION_COMPLETE` already uses in the other direction.
-fn on_scene_load_failed(
-    trigger: On<TelemetryEvent>,
+/// published by the typed scene owner, so the tutorial does not parse a
+/// telemetry name or JSON payload to decide whether its world failed.
+fn on_scene_transition_failed(
+    trigger: On<lunco_core::SceneTransitionFailed>,
     mut progress: ResMut<TutorialProgress>,
-    mut pending: ResMut<PendingAdvance>,
+    mut pending_advance: ResMut<PendingAdvance>,
+    mut pending_start: ResMut<PendingTutorialStart>,
+    mut session: ResMut<TutorialSession>,
     mut commands: Commands,
 ) {
-    if trigger.event().name != "SCENE_LOAD_FAILED" {
+    let path = match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, .. }
+        | lunco_core::SceneTransition::Restart { path, .. } => Some(path.as_str()),
+        lunco_core::SceneTransition::Clear => None,
+    };
+    let matches_pending = path.is_some_and(|path| {
+        pending_start
+            .0
+            .as_ref()
+            .is_some_and(|request| request.world == path)
+    });
+    if matches_pending {
+        let request = pending_start.0.take().expect("pending request matched");
+        pending_advance.0 = None;
+        error!(
+            "[tutorial] abandoning '{}' — its scene failed to load ({:?})",
+            request.id,
+            trigger.event().error
+        );
+        commands.trigger(tutorial_failed(format!(
+            "abandoning '{}' — its scene failed to load ({:?})",
+            request.id,
+            trigger.event().error
+        )));
         return;
     }
     let Some(id) = progress.current.take() else {
         return;
     };
-    pending.0 = None;
+    pending_advance.0 = None;
+    session.world = None;
+    commands.queue(|world: &mut World| {
+        clear_tutorial_hud(world);
+        stop_tutorial_host(world);
+    });
     error!(
-        "[tutorial] abandoning '{id}' — its scene failed to load ({:?}). The \
-         lesson cannot demonstrate anything against an empty viewport, so it is \
-         NOT recorded as complete and its successor will not start.",
-        trigger.event().data
+        "[tutorial] abandoning '{}' — its scene failed to load ({:?})",
+        id,
+        trigger.event().error
     );
-    // `SCENE_LOAD_FAILED` itself already reaches the status bar; this adds the
-    // tutorial-side CONSEQUENCE — which lesson was abandoned — that the raw
-    // scene event cannot name. No recursion: observers filter by name.
     commands.trigger(tutorial_failed(format!(
-        "abandoning '{id}' — its scene failed to load ({:?})",
-        trigger.event().data
+        "abandoning '{}' — its scene failed to load ({:?})",
+        id,
+        trigger.event().error
     )));
 }
 
@@ -1260,13 +1394,17 @@ impl Plugin for TutorialCorePlugin {
         app.insert_resource(roots);
         app.insert_resource(registry);
         app.init_resource::<TutorialHost>();
+        app.init_resource::<PendingTutorialStart>();
+        app.init_resource::<TutorialSession>();
         app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();
         app.register_type::<TutorialSeen>();
         app.register_settings_section::<TutorialSeen>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
-        app.add_observer(on_scene_load_failed);
+        app.add_observer(on_scene_transition_started);
+        app.add_observer(on_scene_transition_completed);
+        app.add_observer(on_scene_transition_failed);
         app.add_observer(resolve_show_tutorial_intent);
         app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);
@@ -1361,9 +1499,92 @@ mod tests {
             Some("/Test/Lesson")
         );
 
+        // External scene controls use the same lifecycle edge as LoadScene.
+        // The active lesson must wind down before the outgoing world changes.
+        app.world_mut().trigger(lunco_core::SceneTransitionStarted {
+            transition: lunco_core::SceneTransition::clear(),
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Lesson".into(),
+        });
+        app.update();
+
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
+    }
+
+    /// A world-backed lesson is a transaction: it requests the world first,
+    /// starts only on the completion edge, and cancelling while it is pending
+    /// clears the transaction through the normal scene command.
+    #[test]
+    fn world_lesson_waits_for_mount_and_cancels_cleanly() {
+        #[derive(Resource, Default)]
+        struct TransitionsSeen(Vec<lunco_core::SceneTransition>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/WorldLesson".into(),
+            title: "World test".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: Some("lunco://tutorials/sandbox/first_drive.usda".into()),
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+        app.insert_resource(TransitionsSeen::default());
+        app.add_observer(
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
+                seen.0.push(trigger.event().transition.clone());
+            },
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/WorldLesson".into(),
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![lunco_core::SceneTransition::load(
+                "lunco://tutorials/sandbox/first_drive.usda",
+                "",
+            )]
+        );
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/WorldLesson")
+        );
+
+        app.world_mut().trigger(SkipTutorial {});
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert!(app.world().resource::<TransitionsSeen>().0.ends_with(&[
+            lunco_core::SceneTransition::load("lunco://tutorials/sandbox/first_drive.usda", "",),
+            lunco_core::SceneTransition::Clear,
+        ]));
     }
 
     /// Starting an unknown tutorial id must publish [`TUTORIAL_FAILED`] — the

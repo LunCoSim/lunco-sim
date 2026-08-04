@@ -247,9 +247,8 @@ type StatusSlot = Arc<Mutex<Option<DatasetState>>>;
 /// not read, a duplicate key, or a failed download.
 ///
 /// Published at [`Severity::Error`](lunco_core::Severity::Error) so the status
-/// bar's error-telemetry observer surfaces it — the same arrangement
-/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
-/// use. A user whose dataset panel is empty because a manifest is broken must
+/// bar's error-telemetry observer surfaces it. A user whose dataset panel is
+/// empty because a manifest is broken must
 /// be told WHY in the UI, not only in a terminal they are not watching.
 /// The payload is a human-readable cause string.
 pub const DATASET_FAILED: &str = "DATASET_FAILED";
