@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_luncosim_edit::catalog::{BalloonModelMarker, PythonBalloonMarker};
+use lunco_scene_commands::catalog::{BalloonModelMarker, PythonBalloonMarker};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Which model the user has selected to attach next.

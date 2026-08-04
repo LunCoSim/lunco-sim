@@ -183,7 +183,6 @@ fn drop_workspace_stage_on_doc_closed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_doc::DocumentOrigin;
 
     /// Smoke-test: opening a USD document via the registry surfaces
     /// it as a `WorkspaceStage` after the events drain.

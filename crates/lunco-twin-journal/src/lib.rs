@@ -1087,6 +1087,93 @@ impl Journal {
         self.local_author = author;
     }
 
+    /// Move entries made by the current local author onto a newly-issued
+    /// connection author while preserving the journal DAG.
+    ///
+    /// A client can edit while offline, then learn its server-issued author in
+    /// the network handshake. Keeping the old ids would make the client omit
+    /// those entries from its outbound local-author stream; changing only the
+    /// entry ids would also leave parents, branch heads, markers, and change
+    /// sets pointing at ghosts. This one atomic rewrite is the join boundary:
+    /// every reference to an affected [`EntryId`] is remapped before the new
+    /// author becomes active. It is rejected if the destination ids already
+    /// exist, because silently merging two histories would lose edits.
+    pub fn rebind_local_author(&mut self, author: AuthorId) -> Result<usize, String> {
+        let from = self.local_author.clone();
+        if from == author {
+            return Ok(0);
+        }
+
+        let local_ids: Vec<EntryId> = self
+            .entry_order
+            .iter()
+            .filter(|id| id.author == from)
+            .cloned()
+            .collect();
+        if local_ids.is_empty() {
+            self.local_author = author;
+            return Ok(0);
+        }
+
+        let mut remap = HashMap::with_capacity(local_ids.len());
+        for old in &local_ids {
+            let new = EntryId {
+                author: author.clone(),
+                lamport: old.lamport,
+            };
+            if self.entries.contains_key(&new) {
+                return Err(format!(
+                    "cannot rebind journal author {} to {}: destination entry {} already exists",
+                    from.0, author.0, old.lamport
+                ));
+            }
+            remap.insert(old.clone(), new);
+        }
+
+        let rewrite = |id: &EntryId| remap.get(id).cloned().unwrap_or_else(|| id.clone());
+
+        let mut entries = HashMap::with_capacity(self.entries.len());
+        for entry in self.entries.values() {
+            let was_local = remap.contains_key(&entry.id);
+            let mut migrated = entry.clone();
+            migrated.id = rewrite(&entry.id);
+            migrated.parents = entry.parents.iter().map(rewrite).collect();
+            if was_local {
+                migrated.author.user = author.0.clone();
+            }
+            entries.insert(migrated.id.clone(), migrated);
+        }
+        self.entries = entries;
+        self.entry_order = self.entry_order.iter().map(rewrite).collect();
+
+        for stream in self.streams.values_mut() {
+            if let Some(head) = stream.head.as_ref() {
+                stream.head = Some(rewrite(head));
+            }
+            if stream.created_by.user == from.0 {
+                stream.created_by.user = author.0.clone();
+            }
+        }
+        for branch in self.branches.values_mut() {
+            branch.head = rewrite(&branch.head);
+        }
+        for change_set in self.change_sets.values_mut() {
+            change_set.entries = change_set.entries.iter().map(rewrite).collect();
+            if change_set.author.user == from.0 {
+                change_set.author.user = author.0.clone();
+            }
+        }
+        for marker in self.markers.values_mut() {
+            marker.head = rewrite(&marker.head);
+            if marker.author.user == from.0 {
+                marker.author.user = author.0.clone();
+            }
+        }
+
+        self.local_author = author;
+        Ok(local_ids.len())
+    }
+
     // ── Streams ──────────────────────────────────────────────────────────
 
     pub fn stream(&self, id: &StreamId) -> Option<&Stream> {
@@ -1993,6 +2080,50 @@ mod tests {
         let m = j.marker(marker).unwrap();
         assert_eq!(m.name, "v1.0");
         assert_eq!(m.head, id);
+    }
+
+    #[test]
+    fn rebind_local_author_rewrites_the_entire_journal_dag() {
+        let mut j = new_journal();
+        let op = FakeOp {
+            class: "Foo".into(),
+            name: "k".into(),
+            value: 2.0,
+        };
+        let first = j
+            .record_op(AuthorTag::local_user(), DocumentId::new(1), &op, &op, None)
+            .unwrap();
+        let change_set = j.begin_change_set("offline", AuthorTag::local_user());
+        let second = j
+            .record_op(AuthorTag::local_user(), DocumentId::new(1), &op, &op, None)
+            .unwrap();
+        j.end_change_set();
+        let marker = j.create_marker(
+            "offline".into(),
+            "before join".into(),
+            second.clone(),
+            AuthorTag::local_user(),
+        );
+
+        let new_author = AuthorId::new("net-session-42");
+        assert_eq!(j.rebind_local_author(new_author.clone()), Ok(2));
+
+        let migrated_first = EntryId {
+            author: new_author.clone(),
+            lamport: first.lamport,
+        };
+        let migrated_second = EntryId {
+            author: new_author.clone(),
+            lamport: second.lamport,
+        };
+        assert!(j.get(&first).is_none());
+        assert_eq!(j.local_author(), &new_author);
+        assert_eq!(
+            j.get(&migrated_second).unwrap().parents,
+            vec![migrated_first]
+        );
+        assert_eq!(j.change_set_entries(change_set), &[migrated_second.clone()]);
+        assert_eq!(j.marker(marker).unwrap().head, migrated_second);
     }
 
     #[test]

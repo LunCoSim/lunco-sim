@@ -31,7 +31,7 @@ pub fn lunco(m: &Bound<'_, PyModule>) -> PyResult<()> {
     //      world_forward/list_entities/emit/sim_tick/dt/elapsed_seconds, each
     //      delegating to `bridge_core::*(&PyBuilder{py}, …)`. Add them with
     //      `m.add_function(wrap_pyfunction!(...)?)`.
-    //   3. Param/emit shims: Python dict -> serde_json::Value (cmd/query params,
+    //   3. Param/emit adapters: Python dict -> serde_json::Value (cmd/query params,
     //      the inherent JSON seam) and Python scalar -> TelemetryValue (emit).
     //   4. `append_to_inittab!(lunco)` BEFORE `prepare_freethreaded_python()`
     //      (in `get_python_status`) so `import lunco` resolves in scripts.

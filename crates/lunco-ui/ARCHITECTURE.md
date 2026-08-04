@@ -286,7 +286,7 @@ The LOD system runs in `PostUpdate`, after transforms propagate. It hides widget
 
 ## Command Tracking
 
-Result-returning commands return `Result<Ack, String>` (`Ok` for success/ACK, `Err` for failure/NACK), pollable by ID via `QueryCommandResult` for transport-dispatched calls (such as over the HTTP API or networked sessions).
+Result-returning commands return `Result<Ack, String>` (`Ok` for success/ACK, `Err` for failure/NACK). Deferred transport commands answer on the original request; the internal command-outcome store is not an API endpoint.
 
 In-process local UI triggers (`ctx.trigger` or `commands.trigger`) execute synchronously or trigger local state changes directly. The UI/AI can monitor outcome states by observing the respective domain state or listening to lifecycle events.
 

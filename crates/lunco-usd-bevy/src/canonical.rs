@@ -749,12 +749,10 @@ impl CanonicalStages {
     /// Ph0′ timing fix: `sync_canonical_stages` reacts to `AssetEvent`s in
     /// `Update`, but the visual/physics extractors instantiate synchronously in
     /// the `on_usd_prim_added` observer cascade — which runs BEFORE that system
-    /// in the load frame. So the extractors would always miss the live stage and
-    /// fall back to the flatten. Building here, at the first read, makes the
-    /// canonical stage the source of truth regardless of system ordering. Cached,
+    /// in the load frame. Building here, at the first read, makes the canonical
+    /// stage available regardless of system ordering. Cached,
     /// so the whole prim cascade shares one composed stage. `None` only if the
-    /// asset carries no `recipe` (legacy flatten-only construction) or the build
-    /// fails.
+    /// asset was supplied without a composition recipe or the build fails.
     pub fn get_or_build(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,

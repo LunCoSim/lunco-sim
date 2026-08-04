@@ -136,7 +136,7 @@ impl ViewModelAppExt for App {
 /// that made `produce_usd_canvas` 11 ms a frame. Nothing here early-returns
 /// cheaply, so nothing here may run ungated.
 pub fn usd_selection_view_changed(
-    selection: Res<crate::SelectedEntities>,
+    selection: Res<lunco_scene_commands::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
     revision: Res<lunco_usd_bevy::UsdStageRevision>,
 ) -> bool {
@@ -248,7 +248,7 @@ impl Plugin for SandboxEditUiPlugin {
         // `lunco_luncosim::ui`), and a run condition that reads a missing resource
         // panics — the producers' own `Option<Res<_>>` tolerance does not cover
         // the gate.
-        app.init_resource::<crate::SelectedEntities>();
+        app.init_resource::<lunco_scene_commands::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
 
         app.init_resource::<cinematic::CinematicViz>();
@@ -589,7 +589,7 @@ fn on_select_progress(
 }
 
 fn on_spawn_progress(
-    _trigger: On<crate::commands::SpawnEntity>,
+    _trigger: On<lunco_core::SpawnEntity>,
     hud: Option<Res<lunco_workbench::tutorial_overlay::TutorialHud>>,
     mut commands: Commands,
 ) {

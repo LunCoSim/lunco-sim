@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::{on_command, Command};
 use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_doc_bevy::{CloseDocument, DocumentSaved};
-use lunco_workbench::file_ops::{NewDocument, OpenFile};
+use lunco_doc_bevy::{CloseDocument, DocumentSaved, NewDocument, OpenFile};
 use std::sync::Arc;
 
 use crate::model_tabs::ModelTabs;
@@ -1361,10 +1360,7 @@ pub fn render_close_dialogs(
 }
 
 #[on_command(NewDocument)]
-pub fn on_new_modelica_document(
-    trigger: On<lunco_workbench::file_ops::NewDocument>,
-    mut commands: Commands,
-) {
+pub fn on_new_modelica_document(trigger: On<lunco_doc_bevy::NewDocument>, mut commands: Commands) {
     if trigger.event().kind != "modelica" {
         return;
     }

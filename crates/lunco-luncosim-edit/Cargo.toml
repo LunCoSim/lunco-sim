@@ -8,8 +8,8 @@ license.workspace = true
 # THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
 # shader catalogs, the runtime-layer USD persisters, `SelectedEntities` — everything
 # a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
-# on it; the direction never reverses. This crate re-exports it (`lib.rs`) so the
-# panels keep saying `crate::catalog::…`.
+# on it; the direction never reverses. Editor modules import its command and
+# catalog types directly from the owning crate.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 # NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
 # `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
@@ -91,7 +91,7 @@ lunco-scripting = { path = "../lunco-scripting" }
 [features]
 default = ["ui"]
 # In-scene editor: gizmo, selection, inspector panels, physics-viz, spawn ghost.
-# OFF ⇒ this crate is nothing but a re-export of `lunco-scene-commands` — no egui,
+# OFF ⇒ this crate contains no editor UI — no egui,
 # no winit, no picking. A headless server should not depend on it at all: it wants
 # `lunco-scene-commands` directly (`commands::SpawnCommandPlugin`).
 ui = [

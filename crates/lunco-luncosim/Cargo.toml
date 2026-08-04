@@ -60,7 +60,7 @@ bevy_winit = { version = "0.19", optional = true }
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 lunco-physics = { workspace = true }
-# The sky-clock panel drives the celestial clock (`SetClock`) directly.
+# The sky-clock panel drives the celestial `TimeDomain` (`SetClock`) directly.
 lunco-time = { path = "../lunco-time" }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
@@ -129,8 +129,7 @@ lunco-tutorial = { path = "../lunco-tutorial", default-features = false }
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
 # Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
-# the USD-reading systems below read the LIVE composed stage first, falling back
-# to the flattened `stage.reader` only for recipe-less legacy assets.
+# every runtime USD read comes from the LIVE composed stage.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 # `cosim::SceneLoadInFlight` for `report_scene_spawn_status`, which mirrors "scene
 # prims are still spawning" onto the workbench `StatusBus` — where the offline

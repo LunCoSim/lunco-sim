@@ -735,7 +735,7 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<workspace_state::WorkspaceStatePlugin>() {
             app.add_plugins(workspace_state::WorkspaceStatePlugin);
         }
-        // Plugin-driven registry of `DocumentKind`s. Domain crates
+        // Plugin-driven registry of document kinds. Domain crates
         // (modelica, future julia/usd/sysml/...) register their kinds
         // here; consumers iterate the registry rather than matching
         // a fixed enum. Idempotent — domain plugins can also call
@@ -818,7 +818,7 @@ impl Plugin for WorkbenchPlugin {
             bevy::prelude::Update,
             (maintain_dock_widths, drain_pending_panel_focus),
         )
-        .add_systems(Startup, register_terrain_settings_menu);
+        .add_systems(Startup, register_graphics_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -871,8 +871,6 @@ pub struct WorkbenchLayout {
     pub(crate) active_center_tab: usize,
     pub(crate) right_inspector: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
-
-    pub(crate) status: Option<StatusContent>,
 
     /// App-wide Settings menu contributions. Domain plugins push a
     /// closure via [`WorkbenchLayout::register_settings`] at Startup;
@@ -1017,7 +1015,6 @@ impl Default for WorkbenchLayout {
             active_center_tab: 0,
             right_inspector: Vec::new(),
             bottom: Vec::new(),
-            status: None,
             settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
             edit_menu: Vec::new(),
@@ -1424,11 +1421,6 @@ impl WorkbenchLayout {
     /// Toggle visibility of the activity bar on the far left.
     pub fn toggle_activity_bar(&mut self) {
         self.activity_bar = !self.activity_bar;
-    }
-
-    /// Set a single-line string rendered in the status bar.
-    pub fn set_status(&mut self, text: impl Into<String>) {
-        self.status = Some(StatusContent::Text(text.into()));
     }
 
     /// Register a perspective and store it in the switcher. If this is the
@@ -2457,12 +2449,6 @@ impl WorkbenchLayout {
     }
 }
 
-/// Content options for the status bar.
-pub enum StatusContent {
-    /// A simple single-line string.
-    Text(String),
-}
-
 /// Extension trait on [`App`] for ergonomic panel + perspective registration.
 pub trait WorkbenchAppExt {
     /// Register a panel with the default workbench layout.
@@ -3257,7 +3243,7 @@ fn render_layout(
                             // target. egui menus right-align after \t.
                             let label = format!("{display}\tCtrl+N");
                             if ui.button(label).clicked() {
-                                world.trigger(file_ops::NewDocument { kind });
+                                world.trigger(lunco_doc_bevy::NewDocument { kind });
                                 ui.close();
                             }
                         }
@@ -3343,7 +3329,7 @@ fn render_layout(
                                     .on_hover_text(path.display().to_string())
                                     .clicked()
                                 {
-                                    world.trigger(file_ops::OpenFile {
+                                    world.trigger(lunco_doc_bevy::OpenFile {
                                         path: path.display().to_string(),
                                     });
                                     ui.close();
@@ -3501,7 +3487,7 @@ fn render_layout(
                 // Each row is a checkbox showing whether the panel is currently
                 // in the dock; clicking a closed one re-docks it in its default
                 // slot. `Hidden` panels never appear (fixtures like the
-                // viewport, legacy entries, instance-tab facets).
+                // viewport, layout-only entries, instance-tab facets).
                 struct ViewPanelEntry {
                     group: PanelMenuGroup,
                     title: String,
@@ -3980,12 +3966,10 @@ fn render_layout(
                             .on_hover_text("Run the simulation (physics included) at this rate")
                             .clicked()
                         {
-                            if let Some(mut t) =
-                                world.get_resource_mut::<lunco_time::TimeTransport>()
-                            {
-                                t.rate = m;
-                                t.mode = lunco_time::TransportMode::Playing;
-                            }
+                            world.trigger(lunco_time::SetTimeTransport {
+                                playing: Some(true),
+                                rate: Some(m),
+                            });
                         }
                     }
                 });
@@ -4035,13 +4019,10 @@ fn render_layout(
                 let btn_resp = ui.button(glyph).on_hover_text(hover);
                 anchor_rects.push(("toolbar.run", btn_resp.rect));
                 if btn_resp.clicked() {
-                    if let Some(mut t) = world.get_resource_mut::<lunco_time::TimeTransport>() {
-                        t.mode = if paused {
-                            lunco_time::TransportMode::Playing
-                        } else {
-                            lunco_time::TransportMode::Paused
-                        };
-                    }
+                    world.trigger(lunco_time::SetTimeTransport {
+                        playing: Some(paused),
+                        ..default()
+                    });
                 }
 
                 // PAUSE/RESUME AND NOTHING ELSE. The rate selector used to sit here
@@ -4119,11 +4100,9 @@ fn render_layout(
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
-    // Falls back to the legacy `layout.status` text when the bus is
-    // empty so existing callers keep working during the migration.
     egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
-        render_status_bar_inner(ui, world, layout, theme);
+        render_status_bar_inner(ui, world, theme);
     });
 
     // ── Activity bar ────────────────────────────────────────────────
@@ -4397,12 +4376,7 @@ fn render_layout(
 /// Render the bottom status strip. Reads from [`status_bus::StatusBus`]
 /// (cross-cutting; populated by MSL load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
-fn render_status_bar_inner(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    layout: &WorkbenchLayout,
-    theme: &lunco_theme::Theme,
-) {
+fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
     use status_bus::{StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
@@ -4485,18 +4459,7 @@ fn render_status_bar_inner(
                         );
                     }
                 } else {
-                    // Bus is empty — fall back to whatever a panel
-                    // pushed via the legacy `layout.status_bar(...)`
-                    // API so existing call sites keep working.
-                    match layout.status.as_ref() {
-                        Some(StatusContent::Text(s)) => {
-                            let text = egui::RichText::new(s).small();
-                            ui.add(egui::Label::new(text).truncate());
-                        }
-                        None => {
-                            ui.label(egui::RichText::new("ready").small().weak());
-                        }
-                    }
+                    ui.label(egui::RichText::new("ready").small().weak());
                 }
             })
             .response
@@ -4732,12 +4695,34 @@ fn render_panel_solo(
     }
 }
 
-fn register_terrain_settings_menu(world: &mut World) {
+fn register_graphics_settings_menu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings_submenu("Graphics", |ui, world| {
+        ui.label(egui::RichText::new("Rendering").weak().small());
+        if let Some(mut settings) =
+            world.get_resource_mut::<lunco_render::RenderingQualitySettings>()
+        {
+            egui::ComboBox::from_id_salt("graphics.rendering_quality")
+                .selected_text(settings.quality.label())
+                .show_ui(ui, |ui| {
+                    for quality in lunco_render::RenderingQuality::all() {
+                        ui.selectable_value(&mut settings.quality, quality, quality.label());
+                    }
+                });
+            ui.label(
+                egui::RichText::new(
+                    "Auto caps shadow-map resolution/cascades to the detected GPU budget. \
+                     Changing this setting safely re-arms a previous shadow fallback.",
+                )
+                .weak()
+                .small(),
+            );
+        }
+
+        ui.separator();
         ui.label(egui::RichText::new("Terrain").weak().small());
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::TerrainSettings>() {
             ui.checkbox(

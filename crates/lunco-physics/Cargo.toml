@@ -75,7 +75,7 @@ lunco-core = { path = "../lunco-core" }
 
 # This was the ONE crate of 65 without this section, so the workspace
 # `disallowed_methods` ban list — std::fs, std::thread::spawn, Instant::now,
-# TextReader::clone, GridAnchor re-parenting — was not enforced here at all.
+# deferred entity writes, GridAnchor re-parenting — was not enforced here.
 # Per the note above, this crate is depended on by generators that "run headless
 # and on wasm", making it exactly where the wasm-portability bans matter most:
 # a `std::fs` or blocking `Instant::now` added here compiles and passes

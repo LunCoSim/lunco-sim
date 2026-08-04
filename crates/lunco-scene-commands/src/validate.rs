@@ -34,7 +34,7 @@
 //! Registered as an [`ApiQueryProvider`] (it returns data, like
 //! [`crate::usd_prim_query`]), so one implementation answers rhai `query()`,
 //! Python, raw HTTP and MCP:
-//! `{"command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
+//! `{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Evaluate a rhai snippet against a running sandbox and print its stdout.
 
-`RunRhai` is asynchronous: the HTTP API returns a `command_id`, and the snippet
-runs on the next `FixedUpdate`, recording its captured `print(...)` output under
-that id. This helper does the two-step dance — submit, then poll
-`QueryCommandResult` — and writes the snippet's stdout to our stdout, so a shell
-harness can assert on it. Stdlib only (mirrors the other scripts/api/*.py tools).
+`RunRhai` is deferred: the HTTP API holds the original request until the snippet
+runs and returns its captured `print(...)` output in that response. This helper
+writes the returned stdout to our stdout, so a shell harness can assert on it.
+Stdlib only (mirrors the other scripts/api/*.py tools).
 
 Usage:
     rhai_eval.py <port> -e '<rhai code>'
@@ -15,11 +14,10 @@ Usage:
 Giving both `-e` and `-f` concatenates them (prelude first) — lets a harness
 inject parameters (e.g. `let ASSERT_PRIMS = [...]`) ahead of a committed script.
 
-Exit codes: 0 = got stdout; 2 = submit failed; 3 = timed out; 4 = rhai error.
+Exit codes: 0 = got stdout; 2 = submit failed; 4 = rhai error.
 """
 import json
 import sys
-import time
 import urllib.error
 import urllib.request
 
@@ -35,27 +33,28 @@ def _post(port, obj):
         return json.loads(resp.read().decode())
 
 
-def rhai_eval(port, code, tries=60, delay=0.1):
-    resp = _post(port, {"command": "RunRhai", "params": {"code": code}})
-    cid = resp.get("command_id")
-    if cid is None:
-        print(f"ERROR: no command_id in {resp}", file=sys.stderr)
+def rhai_eval(port, code):
+    try:
+        resp = _post(
+            port,
+            {
+                "type": "ExecuteCommand",
+                "command": "RunRhai",
+                "params": {"code": code},
+            },
+        )
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        print(f"ERROR: RunRhai request failed: {exc}", file=sys.stderr)
         return 2, ""
-    for _ in range(tries):
-        time.sleep(delay)
-        r = _post(port, {"type": "QueryCommandResult", "id": cid})
-        outcome = (r.get("data") or {}).get("outcome")
-        if not isinstance(outcome, dict):
-            continue
-        if "Failed" in outcome:
-            print(f"RHAI_ERROR: {outcome['Failed']}", file=sys.stderr)
-            return 4, ""
-        assigned = (outcome.get("Succeeded") or {}).get("assigned") or {}
-        if "stdout" in assigned:
-            return 0, assigned["stdout"]
-        # still {"status":"queued"} — keep polling.
-    print(f"ERROR: timed out waiting for command {cid}", file=sys.stderr)
-    return 3, ""
+
+    if "error" in resp:
+        print(f"RHAI_ERROR: {resp['error']}", file=sys.stderr)
+        return 4, ""
+    stdout = (resp.get("data") or {}).get("stdout")
+    if stdout is None:
+        print(f"ERROR: RunRhai returned no stdout: {resp}", file=sys.stderr)
+        return 2, ""
+    return 0, stdout
 
 
 def main():

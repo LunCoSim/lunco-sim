@@ -2,8 +2,8 @@
 
 use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
+use lunco_doc_bevy::NewDocument;
 use lunco_doc_bevy::{EditorIntent, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument};
-use lunco_workbench::file_ops::NewDocument;
 
 // ─── Observers ───────────────────────────────────────────────────────────────
 

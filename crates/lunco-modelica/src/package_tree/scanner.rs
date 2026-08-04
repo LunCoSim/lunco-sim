@@ -12,11 +12,9 @@ use std::path::{Path, PathBuf};
 /// SINGLE SOURCE OF TRUTH — every scanner site (native fs walk + web in-memory
 /// walk) mints ids through here, and it MUST stay in sync with
 /// [`crate::class_ref::ClassRef::parse_tree_id`] (the `msl_path:` scheme it
-/// reverses on click). The id is built straight from the dotted name; we never
-/// substitute `.`→`_`. The legacy `msl_<dots→underscores>` form was lossy
-/// (`PID_Controller` ⇄ `PID.Controller`) AND unparseable, so it silently
-/// no-op'd web clicks ("unparseable tree id"). Routing both backends through
-/// one helper is what keeps them from diverging again.
+/// reverses on click). The id is built straight from the dotted name; dots are
+/// preserved so names such as `PID_Controller` remain unambiguous. Routing
+/// both backends through one helper keeps them aligned.
 pub(crate) fn msl_tree_id(qualified: &str) -> String {
     format!("msl_path:{qualified}")
 }

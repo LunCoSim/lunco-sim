@@ -1846,8 +1846,8 @@ mod tests {
             path: tmp_path.to_string_lossy().to_string(),
         });
         // Flush the queued world-command (spawns the async read task),
-        // then poll the drain system across a few ticks until the read
-        // completes and the document is allocated.
+        // then advance a few ticks until the read completes and the document
+        // is allocated.
         for _ in 0..5 {
             app.update();
         }
@@ -2317,7 +2317,7 @@ mod tests {
     }
 
     /// An empty viewport WITHOUT a recorded reason falls back to the generic
-    /// hint — the legacy behaviour, preserved for cold start / cleared scenes.
+    /// hint used for cold start / cleared scenes when no specific reason exists.
     #[test]
     fn empty_viewport_message_falls_back_to_generic_hint() {
         assert_eq!(

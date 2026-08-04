@@ -73,7 +73,7 @@ use bevy::prelude::*;
 ///
 /// Lives here, not in the editor: `commands` both mutates it (a deleted entity leaves
 /// the selection) and `init_resource`s it, so it is part of the command layer's own
-/// state. `lunco-luncosim-edit` re-exports it for its panels.
+/// state. The editor consumes this resource directly.
 #[derive(Resource, Default, Clone)]
 pub struct SelectedEntities {
     /// The selected entities. The last one added is the "primary" selection.

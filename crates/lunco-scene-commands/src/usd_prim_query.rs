@@ -34,8 +34,8 @@
 //! ## Request
 //!
 //! ```json
-//! {"command": "QueryUsdPrim", "params": {"path": "/Hab1/ShieldWall/OuterSurface"}}
-//! {"command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "/Hab1/ShieldWall/OuterSurface"}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
 //! ```
 //!
 //! Omitting `attrs` returns every authored attribute on the prim. Naming them is

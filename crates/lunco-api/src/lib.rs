@@ -283,7 +283,8 @@ impl Plugin for LunCoApiPlugin {
 /// callers (an egui REPL panel, a menu action) can dispatch the same
 /// `/api/commands` envelope the HTTP/JS transports use — without a socket. The
 /// handle is a cheap clonable mpsc sender; `execute()` awaits the ECS response
-/// on a `oneshot`, so callers run it from a spawned task and poll the result.
+/// on a `oneshot`, so callers run it from a spawned task until the response is
+/// ready.
 /// Present on every build that has a bridge (native `transport-http` + wasm).
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Resource, Clone)]
@@ -296,7 +297,12 @@ pub struct ApiBridge(pub transports::HttpBridge);
 /// `"RunRhai"` by name. Errors only on an internal JSON encode fault.
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
-    let json = serde_json::json!({ "command": "RunRhai", "params": { "code": code } }).to_string();
+    let json = serde_json::json!({
+        "type": "ExecuteCommand",
+        "command": "RunRhai",
+        "params": { "code": code }
+    })
+    .to_string();
     serde_json::from_str::<transports::ApiRequestUnified>(&json)
         .map(Into::into)
         .map_err(|e| format!("rhai_request: {e}"))

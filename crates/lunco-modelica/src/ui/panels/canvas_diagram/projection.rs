@@ -223,7 +223,7 @@ pub(super) fn project_scene(
             kind: "modelica.icon".into(),
             data: std::sync::Arc::new(IconNodeData {
                 qualified_type: node.component_def.name.clone(),
-                icon_only: crate::ui::loaded_classes::is_icon_only_class(&node.component_def.name),
+                icon_only: crate::ui::class_display::is_icon_only_class(&node.component_def.name),
                 expandable_connector: node.component_def.is_expandable_connector(),
                 icon_graphics: node.component_def.icon.clone(),
                 diagram_graphics: if matches!(

@@ -1,28 +1,19 @@
-//! Typed reads over a composed USD scene on openusd `main`.
+//! Typed reads over an authored USD layer.
 //!
-//! openusd `main` removed `TextReader`. Composition still runs through an
-//! openusd `Stage` (see [`crate::compose`]) using the in-memory
-//! [`LuncoUsdResolver`](crate::resolver::LuncoUsdResolver), but `Stage` is
-//! `!Send` (`Rc`-backed) so it can't live in Bevy ECS. The composed stage is
-//! flattened to a Send-safe [`sdf::Data`] (`HashMap<Path, SpecData>`), and this
-//! extension trait adds the ergonomic, typed reads the rest of the stack needs
-//! directly on openusd's own data type — no separate reader object.
-//!
-//! These read *flattened, already-composed* data: references, variants, and
-//! sublayers were resolved by the Stage before flattening, so a plain spec
-//! lookup here returns the composed opinion.
+//! [`sdf::Data`] is the `Send`-safe representation used by document authoring,
+//! save, journal, network, and authoring-only UI code. It contains the layer's
+//! own specs and preserves composition arcs as authored. Runtime projection
+//! reads the live composed [`crate::StageView`] through [`crate::UsdRead`]
+//! instead; this extension must not be used as a runtime-stage substitute.
 
 use openusd::sdf::{self, Path, SpecType, Value};
 use openusd::tf;
 use openusd::usd::InterpolationType;
 
-/// Ergonomic reads over a composed [`sdf::Data`]. Replaces the removed
-/// `TextReader` query methods (`try_get` → [`field`](UsdDataExt::field),
-/// `prim_children`, `prim_attribute_value`).
+/// Ergonomic reads over authored [`sdf::Data`].
 pub trait UsdDataExt {
     /// The raw value of field `key` on the spec at `path`, if present. (A
-    /// missing spec or field is simply `None` — the old `try_get` returned a
-    /// `Result<Option<_>>`; reading flattened in-memory data can't fail.)
+    /// missing spec or field is simply `None`.)
     fn field(&self, path: &Path, key: &str) -> Option<&Value>;
 
     /// A typed view of field `key` on the spec at `path` (clones then extracts

@@ -19,9 +19,9 @@
 //!   The derived set is a pure cache of USD, rebuilt on stage change.
 //!
 //! No domain-specific markers (`BalloonModelMarker`, …) are inserted
-//! here. The legacy catalog/imperative spawn path in
-//! `lunco-luncosim-edit` keeps using its own markers; this translator
-//! is the authoritative path for USD-defined cosim entities.
+//! here. The editor's catalog-driven authoring path owns its explicit
+//! spawn markers; this translator is the authoritative path for
+//! USD-defined cosim entities.
 
 use avian3d::prelude::PhysicsTime;
 use bevy::prelude::*;
@@ -649,6 +649,24 @@ fn process_usd_cosim_prim_read(
         return;
     }
 
+    // A Python source file is not a runnable cosim participant unless the
+    // embedded interpreter is available. Keep the authored USD visible, but
+    // stop at the owning boundary: do not publish a fake participant that
+    // reports `bound` and then silently produces no outputs. The ordinary
+    // scripting executor also checks this status, so this check keeps the USD
+    // projection and the execution layer honest with one source of truth.
+    if python_path.is_some()
+        && lunco_scripting::python::get_python_status()
+            != lunco_scripting::python::PythonStatus::Available
+    {
+        let source = source.as_deref().unwrap_or("<inline Python source>");
+        warn!(
+            "[usd-cosim] program {} not bound: Python runtime unavailable for {}",
+            prim_path.path, source,
+        );
+        return;
+    }
+
     // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
     //
     // NB: this stamps `UsdSimProcessed`, which makes `process_usd_sim_prims` skip this
@@ -1108,8 +1126,9 @@ pub fn dispatch_loaded_python_sources(
             })
             .unwrap_or_default();
 
-        // Offset doc id away from any Modelica-allocated ids on the same
-        // entity (legacy catalog Python balloon does the same).
+        // Offset the synthesized document id away from Modelica ids allocated
+        // for the same entity. This keeps the two document registries disjoint
+        // without inventing a second identity scheme for the script itself.
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
         // Route through the registry funnel so a journal recorder attaches (edits
         // to this cosim script record like any other domain).
@@ -2143,7 +2162,7 @@ fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option
 /// `ListPorts` — enumerate exposed ports. With `{"api_id": N}`, lists that
 /// entity's ports; without, lists every registered entity that has any port.
 ///
-/// `curl … {"command":"ListPorts","params":{"api_id":12345}}`
+/// `curl … {"type":"ExecuteCommand","command":"ListPorts","params":{"api_id":12345}}`
 pub struct ListPortsProvider;
 
 impl lunco_api::ApiQueryProvider for ListPortsProvider {
@@ -2185,7 +2204,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
 
 /// `GetPort` — read one port value.
 ///
-/// `curl … {"command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
+/// `curl … {"type":"ExecuteCommand","command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
 pub struct GetPortProvider;
 
 impl lunco_api::ApiQueryProvider for GetPortProvider {
@@ -2220,8 +2239,8 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
 
 /// `SetPort` — hold one input port at a setpoint.
 ///
-/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
-/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
+/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
+/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
 ///
 /// The write is a HOLD, not a poke: it outranks the wiring fabric for its
 /// duration ([`lunco_cosim::PortHolds`]). Writing the slot alone worked only on
@@ -2286,7 +2305,7 @@ impl lunco_api::ApiQueryProvider for SetPortProvider {
 /// `ReleasePort` — end a [`SetPortProvider`] hold early, handing the port back to
 /// whatever drives it.
 ///
-/// `curl … {"command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
+/// `curl … {"type":"ExecuteCommand","command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
 ///
 /// Holds expire on their own, so this is for the caller who is DONE rather than
 /// the caller who crashed: releasing a throttle at the end of a manoeuvre returns
@@ -2317,7 +2336,7 @@ impl lunco_api::ApiQueryProvider for ReleasePortProvider {
     }
 }
 
-/// API query provider: `curl … {"command":"CosimStatus","params":{}}`
+/// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
 /// state, and propagated cosim values. Lets you probe the running
 /// binary without polling logs.
@@ -2683,7 +2702,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 
 /// Reload (or load) a USD scene at runtime via the API.
 ///
-/// `curl … {"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
+/// `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
 ///
 /// - `path`: USD asset path relative to the asset root.
 /// - `root_prim`: optional override for the SDF path of the prim to
@@ -3291,7 +3310,7 @@ pub fn spawn_scene_root_with_stage(
 ///
 /// The defaultPrim lookup is deliberately deferred rather than read
 /// here: this runs synchronously at command time, before the stage
-/// asset finishes loading. It is resolved from the parsed `TextReader`
+/// asset finishes loading. It is resolved from the parsed canonical `StageView`
 /// at instantiate time instead — correct on both native and web, and
 /// yielding the defaultPrim subtree rather than a whole-stage `/` mount.
 ///

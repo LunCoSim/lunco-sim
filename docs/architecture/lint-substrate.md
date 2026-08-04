@@ -84,7 +84,7 @@ cmd("RunLint", #{});             // lints every loaded stage
 query("LintReport");             // { errors, warnings, findings[] }
 ```
 
-…and the same verb over HTTP/MCP (`{"command":"RunLint"}`). A scenario that calls
+…and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`). A scenario that calls
 both on a cadence **is** the realtime linter — no separate mode exists, because
 none is needed.
 

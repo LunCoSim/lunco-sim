@@ -62,12 +62,15 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use bevy::render::{
     batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
+    extract_resource::{ExtractResource, ExtractResourcePlugin},
     init_gpu_resource,
     renderer::{RenderAdapterInfo, RenderDevice},
     settings::WgpuSettings,
-    RenderApp, RenderStartup,
+    ExtractSchedule, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_egui::{egui, EguiContexts};
+use lunco_render::{GpuShadowBudget, RenderingQualitySettings, ShadowMapSuppressed};
+use lunco_settings::AppSettingsExt;
 
 /// How long a failure must persist after the applicable recovery decision
 /// before presentation is abandoned.
@@ -100,7 +103,7 @@ pub fn preferred_wgpu_settings() -> WgpuSettings {
             // every native backend (including DX12) was still enabled. DX12
             // needs indirect-call validation, but Vulkan does not; leaving it
             // on makes wgpu create an internal compute pipeline during device
-            // creation. Some legacy Vulkan drivers lose the device at exactly
+            // creation. Some affected Vulkan drivers lose the device at exactly
             // that pipeline, before our render-health recovery can start.
             //
             // Keep an explicit diagnostic override intact. This mirrors Bevy's
@@ -160,6 +163,53 @@ pub struct RenderHealth {
     last_failure_kind: AtomicU8,
 }
 
+/// Shared adapter-budget result. RenderStartup runs in the render world, while
+/// the quality projection runs in the main world, so the result crosses the
+/// existing ExtractSchedule boundary through this tiny atomic handle.
+#[derive(Resource, Clone, Debug)]
+struct ShadowBudgetHandle {
+    limit_bytes: Arc<AtomicU64>,
+    revision: Arc<AtomicU64>,
+}
+
+impl Default for ShadowBudgetHandle {
+    fn default() -> Self {
+        Self {
+            limit_bytes: Arc::new(AtomicU64::new(GpuShadowBudget::default().limit_bytes)),
+            revision: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl ShadowBudgetHandle {
+    fn publish(&self, limit_bytes: u64) {
+        self.limit_bytes.store(limit_bytes, Ordering::Release);
+        self.revision.fetch_add(1, Ordering::Release);
+    }
+
+    fn limit_bytes(&self) -> u64 {
+        self.limit_bytes.load(Ordering::Acquire)
+    }
+
+    fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
+    }
+}
+
+const INTEGRATED_SHADOW_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
+const DISCRETE_SHADOW_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+const CPU_SHADOW_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
+const UNKNOWN_SHADOW_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+
+fn recommended_shadow_budget(info: &wgpu::AdapterInfo) -> u64 {
+    match info.device_type {
+        wgpu::DeviceType::IntegratedGpu => INTEGRATED_SHADOW_BUDGET_BYTES,
+        wgpu::DeviceType::DiscreteGpu => DISCRETE_SHADOW_BUDGET_BYTES,
+        wgpu::DeviceType::Cpu => CPU_SHADOW_BUDGET_BYTES,
+        wgpu::DeviceType::Other | wgpu::DeviceType::VirtualGpu => UNKNOWN_SHADOW_BUDGET_BYTES,
+    }
+}
+
 impl RenderHealth {
     fn total(&self) -> u64 {
         self.total.load(Ordering::Relaxed)
@@ -211,6 +261,20 @@ pub struct RenderHealthHandle(pub Arc<RenderHealth>);
 pub struct RenderGaveUp {
     /// Human-readable reason presentation was abandoned.
     pub reason: String,
+}
+
+/// Cross-world gate for the render schedule. Camera deactivation prevents view
+/// extraction, but Bevy still runs the render graph and egui/pipeline systems
+/// when another camera or a non-camera pass remains. This resource is extracted
+/// into the render world and gates every render-stage set, so presentation and
+/// GPU submission actually stop while the main simulation/API keeps running.
+#[derive(Resource, Clone, Copy, Default, ExtractResource)]
+pub(crate) struct PresentationState {
+    pub stopped: bool,
+}
+
+fn presentation_is_active(state: Option<Res<PresentationState>>) -> bool {
+    state.is_none_or(|state| !state.stopped)
 }
 
 /// Persistent presentation warning shown while the simulation is still alive.
@@ -299,6 +363,20 @@ pub(crate) struct Ladder {
 const FAILURE_QUIET_SECS: f64 = 0.5;
 
 impl Ladder {
+    /// Re-arm after an explicit user quality change. A re-arm is only valid
+    /// after the shadow-specific mitigation; device loss and unrelated render
+    /// failures remain terminal/persistent respectively.
+    fn rearm(&mut self, total: u64) {
+        if self.rung != Rung::ShadowMapsOff {
+            return;
+        }
+        self.rung = Rung::Healthy;
+        self.last_total = total;
+        self.failing_since = None;
+        self.last_failure_at = None;
+        self.failure_kind = FailureKind::Other;
+    }
+
     /// Advance one evaluation. `now` is monotonic seconds; `total` is
     /// [`RenderHealth::total`].
     fn step(
@@ -376,6 +454,9 @@ impl Ladder {
 ///
 /// No-op when there is no [`RenderApp`] (headless tests / API-only servers).
 pub(crate) fn install_wgpu_error_handler(app: &mut App) {
+    app.register_settings_section::<RenderingQualitySettings>();
+    app.init_resource::<GpuShadowBudget>();
+
     if app.get_sub_app_mut(RenderApp).is_none() {
         return;
     }
@@ -383,11 +464,52 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     let health = Arc::new(RenderHealth::default());
     app.insert_resource(RenderHealthHandle(health.clone()));
     app.init_resource::<Ladder>();
-    app.add_systems(Update, escalate_render_recovery);
+    app.init_resource::<PresentationState>();
+    app.add_plugins(ExtractResourcePlugin::<PresentationState>::default());
+    app.add_systems(
+        Update,
+        (
+            escalate_render_recovery,
+            apply_render_quality.run_if(render_quality_changed),
+        )
+            .chain(),
+    );
 
+    let shadow_budget = ShadowBudgetHandle::default();
+    app.insert_resource(shadow_budget.clone());
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
-    render_app.add_systems(RenderStartup, set_error_handler);
+    render_app.insert_resource(shadow_budget);
+    // Once the presentation decision is terminal, stop all render-stage work,
+    // including `render_system`, whose only caller presents the swapchain.
+    // Extraction may run one final time to propagate this resource; no render
+    // schedule work is submitted after the gate becomes visible there.
+    render_app.configure_sets(
+        Render,
+        (
+            RenderSystems::ExtractCommands,
+            RenderSystems::PrepareAssets,
+            RenderSystems::PrepareMeshes,
+            RenderSystems::CreateViews,
+            RenderSystems::Specialize,
+            RenderSystems::PrepareViews,
+            RenderSystems::Queue,
+            RenderSystems::PhaseSort,
+            RenderSystems::Prepare,
+            RenderSystems::Render,
+            RenderSystems::Cleanup,
+            RenderSystems::PostCleanup,
+        )
+            .run_if(presentation_is_active),
+    );
+    render_app.add_systems(
+        RenderStartup,
+        (set_error_handler, configure_shadow_budget).chain(),
+    );
+    // RenderStartup cannot borrow the simulation world directly. Publish the
+    // adapter result on the normal extraction boundary so scene projectors see
+    // the safe budget before asynchronous USD lights arrive.
+    render_app.add_systems(ExtractSchedule, publish_shadow_budget);
     // This runs after Bevy has probed the adapter and initialized the resource.
     // It affects only the known-bad Quadro/Vulkan combination above.
     render_app.add_systems(
@@ -396,7 +518,193 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     );
 }
 
-/// Override an optimistic feature probe for the one legacy adapter on which the
+fn configure_shadow_budget(adapter: Res<RenderAdapterInfo>, budget: Res<ShadowBudgetHandle>) {
+    let limit_bytes = recommended_shadow_budget(&adapter.0);
+    budget.publish(limit_bytes);
+    info!(
+        "rendering quality shadow budget: {} MiB for {} ({:?})",
+        limit_bytes / (1024 * 1024),
+        adapter.0.name,
+        adapter.0.device_type,
+    );
+}
+
+fn publish_shadow_budget(
+    mut main_world: ResMut<MainWorld>,
+    budget: Res<ShadowBudgetHandle>,
+    mut published_revision: Local<u64>,
+) {
+    let revision = budget.revision();
+    if revision == *published_revision {
+        return;
+    }
+
+    let value = GpuShadowBudget {
+        limit_bytes: budget.limit_bytes(),
+    };
+    if let Some(mut current) = main_world.get_resource_mut::<GpuShadowBudget>() {
+        *current = value;
+    } else {
+        main_world.insert_resource(value);
+    }
+    *published_revision = revision;
+}
+
+fn render_quality_changed(
+    settings: Res<RenderingQualitySettings>,
+    budget: Res<GpuShadowBudget>,
+    directional_map: Res<bevy::light::DirectionalLightShadowMap>,
+) -> bool {
+    settings.is_changed() || budget.is_changed() || directional_map.is_changed()
+}
+
+/// Project the persisted quality choice onto the live shadow resources.
+///
+/// This is change-driven: settings, the adapter budget, or a newly authored
+/// directional-light map must change before it runs. The directional estimate
+/// happens before allocation and caps a requested profile on constrained
+/// adapters. Changing the setting is also the explicit, safe re-arm after the
+/// reactive error ladder has shed shadows.
+fn apply_render_quality(
+    settings: Res<RenderingQualitySettings>,
+    budget: Res<GpuShadowBudget>,
+    mut directional_map: ResMut<bevy::light::DirectionalLightShadowMap>,
+    mut point_map: ResMut<bevy::light::PointLightShadowMap>,
+    mut directional_lights: Query<(
+        Entity,
+        &mut bevy::light::DirectionalLight,
+        &mut bevy::light::CascadeShadowConfig,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut point_lights: Query<(
+        Entity,
+        &mut bevy::light::PointLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut spot_lights: Query<(
+        Entity,
+        &mut bevy::light::SpotLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut ladder: ResMut<Ladder>,
+    health: Option<Res<RenderHealthHandle>>,
+    warning: Option<Res<RenderWarning>>,
+    mut commands: Commands,
+) {
+    let explicit_rearm = settings.is_changed() && ladder.rung == Rung::ShadowMapsOff;
+    if explicit_rearm {
+        let total = health.as_ref().map_or(0, |handle| handle.0.total());
+        ladder.rearm(total);
+        restore_suppressed_shadow_maps(
+            &mut commands,
+            &mut directional_lights,
+            &mut point_lights,
+            &mut spot_lights,
+        );
+        // The warning was produced by the rung being re-armed. A subsequent
+        // budget cap is reported in the Graphics settings row instead.
+        commands.remove_resource::<RenderWarning>();
+    }
+
+    let directional_count = directional_lights
+        .iter()
+        .filter(|(_, light, _, suppressed)| {
+            light.shadow_maps_enabled || suppressed.is_some_and(|s| s.was_enabled)
+        })
+        .count()
+        .max(1);
+    let effective = settings
+        .quality
+        .effective_for_shadow_budget(budget.limit_bytes, directional_count);
+    let profile = effective.profile();
+
+    if directional_map.size != profile.directional_shadow_map_size as usize {
+        directional_map.size = profile.directional_shadow_map_size as usize;
+    }
+    if point_map.size != profile.point_shadow_map_size as usize {
+        point_map.size = profile.point_shadow_map_size as usize;
+    }
+
+    for (_, _, mut config, _) in &mut directional_lights {
+        if config.bounds.len() == profile.directional_cascades {
+            continue;
+        }
+        let maximum_distance = config
+            .bounds
+            .last()
+            .copied()
+            .unwrap_or(1500.0)
+            .max(config.minimum_distance + f32::EPSILON);
+        let first_cascade_far_bound = config
+            .bounds
+            .first()
+            .copied()
+            .unwrap_or(maximum_distance)
+            .clamp(config.minimum_distance + f32::EPSILON, maximum_distance);
+        *config = bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: profile.directional_cascades,
+            minimum_distance: config.minimum_distance,
+            first_cascade_far_bound,
+            maximum_distance,
+            overlap_proportion: config.overlap_proportion,
+        }
+        .build();
+    }
+
+    if settings.quality != lunco_render::RenderingQuality::Auto
+        && settings.quality != effective
+        && directional_count > 0
+        && warning.is_none()
+    {
+        warn!(
+            "requested rendering quality {} exceeds the {} MiB shadow budget; using {}",
+            settings.quality.label(),
+            budget.limit_bytes / (1024 * 1024),
+            effective.label(),
+        );
+    }
+}
+
+fn restore_suppressed_shadow_maps(
+    commands: &mut Commands,
+    directional_lights: &mut Query<(
+        Entity,
+        &mut bevy::light::DirectionalLight,
+        &mut bevy::light::CascadeShadowConfig,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    point_lights: &mut Query<(
+        Entity,
+        &mut bevy::light::PointLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    spot_lights: &mut Query<(
+        Entity,
+        &mut bevy::light::SpotLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+) {
+    for (entity, mut light, _, suppressed) in directional_lights.iter_mut() {
+        if let Some(suppressed) = suppressed {
+            light.shadow_maps_enabled = suppressed.was_enabled;
+            commands.entity(entity).remove::<ShadowMapSuppressed>();
+        }
+    }
+    for (entity, mut light, suppressed) in point_lights.iter_mut() {
+        if let Some(suppressed) = suppressed {
+            light.shadow_maps_enabled = suppressed.was_enabled;
+            commands.entity(entity).remove::<ShadowMapSuppressed>();
+        }
+    }
+    for (entity, mut light, suppressed) in spot_lights.iter_mut() {
+        if let Some(suppressed) = suppressed {
+            light.shadow_maps_enabled = suppressed.was_enabled;
+            commands.entity(entity).remove::<ShadowMapSuppressed>();
+        }
+    }
+}
+
+/// Override an optimistic feature probe for the one affected adapter on which the
 /// first GPU-preprocessing/material frame loses the device.
 fn force_cpu_preprocessing(
     adapter: Res<RenderAdapterInfo>,
@@ -587,21 +895,34 @@ fn set_error_handler(
 }
 
 /// Main-world escalation: read the shared tallies, advance the [`Ladder`], apply
-/// whatever it decided.
+/// whatever it decided, and publish the cross-world presentation gate.
 ///
 /// In the main world rather than the render world because both remedies are
 /// main-world state — `DirectionalLight::shadow_maps_enabled` and
-/// `Camera::is_active` are extracted to the render world each frame, so setting
-/// them here is what actually stops the work being submitted.
+/// `Camera::is_active` are extracted to the render world each frame. The
+/// terminal presentation gate additionally stops the render schedule itself.
 fn escalate_render_recovery(
     health: Res<RenderHealthHandle>,
     mut ladder: ResMut<Ladder>,
     time: Res<Time>,
+    mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
     warning: Option<Res<RenderWarning>>,
-    mut dir: Query<&mut bevy::light::DirectionalLight>,
-    mut point: Query<&mut bevy::light::PointLight>,
-    mut spot: Query<&mut bevy::light::SpotLight>,
+    mut dir: Query<(
+        Entity,
+        &mut bevy::light::DirectionalLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut point: Query<(
+        Entity,
+        &mut bevy::light::PointLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut spot: Query<(
+        Entity,
+        &mut bevy::light::SpotLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
     mut cameras: Query<&mut bevy::camera::Camera>,
 ) {
     let h = &health.0;
@@ -624,15 +945,30 @@ fn escalate_render_recovery(
     match action {
         Action::DisableShadowMaps => {
             let mut n = 0;
-            for mut l in &mut dir {
+            for (entity, mut l, suppressed) in &mut dir {
+                if suppressed.is_none() {
+                    commands.entity(entity).insert(ShadowMapSuppressed {
+                        was_enabled: l.shadow_maps_enabled,
+                    });
+                }
                 l.shadow_maps_enabled = false;
                 n += 1;
             }
-            for mut l in &mut point {
+            for (entity, mut l, suppressed) in &mut point {
+                if suppressed.is_none() {
+                    commands.entity(entity).insert(ShadowMapSuppressed {
+                        was_enabled: l.shadow_maps_enabled,
+                    });
+                }
                 l.shadow_maps_enabled = false;
                 n += 1;
             }
-            for mut l in &mut spot {
+            for (entity, mut l, suppressed) in &mut spot {
+                if suppressed.is_none() {
+                    commands.entity(entity).insert(ShadowMapSuppressed {
+                        was_enabled: l.shadow_maps_enabled,
+                    });
+                }
                 l.shadow_maps_enabled = false;
                 n += 1;
             }
@@ -640,16 +976,17 @@ fn escalate_render_recovery(
             warn!(
                 "GPU errors are not clearing ({shadow} naming a shadow map) \
                  — disabling shadow maps on {n} light(s) to release the shadow atlas and keep \
-                 rendering. Shadows are off for the rest of this session; reload after closing \
-                 some scene content to get them back. If the errors continue, presentation will \
-                 stop in {GIVE_UP_AFTER_SECS:.0}s."
+                 rendering. Change Rendering quality in Settings to re-arm them after the \
+                 allocation has been reduced. If the errors continue, presentation will stop \
+                 in {GIVE_UP_AFTER_SECS:.0}s."
             );
             commands.insert_resource(RenderWarning {
-                message: "Rendering recovered with shadow maps disabled. The simulation and API are still running.".to_string(),
+                message: "Rendering recovered with shadow maps disabled. Change Rendering quality in Settings to safely re-arm the shadow allocation.".to_string(),
             });
         }
         Action::GiveUp => {
             h.presentation_stopped.store(true, Ordering::Relaxed);
+            presentation.stopped = true;
             let mut n = 0;
             for mut c in &mut cameras {
                 c.is_active = false;
@@ -867,6 +1204,25 @@ mod tests {
             );
         }
         assert_eq!(l.rung, Rung::ShadowMapsOff);
+    }
+
+    #[test]
+    fn an_explicit_quality_change_rearms_only_shadow_degradation() {
+        let mut l = Ladder::default();
+        assert_eq!(
+            l.step(1, FailureKind::ShadowMap, false, 0.0),
+            Some(Action::DisableShadowMaps)
+        );
+        l.rearm(1);
+        assert_eq!(l.rung, Rung::Healthy);
+        // The old error total is the new baseline; a clean frame does not
+        // immediately trip the ladder again.
+        assert_eq!(l.step(1, FailureKind::ShadowMap, false, 1.0), None);
+
+        let mut persistent = Ladder::default();
+        persistent.step(1, FailureKind::OutOfMemory, false, 0.0);
+        persistent.rearm(1);
+        assert_eq!(persistent.rung, Rung::PersistentFailure);
     }
 
     /// Device loss skips the ladder entirely — no rung of it can recover a

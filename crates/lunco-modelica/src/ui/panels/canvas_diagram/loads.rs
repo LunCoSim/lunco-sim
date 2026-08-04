@@ -280,7 +280,7 @@ pub fn drive_drill_in_loads(
         registry.install_prebuilt(doc_id, doc);
         // by the upstream `drill_into_class` call before this
         // driver runs.
-        let land_in_icon_view = crate::ui::loaded_classes::is_icon_only_class(&qualified)
+        let land_in_icon_view = crate::ui::class_display::is_icon_only_class(&qualified)
             || has_components == Some(false);
         if land_in_icon_view {
             // Update the drilled-in tab's view mode. Multiple tabs

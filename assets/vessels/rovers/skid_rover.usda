@@ -521,7 +521,8 @@ def Xform "SkidRover" (
     # `outputs:heat` feeds a `MotorHeatLoad.inputs:heat_w` here as a runtime
     # SimConnection. The acausal `connectors:port` edges stay INSIDE this
     # collection, so thermal compiles independently of electrical. All four
-    # motors get a heat-load bridge; left bank = FL+RL, right bank = FR+RR.
+    # motors get a heat-load bridge; left and right banks are joined by an
+    # explicit chassis ThermalConductor.
     variantSet "thermal" = {
         "none" {
         }
@@ -550,7 +551,16 @@ def Xform "SkidRover" (
                     </SkidRover/Thermal/MotorThermalRight>,
                     </SkidRover/Thermal/MotorRadiatorLeft>,
                     </SkidRover/Thermal/MotorRadiatorRight>,
+                    </SkidRover/Thermal/ThermalBridge>,
                 ]
+
+                def Xform "ThermalBridge" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</ThermalConductor>
+                )
+                {
+                    custom token connectors:port_a.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port_b.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                }
 
                 # ── Left bank: FL + RL into one mass/radiator node ──
                 def Xform "MotorHeat_FL" (

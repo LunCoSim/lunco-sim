@@ -110,7 +110,7 @@ fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
 ///   one onto a canvas is a category error.
 /// - **`partial` classes** can't be instantiated directly per
 ///   MLS §4.4; they only exist to be inherited via `extends`. This
-///   replaces the legacy `.Interfaces.` path heuristic.
+///   replaces folder-name heuristics such as `.Interfaces.`.
 ///
 /// `.Internal.` (library-private convention) is not filtered — it's
 /// MSL author lore with no formal language marker, and users with a

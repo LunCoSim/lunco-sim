@@ -1040,7 +1040,7 @@ pub fn publish_generated_sources(
 /// `GeneratedModelicaSource` — read back the exact Modelica text a projected
 /// network was compiled from.
 ///
-/// `curl … {"command":"GeneratedModelicaSource","params":{}}` lists every
+/// `curl … {"type":"ExecuteCommand","command":"GeneratedModelicaSource","params":{}}` lists every
 /// projected network; `{"network_root":"/Rover/Electrical"}` returns one. This
 /// is the read path for the `generated://…` documents the compiler reports
 /// errors against, and the only way to see what USD actually emitted.
@@ -1156,10 +1156,9 @@ pub fn read_network(
             );
             continue;
         }
-        // The path-derived name is the FALLBACK; the file's own `within` + class
-        // is the answer, once `resolve_member_classes` has read it. A member with
-        // no verdict yet leaves the whole network pending rather than compiling a
-        // guess.
+        // The path-derived name is diagnostic context only; the file's own
+        // `within` + class is the answer. A member with no verdict yet leaves
+        // the whole network pending rather than compiling a guess.
         let derived = match modelica_member_class(view, &path) {
             Ok(class) => class,
             Err(issue) => {
@@ -1172,7 +1171,16 @@ pub fn read_network(
         };
         let source_asset = view.asset(&path, "info:sourceAsset").unwrap_or_default();
         let Some(model_class) = classes.resolve(&source_asset, &derived) else {
-            pending_sources = true;
+            if classes.is_failed(&source_asset) {
+                extraction_errors.push(DomainProjectionError {
+                    path: format!("{path}.info:sourceAsset"),
+                    message: format!(
+                        "the source asset `{source_asset}` did not yield a declared Modelica class; author a readable `.mo` source with its `within` and class"
+                    ),
+                });
+            } else {
+                pending_sources = true;
+            }
             continue;
         };
         if model_class != derived {
@@ -1694,14 +1702,13 @@ pub enum MemberClass {
     /// Read from the file: `within` + the class it declares.
     Declared(String),
     /// The file could not be read (a failed fetch, an unparseable source) or did
-    /// not resolve within [`CLASS_RESOLVE_MAX_SECS`]. The path-derived name is
-    /// used instead — the old behaviour, kept as the FALLBACK so an unreachable
-    /// source degrades to a guess rather than freezing the projection.
-    Unavailable,
+    /// not resolve within [`CLASS_RESOLVE_MAX_SECS`]. Projection fails closed;
+    /// the path is never treated as a Modelica class name.
+    Failed,
 }
 
-/// How long a member source may stay unresolved before the projector stops
-/// waiting for it and falls back to the path-derived class.
+/// How long a member source may stay unresolved before the projector reports a
+/// terminal source-resolution error.
 ///
 /// Same reasoning as `cosim::SCENE_LOAD_MAX_SECS`: on the web a fetch can 404
 /// without ever reporting a failure, and a projection that waits forever is
@@ -1729,21 +1736,9 @@ pub struct MemberClasses {
     metadata:
         HashMap<String, HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
-    path_only: bool,
 }
 
 impl MemberClasses {
-    /// An index that never resolves anything and always answers with the
-    /// path-derived name — for callers with no asset loading at all (the reader
-    /// tests, a tool reading a stage offline). Production uses the default,
-    /// which waits for [`resolve_member_classes`] to read the files.
-    pub fn path_derived_only() -> Self {
-        Self {
-            path_only: true,
-            ..Default::default()
-        }
-    }
-
     /// State a verdict directly, bypassing the loader.
     pub fn declare(&mut self, asset: impl Into<String>, class: impl Into<String>) {
         self.known
@@ -1757,20 +1752,20 @@ impl MemberClasses {
         self.metadata.get(asset)
     }
 
-    /// The class to instantiate for `asset`, given the name derived from its
-    /// path. `None` = not resolved yet: the caller must wait, not guess.
-    pub fn resolve(&self, asset: &str, derived: &str) -> Option<String> {
+    /// The class to instantiate for `asset`. `derived` is diagnostic context
+    /// only; an asset path is never an executable class-name source. `None`
+    /// means pending or failed.
+    pub fn resolve(&self, asset: &str, _derived: &str) -> Option<String> {
         match self.known.get(asset) {
             Some(MemberClass::Declared(class)) => Some(class.clone()),
-            Some(MemberClass::Unavailable) => Some(derived.to_string()),
-            None if self.path_only => Some(derived.to_string()),
             None => None,
+            Some(MemberClass::Failed) => None,
         }
     }
 
-    /// Has a verdict for `asset` (either answer)?
-    pub fn is_known(&self, asset: &str) -> bool {
-        self.known.contains_key(asset)
+    /// Whether a terminal source-resolution failure was recorded for `asset`.
+    pub fn is_failed(&self, asset: &str) -> bool {
+        matches!(self.known.get(asset), Some(MemberClass::Failed))
     }
 }
 
@@ -1791,10 +1786,8 @@ pub struct ProjectionDirty(pub bool);
 /// file.
 ///
 /// A source that fails to load, cannot be parsed, or simply never resolves
-/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Unavailable`], and
-/// the path-derived name is used after all. Waiting forever on an unreachable
-/// asset would be worse than compiling the guess: the scene would have no
-/// electrical domain and nothing to say about why.
+/// within [`CLASS_RESOLVE_MAX_SECS`] becomes [`MemberClass::Failed`]. The
+/// projection then reports the source error and does not invent a class name.
 pub fn resolve_member_classes(
     prims: Query<&UsdPrimPath>,
     added: Query<(), Added<UsdPrimPath>>,
@@ -1892,12 +1885,11 @@ pub fn resolve_member_classes(
             }
             None => {
                 warn!(
-                    "[domain-projection] could not read the class declared by `{asset}` (load \
+                    "[domain-projection] could not read a declared Modelica class from `{asset}` (load \
                      failed, unparseable, or not resolved within {CLASS_RESOLVE_MAX_SECS:.0}s) — \
-                     falling back to the class its PATH implies. If the compiler then reports an \
-                     unknown class, that guess is why."
+                     the network will not project until the source declares `within` and a class."
                 );
-                classes.known.insert(asset, MemberClass::Unavailable);
+                classes.known.insert(asset, MemberClass::Failed);
             }
         }
         // The projection that was waiting on this member has no other reason to

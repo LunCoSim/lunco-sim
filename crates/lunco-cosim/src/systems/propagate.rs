@@ -364,10 +364,23 @@ impl CompiledWiring {
                     )
                 })
                 .expect("SCC has >= 2 members");
+            // `RealtimeSafe` is a promise made by a simulation program, not by
+            // the physical body that receives its force. A normal feedback
+            // loop therefore contains both a `SimComponent` and an Avian body;
+            // requiring the marker on every SCC member rejects the documented
+            // body-state -> program -> body-force shape. Every program in the
+            // loop must make the promise, and a force loop with no program is
+            // not safe by inference.
+            let programs: Vec<Entity> = members
+                .iter()
+                .copied()
+                .filter(|member| world.get::<crate::SimComponent>(*member).is_some())
+                .collect();
             let realtime_safe = force_producing
-                && members
+                && !programs.is_empty()
+                && programs
                     .iter()
-                    .all(|member| world.get::<RealtimeSafe>(*member).is_some());
+                    .all(|program| world.get::<RealtimeSafe>(*program).is_some());
             self.loops.push(DetectedLoop {
                 entity,
                 global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
@@ -679,13 +692,16 @@ pub fn propagate_connections(
             has_port_surface,
             dropped_value: acc[i],
         };
-        let compiling = matches!(
-            world
-                .get::<crate::SimComponent>(t.entity)
-                .map(|component| &component.status),
-            Some(crate::SimStatus::Compiling)
-        );
-        if !has_port_surface || compiling {
+        let model_status = world
+            .get::<crate::SimComponent>(t.entity)
+            .map(|component| &component.status);
+        let compiling = matches!(model_status, Some(crate::SimStatus::Compiling));
+        // A terminal model owns a real endpoint contract even when its current
+        // map is empty. Treating that as "no port surface" forever hides a
+        // missing declared input as assembly progress; only a still-compiling
+        // model (or a bare non-model structural endpoint) remains pending.
+        let terminal_model = model_status.is_some() && !compiling;
+        if compiling || (!has_port_surface && !terminal_model) {
             pending.push(unresolved);
             continue;
         }
@@ -748,6 +764,7 @@ pub fn propagate_connections(
 #[cfg(test)]
 mod wire_order_tests {
     use super::*;
+    use crate::SimComponent;
     use lunco_core::GlobalEntityId;
 
     /// P10: the fabric is compiled from ECS iteration order, but the SUMMATION
@@ -773,15 +790,18 @@ mod wire_order_tests {
             let sink = world.spawn_empty().id();
 
             for gid in spawn_order {
-                world.spawn(SimConnection {
-                    start_element: src[gid],
-                    start_connector: format!("out_{gid}"),
-                    start_is_input: false,
-                    end_element: sink,
-                    end_connector: "force_y".into(),
-                    scale: 1.0,
-                    offset: 0.0,
-                });
+                world.spawn((
+                    SimConnection {
+                        start_element: src[gid],
+                        start_connector: format!("out_{gid}"),
+                        start_is_input: false,
+                        end_element: sink,
+                        end_connector: "force_y".into(),
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                    BoundConnection,
+                ));
             }
 
             let mut compiled = CompiledWiring::default();
@@ -844,15 +864,18 @@ mod wire_order_tests {
                 ..Default::default()
             })
             .id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "demand".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "demand".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         let demand = |world: &World| -> f64 {
             world
@@ -901,15 +924,18 @@ mod wire_order_tests {
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         // Sink has an id but no port backend of any kind.
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "nonexistent_port".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "nonexistent_port".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
 
@@ -965,15 +991,18 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "not_yet_loaded".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "not_yet_loaded".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
 
@@ -1009,15 +1038,18 @@ mod wire_order_tests {
                 },
             ))
             .id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "drive_left".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "drive_left".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         world.run_system_once(propagate_connections).unwrap();
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
@@ -1051,15 +1083,18 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: "out".into(),
-            start_is_input: false,
-            end_element: sink,
-            end_connector: "angle".into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: "out".into(),
+                start_is_input: false,
+                end_element: sink,
+                end_connector: "angle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
 
         // Stand in for "this wire wrote successfully on an earlier tick", which
         // is all `landed` records. Reaching a real port backend would need a
@@ -1081,15 +1116,18 @@ mod wire_order_tests {
     }
 
     fn wire(world: &mut World, src: Entity, out: &str, dst: Entity, inp: &str) {
-        world.spawn(SimConnection {
-            start_element: src,
-            start_connector: out.into(),
-            start_is_input: false,
-            end_element: dst,
-            end_connector: inp.into(),
-            scale: 1.0,
-            offset: 0.0,
-        });
+        world.spawn((
+            SimConnection {
+                start_element: src,
+                start_connector: out.into(),
+                start_is_input: false,
+                end_element: dst,
+                end_connector: inp.into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            BoundConnection,
+        ));
     }
 
     fn loop_faults(world: &World) -> Vec<String> {
@@ -1143,8 +1181,9 @@ mod wire_order_tests {
 
     /// A control loop may reach a body force through a self-wired participant
     /// edge rather than through an inter-entity edge in the SCC. The force
-    /// classification must still see it and accept it only when every loop
-    /// participant declares the realtime contract.
+    /// classification must still see it and accept it when every PROGRAM in
+    /// the loop declares the realtime contract; the receiving body does not
+    /// make that promise.
     #[test]
     fn realtime_safe_loop_with_self_wired_force_is_accepted() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1154,10 +1193,18 @@ mod wire_order_tests {
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
         let a = world
-            .spawn((GlobalEntityId::from_raw(10), RealtimeSafe))
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                SimComponent::default(),
+                RealtimeSafe,
+            ))
             .id();
         let b = world
-            .spawn((GlobalEntityId::from_raw(20), RealtimeSafe))
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                SimComponent::default(),
+                RealtimeSafe,
+            ))
             .id();
         wire(&mut world, a, "out", b, "in");
         wire(&mut world, b, "out", a, "in");
@@ -1168,6 +1215,51 @@ mod wire_order_tests {
         assert!(
             loop_faults(&world).is_empty(),
             "a declared realtime-safe force loop is accepted, not reported as a generic fault"
+        );
+    }
+
+    /// The physical body is not a program and must not need a realtime promise
+    /// of its own. A program without that promise is still unsafe.
+    #[test]
+    fn force_loop_requires_realtime_safe_on_program_not_body() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let body = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let program = world
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                SimComponent::default(),
+                RealtimeSafe,
+            ))
+            .id();
+        wire(&mut world, body, "height", program, "height");
+        wire(&mut world, program, "netForce", body, "force_y");
+
+        world.run_system_once(propagate_connections).unwrap();
+        assert!(
+            loop_faults(&world).is_empty(),
+            "a safe program may close a feedback loop through an unmarked body"
+        );
+
+        let mut unsafe_world = World::new();
+        unsafe_world.init_resource::<PortRegistry>();
+        unsafe_world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        let body = unsafe_world.spawn(GlobalEntityId::from_raw(10)).id();
+        let program = unsafe_world
+            .spawn((GlobalEntityId::from_raw(20), SimComponent::default()))
+            .id();
+        wire(&mut unsafe_world, body, "height", program, "height");
+        wire(&mut unsafe_world, program, "netForce", body, "force_y");
+
+        unsafe_world.run_system_once(propagate_connections).unwrap();
+        assert_eq!(
+            loop_faults(&unsafe_world).len(),
+            1,
+            "an unpromised program must still reject the force loop"
         );
     }
 

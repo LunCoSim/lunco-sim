@@ -261,7 +261,6 @@ mod tests {
     use super::*;
     use crate::document::{LayerId, UsdDocument, UsdOp};
     use lunco_doc::{Document, DocumentOrigin};
-    use lunco_usd_bevy::usd_data::UsdDataExt;
     use openusd::sdf::Path as SdfPath;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";

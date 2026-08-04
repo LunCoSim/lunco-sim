@@ -12,10 +12,13 @@
 //! output = "textures/earth.png"
 //! ```
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::cache_dir;
+#[cfg(not(target_arch = "wasm32"))]
 use image::GenericImageView;
 #[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use usvg::{Options, Tree};
@@ -357,6 +360,7 @@ fn process_asset_to(
 /// voids into finite elevations that the runtime nodata fill could not detect.
 /// v2 (2026-07-27): ROI clamps to the valid-data bounding box, and a crop with
 /// >2% nodata fails the bake instead of shipping (`reject_if_mostly_nodata`).
+#[cfg(not(target_arch = "wasm32"))]
 const PIPELINE_VERSION: u32 = 4;
 
 /// Where the bake stamp lives: inside the output folder for folder outputs
@@ -734,6 +738,7 @@ fn valid_data_bounds(samples: &[f64], w: usize, h: usize) -> Option<(usize, usiz
 /// `resample_roi_bilinear` substitutes `0.0` for every non-finite neighbour, so
 /// by the time a value reaches the bake, "no data" has already been laundered
 /// into a plausible-looking measurement and `is_finite()` can no longer find it.
+#[cfg(not(target_arch = "wasm32"))]
 fn roi_samples(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Vec<f64> {
     // RGB sources keep their data in `planes`; nothing to check here (see
     // `valid_data_bounds`). Returning empty makes the guard a no-op rather than
@@ -774,6 +779,7 @@ fn roi_samples(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Ve
 /// The cap bounds the work and, more usefully, refuses to invent a large interior:
 /// a gap that survives it is too big to fill honestly and is a real authoring
 /// error, not a speckle.
+#[cfg(not(target_arch = "wasm32"))]
 fn fill_dem_voids(v: &mut [f64], n: usize, kind: &str) -> Result<usize, std::io::Error> {
     const MAX_PASSES: usize = 64;
     let idx = |x: usize, y: usize| y * n + x;
@@ -837,6 +843,7 @@ fn fill_dem_voids(v: &mut [f64], n: usize, kind: &str) -> Result<usize, std::io:
 ///
 /// Fails the bake instead of warning. A warning is what the previous behaviour
 /// effectively was, and an 18%-dead map shipped anyway.
+#[cfg(not(target_arch = "wasm32"))]
 fn reject_if_mostly_nodata(values: &[f64], kind: &str, limit: f64) -> Result<(), std::io::Error> {
     if values.is_empty() {
         return Ok(());
@@ -856,6 +863,7 @@ fn reject_if_mostly_nodata(values: &[f64], kind: &str, limit: f64) -> Result<(),
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_roi(
     cfg: &ProcessConfig,
     src: &GraySource,

@@ -110,10 +110,8 @@ pub(super) fn build_ops_from_events(
                         .and_then(|o| o.strip_prefix("plot:"))
                         .and_then(|rest| rest.split_once(':').map(|(_, s)| s.to_string()))
                         .or_else(|| {
-                            // Fallback for legacy / scratch plot
-                            // nodes whose origin isn't in the source
-                            // form yet — pull the signal out of the
-                            // node's `data` payload.
+                            // Unsaved plot nodes have no source origin yet;
+                            // pull the signal from the node payload.
                             node.data
                                 .downcast_ref::<lunco_viz::kinds::canvas_plot_node::PlotNodeData>()
                                 .map(|d| d.signal_path.clone())
@@ -653,11 +651,9 @@ pub(super) fn apply_ops(
     }
 
     let t_mirror_start = web_time::Instant::now();
-    // Mirror the post-edit source back to the registry-by-doc lookup
-    // so every other panel (code editor, breadcrumb, inspector)
-    // that reads the cached source sees the update immediately —
-    // the code editor doesn't watch the registry directly; it
-    // reads the `Arc<str>` on `open_model`.
+    // Mirror the post-edit source into the document registry so every
+    // other panel (code editor, breadcrumb, inspector) sees the update
+    // immediately through the document host.
     let fresh = world
         .get_resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.host(doc_id))

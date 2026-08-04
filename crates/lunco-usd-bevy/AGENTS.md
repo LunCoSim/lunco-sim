@@ -12,9 +12,9 @@ system-level overview).
 
 ## Reading USD attributes
 
-All composed reads go through the `UsdRead` trait (`src/read.rs`), which both the
-live `StageView` and the flattened `sdf::Data` implement — extractors are written
-once against `UsdRead` and read either source.
+All composed runtime reads go through the `UsdRead` trait (`src/read.rs`) and its
+live canonical `StageView` implementation. Authoring-layer reads use
+`UsdDataExt` separately; extractors must not switch between those authorities.
 
 **Real-valued reads use the `real` family, never `scalar::<f64>`/`scalar::<f32>`
 directly.** A bare typed scalar matches only one authored precision, so a value

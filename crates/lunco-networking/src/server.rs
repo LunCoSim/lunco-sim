@@ -8,7 +8,7 @@ use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 
 use crate::scenario::{
     cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
@@ -62,7 +62,9 @@ impl AssignedSessions {
 }
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
-use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
+use crate::shared::{
+    deserialize_env, is_dev_netcode_key, netcode_key, peer_to_session, serialize_env, PROTOCOL_ID,
+};
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
 use sha2::{Digest, Sha256};
@@ -330,6 +332,28 @@ fn load_pem_identity(cert_path: &str, key_path: &str) -> Result<Identity, String
 /// `Start`, and register the lifecycle observers + ferry systems.
 pub(crate) fn setup_host(app: &mut App, port: u16) {
     let (identity, digest) = resolve_identity();
+    let netcode_key = netcode_key();
+
+    // A missing deployment key selects the explicitly-marked development key.
+    // Keep that key useful for local smoke tests, but never let it authenticate
+    // a host reachable from the LAN. Production hosts opt into a real key and
+    // may then choose a public bind through `LUNCO_NET_BIND`.
+    let bind_host = std::env::var("LUNCO_NET_BIND").unwrap_or_else(|_| {
+        if is_dev_netcode_key(&netcode_key) {
+            "127.0.0.1".to_string()
+        } else {
+            "0.0.0.0".to_string()
+        }
+    });
+    let bind_ip = bind_host
+        .parse::<IpAddr>()
+        .unwrap_or_else(|error| panic!("invalid LUNCO_NET_BIND={bind_host}: {error}"));
+    if is_dev_netcode_key(&netcode_key) && !bind_ip.is_loopback() {
+        panic!(
+            "refusing non-loopback WebTransport bind {bind_ip} with the development netcode key; \
+             provide LUNCO_NETCODE_KEY or LUNCO_NETCODE_KEY_FILE before using LUNCO_NET_BIND"
+        );
+    }
 
     // Seed the *Copy invite link* prefill (LAN IP:port) + the cert digest a
     // browser guest must pin, onto the always-on NetStatus seam so the workbench
@@ -343,14 +367,14 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
         status.invite_digest = digest;
     }
 
-    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
+    let server_addr = SocketAddr::new(bind_ip, port);
     let server = app
         .world_mut()
         .spawn((
             Name::new("LunCoServer"),
             NetcodeServer::new(NetcodeConfig {
                 protocol_id: PROTOCOL_ID,
-                private_key: PRIVATE_KEY,
+                private_key: netcode_key,
                 // 30s (default was ~10s): match the client QUIC `max_idle_timeout`
                 // so a client that stalls during heavy startup (USD scene load +
                 // Modelica cosim compile) or under host load isn't reaped before
@@ -609,10 +633,8 @@ fn on_server_connected(
     // Initialize client session in RBAC registry as an *authenticated* Observer with
     // its server-issued token. Observer-authorized-by-default: read-only telemetry
     // plus possession/structural commands (which `authorize` gates at Observer) work
-    // immediately on connect — no profile-name round-trip required. The session is
-    // promoted to Operator (gaining SetPorts control) when it sets a name via
-    // `on_update_profile_rbac`. The token makes the session a server-issued credential
-    // (`is_authorized` requires one), closing the name-only self-promotion of M2.
+    // immediately on connect — no profile-name round-trip required. The role is
+    // deliberately assigned here and never promoted by a client-supplied name.
     rbac.sessions.insert(
         session.0,
         lunco_core::session::UserSession {
@@ -634,6 +656,7 @@ fn on_server_connected(
         &SyncEnvelope::Handshake(HandshakeMsg {
             session: session.0,
             tick: tick.0,
+            journal_author: crate::journal_plane::author_for_session(session),
             // Review N4: the client refuses the session on a mismatch rather than
             // mis-decoding every later message (bincode is positional).
             wire_version: crate::sync::WIRE_VERSION,
@@ -869,9 +892,8 @@ fn on_server_disconnected(
     mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
 ) {
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. `TelemetrySubscriptions` is not reaped here: a
-    // disconnecting client's telemetry subscriptions outlive its session
+    // `TelemetrySubscriptions` is not reaped here: a disconnecting client's
+    // telemetry subscriptions outlive its session
     // (needs a session/peer field on `TelemetrySubscription`, see
     // `lunco-api/src/subscription.rs`). Revisit before multiplayer hardening
     // (report_glm52.md CONC-1 / Tier B7).
@@ -1177,8 +1199,7 @@ fn collect_scenario_input(
             .cloned()
             .collect(),
     };
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. The host ships whatever the unconfined asset closure
+    // The host ships whatever the authored asset closure
     // walker reached. Revisit before multiplayer hardening
     // (REVIEW-2026-07-19.md finding #5).
     for f in lunco_assets::transitive_file_closure(
@@ -1452,7 +1473,7 @@ fn drive_scenario_manifest(
     };
     pending.task = None;
     match result {
-        Some((mut manifest, cid_paths)) => {
+        Some((manifest, cid_paths)) => {
             info!(
                 "[net] scenario manifest built: {} assets",
                 manifest.assets.len()

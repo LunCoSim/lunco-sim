@@ -69,8 +69,9 @@ target/debug/luncosim test \
 Capture the process exit code and the final authored verdict. A parse-only
 `--validate` run proves asset syntax; it does not prove that composition,
 projection, wiring, physics, and the scenario all ran. Likewise,
-`{"command_id": N}` means that an API command was queued, not that it
-succeeded.
+`{"data":{"accepted":true}}` means that an API command passed validation and
+was dispatched. Deferred commands return their completed result in the same
+response.
 
 ## 3. Declared topology is separate from live samples
 

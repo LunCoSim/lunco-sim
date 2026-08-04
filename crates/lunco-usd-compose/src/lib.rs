@@ -8,6 +8,7 @@
 
 mod resolver;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -65,6 +66,13 @@ pub fn compose_file_to_stage_with_assets(path: &Path, assets_root: Option<&Path>
 /// `twin_root` is used only for `twin://` arcs; the engine library remains
 /// resolved through `assets_root`. Keeping both roots explicit prevents a
 /// custom Twin from silently falling back to the process working directory.
+///
+/// This synchronous byte-assembly API is native-only. Browser USD loading
+/// goes through `lunco-usd-bevy`'s `LoadContext`, which is the async asset
+/// boundary that can fetch `lunco://` and `twin://` resources without touching
+/// a filesystem. Returning an explicit error here keeps the target boundary
+/// honest instead of exposing a native reader that cannot work on wasm.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage_with_roots(
     path: &Path,
     assets_root: Option<&Path>,
@@ -103,6 +111,18 @@ pub fn compose_file_to_stage_with_roots(
         .resolver(LuncoUsdResolver::new(bytes))
         .open(&root_id)
         .map_err(|e| anyhow!("USD composition error: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn compose_file_to_stage_with_roots(
+    path: &Path,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+) -> Result<Stage> {
+    let _ = (path, assets_root, twin_root);
+    Err(anyhow!(
+        "synchronous USD composition is unavailable on wasm; load the stage through lunco-usd-bevy"
+    ))
 }
 
 /// Discover a USDA layer's non-binary composition dependencies in canonical

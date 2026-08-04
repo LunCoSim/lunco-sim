@@ -361,11 +361,8 @@ impl SessionRbac {
         }
         // A trusted session must carry a **server-issued token**. The host mints one
         // per connection (`on_server_connected`) and for its own Owner session
-        // (`setup_host_rbac`); a session that reached the map without a token (e.g. a
-        // name-only `UpdateProfile` from an origin the server never issued) is not
-        // authorized. This is what stops the token-less Observer→Operator
-        // self-promotion (review M2) — authority now requires a credential the
-        // server, not the client, created.
+        // (`setup_host_rbac`); a session that reached the map without a token is
+        // not authorized. Roles are assigned by the host, never by a profile name.
         if session.token.is_none() {
             return false;
         }
@@ -511,13 +508,14 @@ pub struct ArticulatedLink;
 pub struct NetExcluded;
 
 /// Server-side record of a runtime spawn the host must replicate to clients,
-/// carrying the catalog id + spawn position so peers can reconstruct the
+/// carrying the catalog id + spawn pose so peers can reconstruct the
 /// geometry locally (M1) pinned to the host-allocated id. Added to the spawn
 /// root on the host; a wire system reads it once the id is minted.
 #[derive(Component, Clone, Debug)]
 pub struct NetSpawn {
     pub entry_id: String,
     pub position: Vec3,
+    pub rotation: Quat,
 }
 
 /// One replicated spawn the host told us to instantiate locally, pinned to the
@@ -529,6 +527,7 @@ pub struct ReplicatedSpawn {
     pub gid: u64,
     pub entry_id: String,
     pub position: Vec3,
+    pub rotation: Quat,
 }
 
 /// Queue of [`ReplicatedSpawn`]s awaiting local instantiation on a client.

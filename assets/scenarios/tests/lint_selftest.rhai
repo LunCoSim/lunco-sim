@@ -23,7 +23,7 @@
 // NOTHING LINTS ON LOAD — the linter is a verb. This scenario calls it exactly as
 // a user would:
 //
-//     cmd("RunLint", #{})            // or: {"command":"RunLint"} over HTTP/MCP
+//     cmd("RunLint", #{})            // or the tagged ExecuteCommand envelope over HTTP/MCP
 //     query("LintReport")
 //
 // and a scenario wanting a LIVE linter just calls the same pair on a cadence.

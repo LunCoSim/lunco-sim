@@ -22,7 +22,7 @@
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
-use lunco_twin::{DocumentKind, FileEntry, FileKind};
+use lunco_twin::{DocumentKindId, FileEntry, FileKind};
 use lunco_workspace::WorkspaceResource;
 
 use crate::ast_extract;
@@ -1124,7 +1124,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
 
         // Modelica docs are the only kind in the `ModelicaDocumentRegistry`
         // today; future kinds (USD, SysML) will need their own registries
-        // and a fan-out by `DocumentKind` here. The cross-domain
+        // and a fan-out by document kind id here. The cross-domain
         // workspace entry tells us which registry to query, so this
         // dispatch is centralised.
         let ws = world.resource::<WorkspaceResource>();
@@ -1152,7 +1152,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
         let entry = entry.expect("checked above");
 
         match entry.kind {
-            DocumentKind::Modelica => {
+            kind if kind.as_str() == "modelica" => {
                 let registry = world.resource::<ModelicaDocumentRegistry>();
                 let Some(host) = registry.host(doc_id) else {
                     return err_doc_not_found(doc_id);
@@ -1787,20 +1787,9 @@ fn err_doc_not_found(doc_id: DocumentId) -> ApiResponse {
     )
 }
 
-/// Stable string label for a [`DocumentKind`]. Matches the file-extension
-/// taxonomy in [`lunco_twin::file_kind`]. The `Other(s)` escape hatch
-/// passes the inner string through unchanged so future domain crates can
-/// expose new kinds without changes here — that's how Markdown will land
-/// when it graduates from `FileReference` to a real `Document` kind.
-fn document_kind_label(kind: &DocumentKind) -> String {
-    match kind {
-        DocumentKind::Modelica => "modelica".into(),
-        DocumentKind::Usd => "usd".into(),
-        DocumentKind::Sysml => "sysml".into(),
-        DocumentKind::Mission => "mission".into(),
-        DocumentKind::Data => "data".into(),
-        DocumentKind::Other(s) => s.clone(),
-    }
+/// Stable string label for a registered document kind.
+fn document_kind_label(kind: &DocumentKindId) -> String {
+    kind.as_str().to_owned()
 }
 
 /// Project a [`lunco_doc::DocumentOrigin`] onto a JSON object. Untitled docs carry

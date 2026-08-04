@@ -43,14 +43,14 @@ fn both_global_observers_run_for_one_event() {
 fn test_detach_joint_command() {
     let mut app = App::new();
     app.add_plugins(lunco_core::LunCoCorePlugin);
-    app.add_observer(lunco_luncosim_edit::commands::on_detach_joint);
-    app.register_type::<lunco_luncosim_edit::commands::DetachJoint>();
+    app.add_observer(lunco_scene_commands::commands::on_detach_joint);
+    app.register_type::<lunco_scene_commands::commands::DetachJoint>();
 
     let joint_entity = app.world_mut().spawn_empty().id();
     assert!(app.world().get_entity(joint_entity).is_ok());
 
     app.world_mut()
-        .trigger(lunco_luncosim_edit::commands::DetachJoint {
+        .trigger(lunco_scene_commands::commands::DetachJoint {
             target: joint_entity,
             intent: lunco_core::EditIntent::Interactive,
         });
@@ -84,7 +84,7 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
     // scheduled in FixedPostUpdate (after the physics writeback).
     app.add_systems(
         FixedPostUpdate,
-        lunco_luncosim_edit::ui::checkpoint_click::mark_reached_waypoints_on_enter,
+        lunco_scene_commands::runtime_waypoint::mark_reached_waypoints_on_enter,
     );
 
     // Set active_document in the workspace
@@ -187,7 +187,7 @@ fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
     app.init_resource::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>();
     app.add_systems(
         FixedPostUpdate,
-        lunco_luncosim_edit::ui::checkpoint_click::mark_reached_waypoints_on_enter,
+        lunco_scene_commands::runtime_waypoint::mark_reached_waypoints_on_enter,
     );
 
     let vessel = app
@@ -202,9 +202,7 @@ fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
         .id();
     let marker = app
         .world_mut()
-        .spawn(
-            lunco_luncosim_edit::ui::checkpoint_click::RuntimeWaypointBinding { vessel, index: 0 },
-        )
+        .spawn(lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding { vessel, index: 0 })
         .id();
     let zone = app
         .world_mut()

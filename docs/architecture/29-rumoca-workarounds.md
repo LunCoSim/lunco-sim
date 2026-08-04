@@ -76,7 +76,7 @@ inside the compiler and no caller can forget it**.
 It did not always live there, and the cost of that was steep: an audit at the
 0.9.20 bump found the strip missing on the *entire* experiments/FastRun surface
 (native `experiments_runner.rs` **and** the wasm `lunica_worker.rs` twin), on the
-worker's disk-fallback compile, and in `modelica_tester` — i.e. the sweep feature
+worker's disk-backed compile, and in `modelica_tester` — i.e. the sweep feature
 whose whole purpose is overriding inputs was silently demoting every bound input
 it swept. Moving the strip into the chokepoint fixed all four at once. Don't move
 it back out.
@@ -284,10 +284,10 @@ the *read* path recover routing too.
 closures, so it cannot cross threads.
 
 **Consequence.** The entire off-thread worker architecture exists to contain it:
-a dedicated OS thread natively, a second wasm instance in the browser, plus an
-`unsafe impl Send/Sync for InlineWorker`. This is the single most expensive
-workaround in the crate and the least likely to be fixed — treat it as the
-platform, not a bug to chase.
+a dedicated OS thread natively and a second wasm instance in the browser. The
+worker owns the session on both targets; no `Send`/`Sync` assertion or
+main-thread simulation path is used. This is the platform boundary, not a bug
+to chase.
 
 **Probe.** `fn assert_send<T: Send>() {} assert_send::<rumoca_sim::SimulationSession>();`
 — fails at compile time today.

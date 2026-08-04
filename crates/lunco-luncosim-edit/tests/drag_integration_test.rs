@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use lunco_core::DragModeActive;
-use lunco_luncosim_edit::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 
 // ─── Selection Flow Tests ─────────────────────────────────────────────────────
 

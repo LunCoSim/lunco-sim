@@ -20,7 +20,7 @@ use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 
 const NODE_KIND: &str = "autopilot.behavior";
 const EDGE_KIND: &str = "autopilot.flow";

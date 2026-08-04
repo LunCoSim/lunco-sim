@@ -159,9 +159,10 @@ fn scope_connector_mismatch(facts, members) {
 ///
 /// NAME CONVENTION. The connector attribute name MUST equal the Modelica
 /// connector member name in the bound `.mo` (`Pin p` → `connectors:p`,
-/// `HeatPort port` → `connectors:port`). This rule enforces the scope-level half:
-/// within one island, one name. The per-member half (the name matches the `.mo`)
-/// is the authoring rule documented alongside this policy.
+/// `HeatPort port` → `connectors:port`). A two-ended component conventionally
+/// spells its same-type members `port_a` and `port_b`; those normalize to the
+/// `port` domain for this scope-level check. The per-member half (the name
+/// matches the `.mo`) is the authoring rule documented alongside this policy.
 ///
 /// ⚠ EXPRESSION COMPLEXITY. rhai caps expression depth and rejects the whole
 /// policy at compile time if a rule is too dense (see the note on

@@ -43,6 +43,7 @@ POST /api/commands
 Content-Type: application/json
 
 {
+  "type": "ExecuteCommand",
   "command": "DriveRover",
   "params": {
     "target": 42,
@@ -56,8 +57,9 @@ Content-Type: application/json
 
 ```json
 {
-  "command_id": 42,
-  "status": "queued"
+  "data": {
+    "accepted": true
+  }
 }
 ```
 
@@ -91,6 +93,7 @@ surfaces and other clients:
 
 ```json
 {
+  "type": "ExecuteCommand",
   "command": "ReadExposures",
   "params": { "surface": "hud" }
 }

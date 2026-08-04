@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
 use crate::SpawnState;
+use lunco_scene_commands::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
 
 /// Spawn palette panel — lists spawnable objects by category.
 pub struct SpawnPalette;

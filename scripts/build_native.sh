@@ -360,77 +360,6 @@ EOF
     info "LunCoSim app identity/icons staged for $platform"
 }
 
-# The Quadro K2100M on the reported Windows laptop loses its Vulkan device,
-# while its DX12 backend completes the same scene load. Keep this launcher
-# separate from run.bat: Vulkan remains the default for machines where it is
-# stable, and this is an explicit, discoverable compatibility choice.
-#
-# `.sh` deliberately targets Git Bash, which is already the shell used to run
-# this packager on Windows. PowerShell users can apply the same one-line
-# `WGPU_BACKEND=dx12` setting before invoking luncosim.exe.
-write_dx12_compat_launcher() {
-    local dir="$1" binary="$2"
-    local launcher="$dir/${binary}_dx12.sh"
-    cat > "$launcher" <<EOF
-#!/usr/bin/env bash
-# DX12 compatibility launcher for the Windows luncosim package.
-#
-# Use this on legacy NVIDIA laptops where Vulkan reports Device(Lost) during
-# the first rendered scene. This changes only the wgpu backend; simulation,
-# assets, and persisted user data are unchanged.
-#
-# The launcher intentionally clears the Vulkan startup diagnostic override.
-# DX12 uses wgpu's normal indirect-call validation policy.
-set -euo pipefail
-cd "\$(dirname "\$0")"
-export WGPU_BACKEND=dx12
-unset WGPU_VALIDATION_INDIRECT_CALL
-exec "./$binary.exe" "\$@"
-EOF
-    chmod +x "$launcher"
-}
-
-# Fast is the deliberately simple visual profile for old/integrated GPUs. It
-# keeps the caller's selected backend: use it when the normal backend works but
-# the scene is too slow. `luncosim_dx12_fast.sh` combines it with the K2100M
-# DX12 workaround above when Vulkan itself is unreliable.
-#
-# These are Git-Bash launchers. The quoted `"$@"` preserves normal luncosim CLI
-# arguments, so a tester can still add `--scene` or `--no-vsync` after the script.
-write_fast_compat_launchers() {
-    local dir="$1" binary="$2"
-    local fast="$dir/${binary}_fast.sh"
-    local dx12_fast="$dir/${binary}_dx12_fast.sh"
-
-    cat > "$fast" <<EOF
-#!/usr/bin/env bash
-# Fast-renderer launcher for the Windows luncosim package.
-#
-# Keeps the current wgpu backend, but starts luncosim with the fast visual
-# profile: unlit texture-free PBR plus HDR, bloom and MSAA disabled. It also
-# opens a smaller 960x540 window, which reduces the framebuffer work on old GPUs.
-set -euo pipefail
-cd "\$(dirname "\$0")"
-exec "./$binary.exe" --render-profile fast "\$@"
-EOF
-    chmod +x "$fast"
-
-    cat > "$dx12_fast" <<EOF
-#!/usr/bin/env bash
-# DX12 + fast-renderer compatibility launcher for the Windows luncosim package.
-#
-# Use this on legacy NVIDIA laptops when Vulkan loses the GPU device and the
-# normal DX12 renderer is still too slow. It changes only renderer startup
-# policy; simulation, assets and persisted user data are unchanged.
-set -euo pipefail
-cd "\$(dirname "\$0")"
-export WGPU_BACKEND=dx12
-unset WGPU_VALIDATION_INDIRECT_CALL
-exec "./$binary.exe" --render-profile fast "\$@"
-EOF
-    chmod +x "$dx12_fast"
-}
-
 # ── Write a README for the package ────────────────────────────────────────
 write_readme() {
     local dir="$1" binary="$2" platform="$3" arch="$4"
@@ -479,21 +408,6 @@ API testing, etc.). See \`skills/README.md\` for the index.
 \`AGENTS.md\` documents the project conventions for AI agents (Bevy 0.18,
 plugin layering, tunability mandate, TDD-first).
 EOF
-    if is_windows "$platform" && [ "$binary" = "luncosim" ]; then
-        cat >> "$readme" <<'EOF'
-## Legacy GPU launchers (Git Bash)
-
-- `luncosim_dx12.sh` — use when Vulkan fails with `Device(Lost)`.
-- `luncosim_fast.sh` — keeps the normal backend but uses the fast visual
-  profile for slow GPUs.
-- `luncosim_dx12_fast.sh` — combines DX12 with the fast visual profile.
-
-The fast profile is also available directly as:
-
-    .\luncosim.exe --render-profile fast
-
-EOF
-    fi
     cat >> "$readme" <<EOF
 
 ## Cache directory
@@ -768,12 +682,6 @@ fi
 # Write launcher script
 if is_windows "$TRIPLE"; then
     write_launcher_windows "$OUT_DIR" "$BINARY"
-    if [ "$BINARY" = "luncosim" ]; then
-        write_dx12_compat_launcher "$OUT_DIR" "$BINARY"
-        write_fast_compat_launchers "$OUT_DIR" "$BINARY"
-        info "DX12 compatibility launcher: $OUT_DIR/luncosim_dx12.sh"
-        info "Fast-renderer launchers: $OUT_DIR/luncosim_fast.sh and $OUT_DIR/luncosim_dx12_fast.sh"
-    fi
 else
     write_launcher_unix "$OUT_DIR" "$BINARY"
 fi

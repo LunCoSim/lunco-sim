@@ -8,7 +8,7 @@
 #   ./tests/api/agent_workflow.sh [PORT]
 #
 # Workbench must already be running with --api:
-#   cargo run --bin lunica -- --api 3000
+#   target/debug/luncosim --api 3000
 #
 # IMPORTANT: this script DOES NOT pkill or send Exit at the end. It walks
 # in, drives the workflow, and walks out — leaving the user's session
@@ -38,7 +38,7 @@ cmd() {
     fi
     curl -s -X POST "${BASE}/commands" \
         -H "Content-Type: application/json" \
-        -d "{\"command\":\"${command}\",\"params\":${params}}"
+        -d "{\"type\":\"ExecuteCommand\",\"command\":\"${command}\",\"params\":${params}}"
 }
 
 # `assert_jq <jq-filter> <expected> <description>`
@@ -84,7 +84,7 @@ echo "⏳ Waiting for API…"
 for i in {1..10}; do
     if curl -s -o /dev/null -X POST "${BASE}/commands" \
         -H "Content-Type: application/json" \
-        -d '{"command":"DiscoverSchema","params":{}}' 2>/dev/null; then
+        -d '{"type":"DiscoverSchema"}' 2>/dev/null; then
         echo "✅ API ready"
         break
     fi
@@ -115,7 +115,7 @@ echo
 # ── 2. open_uri ────────────────────────────────────────────────────────
 echo "📂 2. open_uri(\"$URI\")"
 RESP=$(cmd "Open" "{\"uri\":\"$URI\"}")
-assert_truthy '.command_id' "Open accepted"
+assert_truthy '.data.accepted' "Open accepted"
 echo
 
 # ── 3. list_open_documents — resolve doc_id ───────────────────────────
@@ -161,7 +161,7 @@ echo
 # ── 5. compile_model with explicit class ──────────────────────────────
 echo "🔨 5. compile_model(doc=$DOC_ID, class=\"RocketStage\")"
 RESP=$(cmd "CompileActiveModel" "{\"doc\":$DOC_ID,\"class\":\"RocketStage\"}")
-assert_truthy '.command_id // .data' "Compile accepted"
+assert_truthy '.data.accepted' "Compile accepted"
 echo "  ⏳ waiting up to 60s for compile to finish…"
 for i in {1..120}; do
     sleep 0.5
@@ -253,7 +253,7 @@ echo
 # ── 9. resume sim & 10. snapshot — assert thrust value comes back ─────
 echo "▶  9. ResumeActiveModel(doc=$DOC_ID)"
 RESP=$(cmd "ResumeActiveModel" "{\"doc\":$DOC_ID}")
-assert_truthy '.command_id // .data' "Resume accepted"
+assert_truthy '.data.accepted' "Resume accepted"
 sleep 1.5  # let a few sim steps run
 echo
 
@@ -277,7 +277,7 @@ echo
 # ── 11. PauseActiveModel — clean shutdown ─────────────────────────────
 echo "⏸  11. PauseActiveModel(doc=$DOC_ID)"
 RESP=$(cmd "PauseActiveModel" "{\"doc\":$DOC_ID}")
-assert_truthy '.command_id // .data' "Pause accepted"
+assert_truthy '.data.accepted' "Pause accepted"
 echo
 
 # ── Summary ───────────────────────────────────────────────────────────

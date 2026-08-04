@@ -13,7 +13,7 @@ use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 // Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate `PbrLook`
 // and its shader keys mutate `ShaderLook`; the render binders re-materialise on
 // `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
@@ -38,8 +38,8 @@ use lunco_usd_bevy::{
 /// declares this command's wire channel and needs nothing but the type, so keeping
 /// the definition in core is what let `lunco-networking` drop its dependency on
 /// this crate. The HANDLER (`on_spawn_entity_command`) stays here, with the
-/// catalog it spawns from. Re-exported so existing call sites are unchanged.
-pub use lunco_core::SpawnEntity;
+/// catalog it spawns from. Callers use the command type from `lunco-core`
+/// directly.
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
@@ -527,6 +527,7 @@ pub fn on_spawn_entity_command(
         lunco_core::NetSpawn {
             entry_id: cmd.entry_id.clone(),
             position,
+            rotation,
         },
     ));
 }
@@ -558,18 +559,12 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
-        // for ease of debugging. `NetSpawn` carries no rotation, so replicated
-        // spawns always land at `Quat::IDENTITY`; a host-side non-identity
-        // orientation is wrong on clients until the first transform snapshot
-        // (static props may never be corrected). Revisit before multiplayer
-        // hardening (INDEPENDENT-REVIEW-2026-07-19_agy.md SCENE-1).
         let result = spawn_usd_entry(
             &mut commands,
             &asset_server,
             entry,
             pos,
-            Quat::IDENTITY,
+            job.rotation,
             SpawnAnchor::scene_root(scene_root),
         );
         // Pin the host id; mark runtime instance + replication target. Forced
@@ -1911,11 +1906,11 @@ pub fn clear_kinematic_pulse_velocity(
 /// just add a `match` arm. Drive it from curl after a screenshot to iterate:
 ///
 /// ```jsonc
-/// {"command":"SetObjectProperty",
+/// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
-/// {"command":"SetObjectProperty",
+/// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
-/// {"command":"SetObjectProperty",
+/// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"cell_a","value":"0.1,0.8,0.2"}}
 /// ```
 ///
@@ -2953,8 +2948,8 @@ fn install_shader(
 /// optionally bind it to a target entity — all live, no restart.
 ///
 /// ```json
-/// {"command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
-/// {"command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
+/// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
+/// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
 /// ```
 #[Command(default)]
 pub struct CreateShader {
@@ -3009,7 +3004,7 @@ pub fn on_create_shader(
 /// must be prop-fillable per the engine-param registry.
 ///
 /// ```json
-/// {"command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+/// {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
 /// ```
 #[Command(default)]
 pub struct ImportShader {
@@ -3172,7 +3167,7 @@ pub fn on_rescan_shaders(
 /// Entities currently using it keep their in-memory material for the session.
 ///
 /// ```json
-/// {"command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+/// {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
 /// ```
 #[Command(default)]
 pub struct DeleteShader {

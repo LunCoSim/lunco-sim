@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
 use rumoca_compile::parsing::ast::StoredDefinition;
+#[cfg(not(target_arch = "wasm32"))]
 use rumoca_phase_parse::parse_to_syntax;
 
 use super::ops::{FreshAst, ModelicaChange, ModelicaOp, CHANGE_HISTORY_CAPACITY};
@@ -255,37 +256,36 @@ impl ModelicaDocument {
             parts.join(".")
         };
 
-        // Unified MSL-class AST source (native + wasm): prefer the
-        // pre-parsed bundle — `parsed_msl_bundle` lazily materialises it
-        // from `parsed-msl.bin` on native (one ~1–3 s decode, then every
-        // drill-in is an in-memory hit), and the chunked decoder fills it
-        // on wasm. Keyed by the file path exactly as the indexer wrote it
-        // (`indexer::ingest_file`). On a bundle miss, fall back to a
-        // direct parse of the source text we already read above — this
-        // works identically on both targets (no fs / rayon dependency,
-        // unlike the old native-only `parse_files_parallel`, which paid a
-        // full rumoca parse of the whole `package.mo` wrapper — tens of
-        // seconds for `Modelica/Blocks/package.mo`).
+        // Unified MSL-class AST source: prefer the pre-parsed bundle —
+        // `parsed_msl_bundle` lazily materialises it from `parsed-msl.bin`
+        // on native (one ~1–3 s decode, then every drill-in is an in-memory
+        // hit), and the worker transfer fills it on wasm. Keyed by the file
+        // path exactly as the indexer wrote it (`indexer::ingest_file`).
+        // Native may repair a bundle miss by parsing this one source file;
+        // wasm reports the miss and waits for the worker-owned bundle instead.
         let key = path.to_string_lossy().to_string();
         let bundle_hit = crate::msl_remote::parsed_msl_bundle()
             .map(|b| b.iter().any(|(k, _)| *k == key))
             .unwrap_or(false);
-        // A bundle MISS here means we fall back to fully parsing `full_source`
-        // — for a package wrapper like `Modelica/Blocks/package.mo` (~150 KB,
-        // the whole Blocks package inlined) that is the "tens of seconds" parse
-        // the fallback comment warns about, and on single-threaded wasm it can
-        // stall the drill-in task long enough to look like a hang. Worth a
-        // breadcrumb when it happens.
+        // A native bundle miss can be a slow package-wrapper parse; keep the
+        // breadcrumb so a stale or missing generated artifact is diagnosable.
         if !bundle_hit {
             bevy::log::warn!(
                 "[load_msl_class] parsed-bundle MISS for `{key}` ({} bytes) — \
-                 full reparse (slow for large package.mo wrappers)",
+                 native source repair or worker retry required",
                 full_source.len()
             );
         }
-        let ast: StoredDefinition = match crate::msl_remote::parsed_msl_bundle()
-            .and_then(|b| b.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()))
-        {
+        let bundled_ast = crate::msl_remote::parsed_msl_bundle()
+            .and_then(|b| b.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()));
+        #[cfg(target_arch = "wasm32")]
+        let ast: StoredDefinition = bundled_ast.ok_or_else(|| {
+            format!(
+                "parsed MSL AST unavailable for `{key}`; wait for the Web Worker MSL load and retry"
+            )
+        })?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let ast: StoredDefinition = match bundled_ast {
             Some(ast) => ast,
             None => rumoca_phase_parse::parse_to_ast(&full_source, &key)
                 .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,

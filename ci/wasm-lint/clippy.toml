@@ -41,6 +41,4 @@ disallowed-methods = [
     { path = "bevy_ecs::world::EntityWorldMut::add_child", reason = "See EntityCommands::add_child — same atomicity contract." },
     { path = "bevy_transform::commands::BuildChildrenTransformExt::set_parent_in_place", reason = "Use lunco_core::attach::migrate_to_grid." },
 
-    # ── Deep-cloning a USD stage reader ───────────────────────────────
-    { path = "openusd::usda::TextReader::clone", reason = "Borrow `&*stage.reader` — deep-cloning the stage reader copies the whole HashMap per call." },
 ]

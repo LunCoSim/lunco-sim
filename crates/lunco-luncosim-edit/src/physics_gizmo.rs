@@ -84,7 +84,7 @@ use lunco_core::coords::ancestor_grid_anchor;
 use lunco_core::{on_command, register_commands, Command, GridAnchor};
 use lunco_mobility::WheelRaycast;
 
-use crate::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 
 // ── Settings resource + typed command ────────────────────────────────────
 

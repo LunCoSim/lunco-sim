@@ -25,7 +25,7 @@ use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 
 /// Change-driven view-model for the Command Deck. Reads selection, possession
 /// and the behaviour spec each `Update` (single-entity O(1) lookups — the

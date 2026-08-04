@@ -19,8 +19,8 @@
 //!
 //! ## Provider semantics
 //!
-//! - **Returns data**, unlike Reflect Event commands which return
-//!   `command_accepted`. Use this trait when the caller needs a
+//! - **Returns data**, unlike ordinary Reflect Event commands which return an
+//!   acknowledgement. Use this trait when the caller needs a
 //!   structured response.
 //! - **Has `&mut World` access** — providers can read any resource and
 //!   run any query they need.

@@ -27,36 +27,15 @@ mod world_label;
 pub use shader_look::ShaderLookCache;
 // The concrete custom-shader material + its render pipeline. It lived in
 // `lunco-materials` until the render decoupling; that crate is now render-free and
-// holds only the *intent* (`ShaderLook`) and the reflected schema. Re-exported here
-// so the GUI binaries (and anything else that legitimately needs the concrete type
-// in a RENDER build) can still reach it.
+// holds only the *intent* (`ShaderLook`) and the reflected schema. Export the
+// concrete render type from this crate's public render façade so GUI binaries
+// do not depend on the implementation module directly.
 pub use shader_material::*;
 
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
-
-/// Startup-only rendering policy selected by the desktop binary.
-///
-/// [`RenderProfile::Fast`] is deliberately a compatibility mode, not a second
-/// appearance model: it keeps authored meshes and colours visible but replaces
-/// ordinary PBR materials with texture-free unlit materials. GPU rendering still
-/// requires Bevy's built-in shader; it avoids the expensive lighting, texture
-/// sampling, HDR/bloom and MSAA paths rather than promising an impossible
-/// "no-shader" renderer.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RenderProfile {
-    #[default]
-    Standard,
-    Fast,
-}
-
-impl RenderProfile {
-    pub const fn is_fast(self) -> bool {
-        matches!(self, Self::Fast)
-    }
-}
 
 /// Binds appearance intent to concrete materials. Add this in render builds; omit
 /// it headless.
@@ -95,8 +74,7 @@ pub struct LuncoRenderPlugin;
 
 impl Plugin for LuncoRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RenderProfile>()
-            .init_resource::<PbrLookCache>()
+        app.init_resource::<PbrLookCache>()
             // `PbrLook` derives `Reflect` but was never REGISTERED, which left it
             // invisible to every generic reflection surface in the codebase:
             // `get(id, "PbrLook.emissive.red")` from any scripting language, the
@@ -113,7 +91,7 @@ impl Plugin for LuncoRenderPlugin {
             // scene's authored `UsdPreviewSurface` intent in typed, render-free
             // form. Registering it is what turns that from an internal detail into
             // a UNIVERSAL read surface: one line, no new verb, no per-language
-            // shim — anything that wants to know what a surface looks like asks the
+            // adapter — anything that wants to know what a surface looks like asks the
             // component the loader already filled, rather than re-deriving it.
             .register_type::<PbrLook>()
             .add_observer(bind_pbr_look)
@@ -140,22 +118,15 @@ impl Plugin for LuncoRenderPlugin {
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
         // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
         // before it loads the shared WGSL modules through the `AssetServer`.
-        if app.world().resource::<RenderProfile>().is_fast() {
-            // Do not register the user-WGSL material pipeline in fast mode. The
-            // fallback keeps those meshes visible with one shared unlit material;
-            // terrain map and horizon wiring only feed that retired pipeline.
-            shader_look::build_fast(app);
-        } else {
-            shader_look::build(app);
-            // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
-            // to be added by hand in `lunco-luncosim`'s UI plugin and `luncosim`'s main;
-            // both were deleted when the material moved into this crate, because Bevy
-            // panics on a duplicate plugin.
-            app.add_plugins(shader_material::ShaderMaterialPlugin);
-            terrain_maps::build(app);
-            horizon_shade::build(app);
-            env_light::build(app);
-        }
+        shader_look::build(app);
+        // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
+        // to be added by hand in `lunco-luncosim`'s UI plugin and `luncosim`'s main;
+        // both were deleted when the material moved into this crate, because Bevy
+        // panics on a duplicate plugin.
+        app.add_plugins(shader_material::ShaderMaterialPlugin);
+        terrain_maps::build(app);
+        horizon_shade::build(app);
+        env_light::build(app);
         world_label::build(app);
         sensor_beams::build(app);
         // Connectivity beams: runtime-spawned mesh, authored look, local Transform (no
@@ -168,13 +139,9 @@ impl Plugin for LuncoRenderPlugin {
 /// cameras created after startup by an asynchronously loaded USD scene.
 fn ensure_lunar_shadow_filtering(
     add: On<Add, Camera3d>,
-    profile: Res<RenderProfile>,
     cameras: Query<(), Without<bevy::light::ShadowFilteringMethod>>,
     mut commands: Commands,
 ) {
-    if profile.is_fast() {
-        return;
-    }
     let entity = add.entity;
     if cameras.get(entity).is_ok() {
         commands
@@ -235,30 +202,7 @@ fn bevy_reflectance_from_ior(ior: f32) -> f32 {
 }
 
 /// Build the concrete `StandardMaterial` a look describes.
-fn standard_material(look: &PbrLook, profile: RenderProfile) -> StandardMaterial {
-    if profile.is_fast() {
-        return StandardMaterial {
-            // Flat colour keeps the authored scene legible without lighting,
-            // texture sampling, normal maps, clearcoat or environment probes.
-            base_color: Color::from(look.base_color),
-            emissive: look.emissive,
-            unlit: true,
-            double_sided: look.double_sided,
-            alpha_mode: match look.alpha {
-                SurfaceAlpha::Opaque => AlphaMode::Opaque,
-                SurfaceAlpha::Mask(t) => AlphaMode::Mask(t),
-                SurfaceAlpha::Blend => AlphaMode::Blend,
-                SurfaceAlpha::Add => AlphaMode::Add,
-            },
-            cull_mode: if look.double_sided {
-                None
-            } else {
-                Some(bevy::render::render_resource::Face::Back)
-            },
-            ..default()
-        };
-    }
-
+fn standard_material(look: &PbrLook) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::from(look.base_color),
         emissive: look.emissive,
@@ -298,25 +242,23 @@ fn standard_material(look: &PbrLook, profile: RenderProfile) -> StandardMaterial
 /// the build recipe.
 fn material_for(
     look: &PbrLook,
-    profile: RenderProfile,
     cache: &mut PbrLookCache,
     materials: &mut Assets<StandardMaterial>,
 ) -> Handle<StandardMaterial> {
-    cache.resolve(look, materials, |look| standard_material(look, profile))
+    cache.resolve(look, materials, standard_material)
 }
 
 /// `On<Add, PbrLook>` — the moment intent appears, give it a material.
 fn bind_pbr_look(
     add: On<Add, PbrLook>,
     looks: Query<&PbrLook>,
-    profile: Res<RenderProfile>,
     mut cache: ResMut<PbrLookCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
-    let handle = material_for(look, *profile, &mut cache, &mut materials);
+    let handle = material_for(look, &mut cache, &mut materials);
 
     let mut ec = commands.entity(e);
     // Keep the concrete render material exclusive too. Although callers must
@@ -348,7 +290,6 @@ fn bind_pbr_look(
 /// draws twice.
 fn rebind_changed_pbr_look(
     changed: Query<(Entity, &PbrLook, Option<&MeshMaterial3d<StandardMaterial>>), Changed<PbrLook>>,
-    profile: Res<RenderProfile>,
     mut cache: ResMut<PbrLookCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
@@ -357,12 +298,12 @@ fn rebind_changed_pbr_look(
         if look.unshared {
             // Private material: overwrite the asset it already owns.
             if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
-                *existing = standard_material(look, *profile);
+                *existing = standard_material(look);
                 apply_shadow_flag(&mut commands, e, look);
                 continue;
             }
         }
-        let handle = material_for(look, *profile, &mut cache, &mut materials);
+        let handle = material_for(look, &mut cache, &mut materials);
         // `try_insert`, not `insert`. The USD projector's despawns can no longer
         // race this (it runs in `PreUpdate`), but `ClearScene` and the preview
         // viewport still despawn entities *within* `Update`, and Bevy's deferred
@@ -581,26 +522,8 @@ mod tests {
     /// every material in the workspace silently changes its specular response.
     #[test]
     fn default_look_keeps_bevy_default_reflectance() {
-        let m = standard_material(&PbrLook::default(), RenderProfile::Standard);
+        let m = standard_material(&PbrLook::default());
         assert!((m.reflectance - StandardMaterial::default().reflectance).abs() < 1e-6);
         assert!((m.ior - StandardMaterial::default().ior).abs() < 1e-6);
-    }
-
-    #[test]
-    fn fast_profile_uses_unlit_texture_free_materials() {
-        let mut look = PbrLook::matte(LinearRgba::rgb(0.2, 0.3, 0.4));
-        look.textures.base_color = Some(Handle::default());
-        look.textures.emissive = Some(Handle::default());
-        look.textures.metallic_roughness = Some(Handle::default());
-        look.textures.normal_map = Some(Handle::default());
-        look.textures.occlusion = Some(Handle::default());
-
-        let material = standard_material(&look, RenderProfile::Fast);
-        assert!(material.unlit);
-        assert!(material.base_color_texture.is_none());
-        assert!(material.emissive_texture.is_none());
-        assert!(material.metallic_roughness_texture.is_none());
-        assert!(material.normal_map_texture.is_none());
-        assert!(material.occlusion_texture.is_none());
     }
 }

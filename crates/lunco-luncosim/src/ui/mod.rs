@@ -223,6 +223,7 @@ impl Plugin for SandboxUiPlugin {
                 init_current_scene_path,
                 register_sandbox_scenarios_menu,
                 register_downloadable_assets_settings,
+                register_graphics_settings,
             ),
         )
         .add_observer(
@@ -709,6 +710,49 @@ fn register_downloadable_assets_settings(world: &mut World) {
     });
 }
 
+/// Add luncosim's local-light policy to the workbench-owned Graphics group.
+/// The quality setting and terrain rows live in `lunco-workbench`; this row is
+/// app-specific because possession is the policy owner for rover headlights.
+fn register_graphics_settings(world: &mut World) {
+    use crate::light_policy::LocalLightShadows;
+    use bevy_egui::egui;
+
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings_submenu("Graphics", |ui, world| {
+        ui.label(egui::RichText::new("Local light shadows").weak().small());
+        let Some(mut settings) = world
+            .get_resource_mut::<crate::light_policy::ShadowCastingSettings>()
+        else {
+            ui.label(egui::RichText::new("(local-light policy unavailable)").weak());
+            return;
+        };
+        egui::ComboBox::from_id_salt("graphics.local_light_shadows")
+            .selected_text(match settings.local_lights {
+                LocalLightShadows::Off => "Off",
+                LocalLightShadows::All => "All",
+                LocalLightShadows::PossessedOnly => "Possessed vessel only",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut settings.local_lights, LocalLightShadows::Off, "Off");
+                ui.selectable_value(&mut settings.local_lights, LocalLightShadows::All, "All");
+                ui.selectable_value(
+                    &mut settings.local_lights,
+                    LocalLightShadows::PossessedOnly,
+                    "Possessed vessel only",
+                );
+            });
+        ui.label(
+            egui::RichText::new(
+                "Controls rover headlights and fill lamps; the Rendering quality choice controls the shared sun shadow atlas.",
+            )
+            .weak()
+            .small(),
+        );
+    });
+}
+
 fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
@@ -852,7 +896,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // The store fills asynchronously, so a scene not yet read simply
         // shows no tooltip this frame and gets one on the next redraw.
         let descs: Vec<Option<String>> = {
-            let store = world.resource::<lunco_luncosim_edit::catalog::AssetMetaStore>();
+            let store = world.resource::<lunco_scene_commands::catalog::AssetMetaStore>();
             assets
                 .iter()
                 .map(|a| store.description(&a.asset_path).map(str::to_string))

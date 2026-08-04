@@ -361,16 +361,24 @@ pub fn take_script_rejects() -> Vec<String> {
 
 /// Well-known capability keys for script operations that are NOT a reflected
 /// command but are still authorized through the same [`CommandPolicyRegistry`]
-/// gate as commands — currently the structural mutation verbs (add/remove a
-/// component, despawn), which restructure a target entity directly via
-/// reflection rather than by dispatching a command. Mirrors the avatar-relay
-/// capability keys in `lunco_core::session::capability`.
+/// gate as commands — structural mutation and reflected field/resource writes.
+/// These operations mutate ECS directly rather than dispatching a command, so
+/// they name their capability explicitly at the owning reflection seam.
 pub mod capability {
     /// Structurally mutate a target entity from a script (`add` / `remove` a
     /// component, `despawn`). Registered `OWNED_CONTROL` (see
     /// `commands::register_command_policies`) so a remote script may only
     /// restructure entities its launching session owns.
     pub const STRUCTURAL_MUTATE: &str = "ScriptStructuralMutate";
+    /// Mutate a reflected component field from a remote script. Ownership is
+    /// required for the target entity, just like structural mutation.
+    pub const FIELD_MUTATE: &str = "ScriptFieldMutate";
+    /// Mutate a reflected global resource field from a remote script. There is
+    /// no entity to own, so this is an Operator-floor capability.
+    pub const SETTING_MUTATE: &str = "ScriptSettingMutate";
+    /// Replace or remove an installed policy hook from a script. Hook changes
+    /// alter authorization globally, so remote scripts need Operator authority.
+    pub const POLICY_MUTATE: &str = "ScriptPolicyMutate";
 }
 
 /// The §3.4 authority gate, shared by [`cmd`] and the structural verbs so every
@@ -863,6 +871,7 @@ pub fn set_component_field(
 
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        enforce_script_authority(world, capability::FIELD_MUTATE, Some(gid))?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -900,6 +909,7 @@ pub fn set_resource_field(
     let (res, sub) = split_type_path(path);
 
     with_world(|world| -> Result<(), String> {
+        enforce_script_authority(world, capability::SETTING_MUTATE, None)?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg

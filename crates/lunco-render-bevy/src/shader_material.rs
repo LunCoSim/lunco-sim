@@ -141,9 +141,9 @@ pub struct ShaderMaterial {
     /// [`ATTRIBUTE_MORPH_TARGET`]. `None` (the common case) = Bevy's default mesh
     /// vertex shader, so the fragment-only path is unchanged.
     pub vertex_shader: Option<Handle<Shader>>,
-    /// Reflected parameter layout for [`shader`](Self::shader). Defaults to the
-    /// legacy fixed layout; the reflect system upgrades it once the shader
-    /// source is available. Cheap shared `Arc`. Not a bind-group resource.
+    /// Reflected parameter layout for [`shader`](Self::shader). Starts empty;
+    /// the reflect system derives the layout once the shader source is
+    /// available. Cheap shared `Arc`. Not a bind-group resource.
     pub schema: Arc<ParamSchema>,
     /// Authored/live parameter values by name; packed into `raw` on change.
     /// Not a bind-group resource.

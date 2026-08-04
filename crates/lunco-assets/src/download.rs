@@ -25,6 +25,7 @@
 use crate::{cache_dir, process::ProcessConfig};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 

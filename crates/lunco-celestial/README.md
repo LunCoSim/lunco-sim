@@ -44,7 +44,7 @@ lunco-celestial/src/
 |---|---|
 | `lunco-core` | `SimTick`, `Command` macros |
 | `lunco-time` | `WorldTime` / `TimeTransport` — the unified time spine (reads epoch/regime; no local clock) |
-| `lunco-terrain-globe` | Terrain tile re-exports for backward compatibility (core/surface siblings) |
+| `lunco-terrain-globe` | Cube-sphere terrain tile implementation used by the celestial globe projector |
 | `lunco-controller` | Avatar input map (used by camera spawning) |
 
 ## Multiplayer

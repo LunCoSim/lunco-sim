@@ -8,7 +8,7 @@ use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
 use lunco_core::ControlBinding;
 use lunco_core::{Avatar, Spacecraft};
-use lunco_time::{TimeTransport, TransportMode, WorldTime};
+use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 /// Mission Control panel — everything in one place.
 pub struct MissionControl;
@@ -370,20 +370,18 @@ impl Panel for MissionControl {
         if toggle_pause {
             let cur = clock_state.map(|(_, p, _)| p).unwrap_or(false);
             ctx.defer(move |world| {
-                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                    t.mode = if cur {
-                        TransportMode::Playing
-                    } else {
-                        TransportMode::Paused
-                    };
-                }
+                world.trigger(SetTimeTransport {
+                    playing: Some(cur),
+                    ..default()
+                });
             });
         }
         if let Some(m) = set_speed {
             ctx.defer(move |world| {
-                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                    t.rate = m;
-                }
+                world.trigger(SetTimeTransport {
+                    playing: Some(true),
+                    rate: Some(m),
+                });
             });
         }
         if let Some(p) = set_policy {

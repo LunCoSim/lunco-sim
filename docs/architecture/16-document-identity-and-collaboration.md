@@ -321,7 +321,7 @@ layer_dependency_arcs(text)
 
 The scenario manifest and live scene browser call those APIs directly. Thus
 networking does not read or parse USD files, `lunco-usd-bevy` has no closure
-shim, and a `.glb`, Modelica model, policy, or texture reaches the closure as a
+adapter, and a `.glb`, Modelica model, policy, or texture reaches the closure as a
 leaf once USD declares it. Stage pre-fetch remains its own async AssetServer
 operation; it reuses `child_layer_ids` because it needs only parseable layers.
 

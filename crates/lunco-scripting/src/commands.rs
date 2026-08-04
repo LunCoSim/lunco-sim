@@ -8,9 +8,9 @@
 //! `ExecuteScript` was always advertised but silently no-op'd when no scripting
 //! plugin handled it.
 //!
-//! The handler returns `Result<Ack, String>`; the `#[on_command]` macro records
-//! the outcome under the request id, so callers poll `QueryCommandResult` for
-//! the script's stdout (in `Ack.assigned.stdout`) or its error message.
+//! The handler returns `Result<Ack, String>`. API callers receive the completed
+//! stdout or error on the same deferred request; in-process `cmd()` callers
+//! continue to use the internal command-result substrate.
 //!
 //! Adding another language later = a new `#[cfg(feature = "…")]` command here +
 //! a backend in `backend.rs` + one line in the registration list.
@@ -30,6 +30,8 @@ use crate::{
 };
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
+#[cfg(feature = "rhai")]
+use lunco_api::executor::PendingApiRequest;
 use lunco_core::register_commands;
 #[cfg(feature = "rhai")]
 use lunco_core::ActiveCommandId;
@@ -69,11 +71,11 @@ impl ScenarioDocAllocator {
 /// Run a rhai snippet against the live world — the scripting escape hatch when
 /// no typed command covers what you need.
 ///
-/// The result arrives one FixedUpdate late: rhai needs full `World` access,
+/// The result arrives on the next `Update`: rhai needs full `World` access,
 /// which an observer cannot hold, so the handler enqueues the snippet and the
-/// exclusive `drain_world_scripts` system runs it and overwrites the
-/// provisional outcome with the real stdout. Poll the command result rather
-/// than reading it synchronously.
+/// exclusive `drain_world_scripts` system runs it before answering the
+/// deferred API request with the real stdout. `Update` is intentional because
+/// kinematic celestial warp freezes `FixedUpdate`.
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RunRhai {
@@ -83,13 +85,14 @@ pub struct RunRhai {
 
 // rhai runs with full World access (`cmd`/`world_pos`/`get`/...), which an
 // observer can't hold. So the handler ENQUEUES the snippet under the active
-// request id; the exclusive `drain_world_scripts` system runs it next
-// FixedUpdate and overwrites this provisional outcome with the real stdout.
+// request id; the exclusive `drain_world_scripts` system runs it next Update
+// and records the real stdout.
 #[cfg(feature = "rhai")]
 #[on_command(RunRhai)]
 fn on_run_rhai(
     _t: On<RunRhai>,
     active: Res<ActiveCommandId>,
+    pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
     guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
@@ -98,7 +101,11 @@ fn on_run_rhai(
     // only when this RunRhai arrived from the wire (a remote peer); `None` for a
     // local / host-issued snippet → host-trusted (ungated).
     let authority = guard.and_then(|g| g.0);
-    pending.queue.push((id, cmd.code.clone(), authority));
+    let correlation_id =
+        (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
+    pending
+        .queue
+        .push((id, cmd.code.clone(), authority, correlation_id));
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({ "status": "queued" });
     Ok(ack)
@@ -920,6 +927,24 @@ pub(crate) fn register_command_policies(app: &mut App) {
     reg.register(
         crate::bridge_core::capability::STRUCTURAL_MUTATE,
         CommandPolicy::OWNED_CONTROL,
+    );
+    reg.register(
+        crate::bridge_core::capability::FIELD_MUTATE,
+        CommandPolicy::OWNED_CONTROL,
+    );
+    reg.register(
+        crate::bridge_core::capability::SETTING_MUTATE,
+        CommandPolicy {
+            min_role: AuthorityRole::Operator,
+            ownership_gated: false,
+        },
+    );
+    reg.register(
+        crate::bridge_core::capability::POLICY_MUTATE,
+        CommandPolicy {
+            min_role: AuthorityRole::Operator,
+            ownership_gated: false,
+        },
     );
 }
 

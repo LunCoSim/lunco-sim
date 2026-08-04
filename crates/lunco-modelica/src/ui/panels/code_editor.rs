@@ -498,7 +498,7 @@ impl Panel for CodeEditorPanel {
             // Resolve the DocumentId for the currently-shown model so the
             // focus-loss commit below writes into it. Active document
             // wins (this *is* a per-tab editor — it's looking at the
-            // focused doc by definition); fall back to the legacy
+            // focused doc by definition); fall back to the
             // `selected_entity → document_of(entity)` lookup only when
             // there's no active document, which covers the brief window
             // before workspace state is initialised.

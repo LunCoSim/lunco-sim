@@ -27,7 +27,7 @@
 //!
 //! Generates `pub fn register_all_commands(app)`. Entries may be bare
 //! idents (same module) or module paths — the path form lets observers
-//! live in split submodules without per-fn `use` shims.
+//! live in split submodules without per-function import boilerplate.
 //!
 //! ```ignore
 //! register_commands!(on_drive_rover, on_brake_rover);

@@ -48,9 +48,9 @@ fn rhai_files(dir: &'static Dir<'static>) -> Vec<(&'static str, &'static str)> {
 /// `assets/scripting/prelude/*.rhai` at call time (each engine build — i.e. app
 /// start), so prelude edits need only a restart; when the directory is absent
 /// or empty (installed build, odd CWD) the embedded copy serves. wasm: always
-/// embedded. A DISK prelude that fails to PARSE is handled by the consumer
-/// (`compile_prelude` falls back to [`embedded_prelude_files`] so a broken
-/// edit can never brick startup).
+/// embedded. Once a native disk directory is selected, its contents are the
+/// active authored source; consumers report parse errors instead of silently
+/// switching to stale embedded helpers.
 pub fn prelude_files() -> Vec<(String, String)> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(files) = disk_rhai_files(&crate::assets_dir().join("scripting/prelude")) {

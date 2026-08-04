@@ -47,8 +47,8 @@ remote-twin milestone.
 | [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children`) |
 | [`TwinChildRef`] | One `[[children]]` entry — `name` + (`path` or `url`) |
 | [`FileEntry`] | One discovered file: `relative_path` + `kind` |
-| [`FileKind`] | `Document(DocumentKind)` / `FileReference` / `Unknown` |
-| [`DocumentKind`] | Which domain owns the file (`Modelica`, `Usd`, `Sysml`, `Mission`, `Data`, `Other`) |
+| [`FileKind`] | `Document(DocumentKindId)` / `FileReference` / `Unknown` |
+| [`DocumentKindId`] | Registered string identifying the domain that owns the file |
 | [`TwinError`] | `thiserror`-based error type |
 
 ## Key methods on `Twin`

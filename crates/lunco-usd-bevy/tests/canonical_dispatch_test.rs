@@ -153,7 +153,7 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
 
     // (a) THE cutover assertion: the canonical stage was built and cached, which
     // only happens on the LIVE branch (`get_or_build`). If instantiation had
-    // fallen back to the flatten, this map would be empty — exactly the runtime
+    // used a non-composed read, this map would be empty — exactly the runtime
     // no-op the boot caught.
     let has_canonical = app
         .world()
@@ -164,7 +164,7 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     assert!(
         has_canonical,
         "instantiation must build + use the live canonical stage (LIVE branch), \
-         not fall back to the flattened reader"
+         not use a non-composed reader"
     );
 
     // (b) The bound-shader appearance resolved off the live stage: base color is the
@@ -284,10 +284,9 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
 
 #[test]
 fn recipeless_asset_builds_no_canonical_and_is_skipped() {
-    // Post-collapse invariant: the flatten fallback is GONE — the canonical stage
-    // is the single source. An asset with no recipe builds no canonical stage, so
-    // the visual dispatcher SKIPS it (no stage → no instantiation), rather than
-    // falling back to the flattened reader. Every runtime scene now loads through
+    // Runtime invariant: the canonical stage is the single source. An asset with
+    // no recipe builds no canonical stage, so the visual dispatcher SKIPS it
+    // (no stage → no instantiation). Every runtime scene now loads through
     // the recipe-building async loader, so recipe-less assets don't occur in
     // production; this pins the skip-not-crash behavior.
     let mut app = app();
@@ -316,6 +315,6 @@ fn recipeless_asset_builds_no_canonical_and_is_skipped() {
     );
     assert!(
         entity_at(&mut app, "/World/Box").is_none(),
-        "with the flatten fallback removed, a recipe-less asset is skipped — no children instantiated"
+        "a recipe-less asset is skipped — no children instantiated"
     );
 }

@@ -7,9 +7,10 @@
 > survives until someone picks it up. Each entry carries **what**, **why** (the
 > motivating problem), and **scope**.
 
-Security and multiplayer-hardening deferrals are **not** here — they are annotated
-with `TODO(multiplayer)` at the exact code sites, and the accepted posture is
+Security and multiplayer-hardening decisions are recorded in
 [`../reviews/open-rbac-not-enforced.md`](../reviews/open-rbac-not-enforced.md).
+The network command/session boundaries are enforced; only the explicitly trusted
+loopback API authoring boundary remains outside that session model.
 
 Sourced from the 2026-07-19 static review (`REVIEW-2026-07-19.md` §8) and its
 deferred-work companion. When an item lands, delete it here and let the

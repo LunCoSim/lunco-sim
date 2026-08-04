@@ -222,8 +222,8 @@ pub enum PanelMenuGroup {
     #[default]
     Other,
     /// Not listed at all — panels the user cannot meaningfully open on their
-    /// own: fixtures (the viewport), legacy panels kept only for layout
-    /// compatibility, and singletons that are really a facet of an instance tab.
+    /// own: fixtures (the viewport), layout-only panels, and singletons that
+    /// are really a facet of an instance tab.
     Hidden,
 }
 
@@ -394,7 +394,7 @@ pub struct InstancePanelMenuEntry {
 ///   given `instance` discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TabId {
-    /// A singleton panel tab (legacy one-per-id).
+    /// A singleton panel tab (one panel per id).
     Singleton(PanelId),
     /// A multi-instance tab. `kind` selects the renderer; `instance`
     /// is the per-tab discriminant (usually a raw `DocumentId`).

@@ -79,8 +79,8 @@ impl Plugin for ScreenshotPlugin {
     fn build(&self, app: &mut App) {
         // Registers the TYPE (so `DiscoverSchema` sees it, and so a binary without this
         // plugin cleanly reports "command not found") AND marks it deferred (so the executor
-        // holds the HTTP response open for the PNG instead of answering `command_accepted`
-        // and making the caller poll).
+        // holds the HTTP response open for the PNG instead of answering with a
+        // provisional acknowledgement.
         app.register_deferred_command::<CaptureScreenshot>()
             .add_observer(deliver_screenshot);
 
@@ -161,10 +161,23 @@ fn on_capture_screenshot(
     let request = if cmd.save_to_file {
         // Empty ⇒ we pick a timestamped name. Reaching for a wall clock is not something the
         // render-free substrate should do, so that default lives here.
-        let path = if cmd.path.is_empty() {
-            timestamped_name("screenshot")
+        let requested = if cmd.path.is_empty() {
+            std::path::PathBuf::from(timestamped_name("screenshot"))
         } else {
-            cmd.path.clone()
+            std::path::PathBuf::from(&cmd.path)
+        };
+        let path = match safe_screenshot_path(&requested) {
+            Ok(path) => path,
+            Err(error) => {
+                commands.trigger(ApiResponseEvent {
+                    correlation_id: pending_request.correlation_id,
+                    response: ApiResponse::error(
+                        lunco_api::schema::ApiErrorCode::InternalError,
+                        error,
+                    ),
+                });
+                return;
+            }
         };
 
         // ANSWER NOW. A deferred command owes the caller EXACTLY ONE response on its
@@ -406,6 +419,55 @@ fn timestamped_name(prefix: &str) -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{prefix}_{secs}.png")
+}
+
+/// Keep API-requested screenshot writes inside one explicit output root. The
+/// root defaults to the process working directory so existing automation paths
+/// such as `target/runtime-smoke.png` remain valid; deployments may set
+/// `LUNCO_SCREENSHOT_ROOT` to a dedicated directory. Canonicalizing the parent
+/// also rejects `..` traversal and an existing symlink that escapes the root.
+#[cfg(not(target_arch = "wasm32"))]
+fn safe_screenshot_path(requested: &std::path::Path) -> Result<String, String> {
+    let root = std::env::var_os("LUNCO_SCREENSHOT_ROOT")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "cannot determine screenshot output root".to_string())?;
+    let root = std::fs::canonicalize(&root)
+        .map_err(|error| format!("screenshot output root is unavailable: {error}"))?;
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    if candidate.extension().and_then(|ext| ext.to_str()) != Some("png") {
+        return Err("screenshot path must end in .png".to_string());
+    }
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "screenshot path has no parent directory".to_string())?;
+    let parent = std::fs::canonicalize(parent)
+        .map_err(|error| format!("screenshot parent directory is unavailable: {error}"))?;
+    if !parent.starts_with(&root) {
+        return Err(format!(
+            "screenshot path must stay under {}",
+            root.display()
+        ));
+    }
+    if candidate.exists() {
+        let resolved = std::fs::canonicalize(&candidate)
+            .map_err(|error| format!("cannot resolve screenshot path: {error}"))?;
+        if !resolved.starts_with(&root) {
+            return Err("screenshot path resolves outside the output root".to_string());
+        }
+    }
+    Ok(candidate.to_string_lossy().into_owned())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn safe_screenshot_path(requested: &std::path::Path) -> Result<String, String> {
+    // Browser saves are delegated to the browser/runtime; no native filesystem
+    // path is writable from wasm.
+    Ok(requested.to_string_lossy().into_owned())
 }
 
 use bevy::time::TimeUpdateStrategy;
@@ -898,7 +960,7 @@ const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500)
 /// An ALLOWLIST, not "is anything busy at all". The bus is shared with work that has
 /// nothing to do with what the camera sees — a Modelica compile, a document save, an
 /// MCP request — and the MSL download in particular re-pushes progress every frame
-/// from boot (see `status_bus::tests::push_progress_preserves_start_time_…`). Gating
+/// from boot (see `status_bus::tests::with_progress_preserves_start_time_…`). Gating
 /// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
 /// minutes to an episode and burying the timeout `warn!` under false positives.
 ///

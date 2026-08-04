@@ -39,8 +39,8 @@ active. Switch with:
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands -H "Content-Type: application/json" \
-  -d '{"command":"ActivatePerspective","params":{"id":"modelica_analyze"}}'
-# other ids: "sandbox_view", "rover_build". Reset a broken layout: {"command":"ResetWorkspaceLayout","params":{}}
+  -d '{"type":"ExecuteCommand","command":"ActivatePerspective","params":{"id":"modelica_analyze"}}'
+# other ids: "sandbox_view", "rover_build". Reset a broken layout: {"type":"ExecuteCommand","command":"ResetWorkspaceLayout","params":{}}
 ```
 
 - Add `--no-ui` for a headless compile/run server (no window, no GPU). The API
@@ -69,40 +69,39 @@ Wait for readiness with an `until` loop (never chained `sleep`s):
 ```bash
 until curl -s -o /dev/null -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"Ping","params":{}}'; do sleep 1; done
+  -d '{"type":"ExecuteCommand","command":"Ping","params":{}}'; do sleep 1; done
 ```
 
 Stop with the `Exit` command (never `pkill`/`kill` — those need user confirm):
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
-  -H "Content-Type: application/json" -d '{"command":"Exit","params":{}}'
+  -H "Content-Type: application/json" -d '{"type":"ExecuteCommand","command":"Exit","params":{}}'
 ```
 
 ## 1. The request envelope
 
 Everything is one endpoint: `POST /api/commands`. The JSON shape is always
-`{"command":"<Name>","params":{...}}`. **Always include `params` even when
-empty** (`"params":{}`) — without it the command silently no-ops with a
-`invalid type: null` deserialization error.
+`{"type":"ExecuteCommand","command":"<Name>","params":{...}}`. **Always include `params` even when
+empty** (`"params":{}`) — this keeps every request explicit and discoverable.
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"<Name>","params":{ ... }}'
+  -d '{"type":"ExecuteCommand","command":"<Name>","params":{ ... }}'
 ```
 
 Two kinds of `command` share this envelope:
 
-- **Commands** (fire-and-forget mutations): return `{"command_id": N}`. Errors
-  log server-side; the HTTP call still returns a command_id.
+- **Commands** (fire-and-forget mutations): return `{"data":{"accepted":true}}`.
+  Invalid parameters return HTTP 422; deferred commands return their completed
+  result on the same request.
 - **Query providers** (return data): return the payload directly, e.g.
   `{"runs":[...]}`. `ListRuns`, `GetExperimentResult`, `DescribeModel`,
   `SnapshotVariables`, `CompileStatus`, `ListCompileCandidates`,
   `ListBundled`, `ListOpenDocuments`, `FindModel` are all query providers —
-  invoked with the **same `{"command":...}` form**, NOT the `{"type":...}`
-  form. (`{"type":...}` is only for the built-in `ListEntities` /
-  `DiscoverSchema` / `QueryEntity` meta-queries.)
+  invoked with the same tagged `ExecuteCommand` form. Built-in discovery and
+  entity listing use their own explicit `type` values.
 
 `doc: 0` always means "the active document/tab".
 
@@ -124,27 +123,27 @@ API=http://127.0.0.1:4101/api/commands
 post(){ curl -s -X POST $API -H "Content-Type: application/json" -d "$1"; }
 
 # 1. Open a model. Prefer the unified opener (bundled example / MSL name / path):
-post '{"command":"Open","params":{"uri":"bundled://SpringMass.mo"}}'
+post '{"type":"ExecuteCommand","command":"Open","params":{"uri":"bundled://SpringMass.mo"}}'
 #    bundled://Name.mo | Modelica.Blocks.Examples.PID_Controller | /abs/path.mo | mem://Untitled
-#    List embedded examples first: {"command":"ListBundled","params":{}}
+#    List embedded examples first: {"type":"ExecuteCommand","command":"ListBundled","params":{}}
 
 # 2. Wait for the AST parse (background). Poll CompileStatus until ast_parsed:true:
-post '{"command":"CompileStatus","params":{"doc":0}}'   # -> {state, ast_parsed, candidates, picker_pending, ...}
+post '{"type":"ExecuteCommand","command":"CompileStatus","params":{"doc":0}}'   # -> {state, ast_parsed, candidates, picker_pending, ...}
 
 # 3. Compile + play. class REQUIRED if the file has >1 non-package class
 #    (the GUI picker can't be shown over the API). Discover choices:
-post '{"command":"ListCompileCandidates","params":{"doc":0}}'   # -> {candidates:[{qualified,short}]}
-post '{"command":"RunActiveModel","params":{"doc":0,"class":"SpringMass"}}'
+post '{"type":"ExecuteCommand","command":"ListCompileCandidates","params":{"doc":0}}'   # -> {candidates:[{qualified,short}]}
+post '{"type":"ExecuteCommand","command":"RunActiveModel","params":{"doc":0,"class":"SpringMass"}}'
 
 # 4. Read live values (t + parameters + inputs + variables). Filter with names:
-post '{"command":"SnapshotVariables","params":{"doc":0,"names":["x","v"]}}'
+post '{"type":"ExecuteCommand","command":"SnapshotVariables","params":{"doc":0,"names":["x","v"]}}'
 
 # 5. Poke a runtime input live (no recompile, applies next step):
-post '{"command":"SetModelInput","params":{"doc":0,"name":"F","value":10.0}}'
+post '{"type":"ExecuteCommand","command":"SetModelInput","params":{"doc":0,"name":"F","value":10.0}}'
 
 # 6. Pause / Resume / Reset / Restart:
-post '{"command":"PauseActiveModel","params":{"doc":0}}'
-post '{"command":"RestartActiveModel","params":{"doc":0}}'   # reset t=0 then run
+post '{"type":"ExecuteCommand","command":"PauseActiveModel","params":{"doc":0}}'
+post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc":0}}'   # reset t=0 then run
 ```
 
 `RunActiveModel` = compile-if-stale then play. If already compiled & clean it
@@ -160,7 +159,7 @@ Each run is stored as an `Experiment`; read its trajectory back with
 
 ```bash
 # One run with a parameter override + custom bounds + a label:
-post '{"command":"RunExperiment","params":{
+post '{"type":"ExecuteCommand","command":"RunExperiment","params":{
   "doc":0, "class":"RocketStage",
   "overrides":[{"name":"Isp","value":"300"}],
   "inputs":[{"name":"throttle","value":"1.0"}],
@@ -206,11 +205,11 @@ scripted/agent runs so everything is explicit.
 # List runs (newest first). Optional {"doc":N} filter. Each row is self-describing:
 # experiment_id, name, state (Pending|Queued|Running|Done|Failed|Cancelled),
 # wall_time_ms, the overrides that produced it, and the bounds it ran under.
-post '{"command":"ListRuns","params":{}}'
+post '{"type":"ExecuteCommand","command":"ListRuns","params":{}}'
 
 # Pull a full trajectory: times + series (dotted Modelica path -> samples).
 # Target by experiment_id, OR by doc (its latest run). Filter + downsample:
-post '{"command":"GetExperimentResult","params":{
+post '{"type":"ExecuteCommand","command":"GetExperimentResult","params":{
   "doc":0, "variables":["altitude","velocity"], "max_points":500
 }}'
 # max_points = strided downsample, final sample always kept. Omit = uncapped.
@@ -220,9 +219,9 @@ post '{"command":"GetExperimentResult","params":{
 
 Cancel / clean up:
 ```bash
-post '{"command":"CancelExperiment","params":{"all":true}}'           # or {"experiment_id":"<uuid>"}
-post '{"command":"DeleteExperiment","params":{"all":true}}'           # terminal runs only
-post '{"command":"RenameExperiment","params":{"experiment_id":"<uuid>","name":"baseline"}}'
+post '{"type":"ExecuteCommand","command":"CancelExperiment","params":{"all":true}}'           # or {"experiment_id":"<uuid>"}
+post '{"type":"ExecuteCommand","command":"DeleteExperiment","params":{"all":true}}'           # terminal runs only
+post '{"type":"ExecuteCommand","command":"RenameExperiment","params":{"experiment_id":"<uuid>","name":"baseline"}}'
 ```
 
 ## 6. Recipe D — visualize & compare runs (plots)
@@ -248,10 +247,10 @@ post(){ curl -s -X POST $API -H "Content-Type: application/json" -d "$1"; }
 
 # Open a plot tab seeded with the variables to compare across runs.
 # source=0 = fresh panel; source=<VizId> = clone another plot's signal set + picks.
-post '{"command":"NewPlotPanel","params":{"title":"Ascent","signals":["altitude","velocity"],"source":0}}'
+post '{"type":"ExecuteCommand","command":"NewPlotPanel","params":{"title":"Ascent","signals":["altitude","velocity"],"source":0}}'
 
 # Add another signal to an existing plot (plot=0 = the default graph):
-post '{"command":"AddSignalToPlot","params":{"plot":0,"signal":"mass"}}'
+post '{"type":"ExecuteCommand","command":"AddSignalToPlot","params":{"plot":0,"signal":"mass"}}'
 ```
 
 `signals` in `NewPlotPanel` become the plot's **picked variables**; every
@@ -262,11 +261,11 @@ once with the variables you care about, and each new run lands on the same axes.
 ```bash
 # 1. sweep 4 runs (see §4 loop) with labels Isp=280..340
 # 2. open the comparison plot on the variable of interest
-post '{"command":"NewPlotPanel","params":{"title":"Isp sweep","signals":["altitude"],"source":0}}'
+post '{"type":"ExecuteCommand","command":"NewPlotPanel","params":{"title":"Isp sweep","signals":["altitude"],"source":0}}'
 # 3. confirm the runs landed, then screenshot for the human
-post '{"command":"ListRuns","params":{}}'
+post '{"type":"ExecuteCommand","command":"ListRuns","params":{}}'
 curl -s -X POST $API -H "Content-Type: application/json" \
-  -d '{"command":"CaptureScreenshot","params":{}}' -o /tmp/sweep.png   # then Read the PNG
+  -d '{"type":"ExecuteCommand","command":"CaptureScreenshot","params":{}}' -o /tmp/sweep.png   # then Read the PNG
 ```
 
 ### Numbers vs pixels

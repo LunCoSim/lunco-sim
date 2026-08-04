@@ -270,7 +270,7 @@ pub struct SaveDocument {
 
 /// Request the owning domain persist the document **to a new location**.
 ///
-/// `path` semantics mirror [`OpenFile`](lunco_workbench::file_ops::OpenFile):
+/// `path` semantics mirror [`OpenFile`]:
 ///
 /// - **Empty** → the observer fires
 ///   [`lunco_workbench::picker::PickHandle`](../lunco_workbench/picker/struct.PickHandle.html)
@@ -739,6 +739,13 @@ impl JournalResource {
     /// must set a distinct id so cross-peer entry ids don't collide.
     pub fn set_local_author(&self, author: AuthorId) {
         self.with_write(|j| j.set_local_author(author));
+    }
+
+    /// Rebind offline local entries to the server-issued author at network join.
+    /// The journal rewrites all affected DAG references atomically; a collision
+    /// is returned instead of silently dropping an edit.
+    pub fn rebind_local_author(&self, author: AuthorId) -> Result<usize, String> {
+        self.with_write(|j| j.rebind_local_author(author))
     }
 
     /// Run `f` with a change set open: every journal entry recorded inside it —
