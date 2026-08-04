@@ -1,16 +1,15 @@
 //! Typed identity for a Modelica class across the workbench.
 //!
-//! `ClassRef` is the canonical replacement for the legacy string ID
-//! schemes that previously identified classes in different parts of
-//! the codebase. Tree clicks, palette drops, drill-ins, typed API
-//! commands, and session restore all converge on this one type, so
+//! `ClassRef` is the canonical identity for classes across the workbench.
+//! Tree clicks, palette drops, drill-ins, typed API commands, and session
+//! restore all converge on this one type, so
 //! lookups for "open this", "is this loaded?", "what's its
 //! documentation?", "where's its source file?" share a single path
 //! by construction.
 //!
-//! ## Legacy scheme → `ClassRef`
+//! ## External identifier → `ClassRef`
 //!
-//! | Legacy string | `ClassRef` form |
+//! | String form | `ClassRef` form |
 //! |---|---|
 //! | `msl_path:Modelica.Blocks.Examples.PID_Controller` | `ClassRef::msl(["Blocks","Examples","PID_Controller"])` |
 //! | `bundled://AnnotatedRocketStage.mo#AnnotatedRocketStage.RocketStage` | `ClassRef::bundled(["AnnotatedRocketStage","RocketStage"])` |
@@ -190,7 +189,7 @@ impl ClassRef {
         self.path.is_empty()
     }
 
-    /// Parse a legacy tree-row ID string into a `ClassRef`. Returns
+    /// Parse a tree-row identifier into a `ClassRef`. Returns
     /// `None` when the string doesn't match a recognised scheme or
     /// requires state the parser can't see (e.g. `mem://` lookups
     /// need the in-memory cache to resolve a `DocumentId`).

@@ -48,7 +48,7 @@ use lunco_usd::LoadScene;
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading systems read the LIVE canonical stage via `StageView`, which
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
-// AUTHORED layer; the retired flattened reader used to blur the two). Since the
+// AUTHORED layer). Since the
 // terrain projector moved to `lunco-usd-terrain`, the remaining readers are the
 // networking policy extractor and the UI terrain layer-map binding.
 use bevy::asset::AssetLoadFailedEvent;
@@ -127,9 +127,8 @@ pub fn run_headless() -> AppExit {
     run_with_mode(true)
 }
 
-/// The luncosim's process-start render choice. This stays in the binary shell:
-/// `lunco-render-bevy` owns how the policy is rendered, while the CLI owns how a
-/// user selects it.
+/// The luncosim's process-start render choice. The binary selects it while
+/// `lunco-render-bevy` owns how the policy is rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum SandboxRenderProfile {
     #[default]
@@ -571,7 +570,7 @@ fn sandbox_window(
     };
     if render_profile == SandboxRenderProfile::Fast {
         // A smaller default framebuffer is the largest predictable saving on
-        // legacy GPUs. The user can still resize the window; the profile does
+        // integrated GPUs. The user can still resize the window; the profile does
         // not alter authored scene units or simulation precision.
         window.resolution = bevy::window::WindowResolution::new(960, 540);
     } else if vertical {
@@ -629,7 +628,7 @@ mod window_tests {
             "luncosim test".to_string(),
             bevy::window::PresentMode::Fifo,
             false,
-            super::SandboxRenderProfile::Standard,
+            SandboxRenderProfile::Standard,
         );
 
         assert!(
@@ -2293,19 +2292,14 @@ impl Plugin for SandboxCorePlugin {
         // TEMPORARY: chassis smoothness census, off unless `LUNCO_JITTER_CSV` is set.
         #[cfg(feature = "ui")]
         app.add_plugins(jitter_probe::JitterProbePlugin);
+        // Render profile is installed before the render plugin below.
+        if self.render_profile == SandboxRenderProfile::Fast {
+            app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
+            info!("[render] fast profile enabled");
+        }
 
         #[cfg(feature = "ui")]
         if !self.headless {
-            if self.render_profile == SandboxRenderProfile::Fast {
-                // This resource must exist before the binding plugin registers
-                // its observers: scene projection can begin on the first app
-                // update, so changing it later would produce a mixed-material
-                // scene until every entity were rebuilt.
-                app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
-                info!(
-                    "[render] fast profile: unlit texture-free PBR, HDR/bloom/MSAA disabled, window 960x540"
-                );
-            }
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
         }
 
@@ -3168,7 +3162,7 @@ fn report_terrain_stream_status(
     // const's docs for why this must not be a local literal.
     const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
     if status.wanted > 0 && status.resident < status.wanted {
-        bus.push_progress(
+        bus.set_progress(
             SOURCE,
             format!(
                 "streaming terrain tiles {}/{}",
@@ -3178,7 +3172,7 @@ fn report_terrain_stream_status(
             status.wanted as u64,
         );
     } else {
-        bus.clear_progress(SOURCE);
+        bus.remove_progress(SOURCE);
     }
 }
 
@@ -3215,11 +3209,11 @@ fn report_scene_spawn_status(
     if let Some(g) = in_flight {
         // `total = 0` is the bus's "indeterminate" encoding — the number of prims
         // a scene will spawn is not known until it has spawned them.
-        bus.push_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
+        bus.set_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
     } else if pending > 0 {
-        bus.push_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
+        bus.set_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
     } else {
-        bus.clear_progress(SOURCE);
+        bus.remove_progress(SOURCE);
     }
 }
 
@@ -3253,21 +3247,21 @@ fn report_modelica_status(
         .count();
 
     if pending > 0 {
-        bus.push_progress(
+        bus.set_progress(
             SOURCE,
             format!("loading {pending} Modelica source(s)"),
             0,
             0,
         );
     } else if compiling > 0 {
-        bus.push_progress(
+        bus.set_progress(
             SOURCE,
             format!("compiling {compiling} Modelica participant(s)"),
             0,
             0,
         );
     } else {
-        bus.clear_progress(SOURCE);
+        bus.remove_progress(SOURCE);
     }
 }
 
@@ -3648,15 +3642,8 @@ fn activate_offscreen_camera(
     });
 
     let mut has_image_camera = false;
-    for (
-        entity,
-        mut camera,
-        target,
-        has_pipeline,
-        has_scene,
-        _has_path,
-        has_lod_origin,
-    ) in &mut cameras
+    for (entity, mut camera, target, has_pipeline, has_scene, _has_path, has_lod_origin) in
+        &mut cameras
     {
         let is_image_camera =
             has_pipeline && matches!(target, bevy::camera::RenderTarget::Image(_));

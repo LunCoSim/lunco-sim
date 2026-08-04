@@ -64,7 +64,7 @@ pub fn track_active_camera_path(q_paths: Query<&CameraPath>, mut target: ResMut<
 }
 
 /// Trajectory-overlay state (UI-local, like `TerrainToolState`).
-#[derive(Resource)]
+#[derive(Resource, Clone, Copy)]
 pub struct CinematicViz {
     /// Draw every animated camera's path in the viewport.
     pub show_paths: bool,
@@ -390,10 +390,8 @@ impl Panel for CinematicPanel {
                     )
                     .changed()
                 {
-                    ctx.defer(move |world| {
-                        if let Some(mut v) = world.get_resource_mut::<CinematicViz>() {
-                            v.show_paths = show_mut;
-                        }
+                    ctx.set_resource(CinematicViz {
+                        show_paths: show_mut,
                     });
                 }
 

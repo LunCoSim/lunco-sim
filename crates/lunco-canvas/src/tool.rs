@@ -290,7 +290,7 @@ enum State {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectMode {
     /// Entered via press-and-drag from a port. Release on a port
-    /// commits; release on empty space cancels (legacy behaviour).
+    /// commits; release on empty space cancels.
     Drag,
     /// Entered via a bare port click (press + release on the same
     /// port without moving). The wire follows the cursor; subsequent

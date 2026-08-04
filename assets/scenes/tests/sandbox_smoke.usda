@@ -1,0 +1,28 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The interactive sandbox is intentionally not itself a scene test: opening it
+# is a user session and has no authored PASS/FAIL assertion. This test wrapper
+# composes the same sandbox under the same root path and adds a bounded smoke
+# scenario for CI and release validation.
+def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/luncosim/sandbox_scene.usda@</SandboxScene>
+    kind = "assembly"
+)
+{
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "sandbox-smoke"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/sandbox_smoke.rhai@
+        }
+    }
+}

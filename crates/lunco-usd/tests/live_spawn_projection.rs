@@ -2,7 +2,7 @@
 //! an `AddPrim` op on a doc-backed viewport scene is authored onto the live
 //! `CanonicalStage`, whose openusd change sink fires and `project_stage_changes`
 //! spawns the matching ECS entity — with **no whole-scene asset reload**. This
-//! is the end-to-end regression for the retired reload machinery: the twin
+//! is the end-to-end regression for the incremental projection path: the twin
 //! projection systems (`sync_twin_overlays` → `author_structural_edit` →
 //! `project_stage_changes`) now drive incremental structural edits.
 

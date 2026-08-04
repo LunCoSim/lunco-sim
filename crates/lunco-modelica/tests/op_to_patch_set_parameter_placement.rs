@@ -182,7 +182,7 @@ fn set_parameter_unknown_class_returns_validation_error() {
         })
         .expect_err("apply should fail on unknown class");
     // We surface AstMutError as DocumentError::ValidationFailed for
-    // parity with the legacy `compute_*_patch` error type. Match
+    // parity with the earlier `compute_*_patch` error type. Match
     // loosely to keep the test resilient to message tweaks.
     let msg = format!("{err:?}");
     assert!(

@@ -54,6 +54,8 @@ fn on_tick(me) {
     let direct = linked(g, rover, "earth");
 
     let path = link_path("rover", "earth");
+    let has_relay = path_contains(path, link_ids(g, "relay"));
+    let ends_at_earth = path_ends_at(path, earths);
     for n in g.nodes {
         print("[demo]   node " + n.id + "  " + n.name + "  [" + n.class + "]");
     }
@@ -64,8 +66,21 @@ fn on_tick(me) {
         n_peers: peers.len(),
         direct: direct,
         hops: path.len(),
-        ends_at_earth: if path.is_empty() { false } else { path[path.len() - 1] in earths },
+        has_relay: has_relay,
+        ends_at_earth: ends_at_earth,
     });
+}
+
+fn path_contains(path, ids) {
+    for id in path {
+        if id in ids { return true; }
+    }
+    false
+}
+
+fn path_ends_at(path, ids) {
+    if path.is_empty() { return false; }
+    path[path.len() - 1] in ids
 }
 
 // ── The verdict ─────────────────────────────────────────────────────────────
@@ -100,6 +115,10 @@ fn verdict(s) {
         "through a relay is at least three (rover, relay, complex). Zero means BFS " +
         "found no route at all for a rover that has peers."));
 
+    f.push(t_true(s.has_relay,
+        "the route does not contain the authored lunar relay — rover traffic is " +
+        "not exercising the relay hop"));
+
     f.push(t_true(s.ends_at_earth,
         "the path does not end on an Earth complex — BFS returned a route to " +
         "somewhere other than what was asked for"));
@@ -107,6 +126,7 @@ fn verdict(s) {
     print("[demo] ── results ──────────────────────────────────────────");
     print("[demo]   nodes " + s.n_nodes + "  rover peers " + s.n_peers);
     print("[demo]   direct Earth edge  " + s.direct + " (must be false)");
+    print("[demo]   route contains relay " + s.has_relay);
     print("[demo]   path length        " + s.hops + " node(s), ends on earth=" + s.ends_at_earth);
 
     report_verdict(f, "COMMS DEMO", "COMMS_DEMO");

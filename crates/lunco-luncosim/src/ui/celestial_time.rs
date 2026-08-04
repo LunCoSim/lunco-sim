@@ -5,7 +5,7 @@
 //! That is a different thing from the **celestial clock**, and conflating them is
 //! what made "speed up time to watch the Earth move" also fast-forward the rovers.
 //!
-//! This panel drives the celestial clock alone, via [`SetClock`]:
+//! This panel drives the celestial [`TimeDomain`] alone, via [`SetClock`]:
 //!
 //! * **Follow sim** — the clock hangs under the sim clock: pausing the world freezes
 //!   the sky too (the default, and the deterministic/replay-safe one).
@@ -32,11 +32,12 @@ use bevy_egui::{egui, EguiContexts};
 
 use lunco_core::CelestialBody;
 use lunco_time::{ClockId, ClockParent, Clocks, SetClock, TimeDomain, WorldTime};
+use lunco_workbench::MenuCtx;
 
 /// The sky-clock controls, drawn into whatever `Ui` is given.
 ///
 /// Takes the state it needs rather than queries, so the same widget serves a
-/// system (which has `Res`/`Query`) and a menu callback (which has `&mut World`).
+/// system (which has `Res`/`Query`) and a menu callback.
 /// Returns the [`SetClock`] the user asked for, if any — the caller owns dispatch,
 /// because triggering differs between the two contexts.
 fn sky_clock_ui(
@@ -186,28 +187,23 @@ fn sky_clock_ui(
 
 /// The sky clock as a **Time menu** section. Draws nothing when the scene declared
 /// no celestial bodies — no sky, no sky clock, the same rule the overlay follows.
-pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, world: &mut World) {
-    if world
-        .query_filtered::<(), With<CelestialBody>>()
-        .iter(world)
-        .next()
-        .is_none()
-    {
+pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+    if !ctx.has_component::<CelestialBody>() {
         ui.label(egui::RichText::new("No sky in this scene").weak().small());
         return;
     }
     let (Some(clocks), Some(time)) = (
-        world.get_resource::<Clocks>().copied(),
-        world.get_resource::<WorldTime>().cloned(),
+        ctx.resource::<Clocks>().copied(),
+        ctx.resource::<WorldTime>().cloned(),
     ) else {
         return;
     };
-    let domain = world.get::<TimeDomain>(clocks.celestial);
+    let domain = ctx.get::<TimeDomain>(clocks.celestial);
     let independent = domain.is_some_and(|d| d.parent == Some(clocks.real));
     let scale = domain.map(|d| d.scale).unwrap_or(1.0);
 
     if let Some(req) = sky_clock_ui(ui, &time.utc_string(), time.epoch_jd, independent, scale) {
-        world.trigger(req);
+        ctx.trigger(req);
     }
 }
 

@@ -77,9 +77,12 @@ pub use asset_sources::register_lunco_asset_sources;
 #[cfg(not(target_arch = "wasm32"))]
 pub use closure::{transitive_file_closure, transitive_file_closure_with};
 pub use lunco_source::{
-    id_to_disk_path, parse_lunco_uri, read_asset_bytes, read_asset_bytes_with_twin_root,
-    read_asset_file_bytes, read_asset_file_string, shipped_asset_root, ASSETS_DIR_NAME,
-    LUNCO_SCHEME,
+    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use lunco_source::{
+    read_asset_bytes, read_asset_bytes_with_twin_root, read_asset_file_bytes,
+    read_asset_file_string,
 };
 pub use scheme_registry::SchemeRegistry;
 pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_SCHEME};
@@ -467,8 +470,9 @@ pub fn msl_dir() -> PathBuf {
 ///   types) will fail to resolve unless this file is in scope.
 /// - `ModelicaServices/` — vendor-specific animation / file-IO /
 ///   event-logger services MSL calls into.
-/// - `ObsoleteModelica4.mo` — deprecated classes retained for
-///   backward compatibility.
+/// - `ObsoleteModelica4.mo` — the standard MSL file containing its obsolete
+///   class definitions; it remains part of the source root because MSL models
+///   may reference those definitions.
 ///
 /// Pointing rumoca at `<cache>/msl/` picks up all of the above at
 /// the correct namespace rooting.

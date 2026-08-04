@@ -125,7 +125,7 @@ pub(crate) fn crater_placements(
         return Vec::new();
     }
     let side = (2.0 * half_extent) as f64;
-    // Authored `density` (per ha) is calibrated to the legacy 8 m-radius size
+    // Authored `density` (per ha) is calibrated to the reference 8 m-radius size
     // floor. The power-law SFD `N(>r) ∝ r^-1.8` says lowering the floor to
     // `size.min` multiplies the population by `(8/min)^1.8` — that growth is the
     // saturation-equilibrium small-crater carpet, not a density change, so scale

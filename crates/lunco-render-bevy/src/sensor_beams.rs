@@ -163,7 +163,11 @@ fn drive_range_beam(
         // The stored `distance` when the cast hit, else the full range — so the beam
         // shows what the sensor actually REPORTED, not a fresh cast that could
         // disagree with the value the simulation is using.
-        let len = if s.hit_valid { s.distance } else { s.max_distance };
+        let len = if s.hit_valid {
+            s.distance
+        } else {
+            s.max_distance
+        };
         let half_width = param("width", DEFAULT_HALF_WIDTH);
 
         // The authored prim is a UNIT cylinder (`radius = 1`, `height = 1`), because

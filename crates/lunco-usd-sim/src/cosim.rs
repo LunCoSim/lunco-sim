@@ -19,9 +19,9 @@
 //!   The derived set is a pure cache of USD, rebuilt on stage change.
 //!
 //! No domain-specific markers (`BalloonModelMarker`, …) are inserted
-//! here. The legacy catalog/imperative spawn path in
-//! `lunco-luncosim-edit` keeps using its own markers; this translator
-//! is the authoritative path for USD-defined cosim entities.
+//! here. Catalog-created editor entities in `lunco-luncosim-edit` keep their
+//! own markers; this translator is the authoritative path for USD-defined
+//! cosim entities.
 
 use avian3d::prelude::PhysicsTime;
 use bevy::prelude::*;
@@ -36,8 +36,11 @@ use lunco_cosim::{
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel};
+use lunco_modelica::{
+    ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+};
 use lunco_render::SceneCamera;
+use lunco_scripting::python::{get_python_status, PythonStatus};
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
@@ -49,7 +52,6 @@ use lunco_usd_bevy::{
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
 
 use crate::domain_projection::GeneratedModelicaSource;
 use crate::UsdSimProcessed;
@@ -83,6 +85,17 @@ pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
 /// the same entity on the same tick.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// Scene-scoped diagnostics for Python programs that are authored in USD but
+/// cannot run in this binary. The prim itself carries the durable `Error`
+/// status; this resource only collects the paths so startup can report one
+/// actionable scene-level verdict instead of forcing a tester to find each
+/// per-prim warning in a long load log.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct PythonUnavailablePrograms {
+    paths: BTreeSet<String>,
+    reported: bool,
+}
 
 /// The scalar interface authored on a USD Modelica program.
 ///
@@ -218,9 +231,8 @@ pub struct SceneLoadInFlight {
 #[derive(Component)]
 pub struct PendingModelicaSource {
     pub handle: Handle<ModelicaSource>,
-    /// Asset-relative path, copied for use as the eventual
-    /// `ModelicaModel::model_path` (purely informational once the
-    /// source is in memory).
+    /// Asset-relative path, copied into the generated source's stable compiler
+    /// URI and diagnostics metadata.
     pub asset_path: String,
 }
 
@@ -378,7 +390,7 @@ fn clear_scene_load_in_flight(
     commands.remove_resource::<SceneLoadInFlight>();
 }
 
-pub fn process_usd_cosim_prims(
+pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -387,6 +399,7 @@ pub fn process_usd_cosim_prims(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut wiring_dirty: ResMut<WiringDirty>,
+    mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
     // Which prims a component collection already owns, per stage. Computed once
     // per run rather than per prim (it is a full stage walk), and NOT cached
@@ -466,8 +479,45 @@ pub fn process_usd_cosim_prims(
             members,
             &mut commands,
             &asset_server,
+            &mut wiring_dirty,
+            &mut python_unavailable,
         );
     }
+}
+
+/// Report Python availability once the scene's USD prims have finished
+/// materialising. This is deliberately separate from the per-prim bind
+/// diagnostic: the bind owns the precise error and durable component state,
+/// while this system gives the scene author one concise verdict.
+fn report_python_unavailable(
+    mut diagnostics: ResMut<PythonUnavailablePrograms>,
+    in_flight: Option<Res<SceneLoadInFlight>>,
+    unprocessed: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
+) {
+    if diagnostics.reported
+        || diagnostics.paths.is_empty()
+        || in_flight.is_some()
+        || !unprocessed.is_empty()
+    {
+        return;
+    }
+
+    diagnostics.reported = true;
+    let count = diagnostics.paths.len();
+    let examples = diagnostics
+        .paths
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    warn!(
+        "[usd-cosim] {count} Python program(s) in this scene are inert: the Python runtime is unavailable; affected prims: {examples}"
+    );
+}
+
+fn reset_python_unavailable(mut diagnostics: ResMut<PythonUnavailablePrograms>) {
+    *diagnostics = PythonUnavailablePrograms::default();
 }
 
 /// Project the standard LunCo telemetry declaration attributes into the shared
@@ -539,6 +589,8 @@ fn process_usd_cosim_prim_read(
     network_members: &BTreeSet<String>,
     commands: &mut Commands,
     asset_server: &AssetServer,
+    wiring_dirty: &mut WiringDirty,
+    python_unavailable: &mut PythonUnavailablePrograms,
 ) {
     if reader.type_name(sdf_path).as_deref() == Some("LunCoEvent") {
         let sources = reader.connections(sdf_path, "inputs:trigger");
@@ -597,23 +649,23 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
-    // …and the converse. A part with acausal pins that NO network owns cannot be
-    // solved at all: its `.mo` is a component class whose pins only mean
+    // …and the converse. A part with an acausal pin that NO network owns cannot
+    // be solved at all: its `.mo` is a component class whose pins only mean
     // something inside a `connect()` set, so there is nothing to run standalone.
-    // Silence here is how a battery dropped into a rover with no `Electrical`
-    // scope simply fails to exist — the pin reads as connected in USD while the
-    // circuit it belongs to was never generated.
-    if reader
-        .attr_names(sdf_path)
-        .iter()
-        .any(|name| name.starts_with("connectors:"))
-    {
-        warn!(
-            "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
-             CollectionAPI:components network, so no Modelica model is generated for it and it \
-             does not simulate. Add it to a network scope's `collection:components:includes`.",
-            prim_path.path
-        );
+    // A bare `connectors:p` is only the component's interface declaration. It is
+    // valid on a catalogue part such as a motor selected with `power = "infinite"`
+    // and makes no topology claim until a `.connect` opinion is authored. Skip
+    // both forms here; report only the connected form because that one is an
+    // actionable topology error.
+    if has_acausal_connector(reader, sdf_path) {
+        if has_connected_acausal_connector(reader, sdf_path) {
+            warn!(
+                "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
+                 CollectionAPI:components network, so no Modelica model is generated for it and it \
+                 does not simulate. Add it to a network scope's `collection:components:includes`.",
+                prim_path.path
+            );
+        }
         commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
@@ -647,6 +699,48 @@ fn process_usd_cosim_prim_read(
         .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
     if !has_ports {
         return;
+    }
+
+    // A Python source is not a usable cosim participant until its interpreter
+    // is available. Check at the authoritative USD bind boundary, before
+    // publishing a pending load or claiming the program is bound. This keeps
+    // the runtime contract honest on binaries built without the Python feature
+    // and on machines whose shared Python library cannot be loaded.
+    if let Some(asset_path) = python_path.as_deref() {
+        if get_python_status() != PythonStatus::Available {
+            let reason =
+                format!("Python runtime unavailable; cannot run `{asset_path}` in this binary");
+            python_unavailable.paths.insert(prim_path.path.clone());
+            let (inputs, outputs) = declared_interface(reader, sdf_path);
+            commands.entity(entity).try_insert((
+                UsdSimProcessed,
+                lunco_core::SelectableRoot,
+                lunco_core::NotPredictable,
+                SimComponent {
+                    model_name: format!("Python:{asset_path}"),
+                    inputs,
+                    outputs,
+                    status: SimStatus::Error(reason.clone()),
+                    ..default()
+                },
+            ));
+            warn!(
+                "[usd-cosim] program {} unavailable ({asset_path}): {reason}",
+                prim_path.path
+            );
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_DISPATCH_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(reason),
+                timestamp: 0.0,
+            });
+            // The terminal component still participates in topology resolution:
+            // declared wires must see its published interface and its Error status
+            // must be observable by the binding/readiness projection.
+            wiring_dirty.0 = true;
+            return;
+        }
     }
 
     // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
@@ -761,6 +855,26 @@ fn process_usd_cosim_prim_read(
         prim_path.path,
         source.as_deref().unwrap_or("<none>"),
     );
+}
+
+/// A `connectors:*` property declares an acausal Modelica interface. Such a
+/// program is only executable as a member of a component network.
+fn has_acausal_connector(reader: &lunco_usd_bevy::StageView<'_>, sdf_path: &SdfPath) -> bool {
+    reader
+        .attr_names(sdf_path)
+        .iter()
+        .any(|name| name.starts_with("connectors:"))
+}
+
+/// A bare `connectors:*` property declares an interface; only its connection
+/// list makes an authoring claim about circuit topology.
+fn has_connected_acausal_connector(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    sdf_path: &SdfPath,
+) -> bool {
+    reader.attr_names(sdf_path).iter().any(|name| {
+        name.starts_with("connectors:") && !reader.connections(sdf_path, name).is_empty()
+    })
 }
 
 /// Return an actionable discrepancy between USD's public causal boundary and
@@ -895,9 +1009,9 @@ pub fn dispatch_loaded_modelica_sources(
     canonical: NonSend<CanonicalStages>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
-    // Half of the solver-selection input, and the half only the ECS knows: the
-    // DECLARED `lunco:program:realtimeSafe` promise. The worker derives the other
-    // half (does the model carry algebraic unknowns) from the compiled DAE.
+    // The solver-selection input only carries the authored prediction contract.
+    // Solver capability and Modelica lowering remain owned by the worker's
+    // backend registry; they are never inferred from a DAE shape here.
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
 ) {
     let Some(channels) = channels else { return };
@@ -1031,10 +1145,8 @@ pub fn dispatch_loaded_modelica_sources(
                 extra_sources: Vec::new(),
                 parameter_overrides,
                 stream: None,
-                // Declared, never inferred. A program without the promise is not
-                // client-predicted, so an adaptive implicit solver is correct for
-                // it — which is exactly what a battery/solar electrical island
-                // needs.
+                // Declared, never inferred. A program without the promise is
+                // authoritative live co-simulation, not client prediction.
                 realtime_safe: q_realtime_safe.contains(entity),
             })
             .err()
@@ -1052,7 +1164,6 @@ pub fn dispatch_loaded_modelica_sources(
         component.parameters = parameters.clone();
         component.inputs = inputs.clone();
         commands.entity(entity).try_insert(ModelicaModel {
-            model_path: PathBuf::from(&pending.asset_path),
             model_name: model_name.clone(),
             parameters,
             inputs,
@@ -1131,8 +1242,8 @@ pub fn dispatch_loaded_python_sources(
             })
             .unwrap_or_default();
 
-        // Offset doc id away from any Modelica-allocated ids on the same
-        // entity (legacy catalog Python balloon does the same).
+        // Offset the Python document id away from any Modelica-allocated ids
+        // on the same entity.
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
         // Route through the registry funnel so a journal recorder attaches (edits
         // to this cosim script record like any other domain).
@@ -1205,26 +1316,22 @@ pub fn dispatch_loaded_python_sources(
 pub(crate) fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
     q_new: Query<
-        (
-            Entity,
-            &ModelicaModel,
-            Option<&UsdModelicaPortContract>,
-        ),
+        (Entity, &ModelicaModel, Option<&UsdModelicaPortContract>),
         (With<UsdSourcedCosim>, Without<SimComponent>),
     >,
 ) {
     for (entity, model, contract) in q_new.iter() {
         let mut entity_commands = commands.entity(entity);
         entity_commands.try_insert(SimComponent {
-                model_name: model.model_name.clone(),
-                parameters: model.parameters.clone(),
-                inputs: model.inputs.clone(),
-                // Outputs are the SOLUTION — empty until the worker answers.
-                // `sync_modelica_outputs` fills them and flips the status.
-                outputs: model.variables.clone(),
-                status: modelica_status(model),
-                is_stepping: model.is_stepping,
-            });
+            model_name: model.model_name.clone(),
+            parameters: model.parameters.clone(),
+            inputs: model.inputs.clone(),
+            // Outputs are the SOLUTION — empty until the worker answers.
+            // `sync_modelica_outputs` fills them and flips the status.
+            outputs: model.variables.clone(),
+            status: modelica_status(model),
+            is_stepping: model.is_stepping,
+        });
         if let Some(contract) = contract {
             entity_commands.try_insert(DeclaredOutputPorts {
                 names: contract.outputs.iter().cloned().collect(),
@@ -1720,6 +1827,7 @@ pub fn rewire_usd_connections(
             &UsdPrimPath,
             Has<ModelicaModel>,
             Option<&GeneratedModelicaSource>,
+            Has<lunco_environment::EnvironmentProbe>,
         ),
         Or<(With<lunco_core::PortSurfaceReady>, With<SimComponent>)>,
     >,
@@ -1739,8 +1847,11 @@ pub fn rewire_usd_connections(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     // The realtime gate: whether the SOURCE program promised it is realtime-safe,
     // and whether the SINK is a client-predicted dynamic body (a `RigidBody` NOT
-    // opted out of prediction). Absence of the promise is the dangerous case;
-    // absence of the body is the safe one.
+    // opted out of prediction). The network role is part of this contract: only
+    // a pure client predicts the body locally. Standalone and host processes are
+    // authoritative, so their live solver is not incorrectly classified as a
+    // prediction loop.
+    role: Option<Res<lunco_core::NetworkRole>>,
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
     q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
     q_defaults: Query<&UsdInputDefaults>,
@@ -1750,10 +1861,18 @@ pub fn rewire_usd_connections(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
+    let client_predicts = matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client));
+    let role_changed = role.as_ref().is_some_and(|role| role.is_changed());
+
     // `Added<ModelicaModel>` is the explicit endpoint-contract transition. This
     // pass no longer relies on accidentally deferred removal events to get an
     // extra rewire after a generated model appears.
-    let structural = !wiring_arrivals.is_empty() || removed.read().next().is_some();
+    let structural = !wiring_arrivals.is_empty()
+        || removed.read().next().is_some()
+        // Changing authority changes whether a force edge is admissible. Rebuild
+        // immediately on a standalone/host ↔ client transition instead of
+        // leaving the previous role's wiring decision cached.
+        || role_changed;
     if !structural && !dirty.0 {
         return;
     }
@@ -1774,10 +1893,8 @@ pub fn rewire_usd_connections(
     //
     // The instance key still keeps two runtime spawns of one stage distinct;
     // the stage key keeps independently composed stages distinct.
-    let mut by_path: HashMap<
-        (bevy::asset::AssetId<UsdStageAsset>, Option<u64>, String),
-        Entity,
-    > = HashMap::new();
+    let mut by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, Option<u64>, String), Entity> =
+        HashMap::new();
     // A generated network is one Modelica participant, while its composed
     // member paths remain valid USD addresses for presentation and external
     // scalar consumers. This table translates those member output addresses to
@@ -1793,7 +1910,11 @@ pub fn rewire_usd_connections(
         ),
         (Entity, String),
     > = HashMap::new();
-    for (e, p, _, generated) in q_all.iter() {
+    let environment_probe_entities: std::collections::HashSet<Entity> = q_all
+        .iter()
+        .filter_map(|(entity, _, _, _, is_probe)| is_probe.then_some(entity))
+        .collect();
+    for (e, p, _, generated, _) in q_all.iter() {
         let instance = instance_of(e);
         let key = (p.stage_handle.id(), instance, p.path.clone());
         by_path.insert(key, e);
@@ -1817,6 +1938,16 @@ pub fn rewire_usd_connections(
     // exactly what makes an input a parameter.
     let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
 
+    // Earth demand is a composed-wire fact, not a property of every environment
+    // probe. Rebuild the projection from the same connection sweep below so a
+    // live wire edit removes demand as well as adding it.
+    for entity in &environment_probe_entities {
+        commands
+            .entity(*entity)
+            .remove::<lunco_environment::EarthDirectionRequired>();
+    }
+    let mut earth_direction_required = std::collections::HashSet::new();
+
     // Network membership, per stage — see the skip below. One stage walk per
     // rebuild, not per prim.
     let mut members_by_stage: HashMap<
@@ -1829,7 +1960,7 @@ pub fn rewire_usd_connections(
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path, has_modelica, _) in q_all.iter() {
+    for (entity, prim_path, has_modelica, _, _) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -2043,7 +2174,9 @@ pub fn rewire_usd_connections(
                     .flatten()
                     .cloned();
                 let generated_alias_present = generated_alias.is_some();
-                let (mut start_element, mut src_conn) = if let Some((wrapper, alias)) = generated_alias {
+                let (mut start_element, mut src_conn) = if let Some((wrapper, alias)) =
+                    generated_alias
+                {
                     (wrapper, alias)
                 } else {
                     let Some(&element) = by_path.get(&(
@@ -2071,6 +2204,17 @@ pub fn rewire_usd_connections(
                     };
                     (element, src_conn.to_string())
                 };
+                if !start_is_input
+                    && environment_probe_entities.contains(&start_element)
+                    && matches!(
+                        src_conn.as_str(),
+                        lunco_cosim::EARTH_MOUNT_X_CONNECTOR
+                            | lunco_cosim::EARTH_MOUNT_Y_CONNECTOR
+                            | lunco_cosim::EARTH_MOUNT_Z_CONNECTOR
+                    )
+                {
+                    earth_direction_required.insert(start_element);
+                }
 
                 // ── The SOURCE side of the actuator-port indirection ─────────
                 // A vessel's `outputs:drive_left` is not stored on the vessel
@@ -2109,27 +2253,41 @@ pub fn rewire_usd_connections(
                 // loop, and the body diverges from the server every frame the solver
                 // runs late.
                 //
-                // Warn, don't refuse: cosim prims are stamped `NotPredictable` at
-                // prim-read time, so a scene that trips this gate has ALREADY
-                // routed around the guard some other way, and dropping the wire
-                // silently would leave a vehicle with no forces at all. The warn
-                // names the attribute and the prim so it is actionable.
-                if lunco_cosim::is_physics_force_port(sink_conn)
+                if client_predicts
+                    && lunco_cosim::is_physics_force_port(sink_conn)
                     && matches!(
                         q_predicted_body.get(entity),
                         Ok(avian3d::prelude::RigidBody::Dynamic)
                     )
                     && q_realtime_safe.get(start_element).is_err()
                 {
-                    warn!(
-                        "[usd-cosim] {}.{}: the program at {} drives a force/torque port on a \
-                         CLIENT-PREDICTED dynamic body without declaring \
-                         `lunco:program:realtimeSafe = true`. Its step sequence and cost are not \
-                         guaranteed identical across peers — the predicted body can diverge. \
-                         Declare it on the program prim (see \
-                         docs/architecture/28-modelica-realtime-physics.md).",
-                        prim_path.path, attr, src_prim,
+                    let source_prim = src_prim.to_string();
+                    let detail = format!(
+                        "{}.{} drives predicted dynamic body {} without \
+                         `lunco:program:realtimeSafe = true`; the force wire was not admitted",
+                        prim_path.path, attr, source_prim,
                     );
+                    error!("[usd-cosim] {detail}");
+                    commands.queue(move |world: &mut World| {
+                        let raised = world
+                            .get_resource_mut::<lunco_core::RuntimeFaults>()
+                            .is_some_and(|mut faults| {
+                                faults.raise(
+                                    "cosim-predicted-force-contract",
+                                    Some(entity),
+                                    source_prim,
+                                    detail,
+                                )
+                            });
+                        if raised {
+                            if let Some(mut holds) =
+                                world.get_resource_mut::<lunco_physics::PhysicsHolds>()
+                            {
+                                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                            }
+                        }
+                    });
+                    continue;
                 }
 
                 let (end_element, end_connector) = forward
@@ -2178,6 +2336,12 @@ pub fn rewire_usd_connections(
         if q_defaults.get(entity).map(|d| d.0 != map).unwrap_or(true) {
             commands.entity(entity).try_insert(UsdInputDefaults(map));
         }
+    }
+
+    for entity in earth_direction_required {
+        commands
+            .entity(entity)
+            .insert(lunco_environment::EarthDirectionRequired);
     }
 }
 
@@ -2294,7 +2458,7 @@ fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option
 /// `ListPorts` — enumerate exposed ports. With `{"api_id": N}`, lists that
 /// entity's ports; without, lists every registered entity that has any port.
 ///
-/// `curl … {"command":"ListPorts","params":{"api_id":12345}}`
+/// `curl … {"type":"ExecuteCommand","command":"ListPorts","params":{"api_id":12345}}`
 pub struct ListPortsProvider;
 
 impl lunco_api::ApiQueryProvider for ListPortsProvider {
@@ -2336,7 +2500,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
 
 /// `GetPort` — read one port value.
 ///
-/// `curl … {"command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
+/// `curl … {"type":"ExecuteCommand","command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
 pub struct GetPortProvider;
 
 impl lunco_api::ApiQueryProvider for GetPortProvider {
@@ -2371,8 +2535,8 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
 
 /// `SetPort` — hold one input port at a setpoint.
 ///
-/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
-/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
+/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
+/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
 ///
 /// The write is a HOLD, not a poke: it outranks the wiring fabric for its
 /// duration ([`lunco_cosim::PortHolds`]). Writing the slot alone worked only on
@@ -2437,7 +2601,7 @@ impl lunco_api::ApiQueryProvider for SetPortProvider {
 /// `ReleasePort` — end a [`SetPortProvider`] hold early, handing the port back to
 /// whatever drives it.
 ///
-/// `curl … {"command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
+/// `curl … {"type":"ExecuteCommand","command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
 ///
 /// Holds expire on their own, so this is for the caller who is DONE rather than
 /// the caller who crashed: releasing a throttle at the end of a manoeuvre returns
@@ -2468,7 +2632,7 @@ impl lunco_api::ApiQueryProvider for ReleasePortProvider {
     }
 }
 
-/// API query provider: `curl … {"command":"CosimStatus","params":{}}`
+/// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
 /// state, and propagated cosim values. Lets you probe the running
 /// binary without polling logs.
@@ -2834,7 +2998,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 
 /// Reload (or load) a USD scene at runtime via the API.
 ///
-/// `curl … {"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
+/// `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
 ///
 /// - `path`: USD asset path relative to the asset root.
 /// - `root_prim`: optional override for the SDF path of the prim to
@@ -3442,7 +3606,7 @@ pub fn spawn_scene_root_with_stage(
 ///
 /// The defaultPrim lookup is deliberately deferred rather than read
 /// here: this runs synchronously at command time, before the stage
-/// asset finishes loading. It is resolved from the parsed `TextReader`
+/// asset finishes loading. It is resolved from the parsed canonical `StageView`
 /// at instantiate time instead — correct on both native and web, and
 /// yielding the defaultPrim subtree rather than a whole-stage `/` mount.
 ///
@@ -3512,6 +3676,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<WiringDirty>()
         .init_resource::<BindingEpochDirty>()
         .init_resource::<BindingModelStatuses>()
+        .init_resource::<PythonUnavailablePrograms>()
         .init_resource::<crate::domain_projection::MemberClasses>()
         .init_resource::<crate::domain_projection::ProjectionDirty>()
         // The open synthesizer registry (doc 37 §8): the acausal-network
@@ -3607,6 +3772,15 @@ pub(crate) fn install(app: &mut App) {
 
     app.add_systems(
         Update,
+        report_python_unavailable.after(CosimUpdateSet::Scene),
+    );
+    app.add_systems(
+        lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+        reset_python_unavailable,
+    );
+
+    app.add_systems(
+        Update,
         (
             crate::domain_projection::project_domain_islands,
             crate::domain_projection::sync_generated_network_documents,
@@ -3616,29 +3790,45 @@ pub(crate) fn install(app: &mut App) {
             .in_set(CosimUpdateSet::Projection),
     );
 
+    // Wiring is derived from native `connectionPaths`: rebuilds the
+    // `SimConnection` set whenever prims spawn/despawn (structural) or a
+    // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
+    // Register the stages separately because `run_if` turns a system into a
+    // schedule config and cannot participate in this Bevy version's chained
+    // system tuple. The explicit dependencies retain the same ownership order
+    // without relying on tuple arity or a second compatibility path.
     app.add_systems(
         Update,
-        (
-            // Wiring is derived from native `connectionPaths`: rebuilds the
-            // `SimConnection` set whenever prims spawn/despawn (structural) or a
-            // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
-            rewire_usd_connections,
-            // Retire the previous derived cache and publish its replacement as
-            // one schedule transaction. Without this boundary, a second rewire
-            // during scene composition cannot see edges queued by the first pass,
-            // so a stale transform-only edge and its replacement can both reach
-            // the binding transaction.
-            bevy::ecs::schedule::ApplyDeferred,
-            wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
-            // Parameters: the authored constants the wiring pass gathered off the
-            // unconnected `inputs:` ports, pushed into the model once it exists.
-            // After the wrap, because it needs the `SimComponent` to write into.
-            seed_usd_input_defaults,
-            // §6 opaque guard: once a body is cosim-driven, mark it unpredictable
-            // (after the SimComponent wrap above, so it sees freshly-wrapped bodies).
-            tag_cosim_opaque,
-        )
-            .chain()
+        rewire_usd_connections.in_set(CosimUpdateSet::Wiring),
+    );
+    app.add_systems(
+        Update,
+        bevy::ecs::schedule::ApplyDeferred
+            .after(rewire_usd_connections)
+            .in_set(CosimUpdateSet::Wiring),
+    );
+    app.add_systems(
+        Update,
+        wrap_modelica_into_simcomponent
+            .run_if(any_unwrapped_modelica)
+            .after(rewire_usd_connections)
+            .in_set(CosimUpdateSet::Wiring),
+    );
+    // Parameters: the authored constants the wiring pass gathered off the
+    // unconnected `inputs:` ports, pushed into the model once it exists. After
+    // the wrap, because it needs the `SimComponent` to write into.
+    app.add_systems(
+        Update,
+        seed_usd_input_defaults
+            .after(wrap_modelica_into_simcomponent)
+            .in_set(CosimUpdateSet::Wiring),
+    );
+    // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after
+    // the fresh SimComponent and authored defaults are visible.
+    app.add_systems(
+        Update,
+        tag_cosim_opaque
+            .after(seed_usd_input_defaults)
             .in_set(CosimUpdateSet::Wiring),
     );
 
@@ -3763,6 +3953,22 @@ mod tests {
                 .copied()
                 .collect::<BTreeSet<_>>()
         );
+    }
+
+    #[test]
+    fn bare_acausal_interface_is_not_treated_as_an_unowned_wire() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/electrical_network.usda");
+        let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose fixture");
+        let view = lunco_usd_bevy::StageView::new(&stage);
+
+        let bare_motor = SdfPath::new("/Rig/Motor").expect("motor path");
+        let wired_battery = SdfPath::new("/Rig/Battery").expect("battery path");
+        let bare_panel = SdfPath::new("/Rig/SolarPanel").expect("panel path");
+
+        assert!(!has_connected_acausal_connector(&view, &bare_motor));
+        assert!(has_connected_acausal_connector(&view, &wired_battery));
+        assert!(!has_connected_acausal_connector(&view, &bare_panel));
     }
 
     /// A model that has been parsed and dispatched but not yet solved:

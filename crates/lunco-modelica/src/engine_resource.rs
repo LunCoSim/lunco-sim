@@ -319,7 +319,7 @@ pub fn drive_engine_sync(
             }
             (None, _) => {
                 // Strict parse failed (recovered into session via
-                // lenient fallback). Surface the failure into the
+                // lenient parser recovery). Surface the failure into the
                 // doc's parse cache so the diagnostics panel can
                 // show a row.
                 if let Some(host) = registry.host_mut(doc_id) {
@@ -446,9 +446,9 @@ pub fn drive_engine_sync(
     for doc_id in removed {
         cursor.last_synced.remove(&doc_id);
     }
-    // Spawn async parses outside the engine lock — the spawn helper
-    // re-locks briefly to mark pending; the worker re-locks at the
-    // end to install the AST.
+    // Dispatch parses outside the engine lock. Native parses use the
+    // task pool; wasm parses are posted to the Web Worker and return
+    // through the parse-done channel.
     //
     // Debounce gate (replaces the prior `ast_refresh` system):
     //   - First parse for a doc (syntax.generation == 0) fires
@@ -456,21 +456,16 @@ pub fn drive_engine_sync(
     //   - Edit reparse (syntax.generation > 0 but stale) waits for
     //     `AST_DEBOUNCE_MS` of post-edit silence + no input activity.
     //     Lets a typing burst settle before paying for a parse.
+    #[cfg(not(target_arch = "wasm32"))]
     let pool = bevy::tasks::AsyncComputeTaskPool::get();
     let now = web_time::Instant::now();
     // Active-doc-first ordering. The active tab's reparse takes
     // priority over background tabs because the user is staring at
-    // its canvas; any other tab can wait. On wasm
-    // `AsyncComputeTaskPool` runs cooperatively on the main thread,
-    // so the order in which we *spawn* dictates the order in which
-    // they run.
+    // its canvas; any other tab can wait.
     if let Some(active) = active_doc {
         async_only.sort_by_key(|(doc_id, _, _)| if *doc_id == active { 0 } else { 1 });
     }
-    // Wasm throttle: at most 4 parses in flight at a time. Rumoca
-    // parses on wasm32-unknown-unknown each take ~5 s of main-thread
-    // time; previously this was capped to 1, but with a 4-worker pool
-    // we can sustain parallel parses without blocking the UI.
+    // Wasm throttle: at most 4 worker parses in flight at a time.
     //
     // Native: pool has real worker threads; concurrency is fine and
     // uncapped.
@@ -525,19 +520,14 @@ pub fn drive_engine_sync(
             }
         }
         let src_len = source.len();
-        // Wasm path: ship parsing to the off-thread Web Worker. Rumoca
-        // parse on wasm32-unknown-unknown is ~5 s for a real model
-        // and runs synchronously on the main thread (Bevy's
-        // `AsyncComputeTaskPool` is cooperative there). The worker
-        // bundle has its own wasm instance; parsing there leaves the
-        // UI thread free to render. The result lands via the parse-
-        // done channel that `drain_worker_parse_results` polls each
-        // tick.
+        // Wasm path: ship parsing to the off-thread Web Worker. The worker
+        // bundle has its own wasm instance; parsing there leaves the UI
+        // thread free to render. The result lands via the parse-done channel
+        // that `drain_worker_parse_results` polls each tick.
         //
-        // Falls back to the local pool spawn if the worker isn't
-        // installed yet (very early boot before
-        // `worker_transport::install_worker` lands) or returned an
-        // error.
+        // If the worker is still starting or cannot accept the request,
+        // leave the document eligible for a retry on the next tick. There
+        // is no wasm parser on the page's main thread.
         #[cfg(target_arch = "wasm32")]
         let dispatched_to_worker = match handle.mark_pending_for_worker(doc_id) {
             Some(uri) => {
@@ -622,7 +612,18 @@ pub fn drive_engine_sync(
         #[cfg(not(target_arch = "wasm32"))]
         let dispatched_to_worker = false;
 
+        #[cfg(target_arch = "wasm32")]
         if !dispatched_to_worker {
+            bevy::log::debug!(
+                "[EngineSync] Modelica Web Worker not ready; retrying parse doc={} gen={}",
+                doc_id.raw(),
+                gen,
+            );
+            continue;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
             handle.upsert_document_async(doc_id, gen, source, |task| {
                 pool.spawn(async move { task() }).detach();
             });
@@ -636,7 +637,7 @@ pub fn drive_engine_sync(
             if dispatched_to_worker {
                 "worker"
             } else {
-                "main"
+                "native-task"
             },
             if Some(doc_id) == active_doc {
                 ", priority=active"

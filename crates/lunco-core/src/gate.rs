@@ -50,6 +50,11 @@ pub struct GateStat {
     /// Whether this gate already reported — reported once per process, not once
     /// per window, so a permanently-open gate does not become log spam.
     pub reported: bool,
+    /// Whether the owner explicitly declared an always-open mode for the
+    /// current evaluation window. This is not inferred from the firing rate:
+    /// deterministic scene tests, for example, deliberately solve every
+    /// frame.
+    pub expected_open: bool,
 }
 
 /// Firing rates for every [`tracked`] run condition.
@@ -74,6 +79,15 @@ impl GateActivity {
         let stat = stats.entry(name).or_default();
         stat.evaluations += 1;
         stat.fired += u32::from(fired);
+    }
+
+    /// Mark whether an always-open result is an explicit owner policy for the
+    /// current evaluation window. The owner must update this on every
+    /// evaluation so a runtime settings change immediately re-enables the
+    /// effectiveness diagnostic.
+    pub fn expect_open(&self, name: &'static str, expected: bool) {
+        let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());
+        stats.entry(name).or_default().expected_open = expected;
     }
 
     /// Current tally for a gate, if it has ever been evaluated.
@@ -123,6 +137,11 @@ pub fn report_ineffective_gates(activity: Res<GateActivity>) {
     let mut stats = activity.stats.lock().unwrap_or_else(|e| e.into_inner());
     for (name, stat) in stats.iter_mut() {
         if stat.evaluations < WINDOW {
+            continue;
+        }
+        if stat.expected_open {
+            stat.evaluations = 0;
+            stat.fired = 0;
             continue;
         }
         let rate = stat.fired as f32 / stat.evaluations as f32;
@@ -215,5 +234,15 @@ mod tests {
         let stat = app.world().resource::<GateActivity>().get("shut").unwrap();
         assert_eq!(stat.evaluations, 1);
         assert_eq!(stat.fired, 0);
+    }
+
+    #[test]
+    fn explicit_always_open_mode_is_recorded_as_policy() {
+        let activity = GateActivity::default();
+        activity.record("deterministic", true);
+        activity.expect_open("deterministic", true);
+
+        let stat = activity.get("deterministic").unwrap();
+        assert!(stat.expected_open);
     }
 }

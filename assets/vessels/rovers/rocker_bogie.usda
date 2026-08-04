@@ -1287,11 +1287,11 @@ def Xform "RockerBogie" (
     # couples to the electrical island by CAUSAL cross-domain wires only:
     # each motor's `outputs:heat` (solved by the electrical DAE) feeds a
     # `MotorHeatLoad.inputs:heat_w` here as a runtime SimConnection. The acausal
-    # `connectors:port` edges stay INSIDE this thermal collection (heat balance
-    # per bank), which is the rule that lets thermal compile independently of
-    # electrical — including when `power != "battery"` (no electrical island at
-    # all). All six motors get a heat-load bridge; `ML`/`MR` are no longer
-    # silently dropped.
+    # `connectors:port` edges stay INSIDE this thermal collection. An explicit
+    # chassis ThermalConductor joins the two banks, which lets thermal compile
+    # as one physically connected DAE independently of electrical — including
+    # when `power != "battery"` (no electrical island at all). All six motors
+    # get a heat-load bridge; `ML`/`MR` are no longer silently dropped.
     variantSet "thermal" = {
         "none" {
         }
@@ -1335,7 +1335,16 @@ def Xform "RockerBogie" (
                     </RockerBogie/Thermal/MotorThermalRight>,
                     </RockerBogie/Thermal/MotorRadiatorLeft>,
                     </RockerBogie/Thermal/MotorRadiatorRight>,
+                    </RockerBogie/Thermal/ThermalBridge>,
                 ]
+
+                def Xform "ThermalBridge" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</ThermalConductor>
+                )
+                {
+                    custom token connectors:port_a.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port_b.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
 
                 # ── Left bank: three heat loads into one mass/radiator node ──
                 def Xform "MotorHeat_FL" (

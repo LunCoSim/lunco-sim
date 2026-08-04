@@ -402,10 +402,10 @@ fn setup_web_workbench(
 ) {
     let model_path = PathBuf::from(&model_info.default_filename);
     let source = model_info.default_source.clone();
-    let model_name =
-        lunco_modelica::extract_model_name(&source).unwrap_or_else(|| "Model".to_string());
-    let initial_params = lunco_modelica::extract_parameters(&source);
-    let initial_inputs = lunco_modelica::extract_inputs_with_defaults(&source);
+    let model_name = lunco_modelica::ast_extract::extract_model_name(&source)
+        .unwrap_or_else(|| "Model".to_string());
+    let initial_params = lunco_modelica::ast_extract::extract_parameters(&source);
+    let initial_inputs = lunco_modelica::ast_extract::extract_inputs_with_defaults(&source);
 
     workbench_state.editor_buffer = source.clone();
 

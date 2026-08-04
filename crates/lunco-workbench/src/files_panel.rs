@@ -61,7 +61,7 @@ impl Panel for FilesPanel {
         // the registry's trait objects (no raw `&mut World`). Mirrors
         // `TwinBrowserPanel::render`; sections read domain state (active Twin
         // via `WorkspaceResource`, …) through `BrowserCtx::resource` and emit
-        // changes via `defer`/`actions`.
+        // changes via typed events/actions.
         let present = ctx.resource_scope::<BrowserSectionRegistry, _>(|ctx, registry| {
             let visible: Vec<usize> = registry
                 .iter()

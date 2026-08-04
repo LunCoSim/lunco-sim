@@ -71,17 +71,15 @@ fn endpoint_ready_on_add<T: Component>(
     mut commands: Commands,
     mut revision: ResMut<BindingRevision>,
 ) {
-    commands
-        .entity(trigger.entity)
-        .try_insert((
-            EndpointLifecycle::Ready,
-            // This is the shared admission fact used by USD wiring: a prim is
-            // eligible for endpoint resolution only after its owning backend
-            // has installed its named surface. It is deliberately published
-            // alongside the lifecycle state for every backend, not inferred
-            // from a vehicle- or sensor-specific component.
-            lunco_core::PortSurfaceReady,
-        ));
+    commands.entity(trigger.entity).try_insert((
+        EndpointLifecycle::Ready,
+        // This is the shared admission fact used by USD wiring: a prim is
+        // eligible for endpoint resolution only after its owning backend
+        // has installed its named surface. It is deliberately published
+        // alongside the lifecycle state for every backend, not inferred
+        // from a vehicle- or sensor-specific component.
+        lunco_core::PortSurfaceReady,
+    ));
     revision.request();
 }
 
@@ -473,10 +471,7 @@ mod binding_lifecycle_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
 
-        let entity = app
-            .world_mut()
-            .spawn(lunco_core::PortSurfaceReady)
-            .id();
+        let entity = app.world_mut().spawn(lunco_core::PortSurfaceReady).id();
         app.update();
 
         assert_eq!(

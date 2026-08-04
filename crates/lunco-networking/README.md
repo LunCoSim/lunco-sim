@@ -82,7 +82,7 @@ protocol and (planned) external bridges:
 ┌─── Domain Code (lunco-mobility, lunco-celestial, lunco-obc) ──────┐
 │  Port(f64), SimConnection, DVec3, Typed Commands                  │
 └──────────────────────┬────────────────────────────────────────────┘
-                       │  lunco-networking (transparent shim)
+                       │  lunco-networking (transport adapter)
     ┌──────────────────┼──────────────────┐
     ▼                  ▼                  ▼
  Internal game     CCSDS / YAMCS     DDS / ROS2

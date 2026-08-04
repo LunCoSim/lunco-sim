@@ -5,7 +5,7 @@
 //! bridge core through a `#[wasm_bindgen]` async export instead:
 //!
 //! ```js
-//! const res = await window.lunco_api('{"command":"FastRunActiveModel", ...}');
+//! const res = await window.lunco_api('{"type":"ExecuteCommand","command":"FastRunActiveModel","params":{}}');
 //! ```
 //!
 //! The JSON envelope is byte-identical to the HTTP API. `execute()` awaits a
@@ -34,8 +34,8 @@ pub fn set_wasm_bridge(bridge: HttpBridge) {
     WASM_BRIDGE.with(|b| *b.borrow_mut() = Some(bridge));
 }
 
-/// JS-callable command bridge. Accepts the same `{"command"|"type", ...}`
-/// envelope as the HTTP API and returns the JSON response envelope as a
+/// JS-callable command bridge. Accepts the tagged envelope used by the HTTP
+/// API and returns the JSON response envelope as a
 /// string. Resolves a Promise on the JS side.
 #[wasm_bindgen]
 pub async fn lunco_api(json: String) -> Result<String, JsValue> {
@@ -47,7 +47,8 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
 
     let req: ApiRequest = serde_json::from_str::<ApiRequestUnified>(&json)
         .map_err(|e| JsValue::from_str(&format!("lunco_api: bad request JSON: {e}")))?
-        .into();
+        .try_into()
+        .map_err(|e| JsValue::from_str(&format!("lunco_api: invalid request: {e}")))?;
 
     let resp = bridge
         .execute(req)
@@ -58,7 +59,6 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
     // base64 PNG under a stable key instead.
     if let ApiResponse::Screenshot { png_bytes } = resp {
         let envelope = ApiResponseEnvelope {
-            command_id: None,
             data: Some(serde_json::json!({ "png_base64": STANDARD.encode(&png_bytes) })),
             error: None,
             error_code: None,

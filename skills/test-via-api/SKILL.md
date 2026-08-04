@@ -45,7 +45,7 @@ Use `ReadExposures` to verify the data side independently of the pixels:
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"command":"ReadExposures","params":{"surface":"driven-vessel"}}' | jq .
+  -d '{"type":"ExecuteCommand","command":"ReadExposures","params":{"surface":"driven-vessel"}}' | jq .
 ```
 
 The response's `revision` changes only when an exposed value or visibility flag
@@ -84,7 +84,7 @@ done
 # 4. Stop with Exit, NEVER pkill / kill (user has to confirm those):
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"Exit","params":{}}'
+  -d '{"type":"ExecuteCommand","command":"Exit","params":{}}'
 ```
 
 After `Exit`, verify that the process and `:4101` listener are gone before
@@ -94,50 +94,18 @@ and participant initialization.
 
 ## Curl shape
 
-Always include `"params":{}` even for parameterless commands. Without
-it the API logs `Deserialization error: invalid type: null, expected
-reflected struct value` and the command silently no-ops.
+Every typed command uses the tagged envelope
+`{"type":"ExecuteCommand","command":"<Name>","params":{...}}`.
+Include `params` even for parameterless commands. Built-in discovery and entity
+listing use their own explicit `type` values.
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
+  -d '{"type":"ExecuteCommand","command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
 ```
 
-Successful response: `{"command_id": N}`. Error: `{"error":"..."}`.
-
-**With the `command` spelling, arguments MUST be nested inside `params`.**
-`{"command":"X","eye":[...]}` is accepted with HTTP 200 and the arguments are
-**silently discarded**, so the command runs with `Default::default()` for every
-field.
-
-Which spelling you use decides this, and only one of the two is forgiving
-(`crates/lunco-api/src/transports/envelope.rs`):
-
-| you send | top-level extras |
-|---|---|
-| `{"command":"X", …}` | **dropped** — this branch reads the named `params` slot and nothing else |
-| `{"type":"X", …}` | **promoted into `params`** when you did not send `params` yourself |
-
-So `{"type":"SetCamera","eye":[…]}` works while `{"command":"SetCamera","eye":[…]}`
-does not. Nesting under `params` is correct for both, which is why the examples
-here always do — it is the one shape that cannot bite you.
-
-Symptom to recognise: the log shows zeroed arguments, e.g.
-
-```
-SET_CAMERA: eye=(0.00,0.00,0.00) target=(0.00,0.00,0.00)
-```
-
-which reads as "the geometry is broken" when it actually means "the camera never
-moved". If a command appears to do nothing, grep the log for zeroed arguments
-before you touch the asset.
-
-**`{"command_id": N}` means QUEUED, not succeeded.** It is not an
-acknowledgement that the command ran, validated, or had any effect. Rejections
-and warnings appear **only in the log**, so the log is the real return channel —
-tail it after every batch. `QueryCommandResult` (by `command_id`) exists for
-commands that produce values.
+Successful fire-and-forget response: `{"data":{"accepted":true}}`. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. Deferred commands return their completed payload or error on the same request; there is no command-id polling endpoint.
 
 ### Sandbox: loading a model
 
@@ -173,12 +141,12 @@ yourself rather than relying on `save_to_file`.
 `ValidateAsset` is the parse-only pre-flight ("does this file compile?"):
 no cosim, no scene load, no GPU — safe against any running luncosim, even
 mid-simulation. Unlike the commands below it is a **query provider**, so the
-report comes back in the response body; no `QueryCommandResult` poll.
+report comes back in the response body; no secondary result request is needed.
 
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
+  -d '{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
 **Answered by luncosim binaries only** — it lives in `lunco-scene-commands`,
@@ -283,8 +251,8 @@ or changing `soc`.
 Tutorial acceptance belongs to the production `target/debug/luncosim` binary.
 Build that binary in the worktree, run the scene-test command directly, and
 capture its exit code and authored verdict. `--validate` proves only USD
-parsing; `command_id` proves only that an API request was queued. A live API
-check must also wait for `/api/ready` to report `ready:true`,
+parsing; a successful acknowledgement proves validation and dispatch, not that
+the simulation has finished its work. A live API check must also wait for `/api/ready` to report `ready:true`,
 `world_hold:false`, and `pending_count:0`.
 
 Autopilot checks should observe the same `PossessVessel` and port-write events

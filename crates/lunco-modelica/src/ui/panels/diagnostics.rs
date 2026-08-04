@@ -30,6 +30,32 @@ use crate::ui::panels::log::{render_log_view, LogEntry, LogLevel};
 /// Panel id.
 pub const DIAGNOSTICS_PANEL_ID: PanelId = PanelId("modelica_diagnostics");
 
+/// Clear the diagnostics view after paint.
+#[derive(Event, Clone, Copy, Default)]
+pub(crate) struct ClearDiagnosticsRequested;
+
+/// Move the editor caret to a selected diagnostic location.
+#[derive(Event)]
+pub(crate) struct DiagnosticJumpRequested {
+    pub(crate) doc: Option<lunco_doc::DocumentId>,
+    pub(crate) loc: crate::ui::panels::log::SourceLoc,
+}
+
+pub(crate) fn on_clear_diagnostics_requested(
+    _trigger: On<ClearDiagnosticsRequested>,
+    mut log: ResMut<DiagnosticsLog>,
+) {
+    log.clear();
+}
+
+pub(crate) fn on_diagnostic_jump_requested(
+    trigger: On<DiagnosticJumpRequested>,
+    mut request: ResMut<crate::ui::panels::code_editor::EditorJumpRequest>,
+) {
+    let event = trigger.event();
+    request.request(event.doc, event.loc);
+}
+
 /// Current diagnostics for the open model. Rebuilt from AST state
 /// each frame rather than accumulated — a fixed parse becomes a
 /// cleared log.
@@ -125,11 +151,7 @@ impl Panel for DiagnosticsPanel {
             &theme,
         );
         if clear_requested {
-            ctx.defer(|world| {
-                if let Some(mut log) = world.get_resource_mut::<DiagnosticsLog>() {
-                    log.clear();
-                }
-            });
+            ctx.trigger(ClearDiagnosticsRequested);
         }
         // A located diagnostic was clicked — ask the code editor to
         // jump to it. The target is the currently active document
@@ -138,13 +160,7 @@ impl Panel for DiagnosticsPanel {
             let doc = ctx
                 .resource::<lunco_workspace::WorkspaceResource>()
                 .and_then(|ws| ws.active_document);
-            ctx.defer(move |world| {
-                world
-                    .get_resource_or_insert_with(
-                        crate::ui::panels::code_editor::EditorJumpRequest::default,
-                    )
-                    .request(doc, loc);
-            });
+            ctx.trigger(DiagnosticJumpRequested { doc, loc });
         }
     }
 }

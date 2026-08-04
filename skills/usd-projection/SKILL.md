@@ -48,11 +48,11 @@ UsdOp  ──►  UsdDocumentRegistry::apply   (journals + inverts)
           on_usd_prim_added  (observer on `Add, UsdPrimPath`)
               │
               ▼
-          instantiate_usd_prim_read        (lunco-usd-bevy/src/lib.rs)
+          instantiate_usd_prim_from_stage  (lunco-usd-bevy/src/lib.rs)
               └── match reader.type_name(path) → components
 ```
 
-Two entry points feed `instantiate_usd_prim_read`: the observer above (live
+Two entry points feed `instantiate_usd_prim_from_stage`: the observer above (live
 edits, runtime spawns) and `sync_usd_visuals` (a stage asset finishing its
 load). Both go through the *same* extractor, which is why a scene loaded from
 disk and a prim authored at runtime produce identical entities.
@@ -125,16 +125,17 @@ the right behaviour is for it to visibly do nothing.
 
 ## Adding support for a new prim type or attribute
 
-1. **Read it.** Extractors are generic over the `UsdRead` trait
-   (`lunco-usd-bevy/src/read.rs`), with two impls: `StageView` (the live stage)
-   and `sdf::Data` (the flatten). Write against the trait and you work on both.
+1. **Read it.** Extractors use the `UsdRead` trait
+   (`lunco-usd-bevy/src/read.rs`), implemented by `StageView` (the live
+   composed stage). Authoring-layer reads use `UsdDataExt` separately; runtime
+   extractors never switch to that source.
    - Floats: use `real` / `real_f32`, **never** `scalar::<f64>` — a `float`-
      authored value silently reads `None` through the f64 path.
    - Asset paths: `read_token` (it coerces `String`/`Token`/`AssetPath`), then
      `resolve_texture_path` to make it relative to the stage layer. Downloaded
      assets are `cached_textures://…` (declared in a crate's `Assets.toml`).
 2. **Dispatch it.** Prim types are a `match` on `reader.type_name(&path)` inside
-   `instantiate_usd_prim_read`. There is no registry to add to.
+   `instantiate_usd_prim_from_stage`. There is no registry to add to.
 3. **Project it.** Insert components. Keep render-bound types out of
    `lunco-usd-bevy` — it is render-free by contract (`cargo tree -p lunco-usd-bevy
    -i wgpu` must be empty). `bevy_light` / `bevy_image` / `bevy_camera` are fine;

@@ -18,10 +18,23 @@ use super::projection::projection_relevant_source_hash;
 use super::{active_doc_from_world, active_doc_from_world_ctx, CanvasDiagramState, IconNodeData};
 use crate::model_tabs_types::TabRenderContext;
 
-/// Read the active tab id from `TabRenderContext`. `None` outside a
-/// panel render call (observers, off-render systems); call sites that
-/// pair this with `get_for_render` correctly fall back to first-tab
-/// semantics in that case.
+/// Apply canvas-authored operations after the panel has finished painting.
+#[derive(Event)]
+pub(crate) struct ApplyOpsRequested {
+    pub(crate) doc: lunco_doc::DocumentId,
+    pub(crate) ops: Vec<ModelicaOp>,
+}
+
+pub(crate) fn on_apply_ops_requested(trigger: On<ApplyOpsRequested>, mut commands: Commands) {
+    let doc = trigger.doc;
+    let ops = trigger.ops.clone();
+    commands.queue(move |world: &mut World| {
+        apply_ops_public(world, doc, ops);
+    });
+}
+
+/// Read the active tab id from `TabRenderContext`. `None` identifies the
+/// singleton diagram panel outside a model-tab render call.
 #[cfg(feature = "ui")]
 fn render_tab_id_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<crate::model_tabs_types::TabId> {
     ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id)
@@ -70,9 +83,6 @@ pub(super) fn resolve_doc_context(
     (Some(doc_id), class)
 }
 
-// Thin wrapper so existing call sites keep their shape. The real
-// conversion lives in `super::coords::canvas_min_to_modelica_center`.
-
 /// Translate canvas scene events into ModelicaOps. Needs a brief
 /// read-only borrow of the scene (to look up edge endpoints); the
 /// caller runs it inside its own borrow scope.
@@ -110,10 +120,8 @@ pub(super) fn build_ops_from_events(
                         .and_then(|o| o.strip_prefix("plot:"))
                         .and_then(|rest| rest.split_once(':').map(|(_, s)| s.to_string()))
                         .or_else(|| {
-                            // Fallback for legacy / scratch plot
-                            // nodes whose origin isn't in the source
-                            // form yet — pull the signal out of the
-                            // node's `data` payload.
+                            // Unbound plot nodes have no source origin;
+                            // use their live payload as the signal key.
                             node.data
                                 .downcast_ref::<lunco_viz::kinds::canvas_plot_node::PlotNodeData>()
                                 .map(|d| d.signal_path.clone())
@@ -653,11 +661,9 @@ pub(super) fn apply_ops(
     }
 
     let t_mirror_start = web_time::Instant::now();
-    // Mirror the post-edit source back to the registry-by-doc lookup
-    // so every other panel (code editor, breadcrumb, inspector)
-    // that reads the cached source sees the update immediately —
-    // the code editor doesn't watch the registry directly; it
-    // reads the `Arc<str>` on `open_model`.
+    // Mirror the post-edit source into the document registry so every
+    // other panel (code editor, breadcrumb, inspector) sees the update
+    // immediately through the document host.
     let fresh = world
         .get_resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.host(doc_id))
@@ -719,10 +725,11 @@ pub(super) fn apply_ops(
                     docstate.last_seen_gen = new_gen;
                     docstate.last_seen_source_hash = new_hash;
                 } else {
-                    let docstate = state.get_mut(Some(doc_id));
-                    docstate.canvas_acked_gen = new_gen;
-                    docstate.last_seen_gen = new_gen;
-                    docstate.last_seen_source_hash = new_hash;
+                    if let Some(docstate) = state.get_mut_for_doc(doc_id) {
+                        docstate.canvas_acked_gen = new_gen;
+                        docstate.last_seen_gen = new_gen;
+                        docstate.last_seen_source_hash = new_hash;
+                    }
                 }
             }
         }
@@ -812,7 +819,9 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
         let Some(state) = world.get_resource::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get(Some(doc_id));
+        let Some(docstate) = state.get_for_doc(doc_id) else {
+            return;
+        };
         docstate
             .canvas
             .scene

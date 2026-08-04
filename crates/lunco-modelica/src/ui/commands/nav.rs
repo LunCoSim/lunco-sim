@@ -31,8 +31,8 @@ pub struct FocusDocumentByName {
 pub struct SetViewMode {
     /// Document to switch; unassigned (`0` over the API) = active.
     pub doc: DocumentId,
-    /// `"text"`/`"source"`, `"diagram"`/`"canvas"`, `"icon"`, or
-    /// `"docs"`/`"documentation"`. Anything else leaves the mode unchanged.
+    /// One of `"text"`, `"diagram"`, `"icon"`, or `"docs"`. Anything else
+    /// leaves the mode unchanged.
     pub mode: String,
 }
 
@@ -121,11 +121,11 @@ pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
         };
         use crate::model_tabs::ModelTabs;
         use crate::model_tabs_types::ModelViewMode;
-        let new_mode = match mode_str.to_lowercase().as_str() {
-            "text" | "source" => ModelViewMode::Text,
-            "diagram" | "canvas" => ModelViewMode::Canvas,
+        let new_mode = match mode_str.as_str() {
+            "text" => ModelViewMode::Text,
+            "diagram" => ModelViewMode::Canvas,
             "icon" => ModelViewMode::Icon,
-            "docs" | "documentation" => ModelViewMode::Docs,
+            "docs" => ModelViewMode::Docs,
             other => {
                 bevy::log::warn!(
                     "[SetViewMode] unknown mode '{other}' — expected text|diagram|icon|docs"
@@ -153,11 +153,14 @@ pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
         } else {
             Some(raw)
         };
+        let Some(doc) = doc else { return };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get_mut(doc);
+        let Some(docstate) = state.get_mut_for_doc(doc) else {
+            return;
+        };
         if zoom <= 0.0 {
             if let Some(bounds) = docstate.canvas.scene.bounds() {
                 let sr = super::approx_screen_rect();
@@ -187,11 +190,14 @@ pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
         } else {
             Some(raw)
         };
+        let Some(doc) = doc else { return };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get_mut(doc);
+        let Some(docstate) = state.get_mut_for_doc(doc) else {
+            return;
+        };
         let target = docstate
             .canvas
             .scene
@@ -223,11 +229,14 @@ pub fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
         } else {
             Some(raw)
         };
+        let Some(doc) = doc else { return };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        state.get_mut(doc).pending_fit = true;
+        if let Some(docstate) = state.get_mut_for_doc(doc) {
+            docstate.pending_fit = true;
+        }
     });
 }
 
@@ -240,11 +249,14 @@ pub fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {
         } else {
             Some(ev.doc)
         };
+        let Some(doc) = doc else { return };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get_mut(doc);
+        let Some(docstate) = state.get_mut_for_doc(doc) else {
+            return;
+        };
         let z = docstate.canvas.viewport.zoom;
         docstate
             .canvas

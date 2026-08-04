@@ -315,8 +315,8 @@ pub struct Node {
     /// Plot / control / dashboard nodes are resizable; Modelica
     /// component icons keep the size declared in their `Icon`
     /// annotation (resizing them would desync from the source). Default
-    /// `true` so legacy code paths that build `Node` directly aren't
-    /// silently turned non-resizable.
+    /// `true` so direct `Node` construction has the same documented default as
+    /// deserialization.
     #[serde(default = "default_resizable")]
     pub resizable: bool,
     /// Tight bounding box of the *visible* graphics, in world coords.

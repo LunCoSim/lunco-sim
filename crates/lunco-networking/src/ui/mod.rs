@@ -127,12 +127,25 @@ fn register_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
-        // Read/clone all needed resources up front to avoid borrow checker conflicts on world
-        let mut settings = world.resource::<crate::sync::CursorSettings>().clone();
-        let presence_users = world.resource::<crate::sync::Presence>().users.clone();
-        let tut_settings = world.resource::<crate::sync::TutorialSettings>().clone();
-        let tutor_status = world.resource::<crate::sync::TutorStatusResource>().clone();
+    layout.register_settings(|ui, ctx| {
+        // Read/clone all needed resources up front to avoid borrow conflicts and keep
+        // menu rendering from owning the domain world.
+        let Some(mut settings) = ctx.resource::<crate::sync::CursorSettings>().cloned() else {
+            return;
+        };
+        let Some(presence_users) = ctx
+            .resource::<crate::sync::Presence>()
+            .map(|p| p.users.clone())
+        else {
+            return;
+        };
+        let Some(tut_settings) = ctx.resource::<crate::sync::TutorialSettings>().cloned() else {
+            return;
+        };
+        let Some(tutor_status) = ctx.resource::<crate::sync::TutorStatusResource>().cloned()
+        else {
+            return;
+        };
 
         ui.label(egui::RichText::new("Presence Cursors").weak().small());
         let mut cursor_settings_changed = false;
@@ -154,7 +167,7 @@ fn register_settings_menu(world: &mut World) {
         });
 
         if cursor_settings_changed {
-            *world.resource_mut::<crate::sync::CursorSettings>() = settings;
+            ctx.set_resource(settings);
         }
 
         ui.separator();
@@ -166,7 +179,7 @@ fn register_settings_menu(world: &mut World) {
             .on_hover_text("Take control of the system and stream your window and avatar status to followers.")
             .changed()
         {
-            world.trigger(crate::sync::SetTeachMode { enabled: teach_mode });
+            ctx.trigger(crate::sync::SetTeachMode { enabled: teach_mode });
         }
 
         if teach_mode {
@@ -194,7 +207,7 @@ fn register_settings_menu(world: &mut World) {
                     });
 
                 if changed {
-                    world.trigger(crate::sync::SetTargetClient { target: selected_target });
+                    ctx.trigger(crate::sync::SetTargetClient { target: selected_target });
                 }
 
                 let mut allow_free = tut_settings.allow_free_movement;
@@ -202,7 +215,7 @@ fn register_settings_menu(world: &mut World) {
                     .on_hover_text("If checked, followers can move as they want. Otherwise, they are locked to your perspective.")
                     .changed()
                 {
-                    world.trigger(crate::sync::SetAllowFreeMovement { enabled: allow_free });
+                    ctx.trigger(crate::sync::SetAllowFreeMovement { enabled: allow_free });
                 }
 
                 let target_name = selected_target
@@ -214,7 +227,7 @@ fn register_settings_menu(world: &mut World) {
                     .on_hover_text("Force followers to snap to your current active document and avatar perspective once.")
                     .clicked()
                 {
-                    world.trigger(crate::sync::SharePerspective {});
+                    ctx.trigger(crate::sync::SharePerspective {});
                 }
 
                 if selected_target.is_some() {
@@ -223,7 +236,7 @@ fn register_settings_menu(world: &mut World) {
                         .on_hover_text("Observe the target student's screen and position instead of streaming yours.")
                         .changed()
                     {
-                        world.trigger(crate::sync::SetObserveMode { enabled: observe_mode });
+                        ctx.trigger(crate::sync::SetObserveMode { enabled: observe_mode });
                     }
                 }
             });
@@ -239,12 +252,14 @@ fn register_settings_menu(world: &mut World) {
             )
             .changed()
         {
-            world.trigger(crate::sync::SetFollowOptIn { enabled: follow_opt_in });
+            ctx.trigger(crate::sync::SetFollowOptIn { enabled: follow_opt_in });
         }
 
         // The tutor lock applies to me only if I'm explicitly targeted, or it's a
         // broadcast and I opted in. Only then is the manual toggle disabled.
-        let local_session = world.resource::<lunco_core::LocalSession>().0 .0;
+        let Some(local_session) = ctx.resource::<lunco_core::LocalSession>().map(|s| s.0 .0) else {
+            return;
+        };
         let locked_for_me = tutor_lock_active(&tutor_status)
             && (tutor_status.target_client == Some(local_session)
                 || (tutor_status.target_client.is_none() && tut_settings.follow_opt_in));
@@ -260,7 +275,7 @@ fn register_settings_menu(world: &mut World) {
                 .on_hover_text("Block local inputs and mirror the tutor's window and avatar status.")
                 .changed()
             {
-                world.trigger(crate::sync::SetFollowMode { enabled: follow_mode });
+                ctx.trigger(crate::sync::SetFollowMode { enabled: follow_mode });
             }
         });
     });

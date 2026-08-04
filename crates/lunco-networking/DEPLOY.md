@@ -214,6 +214,12 @@ If the cert env is set but the PEM is bad, the service **panics on boot by
 design** (fail-loud) — `systemctl status` shows it `failed`; the journal line
 names the exact path/permission problem. Fix the cert, `systemctl start`.
 
+Before a LAN/public start, configure a real shared netcode key in the service
+environment. `LUNCO_NETCODE_KEY` is 64 hex characters, or
+`LUNCO_NETCODE_KEY_FILE` points at a file containing that value. Set
+`LUNCO_NET_BIND=0.0.0.0` only with that real key. With no key, the host uses a
+development key and automatically binds `127.0.0.1`.
+
 ---
 
 ## 8. Verify from a browser
@@ -268,6 +274,7 @@ rsync -av --delete dist/luncosim/ $DEST:/opt/lunco/web/luncosim/   # no restart 
 | Symptom | Cause / fix |
 |---|---|
 | Service `failed` immediately, journal `🔐 … cert could not be loaded` | PEM path/perms wrong, or only one of `LUNCO_TLS_CERT`/`KEY` set. Fail-loud by design — fix the env/cert. |
+| Service refuses a public bind | The development netcode key is active. Set `LUNCO_NETCODE_KEY` or `LUNCO_NETCODE_KEY_FILE` to a non-zero 32-byte key before setting `LUNCO_NET_BIND`. |
 | Browser connects to the page but Network → Connect hangs / `WebTransport` error | UDP 5888 not open (`ufw allow 5888/udp`), or a NAT/cloud security-group UDP rule missing. |
 | `host listening` but baseline is `0-entity` | scene loaded but no dynamic bodies tagged — check the scene actually spawns rovers/props. |
 | Cert renewed but browser still sees the old expiry | deploy hook didn't run/restart — check `/etc/letsencrypt/renewal-hooks/deploy/lunco-server.sh` is executable and `journalctl -u lunco-server` shows a restart at renew time. |

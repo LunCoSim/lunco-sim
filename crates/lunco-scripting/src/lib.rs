@@ -58,6 +58,8 @@ pub mod tool_libs;
 pub mod world_bridge;
 
 use doc::{ScriptDocument, ScriptedModel};
+#[cfg(feature = "rhai")]
+use lunco_api::executor::DeferredCommandAppExt;
 use lunco_doc::{Document, DocumentHost, DocumentId};
 use std::collections::HashMap;
 // Brings the pyo3 method traits (`PyDictMethods::{set_item,get_item}`,
@@ -305,7 +307,8 @@ impl Plugin for LunCoScriptingPlugin {
             );
         }
 
-        // World-bound rhai: a queue of (command_id, code) drained by an
+        // World-bound rhai: a queue of (internal_id, code, authority,
+        // correlation_id) drained by an
         // exclusive system so scripts can `cmd()`/read the live `&mut World`.
         // `RunRhai` enqueues here instead of evaluating inline (an observer
         // can't hold `&mut World`); the drain records real stdout afterwards.
@@ -326,6 +329,9 @@ impl Plugin for LunCoScriptingPlugin {
             // here and surface via the ScriptStatus query.
             app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
             app.init_resource::<world_bridge::PendingWorldScripts>();
+            // RunRhai needs full World access, so its API response is resolved
+            // by the Update drain after evaluation completes.
+            app.register_deferred_command::<commands::RunRhai>();
             // The rhai scenario backend, wrapped in the language-neutral driver
             // (owns the on_start/on_tick/on_event/on_stop + hot-reload + pause +
             // teardown lifecycle; rhai supplies only the mechanics).
@@ -368,13 +374,19 @@ impl Plugin for LunCoScriptingPlugin {
             // surface (verbs + commands + queries + tools + prelude) for editor
             // completion / hover / docs and agent discovery.
             catalog::register_queries(app);
+            // One-shot `RunRhai` evals stay host-authoritative — they carry no
+            // `ScriptScope`, so a client cannot run arbitrary sim-mutating
+            // snippets through the REPL/world-script queue. The drain belongs
+            // in Update, not FixedUpdate: kinematic celestial warp deliberately
+            // freezes FixedUpdate, but API requests and their deferred replies
+            // must remain responsive while the sky advances.
+            app.add_systems(
+                Update,
+                world_bridge::drain_world_scripts.run_if(scripts_run_here),
+            );
             app.add_systems(
                 FixedUpdate,
                 (
-                    // One-shot `RunRhai` evals stay host-authoritative — they carry
-                    // no `ScriptScope`, so a client can't run arbitrary sim-mutating
-                    // snippets through the REPL/world-script queue.
-                    world_bridge::drain_world_scripts.run_if(scripts_run_here),
                     // Every newly spawned wheeled control surface gets the same
                     // host-side Rhai autonomy program. This runs before the normal
                     // file-loader/attach lifecycle, so external Twin rovers and
@@ -445,8 +457,8 @@ struct PyCompiledDoc {
     code: Result<pyo3::Py<pyo3::PyAny>, ()>,
 }
 
-/// Per-tick executor for Python `ScriptedModel`s (the legacy inputs/outputs
-/// dict model). Python-only: rhai scenarios run via the world-bridge systems.
+/// Per-tick executor for Python `ScriptedModel`s (the port-mapped
+/// inputs/outputs model). Python-only: rhai scenarios run via the world-bridge systems.
 /// Feeds the USD Python-cosim path (`lunco-usd-sim/cosim.rs`), which syncs
 /// `SimComponent` ports into `ScriptedModel.inputs` before this and reads
 /// `ScriptedModel.outputs` after.

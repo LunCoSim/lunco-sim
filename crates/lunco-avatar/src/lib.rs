@@ -45,7 +45,7 @@ use lunco_celestial::{LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings};
-use lunco_time::{TimeTransport, TransportMode, WorldTime};
+use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 pub mod commands;
 pub use commands::*;
@@ -2965,8 +2965,9 @@ fn avatar_behavior_input_system(
 
 fn avatar_global_hotkeys(
     q_avatar: Query<(&IntentState, Option<&ControllerLink>), With<Avatar>>,
-    mut transport: Option<ResMut<TimeTransport>>,
+    transport: Option<Res<TimeTransport>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
 ) {
     for (intent_state, opt_link) in q_avatar.iter() {
         let mut toggle = intent_state.just_pressed(&UserIntent::Pause);
@@ -2978,11 +2979,11 @@ fn avatar_global_hotkeys(
         }
 
         if toggle {
-            if let Some(transport) = transport.as_deref_mut() {
-                transport.mode = match transport.mode {
-                    TransportMode::Playing => TransportMode::Paused,
-                    TransportMode::Paused => TransportMode::Playing,
-                };
+            if let Some(transport) = transport.as_deref() {
+                commands.trigger(SetTimeTransport {
+                    playing: Some(matches!(transport.mode, TransportMode::Paused)),
+                    ..default()
+                });
             }
         }
     }
@@ -4835,7 +4836,7 @@ mod tests {
 /// `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
 /// `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
 /// the `SessionRegistry` currently records an owner (⇒ `piloted = 1`). Logs one
-/// `[inspect]` line per vessel at INFO. API-driven: `{"command":"InspectVessels"}`.
+/// `[inspect]` line per vessel at INFO. API-driven: `{"type":"ExecuteCommand","command":"InspectVessels"}`.
 #[lunco_core::Command(default)]
 pub struct InspectVessels {}
 

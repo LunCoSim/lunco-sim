@@ -48,7 +48,7 @@ pub struct ModelicaCommandsPlugin;
 
 impl Plugin for ModelicaCommandsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(compile::CompilePlugin)
+        app.add_plugins(compile::CompileCommandsPlugin)
             .init_resource::<CloseDialogState>()
             .init_resource::<PendingCloseAfterSave>()
             .init_resource::<PendingTabCloseScopes>()

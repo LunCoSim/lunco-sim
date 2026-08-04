@@ -1,4 +1,4 @@
-//! Entity list panel — WorkbenchPanel implementation.
+//! Entity list panel — `lunco-workbench::Panel` implementation.
 //!
 //! A hierarchy tree of scene objects: top-level objects (rovers, props,
 //! terrain, cosim blocks) with their sub-parts (wheels, body) nested beneath,
@@ -12,7 +12,7 @@
 //! [`populate_entity_tree_view`], a change-driven system that only re-derives
 //! when the scene topology actually changes (see [`scene_topology_changed`]),
 //! and stores the render-ready result in the [`EntityTreeView`] resource.
-//! `render` reads that resource and the authoritative [`crate::SelectedEntities`]
+//! `render` reads that resource and the authoritative [`lunco_scene_commands::SelectedEntities`]
 //! directly, and routes clicks through the same `apply_selection` path as
 //! before. Nothing is scanned, walked, or sorted while painting.
 
@@ -50,9 +50,11 @@ pub(crate) fn register_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Entity list").weak().small());
-        let current = world.resource::<EntityListSettings>().show_system;
+        let current = ctx
+            .resource::<EntityListSettings>()
+            .map_or(false, |s| s.show_system);
         let mut next = current;
         ui.checkbox(&mut next, "Show system entities")
             .on_hover_text(
@@ -61,7 +63,7 @@ pub(crate) fn register_settings_menu(world: &mut World) {
                  the list shows authored scene objects only.",
             );
         if next != current {
-            world.resource_mut::<EntityListSettings>().show_system = next;
+            ctx.set_resource(EntityListSettings { show_system: next });
         }
     });
 }
@@ -380,7 +382,7 @@ fn render_node(
     ui: &mut egui::Ui,
     entity: Entity,
     view: &EntityTreeView,
-    selected: &crate::SelectedEntities,
+    selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) {
@@ -414,7 +416,7 @@ fn select_label(
     ui: &mut egui::Ui,
     entity: Entity,
     label: &str,
-    selected: &crate::SelectedEntities,
+    selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) {
@@ -439,7 +441,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     // Authoritative selection — read directly (small, cheap); never shadowed.
     let selected = ctx
-        .resource::<crate::SelectedEntities>()
+        .resource::<lunco_scene_commands::SelectedEntities>()
         .cloned()
         .unwrap_or_default();
 
@@ -473,23 +475,10 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // + toggle (multi-select), plain click = replace. The Inspector reads the
     // updated `SelectedEntities` later in this same egui pass.
     if let Some((entity, shift_held)) = to_select {
-        ctx.defer(move |world| {
-            let old: Vec<Entity> = world
-                .query_filtered::<Entity, With<crate::selection::Selected>>()
-                .iter(world)
-                .collect();
-            world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
-                let mut commands = world.commands();
-                crate::selection::apply_selection(
-                    &mut commands,
-                    &mut selected,
-                    old,
-                    entity,
-                    shift_held,
-                    shift_held,
-                );
-            });
-            world.flush();
+        ctx.trigger(crate::selection::SelectEntityTarget {
+            target: entity,
+            extend: shift_held,
+            toggle: shift_held,
         });
     }
 
@@ -497,17 +486,15 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // command the API exposes. Works for anything with an API id — no collider
     // required (this is list-driven, not a viewport raycast).
     if let Some(entity) = to_focus {
-        ctx.defer(move |world| {
-            if let Some(id) = world
-                .get_resource::<lunco_api::registry::ApiEntityRegistry>()
-                .and_then(|r| r.api_id_for(entity))
-                .map(|g| g.get())
-            {
-                world.trigger(crate::commands::FocusEntityById {
-                    entity_id: id,
-                    distance: 0.0,
-                });
-            }
-        });
+        let id = ctx
+            .resource::<lunco_api::registry::ApiEntityRegistry>()
+            .and_then(|r| r.api_id_for(entity))
+            .map(|g| g.get());
+        if let Some(id) = id {
+            ctx.trigger(crate::commands::FocusEntityById {
+                entity_id: id,
+                distance: 0.0,
+            });
+        }
     }
 }

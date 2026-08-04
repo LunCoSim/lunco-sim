@@ -100,7 +100,7 @@ pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> Strin
 //     via `PXR_PLUGINPATH` — config only, no engine code. See
 //     `docs/architecture/21-domain-usd.md` (interop note).
 //   * Our engine (pure-Rust `openusd`, no C++ plugin system): mirror it with a
-//     small glTF→USD-layer shim in `compose.rs` (points/indices/normals/uvs →
+//     small glTF→USD-layer adapter in `compose.rs` (points/indices/normals/uvs →
 //     `Mesh` specs) fed to the composer instead of `discover_arcs` stubbing.
 // Until then the binary side-channel is retained — it works native + web.
 

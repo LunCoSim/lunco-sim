@@ -14,6 +14,13 @@
 //! whole wiring fabric by extending the resolver alone — this system never
 //! changes. That also makes it front-end agnostic: an endpoint is an `Entity`
 //! plus a port name, so USD, the API, and runtime spawns all wire the same way.
+//!
+//! `SimConnection` is the explicit causal co-simulation boundary. The exchange
+//! is a single Jacobi/ZOH read-then-write transaction, so feedback between
+//! participants is a valid dynamic feedback loop: state advances between
+//! transactions and no algebraic convergence is claimed. A true acausal
+//! connection belongs to a typed backend island and must be partitioned before
+//! stepping; it must not be guessed from an SCC in this causal fabric.
 
 use std::collections::HashMap;
 
@@ -108,17 +115,11 @@ struct CompiledTarget {
     resolved: Option<ResolvedPort>,
 }
 
-/// Prefix of the synthetic "port name" an algebraic-loop fault is keyed under in
-/// [`crate::diagnostics::CosimDiagnostics::faults`]. No real port can carry this
-/// name, so a loop entry can never be retracted by a landing write — it is
-/// retracted only when a rebuild no longer finds the loop.
+/// Prefix of the synthetic "port name" an algebraic-loop fault is keyed under
+/// in [`crate::diagnostics::CosimDiagnostics::faults`].
 pub const ALGEBRAIC_LOOP_PORT: &str = "<algebraic-loop>";
 
-/// One algebraic loop found at compile time (M6): a cycle in the wire graph
-/// spanning **two or more** participants. `port` is the full human-readable
-/// description (prefixed with [`ALGEBRAIC_LOOP_PORT`]) listing every wire on the
-/// loop; `entity` is a deterministic canonical member, so one loop is ONE ledger
-/// entry however many wires it comprises.
+/// One algebraic loop found at compile time, spanning at least two participants.
 #[derive(Clone)]
 struct DetectedLoop {
     entity: Entity,
@@ -142,8 +143,7 @@ pub struct CompiledWiring {
     wires: Vec<CompiledWire>,
     /// Distinct targets, one accumulator slot each.
     targets: Vec<CompiledTarget>,
-    /// Algebraic loops in THIS fabric (M6) — recomputed on every rebuild,
-    /// published into the faults ledger by [`propagate_connections`].
+    /// Algebraic loops in this fabric, recomputed on every rebuild.
     loops: Vec<DetectedLoop>,
 }
 
@@ -228,7 +228,6 @@ impl CompiledWiring {
                 .then_with(|| a.src_port.cmp(&b.src_port))
                 .then_with(|| a.src_entity.to_bits().cmp(&b.src_entity.to_bits()))
         });
-
         self.detect_algebraic_loops(world);
     }
 
@@ -364,10 +363,23 @@ impl CompiledWiring {
                     )
                 })
                 .expect("SCC has >= 2 members");
+            // `RealtimeSafe` is a promise made by a simulation program, not by
+            // the physical body that receives its force. A normal feedback
+            // loop therefore contains both a `SimComponent` and an Avian body;
+            // requiring the marker on every SCC member rejects the documented
+            // body-state -> program -> body-force shape. Every program in the
+            // loop must make the promise, and a force loop with no program is
+            // not safe by inference.
+            let programs: Vec<Entity> = members
+                .iter()
+                .copied()
+                .filter(|member| world.get::<crate::SimComponent>(*member).is_some())
+                .collect();
             let realtime_safe = force_producing
-                && members
+                && !programs.is_empty()
+                && programs
                     .iter()
-                    .all(|member| world.get::<RealtimeSafe>(*member).is_some());
+                    .all(|program| world.get::<RealtimeSafe>(*program).is_some());
             self.loops.push(DetectedLoop {
                 entity,
                 global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
@@ -486,52 +498,44 @@ pub fn propagate_connections(
             }
         }
 
-        // M6 — publish this fabric's algebraic loops into the faults ledger.
-        // Loop entries are facts about THE CURRENT FABRIC (unlike never-landed
-        // wire faults, which are history), so a rewire retracts stale ones and
-        // re-asserts the current set. The synthetic key ([`ALGEBRAIC_LOOP_PORT`]
-        // prefix) keeps them out of the landed-retraction path — no real write
-        // can ever clear one. A force-producing loop is accepted only when every
-        // participant explicitly declares the realtime contract. Otherwise it is
-        // a terminal runtime fault and physics is held before force application.
+        // Algebraic-loop entries describe the current fabric, so retract stale
+        // entries on rebuild and publish exactly one deterministic entry per loop.
         world
             .resource_mut::<crate::diagnostics::CosimDiagnostics>()
             .faults
             .retain(|(_, port), _| !port.starts_with(ALGEBRAIC_LOOP_PORT));
-        for l in &compiled.loops {
-            if l.force_producing && l.realtime_safe {
-                if reported.insert(l.port.clone()) {
+        for loop_info in &compiled.loops {
+            if loop_info.force_producing && loop_info.realtime_safe {
+                if reported.insert(loop_info.port.clone()) {
                     info!(
-                        "[cosim] force loop accepted under the declared realtime \
-                         lockstep contract (one fixed-step exchange delay): {}",
-                        l.port
+                        "[cosim] force loop accepted under the declared realtime lockstep contract: {}",
+                        loop_info.port
                     );
                 }
                 continue;
             }
-            if reported.insert(l.port.clone()) {
-                if l.force_producing {
+            if reported.insert(loop_info.port.clone()) {
+                if loop_info.force_producing {
                     error!(
                         "[cosim] unsafe force-producing algebraic loop rejected: {}",
-                        l.port
+                        loop_info.port
                     );
                 } else {
                     warn!(
-                        "[cosim] algebraic loop in the wiring — co-simulated with a 1-step \
-                         delay per hop: {}",
-                        l.port
+                        "[cosim] algebraic loop in the wiring — co-simulated with a 1-step delay: {}",
+                        loop_info.port
                     );
                 }
             }
-            if l.force_producing {
+            if loop_info.force_producing {
                 let raised = world
                     .get_resource_mut::<lunco_core::RuntimeFaults>()
                     .is_some_and(|mut faults| {
                         faults.raise(
                             "cosim-unsafe-force-loop",
-                            Some(l.entity),
+                            Some(loop_info.entity),
                             "co-simulation wiring",
-                            l.port.clone(),
+                            loop_info.port.clone(),
                         )
                     });
                 if raised {
@@ -545,11 +549,11 @@ pub fn propagate_connections(
                 .resource_mut::<crate::diagnostics::CosimDiagnostics>()
                 .faults
                 .insert(
-                    (l.entity, l.port.clone()),
+                    (loop_info.entity, loop_info.port.clone()),
                     crate::diagnostics::BrokenConnection {
-                        entity: l.entity,
-                        global_id: l.global_id,
-                        port: l.port.clone(),
+                        entity: loop_info.entity,
+                        global_id: loop_info.global_id,
+                        port: loop_info.port.clone(),
                         has_port_surface: true,
                         dropped_value: 0.0,
                     },
@@ -679,13 +683,16 @@ pub fn propagate_connections(
             has_port_surface,
             dropped_value: acc[i],
         };
-        let compiling = matches!(
-            world
-                .get::<crate::SimComponent>(t.entity)
-                .map(|component| &component.status),
-            Some(crate::SimStatus::Compiling)
-        );
-        if !has_port_surface || compiling {
+        let model_status = world
+            .get::<crate::SimComponent>(t.entity)
+            .map(|component| &component.status);
+        let compiling = matches!(model_status, Some(crate::SimStatus::Compiling));
+        // A terminal model owns a real endpoint contract even when its current
+        // map is empty. Treating that as "no port surface" forever hides a
+        // missing declared input as assembly progress; only a still-compiling
+        // model (or a bare non-model structural endpoint) remains pending.
+        let terminal_model = model_status.is_some() && !compiling;
+        if compiling || (!has_port_surface && !terminal_model) {
             pending.push(unresolved);
             continue;
         }
@@ -748,6 +755,7 @@ pub fn propagate_connections(
 #[cfg(test)]
 mod wire_order_tests {
     use super::*;
+    use crate::SimComponent;
     use lunco_core::GlobalEntityId;
 
     /// P10: the fabric is compiled from ECS iteration order, but the SUMMATION
@@ -1124,8 +1132,8 @@ mod wire_order_tests {
             .resource::<crate::diagnostics::CosimDiagnostics>()
             .faults
             .keys()
-            .filter(|(_, p)| p.starts_with(ALGEBRAIC_LOOP_PORT))
-            .map(|(_, p)| p.clone())
+            .filter(|(_, port)| port.starts_with(ALGEBRAIC_LOOP_PORT))
+            .map(|(_, port)| port.clone())
             .collect()
     }
 
@@ -1170,8 +1178,9 @@ mod wire_order_tests {
 
     /// A control loop may reach a body force through a self-wired participant
     /// edge rather than through an inter-entity edge in the SCC. The force
-    /// classification must still see it and accept it only when every loop
-    /// participant declares the realtime contract.
+    /// classification must still see it and accept it when every PROGRAM in
+    /// the loop declares the realtime contract; the receiving body does not
+    /// make that promise.
     #[test]
     fn realtime_safe_loop_with_self_wired_force_is_accepted() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1181,10 +1190,18 @@ mod wire_order_tests {
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
         let a = world
-            .spawn((GlobalEntityId::from_raw(10), RealtimeSafe))
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                SimComponent::default(),
+                RealtimeSafe,
+            ))
             .id();
         let b = world
-            .spawn((GlobalEntityId::from_raw(20), RealtimeSafe))
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                SimComponent::default(),
+                RealtimeSafe,
+            ))
             .id();
         wire(&mut world, a, "out", b, "in");
         wire(&mut world, b, "out", a, "in");
@@ -1195,6 +1212,51 @@ mod wire_order_tests {
         assert!(
             loop_faults(&world).is_empty(),
             "a declared realtime-safe force loop is accepted, not reported as a generic fault"
+        );
+    }
+
+    /// The physical body is not a program and must not need a realtime promise
+    /// of its own. A program without that promise is still unsafe.
+    #[test]
+    fn force_loop_requires_realtime_safe_on_program_not_body() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let body = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let program = world
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                SimComponent::default(),
+                RealtimeSafe,
+            ))
+            .id();
+        wire(&mut world, body, "height", program, "height");
+        wire(&mut world, program, "netForce", body, "force_y");
+
+        world.run_system_once(propagate_connections).unwrap();
+        assert!(
+            loop_faults(&world).is_empty(),
+            "a safe program may close a feedback loop through an unmarked body"
+        );
+
+        let mut unsafe_world = World::new();
+        unsafe_world.init_resource::<PortRegistry>();
+        unsafe_world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        let body = unsafe_world.spawn(GlobalEntityId::from_raw(10)).id();
+        let program = unsafe_world
+            .spawn((GlobalEntityId::from_raw(20), SimComponent::default()))
+            .id();
+        wire(&mut unsafe_world, body, "height", program, "height");
+        wire(&mut unsafe_world, program, "netForce", body, "force_y");
+
+        unsafe_world.run_system_once(propagate_connections).unwrap();
+        assert_eq!(
+            loop_faults(&unsafe_world).len(),
+            1,
+            "an unpromised program must still reject the force loop"
         );
     }
 
@@ -1216,12 +1278,15 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            loop_faults(&world).is_empty(),
-            "self-wires on one entity are the intended pattern, not a loop"
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "self-wires on one entity are causal feedback, not missing ports"
         );
     }
 
-    /// M6: an acyclic chain (with a fan-in for good measure) reports nothing.
+    /// An acyclic chain (with a fan-in for good measure) also reports nothing.
     #[test]
     fn an_acyclic_chain_is_not_a_loop_fault() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1240,8 +1305,11 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            loop_faults(&world).is_empty(),
-            "no cycle across participants ⇒ no loop fault"
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "valid causal wires do not create synthetic loop faults"
         );
     }
 }

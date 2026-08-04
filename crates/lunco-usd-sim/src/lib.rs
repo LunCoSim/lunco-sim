@@ -1055,8 +1055,9 @@ fn process_usd_sim_prim_read(
     // that the result is an altimeter, range sensor, or touchdown detector;
     // those conversions are ordinary Modelica scopes authored in USD.
     if reader.has_api_schema(&sdf_path, "LunCoRaycastAPI") {
-        let axis = reader.text(&sdf_path, "lunco:raycast:axis").and_then(|axis| {
-            match axis.as_str() {
+        let axis = reader
+            .text(&sdf_path, "lunco:raycast:axis")
+            .and_then(|axis| match axis.as_str() {
                 "X" => Some(DVec3::X),
                 "-X" => Some(DVec3::NEG_X),
                 "Y" => Some(DVec3::Y),
@@ -1064,14 +1065,12 @@ fn process_usd_sim_prim_read(
                 "Z" => Some(DVec3::Z),
                 "-Z" => Some(DVec3::NEG_Z),
                 _ => None,
-            }
-        });
+            });
         let max_distance = reader.real(&sdf_path, "lunco:raycast:maxDistance");
         if let (Some(axis), Some(max_distance)) = (axis, max_distance) {
-            let offset =
-                lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:raycast:offset")
-                    .map(|v| DVec3::new(v[0], v[1], v[2]))
-                    .unwrap_or_default();
+            let offset = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:raycast:offset")
+                .map(|v| DVec3::new(v[0], v[1], v[2]))
+                .unwrap_or_default();
             commands.entity(entity).try_insert(RaycastObservation {
                 offset,
                 axis,
@@ -1079,7 +1078,10 @@ fn process_usd_sim_prim_read(
                 ..default()
             });
         } else {
-            warn!("USD raycast {} is missing a valid axis or maxDistance", sdf_path);
+            warn!(
+                "USD raycast {} is missing a valid axis or maxDistance",
+                sdf_path
+            );
         }
     }
 

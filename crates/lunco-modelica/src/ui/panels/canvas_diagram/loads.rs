@@ -14,6 +14,23 @@ use crate::state::ModelicaDocumentRegistry;
 use crate::ui::document_openings::{DocumentOpenings, OpeningState};
 use bevy::prelude::*;
 
+/// Open a Modelica class selected in a canvas node through the asynchronous
+/// domain loader. The panel only carries the qualified class name.
+#[derive(Event)]
+pub(crate) struct DrillIntoClassRequested {
+    pub(crate) qualified: String,
+}
+
+pub(crate) fn on_drill_into_class_requested(
+    trigger: On<DrillIntoClassRequested>,
+    mut commands: Commands,
+) {
+    let qualified = trigger.qualified.clone();
+    commands.queue(move |world: &mut World| {
+        drill_into_class(world, &qualified);
+    });
+}
+
 /// Tab-to-class binding for drill-in tabs whose document hasn't
 /// been installed in the registry yet. Stored in
 /// [`crate::ui::document_openings::DocumentOpenings`] under
@@ -280,7 +297,7 @@ pub fn drive_drill_in_loads(
         registry.install_prebuilt(doc_id, doc);
         // by the upstream `drill_into_class` call before this
         // driver runs.
-        let land_in_icon_view = crate::ui::loaded_classes::is_icon_only_class(&qualified)
+        let land_in_icon_view = crate::ui::class_display::is_icon_only_class(&qualified)
             || has_components == Some(false);
         if land_in_icon_view {
             // Update the drilled-in tab's view mode. Multiple tabs

@@ -124,9 +124,10 @@ See `scripts/perf/profile.sh --help` for the full toolkit (setup, reading result
 
 Three regressions/assumptions keep recurring; prefer the by-design fix:
 
-- **Never `(*arc).clone()` a heavy, shared, read-only container** (e.g. a USD
-  `TextReader`) to read it — that's a deep copy. Borrow `&*arc`; share via
-  `Arc`. (This was a real ~⅔-of-frame regression in the USD cosim path.)
+- **Never `(*arc).clone()` a heavy, shared, read-only container** to read it —
+  that's a deep copy. Borrow the shared value; clone only the `Arc` when
+  ownership is needed. (This was a real ~⅔-of-frame regression in the USD
+  cosim path.)
 - **Once-per-entity setup belongs in an observer** (`OnAdd<T>`), not a polling
   `run_if(Without<Marker>)` system — the latter re-scans the whole scene every
   frame if any code path forgets to insert the marker. If you must poll, mark

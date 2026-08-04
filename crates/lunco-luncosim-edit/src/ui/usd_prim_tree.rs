@@ -230,7 +230,7 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.separator();
 
     let selected = ctx
-        .resource::<crate::SelectedEntities>()
+        .resource::<lunco_scene_commands::SelectedEntities>()
         .cloned()
         .unwrap_or_default();
 
@@ -253,23 +253,10 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
     if let Some(entity) = to_select {
-        ctx.defer(move |world| {
-            let old: Vec<Entity> = world
-                .query_filtered::<Entity, With<crate::selection::Selected>>()
-                .iter(world)
-                .collect();
-            world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
-                let mut commands = world.commands();
-                crate::selection::apply_selection(
-                    &mut commands,
-                    &mut selected,
-                    old,
-                    entity,
-                    false,
-                    false,
-                );
-            });
-            world.flush();
+        ctx.trigger(crate::selection::SelectEntityTarget {
+            target: entity,
+            extend: false,
+            toggle: false,
         });
     }
 }
@@ -281,7 +268,7 @@ fn render_prim_node(
     ui: &mut egui::Ui,
     key: &NodeKey,
     view: &UsdPrimTreeView,
-    selected: &crate::SelectedEntities,
+    selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<Entity>,
     depth: usize,
 ) {
@@ -317,7 +304,7 @@ fn prim_select_label(
     ui: &mut egui::Ui,
     node: &PrimTreeNode,
     label: &str,
-    selected: &crate::SelectedEntities,
+    selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<Entity>,
 ) {
     match node.entity {

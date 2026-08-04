@@ -1156,7 +1156,7 @@ impl RunSink for ChannelSink {
 /// per-run editable through the experiments Setup dialog (`bounds.tolerance`).
 ///
 /// **Batch only.** The LIVE interactive/co-simulated path deliberately does NOT
-/// share this policy (A4): an adaptive-implicit solver whose step sequence comes
+/// share this policy: an adaptive-implicit solver whose step sequence comes
 /// from per-machine error estimates must not run inside the client-predicted
 /// fixed-step loop. It has its own configuration in `worker::live_stepper_options`
 /// (explicit family, fixed micro-step ladder, fixed tolerance). The two surfaces

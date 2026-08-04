@@ -34,7 +34,7 @@
 //! Registered as an [`ApiQueryProvider`] (it returns data, like
 //! [`crate::usd_prim_query`]), so one implementation answers rhai `query()`,
 //! Python, raw HTTP and MCP:
-//! `{"command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
+//! `{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -228,13 +228,13 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
     // Lenient parsing still yields usable name/parameter/input snapshots —
     // same recovery semantics the cosim dispatcher relies on.
     let ast = syntax.best_effort();
-    let model_name = lunco_modelica::extract_model_name_from_ast(ast);
+    let model_name = lunco_modelica::ast_extract::extract_model_name_from_ast(ast);
     let parameters: std::collections::BTreeMap<String, f64> =
-        lunco_modelica::extract_parameters_from_ast(ast)
+        lunco_modelica::ast_extract::extract_parameters_from_ast(ast)
             .into_iter()
             .collect();
     let inputs: std::collections::BTreeMap<String, f64> =
-        lunco_modelica::extract_inputs_with_defaults_from_ast(ast)
+        lunco_modelica::ast_extract::extract_inputs_with_defaults_from_ast(ast)
             .into_iter()
             .collect();
 

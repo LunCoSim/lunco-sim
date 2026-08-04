@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize)]
 pub struct ApiResponseEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub command_id: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -23,97 +21,52 @@ pub struct ApiResponseEnvelope {
     pub error_code: Option<u16>,
 }
 
-/// Unified input that handles both tagged and legacy formats.
+/// The single request envelope accepted by every API transport.
 ///
-/// `extra` captures any fields not consumed by the named slots. When
-/// the request looks like a typed command (`{"type":"OpenTwin","path":"..."}`)
-/// — i.e. `type_field` names a domain command and the caller hasn't
-/// supplied a `params` envelope — we promote `extra` into `params`
-/// so observers see the field. Without this promotion the field is
-/// silently dropped, the typed event fires with `Default::default()`,
-/// and `path`-empty observers (like `OpenTwin`) silently open the
-/// file picker instead of acting on the supplied path.
+/// A command is always explicitly tagged as `ExecuteCommand`; domain queries
+/// use the same command channel and are registered by the crate that owns the
+/// queried data. Keeping the wire discriminator closed makes malformed or
+/// stale envelopes fail at the transport boundary instead of being promoted
+/// into a different command with default parameters.
 #[derive(Debug, Deserialize)]
-pub struct ApiRequestUnified {
-    #[serde(rename = "type", default)]
-    pub type_field: Option<String>,
-    pub command: Option<String>,
-    pub params: Option<serde_json::Value>,
-    /// Entity / command id. Always a JSON **number** — `GlobalEntityId` is
-    /// ≤53-bit so it round-trips through a JSON number without precision loss
-    /// (the one and only id form; `ListEntities` emits the same).
-    pub id: Option<u64>,
-    pub language: Option<String>,
-    pub code: Option<String>,
-    pub filter: Option<serde_json::Value>,
-    /// Catches every other top-level field. Used by the typed-command
-    /// fallback to forward the caller's payload as `params`.
-    #[serde(flatten)]
-    pub extra: std::collections::HashMap<String, serde_json::Value>,
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum ApiRequestUnified {
+    ExecuteCommand {
+        command: String,
+        #[serde(default)]
+        params: serde_json::Value,
+    },
+    DiscoverSchema,
+    ListEntities,
+    SubscribeTelemetry {
+        filter: Option<serde_json::Value>,
+    },
+    UnsubscribeTelemetry {
+        /// Entity ids are JSON numbers on the wire. `GlobalEntityId` is
+        /// bounded to the exact-integer range of JSON numbers.
+        id: u64,
+    },
 }
 
-impl From<ApiRequestUnified> for ApiRequest {
-    fn from(env: ApiRequestUnified) -> Self {
-        match env.type_field.as_deref() {
-            Some("ExecuteCommand") => ApiRequest::ExecuteCommand {
-                command: env.command.unwrap_or_default(),
-                params: env.params.unwrap_or_default(),
-            },
-            Some("DiscoverSchema") => ApiRequest::DiscoverSchema,
-            Some("ListEntities") => ApiRequest::ListEntities,
-            // `QueryEntity` is a PROVIDER (owned by `lunco-scene-commands`, beside
-            // `MoveEntity` — same entities, same frame), not a built-in variant.
-            // The wire shape predates that and stays supported: this maps it onto
-            // the provider call, so `{"type":"QueryEntity","id":…}` keeps working
-            // for every existing client. No id → a non-resolving sentinel (id 0 is
-            // never in the registry), as before.
-            Some("QueryEntity") => ApiRequest::ExecuteCommand {
-                command: "QueryEntity".to_string(),
-                params: serde_json::json!({ "id": env.id.unwrap_or(0) }),
-            },
-            Some("QueryCommandResult") => ApiRequest::QueryCommandResult {
-                id: env.id.unwrap_or(0),
-            },
-            Some("SubscribeTelemetry") => ApiRequest::SubscribeTelemetry {
-                filter: env.filter.and_then(|v| serde_json::from_value(v).ok()),
-            },
-            Some("UnsubscribeTelemetry") => ApiRequest::UnsubscribeTelemetry {
-                id: env.id.unwrap_or(0),
-            },
-            None if env.command.is_some() => {
-                // Legacy format: {"command": "...", "params": {...}}. Promote any
-                // leftover top-level fields into `params` too — exactly as the
-                // typed shape below does — so `{"command":"SetCamera","eye":[...]}`
-                // delivers `eye` instead of silently dropping it and firing the
-                // command with `Default::default()`. (The two forms drifting here
-                // was the "malformed args silently discarded" trap.)
-                let params = env
-                    .params
-                    .unwrap_or_else(|| serde_json::Value::Object(env.extra.into_iter().collect()));
-                ApiRequest::ExecuteCommand {
-                    command: env.command.unwrap_or_default(),
-                    params,
-                }
+impl TryFrom<ApiRequestUnified> for ApiRequest {
+    type Error = String;
+
+    fn try_from(env: ApiRequestUnified) -> Result<Self, Self::Error> {
+        match env {
+            ApiRequestUnified::ExecuteCommand { command, params } => {
+                Ok(ApiRequest::ExecuteCommand { command, params })
             }
-            _ => {
-                // Typed-command shape: `{"type":"OpenTwin","path":"..."}`.
-                // The caller didn't supply a `params` envelope, so
-                // promote whatever extra top-level fields they sent
-                // into `params` — this is what makes the intuitive
-                // shape work without forcing `{"command":"X","params":{...}}`.
-                let params = if let Some(explicit) = env.params {
-                    explicit
-                } else {
-                    let mut map = serde_json::Map::new();
-                    for (k, v) in env.extra {
-                        map.insert(k, v);
-                    }
-                    serde_json::Value::Object(map)
-                };
-                ApiRequest::ExecuteCommand {
-                    command: env.type_field.unwrap_or_default(),
-                    params,
-                }
+            ApiRequestUnified::DiscoverSchema => Ok(ApiRequest::DiscoverSchema),
+            ApiRequestUnified::ListEntities => Ok(ApiRequest::ListEntities),
+            ApiRequestUnified::SubscribeTelemetry { filter } => {
+                let filter = filter
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|error| format!("invalid telemetry filter: {error}"))?;
+                Ok(ApiRequest::SubscribeTelemetry { filter })
+            }
+            ApiRequestUnified::UnsubscribeTelemetry { id } => {
+                Ok(ApiRequest::UnsubscribeTelemetry { id })
             }
         }
     }
@@ -123,20 +76,19 @@ impl From<ApiRequestUnified> for ApiRequest {
 mod tests {
     use super::*;
 
-    fn parse(json: &str) -> ApiRequest {
-        serde_json::from_str::<ApiRequestUnified>(json)
-            .unwrap()
-            .into()
+    fn parse(json: &str) -> Result<ApiRequest, String> {
+        let envelope =
+            serde_json::from_str::<ApiRequestUnified>(json).map_err(|error| error.to_string())?;
+        envelope.try_into()
     }
 
-    /// The legacy `{"type":"QueryEntity"}` wire shape still reaches the provider
-    /// (which now lives in `lunco-scene-commands`), with the id carried through as
-    /// a param. Existing clients — including the `query_entity` MCP tool — see no
-    /// change.
     #[test]
-    fn query_entity_maps_onto_the_provider_with_a_number_id() {
-        // One id form on the wire: a JSON number (GlobalEntityId is ≤53-bit).
-        match parse(r#"{"type":"QueryEntity","id":98466552102768}"#) {
+    fn canonical_query_entity_uses_the_execute_command_envelope() {
+        match parse(
+            r#"{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":98466552102768}}"#,
+        )
+        .unwrap()
+        {
             ApiRequest::ExecuteCommand { command, params } => {
                 assert_eq!(command, "QueryEntity");
                 assert_eq!(params["id"], 98466552102768_u64);
@@ -146,76 +98,57 @@ mod tests {
     }
 
     #[test]
-    fn query_entity_string_id_is_rejected() {
-        // No legacy string-id form — a stringified id must NOT silently parse.
+    fn command_params_are_left_for_typed_validation() {
+        assert!(parse(
+            r#"{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":"98466552102768"}}"#,
+        )
+        .is_ok());
+
+        // The envelope carries JSON params; command/provider validation is
+        // responsible for rejecting a string where the provider expects u64.
+        let request = parse(
+            r#"{"type":"ExecuteCommand","command":"UnsubscribeTelemetry","params":{"id":"42"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(request, ApiRequest::ExecuteCommand { .. }));
+    }
+
+    #[test]
+    fn untagged_command_forms_are_rejected() {
+        assert!(parse(r#"{"command":"SetCamera","params":{"eye":[1,2,3]}}"#).is_err());
+        assert!(parse(r#"{"type":"QueryEntity","id":42}"#).is_err());
+        assert!(parse(r#"{"type":"QueryCommandResult","id":42}"#).is_err());
         assert!(
-            serde_json::from_str::<ApiRequestUnified>(
-                r#"{"type":"QueryEntity","id":"98466552102768"}"#
-            )
-            .is_err(),
-            "string ids should be rejected; ids are numbers"
+            parse(r#"{"type":"ExecuteCommand","command":"SetCamera","eye":[1,2,3]}"#,).is_err()
         );
     }
 
-    /// Legacy `{"command":"X", <top-level args>}` (params put at the top level
-    /// instead of under a `params` envelope) must deliver those args, not drop
-    /// them. This is the exact silent-default trap: before, `eye` landed in
-    /// `extra` and the command fired with empty params.
     #[test]
-    fn legacy_command_form_promotes_top_level_fields_into_params() {
-        match parse(r#"{"command":"SetCamera","eye":[1.0,2.0,3.0]}"#) {
-            ApiRequest::ExecuteCommand { command, params } => {
-                assert_eq!(command, "SetCamera");
-                assert_eq!(params["eye"], serde_json::json!([1.0, 2.0, 3.0]));
-            }
-            other => panic!("expected ExecuteCommand, got {other:?}"),
-        }
-    }
-
-    /// An explicit `params` envelope still wins verbatim in the legacy form.
-    #[test]
-    fn legacy_command_form_keeps_explicit_params() {
-        match parse(r#"{"command":"SetCamera","params":{"eye":[4.0,5.0,6.0]}}"#) {
-            ApiRequest::ExecuteCommand { command, params } => {
-                assert_eq!(command, "SetCamera");
-                assert_eq!(params["eye"], serde_json::json!([4.0, 5.0, 6.0]));
-            }
-            other => panic!("expected ExecuteCommand, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn query_command_result_id_is_a_number() {
-        match parse(r#"{"type":"QueryCommandResult","id":42}"#) {
-            ApiRequest::QueryCommandResult { id } => assert_eq!(id, 42),
-            other => panic!("expected QueryCommandResult, got {other:?}"),
-        }
+    fn response_envelope_contains_ack_data_without_a_command_id() {
+        let envelope = ApiResponseEnvelope::from(ApiResponse::accepted());
+        assert_eq!(envelope.data.unwrap()["accepted"], true);
     }
 }
 
 impl From<ApiResponse> for ApiResponseEnvelope {
     fn from(response: ApiResponse) -> Self {
         match response {
-            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope {
-                command_id,
+            ApiResponse::Ok { data } => ApiResponseEnvelope {
                 data,
                 error: None,
                 error_code: None,
             },
             ApiResponse::Error { code, message } => ApiResponseEnvelope {
-                command_id: None,
                 data: None,
                 error: Some(message),
                 error_code: Some(code),
             },
             ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope {
-                command_id: None,
                 data: Some(serde_json::json!(event)),
                 error: None,
                 error_code: None,
             },
             ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
-                command_id: None,
                 data: None,
                 error: Some("unexpected screenshot response".into()),
                 error_code: Some(crate::schema::ApiErrorCode::InternalError as u16),

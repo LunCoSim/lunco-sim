@@ -33,10 +33,13 @@ custom property named `--ui-<property-name>`. The registry stores typed values,
 not CSS or HUI types. A manifest binding may map exact rendered values such as
 `true`, `false`, or `301` into presentation values.
 
-HUI callbacks are semantic runtime actions. The manifest maps a callback name to
-an action string; the adapter emits a typed action event, and the host translates
-that action through the existing command/event path. Templates never inspect
-HTML ids or call domain resources.
+HUI callbacks are semantic runtime actions. Each surface has a stable manifest
+`id`, and the manifest maps each unique callback name to a closed host action
+(`view.surface`, `view.body.moon`, `view.body.earth`, or
+`overlay.terrain.dismiss`). The adapter emits a typed action event, and the
+host translates that action through the existing command/event path. Templates
+never inspect HTML ids or call domain resources. Unknown fields/actions and
+unsafe asset paths are rejected before mounting.
 
 ## Performance and placement
 

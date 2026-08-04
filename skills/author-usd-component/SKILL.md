@@ -458,10 +458,10 @@ wheel reader on any `PhysxVehicleWheelAPI` prim. See
 [`validate-assets`](../validate-assets/SKILL.md).
 
 Then author → load → look. Per [`test-via-api`](../test-via-api/SKILL.md): drive the
-**already-running** workbench, never `pkill`, and always nest arguments under
-`"params"` — with the `{"command":…}` spelling anything top-level is silently
-dropped and the command runs with defaults (a camera command then quietly aims at
-the origin). Nesting is the one shape both envelope spellings accept.
+**already-running** workbench, never `pkill`, and always use the tagged command
+envelope `{"type":"ExecuteCommand","command":"…","params":{…}}`. Arguments
+outside `"params"` are rejected at the API boundary rather than silently
+dropped.
 
 Check the log before concluding anything about geometry. The reader warns on
 every skip path, and "no warning + no geometry" means the prim was never

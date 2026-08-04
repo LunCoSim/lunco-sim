@@ -30,7 +30,7 @@ fn emit(net) {
     }
     src += "equation\n";
     src += "end " + net.model_name + ";\n";
-    src
+    #{ source: src }
 }
 "#;
 
@@ -119,7 +119,7 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
     assert!(
         errors[0]
             .message
-            .contains("must return the Modelica source"),
+            .contains("must return a map with a Modelica `source` key"),
         "the report has to name what the policy did wrong, not blame the scene: {errors:?}"
     );
 }

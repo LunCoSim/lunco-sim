@@ -201,16 +201,12 @@ end PriorAllocator;
         )
         .expect("the preceding generated allocator compiles");
     let dae = compiler
-        .compile_str(
-            "GeneratedRcs",
-            source,
-            "generated://GeneratedRcs.mo",
-        )
+        .compile_str("GeneratedRcs", source, "generated://GeneratedRcs.mo")
         .expect("generated RCS network compiles");
     let mut opts = rumoca_sim::SimOptions::default();
     opts.t_end = 2.0;
-    let mut stepper = rumoca_sim::SimulationSession::new(&dae.dae, opts)
-        .expect("generated RCS stepper builds");
+    let mut stepper =
+        rumoca_sim::SimulationSession::new(&dae.dae, opts).expect("generated RCS stepper builds");
     stepper
         .set_input("roll_pos_a_valve", 0.8)
         .expect("positive valve is a live input");
@@ -241,6 +237,9 @@ end PriorAllocator;
         .get("RcsRollNegModel.valve_opening")
         .expect("negative valve is observable")
         .expect("negative valve has a value");
-    assert!((pos - 0.8).abs() < 1.0e-9, "positive valve was remapped: {pos}");
+    assert!(
+        (pos - 0.8).abs() < 1.0e-9,
+        "positive valve was remapped: {pos}"
+    );
     assert!(neg.abs() < 1.0e-9, "negative valve was remapped: {neg}");
 }

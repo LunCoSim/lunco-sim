@@ -57,9 +57,10 @@ over "DescentGuidance"
     {
         uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
 
-        # It drives the airframe's thrust every solver step, on a body the client
-        # predicts — so it must promise it steps fast enough to be trusted with it.
-        uniform bool lunco:program:realtimeSafe = true
+        # This Modelica controller is authoritative co-simulation. Prediction
+        # is reserved for an explicitly marked model that passes the
+        # fixed-rk4 continuous-profile contract; this controller is not marked
+        # realtimeSafe.
 
         # Sensors and body state. Cross-prim: these ports belong to prims the AIRFRAME
         # contributes, and the reference arc rebases the paths onto the composed vessel.

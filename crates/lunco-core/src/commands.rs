@@ -309,7 +309,7 @@ impl fmt::Display for Reject {
 
 impl std::error::Error for Reject {}
 
-// ── Command outcomes (pollable results) ────────────────────────────────────
+// ── Internal command outcomes ─────────────────────────────────────────────
 //
 // A command invoked through a transport (HTTP API, MCP, future wire) gets a
 // request id and, if its observer reports one, a terminal outcome the caller
@@ -340,15 +340,16 @@ pub enum CommandOutcome {
     Failed(String),
 }
 
-/// Maximum retained outcomes; oldest are evicted FIFO. A simple cap (not a
-/// wall-clock TTL) avoids `Instant`/time on wasm and keeps the store bounded.
+/// Maximum retained internal outcomes; oldest are evicted FIFO. A simple cap
+/// (not a wall-clock TTL) avoids `Instant`/time on wasm and keeps the store
+/// bounded.
 const MAX_COMMAND_RESULTS: usize = 1024;
 
-/// Pollable store of command outcomes, keyed by the transport's request id
-/// (the `command_id` the API mints). Always-on substrate — initialised by
-/// `register_core_resources` so result-reporting observers can't panic on a
-/// missing resource. Transports read it via a `QueryCommandResult`-style
-/// request; observers write it through the `#[on_command]`-generated wrapper.
+/// Internal store of command outcomes, keyed by an in-process command id.
+/// Always-on substrate — initialised by `register_core_resources` so
+/// result-reporting observers cannot panic on a missing resource. Transport
+/// handlers do not expose this store; deferred transport commands answer via
+/// their original request correlation.
 #[derive(Resource, Default)]
 pub struct CommandResults {
     map: HashMap<u64, CommandOutcome>,

@@ -327,8 +327,8 @@ Smaller items in the same category:
 
 ## Not bugs, but worth a decision
 
-- **`rk45` on client-predicted models** (`08:36:38.069`) — the solver warning correctly flags that non-fixed-step integration under the A4 `realtime_tolerated` concession lets peers diverge. Networking was `None` this run so it cost nothing, but it interacts badly with Issue 1: a diverging body integrated on a non-deterministic solver will diverge *differently* on every peer.
-- **The balloon's algebraic loop** (`08:36:37.253`) — `1285v0 ↔ 1823v0` (`RedBalloon` body ↔ its `Plant`) is co-simulated with a one-step delay, and the warning explicitly says this "may diverge for tight coupling". It is not the cause of Issue 1 (the model diverges analytically, delay or no delay), but it is a second-order amplifier on the same object and the warning fires twice.
+- **`rk45` on client-predicted models** (`08:36:38.069`) — the run exposed that non-fixed-step integration cannot serve prediction. The runtime now rejects that solver/profile pairing; `rk45` remains authoritative-live only. Qualified continuous, event-free Modelica programs use the fixed-lattice `fixed-rk4` backend instead, so peers cannot silently diverge through an adaptive stepper.
+- **The balloon's feedback path** (`08:36:37.253`) — `1285v0 ↔ 1823v0` (`RedBalloon` body ↔ its `Plant`) is an explicit causal state-feedback path, not an algebraic loop. The runtime no longer fabricates a loop warning or safety fault for it; true acausal equations remain a backend-island concern.
 - **Journal persistence is off by default** (`08:36:35.514`) — session-only unless `[journal] persist = true` in `twin.toml`. Reasonable default, but it means a tester who hits something interesting cannot hand us the history. Consider enabling it in nightly builds specifically.
 
 ---
@@ -341,3 +341,29 @@ Smaller items in the same category:
 4. **Issue 5** — avatar control targeting a camera is a real functional bug hiding behind a warning.
 5. **Issue 2** — needs the allocation-size logging first; it is not fixable by inspection.
 6. **Issues 6, 7, 8, 10** — log noise, but they are why 1 and 3 went unnoticed for a day.
+
+## Current disposition (2026-08-04)
+
+The following dispositions are based on the current source, not the historical
+tester binary above. A fresh Windows run is still required for adapter-specific
+render evidence.
+
+| issue | current disposition |
+|---|---|
+| 1 | **Fixed in source.** The lunar balloon uses the authored ambient/gravity contract and the escape diagnostics no longer treat upward motion as an unconditional escape. Production scene execution remains part of the verification pass. |
+| 2 | **Fixed in source.** Integrated adapters receive a pre-extraction shadow budget: bounded map sizes, cascade count, and nearest-light caster limits. The workbench exposes the degradation, scene teardown re-arms it, and device loss remains terminal. Actual AMD/Vulkan Windows evidence is still unverified locally. |
+| 3 | **Fixed in source.** Python programs check the authoritative interpreter status before binding, publish their declared interface as a terminal error, and emit one scene-level aggregate diagnostic. Terminal participants now retire their derived edges at the binding boundary, so unavailable Python cannot create secondary missing-port or algebraic-loop faults. The interactive sandbox intentionally has no verdict channel; `assets/scenes/tests/sandbox_smoke.usda` is the explicit composed smoke contract and the production thermal scene remains a separate gate. |
+| 4 | **Closed.** Runtime overlays and history are ignored by source control and excluded by the native packaging copier; no sandbox `.lunco` files are tracked. |
+| 5 | **Fixed in source.** Avatar/control resolution uses the authored control endpoint and skips camera descendants; warnings include the authored identity rather than only an entity id. |
+| 6 | **Fixed in source.** Earth and solar-frame diagnostics use startup settle windows and explicitly report recovery; transient entity-construction order is not treated as a permanent scene fault. Earth-direction demand is also projected only from composed Earth-vector wires, so ordinary environment probes cannot trigger the Earth-tracking warning. |
+| 7 | **Fixed in source.** Deliberate every-frame view models use an explicit registration path outside gate-effectiveness tracking, and deterministic celestial cadence declares its always-open policy to the gate monitor; accidental continuously-true gates retain actionable diagnostics. |
+| 8 | **Fixed in source.** USD camera authoring carries render-free intent only; the render binder adds the complete camera/render graph atomically. |
+| 9 | **Operationally surfaced.** MSL state is mirrored into the workbench status bus/settings UI and downloader retries are bounded. The captured connection refusal remains an external network/cache condition; GitHub Actions packaging still needs a post-change run. |
+| 10 | **Fixed for shipped runtime diagnostics.** Window-placement warnings and the journal nesting diagnostic use logging, and native packaging disables ANSI colour for non-TTY output. CLI, REPL, and test reports intentionally retain stdout/stderr because they are their user-facing protocol. |
+
+The remaining acceptance item is environmental rather than a compatibility path:
+run the Windows nightly on the reported integrated adapter and verify the
+packaged asset cache. The local production binary validates the relevant USD
+and Modelica inputs, passes the thermal scene, and reports unavailable Python
+programs as terminal diagnostics; the sandbox scene itself intentionally has
+no PASS/FAIL scenario channel.

@@ -13,10 +13,9 @@ use std::path::{Path, PathBuf};
 /// walk) mints ids through here, and it MUST stay in sync with
 /// [`crate::class_ref::ClassRef::parse_tree_id`] (the `msl_path:` scheme it
 /// reverses on click). The id is built straight from the dotted name; we never
-/// substitute `.`→`_`. The legacy `msl_<dots→underscores>` form was lossy
-/// (`PID_Controller` ⇄ `PID.Controller`) AND unparseable, so it silently
-/// no-op'd web clicks ("unparseable tree id"). Routing both backends through
-/// one helper is what keeps them from diverging again.
+/// substitute `.`→`_`. The lossy `msl_<dots→underscores>` form
+/// (`PID_Controller` ⇄ `PID.Controller`) is not emitted or parsed. Routing
+/// both backends through one helper keeps them from diverging.
 pub(crate) fn msl_tree_id(qualified: &str) -> String {
     format!("msl_path:{qualified}")
 }

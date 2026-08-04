@@ -20,8 +20,8 @@ Spline-keyframed cinematic camera moves, built on Bevy 0.18's built-in animation
   `CameraDefaults`, `AdaptiveNearPlane`, `SurfaceRelativeMode`).
 - Camera commands: `crates/lunco-avatar/src/commands.rs`
   (`FocusTarget`, `FollowTarget`, `PossessVessel` — pattern to follow for new commands).
-- Deterministic clock: `SimTick(u64)` + `TimeWarpState` (`lunco-core`),
-  `CelestialClock` (`crates/lunco-celestial/src/clock.rs`).
+- Deterministic clock: `SimTick(u64)` plus the unified `TimeTransport`/
+  `TimeDomain` tree (`lunco-time`), with `WorldTime` as the read projection.
 - Viewport sync: `crates/lunco-workbench/src/viewport.rs`.
 - Big-space coords: keyframes authored in absolute solar coords, converted to the
   camera's current grid per frame (same approach `FrameBlend` already uses).
@@ -33,8 +33,8 @@ Spline-keyframed cinematic camera moves, built on Bevy 0.18's built-in animation
   support both (`Aim::Point(DVec3)` / `Aim::Entity(Entity)`); convert to grid-local at
   eval time exactly like `FrameBlend`.
 - **D2 — Time base:** track time is in **seconds of track-local time**, advanced by an
-  `AnimationPlayer`. Recording later drives this player at fixed dt for frame-lock; live
-  preview drives it from wall clock × `TimeWarpState`. Player owns seek.
+  `AnimationPlayer` bound to a `TimeDomain`. Recording later drives this player at fixed
+  dt for frame-lock; live preview binds it to the wall-clock domain. The player owns seek.
 - **D3 — Interpolation:** position = Catmull-Rom spline through keyframe points (C1,
   passes through points). Rotation = slerp of look-at-derived quats. FOV = eased scalar.
   Per-segment easing enum (linear / smoothstep / ease-in-out).

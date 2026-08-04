@@ -16,7 +16,7 @@
 //!   package "which one to compile?" prompt) and `render_fast_run_setup`
 //!   (Simulation Setup dialog with editable input bounds).
 //!
-//! The plugin shim [`CompilePlugin`] registers all observers, modal
+//! The [`CompileCommandsPlugin`] registers all observers, modal
 //! resources, and the two egui systems in one shot — the parent
 //! `ModelicaCommandsPlugin` adds it via `add_plugins`.
 
@@ -81,7 +81,7 @@ pub struct CompileModel {
 /// this to lay out an imported model cleanly in one click.
 ///
 /// Exposed to the LunCo API: `POST /api/commands` with
-/// `{"command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
+/// `{"type":"ExecuteCommand","command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
 /// `doc = 0` targets the currently-active tab. Kept as a raw `u64`
 /// (not `DocumentId`) so the generic `lunco-doc` crate stays free of
 /// the bevy-reflect dependency required to cross the API boundary.
@@ -592,7 +592,7 @@ pub(crate) fn render_compile_class_picker(
         let purpose = entry.purpose;
         // viewing this doc so subsequent reads via
         // `drilled_class_for_doc` see the user's choice. Replaces
-        // the legacy `DrilledInClassNames` cache write.
+        // the old `DrilledInClassNames` cache write.
         for (_, state) in tabs.iter_mut_for_doc(doc) {
             state.drilled_class = Some(qualified.clone());
         }
@@ -989,7 +989,6 @@ pub fn on_compile_model(
             .spawn((
                 Name::new(model_name.clone()),
                 ModelicaModel {
-                    model_path: "".into(),
                     model_name: model_name.clone(),
                     current_time: 0.0,
                     // The world clock this model is coupled to starts with it
@@ -1586,11 +1585,6 @@ fn param_map_from_mods(
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
 /// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
 /// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
-// `resolve_setup_bounds` is UI-free (reads document/runner state) and lives in
-// `crate::model_commands` so the headless API server resolves sim bounds too.
-// Re-exported here for the local callers below.
-pub(crate) use crate::model_commands::resolve_setup_bounds;
-
 fn dispatch_experiment(
     world: &mut World,
     raw: DocumentId,
@@ -1813,7 +1807,7 @@ fn dispatch_experiment(
         // no per-surface divergence. The annotation cache seeding above is
         // what makes the cache layer here resolve without a prior
         // interactive compile.
-        let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
+        let mut bounds = crate::model_commands::resolve_setup_bounds(world, doc, &model_ref);
 
         // Parameter overrides / inputs from the draft, with command-supplied
         // values winning. Empty maps (the FastRunActiveModel path) = no-op.
@@ -2345,13 +2339,13 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
     });
 }
 
-// ─── Plugin shim ─────────────────────────────────────────────────────────────
+// ─── Compile command plugin ────────────────────────────────────────────────
 
 /// Bundles all compile/run/fast-run observers + modal renderers +
 /// modal-state resources. Added by the parent `ModelicaCommandsPlugin`.
-pub(super) struct CompilePlugin;
+pub(super) struct CompileCommandsPlugin;
 
-impl Plugin for CompilePlugin {
+impl Plugin for CompileCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CompileClassPickerState>()
             .init_resource::<FastRunSetupState>()

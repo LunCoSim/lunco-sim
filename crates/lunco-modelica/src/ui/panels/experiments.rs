@@ -22,6 +22,90 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const EXPERIMENTS_PANEL_ID: PanelId = PanelId("modelica_experiments");
 
+#[derive(Event, Clone, Copy, Debug)]
+pub(crate) struct LoadExperimentRequested {
+    pub(crate) id: ExperimentId,
+}
+
+#[derive(Event, Clone, Copy, Debug)]
+pub(crate) struct ExportExperimentRequested {
+    pub(crate) id: ExperimentId,
+}
+
+#[derive(Event, Clone, Copy, Debug)]
+pub(crate) struct RerunExperimentRequested {
+    pub(crate) id: ExperimentId,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct SetExperimentRunTargetRequested {
+    pub(crate) doc: DocumentId,
+    pub(crate) class: String,
+}
+
+pub(crate) fn on_load_experiment_requested(
+    trigger: On<LoadExperimentRequested>,
+    mut commands: Commands,
+) {
+    let id = trigger.id;
+    commands.queue(move |world: &mut World| {
+        load_run_into_draft(world, id);
+    });
+}
+
+pub(crate) fn on_export_experiment_requested(
+    trigger: On<ExportExperimentRequested>,
+    mut commands: Commands,
+) {
+    let id = trigger.id;
+    commands.queue(move |world: &mut World| {
+        export_experiment_csv(world, id);
+    });
+}
+
+pub(crate) fn on_rerun_experiment_requested(
+    trigger: On<RerunExperimentRequested>,
+    mut commands: Commands,
+) {
+    let id = trigger.event().id;
+    commands.queue(move |world: &mut World| {
+        load_run_into_draft(world, id);
+        if let Some(doc) = world
+            .get_resource::<crate::experiments_runner::ExperimentSources>()
+            .and_then(|sources| sources.0.get(&id).copied())
+            .or_else(|| {
+                world
+                    .get_resource::<lunco_workspace::WorkspaceResource>()
+                    .and_then(|workspace| workspace.active_document)
+            })
+        {
+            world
+                .commands()
+                .trigger(crate::ui::commands::FastRunActiveModel {
+                    doc,
+                    class: None,
+                    t_end: None,
+                    dt: None,
+                    n_intervals: None,
+                    tolerance: None,
+                    solver: None,
+                    h0: None,
+                });
+        }
+    });
+}
+
+pub(crate) fn on_set_experiment_run_target_requested(
+    trigger: On<SetExperimentRunTargetRequested>,
+    mut commands: Commands,
+) {
+    let doc = trigger.doc;
+    let class = trigger.class.clone();
+    commands.queue(move |world: &mut World| {
+        crate::sim_default::set_run_target_for_doc(world, doc, &class);
+    });
+}
+
 /// UI-only state attached to the experiments panel that has no
 /// natural home on a per-plot basis: the variable-picker filter,
 /// inline-rename buffer, and the Telemetry "Plot in" router target.
@@ -700,26 +784,20 @@ impl Panel for ExperimentsPanel {
             // Route the registry mutation through the typed command so the
             // panel doesn't mutate `ExperimentRegistry` inline (R3) and the
             // rename is reachable via API/MCP too.
-            ctx.defer(move |world| {
-                world.trigger(crate::ui::commands::compile::RenameExperiment {
-                    experiment_id: id.0.to_string(),
-                    name: new_name,
-                });
-                if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
-                    v.editing_name = None;
-                }
+            ctx.trigger(crate::ui::commands::compile::RenameExperiment {
+                experiment_id: id.0.to_string(),
+                name: new_name,
+            });
+            ctx.resource_scope::<ExperimentVisibility, _>(|_, visibility| {
+                visibility.editing_name = None;
             });
         } else if cancel_rename {
-            ctx.defer(|world| {
-                if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
-                    v.editing_name = None;
-                }
+            ctx.resource_scope::<ExperimentVisibility, _>(|_, visibility| {
+                visibility.editing_name = None;
             });
         } else if let Some(state) = start_rename {
-            ctx.defer(move |world| {
-                if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
-                    v.editing_name = Some(state);
-                }
+            ctx.resource_scope::<ExperimentVisibility, _>(|_, visibility| {
+                visibility.editing_name = Some(state);
             });
         }
 
@@ -739,10 +817,8 @@ impl Panel for ExperimentsPanel {
                         .or_default()
                 })
             };
-            ctx.defer(move |world| {
-                if let Some(mut s) = world.get_resource_mut::<PlotPanelStates>() {
-                    s.toggle_visible(target_viz, id);
-                }
+            ctx.resource_scope::<PlotPanelStates, _>(|_, states| {
+                states.toggle_visible(target_viz, id);
             });
         }
         if let Some(id) = delete {
@@ -750,57 +826,38 @@ impl Panel for ExperimentsPanel {
             // observer deletes from the registry AND purges doc-mapping +
             // per-plot visibility in lockstep, so the panel no longer
             // mutates the registry inline (R3) or duplicates the purge.
-            ctx.defer(move |world| {
-                world.trigger(crate::ui::commands::compile::DeleteExperiment {
-                    experiment_id: Some(id.0.to_string()),
-                    doc: None,
-                    all: false,
-                });
+            ctx.trigger(crate::ui::commands::compile::DeleteExperiment {
+                experiment_id: Some(id.0.to_string()),
+                doc: None,
+                all: false,
             });
         }
         if let Some(id) = cancel {
             // Best-effort cancel via the runner's RunHandle. The
             // PendingHandles drain system will see the resulting
             // RunUpdate::Cancelled and update registry status.
-            ctx.defer(move |world| {
-                if let Some(handles) = world
-                    .get_resource::<crate::experiments_runner::PendingHandles>()
-                {
+            ctx.resource_scope::<crate::experiments_runner::PendingHandles, _>(
+                |_, handles| {
                     for h in &handles.0 {
                         if h.run_id == id {
                             h.cancel();
                             break;
                         }
                     }
-                }
-            });
+                },
+            );
         }
         if let Some(id) = load_into_draft {
-            ctx.defer(move |world| load_run_into_draft(world, id));
+            ctx.trigger(LoadExperimentRequested { id });
         }
         if let Some(id) = export_csv {
-            ctx.defer(move |world| export_experiment_csv(world, id));
+            ctx.trigger(ExportExperimentRequested { id });
         }
         if let Some(id) = rerun {
             // Load setup, then dispatch a new Fast Run with it.
             // Resolving the originating doc keeps diagnostics routed
             // back to the right tab.
-            ctx.defer(move |world| {
-                load_run_into_draft(world, id);
-                if let Some(doc) = world
-                    .get_resource::<crate::experiments_runner::ExperimentSources>()
-                    .and_then(|s| s.0.get(&id).copied())
-                    .or_else(|| {
-                        world
-                            .get_resource::<lunco_workspace::WorkspaceResource>()
-                            .and_then(|ws| ws.active_document)
-                    })
-                {
-                    world
-                        .commands()
-                        .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
-                }
-            });
+            ctx.trigger(RerunExperimentRequested { id });
         }
 
         // Plot + variable picker now live in the Graphs panel — this
@@ -1044,9 +1101,7 @@ impl ExperimentsPanel {
         // frame default_simulation_class — and the whole Setup form /
         // override editor — resolve to it, without moving the canvas view.
         if let Some(cls) = pick_class {
-            ctx.defer(move |world| {
-                crate::sim_default::set_run_target_for_doc(world, doc, &cls);
-            });
+            ctx.trigger(SetExperimentRunTargetRequested { doc, class: cls });
         }
         if bounds.t_end <= bounds.t_start {
             ui.label(
@@ -1271,13 +1326,9 @@ impl ExperimentsPanel {
         // Wire the inline ⊘ Cancel button to the runner.
         if cancel_active {
             // Latest in-flight handle.
-            ctx.defer(|world| {
-                if let Some(handles) =
-                    world.get_resource::<crate::experiments_runner::PendingHandles>()
-                {
-                    if let Some(h) = handles.0.last() {
-                        h.cancel();
-                    }
+            ctx.resource_scope::<crate::experiments_runner::PendingHandles, _>(|_, handles| {
+                if let Some(h) = handles.0.last() {
+                    h.cancel();
                 }
             });
         }
@@ -1285,12 +1336,8 @@ impl ExperimentsPanel {
         // Persist edits.
         if bounds_changed {
             let model_ref_b = model_ref.clone();
-            ctx.defer(move |world| {
-                if let Some(mut drafts) =
-                    world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-                {
-                    drafts.entry(doc, model_ref_b).bounds_override = Some(bounds);
-                }
+            ctx.resource_scope::<crate::experiments_runner::ExperimentDrafts, _>(|_, drafts| {
+                drafts.entry(doc, model_ref_b).bounds_override = Some(bounds);
             });
         }
         if inputs_changed {
@@ -1325,12 +1372,8 @@ impl ExperimentsPanel {
                     map.insert(lunco_experiments::ParamPath(name.clone()), v);
                 }
             }
-            ctx.defer(move |world| {
-                if let Some(mut drafts) =
-                    world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-                {
-                    drafts.entry(doc, model_ref).inputs = map;
-                }
+            ctx.resource_scope::<crate::experiments_runner::ExperimentDrafts, _>(|_, drafts| {
+                drafts.entry(doc, model_ref).inputs = map;
             });
         }
         if run_clicked {
@@ -1338,19 +1381,15 @@ impl ExperimentsPanel {
             // disambiguation modal — the dropdown above already chose the
             // target. Setup (bounds/inputs/overrides) is already in the draft.
             let class = model_name.clone();
-            ctx.defer(move |world| {
-                world
-                    .commands()
-                    .trigger(crate::ui::commands::FastRunActiveModel {
-                        doc,
-                        class: Some(class),
-                        t_end: None,
-                        dt: None,
-                        n_intervals: None,
-                        tolerance: None,
-                        solver: None,
-                        h0: None,
-                    });
+            ctx.trigger(crate::ui::commands::FastRunActiveModel {
+                doc,
+                class: Some(class),
+                t_end: None,
+                dt: None,
+                n_intervals: None,
+                tolerance: None,
+                solver: None,
+                h0: None,
             });
         }
     }
@@ -1574,10 +1613,8 @@ impl ExperimentsPanel {
                 });
 
             if !updates.is_empty() {
-                ctx.defer(move |world| {
-                    if let Some(mut drafts) =
-                        world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-                    {
+                ctx.resource_scope::<crate::experiments_runner::ExperimentDrafts, _>(
+                    |_, drafts| {
                         let entry = drafts.entry(doc, model_ref);
                         for (path, v) in updates {
                             match v {
@@ -1589,8 +1626,8 @@ impl ExperimentsPanel {
                                 }
                             }
                         }
-                    }
-                });
+                    },
+                );
             }
         });
     }
@@ -2263,18 +2300,15 @@ fn render_experiments_plot_inner(
             e.log_y_user_set = true;
         }
         // Persist the popup's filter text back onto the shared resource so
-        // it survives across frames (the menu rebuilds every frame). The
-        // write lands after paint via defer.
+        // it survives across frames (the menu rebuilds every frame).
         {
             let current = ctx
                 .resource::<ExperimentVisibility>()
                 .map(|v| v.var_filter.clone())
                 .unwrap_or_default();
             if current != var_filter {
-                ctx.defer(move |world| {
-                    if let Some(mut vis) = world.get_resource_mut::<ExperimentVisibility>() {
-                        vis.var_filter = var_filter;
-                    }
+                ctx.resource_scope::<ExperimentVisibility, _>(|_, visibility| {
+                    visibility.var_filter = var_filter;
                 });
             }
         }
@@ -2314,16 +2348,14 @@ fn render_experiments_plot_inner(
         // panel's shared header queues it via `VizFitRequests`; the
         // LinePlot body drains the same resource, so Fit behaves
         // identically in both plot modes. Read-only peek during paint,
-        // then clear via a deferred mutation.
+        // then clear through the narrow resource scope.
         let fit_requested = ctx
             .resource::<lunco_viz::VizFitRequests>()
             .map(|r| r.is_pending(viz_id))
             .unwrap_or(false);
         if fit_requested {
-            ctx.defer(move |world| {
-                if let Some(mut r) = world.get_resource_mut::<lunco_viz::VizFitRequests>() {
-                    r.take(viz_id);
-                }
+            ctx.resource_scope::<lunco_viz::VizFitRequests, _>(|_, requests| {
+                requests.take(viz_id);
             });
         }
 

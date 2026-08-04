@@ -43,7 +43,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-physics`** | The physics **readiness gate** — "is the world safe to integrate right now?" A DEM still baking or a collider ring not yet paged in suspends integration without touching the user's transport clock, so a `Dynamic` body cannot free-fall through a collider that does not exist yet. |
 | **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
 | **`lunco-experiments`** | Backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory) with `RunStatus` (`Pending`/`Queued`/`Running`/`Done`/`Failed`/`Cancelled`) and `RunBounds`; the sim backend plugs in via the `ExperimentRunner` trait, parallel runs schedule across a worker pool. |
-| **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit input/output wiring (`SimConnection`), following FMI/SSP causality. Force-producing algebraic loops require an authored `RealtimeSafe` contract; the shared fixed-step barrier prevents stale-force accumulation. Port backends (incl. the `piloted` control-authority sensor derived from possession) resolve every exposed value by name. |
+| **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit causal input/output wiring (`SimConnection`), following FMI/SSP. Dynamic feedback is exchanged once per fixed step; acausal islands require a typed backend partition and are not guessed from graph cycles. Port backends (incl. the `piloted` control-authority sensor derived from possession) resolve every exposed value by name. |
 
 ---
 
@@ -108,7 +108,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-modelica`** | Modelica integration: AST-based editing, compilation via Rumoca, diagram visualization, and the Modelica workbench + worker pool. Live stepping uses fixed-step back-pressure shared with physics; pending worker results hold physics rather than accumulating stale-force debt. |
+| **`lunco-modelica`** | Modelica integration: AST-based editing, compilation via Rumoca, diagram visualization, and the Modelica workbench + worker pool. Authoritative live stepping uses the adaptive RK45 backend behind fixed-step back-pressure; qualified client-predicted continuous models use the deterministic fixed-lattice RK4 backend. Pending worker results hold physics rather than accumulating stale-force debt. |
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. |
 | **`lunco-tools`** | Backend-agnostic, dependency-free tool trait + registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Owns the bevy-free `Tool` trait (discovery + `as_any` downcast) + global registry + discovery. Behaviour-tree execution lives in `lunco-tools-bevy`. |
 | **`lunco-tools-rhai`** | rhai adapter binding for the `lunco-tools` registry: `RhaiTool` (source) + `NativeRhaiTool` (native Rust), and `refresh`, which binds every registered tool into a rhai `Engine` as a static module callable as `name::fn(...)`. |
@@ -252,7 +252,7 @@ Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` 
 ### Networking & API
 
 **`lunco-networking`**
-Transparent multiplayer shim. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing via a verified `AuthorizedCommand` flow and Lamport-ordered `EditLog` for history and undo.
+Multiplayer transport adapter. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing via a verified `AuthorizedCommand` flow and Lamport-ordered `EditLog` for history and undo.
 
 **`lunco-api`**
 Transport-agnostic API core. Exposes simulation state and command discovery via HTTP, mapping ULID-based stable entity IDs to process-local Bevy entities for external control and inspection.

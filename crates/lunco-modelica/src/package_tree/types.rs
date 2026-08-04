@@ -26,8 +26,7 @@ pub enum PackageNode {
         library: ModelLibrary,
         /// Modelica class kind, derived from the rumoca-parsed AST
         /// (or pre-baked from `msl_index.json` for bundled rows).
-        /// `None` for legacy / fallback entries where the kind
-        /// couldn't be determined.
+        /// `None` when the source metadata does not provide a class kind.
         class_kind: Option<crate::index::ClassKind>,
     },
 }

@@ -194,7 +194,7 @@ impl Plugin for WorkspacePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DocumentKind;
+    use crate::DocumentKindId;
     use lunco_doc::DocumentOrigin;
 
     #[test]
@@ -208,7 +208,7 @@ mod tests {
         let mut r = WorkspaceResource::new();
         r.add_document(DocumentEntry {
             id: DocumentId::new(1),
-            kind: DocumentKind::Modelica,
+            kind: DocumentKindId::new("modelica"),
             origin: DocumentOrigin::untitled("X"),
             context_twin: None,
             title: "X".into(),

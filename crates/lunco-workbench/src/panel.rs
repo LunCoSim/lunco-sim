@@ -84,11 +84,6 @@ pub enum PanelSlot {
 
 /// A dockable unit of UI rendered by [`crate::WorkbenchPlugin`].
 ///
-/// Panels take `&mut World` because they routinely need to read and
-/// write multiple resources (a Document registry, selection state,
-/// worker channels, …). Keeping the signature uniform avoids the
-/// `ui` / `ui_world` split we inherited from `bevy_workbench`, which
-/// forced every nontrivial panel into the `ui_world` branch anyway.
 /// Capability-narrowed render context handed to every panel (WP-8
 /// structural prevention — see `docs/architecture/11-workbench.md`).
 ///
@@ -98,19 +93,45 @@ pub enum PanelSlot {
 /// So a ported panel only gets:
 /// - [`resource`](Self::resource) — O(1) read of a (view-model) resource,
 /// - [`get`](Self::get) — O(1) read of one entity's component,
-/// - [`defer`](Self::defer) / [`trigger`](Self::trigger) — emit intent,
-///   applied to the `World` *after* the egui pass.
+/// - [`set_resource`](Self::set_resource) / [`trigger`](Self::trigger) — emit
+///   typed intent, applied to the `World` *after* the egui pass.
 ///
 /// There is deliberately **no** `query`, no `resource_mut`, no `&World`
 /// scan surface. Derivation belongs in change-gated `ViewModelSet`
 /// producer systems whose output a panel reads here; mutation belongs in
-/// the deferred/command path. The egui `Ui` is passed to `render`
+/// the typed command path. The egui `Ui` is passed to `render`
 /// separately so reads and painting don't alias-borrow the context.
 ///
+pub(crate) trait PanelIntent: Send {
+    fn apply(self: Box<Self>, world: &mut World);
+}
+
+struct SetResourceIntent<T>(T);
+
+impl<T: Resource<Mutability = bevy::ecs::component::Mutable>> PanelIntent for SetResourceIntent<T> {
+    fn apply(self: Box<Self>, world: &mut World) {
+        if let Some(mut current) = world.get_resource_mut::<T>() {
+            *current = self.0;
+        }
+    }
+}
+
+struct TriggerIntent<E>(E);
+
+impl<E: bevy::ecs::event::Event> PanelIntent for TriggerIntent<E>
+where
+    for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
+{
+    fn apply(self: Box<Self>, world: &mut World) {
+        world.trigger(self.0);
+    }
+}
+
+/// Capability-narrowed context passed to a panel during its egui render.
 pub struct PanelCtx<'w> {
     world: &'w mut World,
-    /// Mutations emitted during paint, applied (in order) after render.
-    deferred: Vec<Box<dyn FnOnce(&mut World) + Send>>,
+    /// Typed intents emitted during paint, applied in order after render.
+    intents: Vec<Box<dyn PanelIntent>>,
 }
 
 impl<'w> PanelCtx<'w> {
@@ -119,15 +140,15 @@ impl<'w> PanelCtx<'w> {
     pub(crate) fn new(world: &'w mut World) -> Self {
         Self {
             world,
-            deferred: Vec::new(),
+            intents: Vec::new(),
         }
     }
 
-    /// Consume the context and return its queued mutations, releasing the
+    /// Consume the context and return its typed intents, releasing the
     /// borrow on `World` so the dispatch can apply them. Called after the
     /// panel paints.
-    pub(crate) fn into_deferred(self) -> Vec<Box<dyn FnOnce(&mut World) + Send>> {
-        self.deferred
+    pub(crate) fn into_intents(self) -> Vec<Box<dyn PanelIntent>> {
+        self.intents
     }
 
     /// O(1) read of a resource — typically a change-gated view-model.
@@ -151,15 +172,17 @@ impl<'w> PanelCtx<'w> {
         self.world.get::<T>(entity)
     }
 
-    /// Queue a world mutation to run after the egui pass. User intent
-    /// (button clicks, edits) becomes a deferred change instead of an
-    /// in-paint mutation — no mid-render borrow juggling, and the paint
-    /// stays a pure read.
-    pub fn defer(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
-        self.deferred.push(Box::new(f));
+    /// Replace an existing shell or view-model resource after the egui pass.
+    /// Missing resources are a no-op; panels must not create state outside
+    /// their owning plugin's lifecycle.
+    pub fn set_resource<T: Resource<Mutability = bevy::ecs::component::Mutable>>(
+        &mut self,
+        value: T,
+    ) {
+        self.intents.push(Box::new(SetResourceIntent(value)));
     }
 
-    /// Emit an event after the egui pass (sugar over [`defer`](Self::defer)).
+    /// Emit a typed event after the egui pass.
     ///
     /// The `Trigger` bound mirrors `World::trigger`'s own signature in
     /// bevy 0.18 (`E: Event<Trigger<'a>: Default>`): observer events
@@ -169,9 +192,7 @@ impl<'w> PanelCtx<'w> {
     where
         for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
     {
-        self.defer(move |world| {
-            world.trigger(event);
-        });
+        self.intents.push(Box::new(TriggerIntent(event)));
     }
 
     /// Temporarily take one resource out of the world for the duration of
@@ -185,7 +206,7 @@ impl<'w> PanelCtx<'w> {
     /// structural guarantee holds. Returns `None` if `R` isn't present.
     pub fn resource_scope<R: Resource, T>(
         &mut self,
-        f: impl FnOnce(&mut PanelCtx, &mut R) -> T,
+        f: impl FnOnce(&mut PanelCtx<'w>, &mut R) -> T,
     ) -> Option<T> {
         let mut r = self.world.remove_resource::<R>()?;
         // Re-insert `r` even if `f` panics. A section's egui paint can hit an
@@ -221,9 +242,8 @@ pub enum PanelMenuGroup {
     /// Anything that hasn't declared a group. Listed last under "Other".
     #[default]
     Other,
-    /// Not listed at all — panels the user cannot meaningfully open on their
-    /// own: fixtures (the viewport), legacy panels kept only for layout
-    /// compatibility, and singletons that are really a facet of an instance tab.
+    /// Not listed at all — internal panels such as viewport fixtures and
+    /// singletons that are facets of an instance tab.
     Hidden,
 }
 
@@ -304,7 +324,8 @@ pub trait Panel: Send + Sync + 'static {
 
     /// Render the panel contents. The panel reads precomputed state via
     /// [`PanelCtx`] (view-model resources, selected-entity components) and
-    /// emits user intent through [`PanelCtx::defer`]/[`PanelCtx::trigger`];
+    /// emits user intent through [`PanelCtx::trigger`] and narrow resource
+    /// updates;
     /// it has no raw `&mut World`, so per-frame scans / blocking I/O /
     /// in-paint mutation are structurally impossible.
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx);
@@ -394,7 +415,7 @@ pub struct InstancePanelMenuEntry {
 ///   given `instance` discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TabId {
-    /// A singleton panel tab (legacy one-per-id).
+    /// A one-panel-per-id tab.
     Singleton(PanelId),
     /// A multi-instance tab. `kind` selects the renderer; `instance`
     /// is the per-tab discriminant (usually a raw `DocumentId`).

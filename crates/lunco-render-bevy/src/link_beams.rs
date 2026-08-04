@@ -15,9 +15,11 @@
 //! COUNT is the only thing that differs from the altimeter: a node has N peers, so the
 //! driver clones the matching template's mesh + material handle once per peer and writes
 //! each a local [`Transform`] aimed at that peer — near = full span, far = a stub ray
-//! (a 384,000 km Earth beam would be off-screen and jitter). The stub is the longer of an
-//! authored metre length and a share of the CAMERA's distance to the node, so the same
-//! link reads from a surface camera and from an Earth-focus one. Direction is [`world_pose`]
+//! (a 384,000 km Earth beam would be off-screen and jitter). With a camera, the stub uses a
+//! share of the distance to the endpoint nearest the camera, so the same link reads from a
+//! surface camera and from an Earth-focus one without the remote endpoint drawing a
+//! viewport-spanning ray. The authored metre length is the headless fallback. Direction is
+//! [`world_pose`]
 //! (f64, cell-aware) both ends, so nothing jitters. Cloning a `Handle` is a cheap `Arc`
 //! bump and Bevy GPU-batches shared-handle instances into one draw call — this scales to
 //! a lidar's many rays unchanged.
@@ -39,18 +41,19 @@ const DRIVER_ID: &str = "link_beams";
 const DEF_WIDTH: f64 = 0.12;
 const DEF_NEAR_M: f64 = 50_000.0;
 const DEF_STUB: f64 = 20.0;
-/// Far-peer beam length as a fraction of the camera's distance to the node.
+/// Far-peer beam length as a fraction of the camera's distance to the nearer endpoint.
 ///
 /// A fixed `stubLen` is a length in metres, so it only reads at ONE zoom. The
 /// Earth↔Moon link is the case that breaks it: 100 km of ray is generous from a
 /// surface camera and invisible from an Earth-focus camera parked ~19,000 km out
 /// (≈3× Earth radius, where the auto-focus sits). The beam is a DIRECTION
 /// indicator — "the link reaches that way" — so what has to stay constant is how
-/// much of the SCREEN it crosses, not how many metres it spans.
+/// much of the SCREEN it crosses, not how many metres it spans. The endpoint nearest the
+/// camera controls both endpoint-owned copies of the same link; applying a fixed metre
+/// floor to the remote endpoint makes an Earth station draw a huge ray across a lunar view.
 ///
-/// Applied as a floor under `stubLen`, never a cap: zooming in shortens the
-/// camera-relative term until the authored metre length wins, so surface views
-/// keep exactly the beam they had before this existed.
+/// When a camera is available this replaces `stubLen`; `stubLen` remains the fallback for
+/// headless rendering, where there is no view-relative scale to measure.
 const DEF_STUB_CAM_FRAC: f64 = 0.35;
 
 /// Tags a spawned beam with its peer and the state it currently shows, so the reconciler
@@ -101,33 +104,45 @@ struct NodeBeams {
 
 /// How long a beam to this peer should be.
 ///
-/// A NEAR peer gets a real cylinder that lands on it. A FAR one gets a ray: the
-/// longer of the authored metre stub and [`DEF_STUB_CAM_FRAC`]'s share of the
-/// camera's distance to the node, so the link reads at surface zoom and at globe
-/// zoom without either being authored twice.
-fn beam_len(dist: f64, near_m: f64, stub: f32, cam_frac: f32, cam_dist: Option<f64>) -> f32 {
+/// A NEAR peer gets a real cylinder that lands on it. A FAR one gets a ray whose
+/// camera-relative length is [`DEF_STUB_CAM_FRAC`]'s share of the distance to the
+/// nearer endpoint, so the link reads at surface zoom and at globe zoom without
+/// either being authored twice. The authored metre stub is used without a camera.
+fn beam_len(
+    dist: f64,
+    near_m: f64,
+    stub: f32,
+    cam_frac: f32,
+    camera_distances: Option<(f64, f64)>,
+) -> f32 {
     if dist <= near_m {
         return dist as f32;
     }
-    let camera_term = match cam_dist {
-        Some(d) if cam_frac > 0.0 => (d * cam_frac as f64) as f32,
-        _ => 0.0,
+    let camera_term = match camera_distances {
+        Some((source, peer)) if cam_frac > 0.0 => {
+            (source.min(peer) * cam_frac as f64).max(1.0) as f32
+        }
+        _ => return stub,
     };
-    stub.max(camera_term)
+    camera_term
 }
 
-/// World distance from the active camera to `node`, or `None` when there is no
-/// active camera to measure against (headless, or a frame before one exists).
-fn camera_distance_to<F: bevy::ecs::query::QueryFilter>(
-    node_pos: GridPos,
+/// World distances from the active camera to the source and peer, or `None` when
+/// there is no active camera to measure against (headless, or a frame before one exists).
+fn camera_distances<F: bevy::ecs::query::QueryFilter>(
+    source_pos: GridPos,
+    peer_pos: GridPos,
     q_cam: &Query<(&Camera, Entity), With<Camera3d>>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> Option<f64> {
+) -> Option<(f64, f64)> {
     let (_, cam) = q_cam.iter().find(|(c, _)| c.is_active)?;
-    let (cpos, _) = world_pose(cam, q_parents, q_grids, q_spatial)?;
-    Some((cpos.0 - node_pos.0).length())
+    let (camera_pos, _) = world_pose(cam, q_parents, q_grids, q_spatial)?;
+    Some((
+        (camera_pos.0 - source_pos.0).length(),
+        (camera_pos.0 - peer_pos.0).length(),
+    ))
 }
 
 pub(crate) fn build(app: &mut App) {
@@ -204,8 +219,14 @@ fn aim_link_beams(
         let dir_local = (nrot.0.inverse() * (world_dir / dist)).as_vec3();
         // Measured per beam rather than cached on the instance: the camera moves
         // every frame, which is exactly the cadence this system already runs at.
-        let cam_dist = camera_distance_to(npos, &q_cam, &q_parents, &q_grids, &q_spatial);
-        let len = beam_len(dist, inst.near_m, inst.stub, inst.stub_cam_frac, cam_dist);
+        let camera_dists = camera_distances(npos, ppos, &q_cam, &q_parents, &q_grids, &q_spatial);
+        let len = beam_len(
+            dist,
+            inst.near_m,
+            inst.stub,
+            inst.stub_cam_frac,
+            camera_dists,
+        );
         let want = beam_transform(dir_local, len, inst.width);
         // Compare-gated: an unconditional write marks the `Transform` `Changed`
         // and re-propagates the beam every frame even when both endpoints are
@@ -408,8 +429,6 @@ fn reconcile_link_beams(
             continue;
         };
         let nrot_inv = nrot.0.inverse();
-        let cam_dist = camera_distance_to(npos, &q_cam, &q_parents, &q_grids, &q_spatial);
-
         // Beams already spawned for this node, by peer.
         let existing: HashMap<u64, (Entity, bool)> = q_beams
             .iter()
@@ -430,7 +449,9 @@ fn reconcile_link_beams(
                 continue;
             }
             let dir_local = (nrot_inv * (world_dir / dist)).as_vec3();
-            let len = beam_len(dist, nb.near_m, nb.stub, nb.stub_cam_frac, cam_dist);
+            let camera_dists =
+                camera_distances(npos, ppos, &q_cam, &q_parents, &q_grids, &q_spatial);
+            let len = beam_len(dist, nb.near_m, nb.stub, nb.stub_cam_frac, camera_dists);
             let tf = beam_transform(dir_local, len, nb.width);
             let (mesh, mat) = if is_up { up } else { nb.down.as_ref().unwrap() };
 
@@ -518,5 +539,67 @@ fn reconcile_link_beams(
                 commands.entity(beam).try_despawn();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{beam_len, beam_transform};
+    use bevy::prelude::Vec3;
+
+    #[test]
+    fn far_stub_uses_the_nearest_camera_endpoint() {
+        let local_source = beam_len(1.0e9, 50_000.0, 100_000.0, 0.35, Some((10.0, 1.0e9)));
+        assert_eq!(local_source, 3.5);
+
+        let earth_source = beam_len(1.0e9, 50_000.0, 100_000.0, 0.35, Some((1.0e9, 10.0)));
+        assert_eq!(earth_source, 3.5);
+
+        let globe_source = beam_len(
+            1.0e9,
+            50_000.0,
+            100_000.0,
+            0.35,
+            Some((10_000_000.0, 20_000_000.0)),
+        );
+        assert_eq!(globe_source, 3_500_000.0);
+
+        let headless = beam_len(1.0e9, 50_000.0, 100_000.0, 0.35, None);
+        assert_eq!(headless, 100_000.0);
+    }
+
+    #[test]
+    fn near_peer_keeps_its_real_span() {
+        assert_eq!(
+            beam_len(12.5, 50_000.0, 100_000.0, 0.35, Some((10.0, 20.0))),
+            12.5
+        );
+    }
+
+    #[test]
+    fn camera_stub_has_a_visible_minimum() {
+        assert_eq!(
+            beam_len(1.0e9, 50_000.0, 100_000.0, 0.35, Some((0.0, 1.0e9))),
+            1.0
+        );
+    }
+
+    #[test]
+    fn nonpositive_camera_fraction_uses_headless_stub() {
+        assert_eq!(
+            beam_len(1.0e9, 50_000.0, 100_000.0, 0.0, Some((10.0, 1.0e9))),
+            100_000.0
+        );
+    }
+
+    #[test]
+    fn beam_transform_points_the_cylinder_axis_at_the_peer() {
+        let direction = Vec3::new(1.0, 0.0, 1.0).normalize();
+        let length = 12.0;
+        let transform = beam_transform(direction, length, 0.2);
+
+        assert!((transform.translation - direction * (length * 0.5)).length() < 1.0e-6);
+        assert_eq!(transform.scale, Vec3::new(0.2, length, 0.2));
+        assert!((transform.rotation * Vec3::Y - direction).length() < 1.0e-6);
     }
 }

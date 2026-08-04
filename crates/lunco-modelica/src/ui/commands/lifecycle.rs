@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::{on_command, Command};
 use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_doc_bevy::{CloseDocument, DocumentSaved};
-use lunco_workbench::file_ops::{NewDocument, OpenFile};
+use lunco_doc_bevy::{CloseDocument, DocumentSaved, NewDocument, OpenFile};
 use std::sync::Arc;
 
 use crate::model_tabs::ModelTabs;
@@ -450,7 +449,11 @@ pub fn on_create_new_scratch_model(
     // the supplied source → else "Untitled". Then dedup with a numeric
     // suffix ("Untitled", "Untitled2", … — matching the prior scheme).
     let base = req_name
-        .or_else(|| req_source.as_deref().and_then(crate::extract_model_name))
+        .or_else(|| {
+            req_source
+                .as_deref()
+                .and_then(crate::ast_extract::extract_model_name)
+        })
         .unwrap_or_else(|| "Untitled".to_string());
     let name = unique_in_memory_name(&cache, &base);
 
@@ -1361,10 +1364,7 @@ pub fn render_close_dialogs(
 }
 
 #[on_command(NewDocument)]
-pub fn on_new_modelica_document(
-    trigger: On<lunco_workbench::file_ops::NewDocument>,
-    mut commands: Commands,
-) {
+pub fn on_new_modelica_document(trigger: On<lunco_doc_bevy::NewDocument>, mut commands: Commands) {
     if trigger.event().kind != "modelica" {
         return;
     }

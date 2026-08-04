@@ -5,7 +5,7 @@
 //! it snapshots the change-gated [`UsdBrowserView`] (built by
 //! [`produce_usd_browser_view`](crate::ui::loaded_stages::produce_usd_browser_view))
 //! through `BrowserCtx::resource`, paints the row + prim tree, and emits
-//! viewport intent via `BrowserCtx::defer`. No `&mut World`, no inline
+//! viewport intent through typed commands. No `&mut World`, no inline
 //! parse, no resource take-and-restore.
 
 use bevy_egui::egui;
@@ -60,7 +60,7 @@ impl BrowserSection for UsdSceneSection {
             .unwrap_or(egui::Color32::LIGHT_RED);
 
         // Snapshot the view-model out of the (immutable) ctx borrow so
-        // the later `ctx.defer` dispatch is free to take `&mut`. Rows
+        // typed commands can be emitted after row painting. Rows
         // are cheap to clone (Arc readers + short strings).
         let rows: Vec<UsdStageRow> = match ctx.resource::<UsdBrowserView>() {
             Some(view) => view.stages.clone(),
@@ -128,14 +128,12 @@ impl BrowserSection for UsdSceneSection {
         // Clicking any stage / prim row retargets the shared USD
         // viewport at the owning doc and focuses the viewport tab.
         // `SetActiveUsdViewport` / `FocusPanel` are typed commands —
-        // emitted after paint via `defer` so the egui pass stays a
+        // emitted after paint so the egui pass stays a
         // pure read.
         if let Some(doc) = focus_doc {
-            ctx.defer(move |world| {
-                world.trigger(SetActiveUsdViewport { doc });
-                world.trigger(lunco_workbench::FocusPanel {
-                    id: USD_VIEWPORT_PANEL_ID.0.to_string(),
-                });
+            ctx.trigger(SetActiveUsdViewport { doc });
+            ctx.trigger(lunco_workbench::FocusPanel {
+                id: USD_VIEWPORT_PANEL_ID.0.to_string(),
             });
         }
     }
@@ -143,13 +141,13 @@ impl BrowserSection for UsdSceneSection {
 
 /// Paint one stage's prim-tree body from its pre-derived row. Returns
 /// `true` when the user clicked a prim row (→ retarget the viewport).
-/// Pure read over the cached [`TextReader`]; no world access.
+/// Pure read over cached authored-layer data; no world access.
 fn render_stage_body(ui: &mut egui::Ui, row: &UsdStageRow, error_color: egui::Color32) -> bool {
     if let Some(err) = &row.parse_error {
         ui.colored_label(error_color, err);
         return false;
     }
-    let Some(reader) = &row.reader else {
+    let Some(data) = &row.data else {
         ui.label(egui::RichText::new("(no parse)").weak().italics());
         return false;
     };
@@ -167,9 +165,9 @@ fn render_stage_body(ui: &mut egui::Ui, row: &UsdStageRow, error_color: egui::Co
     // `def Xform "Artemis2"` is surfaced as `artemis_2 → Orion` instead
     // of `artemis_2 → Artemis2 (Xform) → Orion`. Single-root prims with
     // no children are kept (they ARE the content).
-    let mut top_paths: Vec<sdf::Path> = reader.prim_children(&root);
+    let mut top_paths: Vec<sdf::Path> = data.prim_children(&root);
     if top_paths.len() == 1 {
-        let grand = reader.prim_children(&top_paths[0]);
+        let grand = data.prim_children(&top_paths[0]);
         if !grand.is_empty() {
             top_paths = grand;
         }
@@ -180,33 +178,32 @@ fn render_stage_body(ui: &mut egui::Ui, row: &UsdStageRow, error_color: egui::Co
         ui.label(egui::RichText::new("(no prims)").weak().italics());
     } else {
         for path in top_paths {
-            render_prim(ui, reader, &path, &row.salt, &mut clicked_prim);
+            render_prim(ui, data, &path, &row.salt, &mut clicked_prim);
         }
     }
     clicked_prim
 }
 
 /// Recursive prim-tree walker. One `CollapsingHeader` per prim;
-/// children fetched via [`UsdRead::children`].
+/// children fetched from the authored-layer data.
 ///
-/// Composition arcs (sublayers, references, payloads) are **not**
-/// flattened — referenced prims show up only after a future
-/// `UsdComposer` integration. Today the walk reflects the raw root
-/// layer, which is the source-of-truth most edits target.
+/// Composition is intentionally not part of this authoring browser: it shows
+/// the layer being edited, while runtime projection reads the live canonical
+/// composed stage.
 fn render_prim(
     ui: &mut egui::Ui,
-    reader: &UsdData,
+    data: &UsdData,
     path: &sdf::Path,
     salt: &str,
     clicked: &mut bool,
 ) {
     let name = path.name().unwrap_or("(root)").to_string();
-    let type_name = reader.prim_type_name(path);
+    let type_name = data.prim_type_name(path);
     let label = match &type_name {
         Some(ty) => format!("{} ({})", name, ty),
         None => name,
     };
-    let children = reader.prim_children(path);
+    let children = data.prim_children(path);
     let header_id = ui.make_persistent_id((salt, path.to_string()));
 
     if children.is_empty() {
@@ -237,7 +234,7 @@ fn render_prim(
             },
             |ui| {
                 for child in children {
-                    render_prim(ui, reader, &child, salt, clicked);
+                    render_prim(ui, data, &child, salt, clicked);
                 }
             },
         );

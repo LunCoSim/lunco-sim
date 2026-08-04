@@ -42,13 +42,10 @@ pub struct JournalEntryMsg {
 
 // ── Peer identity ─────────────────────────────────────────────────────────────
 
-/// This peer's **stable journal author** — durable across reconnects *and* across
-/// the single-player→networked transition, so a peer's own offline edits keep the
-/// same author and therefore upload + merge correctly when it (re)connects. This
-/// is the fix for the old session-scoped author, under which a reconnect minted a
-/// fresh `peer-<session>` id → the peer's prior offline entries (authored under
-/// the old id) were filtered out of `broadcast_journal_entries` and silently
-/// stranded. Precedence:
+/// This peer's **local journal author** — durable across restarts and useful for
+/// standalone/offline authoring. A network handshake replaces it with the
+/// server-issued connection author before networked entries are applied, so a
+/// payload cannot impersonate another live peer. Precedence:
 ///
 /// 1. `LUNCO_PEER_ID` env override — distinct ids for multiple instances on ONE
 ///    machine (tests, `net_smoke`, `run_host_client`), which otherwise share the
@@ -67,6 +64,12 @@ pub fn local_author_id() -> AuthorId {
     AuthorId::new(persisted_install_id())
 }
 
+/// Canonical journal author for a live network connection. The server chooses
+/// this value and sends it in the handshake; payloads may not choose an author.
+pub fn author_for_session(session: lunco_core::SessionId) -> String {
+    format!("net-session-{:016x}", session.0)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn persisted_install_id() -> String {
     let path = lunco_assets::user_config_subdir("identity").join("peer_id");
@@ -80,13 +83,11 @@ fn persisted_install_id() -> String {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. Raw `std::fs::write` bypasses `lunco-storage`'s atomic
-    // rename: a kill mid-write leaves a zero-byte file, so the next start mints a
-    // new id and all journal entries authored under the old id become
-    // unattributable. Related: the wasm branch below (TODO(web-identity)) mints a
-    // fresh id every page reload — same identity-durability gap. Revisit before
-    // multiplayer hardening (INDEPENDENT-REVIEW-2026-07-19_agy.md NET-1).
+    // The identity file is a small local bootstrap record. It is not a network
+    // credential: live network journal entries are rebound to the server-issued
+    // connection author in `apply_inbound_entry`. A future storage migration can
+    // make this bootstrap write atomic without changing the network authority
+    // boundary.
     if let Err(e) = std::fs::write(&path, &fresh) {
         warn!(
             "[journal-plane] could not persist install id to {}: {e}",
@@ -109,11 +110,9 @@ fn persisted_install_id() -> String {
     format!("peer-{:016x}", lunco_core::ids::random_u64())
 }
 
-/// Stamp this peer's stable install id ([`local_author_id`]) as the journal's
-/// local author, so authored edits are attributable and durable across
-/// reconnects. Runs on **both** roles the frame the [`JournalResource`] appears
-/// (idempotent — only writes when it differs). Was host-only + session-scoped
-/// (stamped on handshake); now identity is set once at startup and never churns.
+/// Stamp this peer's local install id ([`local_author_id`]) as the journal's
+/// initial author. Networked clients receive a connection-bound author in the
+/// handshake; standalone sessions keep this durable local identity.
 pub fn stamp_local_journal_author(journal: Option<Res<JournalResource>>) {
     if let Some(j) = journal {
         let me = local_author_id();
@@ -146,9 +145,23 @@ pub fn full_journal_msgs(journal: &JournalResource) -> Vec<JournalEntryMsg> {
 /// then relays them out to the *other* clients (the host is the fan-out hub, so
 /// peer A's edit reaches peer B). Idempotent, so the host re-receiving an entry
 /// it already relayed, or a client seeing its own edit echoed back, is a no-op.
-pub fn apply_inbound_entry(journal: &JournalResource, msg: &JournalEntryMsg) {
+pub fn apply_inbound_entry(
+    journal: &JournalResource,
+    msg: &JournalEntryMsg,
+    canonical_author: Option<AuthorId>,
+) {
     match serde_json::from_str::<JournalEntry>(&msg.json) {
-        Ok(entry) => journal.with_write(|j| j.append_remote(entry)),
+        Ok(mut entry) => {
+            // A host binds every received entry to the connection that carried
+            // it. This prevents a peer from forging another author's EntryId
+            // and suppressing that author's own relay/replay path. Clients pass
+            // None because the host already canonicalized the entry.
+            if let Some(author) = canonical_author {
+                entry.id.author = author.clone();
+                entry.author.user = author.0;
+            }
+            journal.with_write(|j| j.append_remote(entry));
+        }
         Err(e) => warn!("[journal-plane] bad inbound entry: {e}"),
     }
 }
@@ -331,6 +344,46 @@ mod tests {
         std::env::remove_var("LUNCO_PEER_ID");
     }
 
+    #[test]
+    fn host_rebinds_inbound_entry_to_connection_author() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorTag, TwinId};
+
+        let twin = TwinId::new("canonical-author");
+        let source = JournalResource::new(twin.clone(), AuthorId::new("attacker"));
+        source.with_write(|j| {
+            j.append_local(
+                AuthorTag {
+                    user: "victim".into(),
+                    tool: "spoofed".into(),
+                },
+                DocumentId::new(1),
+                EntryKind::Op {
+                    domain: DomainKind::Usd,
+                    op: serde_json::json!({ "v": 1 }),
+                    inverse: serde_json::json!({}),
+                },
+                None,
+            );
+        });
+        let msg = full_journal_msgs(&source).pop().expect("source entry");
+        let target = JournalResource::new(twin, AuthorId::new("host"));
+        apply_inbound_entry(
+            &target,
+            &msg,
+            Some(AuthorId::new("net-session-0000000000000007")),
+        );
+
+        target.with_read(|j| {
+            let entry = j.entries().next().expect("canonical entry");
+            assert_eq!(
+                entry.id.author,
+                AuthorId::new("net-session-0000000000000007")
+            );
+            assert_eq!(entry.author.user, "net-session-0000000000000007");
+        });
+    }
+
     /// End-to-end simulation of the bidirectional plane across THREE peers
     /// (host + two clients) using the real plane functions — `full_journal_msgs`
     /// (the host's fan-out / late-joiner replay), `apply_inbound_entry` (the
@@ -367,7 +420,7 @@ mod tests {
         // The ferry: deliver every entry currently in `from` into `to` (merge).
         let deliver = |from: &JournalResource, to: &JournalResource| {
             for msg in full_journal_msgs(from) {
-                apply_inbound_entry(to, &msg);
+                apply_inbound_entry(to, &msg, None);
             }
         };
 
@@ -479,11 +532,11 @@ mod tests {
         // …and a client edit arriving AFTER that head still replays.
         let client = JournalResource::new(twin, AuthorId::new("peer-client"));
         for msg in full_journal_msgs(&saved) {
-            apply_inbound_entry(&client, &msg);
+            apply_inbound_entry(&client, &msg, None);
         }
         author_usd(&client, 3);
         for msg in full_journal_msgs(&client) {
-            apply_inbound_entry(&saved, &msg);
+            apply_inbound_entry(&saved, &msg, None);
         }
         assert_eq!(
             vals(&scene_ops_after(&saved, Some(&head), &me, &none)),

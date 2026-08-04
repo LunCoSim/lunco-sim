@@ -58,7 +58,7 @@ impl ViewTarget {
 /// Carries the egui `Ui` to paint into plus a capability-narrowed
 /// [`lunco_workbench::PanelCtx`] — the only world access a viz kind
 /// gets (WP-8). A viz reads view-model / signal resources through
-/// `wb.resource::<T>()` and queues mutations via `wb.defer(..)`; there
+/// `wb.resource::<T>()` and emits typed mutations; there
 /// is no raw `&mut World`, so per-frame scans / in-paint mutation are
 /// structurally impossible. `ui` and `wb` are separate fields so reads
 /// (`wb`) and painting (`ui`) borrow disjointly.

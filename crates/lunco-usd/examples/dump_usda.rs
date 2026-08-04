@@ -8,7 +8,7 @@ fn main() {
     let path = args.get(1).expect("Usage: dump_usda <path.usda>");
 
     println!("Loading: {}", path);
-    // Single-layer parse (uncomposed) — mirrors the old `TextReader::read`.
+    // Single-layer parse for inspecting the authored layer directly.
     let text = std::fs::read_to_string(path).expect("Failed to read USD file");
     let reader = usda::parse(&text).expect("Failed to parse USD file");
 

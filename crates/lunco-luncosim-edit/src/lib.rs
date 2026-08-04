@@ -35,12 +35,8 @@
 // (SpawnCommandPlugin = runtime spawn/move + NetReplicate tagging), `spawn_meta`,
 // `shader_doc`, `doc_resolve` and `SelectedEntities` — moved out to
 // `lunco-scene-commands`, so a `--no-ui` server can link the command layer without
-// linking the editor. Re-exported here under their old paths: everything below is
-// the in-scene editor (gizmo/picking/egui), gated on `ui`, and it reaches for them
-// as `crate::catalog::…` / `crate::SelectedEntities` exactly as before.
-pub use lunco_scene_commands::{
-    catalog, commands, doc_resolve, shader_doc, spawn_meta, SelectedEntities,
-};
+// linking the editor. The in-scene editor imports those modules from their owning
+// crate directly; this crate contains only gizmo/picking/egui concerns.
 
 #[cfg(feature = "ui")]
 pub mod gizmo;
@@ -61,11 +57,13 @@ pub mod spawn;
 #[cfg(feature = "ui")]
 pub mod terrain_tools;
 
-/// UI panels — WorkbenchPanel implementations (for editor mode).
+/// UI panels — `lunco-workbench::Panel` implementations (for editor mode).
 #[cfg(feature = "ui")]
 pub mod ui;
 
 use bevy::prelude::*;
+#[cfg(feature = "ui")]
+use lunco_scene_commands::{catalog, commands, shader_doc, SelectedEntities};
 
 /// Master plugin for all luncosim editing tools.
 #[cfg(feature = "ui")]
@@ -108,6 +106,9 @@ impl Plugin for SandboxEditPlugin {
         // the one selection mutation so the Inspector follows the controlled
         // rover without inventing a second inspector-target mechanism.
         app.add_systems(Update, selection::select_possessed_vessel);
+        app.add_observer(ui::spawn_palette::on_spawn_state_requested);
+        app.add_observer(ui::terrain_tools::on_terrain_ui_action);
+        app.add_observer(selection::on_select_entity_target);
         app.add_systems(Update, selection::handle_deselect_keys);
         // Selection → telemetry focus is NOT here: it moved down to the command
         // layer beside `SelectedEntities` itself
@@ -277,7 +278,7 @@ impl Plugin for SandboxEditPlugin {
 }
 
 /// Current state of the spawn system.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub enum SpawnState {
     /// No spawn in progress.
     #[default]

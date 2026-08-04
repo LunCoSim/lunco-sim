@@ -35,7 +35,7 @@ use lunco_hardware::{axle_torque, SteeringActuator};
 use lunco_mobility::WheelRaycast;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 
 // ─────────────────────────────────────────────────────────────────────
 // View-model

@@ -184,14 +184,18 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     app.update();
 
     // The camera's parent must be the inertial anchor, not the rotating grid.
+    // The headless test app deliberately does not install the render plugin that
+    // turns this authored observer entity into a Bevy `Camera3d`. The celestial
+    // contract is the entity's authored identity and inertial parent; the render
+    // projection is a downstream client concern.
     let mut cam_q = app
         .world_mut()
-        .query_filtered::<&ChildOf, With<bevy::camera::Camera>>();
+        .query_filtered::<(&ChildOf, &Name), With<lunco_core::Avatar>>();
     let parent = cam_q
         .iter(app.world())
-        .next()
-        .expect("Observer Camera should exist (spawn_observer_camera defaults true)")
-        .parent();
+        .find(|(_, name)| name.as_str() == "Observer Camera")
+        .map(|(child, _)| child.parent())
+        .expect("Observer Camera should exist (spawn_observer_camera defaults true)");
 
     assert!(
         app.world()
@@ -625,5 +629,80 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
         "the scene authored its own sun, so the celestial takeover must not spawn a \
          fallback beside it — two DirectionalLights make `update_sun_light_system`'s \
          brightest-wins pick steer the wrong one"
+    );
+}
+
+/// A connectivity endpoint is usually a deep child of its physical station. Its
+/// own prim has no geodetic anchor; the station ancestor does. Resolving only the
+/// endpoint itself places an Earth feed in the lunar site frame, collapsing the
+/// Earth link onto the rover and sending the rendered beam sideways.
+#[test]
+fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
+    let mut app = celestial_test_app();
+    let epoch_jd = 2_451_545.0;
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+    app.insert_resource(lunco_celestial::registry::CelestialBodyRegistry::default_system());
+    app.insert_resource(WorldTime {
+        epoch_jd,
+        ..Default::default()
+    });
+
+    let site = app
+        .world_mut()
+        .spawn((
+            Transform::IDENTITY,
+            lunco_celestial::geo::SiteAnchor,
+            lunco_celestial::geo::GeodeticAnchor {
+                body: 301,
+                geodetic: lunco_celestial::geo::Geodetic::new(-86.0, 3.0, 0.3),
+            },
+        ))
+        .id();
+    let station = app
+        .world_mut()
+        .spawn((
+            Transform::IDENTITY,
+            ChildOf(site),
+            lunco_celestial::geo::GeodeticAnchor {
+                body: 399,
+                geodetic: lunco_celestial::geo::Geodetic::new(40.4, -4.2, 837.0),
+            },
+        ))
+        .id();
+    let endpoint = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 27.0, 0.0),
+            ChildOf(station),
+            lunco_celestial::link::LinkNode {
+                class: Some("earth".into()),
+                ..Default::default()
+            },
+        ))
+        .id();
+
+    // The first frame creates the hierarchy and the pose components; the second
+    // observes the components after the deferred inserts have flushed.
+    app.update();
+    app.update();
+
+    let station_pose = *app
+        .world()
+        .get::<lunco_celestial::pose::SolarFramePose>(station)
+        .expect("the anchored station must receive a solar pose");
+    let endpoint_pose = *app
+        .world()
+        .get::<lunco_celestial::pose::SolarFramePose>(endpoint)
+        .expect("the descendant link endpoint must receive a solar pose");
+
+    assert_eq!(station_pose.body(), 399);
+    assert_eq!(endpoint_pose.body(), 399);
+    assert!(
+        (endpoint_pose.pos - station_pose.pos).length() < 28.0,
+        "the feed should remain near its Earth station, not at the lunar site: {:?} vs {:?}",
+        endpoint_pose.pos,
+        station_pose.pos
     );
 }

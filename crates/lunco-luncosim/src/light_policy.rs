@@ -30,6 +30,7 @@ use bevy::prelude::*;
 use lunco_avatar::{PossessVessel, ReleaseVessel};
 use lunco_controller::ControllerLink;
 use lunco_core::SyncApplyGuard;
+use lunco_render::ShadowMapSuppressed;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 
@@ -77,18 +78,29 @@ fn apply_projection(
     mode: LocalLightShadows,
     possessed: &[Entity],
     parents: &Query<&ChildOf>,
-    q_spot: &mut Query<(Entity, &mut SpotLight)>,
-    q_point: &mut Query<(Entity, &mut PointLight)>,
+    lights: &mut ParamSet<(
+        Query<(Entity, &mut SpotLight, Option<&mut ShadowMapSuppressed>)>,
+        Query<(Entity, &mut PointLight, Option<&mut ShadowMapSuppressed>)>,
+    )>,
 ) {
-    for (entity, mut light) in q_spot.iter_mut() {
+    for (entity, mut light, suppressed) in lights.p0().iter_mut() {
         let want = shadow_wanted(entity, mode, possessed, parents);
-        if light.shadow_maps_enabled != want {
+        if let Some(mut suppressed) = suppressed {
+            // The recovery ladder owns the temporary disable. Keep the latest
+            // user/possession intent in the marker so an explicit quality
+            // change can restore the current policy rather than stale state.
+            suppressed.was_enabled = want;
+            light.shadow_maps_enabled = false;
+        } else if light.shadow_maps_enabled != want {
             light.shadow_maps_enabled = want;
         }
     }
-    for (entity, mut light) in q_point.iter_mut() {
+    for (entity, mut light, suppressed) in lights.p1().iter_mut() {
         let want = shadow_wanted(entity, mode, possessed, parents);
-        if light.shadow_maps_enabled != want {
+        if let Some(mut suppressed) = suppressed {
+            suppressed.was_enabled = want;
+            light.shadow_maps_enabled = false;
+        } else if light.shadow_maps_enabled != want {
             light.shadow_maps_enabled = want;
         }
     }
@@ -130,8 +142,10 @@ fn project_on_possess(
     guard: Res<SyncApplyGuard>,
     settings: Res<ShadowCastingSettings>,
     parents: Query<&ChildOf>,
-    mut q_spot: Query<(Entity, &mut SpotLight)>,
-    mut q_point: Query<(Entity, &mut PointLight)>,
+    mut lights: ParamSet<(
+        Query<(Entity, &mut SpotLight, Option<&mut ShadowMapSuppressed>)>,
+        Query<(Entity, &mut PointLight, Option<&mut ShadowMapSuppressed>)>,
+    )>,
 ) {
     // A possession applied from the wire (host attributing a remote client's
     // claim) is not *our* camera/render — only local possessions drive local
@@ -143,8 +157,7 @@ fn project_on_possess(
         settings.local_lights,
         &[trigger.event().target],
         &parents,
-        &mut q_spot,
-        &mut q_point,
+        &mut lights,
     );
 }
 
@@ -155,19 +168,15 @@ fn project_on_release(
     guard: Res<SyncApplyGuard>,
     settings: Res<ShadowCastingSettings>,
     parents: Query<&ChildOf>,
-    mut q_spot: Query<(Entity, &mut SpotLight)>,
-    mut q_point: Query<(Entity, &mut PointLight)>,
+    mut lights: ParamSet<(
+        Query<(Entity, &mut SpotLight, Option<&mut ShadowMapSuppressed>)>,
+        Query<(Entity, &mut PointLight, Option<&mut ShadowMapSuppressed>)>,
+    )>,
 ) {
     if guard.is_from_sync() {
         return;
     }
-    apply_projection(
-        settings.local_lights,
-        &[],
-        &parents,
-        &mut q_spot,
-        &mut q_point,
-    );
+    apply_projection(settings.local_lights, &[], &parents, &mut lights);
 }
 
 /// Reactive (runs only when the setting changes — `resource_changed` — including
@@ -177,17 +186,13 @@ fn reapply_on_settings_change(
     settings: Res<ShadowCastingSettings>,
     links: Query<&ControllerLink>,
     parents: Query<&ChildOf>,
-    mut q_spot: Query<(Entity, &mut SpotLight)>,
-    mut q_point: Query<(Entity, &mut PointLight)>,
+    mut lights: ParamSet<(
+        Query<(Entity, &mut SpotLight, Option<&mut ShadowMapSuppressed>)>,
+        Query<(Entity, &mut PointLight, Option<&mut ShadowMapSuppressed>)>,
+    )>,
 ) {
     let possessed: Vec<Entity> = links.iter().map(|l| l.vessel_entity).collect();
-    apply_projection(
-        settings.local_lights,
-        &possessed,
-        &parents,
-        &mut q_spot,
-        &mut q_point,
-    );
+    apply_projection(settings.local_lights, &possessed, &parents, &mut lights);
 }
 
 fn project_on_light_added(
@@ -195,17 +200,13 @@ fn project_on_light_added(
     settings: Res<ShadowCastingSettings>,
     links: Query<&ControllerLink>,
     parents: Query<&ChildOf>,
-    mut q_spot: Query<(Entity, &mut SpotLight)>,
-    mut q_point: Query<(Entity, &mut PointLight)>,
+    mut lights: ParamSet<(
+        Query<(Entity, &mut SpotLight, Option<&mut ShadowMapSuppressed>)>,
+        Query<(Entity, &mut PointLight, Option<&mut ShadowMapSuppressed>)>,
+    )>,
 ) {
     let possessed: Vec<Entity> = links.iter().map(|l| l.vessel_entity).collect();
-    apply_projection(
-        settings.local_lights,
-        &possessed,
-        &parents,
-        &mut q_spot,
-        &mut q_point,
-    );
+    apply_projection(settings.local_lights, &possessed, &parents, &mut lights);
 }
 
 /// Registers the [`ShadowCastingSettings`] simulation setting and the reactive

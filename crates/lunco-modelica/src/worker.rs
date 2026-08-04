@@ -13,13 +13,13 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
-use rumoca_sim::SimulationSession;
 use serde::{Deserialize, Serialize};
 
 use lunco_assets::modelica_dir;
 
 use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
 use crate::sim_stream::{SimSnapshot, SimStream};
+use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 use lunco_experiments::{ParamPath, ParamValue};
@@ -40,12 +40,11 @@ use lunco_experiments::{ParamPath, ParamValue};
 /// So the family comes from [`solver::resolve`], the same call the batch path
 /// makes, from where the model runs: stepped inside the frame loop, and whether
 /// it drives a client-predicted body. A live model resolves to a backend that
-/// declares `usable_live`, and a predicted one to a backend that declares
-/// `realtime_tolerated` — because those backends *declare* it, not because a
-/// function body asserts it.
+/// declares `usable_live`; a predicted one is admitted only by a backend that
+/// is both fixed-step and deterministic.
 fn live_stepper_options(
     profile: solver::RuntimeProfile,
-) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
+) -> Result<(solver::SolverSpec, rumoca_sim::SimOptions), solver::SolverError> {
     crate::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
@@ -56,29 +55,7 @@ fn live_stepper_options(
         authored: None,
     })?;
 
-    // A4: a predicted model just landed on a backend that is not fixed-step
-    // deterministic. It is eligible only because it declares
-    // `realtime_tolerated`, so two peers integrating the same inputs can take
-    // different substeps and diverge. Declaring the gap in the registry
-    // documents it; this is the one place that REPORTS it, because this is where
-    // a model is actually put on such a stepper. Once per process, keyed on
-    // nothing else: the condition is a property of what is registered, not of
-    // the model, so repeating it per compile would only teach the reader to
-    // scroll past it.
-    if solver::served_by_concession(&spec, &profile) {
-        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            bevy::log::warn!(
-                "[solver] client-predicted models are running on `{}`, which is not \
-                 fixed-step deterministic — it serves them only through the declared \
-                 A4 concession (`realtime_tolerated`), so peers can diverge. Registering \
-                 a genuinely fixed-step backend retires this with no call-site edit.",
-                spec.id
-            );
-        }
-    }
-
-    crate::solver_backends::rumoca_options(
+    let options = crate::solver_backends::rumoca_options(
         &spec,
         &solver::SolverParams {
             atol: LIVE_TOL,
@@ -92,7 +69,8 @@ fn live_stepper_options(
             t_start: 0.0,
             t_end: f64::from(u32::MAX),
         },
-    )
+    )?;
+    Ok((spec, options))
 }
 
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
@@ -112,9 +90,9 @@ fn live_stepper_options(
 /// producing nothing. That silence is what let broken islands ship.
 /// The realtime half of the solver request for one model.
 ///
-/// A model absent from the set is NOT predicted — which for every co-simulated
-/// prim is the truth by construction: they are stamped `NotPredictable`, so an
-/// adaptive implicit solver is not merely permitted but correct for them.
+/// A model absent from the set is NOT predicted. The live path still requires a
+/// frame-loop-usable backend; offline/batch paths are where adaptive implicit
+/// solvers are selected.
 fn profile_for(
     entity: Entity,
     realtime_models: &std::collections::HashSet<Entity>,
@@ -129,11 +107,11 @@ fn profile_for(
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
-) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    let opts = live_stepper_options(profile).map_err(|e| {
+) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
+    let (spec, opts) = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
-    crate::simulation_session::live(&comp_res.dae, opts)
+    crate::simulation_session::live(&comp_res.dae, &spec, opts)
 }
 
 /// Apply the instance's USD parameter values to a freshly compiled DAE before
@@ -197,7 +175,6 @@ pub enum ModelicaCommand {
     Step {
         entity: Entity,
         session_id: u64,
-        model_path: PathBuf,
         model_name: String,
         inputs: Vec<(String, f64)>,
         dt: f64,
@@ -216,11 +193,9 @@ pub enum ModelicaCommand {
         /// prim declare `lunco:program:realtimeSafe`?
         ///
         /// Carried on the command because the worker thread has no ECS: it is
-        /// the second of the two facts solver selection is made of (the first,
-        /// whether the model is implicit, is read off the compiled DAE). DECLARED
-        /// upstream, never inferred here — a worker that guessed this is exactly
-        /// how the explicit stepper ended up on co-simulated electrical islands
-        /// that cannot be solved with it.
+        /// the prediction fact solver selection needs. DECLARED upstream, never
+        /// inferred from the compiled DAE: solvability and backend lowering are
+        /// owned by the selected solver.
         realtime_safe: bool,
         /// Stable session URI for the primary document (the document's
         /// canonical identity from `DocumentOrigin::session_uri` — a file
@@ -245,7 +220,7 @@ pub enum ModelicaCommand {
         parameter_overrides: Vec<(String, f64)>,
         /// Lock-free snapshot handle the worker publishes into after
         /// every successful Step (Phase A of the multi-sim arch).
-        /// `None` = legacy path; main thread still receives per-sample
+        /// `None` = result-stream path; main thread still receives per-sample
         /// data via `ModelicaResult.outputs` and pushes it into
         /// `SignalRegistry`. When `Some`, the worker updates the
         /// stream directly and the main-thread handler can skip the
@@ -253,7 +228,7 @@ pub enum ModelicaCommand {
         ///
         /// Skipped by serde: the `Arc<ArcSwap<_>>` only makes sense
         /// inside one address space. On wasm (Web Worker transport)
-        /// this is always serialized as `None`, forcing the legacy
+        /// this is always serialized as `None`, using the
         /// outputs-via-result path. Native is unaffected.
         #[serde(skip)]
         stream: Option<SimStream>,
@@ -529,15 +504,7 @@ fn rebuild_from_cache(
     entity: Entity,
     library_gen: u64,
 ) -> Option<CacheRebuild> {
-    let (
-        model_name,
-        doc_uri,
-        source,
-        extras,
-        parameter_overrides,
-        cached_hash,
-        cached_gen,
-    ) = {
+    let (model_name, doc_uri, source, extras, parameter_overrides, cached_hash, cached_gen) = {
         let c = cached_models.get(&entity)?;
         (
             c.model_name.clone(),
@@ -579,8 +546,7 @@ fn rebuild_from_cache(
         compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
     };
     let outcome = outcome.and_then(|mut comp_res| {
-        apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides)
-            .map(|()| comp_res)
+        apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides).map(|()| comp_res)
     });
     if let Ok(comp_res) = &outcome {
         if let Some(c) = cached_models.get_mut(&entity) {
@@ -604,8 +570,30 @@ fn rebuild_from_cache(
 /// plots NaN. Filtering out parameters / inputs happens downstream in
 /// [`handle_modelica_responses`]; we report everything here so the UI has
 /// the full picture and decides what goes into `model.variables`.
-pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(String, f64)> {
-    let Ok(state) = stepper.state() else {
+pub(crate) trait ObservableStepper {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError>;
+}
+
+impl ObservableStepper for LiveStepper {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
+        self.state()
+    }
+}
+
+impl ObservableStepper for rumoca_sim::SimulationSession {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
+        self.state()
+    }
+}
+
+pub(crate) fn collect_stepper_observables<S: ObservableStepper>(stepper: &S) -> Vec<(String, f64)> {
+    let Ok(state) = stepper.observable_state() else {
         return Vec::new();
     };
     state
@@ -617,7 +605,7 @@ pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(S
 
 /// Fixed solver tolerance on the LIVE path. Explicit, and deliberately NOT the
 /// model's `experiment(Tolerance=…)` annotation nor the batch runner's default —
-/// see [`live_stepper_options`] (A4).
+/// see [`live_stepper_options`] and the runtime solver capability contract.
 const LIVE_TOL: f64 = 1e-6;
 
 /// The LIVE path's **micro-step**: the one and only step size handed to the
@@ -670,7 +658,7 @@ fn micro_steps_for(dt: f64) -> u32 {
 /// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
 /// side reconciles any residual against the world clock next tick.
 fn integrate_macro_step(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     dt: f64,
 ) -> Result<(), rumoca_sim::SimulationDiagnosticError> {
     for _ in 0..micro_steps_for(dt) {
@@ -796,7 +784,7 @@ fn resolve_default_slots(known: &[String], name: &str, origin: DefaultOrigin) ->
 /// (primary document, sibling docs, seated library members) arrives here in the
 /// same map and is resolved by [`resolve_default_slots`].
 fn apply_input_defaults_validated(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     input_defaults: &HashMap<String, InputDefault>,
     ctx: &str,
 ) {
@@ -1096,7 +1084,7 @@ fn default_issue_message(issue: &InputDefaultIssue) -> String {
 /// is silently discarded forever — warn ONCE per (entity, name).
 #[cfg(not(target_arch = "wasm32"))]
 fn set_input_or_warn(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     rejected_inputs: &mut std::collections::HashSet<(Entity, String)>,
     entity: Entity,
     name: &str,
@@ -1243,11 +1231,11 @@ fn prune_entity_temp_dirs(
 /// than shipping calls that always `Err` in a browser.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
-    let mut steppers: HashMap<Entity, (u64, String, SimulationSession)> = HashMap::default();
+    let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // Which models declared the realtime promise, from `Compile`. Half of the
-    // solver-selection input (the other half is read off the compiled DAE), kept
-    // per entity because every later rebuild — Reset, parameter update, Step
+    // solver-selection input, kept per entity because every later rebuild — Reset,
+    // parameter update, Step
     // auto-init — must resolve the SAME solver as the original compile did.
     let mut realtime_models: std::collections::HashSet<Entity> = Default::default();
     // Inputs the SOLVER rejected, deduped per (entity, name). `set_input` used to
@@ -1589,22 +1577,18 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         );
                         match _compile_outcome {
                             Ok(mut comp_res) => {
-                                let stepper_result =
-                                    apply_compile_parameter_overrides(
-                                        &mut comp_res,
-                                        &parameter_overrides,
-                                    )
-                                    .map_err(|e| {
-                                        rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                                            "parameter binding failed: {e}"
-                                        ))
-                                    })
-                                    .and_then(|()| {
-                                        build_stepper(
-                                            &comp_res,
-                                            profile_for(entity, &realtime_models),
-                                        )
-                                    });
+                                let stepper_result = apply_compile_parameter_overrides(
+                                    &mut comp_res,
+                                    &parameter_overrides,
+                                )
+                                .map_err(|e| {
+                                    rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                                        "parameter binding failed: {e}"
+                                    ))
+                                })
+                                .and_then(|()| {
+                                    build_stepper(&comp_res, profile_for(entity, &realtime_models))
+                                });
                                 match stepper_result {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
@@ -1716,7 +1700,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                     ModelicaCommand::Step {
                         entity,
                         session_id,
-                        model_path,
                         model_name,
                         inputs,
                         dt,
@@ -1804,95 +1787,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     }
                                 }
                             }
-                            // Fallback: compile from file on disk
-                            if !steppers.contains_key(&entity) {
-                                let source = match std::fs::read_to_string(&model_path) {
-                                    Ok(s) => s,
-                                    Err(e) => {
-                                        let mut r = result_ok(entity, session_id);
-                                        r.error = Some(format!(
-                                            "Initialization Failed: cannot read `{}`: {e}",
-                                            model_path.display()
-                                        ));
-                                        let _ = tx_inner.send(r);
-                                        return;
-                                    }
-                                };
-                                let mut unit = assemble_compile_unit(&source, Vec::new());
-                                let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                                unit.merge_library_defaults(compiler.library_input_defaults());
-                                match compiler.compile_str(
-                                    &model_name,
-                                    &unit.source,
-                                    &model_path.to_string_lossy(),
-                                ) {
-                                    Ok(comp_res) => match build_stepper(
-                                        &comp_res,
-                                        profile_for(entity, &realtime_models),
-                                    ) {
-                                        Ok(mut s) => {
-                                            apply_input_defaults_validated(
-                                                &mut s,
-                                                &unit.input_defaults,
-                                                "Init",
-                                            );
-                                            for (name, val) in &inputs {
-                                                set_input_or_warn(
-                                                    &mut s,
-                                                    &mut rejected_inputs,
-                                                    entity,
-                                                    name,
-                                                    *val,
-                                                );
-                                            }
-                                            let doc_uri = model_path.to_string_lossy().into_owned();
-                                            let unit_hash =
-                                                compile_unit_hash(&model_name, &doc_uri, &unit);
-                                            cached_models.insert(
-                                                entity,
-                                                CachedModel {
-                                                    model_name: model_name.clone(),
-                                                    // Reuse the `source` already read from disk
-                                                    // for this compile — re-reading `model_path`
-                                                    // here was a second blocking read of bytes we
-                                                    // hold (CQ-213).
-                                                    source: Arc::from(source.clone()),
-                                                    extra_sources: Vec::new(),
-                                                    parameter_overrides: Vec::new(),
-                                                    doc_uri,
-                                                    compiled: comp_res.clone(),
-                                                    unit_hash,
-                                                    library_gen,
-                                                },
-                                            );
-
-                                            steppers.insert(
-                                                entity,
-                                                (session_id, model_name.clone(), s),
-                                            );
-                                        }
-                                        Err(e) => {
-                                            let mut r = result_ok(entity, session_id);
-                                            r.error = Some(format!(
-                                                "Initialization Failed: stepper init of \
-                                                 `{model_name}` from `{}`: {e}",
-                                                model_path.display()
-                                            ));
-                                            r.compile_diagnostics =
-                                                crate::diagnostics_from_sim_error(&e, &unit.source);
-                                            let _ = tx_inner.send(r);
-                                            return;
-                                        }
-                                    },
-                                    Err(e) => {
-                                        let mut r = result_ok(entity, session_id);
-                                        // `e` is rumoca's formatted compile summary.
-                                        r.error = Some(format!("Initialization Failed: {e}"));
-                                        let _ = tx_inner.send(r);
-                                        return;
-                                    }
-                                }
-                            }
                         }
 
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
@@ -1908,7 +1802,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 }
                                 // Macro step: integrate the requested `dt` — the
                                 // gap between the model's clock and the world's —
-                                // as a fixed ladder of micro-steps (A3/A4).
+                                // as a fixed ladder of micro-steps.
                                 let step_err = integrate_macro_step(stepper, dt).err();
                                 if let Some(e) = step_err {
                                     let mut r = result_ok(entity, session_id);
@@ -2172,7 +2066,7 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 pub struct InlineWorkerInner {
-    steppers: HashMap<Entity, (u64, String, SimulationSession)>,
+    steppers: HashMap<Entity, (u64, String, LiveStepper)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiler: Option<ModelicaCompiler>,
@@ -2282,7 +2176,6 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             model_name,
             inputs,
             dt,
-            model_path: _,
         } => {
             // Auto-init: rebuild from the cached compiled artifact (M3) if
             // the stepper doesn't exist — recompiles only when invalidated.
@@ -2316,8 +2209,6 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         }
                     }
                 }
-                // Fallback: try to compile from model_path (won't work in web)
-                // In web mode, models must be pre-compiled via Compile command first
             }
 
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
@@ -2325,7 +2216,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                     for (name, val) in &inputs {
                         let _ = stepper.set_input(name, *val);
                     }
-                    // Same macro-step ladder as the native worker (A3/A4).
+                    // Same macro-step ladder as the native worker.
                     let step_err = integrate_macro_step(stepper, dt).err();
 
                     if let Some(e) = step_err {
@@ -2426,18 +2317,16 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             };
             match compile_outcome {
                 Ok(mut comp_res) => {
-                    let stepper_result = apply_compile_parameter_overrides(
-                        &mut comp_res,
-                        &parameter_overrides,
-                    )
-                    .map_err(|e| {
-                        rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                            "parameter binding failed: {e}"
-                        ))
-                    })
-                    .and_then(|()| {
-                        build_stepper(&comp_res, profile_for(entity, &w.realtime_models))
-                    });
+                    let stepper_result =
+                        apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides)
+                            .map_err(|e| {
+                                rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                                    "parameter binding failed: {e}"
+                                ))
+                            })
+                            .and_then(|()| {
+                                build_stepper(&comp_res, profile_for(entity, &w.realtime_models))
+                            });
                     match stepper_result {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(
@@ -2764,12 +2653,11 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
 /// Component that attaches a Modelica model to an entity.
 ///
-/// Holds the model path, name, session ID, parameters, inputs, and observable variables.
+/// Holds the model name, session ID, parameters, inputs, and observable variables.
 /// The `is_stepping` flag prevents duplicate Step commands while waiting for results.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct ModelicaModel {
-    pub model_path: PathBuf,
     pub model_name: String,
     /// The model's OWN clock — `stepper.time()` as of the last result that
     /// landed. Lags [`Self::target_time`] by at least the in-flight macro step.
@@ -3017,7 +2905,6 @@ pub fn spawn_modelica_requests(
         let sent = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
-            model_path: model.model_path.clone(),
             model_name: model.model_name.clone(),
             inputs,
             dt,
@@ -3312,13 +3199,6 @@ pub fn handle_modelica_responses(
             }
 
             if result.is_new_model {
-                model.model_path = modelica_dir()
-                    .join(format!(
-                        "{}_{}",
-                        result.entity.index(),
-                        result.entity.generation()
-                    ))
-                    .join("model.mo");
                 model.variables.clear();
                 // A successful Compile leaves the model PAUSED/ready — we do
                 // NOT auto-start a live realtime sim. The one exception is
@@ -3431,7 +3311,7 @@ pub fn handle_modelica_responses(
 }
 
 // ===========================================================================
-// The macro-step contract (A3/A4/A5)
+// The macro-step contract
 // ===========================================================================
 #[cfg(test)]
 mod macro_step_tests {
@@ -3579,7 +3459,7 @@ mod macro_step_tests {
     }
 
     /// The micro-step ladder is an integer function of `dt` alone — same on
-    /// every peer, clamped, and never zero for a positive `dt` (A4).
+    /// every peer, clamped, and never zero for a positive `dt`.
     #[test]
     fn micro_step_ladder_is_deterministic_and_clamped() {
         assert_eq!(micro_steps_for(0.0), 0);
@@ -3600,7 +3480,6 @@ mod macro_step_tests {
         let step = |dt: f64| ModelicaCommand::Step {
             entity: e,
             session_id: 7,
-            model_path: PathBuf::new(),
             model_name: "M".into(),
             inputs: Vec::new(),
             dt,
@@ -3638,7 +3517,6 @@ mod lane_tests {
         ModelicaCommand::Step {
             entity: e,
             session_id: 1,
-            model_path: PathBuf::new(),
             model_name: "M".into(),
             inputs: Vec::new(),
             dt: 0.016,

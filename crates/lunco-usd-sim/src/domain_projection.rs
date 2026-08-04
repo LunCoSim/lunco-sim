@@ -5,13 +5,13 @@
 //! input opinions, and ordinary property connections between public members.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::path::PathBuf;
 
 use bevy::prelude::*;
 use lunco_modelica::{
-    parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice,
-    NoticeLevel,
+    ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    ModelicaNotice, NoticeLevel,
 };
+use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 
@@ -20,7 +20,7 @@ use openusd::sdf::Path as SdfPath;
 // lint fact producer. See `lunco_usd_bevy::program`.
 pub use lunco_usd_bevy::program::is_domain_network_root;
 use lunco_usd_bevy::program::{
-    is_modelica_identifier, modelica_identifier, modelica_member_class, modelica_path_identifier,
+    is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
 };
 
 use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
@@ -50,6 +50,8 @@ pub struct DomainProjectionState {
 pub struct GeneratedModelicaSource {
     /// Composed USD scope that owns this compilation unit.
     pub network_root: String,
+    /// Stable transient document URI used by the Modelica compiler for this unit.
+    pub doc_uri: String,
     /// Exact transient Modelica source sent to the compiler.
     pub source: String,
     /// Included composed USD component paths.
@@ -70,6 +72,8 @@ pub struct GeneratedModelicaSource {
     /// example a light or a telemetry adapter) read a member output without
     /// creating a second solver for that member.
     pub member_output_aliases: Vec<(String, String, String)>,
+    /// Deterministic composite units selected by the synthesizer.
+    pub units: Vec<SynthesisUnit>,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -80,7 +84,7 @@ pub struct DomainComponent {
     /// The `info:sourceAsset` this facet names — the file whose `within` + class
     /// decides what [`MemberClasses`] lets the emitter instantiate.
     pub source_asset: String,
-    /// Fully-qualified class derived from `info:sourceAsset`.
+    /// Fully-qualified class declared by the loaded `info:sourceAsset` source.
     pub model_class: String,
     /// Constant public inputs, emitted as component modifications.
     pub constants: BTreeMap<String, f64>,
@@ -107,10 +111,30 @@ pub struct DomainNetwork {
     pub input_sources: BTreeMap<String, String>,
     /// Public wrapper output name to component output property.
     pub outputs: BTreeMap<String, String>,
-    /// At least one member's `.mo` has not loaded, so its class is a PATH GUESS
-    /// rather than what the file declares. The projector waits instead of
-    /// compiling a guess. See [`MemberClasses`].
+    /// At least one member's `.mo` has not loaded and therefore its declared
+    /// class is not available. The projector waits instead of compiling a
+    /// partial network. See [`MemberClasses`].
     pub pending_sources: bool,
+}
+
+/// One deterministic Modelica composite unit inside a network Scope.
+///
+/// A unit is a connected component of the composed program graph. It is not a
+/// second ECS participant: the selected synthesizer emits the units below one
+/// generated root model, so the Scope keeps one public boundary and one
+/// runtime lifecycle while independent acausal subgraphs remain explicit in
+/// the generated Modelica. This is the same composite-model shape used by
+/// SSP/FMI toolchains.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SynthesisUnit {
+    /// Stable generated Modelica class name for the composite unit.
+    pub name: String,
+    /// Composed USD members absorbed into the unit.
+    pub component_paths: Vec<String>,
+    /// Root boundary inputs consumed by this unit.
+    pub inputs: BTreeSet<String>,
+    /// Root boundary outputs produced by this unit.
+    pub outputs: BTreeSet<String>,
 }
 
 /// One authoring error that prevents a safe runtime projection.
@@ -122,18 +146,16 @@ pub struct DomainProjectionError {
     pub message: String,
 }
 
-// A `Scope` is ONE compilation unit: one generated model on one entity carrying
-// one `ModelicaModel`. There is deliberately no runtime island partition — a
-// collection holding several electrically independent islands is an authoring
-// error, reported by the `network-scope-multiple-islands` lint rule, which is
-// where that policy lives. A partitioner here would have to invent extra
-// entities to host the extra models, and the two definitions of "island" would
-// then have to agree forever.
+// A `Scope` is ONE runtime compilation unit: one generated root model on one
+// entity carrying one `ModelicaModel`. The synthesizer may partition the
+// composed graph into several Modelica composite units, but it owns that
+// topology operation and emits the units under the root. The runtime therefore
+// never invents entities or a second definition of graph connectivity.
 
-/// What a synthesizer hands back: the compilation unit, plus the boundary the
-/// runtime holds it to.
+/// What a synthesizer hands back: the generated root, its public contract, and
+/// the explicit composite units inside it.
 #[derive(Clone, Debug, Default)]
-pub struct Synthesized {
+pub struct SynthesisPlan {
     /// The Modelica source to compile.
     pub source: String,
     /// Public causal inputs of the generated model.
@@ -144,6 +166,8 @@ pub struct Synthesized {
     pub component_paths: Vec<String>,
     /// `(prim, source asset, class)` per member — attribution + class audit.
     pub members: Vec<(String, String, String)>,
+    /// Connected composite units emitted below the root model.
+    pub units: Vec<SynthesisUnit>,
 }
 
 /// One way of turning a composed USD scope into ONE Modelica compilation unit.
@@ -175,10 +199,10 @@ pub enum SynthOutcome {
     /// Not a scope this synthesizer compiles (or nothing solvable is in it).
     NotMine,
     /// Cannot be decided yet — a member's source has not loaded, so the class it
-    /// declares is not knowable. NOT an error and NOT a reason to guess: the
-    /// projection simply waits and is re-triggered when the source lands.
+    /// declares is not knowable. The projection simply waits and is re-triggered
+    /// when the source lands.
     Pending,
-    Ready(Synthesized),
+    Ready(SynthesisPlan),
 }
 
 /// Read-only facts a synthesizer may need beyond the stage itself.
@@ -200,7 +224,6 @@ pub struct SynthesizerRegistry(
 impl Default for SynthesizerRegistry {
     fn default() -> Self {
         let mut registry = Self(Default::default());
-        registry.register(ActuatorWrenchSynthesizer);
         registry.register(AcausalNetworkSynthesizer);
         registry
     }
@@ -221,443 +244,6 @@ impl SynthesizerRegistry {
     }
 }
 
-/// Name of the built-in description-driven actuator network synthesizer.
-pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = "actuator-wrench";
-
-/// One force or torque actuator admitted by an actuator network collection.
-/// The physical description is read from USD once during projection. The
-/// generated Modelica model then owns only the live command equations; Avian
-/// still owns the actual force-at-point or torque integration.
-#[derive(Clone, Debug)]
-struct WrenchActuator {
-    path: String,
-    column: [f64; 6],
-    signed: bool,
-    command_output: String,
-    activity_output: Option<String>,
-}
-
-/// Generate a causal Modelica wrapper for generic USD actuators.
-///
-/// This is deliberately a projection-time operation, not a fixed-step Rust
-/// controller. USD supplies each actuator's body-frame geometry and the output
-/// ports it is wired to. A regularized pseudo-inverse is generated once from
-/// that geometry; the resulting scalar commands are evaluated by Modelica at
-/// runtime and consumed by the generic Avian actuator ports.
-pub struct ActuatorWrenchSynthesizer;
-
-/// Numerical tolerances for the projection-time geometry factorisation. These
-/// are solver-independent projection policy, not live vehicle parameters.
-const ACTUATOR_REGULARIZATION: f64 = 1.0e-9;
-const ACTUATOR_PIVOT_TOLERANCE: f64 = 1.0e-12;
-
-impl DomainSynthesizer for ActuatorWrenchSynthesizer {
-    fn name(&self) -> &'static str {
-        ACTUATOR_WRENCH_SYNTHESIZER
-    }
-
-    fn synthesize(
-        &self,
-        view: &lunco_usd_bevy::StageView<'_>,
-        root: &SdfPath,
-        model_name: &str,
-        _ctx: &SynthContext<'_>,
-    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
-        let members = view
-            .collection_members(root, "components")
-            .map_err(|error| {
-                vec![DomainProjectionError {
-                    path: root.to_string(),
-                    message: format!("could not read actuator collection: {error}"),
-                }]
-            })?;
-        let root_string = root.to_string();
-        let mut actuators = Vec::new();
-        let mut errors = Vec::new();
-
-        for member in members {
-            if member.is_property_path() || member.is_prim_variant_selection_path() {
-                continue;
-            }
-            let force = view.has_api_schema(&member, "LunCoForceActuatorAPI");
-            let torque = view.has_api_schema(&member, "LunCoTorqueActuatorAPI");
-            if !force && !torque {
-                continue;
-            }
-            if force && torque {
-                errors.push(DomainProjectionError {
-                    path: member.to_string(),
-                    message:
-                        "an actuator network member cannot apply both force and torque schemas"
-                            .into(),
-                });
-                continue;
-            }
-
-            let (column, signed) = if force {
-                let Some(description) = crate::force_actuator_from_usd(view, &member) else {
-                    errors.push(DomainProjectionError {
-                        path: member.to_string(),
-                        message: "force actuator metadata is incomplete; direction, limit, body, and transform are required".into(),
-                    });
-                    continue;
-                };
-                let direction = description.direction_local.normalize_or_zero();
-                let moment = description.local_position.cross(direction);
-                (
-                    [
-                        direction.x as f64 * description.max_force_n,
-                        direction.y as f64 * description.max_force_n,
-                        direction.z as f64 * description.max_force_n,
-                        moment.x as f64 * description.max_force_n,
-                        moment.y as f64 * description.max_force_n,
-                        moment.z as f64 * description.max_force_n,
-                    ],
-                    false,
-                )
-            } else {
-                let Some(description) = crate::torque_actuator_from_usd(view, &member) else {
-                    errors.push(DomainProjectionError {
-                        path: member.to_string(),
-                        message: "torque actuator metadata is incomplete; axis, limit, and body are required".into(),
-                    });
-                    continue;
-                };
-                let axis = description.axis_local.normalize_or_zero();
-                (
-                    [
-                        0.0,
-                        0.0,
-                        0.0,
-                        axis.x as f64 * description.max_torque_nm,
-                        axis.y as f64 * description.max_torque_nm,
-                        axis.z as f64 * description.max_torque_nm,
-                    ],
-                    true,
-                )
-            };
-
-            let Some(command_output) = view
-                .value_str(&member, "lunco:forceActuator:commandOutput")
-                .or_else(|| view.value_str(&member, "lunco:torqueActuator:commandOutput"))
-                .filter(|name| !name.is_empty())
-            else {
-                errors.push(DomainProjectionError {
-                    path: member.to_string(),
-                    message: "actuator must author lunco:*Actuator:commandOutput with the normalized valve/torque command port".into(),
-                });
-                continue;
-            };
-            let activity_output = if force {
-                view.value_str(&member, "lunco:forceActuator:activityOutput")
-                    .filter(|name| !name.is_empty())
-            } else {
-                None
-            };
-            actuators.push(WrenchActuator {
-                path: member.to_string(),
-                column,
-                signed,
-                command_output,
-                activity_output,
-            });
-        }
-
-        if actuators.is_empty() && errors.is_empty() {
-            errors.push(DomainProjectionError {
-                path: root_string.clone(),
-                message: "actuator-wrench network contains no force or torque actuators".into(),
-            });
-        }
-
-        let attrs = view.attr_names(root);
-        let inputs: BTreeSet<String> = attrs
-            .iter()
-            .filter_map(|attr| attr.strip_prefix("inputs:").map(str::to_string))
-            .collect();
-        let outputs: BTreeSet<String> = attrs
-            .iter()
-            .filter_map(|attr| attr.strip_prefix("outputs:").map(str::to_string))
-            .collect();
-        for name in inputs.iter().chain(outputs.iter()) {
-            if !is_modelica_identifier(name) {
-                errors.push(DomainProjectionError {
-                    path: root_string.clone(),
-                    message: format!(
-                        "actuator network port `{name}` is not a valid Modelica identifier"
-                    ),
-                });
-            }
-        }
-        for actuator in &actuators {
-            if !outputs.contains(&actuator.command_output) {
-                errors.push(DomainProjectionError {
-                    path: actuator.path.clone(),
-                    message: format!(
-                        "actuator command output `{}` is not declared on `{root_string}`",
-                        actuator.command_output
-                    ),
-                });
-            }
-            if let Some(activity) = &actuator.activity_output {
-                if !outputs.contains(activity) {
-                    errors.push(DomainProjectionError {
-                        path: actuator.path.clone(),
-                        message: format!(
-                            "actuator activity output `{activity}` is not declared on `{root_string}`"
-                        ),
-                    });
-                }
-            }
-        }
-        let duplicate_outputs: BTreeSet<String> = actuators
-            .iter()
-            .flat_map(|actuator| {
-                std::iter::once(actuator.command_output.clone())
-                    .chain(actuator.activity_output.clone())
-            })
-            .fold(BTreeMap::<String, usize>::new(), |mut counts, output| {
-                *counts.entry(output).or_default() += 1;
-                counts
-            })
-            .into_iter()
-            .filter_map(|(name, count)| (count > 1).then_some(name))
-            .collect();
-        for output in duplicate_outputs {
-            errors.push(DomainProjectionError {
-                path: root_string.clone(),
-                message: format!("actuator output `{output}` is driven by more than one actuator"),
-            });
-        }
-        let known_outputs: BTreeSet<String> = actuators
-            .iter()
-            .flat_map(|actuator| {
-                std::iter::once(actuator.command_output.clone())
-                    .chain(actuator.activity_output.clone())
-            })
-            .collect();
-        for output in outputs.difference(&known_outputs) {
-            errors.push(DomainProjectionError {
-                path: format!("{root_string}.outputs:{output}"),
-                message: "actuator-wrench outputs must be connected to an authored actuator input"
-                    .into(),
-            });
-        }
-        for required in ["desired_torque_x", "desired_torque_y", "desired_torque_z"] {
-            if !inputs.contains(required) {
-                errors.push(DomainProjectionError {
-                    path: root_string.clone(),
-                    message: format!("actuator-wrench network requires input `{required}`"),
-                });
-            }
-        }
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-
-        let columns: Vec<[f64; 6]> = actuators.iter().map(|actuator| actuator.column).collect();
-        let pseudo_inverse = match wrench_pseudoinverse(&columns) {
-            Ok(value) => value,
-            Err(message) => {
-                return Err(vec![DomainProjectionError {
-                    path: root_string,
-                    message,
-                }]);
-            }
-        };
-        let source =
-            emit_actuator_wrench_model(&inputs, &outputs, &actuators, &pseudo_inverse, model_name);
-        Ok(SynthOutcome::Ready(Synthesized {
-            source,
-            inputs,
-            outputs,
-            component_paths: actuators
-                .iter()
-                .map(|actuator| actuator.path.clone())
-                .collect(),
-            members: actuators
-                .iter()
-                .map(|actuator| {
-                    (
-                        actuator.path.clone(),
-                        "usd://generic-actuator".into(),
-                        if actuator.signed {
-                            "LunCo.GeneratedTorqueActuator".into()
-                        } else {
-                            "LunCo.GeneratedForceActuator".into()
-                        },
-                    )
-                })
-                .collect(),
-        }))
-    }
-}
-
-fn wrench_pseudoinverse(columns: &[[f64; 6]]) -> Result<Vec<[f64; 6]>, String> {
-    if columns.is_empty() {
-        return Err("cannot synthesize an actuator network with no actuator columns".into());
-    }
-    let mut gram = [[0.0_f64; 6]; 6];
-    for column in columns {
-        for row in 0..6 {
-            for col in 0..6 {
-                gram[row][col] += column[row] * column[col];
-            }
-        }
-    }
-    // A small Tikhonov term keeps a deliberately redundant actuator layout
-    // projectable while preserving the authored geometry as the dominant term.
-    for i in 0..6 {
-        gram[i][i] += ACTUATOR_REGULARIZATION;
-    }
-    let inverse = invert_symmetric_6x6(gram)?;
-    Ok(columns
-        .iter()
-        .map(|column| {
-            let mut row = [0.0; 6];
-            for i in 0..6 {
-                row[i] = (0..6).map(|j| column[j] * inverse[j][i]).sum();
-            }
-            row
-        })
-        .collect())
-}
-
-fn invert_symmetric_6x6(matrix: [[f64; 6]; 6]) -> Result<[[f64; 6]; 6], String> {
-    let mut augmented = [[0.0_f64; 12]; 6];
-    for row in 0..6 {
-        for col in 0..6 {
-            augmented[row][col] = matrix[row][col];
-        }
-        augmented[row][6 + row] = 1.0;
-    }
-    for pivot in 0..6 {
-        let (pivot_row, pivot_value) = (pivot..6)
-            .map(|row| (row, augmented[row][pivot].abs()))
-            .max_by(|left, right| left.1.total_cmp(&right.1))
-            .unwrap();
-        if pivot_value < ACTUATOR_PIVOT_TOLERANCE {
-            return Err(
-                "actuator geometry does not provide a numerically usable wrench basis".into(),
-            );
-        }
-        augmented.swap(pivot, pivot_row);
-        let scale = augmented[pivot][pivot];
-        for value in &mut augmented[pivot] {
-            *value /= scale;
-        }
-        for row in 0..6 {
-            if row == pivot {
-                continue;
-            }
-            let factor = augmented[row][pivot];
-            for col in 0..12 {
-                augmented[row][col] -= factor * augmented[pivot][col];
-            }
-        }
-    }
-    let mut inverse = [[0.0; 6]; 6];
-    for row in 0..6 {
-        inverse[row].copy_from_slice(&augmented[row][6..12]);
-    }
-    Ok(inverse)
-}
-
-fn emit_actuator_wrench_model(
-    inputs: &BTreeSet<String>,
-    outputs: &BTreeSet<String>,
-    actuators: &[WrenchActuator],
-    pseudo_inverse: &[[f64; 6]],
-    model_name: &str,
-) -> String {
-    // This wrapper only instantiates the reusable Modelica allocator and maps
-    // its vector command output to the scalar USD actuator ports. The equations
-    // live in LunCo.Actuation.WrenchAllocator, not in this projection layer.
-    let model_name = modelica_identifier(model_name);
-    let mut source = format!("model {model_name}\n");
-    for name in inputs {
-        source.push_str(&format!("  input Real {};\n", modelica_identifier(name)));
-    }
-    for name in outputs {
-        source.push_str(&format!("  output Real {};\n", modelica_identifier(name)));
-    }
-
-    source.push_str(&format!(
-        "  LunCo.Actuation.WrenchAllocator allocator(actuator_count = {},\n",
-        actuators.len()
-    ));
-    source.push_str("    allocation_pinv = [");
-    for (row, coefficients) in pseudo_inverse.iter().enumerate() {
-        if row > 0 {
-            source.push(';');
-        }
-        for (column, coefficient) in coefficients.iter().enumerate() {
-            if column > 0 {
-                source.push(',');
-            }
-            source.push_str(&format!("{coefficient:.17e}"));
-        }
-    }
-    source.push_str("],\n    lower_command = {");
-    for (index, actuator) in actuators.iter().enumerate() {
-        if index > 0 {
-            source.push(',');
-        }
-        if actuator.signed {
-            source.push_str("-1.0");
-        } else {
-            source.push_str("0.0");
-        }
-    }
-    source.push_str("},\n    upper_command = {");
-    for (index, _actuator) in actuators.iter().enumerate() {
-        if index > 0 {
-            source.push(',');
-        }
-        source.push_str("1.0");
-    }
-    source.push_str("});\n");
-
-    source.push_str("equation\n");
-    for name in [
-        "desired_force_x",
-        "desired_force_y",
-        "desired_force_z",
-        "desired_torque_x",
-        "desired_torque_y",
-        "desired_torque_z",
-    ] {
-        let expression = inputs
-            .contains(name)
-            .then(|| modelica_identifier(name))
-            .unwrap_or_else(|| "0.0".to_string());
-        source.push_str(&format!("  allocator.{name} = {expression};\n"));
-    }
-    for (index, actuator) in actuators.iter().enumerate() {
-        source.push_str(&format!(
-            "  {} = allocator.command[{}];\n",
-            modelica_identifier(&actuator.command_output),
-            index + 1
-        ));
-        if let Some(activity) = &actuator.activity_output {
-            source.push_str(&format!(
-                "  {} = allocator.command[{}];\n",
-                modelica_identifier(activity),
-                index + 1
-            ));
-        }
-    }
-    // Keep generated networks first-class Modelica documents. The wrapper
-    // carries a compact assembly icon and a diagram banner, while every
-    // instantiated component retains its own authored Icon and Placement.
-    // This makes a projected USD network inspectable in the same Modelica
-    // canvas as a hand-authored model instead of rendering as an anonymous
-    // source blob.
-    source.push_str(&format!(
-        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {model_name};\n"
-    ));
-    source
-}
 /// A synthesizer whose EMIT policy is authored, not compiled in.
 ///
 /// The house split, applied to synthesis: **facts in Rust, rules in rhai.** The
@@ -668,10 +254,10 @@ fn emit_actuator_wrench_model(
 /// variant omits parasitic resistance. None of that is a Rust concern, and none
 /// of it should require a rebuild to change.
 ///
-/// The hook receives one argument — [`network_facts`] — and returns either the
-/// Modelica source as a string, or a map with a `source` key (room for a policy
-/// to report its own diagnostics later). Anything else is an authoring error
-/// against the policy, reported as such.
+/// The hook receives one argument — [`network_facts`] — and returns a map with
+/// a required `source` key (room for a policy to report its own diagnostics
+/// later). A single result shape keeps the extension boundary typed and avoids
+/// a compatibility branch between authored emitters.
 ///
 /// Registered through [`register_hook_synthesizer`]; the hook id is by convention
 /// `synth.<name>`, reached exactly like `lint.usd`.
@@ -716,39 +302,33 @@ impl DomainSynthesizer for HookSynthesizer {
                 message: format!("synthesizer `{}` failed: {}", self.name, error.0),
             }]
         })?;
-        let source = match &value {
-            lunco_hooks::HookValue::Str(source) => source.clone(),
-            map @ lunco_hooks::HookValue::Map(_) => {
-                match map.get("source").and_then(|v| v.as_str()) {
-                    Some(source) => source.to_string(),
-                    None => {
-                        return Err(vec![DomainProjectionError {
-                            path: network.root.clone(),
-                            message: format!(
-                                "synthesizer `{}` returned a map with no `source` key",
-                                self.name
-                            ),
-                        }]);
-                    }
-                }
-            }
-            _ => {
-                return Err(vec![DomainProjectionError {
-                    path: network.root.clone(),
-                    message: format!(
-                        "synthesizer `{}` must return the Modelica source as a string (or a map \
-                         with a `source` key)",
-                        self.name
-                    ),
-                }]);
-            }
+        let lunco_hooks::HookValue::Map(map) = &value else {
+            return Err(vec![DomainProjectionError {
+                path: network.root.clone(),
+                message: format!(
+                    "synthesizer `{}` must return a map with a Modelica `source` key",
+                    self.name
+                ),
+            }]);
         };
-        Ok(SynthOutcome::Ready(Synthesized {
-            source,
-            // The BOUNDARY stays Rust's answer even when the body is authored: it
-            // is what the runtime holds the compiled model to
-            // (`UsdModelicaPortContract`), and a policy that mis-stated it would
-            // silence its own contract check.
+        let Some(source) = map
+            .iter()
+            .find_map(|(key, value)| (key == "source").then(|| value.as_str()))
+            .flatten()
+        else {
+            return Err(vec![DomainProjectionError {
+                path: network.root.clone(),
+                message: format!(
+                    "synthesizer `{}` returned a map with no string `source` key",
+                    self.name
+                ),
+            }]);
+        };
+        Ok(SynthOutcome::Ready(SynthesisPlan {
+            source: source.to_string(),
+            // The BOUNDARY and unit partition stay Rust's answer even when the
+            // emitter body is authored: they are the runtime contract and the
+            // topology facts supplied to the policy.
             inputs: network.inputs.clone(),
             outputs: network.outputs.keys().cloned().collect(),
             component_paths: network
@@ -767,6 +347,7 @@ impl DomainSynthesizer for HookSynthesizer {
                     )
                 })
                 .collect(),
+            units: partition_network(&network),
         }))
     }
 }
@@ -891,7 +472,125 @@ pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::
                     .collect(),
             ),
         ),
+        (
+            "units",
+            H::Array(
+                partition_network(network)
+                    .into_iter()
+                    .map(|unit| {
+                        H::map([
+                            ("name", H::str(unit.name)),
+                            (
+                                "components",
+                                H::Array(unit.component_paths.into_iter().map(H::str).collect()),
+                            ),
+                            (
+                                "inputs",
+                                H::Array(unit.inputs.into_iter().map(H::str).collect()),
+                            ),
+                            (
+                                "outputs",
+                                H::Array(unit.outputs.into_iter().map(H::str).collect()),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
     ])
+}
+
+/// Partition a composed network once, at the synthesizer boundary.
+///
+/// Acausal connector edges and internal causal output-to-input edges both keep
+/// components in one composite unit. Boundary connections do not: they are
+/// the public FMI/SSP-style interface of the unit's containing Scope. The
+/// returned order and generated names are stable across runs and independent
+/// of USD collection ordering.
+pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
+    let paths: BTreeSet<String> = network
+        .components
+        .iter()
+        .map(|component| component.path.clone())
+        .collect();
+    let mut graph = ProgramGraph::default();
+    for path in &paths {
+        graph.add_node(path.clone());
+    }
+    for component in &network.components {
+        for target in component.connectors.values().flatten() {
+            if let Some((target_prim, _)) = target.split_once(".connectors:") {
+                if paths.contains(target_prim) {
+                    graph.connect(component.path.clone(), target_prim.to_string());
+                }
+            }
+        }
+        for target in component.inputs.values() {
+            if let Some((target_prim, _)) = target.split_once(".outputs:") {
+                if paths.contains(target_prim) {
+                    graph.connect(component.path.clone(), target_prim.to_string());
+                }
+            }
+        }
+    }
+
+    let component_by_path: BTreeMap<_, _> = network
+        .components
+        .iter()
+        .map(|component| (component.path.as_str(), component))
+        .collect();
+    graph
+        .connected_components()
+        .into_iter()
+        .map(|component_paths| {
+            let members: BTreeSet<_> = component_paths.iter().map(String::as_str).collect();
+            let inputs = network
+                .components
+                .iter()
+                .filter(|component| members.contains(component.path.as_str()))
+                .flat_map(|component| component.inputs.values())
+                .filter_map(|target| network_boundary_for_target(network, target))
+                .collect();
+            let outputs = network
+                .outputs
+                .iter()
+                .filter_map(|(name, target)| {
+                    let (target_prim, _) = target.split_once(".outputs:")?;
+                    members.contains(target_prim).then(|| name.clone())
+                })
+                .collect();
+            let first = component_paths
+                .first()
+                .expect("connected component always has a seed");
+            let relative = first
+                .strip_prefix(&network.root)
+                .unwrap_or(first)
+                .trim_matches('/');
+            let name = format!("Unit_{}", modelica_path_identifier(relative));
+            debug_assert!(component_paths
+                .iter()
+                .all(|path| component_by_path.contains_key(path.as_str())));
+            SynthesisUnit {
+                name,
+                component_paths,
+                inputs,
+                outputs,
+            }
+        })
+        .collect()
+}
+
+fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<String> {
+    let prefix = format!("{}.inputs:", network.root);
+    target
+        .strip_prefix(&prefix)
+        .map(str::to_string)
+        .or_else(|| {
+            network
+                .input_sources
+                .iter()
+                .find_map(|(boundary, source)| (source == target).then(|| boundary.clone()))
+        })
 }
 
 /// The built-in: a `CollectionAPI:components` scope of Modelica program facets
@@ -924,7 +623,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
             .cloned()
             .chain(member_outputs.iter().map(|(_, _, alias)| alias.clone()))
             .collect();
-        Ok(SynthOutcome::Ready(Synthesized {
+        Ok(SynthOutcome::Ready(SynthesisPlan {
             source: emit_modelica(&network, model_name),
             inputs: network.inputs.clone(),
             outputs,
@@ -944,6 +643,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
                     )
                 })
                 .collect(),
+            units: partition_network(&network),
         }))
     }
 }
@@ -1049,10 +749,12 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
     placements
 }
 
-/// Emit one deterministic Modelica wrapper for a composed network scope.
+/// Emit one deterministic composite Modelica wrapper for a composed network
+/// Scope. The wrapper is the runtime participant; its generated child models
+/// are the synthesizer-owned connected units.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
-    let model_name = modelica_identifier(model_name);
-    let mut source = format!("model {model_name}\n");
+    let root_name = modelica_identifier(model_name);
+    let units = partition_network(network);
     let names: BTreeMap<_, _> = network
         .components
         .iter()
@@ -1063,6 +765,23 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             )
         })
         .collect();
+    let unit_instances: BTreeMap<_, _> = units
+        .iter()
+        .map(|unit| {
+            (
+                unit.name.as_str(),
+                modelica_identifier(&format!("instance_{}", unit.name)),
+            )
+        })
+        .collect();
+    let unit_for_component: BTreeMap<_, _> = units
+        .iter()
+        .flat_map(|unit| {
+            unit.component_paths
+                .iter()
+                .map(move |path| (path.as_str(), unit))
+        })
+        .collect();
     let boundary_by_source: BTreeMap<_, _> = network
         .input_sources
         .iter()
@@ -1070,6 +789,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         .collect();
     let placements = network_layout(network);
     let member_outputs = generated_member_outputs(network);
+    let mut source = format!("model {root_name}\n");
 
     for input in &network.inputs {
         source.push_str(&format!("  input Real {};\n", modelica_identifier(input)));
@@ -1082,86 +802,155 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
     }
     for component in &network.components {
         source.push_str(&format!("  // USD: {}\n", component.path));
+    }
+    for unit in &units {
         source.push_str(&format!(
-            "  {} {}",
-            component.model_class,
-            names[component.path.as_str()]
+            "  {} {};\n",
+            unit.name,
+            unit_instances[unit.name.as_str()]
         ));
-        if !component.constants.is_empty() {
-            source.push('(');
-            for (index, (name, value)) in component.constants.iter().enumerate() {
-                if index > 0 {
-                    source.push_str(", ");
-                }
-                source.push_str(name);
-                source.push_str(" = ");
-                source.push_str(&value.to_string());
-            }
-            source.push(')');
+    }
+    source.push_str("equation\n");
+    for unit in &units {
+        let instance = &unit_instances[unit.name.as_str()];
+        for input in &unit.inputs {
+            source.push_str(&format!(
+                "  {instance}.{} = {};\n",
+                modelica_identifier(input),
+                modelica_identifier(input)
+            ));
         }
-        let (x, y) = placements[&component.path];
+        for output in &unit.outputs {
+            source.push_str(&format!(
+                "  {} = {instance}.{};\n",
+                modelica_identifier(output),
+                modelica_identifier(output)
+            ));
+        }
+    }
+    source.push_str(&format!("end {root_name};\n\n"));
+
+    for unit in &units {
+        source.push_str(&format!("model {}\n", unit.name));
+        for input in &unit.inputs {
+            source.push_str(&format!("  input Real {};\n", modelica_identifier(input)));
+        }
+        for output in &unit.outputs {
+            source.push_str(&format!("  output Real {};\n", modelica_identifier(output)));
+        }
         source.push_str(&format!(
-            " annotation(Placement(transformation(origin = {{{x}, {y}}}, extent = {{{{-10, -10}}, {{10, 10}}}})));\n"
+            "  // Synthesis unit members: {}\n",
+            unit.component_paths.join(", ")
         ));
+
+        for path in &unit.component_paths {
+            let component = network
+                .components
+                .iter()
+                .find(|component| component.path == *path)
+                .expect("partitioned component exists in the network");
+            let instance = &names[component.path.as_str()];
+            source.push_str(&format!("  // USD: {}\n", component.path));
+            source.push_str(&format!("  {} {}", component.model_class, instance));
+            if !component.constants.is_empty() {
+                source.push('(');
+                for (index, (name, value)) in component.constants.iter().enumerate() {
+                    if index > 0 {
+                        source.push_str(", ");
+                    }
+                    source.push_str(&modelica_identifier(name));
+                    source.push_str(" = ");
+                    source.push_str(&value.to_string());
+                }
+                source.push(')');
+            }
+            let (x, y) = placements[&component.path];
+            source.push_str(&format!(
+                " annotation(Placement(transformation(origin = {{{x}, {y}}}, extent = {{{{-10, -10}}, {{10, 10}}}})));\n"
+            ));
+        }
+
+        source.push_str("equation\n");
+        let mut emitted_edges = BTreeSet::new();
+        for path in &unit.component_paths {
+            let component = network
+                .components
+                .iter()
+                .find(|component| component.path == *path)
+                .expect("partitioned component exists in the network");
+            let local_instance = &names[component.path.as_str()];
+            for (connector, targets) in &component.connectors {
+                for target in targets {
+                    let Some((target_prim, target_connector)) = target.split_once(".connectors:")
+                    else {
+                        continue;
+                    };
+                    let Some(target_instance) = names.get(target_prim) else {
+                        continue;
+                    };
+                    let left = format!("{local_instance}.{}", modelica_identifier(connector));
+                    let right = format!(
+                        "{target_instance}.{}",
+                        modelica_identifier(target_connector)
+                    );
+                    let edge = if left <= right {
+                        (left, right)
+                    } else {
+                        (right, left)
+                    };
+                    if emitted_edges.insert(edge.clone()) {
+                        source.push_str(&format!("  connect({}, {});\n", edge.0, edge.1));
+                    }
+                }
+            }
+            for (input, target) in &component.inputs {
+                let boundary = network_boundary_for_target(network, target).or_else(|| {
+                    boundary_by_source
+                        .get(target.as_str())
+                        .map(|v| v.to_string())
+                });
+                if let Some(boundary) = boundary {
+                    source.push_str(&format!(
+                        "  {local_instance}.{} = {};\n",
+                        modelica_identifier(input),
+                        modelica_identifier(&boundary)
+                    ));
+                } else if let Some((target_prim, output)) = target.split_once(".outputs:") {
+                    if let Some(target_instance) = names.get(target_prim) {
+                        source.push_str(&format!(
+                            "  {local_instance}.{} = {target_instance}.{};\n",
+                            modelica_identifier(input),
+                            modelica_identifier(output)
+                        ));
+                    }
+                }
+            }
+        }
+        for (output, target) in &network.outputs {
+            let Some((target_prim, member)) = target.split_once(".outputs:") else {
+                continue;
+            };
+            if unit.component_paths.iter().any(|path| path == target_prim) {
+                let instance = &names[target_prim];
+                source.push_str(&format!(
+                    "  {} = {instance}.{};\n",
+                    modelica_identifier(output),
+                    modelica_identifier(member)
+                ));
+            }
+        }
+        source.push_str(&format!("end {};\n\n", unit.name));
     }
 
-    source.push_str("equation\n");
-    let mut emitted_edges = BTreeSet::new();
-    for component in &network.components {
-        let local_instance = &names[component.path.as_str()];
-        for (connector, targets) in &component.connectors {
-            for target in targets {
-                let Some((target_prim, target_connector)) = target.split_once(".connectors:")
-                else {
-                    continue;
-                };
-                let Some(target_instance) = names.get(target_prim) else {
-                    continue;
-                };
-                let left = format!("{local_instance}.{connector}");
-                let right = format!("{target_instance}.{target_connector}");
-                let edge = if left <= right {
-                    (left, right)
-                } else {
-                    (right, left)
-                };
-                if emitted_edges.insert(edge.clone()) {
-                    source.push_str(&format!("  connect({}, {});\n", edge.0, edge.1));
-                }
-            }
-        }
-        for (input, target) in &component.inputs {
-            let boundary_prefix = format!("{}.inputs:", network.root);
-            if let Some(boundary) = target.strip_prefix(&boundary_prefix) {
-                source.push_str(&format!(
-                    "  {local_instance}.{input} = {};\n",
-                    modelica_identifier(boundary)
-                ));
-            } else if let Some(boundary) = boundary_by_source.get(target.as_str()) {
-                // OpenUSD may resolve a connection through the Scope input and
-                // return its ultimate source. Preserve the authored wrapper
-                // boundary instead of bypassing it.
-                source.push_str(&format!(
-                    "  {local_instance}.{input} = {};\n",
-                    modelica_identifier(boundary)
-                ));
-            } else if let Some((target_prim, output)) = target.split_once(".outputs:") {
-                if let Some(target_instance) = names.get(target_prim) {
-                    source.push_str(&format!(
-                        "  {local_instance}.{input} = {target_instance}.{output};\n"
-                    ));
-                }
-            }
-        }
-    }
+    // The lookup is deliberately exercised for every authored boundary output:
+    // a malformed cross-unit output is diagnosed by `validate_network`, not
+    // silently redirected to another unit.
     for (output, target) in &network.outputs {
-        if let Some((target_prim, member)) = target.split_once(".outputs:") {
-            if let Some(instance) = names.get(target_prim) {
-                source.push_str(&format!(
-                    "  {} = {instance}.{member};\n",
-                    modelica_identifier(output)
-                ));
-            }
+        if let Some((target_prim, _)) = target.split_once(".outputs:") {
+            debug_assert!(unit_for_component.contains_key(target_prim));
+            debug_assert!(unit_for_component
+                .get(target_prim)
+                .is_some_and(|unit| unit.outputs.contains(output)));
         }
     }
     for (member, output, alias) in member_outputs {
@@ -1325,7 +1114,6 @@ pub fn project_domain_islands(
                 commands.entity(entity).remove::<UsdModelicaPortContract>();
                 commands.entity(entity).try_insert((
                     ModelicaModel {
-                        model_path: PathBuf::from(format!("generated://{model_name}.mo")),
                         model_name: model_name.clone(),
                         session_id: installed_model.map_or(1, |model| model.session_id + 1),
                         is_stepping: false,
@@ -1337,12 +1125,14 @@ pub fn project_domain_islands(
                     DomainProjectionState { fingerprint },
                     GeneratedModelicaSource {
                         network_root: prim.path.clone(),
+                        doc_uri: format!("generated://{model_name}.mo"),
                         source: String::new(),
                         component_paths: Vec::new(),
                         members: Vec::new(),
                         member_groups: Vec::new(),
                         output_groups: Vec::new(),
                         member_output_aliases: Vec::new(),
+                        units: Vec::new(),
                     },
                 ));
                 continue;
@@ -1385,7 +1175,6 @@ pub fn project_domain_islands(
         let session_id = installed_model.map_or(1, |model| model.session_id + 1);
         let doc_uri = format!("generated://{model_name}.mo");
         let mut model = ModelicaModel {
-            model_path: PathBuf::from(&doc_uri),
             model_name: compiled_name.clone(),
             parameters: interface.parameters,
             inputs: interface.inputs,
@@ -1400,17 +1189,15 @@ pub fn project_domain_islands(
             session_id,
             model_name: compiled_name,
             source,
-            doc_uri,
+            doc_uri: doc_uri.clone(),
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
             stream: None,
             // A projected domain island is a NETWORK of components — a battery
             // bus, a thermal loop — not a program driving a client-predicted
-            // body. It is `NotPredictable` by construction, so it takes the
-            // replicated class's adaptive implicit solver. Handing it the
-            // realtime class's explicit stepper is what silently killed every
-            // solar rover: the island compiled, then failed every step with
-            // `algebraic refresh row 2 cannot be solved` and published nothing.
+            // body. It therefore carries no prediction promise and resolves
+            // through the authoritative-live capability profile. The worker,
+            // not this projector, owns backend selection and DAE lowering.
             realtime_safe: false,
         });
         info!(
@@ -1436,12 +1223,14 @@ pub fn project_domain_islands(
         );
         let generated_source = GeneratedModelicaSource {
             network_root: prim.path.clone(),
+            doc_uri: doc_uri.clone(),
             source: source_for_diagnostics,
             component_paths: synthesized.component_paths,
             members: synthesized.members,
             member_groups: Vec::new(),
             output_groups: wrapper_output_groups(&view, &prim.path),
             member_output_aliases,
+            units: synthesized.units,
         };
         let member_groups = generated_source
             .members
@@ -1547,7 +1336,7 @@ pub fn publish_generated_sources(
 /// `GeneratedModelicaSource` — read back the exact Modelica text a projected
 /// network was compiled from.
 ///
-/// `curl … {"command":"GeneratedModelicaSource","params":{}}` lists every
+/// `curl … {"type":"ExecuteCommand","command":"GeneratedModelicaSource","params":{}}` lists every
 /// projected network; `{"network_root":"/Rover/Electrical"}` returns one. This
 /// is the read path for the `generated://…` documents the compiler reports
 /// errors against, and the only way to see what USD actually emitted.
@@ -1574,9 +1363,7 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                 serde_json::json!({
                     "network_root": generated.network_root,
                     "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
-                    "doc_uri": model
-                        .map(|model| model.model_path.display().to_string())
-                        .unwrap_or_default(),
+                    "doc_uri": generated.doc_uri,
                     "error": model.and_then(|model| model.last_error.clone()),
                     "components": generated.component_paths,
                     "members": generated
@@ -1588,6 +1375,16 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                         .collect::<Vec<_>>(),
                     "member_groups": generated.member_groups,
                     "output_groups": generated.output_groups,
+                    "units": generated
+                        .units
+                        .iter()
+                        .map(|unit| serde_json::json!({
+                            "name": unit.name,
+                            "components": unit.component_paths,
+                            "inputs": unit.inputs,
+                            "outputs": unit.outputs,
+                        }))
+                        .collect::<Vec<_>>(),
                     "source": generated.source,
                 })
             })
@@ -1663,11 +1460,12 @@ pub fn read_network(
             );
             continue;
         }
-        // The file's own `within` + class is authoritative. A member with no
-        // verdict yet leaves the whole network pending; a failed source becomes
-        // an explicit authoring error rather than a guessed class.
-        let derived = match modelica_member_class(view, &path) {
-            Ok(class) => class,
+        // The source file's own `within` + class is the answer, once
+        // `resolve_member_classes` has read it. A member with no verdict yet
+        // leaves the whole network pending until the source declaration is
+        // available.
+        let source_ref = match modelica_source_ref(view, &path) {
+            Ok(source_ref) => source_ref,
             Err(issue) => {
                 extraction_errors.push(DomainProjectionError {
                     path: issue.property,
@@ -1676,24 +1474,21 @@ pub fn read_network(
                 continue;
             }
         };
-        let source_asset = view.asset(&path, "info:sourceAsset").unwrap_or_default();
-        let Some(model_class) = classes.resolve(&source_asset) else {
-            if let Some(reason) = classes.failure(&source_asset) {
+        let model_class = match classes.resolve(&source_ref.asset) {
+            Ok(Some(class)) => class,
+            Ok(None) => {
+                pending_sources = true;
+                continue;
+            }
+            Err(message) => {
                 extraction_errors.push(DomainProjectionError {
                     path: format!("{path}.info:sourceAsset"),
-                    message: format!("Modelica source resolution failed: {reason}"),
+                    message,
                 });
-            } else {
-                pending_sources = true;
+                continue;
             }
-            continue;
         };
-        if model_class != derived {
-            debug!(
-                "[domain-projection] {path} instantiates `{model_class}` as declared by \
-                 `{source_asset}` (its path implies `{derived}`)"
-            );
-        }
+        let source_asset = source_ref.asset;
         let attrs = view.attr_names(&path);
         let mut constants = BTreeMap::new();
         let mut connectors = BTreeMap::new();
@@ -2240,16 +2035,17 @@ fn generated_member_output_aliases(
 pub enum MemberClass {
     /// Read from the file: `within` + the class it declares.
     Declared(String),
-    /// The file could not be read or parsed. A failed source is an authoring
-    /// error; its path is never used as a substitute for the declared class.
-    Failed(String),
+    /// The source settled without a usable Modelica class. This is a terminal
+    /// authoring error; the projector does not substitute another class.
+    Invalid(String),
 }
 
 /// How long a member source may stay unresolved before the projector reports a
-/// source-resolution error instead of compiling an invented class name.
+/// source-resolution error.
 ///
-/// A source that never becomes available is an authoring error, not permission
-/// to compile a guessed class.
+/// Same reasoning as `cosim::SCENE_LOAD_MAX_SECS`: on the web a fetch can 404
+/// without ever reporting a failure, and a projection that waits forever is
+/// strictly worse than one that reports the source failure explicitly.
 const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 
 /// The class each member source declares — the ONE authority on what a generated
@@ -2282,6 +2078,14 @@ impl MemberClasses {
             .insert(asset.into(), MemberClass::Declared(class.into()));
     }
 
+    /// State a terminal source-resolution error. Runtime code uses the same
+    /// state after an asset load fails or its declaration cannot be parsed;
+    /// tests and offline tools can seed that authoritative verdict directly.
+    pub fn reject(&mut self, asset: impl Into<String>, message: impl Into<String>) {
+        self.known
+            .insert(asset.into(), MemberClass::Invalid(message.into()));
+    }
+
     pub fn variable_metadata(
         &self,
         asset: &str,
@@ -2289,26 +2093,14 @@ impl MemberClasses {
         self.metadata.get(asset)
     }
 
-    /// The class to instantiate for `asset`. `None` means the source has not
-    /// resolved or has failed; the caller must wait or report the failure.
-    pub fn resolve(&self, asset: &str) -> Option<String> {
+    /// Resolve the class to instantiate for `asset`. `Ok(None)` means the source
+    /// is still loading; `Err` is a terminal source error.
+    pub fn resolve(&self, asset: &str) -> Result<Option<String>, String> {
         match self.known.get(asset) {
-            Some(MemberClass::Declared(class)) => Some(class.clone()),
-            Some(MemberClass::Failed(_)) | None => None,
+            Some(MemberClass::Declared(class)) => Ok(Some(class.clone())),
+            Some(MemberClass::Invalid(message)) => Err(message.clone()),
+            None => Ok(None),
         }
-    }
-
-    /// Explain a settled source failure to the projection reader.
-    pub fn failure(&self, asset: &str) -> Option<&str> {
-        match self.known.get(asset) {
-            Some(MemberClass::Failed(reason)) => Some(reason.as_str()),
-            _ => None,
-        }
-    }
-
-    /// Has a verdict for `asset` (either answer)?
-    pub fn is_known(&self, asset: &str) -> bool {
-        self.known.contains_key(asset)
     }
 }
 
@@ -2318,20 +2110,19 @@ impl MemberClasses {
 #[derive(Resource, Default)]
 pub struct ProjectionDirty(pub bool);
 
-/// Resolve every member source's DECLARED class, so the emitter never has to
-/// guess one.
+/// Resolve every member source's DECLARED class before synthesis.
 ///
 /// Scans the stage for component collections, loads each member's
 /// `info:sourceAsset` once, and reads `within` + the class the file declares.
 /// Until a member has a verdict its network does not project at all
-/// ([`SynthOutcome::Pending`]) — compiling a path-guessed class is what produced
-/// "class not found" against generated source, naming neither the prim nor the
-/// file.
+/// ([`SynthOutcome::Pending`]) — synthesizing before the source settles would
+/// produce a generated model with an unknown member class and an unattributed
+/// compiler failure.
 ///
 /// A source that fails to load, cannot be parsed, or simply never resolves
-/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Failed`]. The
-/// network reports the source asset as the authoring error; no path-derived
-/// class is invented.
+/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Invalid`]. The
+/// projection reports that terminal source error and does not compile an
+/// incomplete model.
 pub fn resolve_member_classes(
     prims: Query<&UsdPrimPath>,
     added: Query<(), Added<UsdPrimPath>>,
@@ -2428,12 +2219,17 @@ pub fn resolve_member_classes(
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
             None => {
-                let reason = format!(
-                    "could not read a declared Modelica class (load failed, source was \
-                     unparseable, or it did not resolve within {CLASS_RESOLVE_MAX_SECS:.0}s)"
+                warn!(
+                    "[domain-projection] could not read a declared Modelica class from `{asset}` (load \
+                     failed, unparseable, or not resolved within {CLASS_RESOLVE_MAX_SECS:.0}s) — \
+                     the network projection will report this source error."
                 );
-                warn!("[domain-projection] `{asset}`: {reason}");
-                classes.known.insert(asset, MemberClass::Failed(reason));
+                classes.known.insert(
+                    asset,
+                    MemberClass::Invalid(
+                        "the Modelica source did not expose a declared class".into(),
+                    ),
+                );
             }
         }
         // The projection that was waiting on this member has no other reason to
@@ -2501,10 +2297,57 @@ mod tests {
         let source = emit_modelica(&network, "Propulsion");
         assert!(source.contains("output Real __member_RcsJet_light_intensity;"));
         assert!(source.contains("output Real __member_RcsJet_light_radius;"));
-        assert!(source.contains(
-            "__member_RcsJet_light_intensity = RcsJet.light_intensity;"
-        ));
+        assert!(source.contains("__member_RcsJet_light_intensity = RcsJet.light_intensity;"));
         assert!(source.contains("__member_RcsJet_light_radius = RcsJet.light_radius;"));
+    }
+
+    #[test]
+    fn synthesizer_partitions_disconnected_graph_into_composite_units() {
+        let mut left = component("/Thermal/Left/Mass", None);
+        left.inputs
+            .insert("heat_w".into(), "/Thermal.inputs:left_heat".into());
+        let mut right = component("/Thermal/Right/Mass", None);
+        right
+            .inputs
+            .insert("heat_w".into(), "/Thermal.inputs:right_heat".into());
+        let network = DomainNetwork {
+            root: "/Thermal".into(),
+            components: vec![right, left],
+            inputs: BTreeSet::from(["left_heat".into(), "right_heat".into()]),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::from([
+                (
+                    "left_temp".into(),
+                    "/Thermal/Left/Mass.outputs:temp_k".into(),
+                ),
+                (
+                    "right_temp".into(),
+                    "/Thermal/Right/Mass.outputs:temp_k".into(),
+                ),
+            ]),
+            pending_sources: false,
+        };
+
+        let units = partition_network(&network);
+        assert_eq!(units.len(), 2);
+        assert_eq!(
+            units
+                .iter()
+                .map(|unit| unit.component_paths.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                vec!["/Thermal/Left/Mass".to_string()],
+                vec!["/Thermal/Right/Mass".to_string()],
+            ]
+        );
+        assert_eq!(units[0].inputs, BTreeSet::from(["left_heat".into()]));
+        assert_eq!(units[1].outputs, BTreeSet::from(["right_temp".into()]));
+
+        let source = emit_modelica(&network, "Thermal");
+        assert!(source.contains("model Thermal;".trim_end_matches(';')));
+        assert!(source.matches("model Unit_").count() == 2);
+        assert!(source.contains("instance_Unit_Left_x2f_Mass.left_heat = left_heat;"));
+        assert!(source.contains("left_temp = instance_Unit_Left_x2f_Mass.left_temp;"));
     }
 
     #[test]
@@ -2535,7 +2378,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_external_connector_targets_without_rejecting_independent_islands() {
+    fn rejects_external_connector_targets_and_keeps_unit_partition_deterministic() {
         let mut external = component("/Electrical/Load/Model", None);
         external
             .connectors
@@ -2552,9 +2395,7 @@ mod tests {
         assert!(errors
             .iter()
             .any(|error| error.message.contains("outside collection")));
-        assert!(errors
-            .iter()
-            .all(|error| !error.message.contains("multiple disconnected")));
+        assert_eq!(partition_network(&network).len(), 2);
     }
 
     #[test]
@@ -2659,12 +2500,14 @@ mod tests {
             .spawn((
                 GeneratedModelicaSource {
                     network_root: "/Electrical".into(),
+                    doc_uri: "generated://Electrical.mo".into(),
                     source: "model Electrical end Electrical;".into(),
                     component_paths: vec!["/Battery".into()],
                     members: Vec::new(),
                     member_groups: Vec::new(),
                     output_groups: Vec::new(),
                     member_output_aliases: Vec::new(),
+                    units: Vec::new(),
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
@@ -2687,6 +2530,7 @@ mod tests {
     fn generated_variable_maps_back_to_authored_component_path() {
         let source = GeneratedModelicaSource {
             network_root: "/Rover/Electrical".into(),
+            doc_uri: "generated://Rover_Electrical.mo".into(),
             source: String::new(),
             component_paths: vec!["/Rover/Electrical/Battery".into()],
             members: vec![(
@@ -2697,6 +2541,7 @@ mod tests {
             member_groups: Vec::new(),
             output_groups: Vec::new(),
             member_output_aliases: Vec::new(),
+            units: Vec::new(),
         };
         assert_eq!(
             canonical_generated_signal(&source, "Battery.soc_out"),

@@ -6,7 +6,7 @@
 # Command Reference
 
 Every verb in LunCoSim is a typed `#[Command]` — an event dispatched through one
-bus, reachable from the **HTTP API** (`POST /api/commands`, `{"command":"…","params":{…}}`),
+bus, reachable from the **HTTP API** (`POST /api/commands`, `{"type":"ExecuteCommand","command":"…","params":{…}}`),
 **MCP**, and **rhai** (`cmd("CommandName", #{ … })`). This page is generated from the
 **runtime schema** the app itself advertises, so every command below is one you can
 actually call, with the fields the deserializer actually accepts. See the
@@ -217,8 +217,8 @@ actually call, with the fields the deserializer actually accepts. See the
  optionally bind it to a target entity — all live, no restart.
 
  ```json
- {"command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
- {"command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
+ {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
+ {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
  ```
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
@@ -257,7 +257,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Entities currently using it keep their in-memory material for the session.
 
  ```json
- {"command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+ {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
  ```
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
@@ -301,7 +301,7 @@ actually call, with the fields the deserializer actually accepts. See the
  must be prop-fillable per the engine-param registry.
 
  ```json
- {"command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+ {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
  ```
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
@@ -410,11 +410,11 @@ actually call, with the fields the deserializer actually accepts. See the
  just add a `match` arm. Drive it from curl after a screenshot to iterate:
 
  ```jsonc
- {"command":"SetObjectProperty",
+ {"type":"ExecuteCommand","command":"SetObjectProperty",
   "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
- {"command":"SetObjectProperty",
+ {"type":"ExecuteCommand","command":"SetObjectProperty",
   "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
- {"command":"SetObjectProperty",
+ {"type":"ExecuteCommand","command":"SetObjectProperty",
   "params":{"entity_id":42,"property":"cell_a","value":"0.1,0.8,0.2"}}
  ```
 
@@ -447,7 +447,7 @@ the generic authoring command used by data-driven Rhai tools; it does not create
 a LunCo-specific geometry schema.
 
 ```jsonc
-{"command":"SetUsdAttribute",
+{"type":"ExecuteCommand","command":"SetUsdAttribute",
  "params":{"path":"/World/Guide","name":"points",
            "type_name":"point3f[]","value":"[(0,0,0),(1,0,0)]"}}
 ```
@@ -667,7 +667,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Reload (or load) a USD scene at runtime via the API.
 
- `curl … {"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
+ `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
 
  - `path`: USD asset path relative to the asset root.
  - `root_prim`: optional override for the SDF path of the prim to
@@ -1458,7 +1458,7 @@ type and literal, journals the edit, and re-composes the live stage.
  `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
  `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
  the `SessionRegistry` currently records an owner (⇒ `piloted = 1`). Logs one
- `[inspect]` line per vessel at INFO. API-driven: `{"command":"InspectVessels"}`.
+ `[inspect]` line per vessel at INFO. API-driven: `{"type":"ExecuteCommand","command":"InspectVessels"}`.
 
 - *defined in:* `crates/lunco-avatar/src/lib.rs`
 - *fields:* none — call with `InspectVessels` (no params)
@@ -2210,7 +2210,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Request the owning domain persist the document **to a new location**.
 
- `path` semantics mirror [`OpenFile`](lunco_workbench::file_ops::OpenFile):
+ `path` semantics mirror [`OpenFile`](lunco_doc_bevy::OpenFile):
 
  - **Empty** → the observer fires
    [`lunco_workbench::picker::PickHandle`](../lunco_workbench/picker/struct.PickHandle.html)
@@ -2400,7 +2400,7 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `ControlAnimation`
 
  Drive the [`AnimationPreview`] transport. Each field is optional so one verb
- covers run / pause / scroll(seek) / rate / loop — `{"command":"ControlAnimation",
+ covers run / pause / scroll(seek) / rate / loop — `{"type":"ExecuteCommand","command":"ControlAnimation",
  "params":{"playing":false}}` pauses, `{"seek_secs":3.0}` scrubs to 3 s,
  `{"rate":2.0}` doubles speed, `{"looping":true}` loops. Headless-safe: it only
  writes the preview domain's [`Playback`], never any UI or render resource.
@@ -2435,11 +2435,10 @@ type and literal, journals the edit, and re-composes the live stage.
    so a sky left running at 100 000× stops the instant the scene reloads);
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
- * **transport** → Playing at 1×.
-
- It does NOT touch `MissionClock` — the new scene authors its own epoch via
- `SetMissionEpoch` on load (`double lunco:time:epochJd`), which is the right owner
- of "what date is it", and re-anchoring here would fight that.
+ * **transport** → Playing at 1×;
+ * **mission calendar** → the authored mission origin, with any kinematic warp
+   preview cleared. The mission origin is preserved so scene loading can apply
+   its `SetMissionEpoch` afterward.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 - *fields:* none — call with `ResetTime` (no params)
@@ -2447,7 +2446,7 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `SetClock`
 
  Re-point, rate-scale or seek one clock —
- `{"command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
+ `{"type":"ExecuteCommand","command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
  runs the sky 1000× **while the simulation stays paused**.
 
  One verb covers every case, because in an affine tree they are the same case:
@@ -2472,7 +2471,7 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `SetMissionEpoch`
 
  Re-anchor the world clock at an absolute epoch (Julian Date, TDB) —
- `{"command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
+ `{"type":"ExecuteCommand","command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
  the mission origin and the calendar anchor at the CURRENT tick, so the sim
  jumps to that date without a tick discontinuity. This is how a scene picks
  its date: a site-anchored USD stage authors `double lunco:time:epochJd` on
@@ -2489,7 +2488,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Drive the LIVE-WORLD transport (physics/tick clock), distinct from
  [`ControlAnimation`] which drives the keyframe preview. Each field optional so
- one verb covers pause / play / rate — `{"command":"SetTimeTransport",
+ one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
  "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
  `{"rate":4.0}` runs it 4× realtime. This is THE pause command: exposed on the
  API/MCP and wrapped by the rhai prelude verbs `pause()`/`play()`/`set_rate()`,
@@ -2553,7 +2552,7 @@ type and literal, journals the edit, and re-composes the live stage.
  keep their current value. So a curl that just lowers the sun looks like:
 
  ```jsonc
- {"type":"SetEnvironmentLight","sun_pitch":-0.15}
+ {"type":"ExecuteCommand","command":"SetEnvironmentLight","params":{"sun_pitch":-0.15}}
  ```
 
  - **`sun_yaw` / `sun_pitch`** — direction of the single `DirectionalLight`

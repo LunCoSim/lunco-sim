@@ -586,35 +586,6 @@ mod tests {
         assert_eq!(mats.len(), 2, "a bound texture is part of the sharing key");
     }
 
-    /// A USD material can be projected as plain PBR before its WGSL binding is
-    /// resolved. Taking the shader path must replace the concrete material too,
-    /// not merely the render-free intent, or Bevy draws the mesh twice.
-    #[test]
-    fn shader_look_replaces_a_preexisting_standard_material() {
-        let mut app = app();
-        app.init_asset::<StandardMaterial>();
-        let standard = app
-            .world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
-            .add(StandardMaterial::default());
-        let e = app
-            .world_mut()
-            .spawn((
-                MeshMaterial3d(standard),
-                ShaderLook::new("shaders/wheel.wgsl"),
-            ))
-            .id();
-
-        app.update();
-
-        let entity = app.world().entity(e);
-        assert!(entity.contains::<MeshMaterial3d<ShaderMaterial>>());
-        assert!(
-            !entity.contains::<MeshMaterial3d<StandardMaterial>>(),
-            "the shader material must replace, not overlay, the PBR material"
-        );
-    }
-
     #[test]
     fn fast_mode_falls_back_without_creating_a_shader_material() {
         let mut app = App::new();
@@ -646,5 +617,34 @@ mod tests {
             .world()
             .entity(e)
             .contains::<MeshMaterial3d<ShaderMaterial>>());
+    }
+
+    /// A USD material can be projected as plain PBR before its WGSL binding is
+    /// resolved. Taking the shader path must replace the concrete material too,
+    /// not merely the render-free intent, or Bevy draws the mesh twice.
+    #[test]
+    fn shader_look_replaces_a_preexisting_standard_material() {
+        let mut app = app();
+        app.init_asset::<StandardMaterial>();
+        let standard = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let e = app
+            .world_mut()
+            .spawn((
+                MeshMaterial3d(standard),
+                ShaderLook::new("shaders/wheel.wgsl"),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(e);
+        assert!(entity.contains::<MeshMaterial3d<ShaderMaterial>>());
+        assert!(
+            !entity.contains::<MeshMaterial3d<StandardMaterial>>(),
+            "the shader material must replace, not overlay, the PBR material"
+        );
     }
 }

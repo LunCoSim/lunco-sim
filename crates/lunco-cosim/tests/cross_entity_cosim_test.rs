@@ -21,6 +21,8 @@
 //! runtime. The USD reader path is exercised live by the
 //! luncosim scene's CosimChain demo.
 
+#![cfg(feature = "python")]
+
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
@@ -28,10 +30,7 @@ use std::time::Duration;
 use avian3d::prelude::*;
 use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
-use lunco_modelica::{
-    extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
-    ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
-};
+use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaCorePlugin, ModelicaModel};
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
     LunCoScriptingPlugin, ScriptRegistry,
@@ -95,7 +94,6 @@ fn sync_script_inputs(mut q: Query<(&SimComponent, &mut ScriptedModel)>) {
     }
 }
 
-#[cfg(feature = "python")]
 #[test]
 fn cosim_chain_modelica_python_avian_propagates_data() {
     // Enable info-level logs so the test surfaces Modelica worker
@@ -177,17 +175,18 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     // ── Wire engines to nodes ───────────────────────────────────────
     // Modelica oscillator: insert ModelicaModel + dispatch Compile.
     {
-        let model_name = extract_model_name(oscillator_mo()).unwrap_or_else(|| "Oscillator".into());
-        let parameters = extract_parameters(oscillator_mo());
-        let inputs = extract_inputs_with_defaults(oscillator_mo())
-            .into_iter()
-            .collect();
+        let interface =
+            lunco_modelica::ast_extract::parse_model_interface(oscillator_mo(), "oscillator.mo");
+        let model_name = interface.model_name.unwrap_or_else(|| "Oscillator".into());
+        let parameters = interface.parameters;
+        let inputs = interface.inputs;
         app.world_mut()
             .entity_mut(oscillator)
             .insert(ModelicaModel {
                 model_name: model_name.clone(),
                 parameters,
                 inputs,
+                resume_after_compile: true,
                 ..default()
             });
         let tx = app.world().resource::<ModelicaChannels>().tx.clone();
@@ -200,7 +199,8 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
             stream: None,
-            // Worker-stepped, not client-predicted: solver choice comes off the DAE.
+            // Worker-stepped, not client-predicted: authoritative live
+            // co-simulation does not claim the prediction contract.
             realtime_safe: false,
         });
     }
@@ -209,19 +209,15 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     {
         let world = app.world_mut();
         let doc_id = DocumentId::new(amplifier.index().index() as u64 + 10_000);
-        world.resource_mut::<ScriptRegistry>().documents.insert(
-            doc_id,
-            DocumentHost::new(ScriptDocument {
-                id: doc_id.raw(),
-                generation: 0,
-                language: ScriptLanguage::Python,
-                source: amplifier_py().to_string(),
-                origin: DocumentOrigin::untitled("Amplifier"),
-                inputs: vec!["signal".to_string()],
-                outputs: vec!["scaled".to_string()],
-                params: String::new(),
-            }),
-        );
+        let mut amplifier_document =
+            ScriptDocument::new(doc_id.raw(), ScriptLanguage::Python, amplifier_py());
+        amplifier_document.origin = DocumentOrigin::untitled("Amplifier");
+        amplifier_document.inputs = vec!["signal".to_string()];
+        amplifier_document.outputs = vec!["scaled".to_string()];
+        world
+            .resource_mut::<ScriptRegistry>()
+            .documents
+            .insert(doc_id, DocumentHost::new(amplifier_document));
         world.entity_mut(amplifier).insert((
             ScriptedModel {
                 document_id: Some(doc_id.raw()),
@@ -232,6 +228,8 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             },
             SimComponent {
                 model_name: "Amplifier".into(),
+                inputs: [("signal".to_string(), 0.0)].into_iter().collect(),
+                outputs: [("scaled".to_string(), 0.0)].into_iter().collect(),
                 status: SimStatus::Running,
                 ..default()
             },

@@ -247,6 +247,15 @@ pub struct PanelRect {
     pub size: UVec2,
 }
 
+/// Measurement emitted by the transparent viewport panel after it has read
+/// its egui geometry. The panel cannot mutate either view-model directly;
+/// this typed event keeps the write on the workbench side of the boundary.
+#[derive(Event, Debug, Clone, Copy)]
+struct ViewportPanelMeasured {
+    rect: PanelRect,
+    over_scene: bool,
+}
+
 impl PanelRects {
     /// Drop every recorded rect. Called at the top of each egui pass
     /// (`render_workbench`), before any panel renders; the panels in the active
@@ -260,8 +269,7 @@ impl PanelRects {
 
     /// Compute a [`PanelRect`] (physical pixels) from an egui `Ui`,
     /// without touching the world. Lets a panel measure its rect during
-    /// the read-only paint and stash it via [`record`](Self::record)
-    /// inside a `PanelCtx::defer` closure (no `&mut World` in render).
+    /// the read-only paint and emit a typed measurement intent.
     ///
     /// Uses **floor on the origin** and **ceil on the far edge** so the
     /// physical-pixel rect fully covers the panel even at non-integer DPRs
@@ -332,7 +340,7 @@ impl ScenePickGate {
     }
 
     /// Record that the pointer is inside `target`'s scene leaf this frame. Called
-    /// from each scene-hosting panel's render (via `PanelCtx::defer`). Leaves are
+    /// from each scene-hosting panel's typed measurement observer. Leaves are
     /// disjoint, so at most one call per frame passes `true`.
     pub fn record_scene_leaf(&mut self, target: SceneTarget, over: bool) {
         if over {
@@ -607,20 +615,13 @@ impl Panel for ViewportPanel {
         // by bevy_picking (egui occlusion via bevy_egui's picking backend), so
         // there's no pointer gate to compute here anymore.
         //
-        // Measure the rect now (needs `ui`), then write it into `PanelRects`
-        // after the paint via `defer` — render has no `&mut World`.
+        // Measure the rect now (needs `ui`), then emit a typed measurement
+        // intent — render has no mutable world access.
         let rect = PanelRects::panel_rect_from_ui(ui);
         // Authoritative scene-vs-chrome signal — egui's own occlusion-aware hit
         // test, measured now (needs `ui`), folded after the paint.
         let over_scene = ScenePickGate::scene_pointer_from_ui(ui);
-        ctx.defer(move |world| {
-            if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
-                rects.record(VIEWPORT_PANEL_ID, rect);
-            }
-            if let Some(mut gate) = world.get_resource_mut::<ScenePickGate>() {
-                gate.record_scene_leaf(SceneTarget::MainViewport, over_scene);
-            }
-        });
+        ctx.trigger(ViewportPanelMeasured { rect, over_scene });
         // Reserve the panel's space so egui_dock's layout accounts for
         // it; no widgets are drawn — the 3D camera paints here.
         ui.allocate_space(ui.available_size());
@@ -960,8 +961,8 @@ pub fn auto_tag_workbench_3d_cameras(
 /// Sentinel — runs once a couple of seconds after startup and verifies
 /// there's exactly one `PrimaryEguiContext` in the world.
 ///
-/// The grace period covers binaries that prefer to spawn the host
-/// themselves (legacy paths) — they'll have done so by the time this
+/// The grace period covers binaries that spawn the host asynchronously —
+/// they'll have done so by the time this
 /// fires. After that, anything other than 1 is a bug worth panicking
 /// over in debug builds.
 pub(crate) fn check_host_invariant_once(
@@ -1149,12 +1150,22 @@ pub(crate) fn track_egui_focus(
 /// invariant sentinels.
 pub struct WorkbenchViewportPlugin;
 
+fn apply_viewport_panel_measurement(
+    trigger: On<ViewportPanelMeasured>,
+    mut rects: ResMut<PanelRects>,
+    mut gate: ResMut<ScenePickGate>,
+) {
+    rects.record(VIEWPORT_PANEL_ID, trigger.rect);
+    gate.record_scene_leaf(SceneTarget::MainViewport, trigger.over_scene);
+}
+
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanelRects>()
             .init_resource::<ScenePickGate>()
             .init_resource::<ViewportPlaceholder>()
             .init_resource::<lunco_core::EguiFocus>()
+            .add_observer(apply_viewport_panel_measurement)
             .add_systems(Startup, ensure_egui_host)
             // Clear the pick gate's per-frame inputs. `First` — NOT the egui pass —
             // because this must happen even on frames where the egui pass is

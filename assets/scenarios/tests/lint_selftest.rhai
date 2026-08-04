@@ -23,7 +23,7 @@
 // NOTHING LINTS ON LOAD — the linter is a verb. This scenario calls it exactly as
 // a user would:
 //
-//     cmd("RunLint", #{})            // or: {"command":"RunLint"} over HTTP/MCP
+//     cmd("RunLint", #{})            // or the tagged ExecuteCommand envelope over HTTP/MCP
 //     query("LintReport")
 //
 // and a scenario wanting a LIVE linter just calls the same pair on a cadence.
@@ -249,12 +249,10 @@ fn on_tick(me) {
     }
 
     // ONE NODE IS THE PREMISE, and `/LintSelftest/DisconnectedElectrical` is the
-    // fixture that proves the rule knows it: two batteries in one scope, but on two
-    // DISCONNECTED islands, so each pins its own node and neither is
-    // over-determined. Counting per scope instead of per node flags it — MEASURED,
-    // before `island_count` gated the rule. The split itself is already an error
-    // from `disconnected-component-network`; saying it twice, wrongly, is worse
-    // than saying it once.
+    // fixture that proves the synthesizer units are independent: two batteries in
+    // one Scope, on two disconnected units, so each pins its own node and neither
+    // is over-determined. The linter checks the electrical invariant per unit;
+    // disconnected units are a supported composite-model shape.
     f.push(t_true(!mentions(over, "/LintSelftest/DisconnectedElectrical"),
         "electrical-island-over-determined named /LintSelftest/DisconnectedElectrical, " +
         "whose two batteries sit on two disconnected nodes — one source each, which " +

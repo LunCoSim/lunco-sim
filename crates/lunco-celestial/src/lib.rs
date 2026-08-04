@@ -50,9 +50,6 @@ mod trajectories;
 pub mod transform;
 pub mod wifi;
 
-/// Re-export terrain types from lunco-terrain for backward compatibility.
-pub use lunco_terrain_globe::*;
-
 pub mod commands;
 /// UI panels for celestial time control and body browser.
 #[cfg(feature = "ui")]

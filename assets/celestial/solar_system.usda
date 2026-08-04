@@ -48,12 +48,6 @@ def Xform "SolarSystem" (
     )
     {
         uniform int lunco:body = 399
-        # Authored body imagery: the shipped celestial build downloads/processes
-        # this standard dataset and the ordinary lunco:// resolver finds it in
-        # the packed cache or the shared asset cache. Keeping the map on the
-        # body makes a cold registry scan unable to leave Earth untextured.
-        asset lunco:body:albedoMap = @lunco://textures/earth.png@
-
         # Earthshine: the light Earth throws back onto whatever is looking at it.
         # It hangs UNDER the body it comes from, so the namespace states the
         # relationship and no attribute has to. Declaring Earth therefore brings

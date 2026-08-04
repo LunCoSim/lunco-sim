@@ -6,11 +6,8 @@
 
 ## What lunco-ui Provides
 
-> **Note:** the external `bevy_workbench` crate was replaced by the in-house
-> `lunco-workbench` (path dep). The panel trait is now `Panel` (with `PanelCtx` /
-> `PanelId`), *not* `WorkbenchPanel`. Some code snippets below still show the old
-> trait name and are illustrative — check `lunco-workbench/src/panel.rs` for the
-> current API.
+> The workbench panel boundary is the in-house `lunco-workbench` `Panel` trait
+> with `PanelCtx` and `PanelId`; domain UI code should use that current API.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -286,7 +283,7 @@ The LOD system runs in `PostUpdate`, after transforms propagate. It hides widget
 
 ## Command Tracking
 
-Result-returning commands return `Result<Ack, String>` (`Ok` for success/ACK, `Err` for failure/NACK), pollable by ID via `QueryCommandResult` for transport-dispatched calls (such as over the HTTP API or networked sessions).
+Result-returning commands return `Result<Ack, String>` (`Ok` for success/ACK, `Err` for failure/NACK). Deferred transport commands answer on the original request; the internal command-outcome store is not an API endpoint.
 
 In-process local UI triggers (`ctx.trigger` or `commands.trigger`) execute synchronously or trigger local state changes directly. The UI/AI can monitor outcome states by observing the respective domain state or listening to lifecycle events.
 
@@ -299,7 +296,7 @@ crates/lunco-ui/
 └── src/
     ├── lib.rs               # LuncoUiPlugin + theme
     ├── widget.rs            # WidgetSystem + WidgetId + caching
-    ├── context.rs           # UiContext + UiSelection
+    ├── context.rs           # UiSelection
     ├── helpers.rs           # collapsing tree row helpers
     ├── components.rs        # WorldPanel + Label3D
     ├── mission_control.rs   # mission-control panel widget

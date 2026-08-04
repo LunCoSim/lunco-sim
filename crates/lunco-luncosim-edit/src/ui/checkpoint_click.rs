@@ -39,6 +39,7 @@ use lunco_core::{
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding;
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{
@@ -47,12 +48,8 @@ use lunco_usd::document::{
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
-use crate::SelectedEntities;
-
-pub use lunco_scene_commands::runtime_waypoint::{
-    append_runtime_patrol, mark_reached_waypoints_on_enter, runtime_waypoint_key,
-    RuntimeWaypointBinding, RuntimeWaypointSpawner,
-};
+use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
+use lunco_scene_commands::SelectedEntities;
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -854,7 +851,7 @@ fn get_waypoint_positions(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&big_space::prelude::Grid>,
     q_spatial: &Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-) -> Vec<DVec3> {
+) -> Vec<(String, DVec3)> {
     let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(xml) else {
         return Vec::new();
     };
@@ -871,7 +868,7 @@ fn get_waypoint_positions(
                 parts[1].trim().parse::<f64>(),
                 parts[2].trim().parse::<f64>(),
             ) {
-                positions.push(DVec3::new(x, y, z));
+                positions.push((t, DVec3::new(x, y, z)));
                 continue;
             }
         }
@@ -880,7 +877,7 @@ fn get_waypoint_positions(
             if let Some(pos) =
                 lunco_core::coords::world_position(entity, q_parents, q_grids, q_spatial)
             {
-                positions.push(pos.0);
+                positions.push((t, pos.0));
             }
         }
     }
@@ -899,6 +896,133 @@ fn get_runtime_waypoint_positions(spec: &lunco_autopilot::AutopilotBehaviorSpec)
             )
         })
         .collect()
+}
+
+fn route_targets(
+    xml: Option<&BehaviorXml>,
+    spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+) -> Vec<String> {
+    if let Some(xml) = xml {
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            return Vec::new();
+        };
+        let mut targets = Vec::new();
+        collect_targets(&value, &mut targets);
+        if !targets.is_empty() {
+            return targets;
+        }
+    }
+    spec.and_then(|spec| spec.patrol_waypoints())
+        .map(|waypoints| (0..waypoints.len()).map(runtime_waypoint_key).collect())
+        .unwrap_or_default()
+}
+
+fn route_loops(
+    xml: Option<&BehaviorXml>,
+    spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+) -> bool {
+    if let Some(xml) = xml {
+        // XML is the authored route and therefore owns topology when both the
+        // authored tree and its derived runtime spec are present.
+        return lunco_autopilot::btcpp_xml::xml_to_value(&xml.0)
+            .ok()
+            .map(|value| authored_route_loops(&value))
+            .unwrap_or(false);
+    }
+
+    spec.is_some_and(|spec| match &spec.0 {
+        lunco_autopilot::BehaviorSpec::Forever { .. }
+        | lunco_autopilot::BehaviorSpec::Patrol { .. } => true,
+        lunco_autopilot::BehaviorSpec::Repeat { times, .. } => *times > 1,
+        _ => false,
+    })
+}
+
+fn authored_route_loops(value: &Value) -> bool {
+    match value.get("kind").and_then(Value::as_str) {
+        Some("forever" | "patrol") => true,
+        Some("repeat") => value
+            .get("times")
+            .and_then(Value::as_u64)
+            .is_some_and(|times| times > 1),
+        _ => false,
+    }
+}
+
+fn target_matches(a: &str, b: &str) -> bool {
+    a == b || a.ends_with(b) || b.ends_with(a)
+}
+
+/// Runtime visual progress for one route. The collision-backed set is the
+/// durable arrival record; the behavior cursor fills the gap for wheel rigs
+/// whose child colliders do not emit a waypoint Sensor overlap.
+#[derive(Clone, Debug, Default)]
+struct RouteVisualState {
+    visited: Vec<bool>,
+    active_index: Option<usize>,
+}
+
+fn route_visual_state(
+    targets: &[String],
+    reached: Option<&ReachedWaypoints>,
+    cursor: Option<usize>,
+    completed: bool,
+    looping: bool,
+) -> RouteVisualState {
+    let mut visited = targets
+        .iter()
+        .map(|target| {
+            reached.is_some_and(|reached| reached.0.iter().any(|done| target_matches(done, target)))
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(cursor) = cursor {
+        for done in visited.iter_mut().take(cursor) {
+            *done = true;
+        }
+    }
+    if completed {
+        visited.fill(true);
+    }
+
+    let active_index = if completed {
+        None
+    } else {
+        visited.iter().position(|visited| !visited).or_else(|| {
+            looping
+                .then_some(cursor)
+                .flatten()
+                .filter(|_| !targets.is_empty())
+                .map(|i| i % targets.len())
+        })
+    };
+
+    RouteVisualState {
+        visited,
+        active_index,
+    }
+}
+
+fn route_execution(
+    vessel: Entity,
+    q_autopilots: &Query<(
+        &lunco_autopilot::Autopilot,
+        Option<&lunco_autopilot::AutopilotBehavior>,
+        Option<&lunco_autopilot::AutopilotExecutionState>,
+    )>,
+) -> (Option<usize>, bool) {
+    q_autopilots
+        .iter()
+        .find(|(autopilot, _, _)| autopilot.vessel == vessel)
+        .map(|(_, behavior, execution)| {
+            (
+                behavior.and_then(|behavior| behavior.route_cursor()),
+                execution.is_some_and(|state| {
+                    matches!(state, lunco_autopilot::AutopilotExecutionState::Completed)
+                }),
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn collect_targets(v: &Value, out: &mut Vec<String>) {
@@ -935,6 +1059,11 @@ pub fn draw_waypoint_overlay(
     selected: Res<SelectedEntities>,
     q_camera: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
     q_avatar_cam: Query<Entity, With<Avatar>>,
+    q_autopilots: Query<(
+        &lunco_autopilot::Autopilot,
+        Option<&lunco_autopilot::AutopilotBehavior>,
+        Option<&lunco_autopilot::AutopilotExecutionState>,
+    )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
@@ -1005,17 +1134,9 @@ pub fn draw_waypoint_overlay(
         };
         let label_color = theme.tokens.text;
 
-        let xml_targets = xml.map(|xml| {
-            let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
-                return Vec::new();
-            };
-            let mut targets = Vec::new();
-            collect_targets(&value, &mut targets);
-            targets
-        });
-        let authored_route = xml_targets
-            .as_ref()
-            .is_some_and(|targets| !targets.is_empty());
+        let targets = route_targets(xml, spec);
+        let authored_route = xml.is_some() && !targets.is_empty();
+        let looping = route_loops(xml, spec);
         let wp_positions = if authored_route {
             get_waypoint_positions(
                 &xml.expect("authored route has XML").0,
@@ -1025,8 +1146,15 @@ pub fn draw_waypoint_overlay(
                 &q_spatial,
             )
         } else {
-            spec.map(get_runtime_waypoint_positions).unwrap_or_default()
+            spec.map(get_runtime_waypoint_positions)
+                .unwrap_or_default()
+                .into_iter()
+                .enumerate()
+                .map(|(index, position)| (runtime_waypoint_key(index), position))
+                .collect()
         };
+        let (cursor, completed) = route_execution(vessel, &q_autopilots);
+        let progress = route_visual_state(&targets, reached, cursor, completed, looping);
 
         // Collect screen-space points for each waypoint that is in front of the camera.
         struct WpScreen {
@@ -1037,7 +1165,7 @@ pub fn draw_waypoint_overlay(
         }
         let mut wp_screens: Vec<WpScreen> = Vec::with_capacity(wp_positions.len());
 
-        for (i, wp_world) in wp_positions.into_iter().enumerate() {
+        for (i, (target, wp_world)) in wp_positions.into_iter().enumerate() {
             let distance = (wp_world - cam_world).length();
 
             // Convert to camera-relative Vec3 for projection.
@@ -1048,14 +1176,11 @@ pub fn draw_waypoint_overlay(
                 continue;
             };
             let screen = egui::pos2(viewport.x, viewport.y) + origin;
-            let visited = if authored_route {
-                xml_targets
-                    .as_ref()
-                    .and_then(|targets| targets.get(i))
-                    .is_some_and(|target| reached.is_some_and(|reached| reached.0.contains(target)))
-            } else {
-                reached.is_some_and(|reached| reached.0.contains(&runtime_waypoint_key(i)))
-            };
+            let visited = progress.visited.get(i).copied().unwrap_or_else(|| {
+                reached.is_some_and(|reached| {
+                    reached.0.iter().any(|done| target_matches(done, &target))
+                })
+            });
 
             wp_screens.push(WpScreen {
                 screen,
@@ -1529,19 +1654,22 @@ pub enum PathPart {
 fn route_signature(
     targets: &[String],
     smooth: bool,
-    reached: Option<&ReachedWaypoints>,
+    progress: &RouteVisualState,
     rover_pos: Option<DVec3>,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     smooth.hash(&mut h);
-    for t in targets {
+    for (index, t) in targets.iter().enumerate() {
         t.hash(&mut h);
-        reached
-            .map(|r| r.0.contains(t))
+        progress
+            .visited
+            .get(index)
+            .copied()
             .unwrap_or(false)
             .hash(&mut h);
     }
+    progress.active_index.hash(&mut h);
     // A centimetre-level camera/render update should not continuously recreate the
     // mesh, but the route must visibly follow the rover as it drives. Quantising to
     // decimetres makes that explicit and keeps the update cost bounded.
@@ -1560,9 +1688,12 @@ fn route_signature(
 fn route_ribbon_points(
     points: &[(DVec3, bool)],
     rover_pos: Option<DVec3>,
+    active_index: Option<usize>,
 ) -> (Vec<DVec3>, Vec<DVec3>) {
     let green = points.iter().map(|(point, _)| *point).collect();
-    let next = points.iter().position(|(_, visited)| !visited);
+    let next = active_index
+        .filter(|&index| index < points.len())
+        .or_else(|| points.iter().position(|(_, visited)| !visited));
     let blue = next
         .map(|index| {
             vec![
@@ -1671,6 +1802,11 @@ pub fn sync_waypoint_path_mesh(
     )>,
     selected: Res<SelectedEntities>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
+    q_autopilots: Query<(
+        &lunco_autopilot::Autopilot,
+        Option<&lunco_autopilot::AutopilotBehavior>,
+        Option<&lunco_autopilot::AutopilotExecutionState>,
+    )>,
     q_paths: Query<(Entity, &WaypointPathMesh)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
@@ -1776,7 +1912,7 @@ pub fn sync_waypoint_path_mesh(
                     targets,
                     None,
                     route_is_smooth(&xml.0),
-                    xml.0.contains("forever"),
+                    route_loops(Some(xml), spec),
                 )
             } else if let Some(spec) = spec {
                 let Some(waypoints) = spec.patrol_waypoints() else {
@@ -1795,7 +1931,7 @@ pub fn sync_waypoint_path_mesh(
                 let targets = (0..points.len())
                     .map(runtime_waypoint_key)
                     .collect::<Vec<_>>();
-                let closed = points.len() > 2;
+                let closed = route_loops(None, Some(spec));
                 (targets, Some(points), false, closed)
             } else {
                 continue;
@@ -1817,11 +1953,13 @@ pub fn sync_waypoint_path_mesh(
             let targets = (0..points.len())
                 .map(runtime_waypoint_key)
                 .collect::<Vec<_>>();
-            let closed = points.len() > 2;
+            let closed = route_loops(None, Some(spec));
             (targets, Some(points), false, closed)
         } else {
             continue;
         };
+        let (cursor, completed) = route_execution(vessel, &q_autopilots);
+        let progress = route_visual_state(&targets, reached, cursor, completed, closed);
         let rover_pos =
             lunco_core::coords::world_position(vessel, &q_parents, &q_grids_only, &q_spatial)
                 .map(|p| p.0);
@@ -1832,7 +1970,7 @@ pub fn sync_waypoint_path_mesh(
         // availability in the change key so a ribbon first created during the
         // loading frame is rebuilt once the analytic surface can clamp its
         // interpolated samples.
-        let signature = route_signature(&targets, smooth, reached, rover_pos)
+        let signature = route_signature(&targets, smooth, &progress, rover_pos)
             ^ (focused as u64)
             ^ ((surface.has_terrain() as u64) << 1);
 
@@ -1842,8 +1980,7 @@ pub fn sync_waypoint_path_mesh(
                 .into_iter()
                 .enumerate()
                 .map(|(index, point)| {
-                    let key = runtime_waypoint_key(index);
-                    (point, reached.is_some_and(|r| r.0.contains(&key)))
+                    (point, progress.visited.get(index).copied().unwrap_or(false))
                 })
                 .collect()
         } else {
@@ -1859,13 +1996,22 @@ pub fn sync_waypoint_path_mesh(
                         )
                         .map(|p| p.0)
                     });
-                    pos.map(|p| (p, reached.map(|r| r.0.contains(t)).unwrap_or(false)))
+                    let index = targets.iter().position(|target| target == t);
+                    pos.map(|p| {
+                        (
+                            p,
+                            index
+                                .and_then(|index| progress.visited.get(index).copied())
+                                .unwrap_or(false),
+                        )
+                    })
                 })
                 .collect()
         };
         // The complete waypoint-to-waypoint route is green; a separate blue
         // segment overlays only rover → next unresolved waypoint.
-        let (green_points, blue_points) = route_ribbon_points(&pts, rover_pos);
+        let (green_points, blue_points) =
+            route_ribbon_points(&pts, rover_pos, progress.active_index);
         let closed = closed && pts.len() > 2;
 
         for part in [PathPart::Driven, PathPart::Remaining] {
@@ -1995,11 +2141,141 @@ pub fn sync_waypoint_path_mesh(
     }
 }
 
+/// Snapshot the authored dome look before tinting it, so a session-only visual
+/// state never becomes an authored USD change and can be restored on reload.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct WaypointVisualBase(PbrLook);
+
+/// Resolve the session-only appearance of a waypoint from its authored look and
+/// live visit state. Keeping this decision pure makes the visible visited-state
+/// contract testable without a renderer or a spawned USD subtree.
+fn waypoint_look_for_visit(base: &PbrLook, visited: bool) -> PbrLook {
+    if !visited {
+        return base.clone();
+    }
+
+    let mut target = base.clone();
+    target.base_color = LinearRgba::new(0.38, 0.38, 0.38, target.base_color.alpha);
+    target.emissive = LinearRgba::new(0.10, 0.10, 0.10, target.emissive.alpha);
+    target.unshared = true;
+    target
+}
+
+/// Tint visited waypoint domes from the live route state. The marker geometry and
+/// its authored material remain in USD; only the resolved render intent is changed
+/// for this session. `unshared` is required because the tint is animated state and
+/// must not be put through the shared material cache.
+pub(crate) fn sync_waypoint_marker_visuals(
+    q_vessels: Query<(
+        Entity,
+        Option<&BehaviorXml>,
+        Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+        Option<&ReachedWaypoints>,
+    )>,
+    q_autopilots: Query<(
+        &lunco_autopilot::Autopilot,
+        Option<&lunco_autopilot::AutopilotBehavior>,
+        Option<&lunco_autopilot::AutopilotExecutionState>,
+    )>,
+    q_markers: Query<
+        (Entity, &UsdPrimPath, Option<&RuntimeWaypointBinding>),
+        With<lunco_usd_sim::marker::WaypointMarker>,
+    >,
+    mut q_looks: Query<(
+        Entity,
+        &UsdPrimPath,
+        &mut PbrLook,
+        Option<&WaypointVisualBase>,
+    )>,
+    q_parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    let mut routes = std::collections::HashMap::new();
+    for (vessel, xml, spec, reached) in q_vessels.iter() {
+        let targets = route_targets(xml, spec);
+        if targets.is_empty() {
+            continue;
+        }
+        let (cursor, completed) = route_execution(vessel, &q_autopilots);
+        routes.insert(
+            vessel,
+            (
+                targets.clone(),
+                route_visual_state(&targets, reached, cursor, completed, route_loops(xml, spec)),
+            ),
+        );
+    }
+
+    let mut marker_visits = std::collections::HashMap::new();
+    for (marker, path, binding) in q_markers.iter() {
+        let visited = binding
+            .and_then(|binding| {
+                routes
+                    .get(&binding.vessel)
+                    .and_then(|(_, state)| state.visited.get(binding.index).copied())
+            })
+            .or_else(|| {
+                routes.iter().find_map(|(_, (targets, state))| {
+                    targets
+                        .iter()
+                        .position(|target| target_matches(target, &path.path))
+                        .and_then(|index| state.visited.get(index).copied())
+                })
+            });
+        if let Some(visited) = visited {
+            marker_visits.insert(marker, visited);
+        }
+    }
+
+    for (entity, path, mut look, base) in q_looks.iter_mut() {
+        if !path.path.ends_with("/Dome") {
+            continue;
+        }
+        let mut current = entity;
+        let mut marker = None;
+        for _ in 0..32 {
+            if marker_visits.contains_key(&current) {
+                marker = Some(current);
+                break;
+            }
+            let Ok(parent) = q_parents.get(current) else {
+                break;
+            };
+            current = parent.parent();
+        }
+        let Some(visited) = marker.and_then(|marker| marker_visits.get(&marker).copied()) else {
+            continue;
+        };
+
+        let mut target = if let Some(base) = base {
+            base.0.clone()
+        } else {
+            let authored = look.clone();
+            commands
+                .entity(entity)
+                .insert(WaypointVisualBase(authored.clone()));
+            authored
+        };
+        target = waypoint_look_for_visit(&target, visited);
+        if *look != target {
+            *look = target;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{append_runtime_patrol, route_ribbon_points, WAYPOINT_MARKER_ASSET};
+    use super::{
+        route_loops, route_ribbon_points, route_visual_state, BehaviorXml, ReachedWaypoints,
+        WAYPOINT_MARKER_ASSET,
+    };
     use bevy::math::DVec3;
-    use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint};
+    use bevy::prelude::LinearRgba;
+    use lunco_autopilot::{
+        btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
+    };
+    use lunco_render::PbrLook;
+    use lunco_scene_commands::runtime_waypoint::append_runtime_patrol;
 
     #[test]
     fn runtime_click_creates_and_extends_patrol_without_usd() {
@@ -2058,14 +2334,162 @@ mod tests {
         let w2 = DVec3::new(20.0, 0.0, 0.0);
         let rover = DVec3::new(2.0, 0.0, 0.0);
 
-        let (green_before, blue_before) =
-            route_ribbon_points(&[(w0, false), (w1, false), (w2, false)], Some(rover));
+        let (green_before, blue_before) = route_ribbon_points(
+            &[(w0, false), (w1, false), (w2, false)],
+            Some(rover),
+            Some(0),
+        );
         assert_eq!(green_before, vec![w0, w1, w2]);
         assert_eq!(blue_before, vec![rover, w0]);
 
-        let (green_after, blue_after) =
-            route_ribbon_points(&[(w0, true), (w1, false), (w2, false)], Some(rover));
+        let (green_after, blue_after) = route_ribbon_points(
+            &[(w0, true), (w1, false), (w2, false)],
+            Some(rover),
+            Some(1),
+        );
         assert_eq!(green_after, vec![w0, w1, w2]);
         assert_eq!(blue_after, vec![rover, w1]);
+    }
+
+    #[test]
+    fn route_ribbon_ignores_an_stale_cursor_after_route_resolution() {
+        let points = [
+            (DVec3::ZERO, true),
+            (DVec3::X * 10.0, false),
+            (DVec3::X * 20.0, false),
+        ];
+        let (_, blue) = route_ribbon_points(&points, Some(DVec3::Y), Some(99));
+        assert_eq!(blue, vec![DVec3::Y, DVec3::X * 10.0]);
+    }
+
+    #[test]
+    fn route_ribbon_has_no_blue_leg_when_a_one_way_route_is_done() {
+        let points = [(DVec3::ZERO, true), (DVec3::X * 10.0, true)];
+        let (_, blue) = route_ribbon_points(&points, Some(DVec3::Y), None);
+        assert!(blue.is_empty());
+    }
+
+    #[test]
+    fn route_loop_detection_uses_authored_tree_shape() {
+        let sequence = BehaviorXml(
+            value_to_xml(&serde_json::json!({
+                "kind": "sequence",
+                "children": [{"kind": "drive_to", "target": "/Route/W0"}]
+            }))
+            .unwrap(),
+        );
+        let forever = BehaviorXml(
+            value_to_xml(&serde_json::json!({
+                "kind": "forever",
+                "child": {
+                    "kind": "sequence",
+                    "children": [{"kind": "drive_to", "target": "/Route/W0"}]
+                }
+            }))
+            .unwrap(),
+        );
+        assert!(!route_loops(Some(&sequence), None));
+        assert!(route_loops(Some(&forever), None));
+    }
+
+    #[test]
+    fn route_loop_detection_uses_runtime_spec_kind_not_waypoint_count() {
+        let one_way = AutopilotBehaviorSpec::new(BehaviorSpec::Sequence {
+            children: vec![BehaviorSpec::DriveTo {
+                target: [1.0, 0.0, 2.0],
+                speed: 0.5,
+                radius: 1.0,
+            }],
+        });
+        let patrol = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
+            waypoints: vec![PatrolWaypoint::at([1.0, 0.0, 2.0])],
+            speed: 0.5,
+            radius: 1.0,
+            dwell: 0.0,
+        });
+        assert!(!route_loops(None, Some(&one_way)));
+        assert!(route_loops(None, Some(&patrol)));
+    }
+
+    #[test]
+    fn route_progress_uses_autopilot_cursor_when_sensor_arrival_is_missing() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let state = route_visual_state(&targets, None, Some(1), false, false);
+        assert_eq!(state.visited, vec![true, false]);
+        assert_eq!(state.active_index, Some(1));
+    }
+
+    #[test]
+    fn route_progress_keeps_the_current_leg_after_all_session_arrivals() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let mut reached = std::collections::HashSet::new();
+        reached.insert("/Route/W0".to_string());
+        reached.insert("/Route/W1".to_string());
+        let state = route_visual_state(
+            &targets,
+            Some(&ReachedWaypoints(reached)),
+            Some(0),
+            false,
+            true,
+        );
+        assert_eq!(state.visited, vec![true, true]);
+        assert_eq!(state.active_index, Some(0));
+    }
+
+    #[test]
+    fn route_progress_stops_the_active_leg_after_a_one_way_route_completes() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let mut reached = std::collections::HashSet::new();
+        reached.insert("/Route/W0".to_string());
+        reached.insert("/Route/W1".to_string());
+        let state = route_visual_state(
+            &targets,
+            Some(&ReachedWaypoints(reached)),
+            Some(2),
+            false,
+            false,
+        );
+        assert_eq!(state.visited, vec![true, true]);
+        assert_eq!(state.active_index, None);
+    }
+
+    #[test]
+    fn route_progress_marks_completion_without_a_cursor() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let state = route_visual_state(&targets, None, None, true, false);
+        assert_eq!(state.visited, vec![true, true]);
+        assert_eq!(state.active_index, None);
+    }
+
+    #[test]
+    fn visited_waypoint_look_is_gray_and_private() {
+        let mut authored = PbrLook::matte(LinearRgba::new(0.12, 0.72, 0.34, 0.8));
+        authored.emissive = LinearRgba::new(0.02, 0.3, 0.08, 1.0);
+
+        let visited = super::waypoint_look_for_visit(&authored, true);
+
+        assert_eq!(visited.base_color.red, 0.38);
+        assert_eq!(visited.base_color.green, 0.38);
+        assert_eq!(visited.base_color.blue, 0.38);
+        assert_eq!(visited.base_color.alpha, authored.base_color.alpha);
+        assert_eq!(visited.emissive.red, 0.10);
+        assert_eq!(visited.emissive.green, 0.10);
+        assert_eq!(visited.emissive.blue, 0.10);
+        assert!(
+            visited.unshared,
+            "animated visit state must not share authored materials"
+        );
+    }
+
+    #[test]
+    fn unvisited_waypoint_look_preserves_authored_appearance() {
+        let mut authored = PbrLook::matte(LinearRgba::new(0.12, 0.72, 0.34, 0.8));
+        authored.emissive = LinearRgba::new(0.02, 0.3, 0.08, 1.0);
+
+        assert_eq!(
+            super::waypoint_look_for_visit(&authored, false),
+            authored,
+            "unvisited markers must keep the authored look"
+        );
     }
 }

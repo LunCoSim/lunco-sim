@@ -16,18 +16,39 @@ use bevy_hui::prelude::{
 use lunco_core::exposure::EngineExposures;
 use lunco_workbench::{PanelId, PanelRects, ScenePickGate};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io;
 
 /// A semantic action emitted by an authored runtime surface.
 ///
 /// HUI deliberately passes only the pressed element to a bound function. The
-/// bridge closes over the authored action name and turns that callback into a
-/// typed event, so application code never needs to inspect HTML ids or mutate
-/// simulation state from a template callback.
-#[derive(Event, Clone, Debug, PartialEq, Eq)]
+/// bridge parses the authored action into a closed semantic enum and turns that
+/// callback into a typed event, so application code never needs to inspect HTML
+/// ids or mutate simulation state from a template callback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RuntimeUiActionKind {
+    ViewSurface,
+    ViewBodyMoon,
+    ViewBodyEarth,
+    DismissTerrainOverlay,
+}
+
+impl RuntimeUiActionKind {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "view.surface" => Ok(Self::ViewSurface),
+            "view.body.moon" => Ok(Self::ViewBodyMoon),
+            "view.body.earth" => Ok(Self::ViewBodyEarth),
+            "overlay.terrain.dismiss" => Ok(Self::DismissTerrainOverlay),
+            _ => Err(format!("unknown runtime UI action `{value}`")),
+        }
+    }
+}
+
+#[derive(Event, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeUiAction {
-    /// Stable action name authored by the surface adapter.
-    pub action: String,
+    /// Closed semantic action authored by the surface adapter.
+    pub action: RuntimeUiActionKind,
     /// The retained HTML entity that emitted the action.
     pub source: Entity,
 }
@@ -36,28 +57,28 @@ pub(crate) struct RuntimeUiAction {
 pub(crate) fn register_action(
     functions: &mut HtmlFunctions,
     callback: impl Into<String>,
-    action: impl Into<String>,
+    action: RuntimeUiActionKind,
 ) {
-    let action = action.into();
     functions.register(
         callback,
         move |In(source): In<Entity>, mut commands: Commands| {
-            commands.trigger(RuntimeUiAction {
-                action: action.clone(),
-                source,
-            });
+            commands.trigger(RuntimeUiAction { action, source });
         },
     );
 }
 
 /// Authored registration for runtime UI surfaces.
 #[derive(Asset, Deserialize, TypePath, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RuntimeUiManifest {
     pub surfaces: Vec<RuntimeUiSurfaceDefinition>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RuntimeUiSurfaceDefinition {
+    /// Stable identity used to validate and reconcile an authored surface.
+    pub id: String,
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
@@ -79,6 +100,7 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
 /// exposure property. `map` is optional for identity bindings and required for
 /// authored state translations such as a boolean display or an active color.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RuntimeUiBindingDefinition {
     pub source: String,
     #[serde(default)]
@@ -89,13 +111,14 @@ pub(crate) struct RuntimeUiBindingDefinition {
 /// the runtime bridge emits the semantic action without a widget-specific Rust
 /// registration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RuntimeUiActionDefinition {
     pub callback: String,
     pub action: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case")]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RuntimeUiPlacementDefinition {
     Viewport,
     DockPanel {
@@ -123,6 +146,109 @@ pub(crate) enum RuntimeUiWindowAnchor {
     BottomRight,
 }
 
+impl RuntimeUiManifest {
+    /// Validate the authored runtime UI contract before it reaches HUI or the
+    /// semantic action bridge. Invalid manifests are rejected as data errors,
+    /// so a typo cannot silently create an inert or globally overwritten UI.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let mut ids = HashSet::new();
+        let mut namespaces = HashSet::new();
+        let mut callbacks = HashSet::new();
+
+        for surface in &self.surfaces {
+            require_non_empty("surface id", &surface.id)?;
+            require_non_empty("surface namespace", &surface.namespace)?;
+            require_asset_path("surface template", &surface.template)?;
+            require_asset_path("surface stylesheet", &surface.stylesheet)?;
+            if !ids.insert(surface.id.as_str()) {
+                return Err(format!("duplicate runtime UI surface id `{}`", surface.id));
+            }
+            if !namespaces.insert(surface.namespace.as_str()) {
+                return Err(format!(
+                    "duplicate runtime UI namespace `{}`",
+                    surface.namespace
+                ));
+            }
+            if let Some(perspective) = &surface.visible_in_perspective {
+                require_non_empty("visible_in_perspective", perspective)?;
+            }
+            if let Some(gate) = &surface.gate {
+                require_non_empty("surface gate", gate)?;
+            }
+            validate_placement(&surface.placement)?;
+
+            for (target, binding) in &surface.bindings {
+                require_non_empty("binding target", target)?;
+                require_non_empty("binding source", &binding.source)?;
+                for (source_value, rendered_value) in &binding.map {
+                    require_non_empty("binding map key", source_value)?;
+                    require_non_empty("binding map value", rendered_value)?;
+                }
+            }
+            for action in &surface.actions {
+                require_non_empty("action callback", &action.callback)?;
+                require_non_empty("action name", &action.action)?;
+                if !callbacks.insert(action.callback.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI callback `{}`",
+                        action.callback
+                    ));
+                }
+                RuntimeUiActionKind::parse(&action.action)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn require_non_empty(label: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err(format!("{label} must not be empty"))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_asset_path(label: &str, value: &str) -> Result<(), String> {
+    require_non_empty(label, value)?;
+    if value.contains('\\')
+        || value.contains(':')
+        || value.starts_with('/')
+        || value.split('/').any(|part| part.is_empty() || part == "..")
+    {
+        return Err(format!("{label} must be a relative asset path: `{value}`"));
+    }
+    Ok(())
+}
+
+fn validate_placement(placement: &RuntimeUiPlacementDefinition) -> Result<(), String> {
+    match placement {
+        RuntimeUiPlacementDefinition::Viewport => Ok(()),
+        RuntimeUiPlacementDefinition::DockPanel { panel, inset } => {
+            require_non_empty("dock panel", panel.as_str())?;
+            if !inset.is_finite() || *inset < 0.0 {
+                Err("dock panel inset must be finite and non-negative".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        RuntimeUiPlacementDefinition::Window {
+            offset,
+            width,
+            height,
+            ..
+        } => {
+            if offset.iter().any(|value| !value.is_finite()) {
+                return Err("window offset must contain finite values".to_string());
+            }
+            if !width.is_finite() || *width <= 0.0 || !height.is_finite() || *height <= 0.0 {
+                return Err("window width and height must be finite and positive".to_string());
+            }
+            Ok(())
+        }
+    }
+}
+
 #[derive(Default, TypePath)]
 pub(crate) struct RuntimeUiManifestLoader;
 
@@ -142,7 +268,11 @@ impl AssetLoader for RuntimeUiManifestLoader {
             .read_to_end(&mut bytes)
             .await
             .map_err(|error| serde_json::Error::io(error))?;
-        serde_json::from_slice(&bytes)
+        let manifest: RuntimeUiManifest = serde_json::from_slice(&bytes)?;
+        manifest.validate().map_err(|error| {
+            serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, error))
+        })?;
+        Ok(manifest)
     }
 
     fn extensions(&self) -> &[&str] {
@@ -302,14 +432,21 @@ pub(crate) fn sync_runtime_ui_manifest(
     let Some(manifest) = manifests.get(&state.handle) else {
         return;
     };
+    if let Err(error) = manifest.validate() {
+        error!("runtime UI manifest rejected: {error}");
+        return;
+    }
 
     for surface in &manifest.surfaces {
         for action in &surface.actions {
-            register_action(
-                &mut functions,
-                action.callback.clone(),
-                action.action.clone(),
-            );
+            let Ok(action_kind) = RuntimeUiActionKind::parse(&action.action) else {
+                // `validate` above already checked this. Keep this branch
+                // explicit so a future programmatic manifest cannot bypass
+                // the closed action boundary.
+                error!("runtime UI action rejected: `{}`", action.action);
+                return;
+            };
+            register_action(&mut functions, action.callback.clone(), action_kind);
         }
     }
 
@@ -815,12 +952,23 @@ mod tests {
         )
         .expect("manifest should parse");
 
+        manifest.validate().expect("manifest should validate");
         assert_eq!(manifest.surfaces.len(), 3);
         assert!(matches!(
             manifest.surfaces[0].placement,
             RuntimeUiPlacementDefinition::Viewport
         ));
         assert!(manifest.surfaces[2].interactive);
+    }
+
+    #[test]
+    fn shipped_manifest_validates() {
+        let manifest: RuntimeUiManifest =
+            serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
+                .expect("shipped runtime UI manifest should parse");
+        manifest
+            .validate()
+            .expect("shipped runtime UI manifest should validate");
     }
 
     #[test]
@@ -888,5 +1036,94 @@ mod tests {
         assert!(!gates.allows("not-yet-published"));
         gates.set("not-yet-published", true);
         assert!(gates.allows("not-yet-published"));
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_fields() {
+        let error = serde_json::from_str::<RuntimeUiManifest>(
+            r#"{
+                "surfaces": [{
+                    "id": "surface",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "surface",
+                    "unexpected": true,
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect_err("unknown manifest fields must be rejected");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn manifest_validation_rejects_duplicate_identity_and_unknown_action() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [
+                    {
+                        "id": "same",
+                        "template": "ui/a.html",
+                        "stylesheet": "ui/a.css",
+                        "namespace": "one",
+                        "placement": {"mode": "viewport"}
+                    },
+                    {
+                        "id": "same",
+                        "template": "ui/b.html",
+                        "stylesheet": "ui/b.css",
+                        "namespace": "two",
+                        "actions": [{"callback": "button", "action": "not.allowed"}],
+                        "placement": {"mode": "viewport"}
+                    }
+                ]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        let error = manifest.validate().expect_err("identity must be unique");
+        assert!(error.contains("duplicate runtime UI surface id"));
+
+        let unknown_action: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "action-surface",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "action-surface",
+                    "actions": [{"callback": "button", "action": "not.allowed"}],
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        let error = unknown_action
+            .validate()
+            .expect_err("unsupported action must be rejected");
+        assert!(error.contains("unknown runtime UI action"));
+    }
+
+    #[test]
+    fn manifest_validation_rejects_unsafe_asset_path_and_bad_geometry() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "surface",
+                    "template": "../outside.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "surface",
+                    "placement": {
+                        "mode": "window",
+                        "anchor": "top_left",
+                        "width": 0.0,
+                        "height": 10.0
+                    }
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        let error = manifest
+            .validate()
+            .expect_err("unsafe path must be rejected");
+        assert!(error.contains("relative asset path"));
     }
 }

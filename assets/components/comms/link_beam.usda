@@ -50,18 +50,15 @@ def Xform "LinkBeam" (
             custom float lunco:param:state = 0
             custom float lunco:param:width = 0.04
             custom float lunco:param:nearM = 50000
-            # Far-peer beam length, metres. A relay/Earth link is hundreds of thousands
-            # of km — a real cylinder that long jitters and clips — so the beam is a long
-            # RAY that shoots off toward the peer's true direction and far past the
-            # horizon, reading as "the link reaches to Earth". 100 km stays f32-precise.
+            # Far-peer beam length fallback for headless rendering, metres. A relay/Earth
+            # link is hundreds of thousands of km — a real cylinder that long jitters and
+            # clips — so the camera-facing runtime uses stubCamFrac instead of drawing a
+            # fixed 100 km ray across a surface view.
             custom float lunco:param:stubLen = 100000.0
-            # …but metres only read at ONE zoom. From an Earth-focus camera (~19,000 km
-            # out, where the globe auto-focus sits) a 100 km ray is sub-pixel, so the
-            # Earth end of a lunar link showed nothing at exactly the view that exists to
-            # show it. This is the same length expressed as a fraction of the camera's
-            # distance to the node, and the driver takes whichever is LONGER — so the beam
-            # holds a constant share of the screen when zoomed out, and hands back to the
-            # metre stub above when zoomed in. 0 turns the camera term off.
+            # Camera-relative far-peer length: the runtime measures the endpoint nearest
+            # the camera and uses this fraction of that distance. It applies to either
+            # endpoint's copy of a link, so a remote Earth station cannot draw a giant ray
+            # through a lunar surface view. 0 turns the camera term off.
             custom float lunco:param:stubCamFrac = 0.35
             # 0 = every connected peer, 1 = only the nearest, 2 = off.
             custom float lunco:param:mode = 0

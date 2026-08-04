@@ -100,7 +100,7 @@ The whole sweep — terrain march included — is gated behind this. It does **n
 per physics tick. Retune live, from any client or language:
 
 ```json
-{"command": "SetLinkCadence", "params": {"interval_s": 1.0}}
+{"type":"ExecuteCommand","command": "SetLinkCadence", "params": {"interval_s": 1.0}}
 ```
 
 ### Terrain occlusion (rille radio-shadow)

@@ -642,7 +642,7 @@ fn spawn_animation_preview(mut commands: Commands) {
 }
 
 /// Drive the [`AnimationPreview`] transport. Each field is optional so one verb
-/// covers run / pause / scroll(seek) / rate / loop — `{"command":"ControlAnimation",
+/// covers run / pause / scroll(seek) / rate / loop — `{"type":"ExecuteCommand","command":"ControlAnimation",
 /// "params":{"playing":false}}` pauses, `{"seek_secs":3.0}` scrubs to 3 s,
 /// `{"rate":2.0}` doubles speed, `{"looping":true}` loops. Headless-safe: it only
 /// writes the preview domain's [`Playback`], never any UI or render resource.
@@ -715,7 +715,7 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 
 /// Drive the LIVE-WORLD transport (physics/tick clock), distinct from
 /// [`ControlAnimation`] which drives the keyframe preview. Each field optional so
-/// one verb covers pause / play / rate — `{"command":"SetTimeTransport",
+/// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
 /// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
 /// `{"rate":4.0}` runs it 4× realtime. This is THE pause command: exposed on the
 /// API/MCP and wrapped by the rhai prelude verbs `pause()`/`play()`/`set_rate()`,
@@ -723,8 +723,12 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 #[Command(default)]
 pub struct SetTimeTransport {
     /// Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it.
+    #[serde(default)]
+    #[reflect(default)]
     pub playing: Option<bool>,
     /// Speed multiplier vs realtime (1.0 = realtime); `None` leaves it.
+    #[serde(default)]
+    #[reflect(default)]
     pub rate: Option<f64>,
 }
 
@@ -733,7 +737,10 @@ fn on_set_time_transport(
     trigger: On<SetTimeTransport>,
     mut transport: ResMut<crate::TimeTransport>,
 ) {
-    let cmd = trigger.event();
+    apply_time_transport(&mut transport, trigger.event());
+}
+
+fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTransport) {
     if let Some(playing) = cmd.playing {
         transport.mode = if playing {
             crate::TransportMode::Playing
@@ -747,7 +754,7 @@ fn on_set_time_transport(
 }
 
 /// Re-anchor the world clock at an absolute epoch (Julian Date, TDB) —
-/// `{"command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
+/// `{"type":"ExecuteCommand","command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
 /// the mission origin and the calendar anchor at the CURRENT tick, so the sim
 /// jumps to that date without a tick discontinuity. This is how a scene picks
 /// its date: a site-anchored USD stage authors `double lunco:time:epochJd` on
@@ -765,33 +772,24 @@ fn on_set_mission_epoch(
     tick: Res<crate::SimTick>,
     mut clock: ResMut<crate::MissionClock>,
     clocks: Option<Res<Clocks>>,
-    resolved: Res<ResolvedDomains>,
+    real: Res<Time<Real>>,
     mut q: Query<&mut TimeDomain>,
 ) {
     let jd = trigger.event().epoch_jd;
     *clock = crate::MissionClock::anchored(jd, tick.0);
 
-    // The epoch is TWO terms — `mission_epoch0_jd + celestial_t / 86400` (see
-    // `write_epoch_from_celestial_clock`) — so re-anchoring alone does not set
-    // the date. It moves the first term and leaves the second holding whatever
-    // the celestial clock had accumulated, or an `offset` a previous seek solved
-    // against the PREVIOUS anchor. That residue lands on the sky as a jump: a
-    // twin whose stage authors JD 2461007.66944 rendered at 2460926.74 — 81 days
-    // early, so the wrong sun, the wrong shadows and the wrong Earth — and at
-    // 100 000× the same residue reappeared multiplied, moving the epoch 80 694
-    // days in one step.
-    //
-    // Zeroing the clock's local time here is what makes the command mean what it
-    // says: with `celestial_t == 0`, `epoch_jd == jd` exactly, this frame.
-    // `offset -= local_t` works for a derived clock and a detached (root) one
-    // alike — it cancels the resolved local time without needing to know which
-    // source feeds it.
+    // `epoch_jd = mission_epoch0_jd + celestial_t / 86400`. Re-anchoring the
+    // mission alone leaves the celestial domain's old affine offset in place.
+    // Solve that offset against the NEW source time so a previous 100 000x
+    // seek cannot be projected onto the new mission date.
     if let Some(clocks) = clocks {
         if let Ok(mut domain) = q.get_mut(clocks.celestial) {
-            let local_t = resolved.get(clocks.celestial).unwrap_or(0.0);
-            if local_t != 0.0 {
-                domain.offset -= local_t;
-            }
+            // The sim/epoch roots restart at zero at this tick; only a sky
+            // detached onto the wall root has a non-zero new source time.
+            let source_t = (domain.parent == Some(clocks.real))
+                .then(|| real.elapsed_secs_f64())
+                .unwrap_or(0.0);
+            domain.offset = -domain.scale * source_t;
         }
     }
     bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4} (celestial clock zeroed)");
@@ -824,7 +822,7 @@ pub enum ClockParent {
 }
 
 /// Re-point, rate-scale or seek one clock —
-/// `{"command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
+/// `{"type":"ExecuteCommand","command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
 /// runs the sky 1000× **while the simulation stays paused**.
 ///
 /// One verb covers every case, because in an affine tree they are the same case:
@@ -859,7 +857,7 @@ pub struct SetClock {
 /// `local_t` and the seek branch to `0.0`, both of which are wrong for a ROOT
 /// clock — and the celestial clock (the one users actually scale) is a root.
 ///
-/// The cost was measured, not theoretical. With the fallback, the first rate
+/// The cost was measured, not theoretical. With the old source-time guess, the first rate
 /// click happens to be continuous (while `scale == 1, offset == 0` a root's
 /// `local_t` equals its source), and every later click jumps by
 /// `scale · (scale_prev − 1) · Δt`: the sky moved −17 d at 1000×, +169 637 d at
@@ -970,49 +968,65 @@ fn on_set_clock(
 ///   so a sky left running at 100 000× stops the instant the scene reloads);
 /// * **interaction** → wall-rooted identity (its default);
 /// * **animation preview** → playhead 0, playing, 1×;
-/// * **transport** → Playing at 1×.
-///
-/// It does NOT touch `MissionClock` — the new scene authors its own epoch via
-/// `SetMissionEpoch` on load (`double lunco:time:epochJd`), which is the right owner
-/// of "what date is it", and re-anchoring here would fight that.
+/// * **transport** → Playing at 1×;
+/// * **mission calendar** → the authored mission origin, with any kinematic warp
+///   preview cleared. The mission origin itself is preserved so a scene load can
+///   apply its `SetMissionEpoch` afterward.
 #[Command(default)]
 pub struct ResetTime {}
 
 #[on_command(ResetTime)]
 fn on_reset_time(
     _trigger: On<ResetTime>,
+    mut mission: ResMut<crate::MissionClock>,
     clocks: Option<Res<Clocks>>,
     mut q_domain: Query<&mut TimeDomain>,
     mut q_playback: Query<&mut Playback>,
     preview: Option<Res<AnimationPreview>>,
     mut transport: ResMut<crate::TimeTransport>,
+    mut resolved: ResMut<ResolvedDomains>,
+    mut last: ResMut<LastClockT>,
     mut commands: Commands,
 ) {
-    let Some(clocks) = clocks else { return };
+    if let Some(clocks) = clocks {
+        // Celestial: restore the `Epoch` root and clear any `SetClock`
+        // re-parent/scale/seek. `SetClock` removes `ClockRoot` when it gives
+        // the clock a parent, so re-insert it.
+        if let Ok(mut d) = q_domain.get_mut(clocks.celestial) {
+            *d = TimeDomain::default();
+        }
+        commands
+            .entity(clocks.celestial)
+            .try_insert(ClockRoot::Epoch);
 
-    // Celestial: restore the `Epoch` root and clear any `SetClock` re-parent/scale/seek.
-    // `SetClock` removes `ClockRoot` when it gives the clock a parent, so re-insert it.
-    if let Ok(mut d) = q_domain.get_mut(clocks.celestial) {
-        *d = TimeDomain::default();
-    }
-    commands
-        .entity(clocks.celestial)
-        .try_insert(ClockRoot::Epoch);
+        // Interaction: wall-rooted identity (what `spawn_well_known_clocks`
+        // builds).
+        if let Ok(mut d) = q_domain.get_mut(clocks.interaction) {
+            *d = TimeDomain::derived(Some(clocks.real), 0.0, 1.0);
+        }
 
-    // Interaction: wall-rooted identity (what `spawn_well_known_clocks` builds).
-    if let Ok(mut d) = q_domain.get_mut(clocks.interaction) {
-        *d = TimeDomain::derived(Some(clocks.real), 0.0, 1.0);
-    }
-
-    // Animation preview: rewind and play at 1×.
-    if let Some(preview) = preview {
-        if let Ok(mut pb) = q_playback.get_mut(preview.domain) {
-            *pb = Playback::default();
+        // Animation preview: rewind and play at 1x.
+        if let Some(preview) = preview {
+            if let Ok(mut pb) = q_playback.get_mut(preview.domain) {
+                *pb = Playback::default();
+            }
         }
     }
 
     // Transport: a reloaded scene starts playing at realtime.
     *transport = crate::TimeTransport::default();
+
+    // The clock tree is only one half of celestial time. Restore the calendar
+    // anchor too; otherwise a 100 000x preview leaves the Sun at the warped date
+    // after the rate UI has returned to 1x, which can make a lunar scene appear
+    // completely black on its night side.
+    mission.reset_calendar();
+
+    // Clock entities persist across scene loads, so clear their sample history
+    // too. The new scene must not emit a giant negative dt from the previous
+    // scene's 100 000x celestial clock.
+    *resolved = ResolvedDomains::default();
+    *last = LastClockT::default();
 
     bevy::log::info!("[time] clock tree reset to defaults (scene load)");
 }
@@ -1218,6 +1232,23 @@ mod tests {
             ..default()
         };
         assert!((step_playhead(&held, 10.0) - 3.5).abs() < EPS);
+    }
+
+    #[test]
+    fn transport_rate_command_resumes_a_paused_transport() {
+        let mut transport = crate::TimeTransport {
+            mode: TransportMode::Paused,
+            rate: 1.0,
+        };
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                playing: Some(true),
+                rate: Some(8.0),
+            },
+        );
+        assert_eq!(transport.mode, TransportMode::Playing);
+        assert_eq!(transport.rate, 8.0);
     }
 
     #[test]

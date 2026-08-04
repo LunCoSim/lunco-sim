@@ -233,8 +233,8 @@ impl ClassEntry {
     }
 
     /// Convenience: `Some(&description)` when non-empty, `None`
-    /// otherwise. Mirrors the legacy `MSLComponentDef::short_description`
-    /// field semantics.
+    /// otherwise. This is the optional-description projection used by the
+    /// browser and inspector.
     pub fn short_description(&self) -> Option<&str> {
         if self.description.is_empty() {
             None
@@ -285,25 +285,6 @@ impl ClassKind {
     /// avoid offering nonsense choices.
     pub fn is_simulatable(self) -> bool {
         matches!(self, ClassKind::Model | ClassKind::Block | ClassKind::Class)
-    }
-
-    /// Parse a lowercase Modelica class keyword. Adapter for legacy
-    /// callsites still holding `Option<String>`; unknown keywords
-    /// fold to [`ClassKind::Class`] (matches the serde default).
-    pub fn from_keyword(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "model" => ClassKind::Model,
-            "block" => ClassKind::Block,
-            "connector" => ClassKind::Connector,
-            "package" => ClassKind::Package,
-            "function" => ClassKind::Function,
-            "record" => ClassKind::Record,
-            "type" => ClassKind::Type,
-            "operator" => ClassKind::Operator,
-            "expandable_connector" | "expandableconnector" => ClassKind::ExpandableConnector,
-            "operator_record" | "operatorrecord" => ClassKind::OperatorRecord,
-            _ => ClassKind::Class,
-        }
     }
 
     /// Lowercase keyword string for badges and display.

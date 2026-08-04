@@ -21,9 +21,7 @@ const MSL_SOURCE: &str = "MSL";
 /// ticks (updated in place).
 ///
 /// This is a pure state mirror, not a task owner — `MslLoadState` itself is the
-/// lifetime authority, so it uses the legacy `push_progress`/`clear_progress`
-/// API (implicitly `BusyScope::Global`, matching MSL-preload-affects-everything
-/// semantics) rather than `begin` + `BusyHandle`.
+/// lifetime authority, so it uses the status bus's global state-projection API.
 pub fn mirror_msl_state_to_status_bus(
     state: Res<MslLoadState>,
     bus: Option<ResMut<StatusBus>>,
@@ -49,7 +47,7 @@ pub fn mirror_msl_state_to_status_bus(
             }
             // Progress tick (in-place; doesn't accumulate in history).
             let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
-            bus.push_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
+            bus.set_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
         }
         MslLoadState::Ready { file_count, .. } => {
             // Only fire once per Ready transition (re-renders shouldn't spam).
@@ -59,13 +57,13 @@ pub fn mirror_msl_state_to_status_bus(
                     StatusLevel::Info,
                     format!("ready — {file_count} files"),
                 );
-                bus.clear_progress(MSL_SOURCE);
+                bus.remove_progress(MSL_SOURCE);
             }
         }
         MslLoadState::Failed(msg) => {
             if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
                 bus.push(MSL_SOURCE, StatusLevel::Error, msg.clone());
-                bus.clear_progress(MSL_SOURCE);
+                bus.remove_progress(MSL_SOURCE);
             }
         }
     }
@@ -251,7 +249,7 @@ pub fn mirror_source_roots_to_status_bus(
         match &root.state {
             LoadState::NotLoaded => {}
             LoadState::Loading { .. } => {
-                bus.push_progress(STATUS_BUS_SOURCE, format!("Loading library `{id}`…"), 0, 0);
+                bus.set_progress(STATUS_BUS_SOURCE, format!("Loading library `{id}`…"), 0, 0);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Info,
@@ -259,7 +257,7 @@ pub fn mirror_source_roots_to_status_bus(
                 );
             }
             LoadState::Ready => {
-                bus.clear_progress(STATUS_BUS_SOURCE);
+                bus.remove_progress(STATUS_BUS_SOURCE);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Info,
@@ -267,7 +265,7 @@ pub fn mirror_source_roots_to_status_bus(
                 );
             }
             LoadState::Failed(msg) => {
-                bus.clear_progress(STATUS_BUS_SOURCE);
+                bus.remove_progress(STATUS_BUS_SOURCE);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Warn,

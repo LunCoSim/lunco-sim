@@ -272,20 +272,12 @@ fn apply_dynamic_fields(
 /// to that file (error locality). Both prelude uses — the global module and the
 /// per-scenario `prelude_ast` merge — go through here.
 pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
-    // Disk-first (edit -> restart, no rebuild); a disk prelude that fails to
-    // parse falls back to the EMBEDDED copy so a broken helper edit degrades
-    // to stock behaviour instead of bricking startup. The embedded copy is
-    // parse-tested in CI, so its failure is a real bug worth propagating.
-    match compile_prelude_set(engine, lunco_assets::scripting::prelude_files()) {
-        Ok(ast) => Ok(ast),
-        Err(e) => {
-            error!(
-                "[rhai] prelude failed to parse — falling back to the embedded prelude \
-                 (fix assets/scripting/prelude/ and restart): {e}"
-            );
-            compile_prelude_set(engine, lunco_assets::scripting::embedded_prelude_files())
-        }
-    }
+    // Disk-first (edit -> restart, no rebuild) on native; embedded is the
+    // authoritative source on wasm and installed builds without an asset tree.
+    // Once a source set is selected, an authored parse error is terminal for
+    // this engine construction. Running stale embedded helpers would make the
+    // visible source disagree with the policy actually executing.
+    compile_prelude_set(engine, lunco_assets::scripting::prelude_files())
 }
 
 /// Compile a script so its own top-level `const`s are visible inside its `fn`s.
@@ -724,15 +716,25 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // that id (the built-in `assets/scripting/policy/*` rules are just earlier
     // registrations), so a scenario re-shapes policy live, no rebuild — the
     // doc-37 §8 "policy = rhai" surface. `src` must define `fn <entry>(...)`;
-    // returns false (and logs why) on a compile error.
-    //
-    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-    // ease of debugging. No allow-list on which hook ids a script may replace, and
-    // `deterministic` is hard-coded false. Revisit before multiplayer hardening
-    // (REVIEW-2026-07-19.md finding #4).
+    // returns false (and logs why) on a compile error. Replacing or removing a
+    // hook is itself a policy mutation and uses the same Operator-floor gate as
+    // other global script settings.
     engine.register_fn(
         "register_hook",
         |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> bool {
+            let authorized = bridge_core::with_world(|world| {
+                bridge_core::enforce_script_authority(
+                    world,
+                    bridge_core::capability::POLICY_MUTATE,
+                    None,
+                )
+                .is_ok()
+            })
+            .unwrap_or(false);
+            if !authorized {
+                bevy::log::warn!("[rhai] register_hook denied by script authority");
+                return false;
+            }
             match lunco_hooks_rhai::register_rhai_hook(
                 id.as_str(),
                 entry.as_str(),
@@ -757,6 +759,19 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // the original said, because "no hook" is always a valid, defined state (the
     // Rust seam's built-in). Returns whether a hook was actually removed.
     engine.register_fn("unregister_hook", |id: ImmutableString| -> bool {
+        let authorized = bridge_core::with_world(|world| {
+            bridge_core::enforce_script_authority(
+                world,
+                bridge_core::capability::POLICY_MUTATE,
+                None,
+            )
+            .is_ok()
+        })
+        .unwrap_or(false);
+        if !authorized {
+            bevy::log::warn!("[rhai] unregister_hook denied by script authority");
+            return false;
+        }
         let existed = lunco_hooks::get(id.as_str()).is_some();
         lunco_hooks::unregister(id.as_str());
         bevy::log::info!("[rhai] unregister_hook: '{id}' (was registered: {existed})");
@@ -1976,26 +1991,27 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 // ── One-shot drain (RunRhai) ───────────────────────────────────────────────
 
-/// Queue of `(command_id, code, authority)` snippets submitted by `RunRhai`,
-/// waiting to run inside the exclusive [`drain_world_scripts`] system where
-/// `&mut World` is available. The `command_id` is the request id so the outcome
-/// can be recorded in [`CommandResults`] for the caller to poll. `authority` is
-/// the submitting session (the wire origin captured by the handler) the
-/// snippet's `cmd()`s are gated against — `None` for a local/host launch (§3.4).
+/// Queue of `(internal_id, code, authority, correlation_id)` snippets submitted
+/// by `RunRhai`, waiting to run inside the exclusive [`drain_world_scripts`]
+/// system where `&mut World` is available. `correlation_id` is present only
+/// for a transport request that is waiting for the completed response.
+/// `authority` is the submitting session (the wire origin captured by the
+/// handler) the snippet's `cmd()`s are gated against — `None` for a
+/// local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
-    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>)>,
+    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>, Option<u64>)>,
 }
 
-/// Exclusive system: run every queued snippet against the live World and record
-/// its real stdout (or error) under the originating command id, overwriting the
-/// provisional "queued" outcome the `RunRhai` handler recorded.
+/// Exclusive system: run every queued snippet against the live World, record
+/// its internal result, and resolve any waiting API request with the completed
+/// stdout or error.
 pub fn drain_world_scripts(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<PendingWorldScripts>().queue);
     if pending.is_empty() {
         return;
     }
-    for (id, code, authority) in pending {
+    for (id, code, authority, correlation_id) in pending {
         let outcome = match eval_with_world_as(world, &code, authority) {
             Ok(stdout) => {
                 let mut ack = Ack::new(OpId::new());
@@ -2004,7 +2020,29 @@ pub fn drain_world_scripts(world: &mut World) {
             }
             Err(e) => Err(e),
         };
-        // `id == 0` means an in-process trigger with no pollable request id.
+        if let Some(correlation_id) = correlation_id {
+            let response = match &outcome {
+                Ok(ack) => {
+                    let data = if ack.assigned.is_null() {
+                        serde_json::json!({ "accepted": true })
+                    } else {
+                        ack.assigned.clone()
+                    };
+                    lunco_api::schema::ApiResponse::ok(data)
+                }
+                Err(error) => lunco_api::schema::ApiResponse::error(
+                    lunco_api::schema::ApiErrorCode::InternalError,
+                    error.clone(),
+                ),
+            };
+            world
+                .commands()
+                .trigger(lunco_api::executor::ApiResponseEvent {
+                    correlation_id,
+                    response,
+                });
+        }
+        // `id == 0` means an in-process trigger with no internal result key.
         if id != 0 {
             world.resource_mut::<CommandResults>().record(id, outcome);
         }

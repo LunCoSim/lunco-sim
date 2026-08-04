@@ -12,13 +12,41 @@ use bevy::camera::primitives::Aabb;
 use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
 
-use crate::{SelectedEntities, SpawnState};
+use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command};
+use lunco_scene_commands::SelectedEntities;
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
 pub struct Selected;
+
+/// Entity-keyed selection intent emitted by editor panels that already hold
+/// the concrete entity. This preserves the shared selection mutation without
+/// exposing a mutable `World` to UI code.
+#[derive(Event, Clone, Copy)]
+pub(crate) struct SelectEntityTarget {
+    pub(crate) target: Entity,
+    pub(crate) extend: bool,
+    pub(crate) toggle: bool,
+}
+
+pub(crate) fn on_select_entity_target(
+    trigger: On<SelectEntityTarget>,
+    mut selected: ResMut<SelectedEntities>,
+    q_old: Query<Entity, With<Selected>>,
+    mut commands: Commands,
+) {
+    let request = trigger.event();
+    apply_selection(
+        &mut commands,
+        &mut selected,
+        q_old.iter(),
+        request.target,
+        request.extend,
+        request.toggle,
+    );
+}
 
 /// Select an entity by API id — the headless/scriptable equivalent of a
 /// Shift+Left-click in the viewport. Drives the same [`SelectedEntities`]

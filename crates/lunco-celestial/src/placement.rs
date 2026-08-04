@@ -32,6 +32,10 @@ use crate::geo::{
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
 
+/// Celestial projection is multi-stage. Give the solar grid and ephemeris a
+/// short settle window before reporting a structural anchoring failure.
+const ANCHOR_SETTLE_FRAMES: u32 = 30;
+
 /// Orbital view MODE state. Since the traveling-origin change (doc 47 Phase
 /// 6) this resource no longer re-poses the world: the CAMERA — it carries the
 /// `FloatingOrigin` — migrates onto the focused body's inertial parent grid
@@ -108,9 +112,12 @@ pub fn anchor_solar_frame_to_site(
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
     // One-shot latch for the "declared a site but cannot anchor it" diagnostics
-    // below. Latched, not rate-limited: the condition is structural, so it would
-    // otherwise repeat every gated frame for the life of the scene.
+    // below. It is paired with a settle counter so asynchronous celestial
+    // bootstrap does not produce a permanent false alarm during scene load.
     mut warned: Local<bool>,
+    // Celestial entities and ephemeris data arrive in separate projections. Do
+    // not turn their expected startup ordering into a permanent scene warning.
+    mut unresolved_frames: Local<u32>,
 ) {
     // The diagnostics below latch so a structural fault doesn't repeat every
     // gated frame — but the latch belongs to the SCENE, not the process. A new
@@ -118,6 +125,7 @@ pub fn anchor_solar_frame_to_site(
     // scene inherits a spent latch and reports nothing at all.
     if !q_site_changed.is_empty() {
         *warned = false;
+        *unresolved_frames = 0;
     }
     let Some(ephemeris) = ephemeris else { return };
     let anchor_opt = q_site.iter().next();
@@ -133,7 +141,8 @@ pub fn anchor_solar_frame_to_site(
     // renders the whole scene black. Say so once instead of letting a black
     // frame be the only symptom.
     let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else {
-        if !*warned {
+        *unresolved_frames = (*unresolved_frames).saturating_add(1);
+        if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
             *warned = true;
             warn!(
                 "[celestial] site-anchored scene has {} Solar Grid entities (need exactly 1) — \
@@ -144,6 +153,13 @@ pub fn anchor_solar_frame_to_site(
         }
         return;
     };
+    if *warned {
+        info!(
+            "[celestial] solar anchoring prerequisites are available again; the prior warning was startup ordering"
+        );
+        *warned = false;
+    }
+    *unresolved_frames = 0;
 
     let jd = world_time.epoch_jd;
     // Same cadence as the ephemeris projection + site edits; ordering after
@@ -162,7 +178,8 @@ pub fn anchor_solar_frame_to_site(
             .iter()
             .find(|b| b.ephemeris_id == anchor.body)
         else {
-            if !*warned {
+            *unresolved_frames = (*unresolved_frames).saturating_add(1);
+            if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
                 *warned = true;
                 warn!(
                     "[celestial] site anchor names body {} but the registry declares no such \
@@ -175,7 +192,8 @@ pub fn anchor_solar_frame_to_site(
         // No ephemeris ⇒ we do not know where the body IS, so we cannot anchor a site to it.
         // Leaving the anchor un-placed is honest; placing it at the Sun's centre is not.
         let Some(p) = ephemeris.provider.global_position(anchor.body, jd) else {
-            if !*warned {
+            *unresolved_frames = (*unresolved_frames).saturating_add(1);
+            if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
                 *warned = true;
                 warn!(
                     "[celestial] ephemeris has no position for body {} at JD {jd:.5} \
@@ -186,6 +204,12 @@ pub fn anchor_solar_frame_to_site(
             }
             return;
         };
+        if *warned {
+            info!(
+                "[celestial] Earth-relative ephemeris is available again; the prior warning was startup ordering"
+            );
+            *warned = false;
+        }
         let body_center = ecliptic_to_bevy(p).raw();
         let frame = solar_tangent_frame(desc, &anchor.geodetic, body_center, jd);
         // Rows East/Up/−North → world axes.

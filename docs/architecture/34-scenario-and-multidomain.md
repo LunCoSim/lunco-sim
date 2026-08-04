@@ -86,9 +86,11 @@ stick writes.)
 **One `Scope` per physics domain; cross-domain coupling is causal; acausal
 (`connectors:`) stays inside a domain.**
 
-A `Scope` with `CollectionAPI:components` compiles to ONE generated Modelica DAE.
-Acausal `connectors:<name>.connect` edges become `connect(a.<name>, b.<name>)`
-*inside that one DAE* — they cannot span two generated models. So a wire between
+A `Scope` with `CollectionAPI:components` compiles to ONE generated composite
+Modelica root. The synthesizer emits one child unit per connected graph component
+inside that root. Acausal `connectors:<name>.connect` edges become
+`connect(a.<name>, b.<name>)` inside one child unit — they cannot span two generated
+units. So a wire between
 an electrical `Pin` and a thermal `HeatPort` must never be acausal: it would
 either fail to compose (different names) or compile to an invalid
 `connect(Pin, HeatPort)`. Cross-domain coupling is therefore always a causal
@@ -99,7 +101,9 @@ This is why the rover's thermal and electrical domains are separate scopes:
 - `Scope "Electrical"` — Battery + motors, acausal `connectors:p` (Kirchhoff
   current) solved together; forwards each motor's `outputs:heat` to its boundary.
 - `Scope "Thermal"` — heat loads + masses + radiators, acausal `connectors:port`
-  (heat balance) solved together; consumes `inputs:motor_heat_*`.
+  (heat balance) solved together; consumes `inputs:motor_heat_*`. If the authored
+  thermal graph has independent banks, the thermal synthesizer emits one composite
+  root with one generated unit per bank; the asset does not duplicate Scope shells.
 - **The rover root is the bus** between them: it declares `outputs:motor_heat_*`
   ports, forwards the Electrical boundary output onto them, and the Thermal scope
   reads from the root. Neither scope names the other — the root (common ancestor)

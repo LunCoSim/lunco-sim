@@ -13,8 +13,8 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_luncosim_edit::SelectedEntities;
 use lunco_modelica::state::ModelicaDocumentRegistry;
+use lunco_scene_commands::SelectedEntities;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_scripting::ScriptRegistry;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};

@@ -44,7 +44,7 @@ pub struct UsdParamView {
 /// View-model producer: harvest the selected prim's `customData`-ranged
 /// attributes into [`UsdParamView`].
 pub fn produce_usd_param_view(
-    selected: Option<Res<crate::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
     target: Option<Res<crate::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     stages: Res<Assets<UsdStageAsset>>,

@@ -20,7 +20,7 @@ use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::SelectedEntities;
+use lunco_scene_commands::SelectedEntities;
 
 const NODE_KIND: &str = "autopilot.behavior";
 const EDGE_KIND: &str = "autopilot.flow";
@@ -29,6 +29,93 @@ const NODE_H: f32 = 76.0;
 const DEPTH_STEP: f32 = 260.0;
 const ROW_STEP: f32 = 120.0;
 const MARGIN: f32 = 48.0;
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct WriteMissionRequested {
+    vessel: Entity,
+    xml: String,
+}
+
+#[derive(Event, Clone, Copy, Debug)]
+pub(crate) struct CreateMissionRequested {
+    vessel: Entity,
+}
+
+pub(crate) fn on_write_mission_requested(
+    trigger: On<WriteMissionRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) =
+            lunco_scene_commands::doc_resolve::resolve_doc_for_entity(world, request.vessel)
+        else {
+            bevy::log::warn!("[autopilot-canvas] selected vessel is not document-backed");
+            return;
+        };
+        let Some(prim) = world.get::<UsdPrimPath>(request.vessel) else {
+            return;
+        };
+        world.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::SetAttribute {
+                edit_target: LayerId::runtime(),
+                path: format!("{}/Mission", prim.path),
+                name: "info:sourceCode".to_string(),
+                type_name: "string".to_string(),
+                value: request.xml,
+            },
+        });
+    });
+}
+
+pub(crate) fn on_create_mission_requested(
+    trigger: On<CreateMissionRequested>,
+    mut commands: Commands,
+) {
+    let request = *trigger.event();
+    commands.queue(move |world: &mut World| {
+        let vessel = request.vessel;
+        let Some(doc) = lunco_scene_commands::doc_resolve::resolve_doc_for_entity(world, vessel)
+        else {
+            bevy::log::warn!("[autopilot-canvas] selected vessel is not document-backed");
+            return;
+        };
+        let Some(prim) = world.get::<UsdPrimPath>(vessel) else {
+            return;
+        };
+        let value = serde_json::json!({"kind":"sequence", "children":[]});
+        let Ok(xml) = lunco_autopilot::btcpp_xml::value_to_xml(&value) else {
+            return;
+        };
+        let mission = format!("{}/Mission", prim.path);
+        world.trigger(ApplyUsdOps {
+            doc,
+            label: "Create autopilot program".to_string(),
+            ops: vec![
+                UsdOp::AddPrim {
+                    edit_target: LayerId::runtime(),
+                    parent_path: prim.path.clone(),
+                    name: "Mission".to_string(),
+                    type_name: Some("Scope".to_string()),
+                    reference: None,
+                },
+                UsdOp::SetApiSchemas {
+                    edit_target: LayerId::runtime(),
+                    path: mission.clone(),
+                    schemas: vec!["LunCoProgramAPI".to_string()],
+                },
+                UsdOp::SetAttribute {
+                    edit_target: LayerId::runtime(),
+                    path: mission,
+                    name: "info:sourceCode".to_string(),
+                    type_name: "string".to_string(),
+                    value: xml,
+                },
+            ],
+        });
+    });
+}
 
 #[derive(Clone, Debug)]
 struct BehaviorNodeData {
@@ -648,72 +735,14 @@ fn write_mission_xml(ctx: &mut PanelCtx, vessel: Entity, json: String) {
             return;
         }
     };
-    ctx.defer(move |world| {
-        let Some(doc) = lunco_scene_commands::doc_resolve::resolve_doc_for_entity(world, vessel)
-        else {
-            bevy::log::warn!("[autopilot-canvas] selected vessel is not document-backed");
-            return;
-        };
-        let Some(prim) = world.get::<UsdPrimPath>(vessel) else {
-            return;
-        };
-        world.trigger(ApplyUsdOp {
-            doc,
-            op: UsdOp::SetAttribute {
-                edit_target: LayerId::runtime(),
-                path: format!("{}/Mission", prim.path),
-                name: "info:sourceCode".to_string(),
-                type_name: "string".to_string(),
-                value: xml,
-            },
-        });
-    });
+    ctx.trigger(WriteMissionRequested { vessel, xml });
 }
 
 /// Create the standard program child for a vessel that did not ship with one.
 /// These are the same USD operations the waypoint tool uses, so the mission is
 /// persisted, journaled and immediately projected back into the running rover.
 fn create_mission(ctx: &mut PanelCtx, vessel: Entity) {
-    let value = serde_json::json!({"kind":"sequence", "children":[]});
-    let Ok(xml) = lunco_autopilot::btcpp_xml::value_to_xml(&value) else {
-        return;
-    };
-    ctx.defer(move |world| {
-        let Some(doc) = lunco_scene_commands::doc_resolve::resolve_doc_for_entity(world, vessel)
-        else {
-            bevy::log::warn!("[autopilot-canvas] selected vessel is not document-backed");
-            return;
-        };
-        let Some(prim) = world.get::<UsdPrimPath>(vessel) else {
-            return;
-        };
-        let mission = format!("{}/Mission", prim.path);
-        world.trigger(ApplyUsdOps {
-            doc,
-            label: "Create autopilot program".to_string(),
-            ops: vec![
-                UsdOp::AddPrim {
-                    edit_target: LayerId::runtime(),
-                    parent_path: prim.path.clone(),
-                    name: "Mission".to_string(),
-                    type_name: Some("Scope".to_string()),
-                    reference: None,
-                },
-                UsdOp::SetApiSchemas {
-                    edit_target: LayerId::runtime(),
-                    path: mission.clone(),
-                    schemas: vec!["LunCoProgramAPI".to_string()],
-                },
-                UsdOp::SetAttribute {
-                    edit_target: LayerId::runtime(),
-                    path: mission,
-                    name: "info:sourceCode".to_string(),
-                    type_name: "string".to_string(),
-                    value: xml,
-                },
-            ],
-        });
-    });
+    ctx.trigger(CreateMissionRequested { vessel });
 }
 
 pub struct AutopilotCanvasPanel;
@@ -808,16 +837,14 @@ impl Panel for AutopilotCanvasPanel {
                     if let (Some(vessel), Some(spec_json)) =
                         (state.selected, state.signature.clone())
                     {
-                        _ctx.defer(move |world| {
-                            // The autopilot writes the vessel's public control ports.
-                            // That is the same boundary Modelica/GNSS wiring consumes;
-                            // graph activation never bypasses or replaces co-sim.
-                            world.trigger(lunco_autopilot::EngageAutopilot {
-                                vessel,
-                                index: 0,
-                                throttle: 0.0,
-                                spec_json,
-                            });
+                        // The autopilot writes the vessel's public control ports.
+                        // That is the same boundary Modelica/GNSS wiring consumes;
+                        // graph activation never bypasses or replaces co-sim.
+                        _ctx.trigger(lunco_autopilot::EngageAutopilot {
+                            vessel,
+                            index: 0,
+                            throttle: 0.0,
+                            spec_json,
                         });
                     }
                 }

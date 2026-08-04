@@ -158,8 +158,8 @@ impl StageMetrics {
     /// The AUTHORING counterpart to [`from_reader`](Self::from_reader). The write
     /// path opens the document's layer as a transient stage to author through
     /// (`open_doc_stage`), so it reads the metadata from THAT stage rather than
-    /// poking the flattened `sdf::Data` behind it — the same `stage_metadata` call
-    /// `StageView` makes on the read side.
+    /// poking the authored layer data behind it — the same `stage_metadata` call
+    /// the live stage makes on the read side.
     ///
     /// That symmetry is the point: read and write must agree on the stage's frame
     /// or a round-trip is not the identity. Going through the composed stage on

@@ -2,7 +2,7 @@
 //!
 //! The single-op apply funnel (`apply_one_op_as`) plus its shared,
 //! egui-free helper closure: the apply kernel, the deferred-structural-op
-//! queue, and the journal-recording shim. Lifted out of the (egui-gated)
+//! queue, and journal recording. Lifted out of the (egui-gated)
 //! `ui::panels::canvas_diagram::ops` module so the headless / server build
 //! and the core `api::*` command observers can apply ops without pulling in
 //! egui. The batch `apply_ops` path (egui-using: pins tabs, wakes the canvas

@@ -59,7 +59,7 @@ pub fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
             world
                 .get_resource::<CanvasDiagramState>()
                 .and_then(|state| {
-                    let docstate = state.get(Some(doc_id));
+                    let docstate = state.get_for_doc(doc_id)?;
                     docstate.canvas.scene.nodes().find_map(|(_id, n)| {
                         if n.origin.as_deref() == Some(ev.name.as_str()) {
                             Some((n.rect.width().max(1.0), n.rect.height().max(1.0)))

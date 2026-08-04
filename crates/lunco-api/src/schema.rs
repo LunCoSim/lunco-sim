@@ -49,9 +49,8 @@ pub enum ApiRequest {
     // `lunco-scene-commands` as an `ApiQueryProvider`, reporting the same
     // grid-absolute frame that command accepts. As a built-in it read
     // `GlobalTransform` — the render frame — and reported a position that shifted
-    // with the floating origin and could not be fed back. The `{"type":
-    // "QueryEntity"}` wire shape is unchanged; the envelope maps it to the
-    // provider.
+    // with the floating origin and could not be fed back. `QueryEntity` is an
+    // ExecuteCommand call whose provider owns the coordinate-frame semantics.
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry {
@@ -63,11 +62,6 @@ pub enum ApiRequest {
     /// reach it** — every subscription leaked for the life of the process, and a client
     /// that reconnected accumulated a new one each time.
     UnsubscribeTelemetry {
-        id: u64,
-    },
-    /// Poll the outcome of a previously-accepted command by its
-    /// `command_id` (the request id returned in `command_accepted`).
-    QueryCommandResult {
         id: u64,
     },
 }
@@ -85,7 +79,6 @@ pub enum ApiErrorCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ApiResponse {
     Ok {
-        command_id: Option<u64>,
         data: Option<serde_json::Value>,
     },
     Error {
@@ -102,16 +95,13 @@ pub enum ApiResponse {
 
 impl ApiResponse {
     pub fn ok(data: serde_json::Value) -> Self {
-        Self::Ok {
-            command_id: None,
-            data: Some(data),
-        }
+        Self::Ok { data: Some(data) }
     }
-    pub fn command_accepted(command_id: u64) -> Self {
-        Self::Ok {
-            command_id: Some(command_id),
-            data: None,
-        }
+
+    /// A typed command was validated and dispatched. Deferred commands return
+    /// their actual result through the same request/response channel.
+    pub fn accepted() -> Self {
+        Self::ok(serde_json::json!({ "accepted": true }))
     }
     pub fn error(code: ApiErrorCode, message: impl Into<String>) -> Self {
         Self::Error {

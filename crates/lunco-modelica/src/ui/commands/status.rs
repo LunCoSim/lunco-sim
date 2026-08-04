@@ -21,11 +21,6 @@ pub fn publish_unsaved_modelica_docs(
         .map(|(id, host)| {
             let document = host.document();
             let origin = document.origin();
-            // `is_unsaved` covers both flavours of "Save before close
-            // would lose data": Untitled drafts (never saved) AND
-            // dirty saved files (edited since last save). The
-            // app-close prompt and the Files-section dirty dot both
-            // read this flag — keeping the semantics one place.
             let is_unsaved = origin.is_untitled() || document.is_dirty();
             lunco_workbench::UnsavedDocEntry {
                 id,
@@ -41,14 +36,14 @@ pub fn update_status_bar(
     workbench: Res<WorkbenchState>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     compile_states: Res<DocumentDiagnostics>,
-    layout: Option<ResMut<lunco_workbench::WorkbenchLayout>>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
     registry: Res<ModelicaDocumentRegistry>,
 ) {
-    let Some(mut layout) = layout else { return };
+    let Some(mut bus) = bus else { return };
     let any_change = workbench.is_changed()
         || compile_states.is_changed()
         || workspace.as_ref().map(|w| w.is_changed()).unwrap_or(false);
-    if !any_change && !layout.is_added() {
+    if !any_change && !bus.is_added() {
         return;
     }
     let active_doc = workspace.as_ref().and_then(|w| w.active_document);
@@ -73,5 +68,9 @@ pub fn update_status_bar(
             lunco_doc::CompileState::Idle => format!("● {model_name}"),
         },
     };
-    layout.set_status(text);
+    bus.push(
+        lunco_workbench::status_bus::MODELICA_SOURCE,
+        lunco_workbench::status_bus::StatusLevel::Info,
+        text,
+    );
 }

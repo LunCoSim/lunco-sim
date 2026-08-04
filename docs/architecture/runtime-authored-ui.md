@@ -68,11 +68,12 @@ egui host camera, dock rectangles, and scene-pick ownership.
 
 ### 1. Register the surface
 
-Every surface needs a template, stylesheet, namespace, and placement. The
+Every surface needs a stable `id`, template, stylesheet, namespace, and placement. The
 following is a minimal interactive window surface:
 
 ```json
 {
+  "id": "mission-status",
   "template": "ui/status.html",
   "stylesheet": "ui/status.css",
   "namespace": "mission-status",
@@ -81,7 +82,7 @@ following is a minimal interactive window surface:
     "state": { "source": "state" }
   },
   "actions": [
-    { "callback": "runtime_status_pause", "action": "simulation.pause" }
+    { "callback": "runtime_status_focus_moon", "action": "view.body.moon" }
   ],
   "visible_in_perspective": "sandbox_view",
   "interactive": true,
@@ -99,14 +100,19 @@ The fields are:
 
 | Field | Meaning |
 |---|---|
+| `id` | Stable manifest identity; unique within the manifest. |
 | `template`, `stylesheet` | Asset paths under the normal Bevy asset root. |
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values such as `true` or `301` into CSS values. |
-| `actions` | Maps an authored HUI callback name to a semantic action string. |
+| `actions` | Maps a unique HUI callback name to one of the host's closed semantic actions (`view.surface`, `view.body.moon`, `view.body.earth`, or `overlay.terrain.dismiss`). |
 | `visible_in_perspective` | Optional workbench perspective restriction. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
 | `interactive` | Registers the resolved rectangle with the existing chrome/scene pick gate. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
+
+The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
+callbacks, unsafe relative paths, empty contract names, unsupported actions, and
+non-finite or non-positive window geometry before any surface is mounted.
 
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the
@@ -206,7 +212,7 @@ consumer:
 ```sh
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"command":"ReadExposures","params":{"surface":"mission-status"}}'
+  -d '{"type":"ExecuteCommand","command":"ReadExposures","params":{"surface":"mission-status"}}'
 ```
 
 The response contains `revision`, `visible`, and typed properties. A remote

@@ -6,7 +6,7 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
 use crate::commands::TeleportToSurface;
 use lunco_core::{Avatar, CelestialBody};
-use lunco_time::{TimeTransport, TransportMode, WorldTime};
+use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
@@ -33,8 +33,7 @@ impl Panel for CelestialTimePanel {
         }
 
         ui.heading("Epoch & UTC Time");
-        // Snapshot the time state up front so all reads release the immutable
-        // `ctx` borrow before any `ctx.defer` below. Epoch comes from the derived
+        // Snapshot the time state up front. Epoch comes from the derived
         // `WorldTime`; play/rate from the `TimeTransport` authority (doc 19).
         let epoch = ctx.resource::<WorldTime>().map(|w| w.epoch_jd);
         let transport = ctx
@@ -53,14 +52,9 @@ impl Panel for CelestialTimePanel {
                 .button(if paused { "▶ Play" } else { "⏸ Pause" })
                 .clicked()
             {
-                ctx.defer(move |world| {
-                    if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                        t.mode = if paused {
-                            TransportMode::Playing
-                        } else {
-                            TransportMode::Paused
-                        };
-                    }
+                ctx.trigger(SetTimeTransport {
+                    playing: Some(paused),
+                    rate: None,
                 });
             }
         });
@@ -68,10 +62,9 @@ impl Panel for CelestialTimePanel {
             let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
             for &m in multipliers.iter() {
                 if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
-                    ctx.defer(move |world| {
-                        if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                            t.rate = m;
-                        }
+                    ctx.trigger(SetTimeTransport {
+                        playing: Some(true),
+                        rate: Some(m),
                     });
                 }
             }
@@ -106,7 +99,7 @@ impl Panel for CelestialBodiesPanel {
         // Read the precomputed body list (built by
         // `populate_celestial_bodies_view`, change-gated). Collect the
         // teleport intent during paint; emit it after the `view` borrow
-        // ends so `ctx.defer` is free to take `&mut`.
+        // ends through the typed command boundary.
         let mut teleport: Option<(Entity, u64)> = None;
         if let Some(view) = ctx.resource::<CelestialBodiesView>() {
             let avatar = view.avatar;
@@ -123,11 +116,9 @@ impl Panel for CelestialBodiesPanel {
         }
 
         if let Some((target, body_entity)) = teleport {
-            ctx.defer(move |world| {
-                world.trigger(TeleportToSurface {
-                    target,
-                    body_entity,
-                });
+            ctx.trigger(TeleportToSurface {
+                target,
+                body_entity,
             });
         }
     }

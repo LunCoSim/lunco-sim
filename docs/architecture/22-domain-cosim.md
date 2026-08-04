@@ -149,13 +149,13 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 
 | Plane | Examples | Mechanism |
 |---|---|---|
-| **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), *not* by polling `QueryCommandResult` per tick. |
+| **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
 | **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
-| **Live inputs** — high-frequency, latest-wins | parameter scrubs during a run, joystick/throttle (`SetModelInput`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied directly (e.g. `sim.rs::apply_set_model_input` bypasses the event bus by design). Never a pollable result-returning command. |
+| **Live inputs** — high-frequency, latest-wins | parameter scrubs during a run, joystick/throttle (`SetModelInput`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied directly (e.g. `sim.rs::apply_set_model_input` bypasses the event bus by design). Never a result-returning command. |
 
 Rule of thumb: **commands start/stop/configure a run and one-shot actions;
 the simulation runs directly once started; live continuous inputs ride
-ControlStream.** The result/requestId machinery (`QueryCommandResult`,
+ControlStream.** The result/request correlation machinery (the original deferred response,
 `CommandResults`) stays on the discrete control surface and never enters
 the per-tick loop. Async completion of long-running runs is reported via
 domain state, so it is an explicit **non-goal** of the command-result store.
@@ -364,7 +364,7 @@ replaces the active scene without restarting the binary:
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda","root_prim":""}}'
+  -d '{"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda","root_prim":""}}'
 ```
 
 It despawns every entity carrying `UsdPrimPath`, despawns every

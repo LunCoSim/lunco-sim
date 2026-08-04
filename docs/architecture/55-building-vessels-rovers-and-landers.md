@@ -23,8 +23,10 @@ When building any vehicle assembly in LunCoSim:
    - Every included Modelica facet explicitly uses
      `info:implementationSource = "sourceAsset"` with a `.mo` source.
    - Runtime Rust projection reads the composed stage and emits the transient Modelica wrapper. Rhai does not synthesize equations.
-   - One collection must contain one connected acausal island. A disconnected island
-     is another compilation and failure domain, so it gets another named Scope.
+   - One collection is one runtime compilation boundary. The synthesizer partitions
+     its composed program graph into explicit connected Modelica units, so independent
+     acausal units remain separate equation subgraphs without duplicate Scopes or
+     runtime entities.
 
 3. **Vehicle Assembly Defines Topology**:
    - The vehicle assembly layer authors the Kirchhoff pin connections between components:
@@ -121,10 +123,9 @@ normal. Include the panel, battery and driven loads in the same explicit
 battery pin.
 
 The acceptance is a chain, not a mesh check: the electrical scope must compile,
-the panel must publish `power_out`/`cos_incidence`, and the battery must publish
-`soc_out` while receiving current. Read the live island through `ReadPorts`; the
-member port uses the fully mangled prim path, while the scope boundary may expose
-short names such as `solar_power` and `soc`.
+the authored Scope boundary must publish `solar_power`/`solar_incidence`, and it
+must publish `soc` while receiving current. Read the stable boundary names through
+`ReadPorts`; generated child-unit and member-instance names are diagnostic only.
 
 ---
 

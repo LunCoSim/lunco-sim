@@ -104,8 +104,8 @@ pub enum TimeRegime {
 }
 
 /// The transport authority: the single internal source of truth for play state
-/// and rate. UI (the Time Control / mission-control panels and the avatar pause
-/// hotkey) writes this directly — it is the sole play/rate authority.
+/// and rate. UI and input surfaces dispatch [`SetTimeTransport`], which updates
+/// this resource — it is the sole play/rate authority.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct TimeTransport {
@@ -262,6 +262,19 @@ impl MissionClock {
     #[inline]
     pub fn met_secs(&self, tick: u64, real_secs: f64) -> f64 {
         (self.epoch_jd(tick, real_secs) - self.mission_epoch0_jd) * SECS_PER_DAY
+    }
+
+    /// Restore the calendar mapping to the mission origin and leave any fast
+    /// preview regime. The authored mission origin itself is preserved so a
+    /// scene reload can reset the old scene first and then apply the new scene's
+    /// `SetMissionEpoch` without a stale warp carrying across the boundary.
+    pub fn reset_calendar(&mut self) {
+        self.anchor = TimeAnchor {
+            epoch0_jd: self.mission_epoch0_jd,
+            tick0: self.mission_tick0,
+        };
+        self.regime = TimeRegime::RealtimePhysics;
+        self.warp = None;
     }
 }
 
@@ -604,6 +617,24 @@ mod tests {
         assert!((c.epoch_jd(60, 6.0) - (warped + 1.0 / SECS_PER_DAY)).abs() < EPS);
         // While sim_secs advances from the *mission* origin, not the re-anchor.
         assert!((c.sim_secs(60) - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn reset_calendar_returns_warp_to_the_authored_mission_origin() {
+        let mut c = MissionClock::anchored(2_461_283.66746, 12);
+        let origin = c.epoch_jd(12, 0.0);
+
+        advance_clock(&mut c, 12, 100_000.0, false, 0.0);
+        assert_eq!(c.regime, TimeRegime::KinematicWarp);
+        assert!(c.epoch_jd(12, 1.0) > origin + 1.0);
+
+        c.reset_calendar();
+
+        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
+        assert!(c.warp.is_none());
+        assert_eq!(c.anchor.epoch0_jd, c.mission_epoch0_jd);
+        assert_eq!(c.anchor.tick0, c.mission_tick0);
+        assert_eq!(c.epoch_jd(12, 1.0), origin);
     }
 
     #[test]

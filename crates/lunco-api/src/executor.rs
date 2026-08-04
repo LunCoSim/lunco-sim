@@ -40,9 +40,9 @@ pub struct ApiCommandEvent {
     pub command: String,
     #[reflect(ignore)]
     pub params: serde_json::Value,
-    /// Request id minted at ingress; the dispatcher sets `ActiveCommandId`
-    /// to this around the observer trigger so a result-reporting handler
-    /// records its outcome under the id the caller can poll.
+    /// Internal outcome key used by result-reporting in-process handlers.
+    /// Transport responses use the request correlation id directly; this id
+    /// is not exposed on the wire.
     pub id: u64,
 }
 
@@ -75,7 +75,6 @@ pub fn api_request_observer(
     query_registry: Res<ApiQueryRegistry>,
     visibility: Res<ApiVisibility>,
     type_registry: Res<AppTypeRegistry>,
-    cmd_results: Res<lunco_core::CommandResults>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     q_meta: Query<(
         Option<&Name>,
@@ -99,7 +98,6 @@ pub fn api_request_observer(
             &query_registry,
             &visibility,
             &type_reg,
-            &cmd_results,
             &mut subscriptions,
             &q_meta,
             deferred_commands.as_deref(),
@@ -177,8 +175,7 @@ pub fn validate_command_params(
 
     let constructible = registration
         .data::<bevy::reflect::ReflectFromReflect>()
-        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
-        .unwrap_or(true);
+        .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
     if !constructible {
         return Err(format!(
             "Command '{command}': params are not constructible into the command type (a required field is missing or invalid)"
@@ -213,11 +210,9 @@ pub fn api_command_dispatcher(
     let mut resolved_params = event.params.clone();
     // Coerce absent/null params to an empty object. Unit-struct commands
     // (e.g. `Exit`, `Ping`) and commands whose fields are all defaulted are
-    // sent as `{"command":"X"}` with no `params`; TypedReflectDeserializer
-    // rejects a bare `null` ("invalid type: null, expected reflected struct
-    // value") and the command silently never fires (the HTTP layer still
-    // returns a command_id, so it *looks* accepted). An empty map deserializes
-    // fine — missing fields fall back to their reflect/serde defaults.
+    // may omit `params`; TypedReflectDeserializer rejects a bare `null`.
+    // An empty map deserializes fine — missing fields fall back to their
+    // reflect/serde defaults.
     if resolved_params.is_null() {
         resolved_params = serde_json::Value::Object(serde_json::Map::new());
     }
@@ -263,25 +258,21 @@ pub fn api_command_dispatcher(
                 {
                     // Guard against a panic in `ReflectEvent::trigger`: it builds
                     // the concrete type via `FromReflect`, falling back to
-                    // `Default`/`FromWorld` and PANICKING when none apply (e.g. a
-                    // struct still missing a no-`Default` field). Verify the value
-                    // is fully constructible first so a malformed command logs and
-                    // is dropped instead of killing the process. (Types without a
-                    // registered `ReflectFromReflect` keep the legacy path.)
+                    // `Default`/`FromWorld` and panicking when none apply. Verify
+                    // the value is fully constructible first so malformed
+                    // commands are logged and dropped instead of killing the
+                    // process. Types without a registered `ReflectFromReflect`
+                    // use Bevy's normal reflected-event path.
                     let constructible = registration
                         .data::<bevy::reflect::ReflectFromReflect>()
-                        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
-                        .unwrap_or(true);
+                        .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
                     if !constructible {
                         let msg = format!(
                             "command '{cmd_name}' not constructible from params (missing/invalid fields)"
                         );
                         warn!("[lunco-api] {msg}; dropped");
-                        // Record a TERMINAL outcome. A dropped command used to
-                        // leave `CommandResults` empty, so `QueryCommandResult`
-                        // answered `outcome: null` — the same answer a healthy
-                        // fire-and-forget command gives. A poller could not tell
-                        // "never ran" from "ran fine".
+                        // Record a terminal internal outcome for scripts and
+                        // in-process result handlers.
                         world.resource_mut::<lunco_core::CommandResults>().insert(
                             cmd_id,
                             lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
@@ -295,6 +286,13 @@ pub fn api_command_dispatcher(
                     world.resource_mut::<lunco_core::ActiveCommandId>().set(Some(cmd_id));
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
                     world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
+                    // The pending correlation is a per-dispatch handoff to a
+                    // deferred command handler. Clear it immediately after
+                    // the reflected event so a later in-process trigger cannot
+                    // inherit an old transport request.
+                    if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
+                        pending.correlation_id = 0;
+                    }
                 }
             });
         }
@@ -302,7 +300,7 @@ pub fn api_command_dispatcher(
             // Terminal, and RECORDED — see the `!constructible` branch above.
             // An external caller sees this synchronously as a 422 from
             // `execute_request`'s pre-flight validation; an in-process trigger
-            // learns about it by polling `QueryCommandResult`.
+            // learns about it through the internal command-result substrate.
             let msg = format!("command '{}': invalid params: {e}", event.command);
             warn!("[lunco-api] {msg}; dropped");
             let cmd_id = event.id;
@@ -568,7 +566,6 @@ fn execute_request(
     query_registry: &ApiQueryRegistry,
     visibility: &ApiVisibility,
     type_registry: &TypeRegistry,
-    cmd_results: &lunco_core::CommandResults,
     subscriptions: &mut TelemetrySubscriptions,
     q_meta: &Query<(
         Option<&Name>,
@@ -656,13 +653,9 @@ fn execute_request(
                 ));
             }
 
-            // Validate the PARAMS synchronously, here, while the registry is in
-            // hand. Previously this returned `command_accepted` immediately and
-            // the dispatcher, running later, just `warn!`d and dropped anything
-            // that failed to deserialize — so a typo'd param returned 200 OK and
-            // `QueryCommandResult` came back `outcome: null`, which is also what
-            // a fire-and-forget success looks like. A bad command was
-            // INDISTINGUISHABLE from a good one. Now it is a synchronous 422.
+            // Validate the params synchronously, here, while the registry is in
+            // hand. A typo'd param must be rejected at the request boundary,
+            // rather than being dropped later by the reflected dispatcher.
             //
             // The dispatcher still re-validates (it must: `ApiCommandEvent` can
             // be triggered in-process too), so this is a gate, not the only
@@ -683,7 +676,7 @@ fn execute_request(
                 id: command_id,
             });
 
-            Some(ApiResponse::command_accepted(command_id))
+            Some(ApiResponse::accepted())
         }
         ApiRequest::ListEntities => {
             let entities: Vec<serde_json::Value> = registry
@@ -741,31 +734,16 @@ fn execute_request(
             subscriptions.unsubscribe(*id);
             Some(ApiResponse::ok(serde_json::json!({ "unsubscribed": id })))
         }
-        ApiRequest::QueryCommandResult { id } => {
-            // `outcome: null` = STILL PENDING (or an unknown id): the command was
-            // accepted and no terminal outcome has been recorded yet. It no
-            // longer doubles as "was silently dropped" — invalid params are now
-            // rejected synchronously (422) by `execute_request`, and the
-            // dispatcher records `Rejected` for anything it drops. A
-            // fire-and-forget command whose handler reports nothing also stays
-            // `null`; that's the one remaining ambiguity, and it is bounded to
-            // handlers that never report.
-            let outcome = cmd_results.get(*id);
-            Some(ApiResponse::ok(serde_json::json!({
-                "id": id,
-                "outcome": outcome,
-            })))
-        }
     }
 }
 
 /// **Commands that answer LATER, on the request's correlation id.**
 ///
 /// Most commands are fire-and-report: the executor validates them, dispatches an
-/// `ApiCommandEvent`, and answers `command_accepted` immediately. A few cannot — their
+/// `ApiCommandEvent`, and answers with an explicit acknowledgement immediately. A few cannot — their
 /// result only exists after something asynchronous happens (a GPU frame is captured, a bake
 /// finishes, a file is written). Those want to put the *actual payload* in the HTTP response
-/// rather than make the caller poll `QueryCommandResult`.
+/// rather than make the caller poll a second endpoint.
 ///
 /// The mechanism already existed for query providers (`return None; // response deferred`,
 /// then answer with an [`ApiResponseEvent`] carrying the same `correlation_id`). This makes
@@ -1077,7 +1055,7 @@ mod tests {
     }
 
     #[test]
-    fn test_command_id_generation() {
+    fn internal_command_id_generation() {
         let mut counter = ApiIdCounter::default();
         assert_eq!(counter.next_id(), 0);
         assert_eq!(counter.next_id(), 1);
@@ -1092,6 +1070,12 @@ mod tests {
     // reaches a real App's registry.
     #[Command(default)]
     struct TestEcho {
+        pub fail: bool,
+    }
+
+    #[derive(Reflect)]
+    #[reflect(from_reflect = false)]
+    struct NoConstructor {
         pub fail: bool,
     }
 
@@ -1140,17 +1124,30 @@ mod tests {
 
     // ── Params validation (a failed command must NOT report success) ──────
     //
-    // The bug: `execute_request` minted a `command_id` and returned
-    // `command_accepted` BEFORE anything looked at the params; the dispatcher
-    // later dropped an undeserializable command with a `warn!`, and
-    // `QueryCommandResult` answered `outcome: null` — the same thing it says
-    // for a healthy fire-and-forget command. `{"command":"X","params":{bad}}`
-    // was a 200 OK. These pin the synchronous gate that replaced it.
+    // The bug: the request path used to acknowledge before validating params;
+    // the dispatcher then dropped malformed commands. These pin the
+    // synchronous validation gate that replaced that ambiguity.
 
     fn test_registry() -> bevy::reflect::TypeRegistry {
         let mut reg = bevy::reflect::TypeRegistry::new();
         reg.register::<TestEcho>();
         reg
+    }
+
+    #[test]
+    fn missing_constructor_fails_validation() {
+        let mut reg = bevy::reflect::TypeRegistry::new();
+        reg.register::<NoConstructor>();
+        let registration = reg.get_with_short_type_path("NoConstructor").unwrap();
+        let err = validate_command_params(
+            "NoConstructor",
+            &serde_json::json!({ "fail": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .expect_err("a reflected command without a constructor must be rejected");
+        assert!(err.contains("not constructible"), "unexpected error: {err}");
     }
 
     #[test]
@@ -1169,7 +1166,7 @@ mod tests {
 
     #[test]
     fn absent_params_pass_validation() {
-        // Unit-ish command sent as `{"command":"TestEcho"}` — no params at all.
+        // Unit-ish command with omitted params — no fields at all.
         // All fields default, so this is legitimately valid.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();

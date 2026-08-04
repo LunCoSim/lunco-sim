@@ -26,7 +26,7 @@
 //! ## What this crate ships today
 //!
 //! - [`Panel`] trait: minimal render contract (`id`, `title`,
-//!   `default_slot`, `render(&mut Ui, &mut World)`)
+//!   `default_slot`, `render(&mut Ui, &mut PanelCtx)`)
 //! - [`WorkbenchLayout`] resource wrapping `egui_dock::DockState`
 //! - Perspective presets (slot-assignment DSL) — see [`Perspective`]
 //! - Auto-add of `bevy_egui::EguiPlugin` if the host hasn't
@@ -46,10 +46,7 @@
 //!   *perspective* preset, not arbitrary user split rearrangements
 //!   (egui_dock's tree isn't serialized; `TabId`/`PanelId` hold
 //!   `&'static str`).
-//! - **Document auto-reopen** — open paths are persisted but not yet
-//!   replayed on launch (needs per-domain open commands).
 //! - **Command palette** — `Ctrl+P` unbound.
-//! - **Theming / keybinds** — egui defaults only.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -64,6 +61,7 @@ use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
 mod editor_tabs;
+mod menu;
 mod panel;
 mod perspective;
 mod perspective_help;
@@ -102,6 +100,17 @@ pub use perspective_help::{
 pub use render_robustness::{
     preferred_wgpu_settings, RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning,
 };
+
+/// Register the render-recovery reset at the host application's scene-teardown
+/// boundary. The workbench owns GPU state but deliberately does not depend on
+/// the USD scene lifecycle crate; the composition root supplies its schedule
+/// label when both concerns are present.
+pub fn install_render_recovery_teardown<S: bevy::ecs::schedule::ScheduleLabel>(
+    app: &mut App,
+    schedule: S,
+) {
+    app.add_systems(schedule, render_robustness::reset_render_recovery);
+}
 pub use window_command::{
     merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
 };
@@ -118,6 +127,7 @@ pub use workspace_state::{
     WorkspaceStatePlugin,
 };
 
+pub use menu::{MenuCtx, UndoProbeCtx};
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot,
     TabId,
@@ -735,7 +745,7 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<workspace_state::WorkspaceStatePlugin>() {
             app.add_plugins(workspace_state::WorkspaceStatePlugin);
         }
-        // Plugin-driven registry of `DocumentKind`s. Domain crates
+        // Plugin-driven registry of document kinds. Domain crates
         // (modelica, future julia/usd/sysml/...) register their kinds
         // here; consumers iterate the registry rather than matching
         // a fixed enum. Idempotent — domain plugins can also call
@@ -818,7 +828,7 @@ impl Plugin for WorkbenchPlugin {
             bevy::prelude::Update,
             (maintain_dock_widths, drain_pending_panel_focus),
         )
-        .add_systems(Startup, register_terrain_settings_menu);
+        .add_systems(Startup, register_graphics_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -872,21 +882,20 @@ pub struct WorkbenchLayout {
     pub(crate) right_inspector: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 
-    pub(crate) status: Option<StatusContent>,
-
     /// App-wide Settings menu contributions. Domain plugins push a
     /// closure via [`WorkbenchLayout::register_settings`] at Startup;
     /// the closure is invoked each time the user opens the Settings
     /// drop-down. Keeps editor prefs / theme toggles / etc. in one
     /// discoverable place instead of scattered gear buttons.
-    pub(crate) settings_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) settings_menu:
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Named, scrollable groups within Settings.  Use this for a coherent
     /// feature area with enough rows that keeping it in the root menu would
     /// obscure unrelated preferences.
     pub(crate) settings_submenus: Vec<(
         String,
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
     )>,
 
     /// App-wide Edit menu contributions. Same pattern as
@@ -895,7 +904,7 @@ pub struct WorkbenchLayout {
     /// the global Edit menu can host domain-specific verbs (e.g. the
     /// code editor's Cut/Copy/Paste) without each plugin scattering its
     /// own toolbar.
-    pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Undo/redo availability probes. Domain plugins push a closure via
     /// [`WorkbenchLayout::register_undo_probe`] at Startup; each probe
@@ -906,22 +915,21 @@ pub struct WorkbenchLayout {
     /// the `EditorIntent` resolvers. With no probe answering, the menu
     /// falls back to "a document is active" so a domain without a probe
     /// keeps working Undo/Redo entries.
-    pub(crate) undo_probes: Vec<Box<dyn Fn(&World) -> Option<(bool, bool)> + Send + Sync>>,
+    pub(crate) undo_probes: Vec<Box<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>>,
 
     /// App-wide Help menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
     /// closure via [`WorkbenchLayout::register_help_menu`] at Startup
     /// so the Help drop-down can host tour / docs / about entries
     /// without each domain inventing its own help button.
-    pub(crate) help_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync>>,
+    pub(crate) help_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// App-wide File menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
     /// closure via [`WorkbenchLayout::register_file_menu`] at Startup so
     /// the File menu can host domain-specific verbs (e.g. Load Example)
     /// without hardcoding them in `lunco-workbench`.
-    pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// App-wide Time menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
@@ -929,12 +937,12 @@ pub struct WorkbenchLayout {
     /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
     /// live under ONE discoverable menu instead of on the toolbar and in
     /// floating overlays. The toolbar keeps pause/resume and nothing else.
-    pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Dynamic top-level menus contributed by domain plugins.
     pub(crate) custom_menus: Vec<(
         &'static str,
-        Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>,
+        Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>,
     )>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
@@ -1017,7 +1025,6 @@ impl Default for WorkbenchLayout {
             active_center_tab: 0,
             right_inspector: Vec::new(),
             bottom: Vec::new(),
-            status: None,
             settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
             edit_menu: Vec::new(),
@@ -1426,23 +1433,21 @@ impl WorkbenchLayout {
         self.activity_bar = !self.activity_bar;
     }
 
-    /// Set a single-line string rendered in the status bar.
-    pub fn set_status(&mut self, text: impl Into<String>) {
-        self.status = Some(StatusContent::Text(text.into()));
-    }
-
     /// Register a perspective and store it in the switcher. If this is the
     /// first perspective added, it also becomes active and its `apply`
     /// runs immediately to seed the initial layout.
     /// Register a closure that contributes rows to the app-wide
     /// Settings drop-down in the menu bar. Called once per open of the
-    /// menu; the closure may read/write Bevy resources via `world`.
+    /// menu; the closure reads through [`MenuCtx`] and queues typed intent for
+    /// application after painting.
     ///
     /// Intended for domain plugins to expose editor / theme / pane
-    /// preferences without each plugin inventing its own gear button.
+    /// preferences without each plugin inventing its own gear button. Callbacks
+    /// may emit typed events or replace an existing resource through `MenuCtx`;
+    /// they cannot receive a raw `World` mutation closure.
     pub fn register_settings<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.settings_menu.push(Box::new(callback));
     }
@@ -1452,7 +1457,7 @@ impl WorkbenchLayout {
     /// another; the label is the single grouping key.
     pub fn register_settings_submenu<F>(&mut self, label: impl Into<String>, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         let label = label.into();
         if let Some((_, callbacks)) = self
@@ -1471,7 +1476,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_edit_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.edit_menu.push(Box::new(callback));
     }
@@ -1479,13 +1484,13 @@ impl WorkbenchLayout {
     /// Register an undo/redo availability probe for the global Edit menu.
     ///
     /// The probe returns `Some((can_undo, can_redo))` for documents its
-    /// domain owns (read the domain registry off `&World`), `None` for
+    /// domain owns (read the domain registry off [`UndoProbeCtx`]), `None` for
     /// anything else. First registered probe to answer wins — mirror of
     /// the `EditorIntent` resolver contract, so register exactly one per
     /// domain, next to [`register_edit_menu`](Self::register_edit_menu).
     pub fn register_undo_probe<F>(&mut self, probe: F)
     where
-        F: Fn(&World) -> Option<(bool, bool)> + Send + Sync + 'static,
+        F: Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync + 'static,
     {
         self.undo_probes.push(Box::new(probe));
     }
@@ -1494,7 +1499,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_help_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.help_menu.push(Box::new(callback));
     }
@@ -1503,7 +1508,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_file_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.file_menu.push(Box::new(callback));
     }
@@ -1517,7 +1522,7 @@ impl WorkbenchLayout {
     /// user cannot turn off.
     pub fn register_time_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.time_menu.push(Box::new(callback));
     }
@@ -1525,7 +1530,7 @@ impl WorkbenchLayout {
     /// Register a custom top-level menu button.
     pub fn register_custom_menu<F>(&mut self, name: &'static str, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
         self.custom_menus.push((name, Box::new(callback)));
     }
@@ -2457,12 +2462,6 @@ impl WorkbenchLayout {
     }
 }
 
-/// Content options for the status bar.
-pub enum StatusContent {
-    /// A simple single-line string.
-    Text(String),
-}
-
 /// Extension trait on [`App`] for ergonomic panel + perspective registration.
 pub trait WorkbenchAppExt {
     /// Register a panel with the default workbench layout.
@@ -2810,10 +2809,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     let body = ui.clip_rect();
                     let mut ctx = PanelCtx::new(self.world);
                     panel.render(ui, &mut ctx);
-                    let deferred = ctx.into_deferred();
+                    let intents = ctx.into_intents();
                     self.panels.insert(id, panel);
-                    for f in deferred {
-                        f(self.world);
+                    for intent in intents {
+                        intent.apply(self.world);
                     }
                     if !is_main_scene {
                         record_chrome(self.world, ui, body, transparent);
@@ -2839,10 +2838,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     let body = ui.clip_rect();
                     let mut ctx = PanelCtx::new(self.world);
                     panel.render(ui, &mut ctx, instance);
-                    let deferred = ctx.into_deferred();
+                    let intents = ctx.into_intents();
                     self.instance_panels.insert(kind, panel);
-                    for f in deferred {
-                        f(self.world);
+                    for intent in intents {
+                        intent.apply(self.world);
                     }
                     record_chrome(self.world, ui, body, transparent);
                 } else {
@@ -2931,10 +2930,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             if let Some(mut panel) = self.instance_panels.remove(&kind) {
                 let mut ctx = PanelCtx::new(self.world);
                 panel.tab_context_menu(ui, &mut ctx, instance);
-                let deferred = ctx.into_deferred();
+                let intents = ctx.into_intents();
                 self.instance_panels.insert(kind, panel);
-                for f in deferred {
-                    f(self.world);
+                for intent in intents {
+                    intent.apply(self.world);
                 }
             }
         }
@@ -2993,6 +2992,21 @@ fn menu_item(
     };
     ui.add_enabled(enabled, egui::Button::new(text))
         .on_disabled_hover_text(disabled_hint)
+}
+
+/// Run one contributed menu callback behind the capability-limited
+/// [`MenuCtx`], then apply its typed intent while the workbench layout is
+/// still temporarily removed from the world.
+fn run_menu_callback(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    callback: &(dyn Fn(&mut egui::Ui, &mut MenuCtx) + Send + Sync),
+) {
+    let mut menu = MenuCtx::new(world);
+    callback(ui, &mut menu);
+    for intent in menu.into_intents() {
+        intent.apply(world);
+    }
 }
 
 fn render_layout(
@@ -3257,7 +3271,7 @@ fn render_layout(
                             // target. egui menus right-align after \t.
                             let label = format!("{display}\tCtrl+N");
                             if ui.button(label).clicked() {
-                                world.trigger(file_ops::NewDocument { kind });
+                                world.trigger(lunco_doc_bevy::NewDocument { kind });
                                 ui.close();
                             }
                         }
@@ -3343,7 +3357,7 @@ fn render_layout(
                                     .on_hover_text(path.display().to_string())
                                     .clicked()
                                 {
-                                    world.trigger(file_ops::OpenFile {
+                                    world.trigger(lunco_doc_bevy::OpenFile {
                                         path: path.display().to_string(),
                                     });
                                     ui.close();
@@ -3410,7 +3424,7 @@ fn render_layout(
                 let callbacks = std::mem::take(&mut layout.file_menu);
                 if !callbacks.is_empty() {
                     for cb in &callbacks {
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                     ui.separator();
                 }
@@ -3439,7 +3453,7 @@ fn render_layout(
                 let (can_undo, can_redo) = layout
                     .undo_probes
                     .iter()
-                    .find_map(|probe| probe(world))
+                    .find_map(|probe| probe(&UndoProbeCtx::new(world)))
                     .unwrap_or((has_active, has_active));
                 let undo_hint = if has_active {
                     "Nothing to undo"
@@ -3465,12 +3479,13 @@ fn render_layout(
                 // Domain plugins (e.g. the Modelica code editor)
                 // contribute Cut/Copy/Paste/Select-All here via
                 // `register_edit_menu`. Same extraction pattern as the
-                // Settings menu so callbacks can take `&mut World`.
+                // Settings menu so callbacks receive the capability-limited
+                // `MenuCtx`.
                 let callbacks = std::mem::take(&mut layout.edit_menu);
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.edit_menu = callbacks;
@@ -3501,7 +3516,7 @@ fn render_layout(
                 // Each row is a checkbox showing whether the panel is currently
                 // in the dock; clicking a closed one re-docks it in its default
                 // slot. `Hidden` panels never appear (fixtures like the
-                // viewport, legacy entries, instance-tab facets).
+                // viewport, layout-only entries, instance-tab facets).
                 struct ViewPanelEntry {
                     group: PanelMenuGroup,
                     title: String,
@@ -3682,7 +3697,7 @@ fn render_layout(
                 };
 
                 let r_custom = ui.menu_button(text, |ui| {
-                    cb(ui, world);
+                    run_menu_callback(ui, world, cb.as_ref());
                 });
 
                 if highlight {
@@ -3715,9 +3730,8 @@ fn render_layout(
                 }
                 ui.separator();
 
-                // Take the callbacks out so we can pass &mut World into
-                // them while the layout is still extracted. Restored
-                // at the end of the block.
+                // Take the callbacks out while the layout is still extracted;
+                // each callback receives `MenuCtx` and is restored below.
                 let callbacks = std::mem::take(&mut layout.settings_menu);
                 if callbacks.is_empty() {
                     ui.label(
@@ -3730,7 +3744,7 @@ fn render_layout(
                         if i > 0 {
                             ui.separator();
                         }
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.settings_menu = callbacks;
@@ -3749,7 +3763,7 @@ fn render_layout(
                                     if i > 0 {
                                         ui.separator();
                                     }
-                                    callback(ui, world);
+                                    run_menu_callback(ui, world, callback.as_ref());
                                 }
                             });
                     });
@@ -3768,7 +3782,7 @@ fn render_layout(
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world, layout);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.help_menu = callbacks;
@@ -3980,12 +3994,10 @@ fn render_layout(
                             .on_hover_text("Run the simulation (physics included) at this rate")
                             .clicked()
                         {
-                            if let Some(mut t) =
-                                world.get_resource_mut::<lunco_time::TimeTransport>()
-                            {
-                                t.rate = m;
-                                t.mode = lunco_time::TransportMode::Playing;
-                            }
+                            world.trigger(lunco_time::SetTimeTransport {
+                                playing: Some(true),
+                                rate: Some(m),
+                            });
                         }
                     }
                 });
@@ -4010,7 +4022,7 @@ fn render_layout(
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world);
+                        run_menu_callback(ui, world, cb.as_ref());
                     }
                 }
                 layout.time_menu = callbacks;
@@ -4035,13 +4047,10 @@ fn render_layout(
                 let btn_resp = ui.button(glyph).on_hover_text(hover);
                 anchor_rects.push(("toolbar.run", btn_resp.rect));
                 if btn_resp.clicked() {
-                    if let Some(mut t) = world.get_resource_mut::<lunco_time::TimeTransport>() {
-                        t.mode = if paused {
-                            lunco_time::TransportMode::Playing
-                        } else {
-                            lunco_time::TransportMode::Paused
-                        };
-                    }
+                    world.trigger(lunco_time::SetTimeTransport {
+                        playing: Some(paused),
+                        ..default()
+                    });
                 }
 
                 // PAUSE/RESUME AND NOTHING ELSE. The rate selector used to sit here
@@ -4119,11 +4128,9 @@ fn render_layout(
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
-    // Falls back to the legacy `layout.status` text when the bus is
-    // empty so existing callers keep working during the migration.
     egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
-        render_status_bar_inner(ui, world, layout, theme);
+        render_status_bar_inner(ui, world, theme);
     });
 
     // ── Activity bar ────────────────────────────────────────────────
@@ -4397,12 +4404,7 @@ fn render_layout(
 /// Render the bottom status strip. Reads from [`status_bus::StatusBus`]
 /// (cross-cutting; populated by MSL load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
-fn render_status_bar_inner(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    layout: &WorkbenchLayout,
-    theme: &lunco_theme::Theme,
-) {
+fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
     use status_bus::{StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
@@ -4485,18 +4487,7 @@ fn render_status_bar_inner(
                         );
                     }
                 } else {
-                    // Bus is empty — fall back to whatever a panel
-                    // pushed via the legacy `layout.status_bar(...)`
-                    // API so existing call sites keep working.
-                    match layout.status.as_ref() {
-                        Some(StatusContent::Text(s)) => {
-                            let text = egui::RichText::new(s).small();
-                            ui.add(egui::Label::new(text).truncate());
-                        }
-                        None => {
-                            ui.label(egui::RichText::new("ready").small().weak());
-                        }
-                    }
+                    ui.label(egui::RichText::new("ready").small().weak());
                 }
             })
             .response
@@ -4715,10 +4706,10 @@ fn render_panel_solo(
     if let Some(mut panel) = layout.panels.remove(id) {
         let mut ctx = PanelCtx::new(world);
         panel.render(ui, &mut ctx);
-        let deferred = ctx.into_deferred();
+        let intents = ctx.into_intents();
         layout.panels.insert(*id, panel);
-        for f in deferred {
-            f(world);
+        for intent in intents {
+            intent.apply(world);
         }
     } else {
         let error_color = world
@@ -4732,40 +4723,69 @@ fn render_panel_solo(
     }
 }
 
-fn register_terrain_settings_menu(world: &mut World) {
+fn register_graphics_settings_menu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings_submenu("Graphics", |ui, ctx| {
+        ui.label(egui::RichText::new("Rendering").weak().small());
+        if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
+            let mut settings = current.clone();
+            egui::ComboBox::from_id_salt("graphics.rendering_quality")
+                .selected_text(settings.quality.label())
+                .show_ui(ui, |ui| {
+                    for quality in lunco_render::RenderingQuality::all() {
+                        ui.selectable_value(&mut settings.quality, quality, quality.label());
+                    }
+                });
+            if settings != *current {
+                ctx.set_resource(settings);
+            }
+            ui.label(
+                egui::RichText::new(
+                    "Auto caps shadow-map resolution/cascades to the detected GPU budget. \
+                     Changing this setting safely re-arms a previous shadow fallback.",
+                )
+                .weak()
+                .small(),
+            );
+        }
+
+        ui.separator();
         ui.label(egui::RichText::new("Terrain").weak().small());
-        if let Some(mut settings) = world.get_resource_mut::<lunco_settings::TerrainSettings>() {
-            ui.checkbox(
-                &mut settings.enable_shaders,
-                "Enable high-quality procedural shaders",
-            )
-            .on_hover_text(
-                "Enable dynamic micro-relief normal mapping and albedo mottle. \
-                     Turning this off improves WebAssembly/browser frame rate. \
-                     Persisted to ~/.lunco/settings.json.",
-            );
-            ui.add(
-                egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
-                    .text("Camera detail radius (m)"),
-            )
-            .on_hover_text(
-                "Distance around each active terrain camera that requests the finest \
-                 available terrain geometry. Persisted to ~/.lunco/settings.json.",
-            );
-            ui.add(
-                egui::Slider::new(&mut settings.visual_detail_hysteresis_m, 0.0..=200.0)
-                    .text("Camera detail retention (m)"),
-            )
-            .on_hover_text(
-                "Extra distance that keeps already-refined tiles resident while the \
-                 camera moves away, preventing fine-to-coarse-to-fine flicker. \
+        let Some(mut settings) = ctx.resource::<lunco_settings::TerrainSettings>().cloned() else {
+            return;
+        };
+        let original = settings.clone();
+        ui.checkbox(
+            &mut settings.enable_shaders,
+            "Enable high-quality procedural shaders",
+        )
+        .on_hover_text(
+            "Enable dynamic micro-relief normal mapping and albedo mottle. \
+                 Turning this off improves WebAssembly/browser frame rate. \
                  Persisted to ~/.lunco/settings.json.",
-            );
+        );
+        ui.add(
+            egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
+                .text("Camera detail radius (m)"),
+        )
+        .on_hover_text(
+            "Distance around each active terrain camera that requests the finest \
+             available terrain geometry. Persisted to ~/.lunco/settings.json.",
+        );
+        ui.add(
+            egui::Slider::new(&mut settings.visual_detail_hysteresis_m, 0.0..=200.0)
+                .text("Camera detail retention (m)"),
+        )
+        .on_hover_text(
+            "Extra distance that keeps already-refined tiles resident while the \
+             camera moves away, preventing fine-to-coarse-to-fine flicker. \
+             Persisted to ~/.lunco/settings.json.",
+        );
+        if settings != original {
+            ctx.set_resource(settings);
         }
     });
 }

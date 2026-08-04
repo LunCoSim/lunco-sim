@@ -35,9 +35,9 @@ pub mod inspector;
 /// Joint State panel — live joint θ / ω / target / τ table for the selected
 /// vessel (revolute joints + raycast wheels + steering), deep-review §2.7.
 pub mod joint_state;
-pub mod spawn_palette;
 /// Generic right-click menus for USD-authored transparent markers.
 pub mod scene_context;
+pub mod spawn_palette;
 pub mod terrain_tools;
 pub mod usd_mount;
 pub mod usd_params;
@@ -138,7 +138,7 @@ impl ViewModelAppExt for App {
 /// that made `produce_usd_canvas` 11 ms a frame. Nothing here early-returns
 /// cheaply, so nothing here may run ungated.
 pub fn usd_selection_view_changed(
-    selection: Res<crate::SelectedEntities>,
+    selection: Res<lunco_scene_commands::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
     revision: Res<lunco_usd_bevy::UsdStageRevision>,
 ) -> bool {
@@ -250,7 +250,7 @@ impl Plugin for SandboxEditUiPlugin {
         // `lunco_luncosim::ui`), and a run condition that reads a missing resource
         // panics — the producers' own `Option<Res<_>>` tolerance does not cover
         // the gate.
-        app.init_resource::<crate::SelectedEntities>();
+        app.init_resource::<lunco_scene_commands::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
 
         app.init_resource::<cinematic::CinematicViz>();
@@ -406,6 +406,20 @@ impl Plugin for SandboxEditUiPlugin {
         // (which `PanelCtx` can't gather in paint) from `InspectorView`,
         // produced each frame by an exclusive system before the egui pass.
         app.init_resource::<inspector::InspectorView>();
+        app.init_resource::<inspector::ShaderSchemaCache>();
+        app.add_observer(inspector::on_inspector_component_edit)
+            .add_observer(inspector::on_projection_edit_requested)
+            .add_observer(inspector::on_usd_attribute_edit_requested)
+            .add_observer(inspector::on_usd_variant_edit_requested)
+            .add_observer(inspector::on_mount_snap_requested)
+            .add_observer(inspector::on_shader_swap_requested)
+            .add_observer(inspector::on_shader_create_requested)
+            .add_observer(inspector::on_shader_import_requested)
+            .add_observer(inspector::on_shader_parameters_requested)
+            .add_observer(inspector::on_pbr_material_requested)
+            .add_observer(inspector::on_modelica_parameter_requested);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_observer(inspector::on_attach_at_socket_requested);
         app.add_view_model(
             inspector::populate_inspector_view,
             inspector::inspector_inputs_changed,
@@ -432,6 +446,8 @@ impl Plugin for SandboxEditUiPlugin {
         // behaviour spec. The canvas's layout only rebuilds when that source
         // changes, never while the simulation is ticking.
         app.init_resource::<autopilot_canvas::AutopilotCanvasState>();
+        app.add_observer(autopilot_canvas::on_write_mission_requested)
+            .add_observer(autopilot_canvas::on_create_mission_requested);
         app.add_view_model_every_frame(autopilot_canvas::produce_autopilot_canvas);
 
         // USD prim tree: same main-thread producer pattern (the stage is
@@ -559,6 +575,7 @@ impl Plugin for SandboxEditUiPlugin {
                     scene_context::apply_pointer_policies,
                     // The route line is real 3D geometry, not an egui overlay stroke.
                     checkpoint_click::sync_waypoint_path_mesh,
+                    checkpoint_click::sync_waypoint_marker_visuals,
                     checkpoint_click::handle_autopilot_toggle_hotkey,
                     // Grabbing the controls takes the vessel back from its autopilot.
                     checkpoint_click::manual_input_disengages_autopilot,
@@ -599,7 +616,7 @@ fn on_select_progress(
 }
 
 fn on_spawn_progress(
-    _trigger: On<crate::commands::SpawnEntity>,
+    _trigger: On<lunco_core::SpawnEntity>,
     hud: Option<Res<lunco_workbench::tutorial_overlay::TutorialHud>>,
     mut commands: Commands,
 ) {
@@ -616,14 +633,26 @@ fn register_debug_viz_settings(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Debug Visualization").weak().small());
-        let mut settings = world.resource_mut::<crate::joint_viz::JointVizSettings>();
+        let Some(mut settings) = ctx
+            .resource::<crate::joint_viz::JointVizSettings>()
+            .copied()
+        else {
+            return;
+        };
+        let original_settings = settings;
+        let Some(mut gizmo) = ctx
+            .resource::<crate::physics_gizmo::PhysicsGizmoSettings>()
+            .copied()
+        else {
+            return;
+        };
+        let original_gizmo = gizmo;
         ui.checkbox(&mut settings.show_joints, "Show joints")
             .on_hover_text("Draw anchor dots + axis lines for every Avian joint");
         ui.checkbox(&mut settings.show_wheel_forces, "Show wheel forces")
             .on_hover_text("Draw a force box + arrow at every wheel");
-        let mut gizmo = world.resource_mut::<crate::physics_gizmo::PhysicsGizmoSettings>();
         ui.checkbox(&mut gizmo.show_mass, "Selected-body mass")
             .on_hover_text(
                 "CoM marker + inertia ellipsoid/axes for the selected \
@@ -639,6 +668,12 @@ fn register_debug_viz_settings(world: &mut World) {
                 "XYZ frame triads (RGB = XYZ) + revolute anchors for the \
                  selected vessel's rigid-body parts",
             );
+        if settings != original_settings {
+            ctx.set_resource(settings);
+        }
+        if gizmo != original_gizmo {
+            ctx.set_resource(gizmo);
+        }
     });
 }
 

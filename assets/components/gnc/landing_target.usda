@@ -10,6 +10,7 @@
 # child reference, while its body origin sits at the lander's touchdown COM
 # height (5 m); the dome itself is offset to the ground surface.
 def Xform "LandingTarget" (
+    doc = "Kinematic landing target for navigation and touchdown guidance."
     prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker>
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
     kind = "component"

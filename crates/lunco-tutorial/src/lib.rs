@@ -203,7 +203,20 @@ impl CurriculumRoot {
             "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
             "twin" => {
                 let (_twin, rel) = rest.split_once('/')?;
-                lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (self, _twin, rel);
+                    // This synchronous curriculum reader has no browser byte
+                    // source. Twin lessons on wasm must arrive through the
+                    // async AssetServer/UsdLoader projection, just like their
+                    // curriculum layer; do not pretend a filesystem read is a
+                    // portable fallback.
+                    None
+                }
             }
             _ => None,
         }
@@ -1018,13 +1031,13 @@ fn register_tutorials_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
-    layout.register_custom_menu("🎓 Tutorials", |ui, world| {
-        let registry = world
-            .get_resource::<TutorialRegistry>()
+    layout.register_custom_menu("🎓 Tutorials", |ui, ctx| {
+        let registry = ctx
+            .resource::<TutorialRegistry>()
             .cloned()
             .unwrap_or_default();
-        let progress = world
-            .get_resource::<TutorialProgress>()
+        let progress = ctx
+            .resource::<TutorialProgress>()
             .cloned()
             .unwrap_or_default();
         if registry.tutorials.is_empty() {
@@ -1079,7 +1092,7 @@ fn register_tutorials_menu(world: &mut World) {
                         .on_hover_text(meta.blurb.as_str())
                         .clicked()
                     {
-                        world.trigger(StartTutorial {
+                        ctx.trigger(StartTutorial {
                             id: meta.id.to_string(),
                         });
                         ui.close();
@@ -1091,7 +1104,7 @@ fn register_tutorials_menu(world: &mut World) {
         ui.separator();
         ui.add_enabled_ui(progress.current.is_some(), |ui| {
             if ui.button("⏹ Stop tutorial").clicked() {
-                world.trigger(SkipTutorial {});
+                ctx.trigger(SkipTutorial {});
                 ui.close();
             }
         });

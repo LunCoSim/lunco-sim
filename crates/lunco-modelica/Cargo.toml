@@ -173,11 +173,13 @@ image = { workspace = true }
 # it through `experiments_runner::stepper_options_from_bounds`, never from
 # `SimOptions::default()` — see the docs there.
 rumoca-sim = { workspace = true }
+rumoca-eval-solve = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
 # FACTS for the `modelica` lint domain (`src/lint.rs`) are `HookValue`, the same
 # typed shape every other domain hands its authored rules.
 lunco-hooks = { path = "../lunco-hooks" }
 rumoca-compile = { workspace = true }
+rumoca-ir-solve = { workspace = true }
 rumoca-phase-parse = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with

@@ -269,19 +269,13 @@ pub fn build(app: &mut App) {
 /// light component.  USD projection and runtime-created lights use the same
 /// backend, so this belongs at the scene-property boundary rather than in a
 /// campaign scene or a connection special case.
-fn mark_point_light_surface_ready(
-    trigger: On<Add, PointLight>,
-    mut commands: Commands,
-) {
+fn mark_point_light_surface_ready(trigger: On<Add, PointLight>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_insert(lunco_core::PortSurfaceReady);
 }
 
-fn mark_spot_light_surface_ready(
-    trigger: On<Add, SpotLight>,
-    mut commands: Commands,
-) {
+fn mark_spot_light_surface_ready(trigger: On<Add, SpotLight>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_insert(lunco_core::PortSurfaceReady);

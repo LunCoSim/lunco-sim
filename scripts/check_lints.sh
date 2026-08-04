@@ -12,10 +12,9 @@
 #   `cargo clippy -p foo` only lints `foo`. The 2026-05-29 sandbox FPS
 #   regression recurred a FOURTH time in `lunco-materials` precisely
 #   because nobody ran clippy against that crate after the ban was added —
-#   the `openusd::usda::TextReader::clone` deep-copy slipped straight past.
-#   `--workspace` is the only invocation that lints every crate, so this is
-#   the regression guard for the whole ban list (TextReader::clone,
-#   std::fs, std::thread::spawn, Instant::now, GridAnchor re-parenting).
+#   a disallowed method slipped straight past. `--workspace` is the only
+#   invocation that lints every crate, so this is the regression guard for
+#   the whole native ban list (deferred writes and GridAnchor re-parenting).
 #
 # Companion to scripts/check_wasm.sh (the wasm build gate). Same contract:
 # a CI step you can also run locally before pushing.

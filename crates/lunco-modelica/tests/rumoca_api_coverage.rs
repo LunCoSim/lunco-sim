@@ -22,7 +22,7 @@ const RC_SOURCE: &str = "model RC_Circuit\n  Real R = 100;\n  Real C = 0.001;\n 
 /// Duplicated here to lock the comparison: when we delete that function,
 /// this test continues to lock rumoca's behavior against the historical
 /// regex output.
-fn legacy_regex_scan(source: &str) -> HashSet<(String, String)> {
+fn reference_regex_scan(source: &str) -> HashSet<(String, String)> {
     let re = regex::Regex::new(
         r"(?m)^\s*(?:(?:redeclare|flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
     ).expect("regex compiles");
@@ -177,7 +177,7 @@ fn rumoca_ast_scan(source: &str, file_name: &str) -> HashSet<(String, String)> {
 #[test]
 fn rumoca_components_match_regex_scan() {
     let ast_pairs = rumoca_ast_scan(RC_SOURCE, "RC_Circuit.mo");
-    let regex_pairs = legacy_regex_scan(RC_SOURCE);
+    let regex_pairs = reference_regex_scan(RC_SOURCE);
 
     // Regex picks up the parameter declarations (`Real R = 100;`) too,
     // but so does the AST — both produce the same set.

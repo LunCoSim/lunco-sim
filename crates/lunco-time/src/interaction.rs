@@ -331,8 +331,6 @@ mod tests {
     /// the sim reads the true pose, only the render sees the eased one.
     #[test]
     fn interpolation_does_not_feed_back_into_an_incremental_writer() {
-        use bevy::ecs::system::RunSystemOnce;
-
         let mut app = App::new();
         app.init_resource::<Time<Real>>()
             .init_resource::<Time<Virtual>>()

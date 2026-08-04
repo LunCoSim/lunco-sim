@@ -49,7 +49,7 @@ curl -s http://127.0.0.1:4101/api/commands \
 # Query a specific entity by its numeric api_id (from ListEntities)
 curl -s http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"type":"QueryEntity","id":98466552102768}' | jq .
+  -d '{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":98466552102768}}' | jq .
 ```
 
 ## Endpoints
@@ -62,7 +62,7 @@ resources.
 |---|---|---|
 | `GET` | `/api/health` | Liveness. Answered by the transport thread; no world access. |
 | `GET` | `/api/commands/schema` | The runtime `DiscoverSchema` — every callable command and its field types. |
-| `POST` | `/api/commands` | Execute a command, or run a query (`ListEntities`, `QueryEntity`, `QueryCommandResult`, `DiscoverSchema`, `SubscribeTelemetry`). |
+| `POST` | `/api/commands` | Execute a tagged command or query (`ListEntities`, `QueryEntity`, `DiscoverSchema`, `SubscribeTelemetry`). |
 
 ## API Queries (Data Retrieval)
 
@@ -142,14 +142,17 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
 }
 ```
 
-The macro records the outcome in `CommandResults` (`lunco-core`) under the request id the transport minted, and the caller polls it back. In-process triggers (UI `commands.trigger`) set no active id, so nothing is recorded — only transport-dispatched calls are pollable. For the polling protocol, the `outcome` states, and the store's bounds/design rationale, see [*Command results — `QueryCommandResult`*](#command-results--querycommandresult) below.
+Deferred commands answer on the original request. `RunRhai`, for example,
+waits for the next `Update` and returns its captured stdout or error in the
+response body. In-process `cmd()` calls use the internal `CommandResults`
+store only while the script is running; it is not an API endpoint.
 
 ### Registering inside `Plugin::build`
 
 ```rust
 // One source-of-truth list at module scope. Alphabetical for diff hygiene.
 // Entries may be bare idents or `module::fn` paths — the path form lets
-// observers live in split submodules without per-fn `use` shims.
+// observers live in split submodules without per-function import boilerplate.
 register_commands!(
     on_open_file,
     on_compile_model,
@@ -234,6 +237,7 @@ allocates those inputs to the actuator ports.
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
+    "type": "ExecuteCommand",
     "command": "SetPorts",
     "params": {
       "target": "01ARZ7NDEKTSV4M9",
@@ -248,6 +252,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
+    "type": "ExecuteCommand",
     "command": "SetPorts",
     "params": {
       "target": "01ARZ7NDEKTSV4M9",
@@ -262,6 +267,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
+    "type": "ExecuteCommand",
     "command": "SpawnEntity",
     "params": {
       "target": "01ARZ7NDEKTSV4M9",
@@ -282,6 +288,7 @@ pick up changes without restarting.
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
+    "type": "ExecuteCommand",
     "command": "LoadScene",
     "params": {
       "path": "scenes/luncosim/sandbox_scene.usda",
@@ -303,15 +310,15 @@ play / pause / scrub / rate.
 ```bash
 # Pause the animation (physics keeps running)
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"ControlAnimation","params":{"playing":false}}'
+  -d '{"type":"ExecuteCommand","command":"ControlAnimation","params":{"playing":false}}'
 
 # Scrub the playhead to 3.0 seconds
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"ControlAnimation","params":{"seek_secs":3.0}}'
+  -d '{"type":"ExecuteCommand","command":"ControlAnimation","params":{"seek_secs":3.0}}'
 
 # Resume at half speed
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"ControlAnimation","params":{"playing":true,"rate":0.5}}'
+  -d '{"type":"ExecuteCommand","command":"ControlAnimation","params":{"playing":true,"rate":0.5}}'
 ```
 
 The same controls are in the Inspector's **Animation** section. See
@@ -324,15 +331,15 @@ Three avatar-camera commands, all share `{avatar, target}`:
 ```bash
 # Take direct control (rover, spacecraft)
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"PossessVessel","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+  -d '{"type":"ExecuteCommand","command":"PossessVessel","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 
 # Chase camera only — any SelectableRoot (balloons, props)
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"FollowTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+  -d '{"type":"ExecuteCommand","command":"FollowTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 
 # Orbit a celestial body
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"command":"FocusTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+  -d '{"type":"ExecuteCommand","command":"FocusTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 ```
 
 ### Example: Live cosim status
@@ -344,7 +351,7 @@ propagated wire values:
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"CosimStatus","params":{}}' | jq
+  -d '{"type":"ExecuteCommand","command":"CosimStatus","params":{}}' | jq
 ```
 
 ```json
@@ -374,7 +381,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 ```json
 {
   "data": {
-    "command_id": 42
+    "accepted": true
   }
 }
 ```
@@ -451,7 +458,7 @@ if let Some(port) = parse_api_port() {
     app.add_plugins(lunco_api::LunCoApiPlugin::new(lunco_api::LunCoApiConfig {
         http_config: Some(lunco_api::transports::HttpServerConfig { port }),
     }));
-    eprintln!("🌐 API server enabled on http://0.0.0.0:{}", port);
+    eprintln!("🌐 API server enabled on http://127.0.0.1:{}", port);
 }
 
 app.run();
@@ -464,9 +471,9 @@ There are **two response shapes** behind `POST /api/commands`:
 1. **Reflect Event commands** — side effects. `OpenFile`,
    `MoveComponent`, `SetPorts`, etc. The executor reflects on the
    type, deserialises params, and triggers the matching `Event` for
-   domain observers to handle. Returns `command_accepted` (with a
-   request id) immediately; commands that report a result also record
-   a pollable outcome — see *Command results* below.
+   domain observers to handle. Returns `{"data":{"accepted":true}}`
+   after validation. Commands that need a result register as deferred and
+   answer on the original request when their result exists.
 
 2. **Query providers** — return structured data.
    `ListBundled`, `ListTwin`, `ListMsl`, `MslStatus`,
@@ -477,7 +484,7 @@ There are **two response shapes** behind `POST /api/commands`:
    via `commands.queue` so it has `&mut World` access, and returns
    the resulting `ApiResponse::Ok { data }` to the transport.
 
-The wire format is identical for both — `{"command": "...", "params": {...}}` —
+The wire format is identical for both — `{"type":"ExecuteCommand","command":"...","params":{...}}` —
 so callers don't need to know which path their command takes. The
 executor differentiates internally.
 
@@ -523,33 +530,27 @@ without rebuilding unchanged views.
 **Adding a new typed command** (side-effect): follow the existing
 pattern in `skills/test-via-api/SKILL.md`.
 
-### Command results — `QueryCommandResult`
+### Deferred command responses
 
-Every accepted command returns a `command_id` (the request id). Most
-commands are fire-and-forget and record nothing. A command whose
-observer returns `Result<Ack, String>` (see AGENTS.md § 4.2) records a
-**terminal outcome** under that id, which the caller polls:
+Commands that require work after dispatch register with
+`register_deferred_command`. The executor holds the original transport request
+open, and the owning handler emits one `ApiResponseEvent` on its correlation
+id. This is used by `CaptureScreenshot` and `RunRhai`; callers receive the
+actual payload or error without a second endpoint or an exposed command id.
 
 ```bash
-# 1. dispatch → get the request id
-curl -s :4101/api/commands -d '{"command":"RunPython","params":{"code":"print(2+2)"}}'
-# → {"command_id": 7}
-
-# 2. poll the outcome by id
-curl -s :4101/api/commands -d '{"type":"QueryCommandResult","id":"7"}'
-# → {"data":{"id":7,"outcome":{"Succeeded":{"assigned":{"stdout":"4\n"}}}}}
+curl -s :4101/api/commands \
+  -H 'content-type: application/json' \
+  -d '{"type":"ExecuteCommand","command":"RunRhai","params":{"code":"print(2+2)"}}'
+# → the response carries the script result, or an error, on this request
 ```
 
-`outcome` is one of `Succeeded(Ack)` (ran OK — `Ack.assigned` carries any
-returned data), `Failed(msg)` (ran and errored — do **not** revert),
-`Rejected(Reject)` (never ran — revert an optimistic edit), `Pending`
-(accepted, async not yet done), or `null` (unknown id / fire-and-forget).
+The response carries the actual payload or an error. Commands that complete
+immediately may return their result directly; deferred commands keep this same
+request open until their owning handler produces the result.
 
-The store (`CommandResults` in `lunco-core`) is bounded (FIFO-evicted),
-so poll reasonably soon after dispatch. The model is deliberately minimal
-— one result + a few states (F′/MAVLink/behaviour-tree style), not XTCE's
-multi-stage verifier pipeline. Long-running lifecycles (queued, progress,
-cancel) live as per-domain state (e.g. experiments' `RunStatus`), not here.
+Long-running lifecycles (queued, progress, cancel) remain domain state, such as
+an experiment's `RunStatus`, and are read through the owning query provider.
 
 ### TBD: grouped self-submitting command registration
 
@@ -616,5 +617,5 @@ that want a runtime-toggleable opt-out.
 |---|---|
 | Connection refused | Make sure sim was started with `--api` flag |
 | "Command not found" | Check `/api/commands/schema` for available commands |
-| "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid ULID strings — there is no `GET /api/entities` route |
+| "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid numeric api ids — there is no `GET /api/entities` route |
 | `lunco_api` not found in `Cargo.toml` | Add `lunco-api = { path = "../lunco-api" }` dependency |

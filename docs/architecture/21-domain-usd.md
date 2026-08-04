@@ -455,7 +455,7 @@ Adobe's open-source [`USD-Fileformat-plugins`](https://github.com/adobe/USD-File
 at them. The `@terrain.glb@` payload then composes natively as `Mesh` geometry —
 config only, no conversion, no engine code. This is the proper interop path.
 
-*Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer shim in `lunco-usd-bevy/compose.rs` can be added to emit `Mesh` specs instead of stubbing. This would remove the `lunco:resolvedAsset` side-channel so that terrain is ordinary composed USD everywhere.
+*Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer adapter in `lunco-usd-bevy/compose.rs` can be added to emit `Mesh` specs instead of stubbing. This would remove the `lunco:resolvedAsset` side-channel so that terrain is ordinary composed USD everywhere.
 
 ### Reference Resolution
 USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative to the **USD asset root** (`assets/`). The `UsdComposer` resolves:

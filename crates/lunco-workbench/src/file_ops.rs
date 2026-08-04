@@ -69,11 +69,10 @@ pub struct ShowOpenFolderPicker {}
 // `NewDocument` and `OpenFile` are document-lifecycle verbs, not UI: they
 // moved to `lunco-doc-bevy` (the non-egui document layer) so headless /
 // luncosim / server binaries can dispatch them by `kind` / `path` without
-// pulling the workbench shell. Re-exported here so the workbench's picker
-// resolver + the File menu keep referring to them as `file_ops::{…}`, and
-// existing `lunco_workbench::file_ops::OpenFile` paths stay valid. Only the
-// **empty-path picker** dispatch (below) is genuinely workbench-bound.
-pub use lunco_doc_bevy::{NewDocument, OpenFile};
+// pulling the workbench shell. The document-lifecycle verbs remain owned by
+// `lunco-doc-bevy`; this module
+// only installs the workbench-specific observers and picker dispatch.
+use lunco_doc_bevy::{NewDocument, OpenFile};
 
 /// Produce a shareable link for the active document and copy it to the
 /// clipboard.
@@ -221,8 +220,8 @@ fn on_show_open_file_picker(
     }
 
     if extensions.is_empty() {
-        // Fallback for Modelica if no kinds are registered yet.
-        extensions.push("mo".to_string());
+        warn!("[OpenFilePicker] no document kinds are registered");
+        return;
     }
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();

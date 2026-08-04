@@ -77,3 +77,21 @@ def Xform "MotorRadiator" (
     float inputs:T_sink = 250.0
     custom token connectors:port
 }
+
+# Explicit chassis conduction between the left and right thermal banks. The
+# rover owns this bridge in its thermal CollectionAPI:components scope; keeping
+# it as a reusable facet makes the topology visible in USD and gives the
+# generated DAE one connected heat network rather than two accidental islands.
+def Xform "ThermalConductor" (
+    doc = "Conducts heat between the rover's left and right thermal banks."
+    kind = "component"
+    prepend apiSchemas = ["LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalConductor.mo@
+
+    float inputs:G = 10.0
+    custom token connectors:port_a
+    custom token connectors:port_b
+}

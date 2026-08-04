@@ -78,7 +78,7 @@ fn joint_path_for(part: &str) -> String {
 
 /// View-model producer: resolve each advertised socket's snap for the selected host.
 pub fn produce_usd_mount_view(
-    selected: Option<Res<crate::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
     q: Query<&UsdPrimPath>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,

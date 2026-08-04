@@ -71,7 +71,7 @@ pub struct Canvas {
     /// no drag-to-move, no drag-to-connect, no Delete. Pan / zoom /
     /// selection still work. Set per-frame by the embedding app
     /// (e.g. `canvas_diagram.rs` flips it based on
-    /// `WorkbenchState.open_model.read_only`).
+    /// the active document's read-only state).
     pub read_only: bool,
 
     /// Optional drag-to-grid snap. When `Some`, the default tool

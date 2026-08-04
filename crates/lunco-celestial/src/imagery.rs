@@ -46,7 +46,9 @@ struct BodyImageryDecl {
 }
 
 /// Globes already dressed — so the scan is a no-op after the first frame that
-/// finds each one, and a re-bind never churns the tile set.
+/// finds each one, and a re-bind never churns the tile set. The source is
+/// retained with the entity: an authored map can be removed or replaced during
+/// a live scene rebuild, and the dataset must then be allowed to take over.
 ///
 /// Keyed on the GLOBE ENTITY, not on the NAIF id. Keying on the id made this a
 /// scene-lifetime fact stored in a world-lifetime resource: teardown despawns
@@ -57,7 +59,15 @@ struct BodyImageryDecl {
 /// the thing that actually dies, so the memo now dies with it and no teardown
 /// has to remember this resource exists.
 #[derive(Resource, Default)]
-pub(crate) struct BoundBodyImagery(bevy::platform::collections::HashSet<Entity>);
+pub(crate) struct BoundBodyImagery(
+    bevy::platform::collections::HashMap<Entity, BoundBodyImagerySource>,
+);
+
+#[derive(Debug, Clone)]
+enum BoundBodyImagerySource {
+    Authored,
+    Dataset,
+}
 
 /// Imagery requests that are still being decoded by Bevy's asset pipeline.
 ///
@@ -70,6 +80,10 @@ pub(crate) struct PendingBodyImagery {
     /// Authored maps are retained until the asset server publishes readiness.
     authored: Vec<PendingBodyImage>,
     ready: bevy::platform::collections::HashSet<AssetId<Image>>,
+    /// Authored maps whose asset load failed, and how many times. A scene-authored
+    /// choice remains authoritative even when its bytes are unavailable, so the
+    /// dataset default is not allowed to replace it after the bounded retry.
+    authored_attempts: bevy::platform::collections::HashMap<String, u8>,
     /// Datasets whose load has failed, and how many times. A dataset that has
     /// reached [`MAX_IMAGERY_ATTEMPTS`] is never re-issued — the give-up path
     /// this map exists for.
@@ -173,6 +187,34 @@ pub(crate) fn adopt_authored_body_albedo(
     mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
     mut commands: Commands,
 ) {
+    // A live USD edit may replace or remove the authored asset while an old
+    // request is still decoding. Keep only requests represented by the current
+    // declaration, so an obsolete handle can never win the precedence rule.
+    let authored_assets: bevy::platform::collections::HashMap<i32, String> = q_decl
+        .iter()
+        .map(|(decl, albedo)| (decl.naif, albedo.asset.clone()))
+        .collect();
+    pending.authored.retain(|request| {
+        authored_assets
+            .get(&request.naif_id)
+            .is_some_and(|asset| asset == &request.dataset_key)
+    });
+    pending
+        .authored_attempts
+        .retain(|asset, _| authored_assets.values().any(|current| current == asset));
+
+    // If the authored declaration was removed, release its ownership mark.
+    // The dataset system runs first in the chain, so it will see the released
+    // globe on the next frame and may bind the installed default.
+    bound.0.retain(|globe, source| {
+        if !matches!(source, BoundBodyImagerySource::Authored) {
+            return true;
+        }
+        q_globes.iter().any(|(entity, body, _, _)| {
+            entity == *globe && authored_assets.contains_key(&body.ephemeris_id)
+        })
+    });
+
     for event in image_events.read() {
         match event {
             AssetEvent::Added { id }
@@ -192,7 +234,18 @@ pub(crate) fn adopt_authored_body_albedo(
         {
             continue; // globe not built yet; reconcile again on the next frame
         }
-        if !pending.authored.iter().any(|r| r.naif_id == decl.naif) {
+        if pending
+            .authored_attempts
+            .get(&albedo.asset)
+            .is_some_and(|n| *n >= MAX_IMAGERY_ATTEMPTS)
+        {
+            continue;
+        }
+        if !pending
+            .authored
+            .iter()
+            .any(|r| r.naif_id == decl.naif && r.dataset_key == albedo.asset)
+        {
             let image = load_body_image(&asset_server, albedo.asset.clone());
             // If the globe appeared after the asset event, capture the already
             // resident asset once; steady state is driven by AssetEvent<Image].
@@ -207,6 +260,38 @@ pub(crate) fn adopt_authored_body_albedo(
         }
     }
     for request in std::mem::take(&mut pending.authored) {
+        if asset_server.load_state(&request.image).is_failed() {
+            let attempts = pending
+                .authored_attempts
+                .entry(request.dataset_key.clone())
+                .or_insert(0);
+            *attempts += 1;
+            if *attempts < MAX_IMAGERY_ATTEMPTS {
+                warn!(
+                    "[celestial] authored imagery '{}' for body {} failed to load \
+                     (attempt {attempts}/{MAX_IMAGERY_ATTEMPTS}) — retrying",
+                    request.dataset_key, request.naif_id
+                );
+                continue;
+            }
+            error!(
+                "[celestial] authored imagery '{}' for body {} failed to load \
+                 {MAX_IMAGERY_ATTEMPTS} times — keeping the body's untextured colour",
+                request.dataset_key, request.naif_id
+            );
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: BODY_IMAGERY_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(format!(
+                    "authored imagery '{}' for body {} failed to load after \
+                     {MAX_IMAGERY_ATTEMPTS} attempts — body renders untextured",
+                    request.dataset_key, request.naif_id
+                )),
+                timestamp: 0.0,
+            });
+            continue;
+        }
         if !pending.ready.contains(&request.image.id()) {
             pending.authored.push(request);
             continue;
@@ -218,12 +303,9 @@ pub(crate) fn adopt_authored_body_albedo(
             pending.authored.push(request);
             continue;
         };
-        if bound.0.contains(&globe) {
-            continue;
-        }
         lod.look = bind_albedo(&lod.look, request.image);
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
-        bound.0.insert(globe);
+        bound.0.insert(globe, BoundBodyImagerySource::Authored);
         info!(
             "[celestial] body {} took the ready imagery authored on its prim ({})",
             request.naif_id, request.dataset_key
@@ -281,6 +363,7 @@ fn declared_body(entry: &lunco_assets::datasets::DatasetEntry) -> Option<i32> {
 pub(crate) fn bind_dataset_body_imagery(
     registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
     asset_server: Res<AssetServer>,
+    authored: Query<&crate::CelestialBodyDecl, With<crate::AuthoredBodyAlbedo>>,
     mut bound: ResMut<BoundBodyImagery>,
     mut pending: ResMut<PendingBodyImagery>,
     mut q_globes: Query<(Entity, &CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
@@ -290,7 +373,7 @@ pub(crate) fn bind_dataset_body_imagery(
     // Forget globes that no longer exist, so a long session that loads many
     // scenes does not accumulate dead ids. Before the empty check: the
     // torn-down world is exactly when there is most to forget.
-    bound.0.retain(|globe| q_globes.contains(*globe));
+    bound.0.retain(|globe, _| q_globes.contains(*globe));
     // A dataset that is no longer installed cannot fail again until it is
     // re-installed, and a re-install is a new set of bytes — so it earns a
     // fresh budget. Done here (not on the `is_installed` continue below) so it
@@ -313,6 +396,13 @@ pub(crate) fn bind_dataset_body_imagery(
         let Some(naif_id) = declared_body(entry) else {
             continue;
         };
+        // An authored map is an explicit scene fact. It blocks the optional
+        // dataset default before loading begins, so dataset readiness order
+        // cannot make the default win. If the authored asset later fails, the
+        // body keeps its base colour rather than silently changing authority.
+        if authored.iter().any(|decl| decl.naif == naif_id) {
+            continue;
+        }
         // Given up on: do not hand it to the asset server again. Without this
         // the failure arm below dropped the request without recording anything,
         // so the next frame re-issued the same doomed load forever.
@@ -332,7 +422,7 @@ pub(crate) fn bind_dataset_body_imagery(
         else {
             continue; // body not in this scene — nothing to dress
         };
-        if bound.0.contains(&globe) {
+        if bound.0.contains_key(&globe) {
             continue;
         }
 
@@ -400,14 +490,14 @@ pub(crate) fn bind_dataset_body_imagery(
         // The globe may have been replaced while the raster decoded, and the new
         // one may already carry an authored map — content still outranks the
         // dataset default.
-        if bound.0.contains(&globe) {
+        if bound.0.contains_key(&globe) {
             continue;
         }
 
         let naif_id = request.naif_id;
         lod.look = bind_albedo(&lod.look, request.image);
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
-        bound.0.insert(globe);
+        bound.0.insert(globe, BoundBodyImagerySource::Dataset);
         info!(
             "[celestial] body {naif_id} took its ready imagery from dataset '{}'",
             request.dataset_key

@@ -13,7 +13,7 @@ use crate::sync::{SyncInbox, SyncOutbox};
 use lunco_core::{LocalSession, NetStatus, NetworkRole, SessionId, SyncChannel};
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
-use crate::shared::{deserialize_env, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
+use crate::shared::{deserialize_env, netcode_key, serialize_env, PROTOCOL_ID};
 
 /// **Build-time**: register the client ferry systems, the disconnect observer,
 /// the `JoinServer`/`LeaveServer` command observers, and (wasm) the URL-dialing
@@ -124,7 +124,7 @@ pub(crate) fn spawn_client(
     let auth = Authentication::Manual {
         server_addr,
         client_id,
-        private_key: PRIVATE_KEY,
+        private_key: netcode_key(),
         protocol_id: PROTOCOL_ID,
     };
     let netcode = match NetcodeClient::new(
@@ -209,6 +209,7 @@ fn on_join_server(
     mut role: ResMut<NetworkRole>,
     mut status: ResMut<NetStatus>,
     mut local: ResMut<LocalSession>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     // Drop any current connection first, then dial the new address.
     for e in &existing {
@@ -242,6 +243,12 @@ fn on_join_server(
     // report `connected` and lets prediction/proxy systems act under the old
     // session during the connect window. `on_leave_server` does the same reset.
     local.0 = SessionId::LOCAL;
+    // Keep new offline edits under the durable install author until the
+    // handshake supplies the connection-bound author. The handshake then
+    // atomically rebinds those entries and their DAG references.
+    if let Some(journal) = journal {
+        journal.set_local_author(crate::journal_plane::local_author_id());
+    }
 }
 
 #[lunco_core::on_command(LeaveServer)]
@@ -252,6 +259,7 @@ fn on_leave_server(
     mut role: ResMut<NetworkRole>,
     mut status: ResMut<NetStatus>,
     mut local: ResMut<LocalSession>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     for e in &existing {
         commands.entity(e).try_despawn();
@@ -264,6 +272,9 @@ fn on_leave_server(
     status.peers = 0;
     status.endpoint = String::new();
     local.0 = SessionId::LOCAL;
+    if let Some(journal) = journal {
+        journal.set_local_author(crate::journal_plane::local_author_id());
+    }
     let _ = cmd;
     info!("[net] left session — back to local");
 }

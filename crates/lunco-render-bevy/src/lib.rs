@@ -27,9 +27,9 @@ mod world_label;
 pub use shader_look::ShaderLookCache;
 // The concrete custom-shader material + its render pipeline. It lived in
 // `lunco-materials` until the render decoupling; that crate is now render-free and
-// holds only the *intent* (`ShaderLook`) and the reflected schema. Re-exported here
-// so the GUI binaries (and anything else that legitimately needs the concrete type
-// in a RENDER build) can still reach it.
+// holds only the *intent* (`ShaderLook`) and the reflected schema. Export the
+// concrete render type from this crate's public render façade so GUI binaries
+// do not depend on the implementation module directly.
 pub use shader_material::*;
 
 use bevy::light::NotShadowCaster;
@@ -113,7 +113,7 @@ impl Plugin for LuncoRenderPlugin {
             // scene's authored `UsdPreviewSurface` intent in typed, render-free
             // form. Registering it is what turns that from an internal detail into
             // a UNIVERSAL read surface: one line, no new verb, no per-language
-            // shim — anything that wants to know what a surface looks like asks the
+            // adapter — anything that wants to know what a surface looks like asks the
             // component the loader already filled, rather than re-deriving it.
             .register_type::<PbrLook>()
             .add_observer(bind_pbr_look)

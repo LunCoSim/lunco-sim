@@ -5,17 +5,114 @@ use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
 use lunco_core::{NetStatus, NetworkRole, SessionId, SyncChannel};
+#[cfg(not(target_family = "wasm"))]
+use lunco_storage::Storage;
 
 use crate::NetworkMode;
 
-/// Dev protocol id + key. Host and client MUST agree. (Localhost MVP; a real
-/// deployment would load a real key.)
-///
-/// TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
-/// ease of debugging. Zero `PRIVATE_KEY` / constant `PROTOCOL_ID` compiled in.
-/// Revisit before multiplayer hardening (REVIEW-2026-07-19.md §2 Security, MED).
+/// Protocol id shared by host and client.
 pub(crate) const PROTOCOL_ID: u64 = 0x004C_554E_434F_0001; // "LUNCO"
-pub(crate) const PRIVATE_KEY: [u8; 32] = [0u8; 32];
+
+/// Explicitly-marked development key. It is non-zero so an accidental public
+/// bind cannot be mistaken for authenticated netcode. Hosts using this key are
+/// restricted to loopback; deployments must provide a real key.
+const DEV_NETCODE_KEY: [u8; 32] = [
+    0x4c, 0x75, 0x6e, 0x43, 0x6f, 0x2d, 0x64, 0x65, 0x76, 0x2d, 0x6e, 0x65, 0x74, 0x2d, 0x6b, 0x65,
+    0x79, 0x2d, 0x6f, 0x6e, 0x6c, 0x79, 0x2d, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x2d, 0x76, 0x31, 0x00,
+];
+
+const ENV_NETCODE_KEY: &str = "LUNCO_NETCODE_KEY";
+const ENV_NETCODE_KEY_FILE: &str = "LUNCO_NETCODE_KEY_FILE";
+
+/// Parse the 32-byte netcode key from canonical lowercase/uppercase hex.
+fn parse_netcode_key(value: &str) -> Result<[u8; 32], String> {
+    let value = value.trim();
+    if value.len() != 64 {
+        return Err(format!(
+            "expected 64 hex characters for {ENV_NETCODE_KEY}, got {}",
+            value.len()
+        ));
+    }
+    let mut key = [0u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = (pair[0] as char)
+            .to_digit(16)
+            .ok_or_else(|| format!("invalid hex at byte {index}"))?;
+        let low = (pair[1] as char)
+            .to_digit(16)
+            .ok_or_else(|| format!("invalid hex at byte {index}"))?;
+        key[index] = ((high << 4) | low) as u8;
+    }
+    if key == [0; 32] {
+        return Err(format!("{ENV_NETCODE_KEY} must not be all zeroes"));
+    }
+    Ok(key)
+}
+
+/// Resolve the shared netcode authentication key.
+///
+/// Native deployments use `LUNCO_NETCODE_KEY` or
+/// `LUNCO_NETCODE_KEY_FILE`. A missing value selects the explicitly-limited
+/// loopback development key. Browser builds may provide the key at compile
+/// time through the same variable; otherwise they use that development key.
+pub(crate) fn netcode_key() -> [u8; 32] {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if let Ok(value) = std::env::var(ENV_NETCODE_KEY) {
+            return parse_netcode_key(&value)
+                .unwrap_or_else(|error| panic!("invalid {ENV_NETCODE_KEY}: {error}"));
+        }
+        if let Ok(path) = std::env::var(ENV_NETCODE_KEY_FILE) {
+            let storage = lunco_storage::FileStorage::new();
+            let bytes = storage
+                .read_sync(&lunco_storage::StorageHandle::File(
+                    std::path::PathBuf::from(&path),
+                ))
+                .unwrap_or_else(|error| {
+                    panic!("cannot read {ENV_NETCODE_KEY_FILE}={path}: {error:?}")
+                });
+            let value = String::from_utf8(bytes)
+                .unwrap_or_else(|error| panic!("{ENV_NETCODE_KEY_FILE} is not UTF-8: {error}"));
+            return parse_netcode_key(&value)
+                .unwrap_or_else(|error| panic!("invalid key in {ENV_NETCODE_KEY_FILE}: {error}"));
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    if let Some(value) = option_env!("LUNCO_NETCODE_KEY") {
+        return parse_netcode_key(value)
+            .unwrap_or_else(|error| panic!("invalid build-time {ENV_NETCODE_KEY}: {error}"));
+    }
+
+    DEV_NETCODE_KEY
+}
+
+pub(crate) fn is_dev_netcode_key(key: &[u8; 32]) -> bool {
+    key == &DEV_NETCODE_KEY
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_key_is_nonzero_and_marked() {
+        assert_ne!(DEV_NETCODE_KEY, [0; 32]);
+        assert!(is_dev_netcode_key(&DEV_NETCODE_KEY));
+    }
+
+    #[test]
+    fn key_parser_rejects_zero_and_wrong_length() {
+        assert!(parse_netcode_key(&"00".repeat(32)).is_err());
+        assert!(parse_netcode_key("deadbeef").is_err());
+    }
+
+    #[test]
+    fn key_parser_accepts_32_bytes_of_hex() {
+        let key = parse_netcode_key(&"ab".repeat(32)).expect("valid key");
+        assert_eq!(key, [0xab; 32]);
+    }
+}
 
 // Wire envelope codec = **bincode** (binary, positional — no field names). This is
 // the hot 20 Hz snapshot path; JSON here roughly doubled the byte count. The inner

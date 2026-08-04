@@ -36,11 +36,12 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use lunco_assets::msl_dir;
 use rumoca_compile::{Session, SessionConfig};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
 /// Typed identity for a Modelica class across the workbench.
 ///
-/// Replaces the legacy string ID schemes (`msl_path:`, `bundled://…#`,
+/// Replaces the former string ID schemes (`msl_path:`, `bundled://…#`,
 /// raw file paths, `mem://`) with a single `ClassRef { library, path }`
 /// value that flows through opening, drill-in, tab dedup, projection
 /// target lookup, and documentation lookup. See module docs for the
@@ -148,6 +149,7 @@ pub mod doc_extract;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
+pub mod fixed_step;
 /// Default-simulation-class resolution + run-target overrides
 /// (was `ui::panels::model_view::context::default_simulation_class` & friends).
 /// The rumoca backends, registered into `lunco_experiments::solver`. Solver
@@ -381,7 +383,7 @@ impl ModelicaCompiler {
     /// the loaded tree from the members' own `within` declarations. Idempotent and
     /// cheap on repeat.
     ///
-    /// DISK FIRST, embedded only as the fallback. Both copies exist — `assets/models`
+    /// DISK FIRST on native; the embedded snapshot is the wasm source. Both copies exist — `assets/models`
     /// on the filesystem, and the `include_dir!` snapshot baked into the binary — and
     /// they drift the moment anyone edits a `.mo` without rebuilding. The disk tree is
     /// the one Bevy's AssetServer serves, so it is what `info:sourceAsset`
@@ -481,8 +483,8 @@ impl ModelicaCompiler {
     }
 
     /// If a process-wide MSL has been installed, preload it into the
-    /// session. Returns `true` when handled (caller skips the disk
-    /// fallback).
+    /// session. Returns `true` when handled (caller skips the native disk
+    /// source path).
     ///
     /// Two web-side fast paths, in priority order:
     ///
@@ -865,8 +867,8 @@ impl ModelicaCompiler {
         //
         // Wasm note: `std::thread::spawn` panics on wasm32-unknown-unknown
         // (single-threaded target). The compile already runs on the main
-        // task there via the inline worker, so the user sees the freeze
-        // anyway — heartbeat would just be cosmetic. Skip it.
+        // task there via the chunked browser-load path, so a heartbeat thread
+        // would be unavailable and purely cosmetic. Skip it.
         use std::sync::atomic::{AtomicBool, Ordering};
         let still_compiling = std::sync::Arc::new(AtomicBool::new(true));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1639,14 +1641,11 @@ impl Plugin for ModelicaWorkbenchPlugin {
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
         // inline rumoca *compile* (seconds for non-trivial models) freezes the
-        // render loop. The worker pool handles that heavy compile/run work — but
-        // it is NOT spawned here. Spawning it eagerly at boot is a cold compile
-        // of each ~60 MB worker bundle that can take tens of seconds on a weak
-        // machine, and the diagram must not wait on it. We only register the
-        // worker URL now; `worker_transport::ensure_pool_spawned` spawns the
-        // pool the first time a compile/run is requested. Parsing-for-diagram
-        // runs on the main thread until a worker is warm (see
-        // `dispatch_parse_to_worker`), so the model renders immediately.
+        // render loop. The worker pool handles that heavy compile/run work —
+        // but it is NOT spawned here. Spawning it eagerly at boot is a cold
+        // compile of each worker bundle and can take tens of seconds on a
+        // weak machine. We only register the worker URL now; parsing-for-
+        // diagram runs on the main thread until a worker is warm.
         #[cfg(target_arch = "wasm32")]
         worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }
@@ -1707,18 +1706,6 @@ fn build_modelica_core(app: &mut App) {
         });
     }
 
-    // On wasm we still hold the inline worker resource as a fallback for
-    // pages that haven't loaded the off-thread worker bundle (e.g. local
-    // dev where the worker JS file is missing). The Web Worker transport,
-    // when wired up by the binary's startup code via
-    // `worker_transport::install_worker`, takes precedence — it intercepts
-    // commands via its own pump system and ships them to the worker
-    // bundle, bypassing the inline path entirely.
-    #[cfg(target_arch = "wasm32")]
-    {
-        app.insert_resource(worker::InlineWorker::default());
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     app.insert_resource(ModelicaChannels {
         tx: tx_cmd,
@@ -1755,7 +1742,7 @@ fn build_modelica_core(app: &mut App) {
     // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
     // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
     // adds core first, so the GUI still gets them. Guarded/idempotent so the
-    // UI's own `WorkbenchState`/registry init (a legacy safety net) is a no-op.
+    // UI and headless hosts share the same idempotent initialization.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
     app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
@@ -1849,14 +1836,9 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Command dispatch on wasm. `pump_commands_to_worker` is the primary
-        // drainer: on a queued command it lazily spawns the worker pool and
-        // ships the command off-thread. It is ordered BEFORE
-        // `inline_worker_process` so that, whenever the pool spawns, the inline
-        // fallback sees an empty queue and no-ops. The inline (main-thread)
-        // path only does work when `pump_commands_to_worker` declines — i.e.
-        // the worker bundle failed to spawn — so a missing/blocked worker still
-        // compiles (just on the main thread).
+        app.insert_resource(worker::InlineWorker::default());
+        // Command dispatch on wasm always goes through the Web Worker. If the
+        // bundle cannot start, the inline worker remains a functional fallback.
         app.add_systems(
             Update,
             worker_transport::pump_commands_to_worker.before(worker::inline_worker_process),
@@ -2015,7 +1997,7 @@ pub struct FrameTimeProbe {
 }
 
 // ---------------------------------------------------------------------------
-// Re-export AST extraction for public API compatibility
+// Public AST extraction API
 // ---------------------------------------------------------------------------
 // These functions live in `ast_extract` but are re-exported here so external
 // callers (workbench binaries, UI panels) can import from the crate root.

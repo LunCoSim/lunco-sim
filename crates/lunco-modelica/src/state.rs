@@ -51,22 +51,6 @@ pub struct GeneratedModelicaSourceEntry {
     pub error: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Model File Tracking
-// ---------------------------------------------------------------------------
-
-// `OpenModel` retired (2026-05-08). The cache held
-// fields all derivable from the document host:
-//   - `source` → `host.document().source()` + Index.
-//   - `display_name` → `host.document().origin().display_name()`.
-//   - `read_only` → `host.document().is_read_only()`.
-//   - `detected_name` → `extract_model_name_from_ast(host.document().strict_ast()?)`.
-//   - `library` → derive from `host.document().origin()`.
-//   - `cached_galley` → moved to `EditorBufferState`.
-//   - `model_path` → derive from origin (file path / mem://name / msl://qualified).
-// Helpers in this module: `detected_name_for`, `read_only_for`,
-// `display_name_for`.
-
 /// Which library a model belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ModelLibrary {
@@ -115,15 +99,13 @@ pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
 
 /// Shared state for the Modelica workbench UI.
 ///
-/// # What lives here (post–Workspace migration)
+/// # What lives here
 ///
-/// This resource is now a **UI cache** on top of the authoritative
-/// session state in [`lunco_workspace::WorkspaceResource`]:
+/// This resource is a UI cache on top of the authoritative session state in
+/// [`lunco_workspace::WorkspaceResource`]:
 ///
 /// - **Identity of the active document** lives on the Workspace
-///   (`active_document: Option<DocumentId>`). This struct only carries
-///   the derived render-side snapshot (`open_model`) so per-frame
-///   painting doesn't chase it through the registry.
+///   (`active_document: Option<DocumentId>`).
 /// - **Selection bridge** — `selected_entity` still funnels library /
 ///   3D-viewport / colony-tree clicks into the editor panels.
 /// - **Transient UI flags** — compile error, "is loading" spinner,
@@ -162,14 +144,11 @@ pub struct WorkbenchState {
 // events — the canonical `JournalResource` records them all.
 
 // ---------------------------------------------------------------------------
-// B.3 phase 6 helpers — drop-in replacements for `OpenModel` field
-// reads. Derive each field from the document registry so the legacy
-// `WorkbenchState.open_model` cache can be retired one reader at a
-// time.
+// Document-derived view helpers. Read these values from the document
+// registry instead of maintaining a second cache in `WorkbenchState`.
 // ---------------------------------------------------------------------------
 
-/// Detected top-level model name for `doc`. Replaces
-/// `open_model.detected_name`. Returns `None` when the doc has no
+/// Detected top-level model name for `doc`. Returns `None` when the doc has no
 /// AST yet (parse pending) or when no model declaration exists.
 pub fn detected_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option<String> {
     crate::sim_default::default_simulation_class(world, doc)
@@ -198,7 +177,7 @@ pub fn display_name_for_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) ->
         .map(|h| h.document().origin().display_name())
 }
 
-/// Read-only flag for `doc`. Replaces `open_model.read_only`.
+/// Read-only flag for `doc`.
 pub fn read_only_for(world: &bevy::prelude::World, doc: DocumentId) -> bool {
     world
         .resource::<ModelicaDocumentRegistry>()
@@ -207,7 +186,7 @@ pub fn read_only_for(world: &bevy::prelude::World, doc: DocumentId) -> bool {
         .unwrap_or(false)
 }
 
-/// Display name for `doc`. Replaces `open_model.display_name`.
+/// Display name for `doc`.
 pub fn display_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option<String> {
     world
         .resource::<ModelicaDocumentRegistry>()
@@ -695,11 +674,6 @@ impl Default for WorkbenchState {
         }
     }
 }
-
-// `mirror_active_open_model` deleted (2026-05-08).
-// The `WorkbenchState::open_model` cache it kept fresh is gone;
-// readers derive source/metadata from
-// `ModelicaDocumentRegistry::host(doc).document()` directly.
 
 #[cfg(test)]
 mod tests {

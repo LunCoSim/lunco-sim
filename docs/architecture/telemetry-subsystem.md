@@ -223,7 +223,7 @@ connected — so every plot opens empty and stays that way until new data arrive
 
 Both are `ApiQueryProvider`s — the same extension point Modelica's `SnapshotVariables` uses — so
 they are transport-agnostic and already reachable over the API and MCP. **An OpenMCT telemetry
-adapter (or a YAMCS bridge) is a thin shim over these, not a rewrite**; HTTP/WebSocket streaming
+adapter (or a YAMCS bridge) is a thin integration layer over these, not a rewrite**; HTTP/WebSocket streaming
 can be layered on later without touching this layer.
 
 Two decisions that make that possible:

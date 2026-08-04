@@ -176,7 +176,7 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
     //
     // This function used to overwrite `EditorBufferState.{text,
     // detected_name, model_path, bound_doc}` from `doc.source()`
-    // every frame. That was the legacy push-from-doc-to-buffer
+    // every frame. That was the old push-from-doc-to-buffer
     // pipeline; it ran *before* `CodeEditorPanel::render` and
     // clobbered any uncommitted typing whenever the mismatch
     // condition tripped. The new pipeline is:
