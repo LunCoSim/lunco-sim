@@ -370,6 +370,16 @@ pub(crate) fn instantiate_light_prim(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
 ) -> bool {
+    // A SphereLight's scene-property ports are backed by a deferred Bevy light
+    // component. Publish the generic pending state before projection can create
+    // wires, so an epoch seal cannot turn that short installation window into a
+    // terminal missing-port error. The ready marker is published atomically with
+    // the eventual PointLight/SpotLight below.
+    if prim_type == Some("SphereLight") {
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::PortSurfacePending);
+    }
     match prim_type {
         Some("DistantLight") => {
             // UsdLux spec default intensity is 1.0, but 1 lx is invisible
@@ -569,21 +579,27 @@ pub(crate) fn instantiate_light_prim(
                 // vessel headlight), not a scene-dominant sun/sky. Stamping it
                 // would re-run the dome ambient recompute every time a rover
                 // spawns — see the marker docs.
-                commands.entity(entity).try_insert(SpotLight {
-                    color,
-                    intensity: intensity_lm,
-                    range,
-                    // The same `inputs:radius`, now also as the light's physical
-                    // source size — which is what the attribute geometrically MEANS.
-                    // Bevy uses it for soft shadow penumbra / specular highlight size,
-                    // so an authored radius reads as a bigger, softer source as well
-                    // as a brighter one.
-                    radius: light_radius.max(0.0),
-                    shadow_maps_enabled,
-                    inner_angle,
-                    outer_angle,
-                    ..default()
-                });
+                commands
+                    .entity(entity)
+                    .try_remove::<lunco_core::PortSurfacePending>();
+                commands.entity(entity).try_insert((
+                    SpotLight {
+                        color,
+                        intensity: intensity_lm,
+                        range,
+                        // The same `inputs:radius`, now also as the light's physical
+                        // source size — which is what the attribute geometrically MEANS.
+                        // Bevy uses it for soft shadow penumbra / specular highlight size,
+                        // so an authored radius reads as a bigger, softer source as well
+                        // as a brighter one.
+                        radius: light_radius.max(0.0),
+                        shadow_maps_enabled,
+                        inner_angle,
+                        outer_angle,
+                        ..default()
+                    },
+                    lunco_core::PortSurfaceReady,
+                ));
                 debug!(
                     "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m, cone={} deg",
                     sdf_path.as_str(),
@@ -598,15 +614,21 @@ pub(crate) fn instantiate_light_prim(
             } else {
                 // Pointlight path (standard SphereLight). No `UsdAuthoredLight`
                 // — local light, not a scene-dominant sun/sky (see above).
-                commands.entity(entity).try_insert(PointLight {
-                    color,
-                    intensity: intensity_lm,
-                    range,
-                    // See the SpotLight arm: `inputs:radius` is the source size too.
-                    radius: light_radius.max(0.0),
-                    shadow_maps_enabled,
-                    ..default()
-                });
+                commands
+                    .entity(entity)
+                    .try_remove::<lunco_core::PortSurfacePending>();
+                commands.entity(entity).try_insert((
+                    PointLight {
+                        color,
+                        intensity: intensity_lm,
+                        range,
+                        // See the SpotLight arm: `inputs:radius` is the source size too.
+                        radius: light_radius.max(0.0),
+                        shadow_maps_enabled,
+                        ..default()
+                    },
+                    lunco_core::PortSurfaceReady,
+                ));
                 debug!(
                     "[usd-bevy] {} SphereLight (PointLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m",
                     sdf_path.as_str(),

@@ -324,6 +324,17 @@ pub struct Port {
 #[reflect(Component)]
 pub struct PortSurfaceReady;
 
+/// Marks an entity while a deferred port backend is still being installed.
+///
+/// A scene projection may author a wire in the same epoch in which its target
+/// component is spawned.  The binder must keep that edge pending across an
+/// epoch seal while the producer finishes installing its surface; otherwise a
+/// valid wire becomes a terminal missing-port fault merely because component
+/// insertion and wire projection were observed in different schedules.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct PortSurfacePending;
+
 // ── Control surface ───────────────────────────────────────────────────────────
 
 /// An entity's declared **`inputs:*` port surface**, with current values.

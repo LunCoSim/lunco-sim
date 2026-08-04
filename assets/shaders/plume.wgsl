@@ -10,16 +10,17 @@
 //! therefore a CONSEQUENCE of the engine's commanded state, on the same tick and
 //! by the same number the vessel published.
 //!
-//! ## Why this ray-marches instead of shading the cone's skin
+//! ## Why this shades the authored cone surface
 //!
-//! Throttle changes the plume's LENGTH and its WIDTH, and a narrower plume is
-//! strictly inside the bounding cone — it touches that cone's surface nowhere. So
-//! there is no way to draw it by tinting the surface the rasteriser hands us: the
-//! shape being drawn is a different, smaller cone that lives in the volume. Each
-//! front-face fragment is therefore an entry point, and the fragment marches the
-//! view ray through the bounding volume accumulating emission and extinction from
-//! the CURRENT plume cone. That also gives the plume real depth — it is brighter
-//! along the line of sight through its axis, which a skin never is.
+//! The cone is a fixed, full-throttle envelope. An earlier implementation
+//! ray-marched a shorter cone inside it, but that made visibility depend on a
+//! view-ray entry point and the renderer's front/back-face convention. In the
+//! simulator that could leave a real, non-zero engine command with no visible
+//! pixels. The reusable presentation contract is simpler and more reliable: the
+//! authored cone is the exhaust surface, and throttle masks it from the nozzle
+//! outward while also changing its radiance and width response. This is not a
+//! simulation shortcut — it is a stable visualisation of the same commanded
+//! actuator state, with no scene-specific code or per-tick script.
 //!
 //! ## The shape, and where its numbers come from
 //!
@@ -28,8 +29,8 @@
 //! 180° flip puts the apex DOWNSTREAM, so with `a = y + 0.5` running 0 at the
 //! nozzle end to 1 at the tip, the bounding surface is `r = 1 - a`.
 //!
-//! The current plume is the cone of length `a <= len` and half-width
-//! `wid * (1 - a/len)`, where
+//! The current plume is the visible part of the authored cone up to `a <= len`,
+//! with a brightness and width response derived from
 //!
 //!     response = throttle ^ throttle_exponent
 //!     len = response                         (normalised to the authored volume)
@@ -70,7 +71,6 @@
 #import bevy_pbr::{
     mesh_functions,
     forward_io::VertexOutput,
-    mesh_view_bindings::view,
     mesh_view_bindings::globals,
 }
 #import lunco::pbr_lit::lit
@@ -112,50 +112,8 @@ struct Material {
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
 
-/// Plume density at a mesh-local point — 0 outside the current plume cone.
-///
-/// `len` and `wid` are the current plume's length and half-width as fractions of
-/// the authored bounding volume, so this function is the shape and nothing else.
-fn plume_density(p: vec3<f32>, len: f32, wid: f32) -> f32 {
-    // Distance along the plume, 0 at the nozzle end, 1 at the bounding apex.
-    let a = p.y + 0.5;
-    let r = length(p.xz);
-    // Outside the authored volume — the march is stepping through empty space
-    // either side of the cone.
-    if (a < 0.0 || a > 1.0 || r > 1.0 - a) {
-        return 0.0;
-    }
-    // Station along the CURRENT plume, which is shorter than the volume.
-    let ax = a / len;
-    if (ax > 1.0) {
-        return 0.0;
-    }
-    let half_width = wid * (1.0 - ax);
-    let rn = r / max(half_width, 1e-4);
-    if (rn > 1.0) {
-        return 0.0;
-    }
-
-    // Radially: densest on the axis, falling to nothing at the flank. Axially:
-    // thinning toward the tip, where the gas has expanded and cooled.
-    let radial = 1.0 - rn * rn;
-    let axial = 1.0 - ax * ax;
-    var d = radial * axial;
-
-    // Turbulence advected downstream. `a` enters the noise domain with time so
-    // the cells travel WITH the exhaust rather than boiling in place.
-    let n = vnoise(vec3<f32>(
-        p.x * mat.flicker_scale,
-        p.z * mat.flicker_scale,
-        a * mat.flicker_scale + globals.time * mat.flicker_speed
-    ));
-    d *= 1.0 - clamp(mat.flicker, 0.0, 1.0) * 0.7 * (1.0 - n);
-
-    return max(d, 0.0);
-}
-
 @fragment
-fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let t = clamp(mat.throttle, 0.0, 1.0);
     // A dead engine emits NOTHING — not a residual glow. The photometry model
     // gates its light to exactly zero at zero throttle for the same reason, and
@@ -173,57 +131,45 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let len = max(visual_throttle, 1e-3);
     let wid = mat.width_idle + (1.0 - mat.width_idle) * visual_throttle;
 
-    // Mesh-local ray. The fragment is on the volume's front face, so it IS the
-    // entry point; the camera gives the direction.
+    // The rasteriser gives us a point on the fixed authored cone. Use the mesh
+    // transform rather than world-space assumptions: the same material works
+    // for a vessel nozzle, a side RCS jet, or a nozzle on a nested USD instance.
     let local_from_world = mesh_functions::get_local_from_world(input.instance_index);
-    let entry = (local_from_world * vec4<f32>(input.world_position.xyz, 1.0)).xyz;
-    let eye = (local_from_world * vec4<f32>(view.world_position, 1.0)).xyz;
-    // `doubleSided` is authored on the exhaust gprim because a camera can see
-    // either side of a short RCS jet. A back-face fragment is the far boundary
-    // of the volume, so its march must run back toward the camera; marching away
-    // from that face samples empty space and makes the live plume disappear.
-    let surface_dir = normalize(entry - eye);
-    var dir = surface_dir;
-    if (!is_front) {
-        dir = -surface_dir;
-    }
+    let p = (local_from_world * vec4<f32>(input.world_position.xyz, 1.0)).xyz;
+    let a = clamp(p.y + 0.5, 0.0, 1.0);
+    let axial = 1.0 - a;
 
-    // The longest chord of a unit-radius, unit-height cone is under 2.3; 2.5 is a
-    // bound that needs no per-instance number.
-    let steps = i32(clamp(mat.steps, 4.0, 64.0));
-    let dt = 2.5 / f32(steps);
-
-    var optical_depth = 0.0;
-    var emitted = vec3<f32>(0.0);
-    for (var i = 0; i < steps; i++) {
-        // Half-step offset: sampling at the segment midpoint, so the entry face
-        // itself does not get double weight.
-        let p = entry + dir * (dt * (f32(i) + 0.5));
-        let d = plume_density(p, len, wid);
-        if (d <= 0.0) {
-            continue;
-        }
-        // Colour by how far off-axis the sample is: the core stays yellow-white,
-        // the flank cools to orange. This is a LOOK decision and belongs here.
-        let tint = mix(mat.edge_color, mat.core_color, d);
-        optical_depth += d * dt;
-        emitted += tint * d * dt;
+    // Mask the fixed cone into a short, readable jet. The small fade band keeps
+    // the tip from popping as throttle changes, while a full-throttle command
+    // still fills the complete authored envelope.
+    var cutoff = 1.0;
+    if (len < 0.999) {
+        cutoff = 1.0 - smoothstep(len, min(len + 0.12, 1.0), a);
     }
-    if (optical_depth <= 0.0) {
+    if (cutoff <= 0.0) {
         return vec4<f32>(0.0);
     }
 
-    // Beer–Lambert coverage, so a long line of sight through the axis saturates
-    // instead of running away, and a grazing one stays thin.
-    let alpha = 1.0 - exp(-mat.density * optical_depth);
-    let emissive = emitted * mat.density;
+    // Turbulence is advected downstream. It changes the edge/core balance and
+    // radiance, so the engine flame visibly changes over time without any Rhai
+    // tick work or hidden state.
+    let n = vnoise(vec3<f32>(
+        p.x * mat.flicker_scale,
+        p.z * mat.flicker_scale,
+        a * mat.flicker_scale + globals.time * mat.flicker_speed
+    ));
+    let shimmer = 1.0 - clamp(mat.flicker, 0.0, 1.0) * 0.45 * (1.0 - n);
+    let core_mix = clamp(0.65 + 0.25 * shimmer + 0.1 * axial, 0.0, 1.0);
+    let tint = mix(mat.edge_color, mat.core_color, core_mix);
+    let width_response = 0.35 + 0.65 * wid;
+    let radiance = (0.8 + 1.5 * cutoff) * shimmer * width_response;
+    let alpha = clamp(cutoff * (0.55 + 0.35 * shimmer), 0.0, 1.0);
+    let emissive = tint * mat.density * radiance;
 
-    // A plume is a participating emitter, not a PBR surface. Return the
-    // accumulated emission directly so its colour cannot be attenuated by a
-    // geometric normal or a directional-light term. The gprim's authored
-    // `lunco:surface:additive` selects Bevy's premultiplied additive pipeline;
-    // alpha must therefore be zero, otherwise the blend state would also erase
-    // the terrain behind the exhaust. The physical light is a separate
-    // SphereLight driven by Modelica photometry.
-    return vec4<f32>(emissive, 0.0);
+    // The gprim's authored `lunco:surface:additive` selects Bevy's premultiplied
+    // additive pipeline, so return both radiance and coverage. Alpha is not an
+    // opaque cutout here: it weights the emitted RGB while the additive blend
+    // keeps the terrain and vehicle behind the exhaust visible. The physical
+    // light remains a separate SphereLight driven by Modelica photometry.
+    return vec4<f32>(emissive, alpha);
 }

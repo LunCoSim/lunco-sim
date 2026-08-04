@@ -127,6 +127,12 @@ pub fn bind_connections(world: &mut World) {
             || matches!(dst, Some(EndpointLifecycle::Pending))
             || matches!(model_status(spec.start_element), Some(SimStatus::Compiling))
             || matches!(model_status(spec.end_element), Some(SimStatus::Compiling));
+        let surface_pending = world
+            .get::<lunco_core::PortSurfacePending>(spec.start_element)
+            .is_some()
+            || world
+                .get::<lunco_core::PortSurfacePending>(spec.end_element)
+                .is_some();
         // Binding validates the declared topology, not whether a source has
         // produced a sample yet. Ordinary outputs still use their live value;
         // endpoints with an explicit declared-output contract are also valid
@@ -149,7 +155,12 @@ pub fn bind_connections(world: &mut World) {
         // named sides resolve and neither endpoint has explicitly failed, bind
         // immediately; unresolved async endpoints still remain pending while the
         // epoch is open below.
-        if !endpoints_failed && !endpoints_pending && source_ok && target_ok {
+        if !endpoints_failed
+            && !endpoints_pending
+            && !surface_pending
+            && source_ok
+            && target_ok
+        {
             world
                 .entity_mut(edge)
                 .insert((ConnectionBinding::Bound, BoundConnection));
@@ -160,7 +171,7 @@ pub fn bind_connections(world: &mut World) {
         // its solver/model is terminal.  A failed participant below is the only
         // terminal async outcome; a timeout belongs to the readiness policy, not
         // a fabricated missing-port diagnostic.
-        if !endpoints_failed && endpoints_pending {
+        if !endpoints_failed && (endpoints_pending || surface_pending) {
             world
                 .entity_mut(edge)
                 .insert(ConnectionBinding::Pending)
@@ -391,5 +402,35 @@ mod tests {
             world.get::<ConnectionBinding>(edge),
             Some(&ConnectionBinding::Pending)
         );
+    }
+
+    #[test]
+    fn deferred_scene_surface_stays_pending_across_a_sealed_epoch() {
+        let (mut world, source, target) = world_with_ports("target");
+        let edge = world
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "source".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "target".into(),
+                ..default()
+            })
+            .id();
+
+        world.entity_mut(target).insert(lunco_core::PortSurfacePending);
+        world.resource_mut::<BindingRevision>().seal_epoch();
+        world.run_system_once(bind_connections).unwrap();
+
+        assert_eq!(
+            world.get::<ConnectionBinding>(edge),
+            Some(&ConnectionBinding::Pending)
+        );
+        assert!(world.resource::<CosimDiagnostics>().faults.is_empty());
+
+        world.entity_mut(target).remove::<lunco_core::PortSurfacePending>();
+        world.resource_mut::<BindingRevision>().request();
+        world.run_system_once(bind_connections).unwrap();
+        assert!(world.get::<BoundConnection>(edge).is_some());
     }
 }

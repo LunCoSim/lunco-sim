@@ -325,6 +325,17 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_light_publishes_its_port_surface_lifecycle() {
+        let mut app = app();
+        let e = app.world_mut().spawn_empty().id();
+
+        app.world_mut().entity_mut(e).insert(PointLight::default());
+        app.update();
+
+        assert!(app.world().get::<lunco_core::PortSurfaceReady>(e).is_some());
+    }
+
+    #[test]
     fn a_port_write_drives_a_spot_light() {
         let mut app = app();
         let e = app

@@ -73,7 +73,26 @@ fn endpoint_ready_on_add<T: Component>(
 ) {
     commands
         .entity(trigger.entity)
-        .try_insert(EndpointLifecycle::Ready);
+        .try_insert((
+            EndpointLifecycle::Ready,
+            // This is the shared admission fact used by USD wiring: a prim is
+            // eligible for endpoint resolution only after its owning backend
+            // has installed its named surface. It is deliberately published
+            // alongside the lifecycle state for every backend, not inferred
+            // from a vehicle- or sensor-specific component.
+            lunco_core::PortSurfaceReady,
+        ));
+    revision.request();
+}
+
+fn endpoint_pending_on_add<T: Component>(
+    trigger: On<Add, T>,
+    mut commands: Commands,
+    mut revision: ResMut<BindingRevision>,
+) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(EndpointLifecycle::Pending);
     revision.request();
 }
 
@@ -163,6 +182,7 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
             .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
             .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
+            .add_observer(endpoint_pending_on_add::<lunco_core::PortSurfacePending>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
             .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
@@ -446,6 +466,23 @@ mod binding_lifecycle_tests {
         app.update();
 
         assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+
+    #[test]
+    fn scene_port_surface_ready_enters_the_generic_endpoint_lifecycle() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn(lunco_core::PortSurfaceReady)
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<EndpointLifecycle>(entity),
+            Some(&EndpointLifecycle::Ready)
+        );
     }
 }
 

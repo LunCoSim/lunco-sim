@@ -729,6 +729,11 @@ def Xform "DescentLander" (
                 float inputs:throttle = 0
                 float inputs:throttle_exponent = 0.35
                 float inputs:flicker = 1.0
+                float inputs:flicker_speed = 6.0
+                float inputs:flicker_scale = 7.0
+                float inputs:width_idle = 0.28
+                float inputs:density = 9.0
+                float inputs:steps = 24.0
                 token outputs:surface
             }
         }
@@ -748,6 +753,11 @@ def Xform "DescentLander" (
                 # Shallower than the shroud's: the core is the denser, steadier
                 # part of the jet and a hard shimmer on it reads as a bug.
                 float inputs:flicker = 0.5
+                float inputs:flicker_speed = 4.0
+                float inputs:flicker_scale = 6.0
+                float inputs:width_idle = 0.22
+                float inputs:density = 16.0
+                float inputs:steps = 24.0
                 token outputs:surface
             }
         }

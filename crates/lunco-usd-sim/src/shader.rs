@@ -294,7 +294,15 @@ fn apply_usd_shader_material_read(
     };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
-    commands.entity(entity).remove::<PbrLook>().try_insert(look);
+    // ShaderLook is also the owner of the shader-parameter port backend. Publish
+    // the generic surface contract together with the look so USD connections on
+    // the bound gprim (for example a plume's `inputs:throttle`) are admitted by
+    // the wiring pass. `UsdVisualSynced` only says that a prim was projected; it
+    // is not proof that the prim owns a named port surface.
+    commands
+        .entity(entity)
+        .remove::<PbrLook>()
+        .try_insert((look, lunco_core::PortSurfaceReady));
 }
 
 /// True if `shader_path` is a usable material shader — i.e. it declares a

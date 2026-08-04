@@ -1202,21 +1202,34 @@ pub fn dispatch_loaded_python_sources(
 /// `SimComponent.inputs`, and `sync_modelica_inputs` hands them to the solver
 /// for its first step. `SimStatus::Compiling` marks the interface as declared
 /// but not yet solving, and `can_step()` already refuses to step it.
-pub fn wrap_modelica_into_simcomponent(
+pub(crate) fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
-    q_new: Query<(Entity, &ModelicaModel), (With<UsdSourcedCosim>, Without<SimComponent>)>,
+    q_new: Query<
+        (
+            Entity,
+            &ModelicaModel,
+            Option<&UsdModelicaPortContract>,
+        ),
+        (With<UsdSourcedCosim>, Without<SimComponent>),
+    >,
 ) {
-    for (entity, model) in q_new.iter() {
-        commands.entity(entity).try_insert(SimComponent {
-            model_name: model.model_name.clone(),
-            parameters: model.parameters.clone(),
-            inputs: model.inputs.clone(),
-            // Outputs are the SOLUTION — empty until the worker answers.
-            // `sync_modelica_outputs` fills them and flips the status.
-            outputs: model.variables.clone(),
-            status: modelica_status(model),
-            is_stepping: model.is_stepping,
-        });
+    for (entity, model, contract) in q_new.iter() {
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.try_insert(SimComponent {
+                model_name: model.model_name.clone(),
+                parameters: model.parameters.clone(),
+                inputs: model.inputs.clone(),
+                // Outputs are the SOLUTION — empty until the worker answers.
+                // `sync_modelica_outputs` fills them and flips the status.
+                outputs: model.variables.clone(),
+                status: modelica_status(model),
+                is_stepping: model.is_stepping,
+            });
+        if let Some(contract) = contract {
+            entity_commands.try_insert(DeclaredOutputPorts {
+                names: contract.outputs.iter().cloned().collect(),
+            });
+        }
     }
 }
 
@@ -1689,11 +1702,27 @@ pub fn rewire_usd_connections(
             Added<UsdPrimPath>,
             Added<ModelicaModel>,
             Added<lunco_core::GlobalEntityId>,
+            Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
     mut removed: RemovedComponents<UsdPrimPath>,
     mut dirty: ResMut<WiringDirty>,
-    q_all: Query<(Entity, &UsdPrimPath, Has<ModelicaModel>)>,
+    // Wiring consumes a projected endpoint, not an initial path stub. A prim
+    // path is not itself an endpoint: require the generic port-surface marker
+    // or a declared SimComponent interface before indexing it. The visual-sync
+    // marker is intentionally not part of this contract: a standard USD light
+    // publishes its scene-property surface when the renderer installs the
+    // Bevy light, and that surface is a valid sink even if visual bookkeeping
+    // is scheduled in a different deferred command batch.
+    q_all: Query<
+        (
+            Entity,
+            &UsdPrimPath,
+            Has<ModelicaModel>,
+            Option<&GeneratedModelicaSource>,
+        ),
+        Or<(With<lunco_core::PortSurfaceReady>, With<SimComponent>)>,
+    >,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
     // the same asset compose byte-IDENTICAL stage-relative paths (`/DescentLander`,
@@ -1736,12 +1765,51 @@ pub fn rewire_usd_connections(
     let instance_of =
         |e: Entity| lunco_usd_bevy::instance_key(e, &q_provenance, &q_gid, &q_instance_root);
 
-    // Index every prim entity by (instance, path). Keying on the instance is what
-    // keeps two spawns of one asset distinct: their identical stage-relative paths
-    // now land under different instance keys instead of overwriting each other.
-    let mut by_path: HashMap<(Option<u64>, String), Entity> = HashMap::new();
-    for (e, p, _) in q_all.iter() {
-        by_path.insert((instance_of(e), p.path.clone()), e);
+    // Index every prim entity by (stage, instance, path). The stage is part of
+    // prim identity: two composed USD projections may carry the same path text
+    // while belonging to different stage assets. Omitting it lets a later
+    // projection silently overwrite the first one, which can bind a simulation
+    // wire to a transform-only entity instead of the light/material/physics
+    // projection that owns the named port.
+    //
+    // The instance key still keeps two runtime spawns of one stage distinct;
+    // the stage key keeps independently composed stages distinct.
+    let mut by_path: HashMap<
+        (bevy::asset::AssetId<UsdStageAsset>, Option<u64>, String),
+        Entity,
+    > = HashMap::new();
+    // A generated network is one Modelica participant, while its composed
+    // member paths remain valid USD addresses for presentation and external
+    // scalar consumers. This table translates those member output addresses to
+    // the generated wrapper output declared by the projection. It is derived
+    // from generated source metadata, not from any vehicle, sensor, or renderer
+    // type, so every generated domain gets the same boundary behavior.
+    let mut generated_member_outputs: HashMap<
+        (
+            bevy::asset::AssetId<UsdStageAsset>,
+            Option<u64>,
+            String,
+            String,
+        ),
+        (Entity, String),
+    > = HashMap::new();
+    for (e, p, _, generated) in q_all.iter() {
+        let instance = instance_of(e);
+        let key = (p.stage_handle.id(), instance, p.path.clone());
+        by_path.insert(key, e);
+        if let Some(generated) = generated {
+            for (member, output, alias) in &generated.member_output_aliases {
+                generated_member_outputs.insert(
+                    (
+                        p.stage_handle.id(),
+                        instance,
+                        member.clone(),
+                        output.clone(),
+                    ),
+                    (e, alias.clone()),
+                );
+            }
+        }
     }
 
     // Authored constants on unconnected `inputs:` ports — a model's parameters.
@@ -1761,7 +1829,7 @@ pub fn rewire_usd_connections(
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path, has_modelica) in q_all.iter() {
+    for (entity, prim_path, has_modelica, _) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -1947,26 +2015,6 @@ pub fn rewire_usd_connections(
                 // consumer just reads the port it named and a chain of forwards is a
                 // chain of edges. Walking the chain from this side too would be a
                 // second resolution path for the same fact.
-                let Some(&start_element) = by_path.get(&(sink_instance, src_prim.to_string()))
-                else {
-                    // Two very different situations, and they must not look alike.
-                    // A prim that EXISTS on the stage but has no entity yet is
-                    // mid-spawn: its later spawn is a structural change that re-runs
-                    // this and completes the edge. A prim that is not on the stage at
-                    // all is a typo'd or stale target that will never resolve, and a
-                    // silently dropped wire is how a vehicle ends up with no forces
-                    // and no explanation.
-                    if let Ok(src_sdf) = SdfPath::new(src_prim) {
-                        if !view.has_prim(&src_sdf) {
-                            warn!(
-                                "[usd-cosim] {}.{}: connection source '{}' names a prim that does \
-                                 not exist on this stage — the wire is dropped. Check the path.",
-                                prim_path.path, attr, src_prim
-                            );
-                        }
-                    }
-                    continue;
-                };
                 // The namespace says WHICH SIDE of the source to read. `outputs:` is
                 // what it produces; `inputs:` is what it was commanded — a drive law
                 // consumes the vessel's throttle command, and both can share a name
@@ -1977,6 +2025,52 @@ pub fn rewire_usd_connections(
                     .strip_prefix("outputs:")
                     .or_else(|| src_leaf.strip_prefix("inputs:"))
                     .unwrap_or(src_leaf);
+
+                // A composed member of a generated network has no standalone
+                // `SimComponent`; its live outputs are public aliases on the
+                // network wrapper. Resolve that address before looking for a
+                // spawned member entity. This is the generic generated-network
+                // boundary, not a special case for a propulsion or visual type.
+                let generated_alias = (!start_is_input)
+                    .then(|| {
+                        generated_member_outputs.get(&(
+                            prim_path.stage_handle.id(),
+                            sink_instance,
+                            src_prim.to_string(),
+                            src_conn.to_string(),
+                        ))
+                    })
+                    .flatten()
+                    .cloned();
+                let generated_alias_present = generated_alias.is_some();
+                let (mut start_element, mut src_conn) = if let Some((wrapper, alias)) = generated_alias {
+                    (wrapper, alias)
+                } else {
+                    let Some(&element) = by_path.get(&(
+                        prim_path.stage_handle.id(),
+                        sink_instance,
+                        src_prim.to_string(),
+                    )) else {
+                        // Two very different situations, and they must not look alike.
+                        // A prim that EXISTS on the stage but has no entity yet is
+                        // mid-spawn: its later spawn is a structural change that re-runs
+                        // this and completes the edge. A prim that is not on the stage at
+                        // all is a typo'd or stale target that will never resolve, and a
+                        // silently dropped wire is how a vehicle ends up with no forces
+                        // and no explanation.
+                        if let Ok(src_sdf) = SdfPath::new(src_prim) {
+                            if !view.has_prim(&src_sdf) {
+                                warn!(
+                                    "[usd-cosim] {}.{}: connection source '{}' names a prim that does \
+                                     not exist on this stage — the wire is dropped. Check the path.",
+                                    prim_path.path, attr, src_prim
+                                );
+                            }
+                        }
+                        continue;
+                    };
+                    (element, src_conn.to_string())
+                };
 
                 // ── The SOURCE side of the actuator-port indirection ─────────
                 // A vessel's `outputs:drive_left` is not stored on the vessel
@@ -1994,15 +2088,17 @@ pub fn rewire_usd_connections(
                 // run. Every motor drew no current, so a driving rover's battery
                 // never discharged and its bus was solved as if parked. Silent:
                 // the island compiled, published, and stepped.
-                let (start_element, src_conn) = match q_actuators
-                    .get(start_element)
-                    .ok()
-                    .filter(|_| !start_is_input)
-                    .and_then(|a| a.get(src_conn))
-                {
-                    Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME),
-                    None => (start_element, src_conn),
-                };
+                if !generated_alias_present {
+                    if let Some(port_entity) = q_actuators
+                        .get(start_element)
+                        .ok()
+                        .filter(|_| !start_is_input)
+                        .and_then(|a| a.get(&src_conn))
+                    {
+                        start_element = port_entity;
+                        src_conn = lunco_cosim::PORT_NAME.to_string();
+                    }
+                }
 
                 // ── The realtime gate ───────────────────────────────────────
                 // A program may only push a client-predicted `Dynamic` body around
@@ -3527,6 +3623,12 @@ pub(crate) fn install(app: &mut App) {
             // `SimConnection` set whenever prims spawn/despawn (structural) or a
             // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
             rewire_usd_connections,
+            // Retire the previous derived cache and publish its replacement as
+            // one schedule transaction. Without this boundary, a second rewire
+            // during scene composition cannot see edges queued by the first pass,
+            // so a stale transform-only edge and its replacement can both reach
+            // the binding transaction.
+            bevy::ecs::schedule::ApplyDeferred,
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
             // Parameters: the authored constants the wiring pass gathered off the
             // unconnected `inputs:` ports, pushed into the model once it exists.

@@ -61,6 +61,15 @@ pub struct GeneratedModelicaSource {
     pub member_groups: Vec<(String, String)>,
     /// Public wrapper outputs mapped to their authored producer groups.
     pub output_groups: Vec<(String, String)>,
+    /// Causal outputs of generated members promoted to the wrapper boundary.
+    /// Each tuple is `(member USD path, member output, wrapper output)`.
+    ///
+    /// A generated network is one solver participant, but its composed USD
+    /// members remain addressable presentation/topology nodes. This map is the
+    /// generic address translation that lets an external USD consumer (for
+    /// example a light or a telemetry adapter) read a member output without
+    /// creating a second solver for that member.
+    pub member_output_aliases: Vec<(String, String, String)>,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -908,10 +917,17 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
         if network.pending_sources {
             return Ok(SynthOutcome::Pending);
         }
+        let member_outputs = generated_member_outputs(&network);
+        let outputs = network
+            .outputs
+            .keys()
+            .cloned()
+            .chain(member_outputs.iter().map(|(_, _, alias)| alias.clone()))
+            .collect();
         Ok(SynthOutcome::Ready(Synthesized {
             source: emit_modelica(&network, model_name),
             inputs: network.inputs.clone(),
-            outputs: network.outputs.keys().cloned().collect(),
+            outputs,
             component_paths: network
                 .components
                 .iter()
@@ -1053,12 +1069,16 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         .map(|(boundary, source)| (source.as_str(), boundary.as_str()))
         .collect();
     let placements = network_layout(network);
+    let member_outputs = generated_member_outputs(network);
 
     for input in &network.inputs {
         source.push_str(&format!("  input Real {};\n", modelica_identifier(input)));
     }
     for output in network.outputs.keys() {
         source.push_str(&format!("  output Real {};\n", modelica_identifier(output)));
+    }
+    for (_, _, alias) in &member_outputs {
+        source.push_str(&format!("  output Real {alias};\n"));
     }
     for component in &network.components {
         source.push_str(&format!("  // USD: {}\n", component.path));
@@ -1144,6 +1164,11 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             }
         }
     }
+    for (member, output, alias) in member_outputs {
+        if let Some(instance) = names.get(member.as_str()) {
+            source.push_str(&format!("  {alias} = {instance}.{output};\n"));
+        }
+    }
     // Generated networks are ordinary Modelica documents. Their assembly
     // annotation provides a stable canvas banner; component Icons and
     // Placement annotations remain the source of the actual network picture.
@@ -1151,6 +1176,36 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {model_name};\n"
     ));
     source
+}
+
+/// Stable Modelica name for a causal output promoted from a generated member.
+///
+/// The wrapper is the only runtime solver participant, so member outputs that
+/// remain visible in USD need a first-class boundary name. The prefix keeps
+/// these derived names separate from authored network outputs; the escaped
+/// instance identifier keeps the mapping injective for arbitrary USD paths.
+pub(crate) fn generated_member_output_name(root: &str, member: &str, output: &str) -> String {
+    format!(
+        "__member_{}_{}",
+        instance_identifier(root, member),
+        modelica_identifier(output)
+    )
+}
+
+fn generated_member_outputs(network: &DomainNetwork) -> Vec<(String, String, String)> {
+    network
+        .components
+        .iter()
+        .flat_map(|component| {
+            component.declared_outputs.iter().map(|output| {
+                (
+                    component.path.clone(),
+                    output.clone(),
+                    generated_member_output_name(&network.root, &component.path, output),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Reactively compile every ordinary `Scope` containing a standard component
@@ -1287,6 +1342,7 @@ pub fn project_domain_islands(
                         members: Vec::new(),
                         member_groups: Vec::new(),
                         output_groups: Vec::new(),
+                        member_output_aliases: Vec::new(),
                     },
                 ));
                 continue;
@@ -1372,6 +1428,12 @@ pub fn project_domain_islands(
                 text: format!("[{}] Compile error: {message}", model.model_name),
             });
         }
+        let member_output_aliases = generated_member_output_aliases(
+            &view,
+            &prim.path,
+            &synthesized.members,
+            &synthesized.outputs,
+        );
         let generated_source = GeneratedModelicaSource {
             network_root: prim.path.clone(),
             source: source_for_diagnostics,
@@ -1379,6 +1441,7 @@ pub fn project_domain_islands(
             members: synthesized.members,
             member_groups: Vec::new(),
             output_groups: wrapper_output_groups(&view, &prim.path),
+            member_output_aliases,
         };
         let member_groups = generated_source
             .members
@@ -2138,6 +2201,40 @@ fn wrapper_output_groups(view: &impl UsdRead, root: &str) -> Vec<(String, String
         .collect()
 }
 
+/// Resolve the generated wrapper names for member outputs that are actually
+/// declared by the composed USD and exposed by the selected synthesizer.
+///
+/// The source path remains USD-authored; only the runtime solver address is
+/// translated. Keeping this as data on the generated document avoids a model- or
+/// renderer-specific branch in the wire resolver.
+fn generated_member_output_aliases(
+    view: &impl UsdRead,
+    root: &str,
+    members: &[(String, String, String)],
+    emitted_outputs: &BTreeSet<String>,
+) -> Vec<(String, String, String)> {
+    members
+        .iter()
+        .flat_map(|(member, _, _)| {
+            let Ok(path) = SdfPath::new(member) else {
+                return Vec::new();
+            };
+            view.attr_names(&path)
+                .into_iter()
+                .filter_map(|attr| {
+                    let output = attr
+                        .strip_prefix("outputs:")
+                        .map(|name| name.strip_suffix(".connect").unwrap_or(name))?;
+                    let alias = generated_member_output_name(root, member, output);
+                    emitted_outputs
+                        .contains(&alias)
+                        .then(|| (member.clone(), output.to_string(), alias))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// What class a member's source asset actually declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberClass {
@@ -2388,6 +2485,29 @@ mod tests {
     }
 
     #[test]
+    fn promotes_member_outputs_to_generated_wrapper_boundary() {
+        let mut jet = component("/Propulsion/RcsJet", None);
+        jet.declared_outputs.insert("light_intensity".into());
+        jet.declared_outputs.insert("light_radius".into());
+        let network = DomainNetwork {
+            root: "/Propulsion".into(),
+            components: vec![jet],
+            inputs: BTreeSet::new(),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            pending_sources: false,
+        };
+
+        let source = emit_modelica(&network, "Propulsion");
+        assert!(source.contains("output Real __member_RcsJet_light_intensity;"));
+        assert!(source.contains("output Real __member_RcsJet_light_radius;"));
+        assert!(source.contains(
+            "__member_RcsJet_light_intensity = RcsJet.light_intensity;"
+        ));
+        assert!(source.contains("__member_RcsJet_light_radius = RcsJet.light_radius;"));
+    }
+
+    #[test]
     fn emits_every_target_of_a_multiway_connector() {
         let mut bus = component("/Electrical/Bus/Model", None);
         bus.connectors.insert(
@@ -2544,6 +2664,7 @@ mod tests {
                     members: Vec::new(),
                     member_groups: Vec::new(),
                     output_groups: Vec::new(),
+                    member_output_aliases: Vec::new(),
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
@@ -2575,6 +2696,7 @@ mod tests {
             )],
             member_groups: Vec::new(),
             output_groups: Vec::new(),
+            member_output_aliases: Vec::new(),
         };
         assert_eq!(
             canonical_generated_signal(&source, "Battery.soc_out"),
