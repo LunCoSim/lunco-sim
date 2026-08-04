@@ -616,7 +616,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
         if network.pending_sources {
             return Ok(SynthOutcome::Pending);
         }
-        let member_outputs = generated_member_outputs(&network);
+        let member_outputs = generated_member_outputs(&network, Some(ctx.classes));
         let outputs = network
             .outputs
             .keys()
@@ -624,7 +624,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
             .chain(member_outputs.iter().map(|(_, _, alias)| alias.clone()))
             .collect();
         Ok(SynthOutcome::Ready(SynthesisPlan {
-            source: emit_modelica(&network, model_name),
+            source: emit_modelica_with_classes(&network, model_name, Some(ctx.classes)),
             inputs: network.inputs.clone(),
             outputs,
             component_paths: network
@@ -753,6 +753,14 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
 /// Scope. The wrapper is the runtime participant; its generated child models
 /// are the synthesizer-owned connected units.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
+    emit_modelica_with_classes(network, model_name, None)
+}
+
+fn emit_modelica_with_classes(
+    network: &DomainNetwork,
+    model_name: &str,
+    classes: Option<&MemberClasses>,
+) -> String {
     let root_name = modelica_identifier(model_name);
     let units = partition_network(network);
     let names: BTreeMap<_, _> = network
@@ -788,7 +796,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         .map(|(boundary, source)| (source.as_str(), boundary.as_str()))
         .collect();
     let placements = network_layout(network);
-    let member_outputs = generated_member_outputs(network);
+    let member_outputs = generated_member_outputs(network, classes);
     let mut source = format!("model {root_name}\n");
 
     for input in &network.inputs {
@@ -828,6 +836,21 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             ));
         }
     }
+    // Member aliases are wrapper outputs, so their equations belong to the
+    // wrapper's equation section. Keeping them here also keeps the complete
+    // generated root model syntactically self-contained.
+    for (member, _output, alias) in &member_outputs {
+        if let Some(unit) = unit_for_component.get(member.as_str()) {
+            let unit_instance = &unit_instances[unit.name.as_str()];
+            source.push_str(&format!("  {alias} = {unit_instance}.{alias};\n"));
+        }
+    }
+    // Generated networks are ordinary Modelica documents. Their assembly
+    // annotation provides a stable canvas banner; component Icons and
+    // Placement annotations remain the source of the actual network picture.
+    source.push_str(&format!(
+        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\n"
+    ));
     source.push_str(&format!("end {root_name};\n\n"));
 
     for unit in &units {
@@ -837,6 +860,11 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         }
         for output in &unit.outputs {
             source.push_str(&format!("  output Real {};\n", modelica_identifier(output)));
+        }
+        for (member, _, alias) in &member_outputs {
+            if unit.component_paths.iter().any(|path| path == member) {
+                source.push_str(&format!("  output Real {alias};\n"));
+            }
         }
         source.push_str(&format!(
             "  // Synthesis unit members: {}\n",
@@ -939,6 +967,15 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
                 ));
             }
         }
+        for (member, output, alias) in &member_outputs {
+            if unit.component_paths.iter().any(|path| path == member) {
+                let instance = &names[member.as_str()];
+                source.push_str(&format!(
+                    "  {alias} = {instance}.{};\n",
+                    modelica_identifier(output)
+                ));
+            }
+        }
         source.push_str(&format!("end {};\n\n", unit.name));
     }
 
@@ -953,17 +990,6 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
                 .is_some_and(|unit| unit.outputs.contains(output)));
         }
     }
-    for (member, output, alias) in member_outputs {
-        if let Some(instance) = names.get(member.as_str()) {
-            source.push_str(&format!("  {alias} = {instance}.{output};\n"));
-        }
-    }
-    // Generated networks are ordinary Modelica documents. Their assembly
-    // annotation provides a stable canvas banner; component Icons and
-    // Placement annotations remain the source of the actual network picture.
-    source.push_str(&format!(
-        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\nend {model_name};\n"
-    ));
     source
 }
 
@@ -981,18 +1007,29 @@ pub(crate) fn generated_member_output_name(root: &str, member: &str, output: &st
     )
 }
 
-fn generated_member_outputs(network: &DomainNetwork) -> Vec<(String, String, String)> {
+fn generated_member_outputs(
+    network: &DomainNetwork,
+    classes: Option<&MemberClasses>,
+) -> Vec<(String, String, String)> {
     network
         .components
         .iter()
         .flat_map(|component| {
-            component.declared_outputs.iter().map(|output| {
-                (
-                    component.path.clone(),
-                    output.clone(),
-                    generated_member_output_name(&network.root, &component.path, output),
-                )
-            })
+            let modelica_outputs =
+                classes.and_then(|classes| classes.output_names(&component.source_asset));
+            component
+                .declared_outputs
+                .iter()
+                .filter(move |output| {
+                    modelica_outputs.is_none_or(|outputs| outputs.contains(*output))
+                })
+                .map(|output| {
+                    (
+                        component.path.clone(),
+                        output.clone(),
+                        generated_member_output_name(&network.root, &component.path, output),
+                    )
+                })
         })
         .collect()
 }
@@ -2068,6 +2105,7 @@ pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
     metadata:
         HashMap<String, HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
+    outputs: HashMap<String, BTreeSet<String>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
 }
 
@@ -2091,6 +2129,14 @@ impl MemberClasses {
         asset: &str,
     ) -> Option<&HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>> {
         self.metadata.get(asset)
+    }
+
+    /// Causal outputs declared by the resolved Modelica class. `None` means
+    /// the class was seeded by an offline test/tool without source interface
+    /// data; callers then retain their authored contract and let compilation
+    /// be the authority.
+    pub fn output_names(&self, asset: &str) -> Option<&BTreeSet<String>> {
+        self.outputs.get(asset)
     }
 
     /// Resolve the class to instantiate for `asset`. `Ok(None)` means the source
@@ -2191,6 +2237,7 @@ pub fn resolve_member_classes(
         String,
         Option<String>,
         Option<HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
+        Option<BTreeSet<String>>,
     )> = classes
         .pending
         .iter()
@@ -2201,20 +2248,28 @@ pub fn resolve_member_classes(
                     Some(within) => format!("{within}.{declared}"),
                     None => declared,
                 });
-                return Some((asset.clone(), class, Some(interface.variable_metadata)));
+                return Some((
+                    asset.clone(),
+                    class,
+                    Some(interface.variable_metadata),
+                    Some(interface.outputs),
+                ));
             }
             if asset_server.load_state(handle).is_failed() || now >= *expires {
-                return Some((asset.clone(), None, None));
+                return Some((asset.clone(), None, None, None));
             }
             None
         })
         .collect();
-    for (asset, class, metadata) in settled {
+    for (asset, class, metadata, outputs) in settled {
         classes.pending.remove(&asset);
         match class {
             Some(class) => {
                 if let Some(metadata) = metadata {
                     classes.metadata.insert(asset.clone(), metadata);
+                }
+                if let Some(outputs) = outputs {
+                    classes.outputs.insert(asset.clone(), outputs);
                 }
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
@@ -2299,6 +2354,42 @@ mod tests {
         assert!(source.contains("output Real __member_RcsJet_light_radius;"));
         assert!(source.contains("__member_RcsJet_light_intensity = RcsJet.light_intensity;"));
         assert!(source.contains("__member_RcsJet_light_radius = RcsJet.light_radius;"));
+        assert!(source.contains(
+            "__member_RcsJet_light_intensity = instance_Unit_RcsJet.__member_RcsJet_light_intensity;"
+        ));
+        let (_, _, issues) = lunco_modelica::ast_extract::strip_input_defaults_with_report(&source);
+        assert!(
+            issues.is_empty(),
+            "generated wrapper must be parseable before compilation: {issues:?}\n{source}"
+        );
+    }
+
+    #[test]
+    fn filters_native_only_member_outputs_from_generated_modelica() {
+        let mut motor = component("/Electrical/Motor", None);
+        motor.declared_outputs = BTreeSet::from(["heat".into(), "torque".into()]);
+        let network = DomainNetwork {
+            root: "/Electrical".into(),
+            components: vec![motor],
+            inputs: BTreeSet::new(),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            pending_sources: false,
+        };
+        let asset = network.components[0].source_asset.clone();
+        let mut classes = MemberClasses::default();
+        classes
+            .outputs
+            .insert(asset, BTreeSet::from(["heat".into()]));
+
+        let source = emit_modelica_with_classes(&network, "Electrical", Some(&classes));
+        assert!(source.contains("__member_Motor_heat"));
+        assert!(!source.contains("__member_Motor_torque"));
+        let (_, _, issues) = lunco_modelica::ast_extract::strip_input_defaults_with_report(&source);
+        assert!(
+            issues.is_empty(),
+            "generated wrapper must parse: {issues:?}"
+        );
     }
 
     #[test]

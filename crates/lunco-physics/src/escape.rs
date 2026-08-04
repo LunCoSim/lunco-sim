@@ -314,6 +314,11 @@ impl Plugin for EscapeDiagnosticPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldBounds>()
             .init_resource::<ReportedEscapes>()
+            // The diagnostic raises the safety hold at the owning physics
+            // boundary. Keep the plugin self-contained for headless apps and
+            // focused integration tests that install it without the broader
+            // PhysicsGatePlugin.
+            .init_resource::<crate::PhysicsHolds>()
             // In `Writeback`, after the solver has moved bodies this tick, so a
             // body that left the world is reported on the tick it left rather
             // than one tick later. Bounds are refreshed first so newly-paged

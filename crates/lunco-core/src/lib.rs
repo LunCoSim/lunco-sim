@@ -1154,6 +1154,25 @@ mod ph1_identity_tests {
         assert!(w.get_resource::<session::AppliedInputSeq>().is_some());
     }
 
+    #[test]
+    fn scene_pointer_policy_has_fail_safe_usd_semantics() {
+        assert_eq!(
+            ScenePointerPolicy::from_usd(Some("pass_through"), Some("context")),
+            Some(ScenePointerPolicy {
+                left: PointerInteraction::PassThrough,
+                right: PointerInteraction::Context,
+            })
+        );
+        assert_eq!(ScenePointerPolicy::from_usd(None, None), None);
+        assert_eq!(
+            ScenePointerPolicy::from_usd(Some("typo"), None),
+            Some(ScenePointerPolicy {
+                left: PointerInteraction::Block,
+                right: PointerInteraction::Block,
+            })
+        );
+    }
+
     fn id_of(app: &mut App, e: Entity) -> Option<u64> {
         app.world()
             .get::<GlobalEntityId>(e)

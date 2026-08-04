@@ -95,18 +95,19 @@ pub fn slashed(p: impl AsRef<Path>) -> String {
 /// its results — a pre-fetch keyed on one spelling and a lookup keyed on another
 /// is a guaranteed cache miss (R-canon).
 pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
-    if is_anchored(asset_path) {
-        return canonicalize_root(asset_path);
+    let asset_path = slashed(asset_path);
+    if is_anchored(&asset_path) {
+        return canonicalize_root(&asset_path);
     }
     let (scheme, anchor_path) = match split_scheme(anchor) {
         Some((s, rest)) => (Some(s), rest),
         None => (None, anchor),
     };
-    let base = Path::new(anchor_path)
+    let base = Path::new(&slashed(anchor_path))
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let resolved = normalize(&base.join(asset_path))
+    let resolved = normalize(&base.join(&asset_path))
         .to_string_lossy()
         .into_owned();
     match scheme {
@@ -124,10 +125,11 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
 /// are genuinely different questions, and collapsing them into one nullable
 /// argument is what let callers ask the wrong one without noticing.
 pub fn canonicalize_root(reference: &str) -> String {
-    if crate::has_scheme(reference) {
-        return reference.to_string();
+    let reference = slashed(reference);
+    if crate::has_scheme(&reference) {
+        return reference;
     }
-    let rel = reference.strip_prefix('/').unwrap_or(reference);
+    let rel = reference.strip_prefix('/').unwrap_or(&reference);
     normalize(Path::new(rel)).to_string_lossy().into_owned()
 }
 
@@ -196,6 +198,10 @@ mod tests {
     #[test]
     fn scheme_qualified_passes_through() {
         assert_eq!(canonicalize_root("lunco://a/b.usda"), "lunco://a/b.usda");
+        assert_eq!(
+            canonicalize_root(r"twin://SummerSpaceSchool\sim\scenes\traverse.usda"),
+            "twin://SummerSpaceSchool/sim/scenes/traverse.usda"
+        );
         // Even with an anchor — an absolute reference is absolute.
         assert_eq!(
             canonicalize("twin://ep1/lib.rhai", "lunco://scenes/x.usda"),
@@ -218,6 +224,13 @@ mod tests {
                 "lunco://vessels/rovers/skid.usda"
             ),
             "lunco://components/wheel.usda"
+        );
+        assert_eq!(
+            canonicalize(
+                r"..\components\wheel.usda",
+                r"twin://vessels\rovers\skid.usda"
+            ),
+            "twin://vessels/components/wheel.usda"
         );
         assert_eq!(
             canonicalize("lib.rhai", "twin://ep1/main.rhai"),

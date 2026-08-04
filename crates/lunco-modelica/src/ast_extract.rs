@@ -65,6 +65,9 @@ pub struct ModelInterface {
     /// subset that authored a numeric binding — seeding from defaults alone
     /// gives an unbound `input Real drive_left` no port at all.
     pub inputs: HashMap<String, f64>,
+    /// Every causal output declared by the model, including output connector
+    /// types whose causality is carried by the connector class.
+    pub outputs: std::collections::BTreeSet<String>,
     /// Documentation projected from the same parsed declarations as this
     /// interface. Solver adapters use it for observable telemetry metadata.
     pub variable_metadata: HashMap<String, ModelicaVariableMetadata>,
@@ -144,6 +147,7 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
                 (name, seed)
             })
             .collect(),
+        outputs: extract_output_names_from_ast(&ast),
         variable_metadata: variable_metadata_from_index(index),
     }
 }
@@ -460,6 +464,16 @@ pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<
 pub fn extract_input_names_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     collect_input_names_from_classes(&ast.classes, &mut names);
+    names
+}
+
+/// Every output-typed component in the parsed Modelica source. This is the
+/// source-level interface used when a USD prim carries additional native
+/// outputs alongside its Modelica facet: only outputs the instantiated class
+/// actually owns may be emitted into a generated Modelica wrapper.
+pub fn extract_output_names_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    collect_output_names_from_classes(&ast.classes, &mut names);
     names
 }
 
@@ -800,6 +814,22 @@ fn collect_input_names_from_classes(
             }
         }
         collect_input_names_from_classes(&class.classes, names);
+    }
+}
+
+fn collect_output_names_from_classes(
+    classes: &AstIndexMap<String, ClassDef>,
+    names: &mut BTreeSet<String>,
+) {
+    for class in classes.values() {
+        for component in class.components.values() {
+            if matches!(component.causality, Causality::Output(_))
+                || is_output_connector_type(&component.type_name.to_string())
+            {
+                names.insert(component.name.clone());
+            }
+        }
+        collect_output_names_from_classes(&class.classes, names);
     }
 }
 
@@ -1376,6 +1406,24 @@ mod tests {
             !defaults.contains_key("drive_left"),
             "an unbound input has no authored default to report"
         );
+    }
+
+    #[test]
+    fn output_names_include_causal_outputs() {
+        let source = concat!(
+            "model M\n",
+            "  input Real command;\n",
+            "  output Real value;\n",
+            "  Real internal;\n",
+            "equation\n",
+            "  value = command;\n",
+            "  internal = value;\n",
+            "end M;\n",
+        );
+        let interface = parse_model_interface(source, "outputs.mo");
+
+        assert_eq!(interface.outputs, BTreeSet::from(["value".to_string()]));
+        assert!(!interface.outputs.contains("internal"));
     }
 
     // --- extract_model_name ---

@@ -198,6 +198,12 @@ impl CurriculumRoot {
     /// already decided which twin is asking — that is what stopped a bundled
     /// lesson and a twin's from shadowing each other by relative path.
     pub fn read(&self, asset: &str) -> Option<String> {
+        // URI identity is slash-based on every platform. Twin-authored USD
+        // can arrive from a Windows editor with backslashes in both the
+        // scheme remainder and the twin/relative separator; normalize before
+        // splitting so the same curriculum composes on native Windows and
+        // Linux.
+        let asset = lunco_assets::asset_path::slashed(asset);
         let (scheme, rest) = asset.split_once("://")?;
         match scheme {
             "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
