@@ -457,7 +457,7 @@ struct PyCompiledDoc {
     code: Result<pyo3::Py<pyo3::PyAny>, ()>,
 }
 
-/// Per-tick executor for Python `ScriptedModel`s (the dict-backed
+/// Per-tick executor for Python `ScriptedModel`s (the port-mapped
 /// inputs/outputs model). Python-only: rhai scenarios run via the world-bridge systems.
 /// Feeds the USD Python-cosim path (`lunco-usd-sim/cosim.rs`), which syncs
 /// `SimComponent` ports into `ScriptedModel.inputs` before this and reads

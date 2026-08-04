@@ -1,4 +1,4 @@
-//! Inspector panel — WorkbenchPanel implementation.
+//! Inspector panel — `lunco-workbench::Panel` implementation.
 //!
 //! Migrates the old standalone egui window to use bevy_workbench docking.
 //! Provides editable sliders for transform, physics, and wheel parameters.
@@ -8,7 +8,7 @@
 //! [`PanelCtx::resource`]/[`PanelCtx::get`] (and, for query-derived data
 //! like the scene sun / camera / joint, the change-driven
 //! [`InspectorView`] view-model produced by [`populate_inspector_view`]);
-//! every mutation is queued through [`PanelCtx::defer`] and applied after
+//! every mutation is emitted as a typed intent and applied by an observer after
 //! the egui pass.
 
 use bevy::prelude::*;
@@ -18,7 +18,7 @@ use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
-use lunco_materials::ShaderLook;
+use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
 
 use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
@@ -32,6 +32,560 @@ use lunco_scene_commands::doc_resolve::{
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
+
+#[derive(Event, Clone, Copy, Debug)]
+pub(crate) enum InspectorComponentEdit {
+    Mass {
+        entity: Entity,
+        value: f32,
+    },
+    LinearDamping {
+        entity: Entity,
+        value: f64,
+    },
+    AngularDamping {
+        entity: Entity,
+        value: f64,
+    },
+    TerrainShader {
+        entity: Entity,
+        mode: lunco_terrain_surface::TerrainShaderMode,
+    },
+    JointSetpoint {
+        holder: Entity,
+        value: f64,
+    },
+    Anchor {
+        entity: Entity,
+        value: lunco_celestial::GeodeticAnchor,
+    },
+    Orbit {
+        entity: Entity,
+        value: lunco_celestial::KeplerOrbit,
+    },
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct ProjectionEditRequested {
+    entity: Entity,
+    projection: Projection,
+    fov: f32,
+    near: f32,
+    far: f32,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct UsdAttributeEditRequested {
+    entity: Entity,
+    name: String,
+    type_name: String,
+    value: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct UsdVariantEditRequested {
+    entity: Entity,
+    prim_path: String,
+    set: String,
+    variant: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct MountSnapRequested {
+    entity: Entity,
+    part: String,
+    joint: String,
+    placement: [f64; 3],
+    rotate: [f64; 3],
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Event, Clone, Debug)]
+pub(crate) struct AttachAtSocketRequested {
+    entity: Entity,
+    host_path: String,
+    name: String,
+    asset: String,
+    joint: lunco_usd::attach::AttachJoint,
+    socket_frame: Transform,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct ShaderSwapRequested {
+    part: Entity,
+    path: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct ShaderCreateRequested {
+    part: Entity,
+    name: String,
+    template: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct ShaderImportRequested {
+    part: Entity,
+    source: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct ShaderParametersRequested {
+    entity: Entity,
+    edits: Vec<(String, ParamValue)>,
+    usd_prim_exists: bool,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct PbrMaterialRequested {
+    part: Entity,
+    parts: Vec<Entity>,
+    base: [f32; 3],
+    alpha: f32,
+    emissive: [f32; 3],
+    metallic: f32,
+    roughness: f32,
+    ior: f32,
+    double_sided: bool,
+    base_changed: bool,
+    emissive_changed: bool,
+    metallic_changed: bool,
+    roughness_changed: bool,
+    ior_changed: bool,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct ModelicaParameterRequested {
+    entity: Entity,
+    key: String,
+    value: f64,
+}
+
+pub(crate) fn on_inspector_component_edit(
+    trigger: On<InspectorComponentEdit>,
+    mut commands: Commands,
+    mut masses: Query<&mut avian3d::prelude::Mass>,
+    mut linear: Query<&mut avian3d::prelude::LinearDamping>,
+    mut angular: Query<&mut avian3d::prelude::AngularDamping>,
+    mut terrain: Query<&mut lunco_terrain_surface::TerrainShaderMode>,
+) {
+    match *trigger.event() {
+        InspectorComponentEdit::Mass { entity, value } => {
+            if let Ok(mut mass) = masses.get_mut(entity) {
+                mass.0 = value;
+            }
+        }
+        InspectorComponentEdit::LinearDamping { entity, value } => {
+            if let Ok(mut damping) = linear.get_mut(entity) {
+                damping.0 = value;
+            }
+        }
+        InspectorComponentEdit::AngularDamping { entity, value } => {
+            if let Ok(mut damping) = angular.get_mut(entity) {
+                damping.0 = value;
+            }
+        }
+        InspectorComponentEdit::TerrainShader { entity, mode } => {
+            if let Ok(mut current) = terrain.get_mut(entity) {
+                *current = mode;
+            }
+        }
+        InspectorComponentEdit::JointSetpoint { holder, value } => {
+            commands.queue(move |world: &mut World| {
+                let registry = world.resource::<PortRegistry>().clone();
+                registry.write_port(world, holder, JOINT_ANGLE_PORT, value);
+            });
+        }
+        InspectorComponentEdit::Anchor { entity, value } => {
+            commands.queue(move |world: &mut World| {
+                if let Some(mut current) = world.get_mut::<lunco_celestial::GeodeticAnchor>(entity)
+                {
+                    *current = value;
+                }
+                for (name, value) in [
+                    ("lunco:anchor:lat", format!("{}", value.geodetic.lat_deg)),
+                    ("lunco:anchor:lon", format!("{}", value.geodetic.lon_deg)),
+                    (
+                        "lunco:anchor:height",
+                        format!("{}", value.geodetic.height_m),
+                    ),
+                ] {
+                    apply_usd_attribute_change(world, entity, name, "double", value);
+                }
+                apply_usd_attribute_change(
+                    world,
+                    entity,
+                    "lunco:anchor:body",
+                    "int",
+                    format!("{}", value.body),
+                );
+            });
+        }
+        InspectorComponentEdit::Orbit { entity, value } => {
+            commands.queue(move |world: &mut World| {
+                if let Some(mut current) = world.get_mut::<lunco_celestial::KeplerOrbit>(entity) {
+                    *current = value;
+                }
+                for (name, value) in [
+                    (
+                        "lunco:orbit:semiMajorAxisM",
+                        format!("{}", value.elements.semi_major_axis_m),
+                    ),
+                    (
+                        "lunco:orbit:eccentricity",
+                        format!("{}", value.elements.eccentricity),
+                    ),
+                    (
+                        "lunco:orbit:inclinationDeg",
+                        format!("{}", value.elements.inclination_deg),
+                    ),
+                    (
+                        "lunco:orbit:raanDeg",
+                        format!("{}", value.elements.raan_deg),
+                    ),
+                    (
+                        "lunco:orbit:argPeriapsisDeg",
+                        format!("{}", value.elements.arg_periapsis_deg),
+                    ),
+                    (
+                        "lunco:orbit:meanAnomalyDeg",
+                        format!("{}", value.elements.mean_anomaly_deg),
+                    ),
+                ] {
+                    apply_usd_attribute_change(world, entity, name, "double", value);
+                }
+            });
+        }
+    }
+}
+
+pub(crate) fn on_projection_edit_requested(
+    trigger: On<ProjectionEditRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        if let Some(mut current) = world.get_mut::<Projection>(request.entity) {
+            *current = request.projection;
+        }
+        if world.get::<UsdPrimPath>(request.entity).is_some() {
+            const VERTICAL_APERTURE_MM: f32 = 15.2908;
+            let focal_length = VERTICAL_APERTURE_MM / (2.0 * (request.fov * 0.5).tan());
+            apply_usd_attribute_change(
+                world,
+                request.entity,
+                "focalLength",
+                "float",
+                format!("{focal_length}"),
+            );
+            apply_usd_attribute_change(
+                world,
+                request.entity,
+                "clippingRange",
+                "float2",
+                format!("({}, {})", request.near, request.far),
+            );
+        }
+    });
+}
+
+pub(crate) fn on_usd_attribute_edit_requested(
+    trigger: On<UsdAttributeEditRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        apply_usd_attribute_change(
+            world,
+            request.entity,
+            &request.name,
+            &request.type_name,
+            request.value,
+        );
+    });
+}
+
+pub(crate) fn on_usd_variant_edit_requested(
+    trigger: On<UsdVariantEditRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        apply_usd_variant_selection(
+            world,
+            request.entity,
+            request.prim_path,
+            request.set,
+            request.variant,
+        );
+    });
+}
+
+pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let ops = lunco_usd::attach::realign_component_ops(
+            LayerId::root(),
+            request.part,
+            request.joint,
+            request.placement,
+            request.rotate,
+        );
+        apply_usd_ops(world, request.entity, ops);
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn on_attach_at_socket_requested(
+    trigger: On<AttachAtSocketRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        attach_component_at_socket(
+            world,
+            request.entity,
+            request.host_path,
+            request.name,
+            request.asset,
+            request.joint,
+            request.socket_frame,
+        );
+    });
+}
+
+pub(crate) fn on_shader_swap_requested(trigger: On<ShaderSwapRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        swap_shader_on_entity(world, request.part, &request.path);
+    });
+}
+
+pub(crate) fn on_shader_create_requested(
+    trigger: On<ShaderCreateRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        create_and_apply(world, request.part, &request.name, &request.template);
+    });
+}
+
+pub(crate) fn on_shader_import_requested(
+    trigger: On<ShaderImportRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        import_and_apply(world, request.part, &request.source);
+    });
+}
+
+pub(crate) fn on_shader_parameters_requested(
+    trigger: On<ShaderParametersRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
+            for (name, value) in &request.edits {
+                look.values.insert(name.clone(), *value);
+            }
+        }
+        if request.usd_prim_exists {
+            for (name, value) in &request.edits {
+                let usd_name = if name.starts_with("primvars:") {
+                    name.clone()
+                } else {
+                    format!("primvars:{name}")
+                };
+                let (type_name, value_str) = match value {
+                    ParamValue::F32(x) => ("float", format!("{x:.3}")),
+                    ParamValue::I32(x) => ("int", format!("{x}")),
+                    ParamValue::U32(x) => ("uint", format!("{x}")),
+                    ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
+                    ParamValue::Vec3(arr) => {
+                        let name_lc = name.to_lowercase();
+                        let ty = if name_lc.contains("color") || name_lc.contains("colour") {
+                            "color3f"
+                        } else {
+                            "float3"
+                        };
+                        (ty, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
+                    }
+                    ParamValue::Vec4(arr) => (
+                        "float4",
+                        format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3]),
+                    ),
+                };
+                apply_usd_attribute_change(world, request.entity, &usd_name, type_name, value_str);
+            }
+        }
+    });
+}
+
+pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        for entity in &request.parts {
+            let Some(mut look) = world.get_mut::<PbrLook>(*entity) else {
+                continue;
+            };
+            look.base_color = LinearRgba::new(
+                request.base[0],
+                request.base[1],
+                request.base[2],
+                request.alpha,
+            );
+            look.emissive = LinearRgba::new(
+                request.emissive[0],
+                request.emissive[1],
+                request.emissive[2],
+                1.0,
+            );
+            look.metallic = request.metallic;
+            look.perceptual_roughness = request.roughness;
+            look.ior = request.ior;
+            look.double_sided = request.double_sided;
+            look.alpha = if request.alpha >= 1.0 {
+                lunco_render::SurfaceAlpha::Opaque
+            } else {
+                lunco_render::SurfaceAlpha::Blend
+            };
+        }
+
+        let Some(prim) = world.get::<UsdPrimPath>(request.part).cloned() else {
+            return;
+        };
+        let shader_path = bound_shader_prim(world, &prim);
+        let (mut ops, shader) = match &shader_path {
+            Some(path) => (Vec::new(), path.clone()),
+            None => {
+                let schemas = geom_api_schemas(world, &prim);
+                let Some((ops, shader)) =
+                    lunco_usd::material::ensure_preview_surface_ops(&prim.path, &schemas)
+                else {
+                    return;
+                };
+                (ops, shader)
+            }
+        };
+        let fresh = shader_path.is_none();
+        let root = LayerId::root();
+        let mut set = |name: &str, type_name: &str, value: String| {
+            ops.push(UsdOp::SetAttribute {
+                edit_target: root.clone(),
+                path: shader.clone(),
+                name: name.to_string(),
+                type_name: type_name.to_string(),
+                value,
+            });
+        };
+        if request.base_changed || fresh {
+            set(
+                "inputs:diffuseColor",
+                "color3f",
+                format!(
+                    "({}, {}, {})",
+                    request.base[0], request.base[1], request.base[2]
+                ),
+            );
+        }
+        if request.emissive_changed || fresh {
+            set(
+                "inputs:emissiveColor",
+                "color3f",
+                format!(
+                    "({}, {}, {})",
+                    request.emissive[0], request.emissive[1], request.emissive[2]
+                ),
+            );
+        }
+        if request.metallic_changed || fresh {
+            set(
+                "inputs:metallic",
+                "float",
+                format!("{:.3}", request.metallic),
+            );
+        }
+        if request.roughness_changed || fresh {
+            set(
+                "inputs:roughness",
+                "float",
+                format!("{:.3}", request.roughness),
+            );
+        }
+        if request.ior_changed || fresh {
+            set("inputs:ior", "float", format!("{:.3}", request.ior));
+        }
+        if let Some(doc) = resolve_doc_for_entity(world, request.part) {
+            lunco_usd::commands::apply_ops_as_change_set(world, doc, "Edit material", ops);
+        }
+    });
+}
+
+pub(crate) fn on_modelica_parameter_requested(
+    trigger: On<ModelicaParameterRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use lunco_modelica::document::ModelicaOp;
+        use lunco_modelica::state::ModelicaDocumentRegistry;
+        use lunco_modelica::ui::panels::canvas_diagram::apply_ops_public;
+        use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel};
+
+        let mut session_id = 0u64;
+        let mut model_name = String::new();
+        if let Some(mut model) = world.get_mut::<ModelicaModel>(request.entity) {
+            if let Some(slot) = model.parameters.get_mut(&request.key) {
+                *slot = request.value;
+            }
+            model.session_id += 1;
+            session_id = model.session_id;
+            model.is_stepping = true;
+            model_name = model.model_name.clone();
+        }
+
+        let (doc_id, class_name) = {
+            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let doc = registry.document_of(request.entity);
+            let class = doc.and_then(|doc| registry.host(doc)).and_then(|host| {
+                lunco_modelica::ast_extract::extract_model_name_from_ast(
+                    host.document().syntax().ast(),
+                )
+            });
+            (doc, class)
+        };
+        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else {
+            return;
+        };
+        apply_ops_public(
+            world,
+            doc_id,
+            vec![ModelicaOp::SetParameter {
+                class: class_name,
+                component: request.key.clone(),
+                param: String::new(),
+                value: format!("{}", request.value),
+            }],
+        );
+        let new_source = world
+            .resource::<ModelicaDocumentRegistry>()
+            .host(doc_id)
+            .map(|host| host.document().source().to_string());
+        if let (Some(new_source), Some(channels)) =
+            (new_source, world.get_resource::<ModelicaChannels>())
+        {
+            let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                entity: request.entity,
+                session_id,
+                model_name,
+                source: new_source,
+            });
+        }
+    });
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // View-model (WP-8) — query-derived inspector state.
@@ -490,14 +1044,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
         let primary = ctx.resource::<SelectedEntities>().and_then(|s| s.primary());
         if let Some(entity) = primary {
-            ctx.defer(move |world| {
-                // The typed verb — despawns, drops the selection, AND authors the
-                // `RemovePrim`, so the delete persists, journals, replicates, and
-                // undoes (Ctrl+Z).
-                world.trigger(lunco_scene_commands::commands::DeleteEntity {
-                    target: entity,
-                    intent: lunco_core::EditIntent::Persistent,
-                });
+            // The typed verb — despawns, drops the selection, AND authors the
+            // `RemovePrim`, so the delete persists, journals, replicates, and
+            // undoes (Ctrl+Z).
+            ctx.trigger(crate::commands::DeleteEntity {
+                target: entity,
+                intent: lunco_core::EditIntent::Persistent,
             });
             return;
         }
@@ -581,26 +1133,16 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
                     if committed {
                         let new_t = Vec3::new(x, y, z);
-                        ctx.defer(move |world| {
-                            // Route through the typed `MoveEntity` verb rather than
-                            // poking `Transform` here. It already owns the
-                            // physics-aware pose seat (CQ-510: writing only
-                            // `Transform` silently no-ops on a body, because avian
-                            // re-derives it from the f64 `Position` each tick), and
-                            // its persister authors the `SetTranslate` — so the edit
-                            // journals, replicates, persists, and undoes. The
-                            // hand-rolled copy that used to live here did none of
-                            // that.
-                            let Some(gid) =
-                                world.get::<lunco_core::GlobalEntityId>(entity).copied()
-                            else {
-                                warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
-                                return;
-                            };
-                            world.trigger(lunco_scene_commands::commands::MoveEntity {
-                                entity_id: gid.get(),
-                                translation: new_t.to_array().map(f64::from),
-                            });
+                        // Route through the typed `MoveEntity` verb; it owns
+                        // physics pose seating and USD persistence.
+                        let Some(gid) = ctx.get::<lunco_core::GlobalEntityId>(entity).copied()
+                        else {
+                            warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
+                            return;
+                        };
+                        ctx.trigger(crate::commands::MoveEntity {
+                            entity_id: gid.get(),
+                            translation: new_t.to_array().map(f64::from),
                         });
                     }
                 }
@@ -634,12 +1176,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         )
                         .changed()
                     {
-                        ctx.defer(move |world| {
-                            if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(entity)
-                            {
-                                mass.0 = m;
-                            }
-                        });
+                        ctx.trigger(InspectorComponentEdit::Mass { entity, value: m });
                     }
                 }
                 if let Some(cur) = ctx
@@ -651,12 +1188,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         .add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping"))
                         .changed()
                     {
-                        ctx.defer(move |world| {
-                            if let Some(mut damp) =
-                                world.get_mut::<avian3d::prelude::LinearDamping>(entity)
-                            {
-                                damp.0 = d as f64;
-                            }
+                        ctx.trigger(InspectorComponentEdit::LinearDamping {
+                            entity,
+                            value: d as f64,
                         });
                     }
                 }
@@ -669,12 +1203,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         .add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping"))
                         .changed()
                     {
-                        ctx.defer(move |world| {
-                            if let Some(mut damp) =
-                                world.get_mut::<avian3d::prelude::AngularDamping>(entity)
-                            {
-                                damp.0 = d as f64;
-                            }
+                        ctx.trigger(InspectorComponentEdit::AngularDamping {
+                            entity,
+                            value: d as f64,
                         });
                     }
                 }
@@ -700,8 +1231,8 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         let mut target = stored.or_else(|| default_part(ctx, &parts));
         if stored.is_none() {
             if let Some(t) = target {
-                ctx.defer(move |world| {
-                    world.resource_mut::<crate::InspectorTarget>().part = Some(t);
+                ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
+                    target.part = Some(t);
                 });
             }
         }
@@ -759,13 +1290,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         ui.selectable_value(&mut sel, M::Plain, label(M::Plain));
                     });
                 if sel != mode {
-                    ctx.defer(move |world| {
-                        if let Some(mut m) =
-                            world.get_mut::<lunco_terrain_surface::TerrainShaderMode>(entity)
-                        {
-                            *m = sel;
-                        }
-                    });
+                    ctx.trigger(InspectorComponentEdit::TerrainShader { entity, mode: sel });
                 }
             });
     }
@@ -793,11 +1318,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // Delete button
     ui.separator();
     if ui.button("🗑 Delete Entity (Del)").clicked() {
-        ctx.defer(move |world| {
-            world.trigger(lunco_scene_commands::commands::DeleteEntity {
-                target: entity,
-                intent: lunco_core::EditIntent::Persistent,
-            });
+        ctx.trigger(crate::commands::DeleteEntity {
+            target: entity,
+            intent: lunco_core::EditIntent::Persistent,
         });
     }
 }
@@ -839,33 +1362,12 @@ fn camera_projection_section(
             let authored_fov = perspective.fov;
             let authored_near = perspective.near;
             let authored_far = perspective.far;
-            ctx.defer(move |world| {
-                if let Some(mut current) = world.get_mut::<Projection>(entity) {
-                    *current = Projection::Perspective(perspective);
-                }
-                // USD owns authored camera facts. Preserve the USD default
-                // vertical aperture while converting the Inspector's vertical
-                // FOV back to the standard `focalLength` attribute; composed
-                // camera reloads therefore retain the edit instead of
-                // reverting to an ECS-only override.
-                if world.get::<UsdPrimPath>(entity).is_some() {
-                    const VERTICAL_APERTURE_MM: f32 = 15.2908;
-                    let focal_length = VERTICAL_APERTURE_MM / (2.0 * (authored_fov * 0.5).tan());
-                    apply_usd_attribute_change(
-                        world,
-                        entity,
-                        "focalLength",
-                        "float",
-                        format!("{focal_length}"),
-                    );
-                    apply_usd_attribute_change(
-                        world,
-                        entity,
-                        "clippingRange",
-                        "float2",
-                        format!("({}, {})", authored_near, authored_far),
-                    );
-                }
+            ctx.trigger(ProjectionEditRequested {
+                entity,
+                projection: Projection::Perspective(perspective),
+                fov: authored_fov,
+                near: authored_near,
+                far: authored_far,
             });
         });
 }
@@ -929,8 +1431,8 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                         .unwrap_or_else(|| format!("{target:?}"));
                     ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
                     if ui.small_button("⏶ back to root").clicked() {
-                        ctx.defer(|world| {
-                            world.resource_mut::<crate::InspectorTarget>().part = None;
+                        ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
+                            target.part = None;
                         });
                     }
                 });
@@ -952,8 +1454,11 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 }
             }
             for (name, type_name, value) in edits {
-                ctx.defer(move |world| {
-                    apply_usd_attribute_change(world, target, &name, &type_name, value);
+                ctx.trigger(UsdAttributeEditRequested {
+                    entity: target,
+                    name,
+                    type_name,
+                    value,
                 });
             }
         });
@@ -1000,9 +1505,11 @@ fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 }
             }
             for (set, variant) in picked {
-                let path = prim_path.clone();
-                ctx.defer(move |world| {
-                    apply_usd_variant_selection(world, entity, path, set, variant);
+                ctx.trigger(UsdVariantEditRequested {
+                    entity,
+                    prim_path: prim_path.clone(),
+                    set,
+                    variant,
                 });
             }
         });
@@ -1039,8 +1546,6 @@ fn attach_joint_from(joint: &str, axis: Option<&str>) -> lunco_usd::attach::Atta
 /// Reads the pre-resolved [`UsdMountView`](crate::ui::usd_mount::UsdMountView) (the
 /// socket frame math ran in the producer; it needs the `!Send` stage).
 fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    use lunco_usd::attach::realign_component_ops;
-
     let (host_path, items) = match ctx.resource::<crate::ui::usd_mount::UsdMountView>() {
         Some(v) if v.entity == Some(entity) && !v.items.is_empty() => {
             (v.host_path.clone(), v.items.clone())
@@ -1116,29 +1621,23 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 }
             }
             if let Some((part, joint, placement, rotate)) = snap {
-                ctx.defer(move |world| {
-                    let ops = realign_component_ops(
-                        lunco_usd::document::LayerId::root(),
-                        part,
-                        joint,
-                        placement,
-                        rotate,
-                    );
-                    apply_usd_ops(world, entity, ops);
+                ctx.trigger(MountSnapRequested {
+                    entity,
+                    part,
+                    joint,
+                    placement,
+                    rotate,
                 });
             }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some((asset, name, host, joint_tok, axis, socket_frame)) = attach {
-                ctx.defer(move |world| {
-                    attach_component_at_socket(
-                        world,
-                        entity,
-                        host,
-                        name,
-                        asset,
-                        attach_joint_from(&joint_tok, axis.as_deref()),
-                        socket_frame,
-                    );
+                ctx.trigger(AttachAtSocketRequested {
+                    entity,
+                    host_path: host,
+                    name,
+                    asset,
+                    joint: attach_joint_from(&joint_tok, axis.as_deref()),
+                    socket_frame,
                 });
             }
             #[cfg(target_arch = "wasm32")]
@@ -1148,8 +1647,8 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
 
 /// Perform a new-attach: read the asset's plug frame off its (not-yet-loaded) file,
 /// `from_mount` it onto `socket_frame`, and dispatch [`AttachComponent`] to the
-/// host's document. Runs in a deferred `&mut World` closure (the asset composition
-/// does file I/O — a one-shot click, never per frame). Native-only.
+/// host's document. The typed request observer performs the asset composition
+/// work after the egui pass (a one-shot click, never per frame). Native-only.
 #[cfg(not(target_arch = "wasm32"))]
 fn attach_component_at_socket(
     world: &mut World,
@@ -1387,9 +1886,7 @@ fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         });
 
     if any_change {
-        ctx.defer(move |world| {
-            world.trigger(cmd);
-        });
+        ctx.trigger(cmd);
     }
 }
 
@@ -1434,9 +1931,7 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 
     if any_change {
-        ctx.defer(move |world| {
-            world.trigger(cmd);
-        });
+        ctx.trigger(cmd);
     }
 }
 
@@ -1790,9 +2285,7 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 
     if let Some(spec) = regen_spec {
-        ctx.defer(move |world| {
-            world.trigger(UpdateObstacleFieldSpec { spec });
-        });
+        ctx.trigger(UpdateObstacleFieldSpec { spec });
     }
 }
 
@@ -1812,7 +2305,7 @@ fn subtree(ctx: &PanelCtx, root: Entity) -> Vec<Entity> {
 }
 
 /// Joint control over a revolute joint's `angle` port. Reads the
-/// [`InspectorView`] snapshot; the setpoint write is deferred through
+/// [`InspectorView`] snapshot; the setpoint write is emitted through
 /// [`lunco_cosim::write_port`].
 fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout) {
     let measured = j.measured;
@@ -1831,9 +2324,9 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     );
     ui.label(format!("{:.1}°", commanded.to_degrees()));
     if r.changed() {
-        ctx.defer(move |world| {
-            let registry = world.resource::<PortRegistry>().clone();
-            registry.write_port(world, holder, JOINT_ANGLE_PORT, commanded);
+        ctx.trigger(InspectorComponentEdit::JointSetpoint {
+            holder,
+            value: commanded,
         });
     }
     if j.wired {
@@ -1903,7 +2396,7 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
 }
 
 /// *Part* dropdown for a multi-part component. Writes the choice into
-/// [`InspectorTarget`](crate::InspectorTarget) (deferred) and returns the
+/// [`InspectorTarget`](crate::InspectorTarget) (through a scoped resource) and returns the
 /// new target.
 fn parts_selector(
     ui: &mut egui::Ui,
@@ -1926,8 +2419,8 @@ fn parts_selector(
             }
         });
     if let Some(c) = chosen {
-        ctx.defer(move |world| {
-            world.resource_mut::<crate::InspectorTarget>().part = Some(c);
+        ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
+            target.part = Some(c);
         });
         return Some(c);
     }
@@ -1935,7 +2428,7 @@ fn parts_selector(
 }
 
 /// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and,
-/// on pick, defers a `.wgsl` swap on `part`.
+/// on pick, emits a typed `.wgsl` swap request for `part`.
 fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
     let entries = ctx
         .resource::<lunco_materials::ShaderCatalog>()
@@ -1963,14 +2456,14 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
         });
     if let Some(path) = chosen {
         if path != cur {
-            ctx.defer(move |world| swap_shader_on_entity(world, part, &path));
+            ctx.trigger(ShaderSwapRequested { part, path });
         }
     }
 }
 
 /// Point `part`'s [`ShaderLook`] at shader `path`, carrying over the params it
-/// already had (the render binder swaps the material). Runs inside a deferred
-/// closure (`&mut World`).
+/// already had (the render binder swaps the material). Runs in the typed
+/// request observer after the egui pass.
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     let mut look = world.get::<ShaderLook>(part).cloned().unwrap_or_default();
     look.shader = path.to_string();
@@ -2038,8 +2531,8 @@ fn current_shader_path(ctx: &PanelCtx, part: Entity) -> Option<String> {
 }
 
 /// "Shader Tools" — GUI front-end for the live shader-authoring commands.
-/// Create / Import apply the result to `part` by `Entity`. Commands are
-/// deferred (they run their observers via `world.trigger`).
+/// Create / Import apply the result to `part` by `Entity`. Commands are emitted
+/// as typed events (their observers run via `world.trigger`).
 fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
     egui::CollapsingHeader::new("Shader Tools")
         .default_open(false)
@@ -2090,7 +2583,11 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
             {
                 let name = st.name.clone();
                 let template = st.template.clone();
-                ctx.defer(move |world| create_and_apply(world, part, &name, &template));
+                ctx.trigger(ShaderCreateRequested {
+                    part,
+                    name,
+                    template,
+                });
                 st.name.clear();
             }
 
@@ -2110,7 +2607,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                 .clicked()
             {
                 let src = st.import.trim().to_string();
-                ctx.defer(move |world| import_and_apply(world, part, &src));
+                ctx.trigger(ShaderImportRequested { part, source: src });
             }
 
             ui.separator();
@@ -2120,9 +2617,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     .on_hover_text("Register any .wgsl dropped into the twin's shaders/ folder")
                     .clicked()
                 {
-                    ctx.defer(|world| {
-                        world.trigger(lunco_scene_commands::commands::RescanShaders {});
-                    });
+                    ctx.trigger(crate::commands::RescanShaders {});
                 }
                 if let Some(path) = current_shader_path(ctx, part) {
                     if ui
@@ -2130,9 +2625,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                         .on_hover_text(format!("Remove {path} (file + picker)"))
                         .clicked()
                     {
-                        ctx.defer(move |world| {
-                            world.trigger(lunco_scene_commands::commands::DeleteShader { path });
-                        });
+                        ctx.trigger(crate::commands::DeleteShader { path });
                     }
                 }
             });
@@ -2196,7 +2689,8 @@ fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
 /// this crate off `bevy_pbr`.) A surface with no `PbrLook` is not listed as a part,
 /// so there is nothing here to fall back to.
 ///
-/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
+/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are handled by
+/// a typed observer.
 fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, parts: &[Entity]) {
     let Some(&first) = parts.first() else {
         return;
@@ -2271,102 +2765,21 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
     }
 
     if changed {
-        let parts = parts.to_vec();
-        ctx.defer(move |world| {
-            for e in &parts {
-                // Intent only — the binder re-materialises it (and, sharing by
-                // look, gives this entity its own handle if the edit made it
-                // unique).
-                let Some(mut look) = world.get_mut::<PbrLook>(*e) else {
-                    continue;
-                };
-                look.base_color = LinearRgba::new(base[0], base[1], base[2], alpha);
-                look.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
-                look.metallic = metallic;
-                look.perceptual_roughness = roughness;
-                look.ior = ior;
-                look.double_sided = double_sided;
-                look.alpha = if alpha >= 1.0 {
-                    lunco_render::SurfaceAlpha::Opaque
-                } else {
-                    lunco_render::SurfaceAlpha::Blend
-                };
-            }
-
-            // Propagate changes to USD.
-            if let Some(prim) = world.get::<UsdPrimPath>(part).cloned() {
-                // Shared with `SetObjectProperty` (commands.rs): both edit a look, so
-                // both must agree on where the look LIVES.
-                let shader_path = bound_shader_prim(world, &prim);
-
-                // Where do shader inputs go? Onto a `Shader` prim, always —
-                // `inputs:*` is the UsdShade namespace and is meaningless on a
-                // Gprim. If this mesh has no material yet, BUILD one rather than
-                // scribbling shader inputs onto the geometry (which is what this
-                // used to do, and which no other DCC would ever read back).
-                //
-                // The whole thing — Scope + Material + Shader + binding + every
-                // changed input — lands as ONE journal change set, so it is one
-                // undo unit: undo removes the material it created, not just the
-                // last slider you touched.
-                let (mut ops, shader) = match &shader_path {
-                    Some(sp) => (Vec::new(), sp.clone()),
-                    None => {
-                        let Some(prim) = world.get::<UsdPrimPath>(part).cloned() else {
-                            return;
-                        };
-                        let schemas = geom_api_schemas(world, &prim);
-                        let Some((ops, shader)) =
-                            lunco_usd::material::ensure_preview_surface_ops(&prim.path, &schemas)
-                        else {
-                            return;
-                        };
-                        (ops, shader)
-                    }
-                };
-                // A freshly-created material must reproduce what is on screen
-                // right now, not snap to UsdPreviewSurface's defaults — so seed
-                // every input, not only the one the user just dragged.
-                let fresh = shader_path.is_none();
-                let root = LayerId::root();
-                let mut set = |attr: &str, ty: &str, value: String| {
-                    ops.push(UsdOp::SetAttribute {
-                        edit_target: root.clone(),
-                        path: shader.clone(),
-                        name: attr.to_string(),
-                        type_name: ty.to_string(),
-                        value,
-                    });
-                };
-
-                if base_changed || fresh {
-                    set(
-                        "inputs:diffuseColor",
-                        "color3f",
-                        format!("({}, {}, {})", base[0], base[1], base[2]),
-                    );
-                }
-                if emissive_changed || fresh {
-                    set(
-                        "inputs:emissiveColor",
-                        "color3f",
-                        format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]),
-                    );
-                }
-                if metallic_changed || fresh {
-                    set("inputs:metallic", "float", format!("{:.3}", metallic));
-                }
-                if roughness_changed || fresh {
-                    set("inputs:roughness", "float", format!("{:.3}", roughness));
-                }
-                if ior_changed || fresh {
-                    set("inputs:ior", "float", format!("{:.3}", ior));
-                }
-
-                if let Some(doc) = resolve_doc_for_entity(world, part) {
-                    lunco_usd::commands::apply_ops_as_change_set(world, doc, "Edit material", ops);
-                }
-            }
+        ctx.trigger(PbrMaterialRequested {
+            part,
+            parts: parts.to_vec(),
+            base,
+            alpha,
+            emissive,
+            metallic,
+            roughness,
+            ior,
+            double_sided,
+            base_changed,
+            emissive_changed,
+            metallic_changed,
+            roughness_changed,
+            ior_changed,
         });
     }
 }
@@ -2378,7 +2791,7 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
 /// side's `ShaderSchemas` cache (the Cargo.toml render gate), so it keeps
 /// its own.
 #[derive(Resource, Default)]
-struct ShaderSchemaCache {
+pub(crate) struct ShaderSchemaCache {
     #[allow(clippy::type_complexity)]
     map: std::collections::HashMap<
         bevy::asset::AssetId<bevy::shader::Shader>,
@@ -2423,12 +2836,7 @@ fn shader_schema_of(
     });
     match cached {
         Some(schema) => schema,
-        None => {
-            ctx.defer(|world| {
-                world.init_resource::<ShaderSchemaCache>();
-            });
-            None
-        }
+        None => None,
     }
 }
 
@@ -2441,7 +2849,8 @@ fn shader_schema_of(
 /// edit mutates the component and the binder re-materialises on `Changed<ShaderLook>`,
 /// so nothing here touches a material asset.
 ///
-/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
+/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are handled by
+/// a typed observer.
 fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     use lunco_materials::{ParamType, ParamValue, UiKind};
 
@@ -2581,56 +2990,23 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
 
     if !edits.is_empty() {
         let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
-        ctx.defer(move |world| {
-            if let Some(mut look) = world.get_mut::<ShaderLook>(entity) {
-                for (name, v) in edits.iter() {
-                    look.values.insert(name.clone(), *v);
-                }
-            }
-
-            // Propagate changes to USD
-            if usd_prim_exists {
-                for (name, v) in edits {
-                    let usd_name = if name.starts_with("primvars:") {
-                        name.clone()
-                    } else {
-                        format!("primvars:{}", name)
-                    };
-                    let (type_name, value_str) = match v {
-                        ParamValue::F32(x) => ("float", format!("{:.3}", x)),
-                        ParamValue::I32(x) => ("int", format!("{}", x)),
-                        ParamValue::U32(x) => ("uint", format!("{}", x)),
-                        ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
-                        ParamValue::Vec3(arr) => {
-                            let name_lc = name.to_lowercase();
-                            let t = if name_lc.contains("color") || name_lc.contains("colour") {
-                                "color3f"
-                            } else {
-                                "float3"
-                            };
-                            (t, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
-                        }
-                        ParamValue::Vec4(arr) => (
-                            "float4",
-                            format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3]),
-                        ),
-                    };
-                    apply_usd_attribute_change(world, entity, &usd_name, type_name, value_str);
-                }
-            }
+        ctx.trigger(ShaderParametersRequested {
+            entity,
+            edits,
+            usd_prim_exists,
         });
     }
 }
 
 /// Render editable sliders for every tunable `parameter Real` in the
 /// entity's Modelica model. Reads params via [`PanelCtx::get`]; the op
-/// dispatch + recompile signal run in a deferred `&mut World` closure.
+/// dispatch + recompile signal run in the typed request observer.
 fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     use lunco_modelica::ModelicaModel;
 
     // Snapshot the current params so we can render stable sliders.
-    let (params, model_name) = match ctx.get::<ModelicaModel>(entity) {
-        Some(m) => (m.parameters.clone(), m.model_name.clone()),
+    let params = match ctx.get::<ModelicaModel>(entity) {
+        Some(m) => m.parameters.clone(),
         None => return,
     };
     if params.is_empty() {
@@ -2664,69 +3040,15 @@ fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: En
         return;
     };
 
-    ctx.defer(move |world| {
-        use lunco_modelica::document::ModelicaOp;
-        use lunco_modelica::state::ModelicaDocumentRegistry;
-        use lunco_modelica::ui::panels::canvas_diagram::apply_ops_public;
-        use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel};
-
-        // Mirror the new value into ECS state for instant slider feedback;
-        // bump session id so the worker treats this as a fresh generation.
-        let mut session_id = 0u64;
-        if let Some(mut m) = world.get_mut::<ModelicaModel>(entity) {
-            if let Some(slot) = m.parameters.get_mut(&changed_key) {
-                *slot = new_value;
-            }
-            m.session_id += 1;
-            session_id = m.session_id;
-            m.is_stepping = true;
-        }
-
-        // Resolve doc id + root class from the registry.
-        let (doc_id, class_name) = {
-            let registry = world.resource::<ModelicaDocumentRegistry>();
-            let doc = registry.document_of(entity);
-            let class = doc.and_then(|d| registry.host(d)).and_then(|h| {
-                lunco_modelica::ast_extract::extract_model_name_from_ast(
-                    h.document().syntax().ast(),
-                )
-            });
-            (doc, class)
-        };
-        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else {
-            return;
-        };
-
-        apply_ops_public(
-            world,
-            doc_id,
-            vec![ModelicaOp::SetParameter {
-                class: class_name,
-                component: changed_key,
-                param: String::new(),
-                value: format!("{new_value}"),
-            }],
-        );
-
-        let new_source = world
-            .resource::<ModelicaDocumentRegistry>()
-            .host(doc_id)
-            .map(|h| h.document().source().to_string());
-        if let (Some(new_source), Some(channels)) =
-            (new_source, world.get_resource::<ModelicaChannels>())
-        {
-            let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
-                entity,
-                session_id,
-                model_name,
-                source: new_source,
-            });
-        }
+    ctx.trigger(ModelicaParameterRequested {
+        entity,
+        key: changed_key,
+        value: new_value,
     });
 }
 
-/// Dispatch a `UsdOp::SetAttribute` for a specific prim path. Runs inside a
-/// deferred `&mut World` closure.
+/// Dispatch a `UsdOp::SetAttribute` for a specific prim path from the typed
+/// request observer.
 /// Comms & Orbit (doc 43): position ground stations (geodetic anchor) and
 /// satellites (Kepler elements) realistically, tune antenna range/mask, and
 /// watch live link state. Edits update the live component (the USD bridge
@@ -2772,42 +3094,12 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                     | ui.add(egui::DragValue::new(&mut body).prefix("body NAIF "))
                         .changed();
                 if changed {
-                    ctx.defer(move |world| {
-                        if let Some(mut c) = world.get_mut::<GeodeticAnchor>(entity) {
-                            c.body = body;
-                            c.geodetic.lat_deg = lat;
-                            c.geodetic.lon_deg = lon;
-                            c.geodetic.height_m = height;
-                        }
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:anchor:lat",
-                            "double",
-                            format!("{lat}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:anchor:lon",
-                            "double",
-                            format!("{lon}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:anchor:height",
-                            "double",
-                            format!("{height}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:anchor:body",
-                            "int",
-                            format!("{body}"),
-                        );
-                    });
+                    let mut value = a;
+                    value.body = body;
+                    value.geodetic.lat_deg = lat;
+                    value.geodetic.lon_deg = lon;
+                    value.geodetic.height_m = height;
+                    ctx.trigger(InspectorComponentEdit::Anchor { entity, value });
                 }
             }
 
@@ -2849,58 +3141,14 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                     })
                     .inner;
                 if changed {
-                    ctx.defer(move |world| {
-                        if let Some(mut c) = world.get_mut::<KeplerOrbit>(entity) {
-                            c.elements.semi_major_axis_m = a_m;
-                            c.elements.eccentricity = e;
-                            c.elements.inclination_deg = inc;
-                            c.elements.raan_deg = raan;
-                            c.elements.arg_periapsis_deg = argp;
-                            c.elements.mean_anomaly_deg = m0;
-                        }
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:orbit:semiMajorAxisM",
-                            "double",
-                            format!("{a_m}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:orbit:eccentricity",
-                            "double",
-                            format!("{e}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:orbit:inclinationDeg",
-                            "double",
-                            format!("{inc}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:orbit:raanDeg",
-                            "double",
-                            format!("{raan}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:orbit:argPeriapsisDeg",
-                            "double",
-                            format!("{argp}"),
-                        );
-                        apply_usd_attribute_change(
-                            world,
-                            entity,
-                            "lunco:orbit:meanAnomalyDeg",
-                            "double",
-                            format!("{m0}"),
-                        );
-                    });
+                    let mut value = o;
+                    value.elements.semi_major_axis_m = a_m;
+                    value.elements.eccentricity = e;
+                    value.elements.inclination_deg = inc;
+                    value.elements.raan_deg = raan;
+                    value.elements.arg_periapsis_deg = argp;
+                    value.elements.mean_anomaly_deg = m0;
+                    ctx.trigger(InspectorComponentEdit::Orbit { entity, value });
                 }
             }
         });
@@ -2940,7 +3188,7 @@ fn apply_usd_path_attribute_change(
 }
 
 /// Dispatch a `UsdOp::SetVariantSelection` — choose which variant of `set` the
-/// prim composes with. Runs inside a deferred `&mut World` closure.
+/// prim composes with from the typed request observer.
 ///
 /// Coarse by nature: value resolution re-composes the prim's whole subtree, so
 /// the projection rebuilds instead of replaying incrementally
@@ -2967,7 +3215,7 @@ fn apply_usd_variant_selection(
 }
 
 /// Dispatch a `UsdOp::SetAttribute` to write changes back to the USD
-/// document. Runs inside a deferred `&mut World` closure.
+/// document from the typed request observer.
 fn apply_usd_attribute_change(
     world: &mut World,
     entity: Entity,

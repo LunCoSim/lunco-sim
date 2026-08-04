@@ -49,10 +49,7 @@ fn add_force_y_witness(app: &mut App) {
             .before(lunco_cosim::systems::apply_forces::CosimSet::ApplyForces),
     );
 }
-use lunco_modelica::{
-    extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
-    ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
-};
+use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaCorePlugin, ModelicaModel};
 use lunco_scene_commands::catalog::BalloonModelMarker;
 
 fn balloon_mo() -> &'static str {
@@ -68,9 +65,10 @@ fn compile_balloon_model(
 ) {
     for (entity, name) in &q_new {
         let source = balloon_mo().to_string();
-        let model_name = extract_model_name(&source).unwrap_or_else(|| "Balloon".into());
-        let params = extract_parameters(&source);
-        let mut inputs = extract_inputs_with_defaults(&source);
+        let interface = lunco_modelica::ast_extract::parse_model_interface(&source, "balloon.mo");
+        let model_name = interface.model_name.unwrap_or_else(|| "Balloon".into());
+        let params = interface.parameters;
+        let mut inputs = interface.inputs;
         // THE SCENE STATES THE ATMOSPHERE. `Balloon.mo`'s `rho0` defaults to 0 —
         // vacuum, the correct reading of the Moon — and in vacuum there is no
         // buoyancy to fly up on. An Earth-like scene authors 1.225; a production
@@ -105,7 +103,8 @@ fn compile_balloon_model(
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
-            // Worker-stepped, not client-predicted: solver choice comes off the DAE.
+            // Worker-stepped, not client-predicted: authoritative live
+            // co-simulation does not claim the prediction contract.
             realtime_safe: false,
         });
 

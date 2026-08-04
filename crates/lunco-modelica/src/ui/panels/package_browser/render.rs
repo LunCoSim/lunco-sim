@@ -1,22 +1,22 @@
-//! Modelica class-tree rendering used by the Twin Browser.
-
-use bevy_egui::egui;
+//! UI rendering helpers for the Modelica section of the Twin Browser.
 
 use crate::package_tree::types::PackageNode;
 use crate::state::ModelLibrary;
+use bevy_egui::egui;
 
 #[derive(Clone)]
-pub enum PackageAction {
+pub(super) enum PackageAction {
     Open(String, String, ModelLibrary, bool),
     DragStart { msl_path: String },
 }
 
-/// Read-only renderer for callers that hold a
+/// Render helper for callers that hold a
 /// `&PackageTreeCache` (no `&mut`) — e.g. the Twin Browser's
 /// [`BrowserCtx`](lunco_workbench::BrowserCtx), which can't take the
 /// cache mutably. Instead of mutating `is_loading` / pushing scan
 /// tasks in place, an unscanned Category pushes its `(id, package_path)`
-/// into `load_out`; the caller spawns the scan via `ctx.defer`. Egui
+/// into `load_out`; the caller schedules the scan through the package-tree
+/// owner. Egui
 /// owns the expand/collapse state (CollapsingHeader id_salt), so the
 /// read-only render still expands correctly.
 pub(crate) fn render_node_single_ro(

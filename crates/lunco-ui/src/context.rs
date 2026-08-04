@@ -1,66 +1,9 @@
-//! UI context — unified params passed to panel render functions.
-//!
-//! Provides ergonomic access to resources and typed command triggering.
-//! For panels with many query fields, prefer defining a custom
-//! `#[derive(SystemParam)]` struct + `WidgetSystem` impl directly.
+//! Small UI selection resource shared by domain panels.
 
-use crate::{widget, WidgetId, WidgetSystem};
 use bevy::prelude::*;
-use bevy_egui::egui;
 
 /// Tracks which entity is currently selected in the UI.
 #[derive(Resource, Default)]
 pub struct UiSelection {
     pub entity: Option<Entity>,
-}
-
-/// Unified context passed to panel render functions.
-pub struct UiContext<'w, 's> {
-    /// The egui context for this frame.
-    pub egui: &'w mut egui::Context,
-    /// Access to the Bevy world for queries.
-    pub world: &'w mut World,
-    /// Commands for triggering actions.
-    pub commands: Commands<'w, 's>,
-}
-
-impl<'w, 's> UiContext<'w, 's> {
-    /// Get immutable access to a resource.
-    pub fn resource<R: Resource>(&self) -> &R {
-        self.world.resource::<R>()
-    }
-
-    /// Get mutable access to a resource.
-    pub fn resource_mut<R: Resource<Mutability = bevy::ecs::component::Mutable>>(
-        &mut self,
-    ) -> Mut<'_, R> {
-        self.world.resource_mut::<R>()
-    }
-
-    /// Check if the world contains an entity.
-    pub fn has_entity(&self, entity: Entity) -> bool {
-        self.world.get_entity(entity).is_ok()
-    }
-
-    /// Get mutable access to commands for triggering events.
-    /// Use `ctx.commands.trigger(TypedCommand { ... })` to fire commands.
-    pub fn commands(&mut self) -> &mut Commands<'w, 's> {
-        &mut self.commands
-    }
-
-    /// Access the global UI theme.
-    pub fn theme(&self) -> &lunco_theme::Theme {
-        self.world.resource::<lunco_theme::Theme>()
-    }
-
-    /// Access the global UI theme mutably (e.g. to toggle Dark/Light mode).
-    pub fn theme_mut(&mut self) -> Mut<'_, lunco_theme::Theme> {
-        self.world.resource_mut::<lunco_theme::Theme>()
-    }
-
-    /// Render a nested widget using the WidgetSystem pattern.
-    /// This provides composability — panels can contain other widgets.
-    pub fn render<W: WidgetSystem + 'static>(&mut self, ui: &mut egui::Ui, id: WidgetId) {
-        widget::<W>(self.world, ui, id);
-    }
 }

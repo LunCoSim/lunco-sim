@@ -13,6 +13,7 @@ pub mod render;
 //   - `crate::sim_default`      — default_simulation_class, RunTargetOverrides, …
 pub use context::sync_active_tab_to_doc;
 pub use render::ModelViewPanel;
+pub(crate) use render::{on_fast_run_setup_requested, on_sync_model_tab_requested};
 
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::TabRenderContext;

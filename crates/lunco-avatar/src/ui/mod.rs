@@ -156,8 +156,7 @@ impl Panel for AvatarStatusPanel {
         ui.separator();
 
         // ── Surface Mode Info ──
-        // `leave_target` defers the `LeaveSurface` trigger until after the
-        // `view` borrow ends, so `ctx.defer` is free to take `&mut`.
+        // `leave_target` holds the command until after the `view` borrow ends.
         let mut leave_target: Option<Entity> = None;
         if let Some(surface) = &view.surface {
             if let Some(body) = surface.body {
@@ -198,11 +197,9 @@ impl Panel for AvatarStatusPanel {
         }
 
         // `view` borrow released above (its data was cloned out); emit the
-        // deferred surface-leave intent now.
+        // typed surface-leave intent now.
         if let Some(target) = leave_target {
-            ctx.defer(move |world| {
-                world.trigger(LeaveSurface { target });
-            });
+            ctx.trigger(LeaveSurface { target });
         }
 
         ui.separator();

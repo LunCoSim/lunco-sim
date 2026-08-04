@@ -68,7 +68,7 @@ impl Panel for MyPanel {
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
     // Reads go through the capability-narrowed `PanelCtx` (no raw `&mut World`);
-    // queue mutations with `ctx.defer(|world| { ... })`.
+    // emit mutations with `ctx.trigger(typed_event)` or `ctx.set_resource(...)`.
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // e.g. `let sel = ctx.resource::<SelectedEntities>();`
     }

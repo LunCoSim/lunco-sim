@@ -31,6 +31,19 @@ use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, Vi
 use lunco_core::GlobalEntityId;
 use lunco_workbench::PanelCtx;
 
+/// A line-plot toolbar edit requested by the panel's read-only paint pass.
+#[derive(Event)]
+pub(crate) struct LinePlotEditRequested {
+    pub(crate) viz: crate::viz::VizId,
+    edit: Edit,
+}
+
+/// A one-shot request to reset a plot's egui bounds on its next render.
+#[derive(Event, Clone, Copy)]
+pub(crate) struct LinePlotFitRequested {
+    pub(crate) viz: crate::viz::VizId,
+}
+
 /// LinePlot-specific options stashed in
 /// [`VisualizationConfig::style`]. Serialised as JSON for on-disk
 /// round-trip. All fields optional — missing fields keep default
@@ -245,7 +258,7 @@ impl Visualization for LinePlot {
             // Queue the registry mutation for after the egui pass —
             // render holds only read access to the world.
             let id = config.id;
-            ctx.wb.defer(move |world| apply_edit(world, id, edit));
+            ctx.wb.trigger(LinePlotEditRequested { viz: id, edit });
             // Don't render the body this frame — the config just
             // changed. Next frame picks up the new bindings.
             return;
@@ -461,7 +474,7 @@ impl Visualization for LinePlot {
         // a policy change. `Plot::reset()` forces the plot to
         // discard stored memory and re-fit to the data exactly once.
         // Peek the pending fit now (read-only) so we can pass `.reset()`
-        // to the plot this frame; clear the request via a deferred
+        // to the plot this frame; clear the request via the typed observer
         // mutation so render stays a pure read.
         let fit_requested = ctx
             .wb
@@ -470,11 +483,7 @@ impl Visualization for LinePlot {
             .unwrap_or(false);
         if fit_requested {
             let id = config.id;
-            ctx.wb.defer(move |world| {
-                if let Some(mut r) = world.get_resource_mut::<VizFitRequests>() {
-                    r.take(id);
-                }
-            });
+            ctx.wb.trigger(LinePlotFitRequested { viz: id });
         }
 
         // Axis labels. Explicit user override → that; otherwise
@@ -493,7 +502,7 @@ impl Visualization for LinePlot {
             if y_bindings.len() == 1 {
                 // Resolve meta via a short-lived borrow so the long-lived
                 // `registry` (held since the top of the body) is not captured
-                // across the `ctx.wb.defer` for fit requests below.
+                // across the typed fit request below.
                 let meta = ctx
                     .wb
                     .resource::<SignalRegistry>()
@@ -555,6 +564,7 @@ impl Visualization for LinePlot {
 
 /// The mutation the toolbar asked for, applied in a second pass so
 /// we don't hold `&VisualizationConfig` while mutating the registry.
+#[derive(Clone)]
 enum Edit {
     SetX(Option<SignalRef>),
     AddY(SignalRef),
@@ -711,10 +721,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
     edit
 }
 
-fn apply_edit(world: &mut World, viz: crate::viz::VizId, edit: Edit) {
-    let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() else {
-        return;
-    };
+fn apply_edit(registry: &mut VisualizationRegistry, viz: crate::viz::VizId, edit: Edit) {
     let Some(cfg) = registry.get_mut(viz) else {
         return;
     };
@@ -738,6 +745,21 @@ fn apply_edit(world: &mut World, viz: crate::viz::VizId, edit: Edit) {
             style.save(cfg);
         }
     }
+}
+
+pub(crate) fn on_line_plot_edit_requested(
+    trigger: On<LinePlotEditRequested>,
+    mut registry: ResMut<VisualizationRegistry>,
+) {
+    let request = trigger.event();
+    apply_edit(&mut registry, request.viz, request.edit.clone());
+}
+
+pub(crate) fn on_line_plot_fit_requested(
+    trigger: On<LinePlotFitRequested>,
+    mut requests: ResMut<VizFitRequests>,
+) {
+    requests.take(trigger.viz);
 }
 
 /// Pair X and Y samples by time. For each Y sample, find the X

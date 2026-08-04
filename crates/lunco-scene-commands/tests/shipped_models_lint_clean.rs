@@ -81,7 +81,7 @@ fn a_conditional_algebraic_observable_is_caught() {
     let src = "model M\n  Real f;\n  Real x;\nequation\n  f = if x > 0.0 then x else 0.0;\n  x = 1.0;\nend M;\n";
     let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
     let ast = syntax.best_effort();
-    let model = lunco_modelica::extract_model_name_from_ast(ast).unwrap_or_default();
+    let model = lunco_modelica::ast_extract::extract_model_name_from_ast(ast).unwrap_or_default();
 
     let findings = lunco_lint::run_lint(
         lunco_modelica::lint::MODELICA_LINT_DOMAIN,
@@ -106,7 +106,7 @@ fn a_when_equation_is_not_flagged_as_a_conditional_observable() {
     let src = "model M\n  Real x;\n  discrete Real n;\nequation\n  x = 1.0;\n  when x > 0.5 then\n    n = pre(n) + 1;\n  end when;\nend M;\n";
     let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
     let ast = syntax.best_effort();
-    let model = lunco_modelica::extract_model_name_from_ast(ast).unwrap_or_default();
+    let model = lunco_modelica::ast_extract::extract_model_name_from_ast(ast).unwrap_or_default();
 
     let findings = lunco_lint::run_lint(
         lunco_modelica::lint::MODELICA_LINT_DOMAIN,
@@ -166,12 +166,14 @@ fn every_shipped_model_lints_clean() {
         // The same parse + extraction `validate_modelica` performs.
         let syntax = rumoca_phase_parse::parse_to_syntax(&text, file_name);
         let ast = syntax.best_effort();
-        let model = lunco_modelica::extract_model_name_from_ast(ast).unwrap_or_default();
-        let params: BTreeMap<String, f64> = lunco_modelica::extract_parameters_from_ast(ast)
-            .into_iter()
-            .collect();
+        let model =
+            lunco_modelica::ast_extract::extract_model_name_from_ast(ast).unwrap_or_default();
+        let params: BTreeMap<String, f64> =
+            lunco_modelica::ast_extract::extract_parameters_from_ast(ast)
+                .into_iter()
+                .collect();
         let inputs: BTreeMap<String, f64> =
-            lunco_modelica::extract_inputs_with_defaults_from_ast(ast)
+            lunco_modelica::ast_extract::extract_inputs_with_defaults_from_ast(ast)
                 .into_iter()
                 .collect();
 

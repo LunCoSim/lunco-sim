@@ -62,7 +62,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
 use lunco_lint::LintFinding;
-use lunco_usd_bevy::{StageView, UsdRead};
+use lunco_usd_bevy::{program::ProgramGraph, StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
@@ -477,11 +477,11 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     sorted.sort();
 
     let mut body_facts: Vec<H> = Vec::new();
-    let mut legacy_program_prims: Vec<H> = Vec::new();
+    let mut unsupported_program_prims: Vec<H> = Vec::new();
     let mut connector_programs: Vec<H> = Vec::new();
     for p in &paths {
         if reader.prim_type_name(p).as_deref() == Some("LunCoProgram") {
-            legacy_program_prims.push(H::str(p.to_string()));
+            unsupported_program_prims.push(H::str(p.to_string()));
         }
         let path = p.to_string();
         if !bodies.contains(&path) {
@@ -557,8 +557,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 Err(error) => (Vec::new(), error),
             };
             let member_names: HashSet<String> = members.iter().map(ToString::to_string).collect();
-            let mut acausal_members = HashSet::new();
-            let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
+            let mut modelica_members = HashSet::new();
+            let mut graph_edges = Vec::<(String, String)>::new();
             let mut dangling_connectors = Vec::new();
             let mut modelica_member_count = 0_i64;
             let mut invalid_program_sources = Vec::new();
@@ -593,16 +593,16 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     continue;
                 }
                 let member_name = member.to_string();
-                // ONE definition of "usable Modelica program facet", shared with
-                // the runtime projector (`lunco_usd_bevy::program`). This used to
-                // be its own check — any `.mo` passed — while the projector also
-                // needed a resolvable class name, so an asset could lint clean
-                // and be rejected at load with a different message.
-                if lunco_usd_bevy::program::modelica_member_class(reader, member).is_err() {
+                // ONE definition of the authored program contract, shared with
+                // the runtime projector. The class itself is resolved from the
+                // loaded source by lunco-usd-sim; lint must not invent one from
+                // the asset path.
+                if lunco_usd_bevy::program::modelica_source_ref(reader, member).is_err() {
                     invalid_program_sources.push(member_name.clone());
                     continue;
                 }
                 modelica_member_count += 1;
+                modelica_members.insert(member_name.clone());
                 for attr in reader.attr_names(member) {
                     if (attr.starts_with("inputs:") || attr.starts_with("outputs:"))
                         && reader.connections(member, &attr).len() > 1
@@ -612,8 +612,6 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     let Some(connector) = attr.strip_prefix("connectors:") else {
                         continue;
                     };
-                    acausal_members.insert(member_name.clone());
-                    adjacency.entry(member_name.clone()).or_default();
                     for target in reader.connections(member, &attr) {
                         let target_string = target.to_string();
                         let Some((target_prim, target_connector)) =
@@ -639,31 +637,45 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                                 .push(format!("{member_name}.connectors:{connector}"));
                             continue;
                         }
-                        adjacency
-                            .entry(member_name.clone())
-                            .or_default()
-                            .insert(target_prim.to_string());
-                        adjacency
-                            .entry(target_prim.to_string())
-                            .or_default()
-                            .insert(member_name.clone());
+                        graph_edges.push((member_name.clone(), target_prim.to_string()));
                     }
                 }
             }
-            let mut unseen = acausal_members;
-            let mut island_count = 0_i64;
-            while let Some(seed) = unseen.iter().next().cloned() {
-                island_count += 1;
-                let mut pending = vec![seed];
-                while let Some(current) = pending.pop() {
-                    if !unseen.remove(&current) {
+            let mut graph = ProgramGraph::default();
+            for member in &modelica_members {
+                graph.add_node(member.clone());
+            }
+            for (left, right) in graph_edges {
+                if modelica_members.contains(&right) {
+                    graph.connect(left, right);
+                }
+            }
+            // A causal edge also couples two members in one generated Modelica
+            // composite unit. Read it through the same graph helper as the
+            // runtime synthesizer; lint must not maintain a second connectivity
+            // algorithm.
+            for member in &modelica_members {
+                let Ok(member_path) = SdfPath::new(member) else {
+                    continue;
+                };
+                for attr in reader.attr_names(&member_path) {
+                    if !attr.starts_with("inputs:") {
                         continue;
                     }
-                    if let Some(neighbors) = adjacency.get(&current) {
-                        pending.extend(neighbors.iter().cloned());
+                    let connections = reader.connections(&member_path, &attr);
+                    let [source] = connections.as_slice() else {
+                        continue;
+                    };
+                    let source = source.to_string();
+                    let Some((source_prim, _)) = source.split_once(".outputs:") else {
+                        continue;
+                    };
+                    if modelica_members.contains(source_prim) {
+                        graph.connect(member.clone(), source_prim.to_string());
                     }
                 }
             }
+            let units = graph.connected_components();
             network_scopes.push(H::map([
                 ("path", H::str(p.to_string())),
                 (
@@ -683,7 +695,20 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                             .collect(),
                     ),
                 ),
-                ("island_count", H::Int(island_count)),
+                (
+                    "units",
+                    H::Array(
+                        units
+                            .into_iter()
+                            .map(|members| {
+                                H::map([(
+                                    "members",
+                                    H::Array(members.into_iter().map(H::str).collect()),
+                                )])
+                            })
+                            .collect(),
+                    ),
+                ),
                 ("modelica_member_count", H::Int(modelica_member_count)),
                 ("collection_error", H::str(collection_error)),
                 (
@@ -830,7 +855,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("collections", H::Array(collections)),
         ("network_scopes", H::Array(network_scopes)),
         ("prims", H::Array(prims)),
-        ("legacy_program_prims", H::Array(legacy_program_prims)),
+        (
+            "unsupported_program_prims",
+            H::Array(unsupported_program_prims),
+        ),
         ("connector_programs", H::Array(connector_programs)),
     ])
 }

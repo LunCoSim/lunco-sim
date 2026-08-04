@@ -64,6 +64,10 @@ pub enum ApiRequest {
     UnsubscribeTelemetry {
         id: u64,
     },
+    /// Poll the outcome of a previously accepted command by its request id.
+    QueryCommandResult {
+        id: u64,
+    },
 }
 
 /// Response status codes for API errors.
@@ -79,6 +83,7 @@ pub enum ApiErrorCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ApiResponse {
     Ok {
+        command_id: Option<u64>,
         data: Option<serde_json::Value>,
     },
     Error {
@@ -95,14 +100,19 @@ pub enum ApiResponse {
 
 impl ApiResponse {
     pub fn ok(data: serde_json::Value) -> Self {
-        Self::Ok { data: Some(data) }
+        Self::Ok {
+            command_id: None,
+            data: Some(data),
+        }
     }
 
-    /// A typed command was validated and dispatched. Commands that produce a
-    /// result use the same request/response channel and return that result;
-    /// fire-and-forget commands use this explicit acknowledgement.
-    pub fn accepted() -> Self {
-        Self::ok(serde_json::json!({ "accepted": true }))
+    /// A typed command was validated and dispatched. Its outcome may be polled
+    /// by this id when the handler reports one asynchronously.
+    pub fn command_accepted(command_id: u64) -> Self {
+        Self::Ok {
+            command_id: Some(command_id),
+            data: None,
+        }
     }
     pub fn error(code: ApiErrorCode, message: impl Into<String>) -> Self {
         Self::Error {

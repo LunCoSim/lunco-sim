@@ -68,7 +68,6 @@ def Xform "DriveLaw" (
     )
     {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverDrivetrain.mo@
-        uniform bool lunco:program:realtimeSafe = true
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>

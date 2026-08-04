@@ -260,7 +260,7 @@ pub trait Panel: Send + Sync + 'static {
     fn title(&self) -> String;
     fn default_slot(&self) -> PanelSlot;     // Left / RightInspector / Bottom / Center / …
     // Render reads through the capability-narrowed `PanelCtx` (no raw `&mut World`);
-    // mutations are queued via `ctx.defer(|world| { … })` and applied after paint.
+    // mutations emit typed events/resources and are applied after paint.
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx);
     // Optional: closable(), transparent_background(), dynamic_title().
 }

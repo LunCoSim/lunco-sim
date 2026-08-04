@@ -114,6 +114,7 @@ Add a surface entry to `assets/ui/runtime_surfaces.json`:
 
 ```json
 {
+  "id": "mission-status",
   "template": "ui/status.html",
   "stylesheet": "ui/status.css",
   "namespace": "mission-status",
@@ -122,7 +123,7 @@ Add a surface entry to `assets/ui/runtime_surfaces.json`:
     "state": { "source": "state" }
   },
   "actions": [
-    { "callback": "runtime_status_pause", "action": "simulation.pause" }
+    { "callback": "runtime_status_focus_moon", "action": "view.body.moon" }
   ],
   "visible_in_perspective": "sandbox_view",
   "interactive": true,
@@ -135,6 +136,10 @@ Add a surface entry to `assets/ui/runtime_surfaces.json`:
   }
 }
 ```
+
+Surface `id` values and callback names must be unique within the manifest. The
+loader rejects unknown fields, unsafe asset paths, invalid geometry, and
+actions outside the host's closed semantic action set.
 
 Binding target names must be declared template properties. `map` translates
 exact rendered strings, which is useful for `true`/`false`, body ids, `display`,

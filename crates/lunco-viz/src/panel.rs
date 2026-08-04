@@ -20,6 +20,20 @@ use crate::registry::{VisualizationRegistry, VizKindCatalog};
 use crate::view::{Panel2DCtx, ViewTarget};
 use crate::viz::VizId;
 
+/// Bind a dropped telemetry channel to a visualization instance.
+#[derive(Event, Clone, Debug)]
+pub(crate) struct BindChannelRequested {
+    pub(crate) viz: VizId,
+    pub(crate) payload: crate::ChannelDragPayload,
+}
+
+pub(crate) fn on_bind_channel_requested(
+    trigger: On<BindChannelRequested>,
+    mut registry: ResMut<VisualizationRegistry>,
+) {
+    crate::bind_dropped_channel(&mut registry, trigger.viz, &trigger.payload);
+}
+
 /// Multi-instance kind id used by `lunco_workbench` to address
 /// viz-panel instances. Same `kind` value across every viz instance;
 /// the `instance` field is the [`VizId`].
@@ -59,10 +73,9 @@ impl InstancePanel for VizPanel {
             egui::Sense::hover(),
         );
         if let Some(payload) = drop_target.dnd_release_payload::<crate::ChannelDragPayload>() {
-            ctx.defer(move |world| {
-                if let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() {
-                    crate::bind_dropped_channel(&mut registry, id, &payload);
-                }
+            ctx.trigger(BindChannelRequested {
+                viz: id,
+                payload: (*payload).clone(),
             });
         }
 
@@ -81,12 +94,9 @@ impl InstancePanel for VizPanel {
                 // visualization. The registry is authoritative, so remove
                 // the stale tab after this paint rather than showing a dead
                 // panel body.
-                ctx.defer(move |world| {
-                    if let Some(mut layout) =
-                        world.get_resource_mut::<lunco_workbench::WorkbenchLayout>()
-                    {
-                        layout.close_instance(VIZ_PANEL_KIND, instance);
-                    }
+                ctx.trigger(lunco_workbench::CloseTab {
+                    kind: VIZ_PANEL_KIND,
+                    instance,
                 });
                 return;
             };

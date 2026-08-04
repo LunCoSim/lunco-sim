@@ -869,13 +869,12 @@ impl Panel for WelcomePanel {
         if let Some(filename) = open_bundled {
             let stem = filename.strip_suffix(".mo").unwrap_or(filename).to_string();
             // Welcome card click is deliberate → pinned tab.
-            ctx.defer(move |world| {
-                crate::ui::panels::package_browser::open_class(
-                    world,
-                    crate::class_ref::ClassRef::bundled([stem]),
-                    true,
-                );
-            });
+            ctx.trigger(
+                crate::ui::panels::package_browser::OpenPackageClassRequested {
+                    tree_id: format!("bundled://{stem}.mo#{stem}"),
+                    pinned: true,
+                },
+            );
         }
         if let Some(qualified) = open_msl {
             // Welcome examples are "open as my copy to play with" —

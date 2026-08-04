@@ -525,5 +525,10 @@ mod tests {
             CanonicalJournal::from_bytes(&read_journal_bytes(dir.path()).unwrap()).unwrap();
         assert_eq!(loaded.twin(), &target);
         assert_eq!(loaded.len(), 1);
+
+        // Binding a loaded journal to the storage identity remains explicit.
+        let mut rebound = CanonicalJournal::from_bytes(&original).unwrap();
+        rebound.set_twin(target.clone());
+        assert_eq!(rebound.twin(), &target);
     }
 }

@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
-use lunco_workbench::status_bus::{BusyHandle, BusyOutcome, BusyScope, StatusBus, StatusLevel};
+use lunco_workbench::status_bus::{StatusBus, StatusLevel};
 
 use lunco_assets::msl::{MslLoadPhase, MslLoadState};
 
@@ -20,14 +20,12 @@ const MSL_SOURCE: &str = "MSL";
 /// (preserved in history); byte/file counts within a phase become `Progress`
 /// ticks (updated in place).
 ///
-/// The observer owns a global [`BusyHandle`] whose lifetime follows the
-/// loading state. Dropping it on Ready/Failed clears progress through the
-/// same scoped status mechanism used by every other tracked task.
+/// This is a pure state mirror, not a task owner — `MslLoadState` itself is the
+/// lifetime authority, so it uses the status bus's global state-projection API.
 pub fn mirror_msl_state_to_status_bus(
     state: Res<MslLoadState>,
     bus: Option<ResMut<StatusBus>>,
     mut last: Local<Option<MirrorMemo>>,
-    mut busy: Local<Option<BusyHandle>>,
 ) {
     let Some(mut bus) = bus else {
         return;
@@ -36,11 +34,7 @@ pub fn mirror_msl_state_to_status_bus(
     let prior_phase_label = last.as_ref().and_then(|m| m.phase_label);
 
     match &*state {
-        MslLoadState::NotStarted => {
-            if let Some(handle) = busy.take() {
-                drop(handle);
-            }
-        }
+        MslLoadState::NotStarted => {}
         MslLoadState::Loading {
             phase,
             bytes_done,
@@ -53,34 +47,23 @@ pub fn mirror_msl_state_to_status_bus(
             }
             // Progress tick (in-place; doesn't accumulate in history).
             let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
-            if busy.is_none() {
-                *busy = Some(bus.begin(BusyScope::Global, MSL_SOURCE, detail.clone()));
-            }
-            if let Some(handle) = busy.as_ref() {
-                bus.with_progress(handle, *bytes_done, *bytes_total);
-                bus.with_label(handle, detail);
-            }
+            bus.set_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
         }
         MslLoadState::Ready { file_count, .. } => {
             // Only fire once per Ready transition (re-renders shouldn't spam).
             if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
-                if let Some(handle) = busy.take() {
-                    drop(handle);
-                }
                 bus.push(
                     MSL_SOURCE,
                     StatusLevel::Info,
                     format!("ready — {file_count} files"),
                 );
+                bus.remove_progress(MSL_SOURCE);
             }
         }
         MslLoadState::Failed(msg) => {
             if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
-                if let Some(mut handle) = busy.take() {
-                    handle.set_outcome(BusyOutcome::Failed(msg.clone()));
-                    drop(handle);
-                }
                 bus.push(MSL_SOURCE, StatusLevel::Error, msg.clone());
+                bus.remove_progress(MSL_SOURCE);
             }
         }
     }
@@ -248,7 +231,6 @@ pub fn mirror_source_roots_to_status_bus(
     registry: Option<Res<crate::source_roots::SourceRootRegistry>>,
     bus: Option<ResMut<StatusBus>>,
     mut last: Local<std::collections::HashMap<String, u8>>,
-    mut busy: Local<std::collections::HashMap<String, BusyHandle>>,
 ) {
     use crate::source_roots::{LoadState, STATUS_BUS_SOURCE};
     let (Some(registry), Some(mut bus)) = (registry, bus) else {
@@ -265,20 +247,9 @@ pub fn mirror_source_roots_to_status_bus(
             continue;
         }
         match &root.state {
-            LoadState::NotLoaded => {
-                if let Some(handle) = busy.remove(id) {
-                    drop(handle);
-                }
-            }
+            LoadState::NotLoaded => {}
             LoadState::Loading { .. } => {
-                let handle = busy.entry(id.clone()).or_insert_with(|| {
-                    bus.begin(
-                        BusyScope::Global,
-                        STATUS_BUS_SOURCE,
-                        format!("Loading library `{id}`…"),
-                    )
-                });
-                bus.with_progress(handle, 0, 0);
+                bus.set_progress(STATUS_BUS_SOURCE, format!("Loading library `{id}`…"), 0, 0);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Info,
@@ -286,9 +257,7 @@ pub fn mirror_source_roots_to_status_bus(
                 );
             }
             LoadState::Ready => {
-                if let Some(handle) = busy.remove(id) {
-                    drop(handle);
-                }
+                bus.remove_progress(STATUS_BUS_SOURCE);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Info,
@@ -296,10 +265,7 @@ pub fn mirror_source_roots_to_status_bus(
                 );
             }
             LoadState::Failed(msg) => {
-                if let Some(mut handle) = busy.remove(id) {
-                    handle.set_outcome(BusyOutcome::Failed(msg.clone()));
-                    drop(handle);
-                }
+                bus.remove_progress(STATUS_BUS_SOURCE);
                 bus.push(
                     STATUS_BUS_SOURCE,
                     StatusLevel::Warn,

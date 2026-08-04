@@ -247,10 +247,8 @@ impl Panel for RhaiEditorPanel {
                 // The producer resyncs to the new generation once RunScenario
                 // bumps it; clearing dirty lets that reload land.
                 vm.dirty = false;
-                ctx.defer(move |world| {
-                    world.trigger(RunScenario { target: entity, source, params });
-                    world.trigger(SaveScenario { target: entity });
-                });
+                ctx.trigger(RunScenario { target: entity, source, params });
+                ctx.trigger(SaveScenario { target: entity });
             }
         });
     }

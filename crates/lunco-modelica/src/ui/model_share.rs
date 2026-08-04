@@ -112,7 +112,7 @@ fn load_shared_model_on_boot(mut commands: Commands) {
     let Some(source) = shared_source_from_url() else {
         return;
     };
-    let name = crate::extract_model_name(&source);
+    let name = crate::ast_extract::extract_model_name(&source);
     bevy::log::info!(
         "[model_share] opening shared model from URL fragment ({} bytes)",
         source.len()

@@ -144,7 +144,8 @@ pub struct WorkbenchState {
 // events — the canonical `JournalResource` records them all.
 
 // ---------------------------------------------------------------------------
-// Document-derived view helpers.
+// Document-derived view helpers. Read these values from the document
+// registry instead of maintaining a second cache in `WorkbenchState`.
 // ---------------------------------------------------------------------------
 
 /// Detected top-level model name for `doc`. Returns `None` when the doc has no

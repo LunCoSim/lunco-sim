@@ -27,10 +27,7 @@ pub(crate) fn poll_and_swap_projection(
             .map(|h| h.document().generation())
     });
 
-    let docstate = match (render_tab_id, active_doc) {
-        (Some(t), Some(d)) => state.get_mut_for_tab(t, d),
-        _ => state.get_mut(active_doc),
-    };
+    let docstate = state.get_mut_for_render(render_tab_id, active_doc);
     let is_initial_projection = docstate.last_seen_gen == 0;
 
     let timed_out = docstate
@@ -252,10 +249,7 @@ pub(crate) fn trigger_projection_if_needed(
         .unwrap_or_else(|| std::sync::Arc::<str>::from(""));
 
     let needs_project = {
-        let docstate = match render_tab_id {
-            Some(t) => state.get_for_tab(t),
-            None => state.get(Some(doc_id)),
-        };
+        let docstate = state.get_for_render(render_tab_id, Some(doc_id));
         // Don't respawn while a projection is already in flight —
         // otherwise every frame cancels and re-spawns the task,
         // it never gets to complete, and the canvas stays blank.
@@ -300,10 +294,7 @@ pub(crate) fn trigger_projection_if_needed(
         spawn_projection_task(ctx, state, doc_id, gen, render_tab_id);
     } else {
         let new_hash = projection_relevant_source_hash(&*current_source);
-        let docstate = match render_tab_id {
-            Some(t) => state.get_mut_for_tab(t, doc_id),
-            None => state.get_mut(Some(doc_id)),
-        };
+        let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
         if gen != docstate.last_seen_gen
             && gen > docstate.canvas_acked_gen
             && new_hash == docstate.last_seen_source_hash
@@ -368,10 +359,7 @@ fn spawn_projection_task(
             // async parse completes it bumps the generation, and
             // first_render/gen_advanced re-spawns the projection with MSL now
             // resident, so standard-library icons still resolve.
-            let docstate = match render_tab_id {
-                Some(t) => state.get_mut_for_tab(t, doc_id),
-                None => state.get_mut(Some(doc_id)),
-            };
+            let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
             docstate.force_reproject = false;
             return;
         }
@@ -397,10 +385,7 @@ fn spawn_projection_task(
         .unwrap_or_default();
 
     {
-        let docstate = match render_tab_id {
-            Some(t) => state.get_mut_for_tab(t, doc_id),
-            None => state.get_mut(Some(doc_id)),
-        };
+        let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
         if docstate.last_seen_target != target_class {
             docstate.last_seen_gen = 0;
         }
@@ -473,10 +458,7 @@ fn spawn_projection_task(
     // busy for `Document(doc_id)` across the boundary because the
     // new entry was inserted before this drop fires.
     state.complete_projection_handoff(doc_id);
-    let docstate = match render_tab_id {
-        Some(t) => state.get_mut_for_tab(t, doc_id),
-        None => state.get_mut(Some(doc_id)),
-    };
+    let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
 
     // Consume the one-shot MSL-ready re-projection request (if any) — this
     // spawn satisfies it.

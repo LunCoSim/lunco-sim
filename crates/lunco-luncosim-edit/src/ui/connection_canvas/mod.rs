@@ -428,11 +428,11 @@ impl Panel for UsdCanvasPanel {
                 return;
             }
             match doc {
-                Some(doc) => ctx.defer(move |world| {
+                Some(doc) => {
                     for op in ops {
-                        world.trigger(ApplyUsdOp { doc, op });
+                        ctx.trigger(ApplyUsdOp { doc, op });
                     }
-                }),
+                }
                 None => {
                     // Raw-file scene: authoring would be dropped on reboot. The
                     // canvas already reflects the edit locally; the producer will

@@ -6,14 +6,37 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use std::path::PathBuf;
 
-pub mod render;
+mod render;
 
 // The egui-free package-tree backend (data types, scanner, cache,
-// library-tree builder) lives in the ungated `crate::package_tree`
-// module so the headless/server build can resolve packages without
-// egui. This module supplies the Modelica section's loading and
-// rendering helpers.
+// library-tree builder) lives in the ungated `crate::package_tree` module
+// so the headless/server build can resolve packages without egui. The Twin
+// Browser renders that backend; this module owns loading and opening.
 use crate::package_tree::{PackageNode, PackageTreeCache};
+
+/// Open a class selected in the Modelica Twin-Browser section through the
+/// normal asynchronous document/tab loader.
+#[derive(Event)]
+pub(crate) struct OpenPackageClassRequested {
+    pub(crate) tree_id: String,
+    pub(crate) pinned: bool,
+}
+
+pub(crate) fn on_open_package_class_requested(
+    trigger: On<OpenPackageClassRequested>,
+    mut commands: Commands,
+) {
+    let tree_id = trigger.tree_id.clone();
+    let pinned = trigger.pinned;
+    commands.queue(move |world: &mut World| {
+        let class = ClassRef::parse_tree_id(&tree_id).or_else(|| resolve_mem_id(world, &tree_id));
+        if let Some(class) = class {
+            open_class(world, class, pinned);
+        } else {
+            bevy::log::warn!("[PackageBrowser] unparseable tree id `{tree_id}`");
+        }
+    });
+}
 
 // The cache resource and its loading systems are registered directly by the
 // Modelica UI plugin because the cache must be seeded via
@@ -184,7 +207,7 @@ pub fn render_root_subtree(
 
     // Read-only render: read the cache, render the root's children, and
     // collect (1) any user action and (2) lazy-scan requests. Both are
-    // dispatched via `ctx.defer` AFTER the read borrow ends (NLL).
+    // dispatched through typed intents after the read borrow ends.
     let mut action: Option<render::PackageAction> = None;
     let mut load_out: Vec<(String, String)> = Vec::new();
     if let Some(cache) = ctx.resource::<PackageTreeCache>() {
@@ -227,17 +250,14 @@ pub fn render_root_subtree(
     }
 
     // Spawn lazy scans for the categories that were requested this frame.
-    // Replicates the mutable tree renderer's in-place scan, but deferred so it
-    // runs with `&mut World` after the egui pass. `find_category_path` →
+    // Replicates `render_node_single`'s in-place scan, but deferred so it
+    // runs after the egui pass. `find_category_path` →
     // resolve by id; only spawns when still unscanned & not already
     // loading. The existing scan-task poller integrates `ScanResult` on a
     // later frame (one-frame delay is fine).
     for (id, pkg_path) in load_out {
-        ctx.defer(move |world| {
+        let _ = ctx.resource_scope::<PackageTreeCache, _>(move |_, cache| {
             use bevy::tasks::AsyncComputeTaskPool;
-            let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() else {
-                return;
-            };
             // Resolve the package_path for `id` from the live tree (the
             // read-only renderer only had the id for nested categories).
             if let Some((children, is_loading, package_path)) =
@@ -269,25 +289,16 @@ pub fn render_root_subtree(
     }
 
     if let Some(render::PackageAction::Open(id, _name, _lib, pinned)) = action {
-        ctx.defer(move |world| {
-            if let Some(class) = ClassRef::parse_tree_id(&id) {
-                open_class(world, class, pinned);
-            } else if let Some(class) = resolve_mem_id(world, &id) {
-                open_class(world, class, pinned);
-            } else {
-                bevy::log::warn!("[PackageBrowser] unparseable tree id `{id}`");
-            }
+        ctx.trigger(OpenPackageClassRequested {
+            tree_id: id,
+            pinned,
         });
     } else if let Some(render::PackageAction::DragStart { msl_path }) = action {
-        ctx.defer(move |world| {
-            if let Some(def) = crate::visual_diagram::msl_class_by_path(&msl_path) {
-                world
-                    .get_resource_or_insert_with::<crate::ui::panels::palette::ComponentDragPayload>(
-                        Default::default,
-                    )
-                    .def = Some(def);
-            }
-        });
+        if let Some(def) = crate::visual_diagram::msl_class_by_path(&msl_path) {
+            let _ = ctx.resource_scope::<crate::ui::panels::palette::ComponentDragPayload, _>(
+                |_, payload| payload.def = Some(def),
+            );
+        }
     }
 }
 
@@ -324,7 +335,7 @@ fn find_category_scan_target<'a>(
 
 /// Single entry point for "open a Modelica class in the workbench".
 ///
-/// Single dispatch for opening a Modelica class, selected by [`Library`]. Every UI
+/// Uses one dispatch on [`Library`]. Every UI
 /// gesture (tree click, palette drop, typed command, session
 /// restore) translates its intent into a [`ClassRef`] and calls
 /// this function — there is no second code path that can disagree
@@ -367,7 +378,7 @@ pub(crate) fn open_class(world: &mut World, class: ClassRef, pinned: bool) {
     }
 }
 
-/// Resolve a serialized in-memory tree id to a [`ClassRef`] by
+/// Resolve an in-memory tree id to a [`ClassRef`] by
 /// consulting [`PackageTreeCache::in_memory_models`]. Lives here
 /// rather than in [`ClassRef::parse_tree_id`] because the mapping
 /// from name → `DocumentId` requires world state the parser doesn't

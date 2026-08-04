@@ -16,7 +16,7 @@
 //!   package "which one to compile?" prompt) and `render_fast_run_setup`
 //!   (Simulation Setup dialog with editable input bounds).
 //!
-//! The [`CompilePlugin`] registers all observers, modal
+//! The [`CompileCommandsPlugin`] registers all observers, modal
 //! resources, and the two egui systems in one shot — the parent
 //! `ModelicaCommandsPlugin` adds it via `add_plugins`.
 
@@ -590,8 +590,9 @@ pub(crate) fn render_compile_class_picker(
     if let Some(qualified) = confirmed {
         let doc = entry.doc;
         let purpose = entry.purpose;
-        // Pin the selected class on every tab viewing this document so
-        // subsequent compile/run reads use the user's choice.
+        // viewing this doc so subsequent reads via
+        // `drilled_class_for_doc` see the user's choice. Replaces
+        // the old `DrilledInClassNames` cache write.
         for (_, state) in tabs.iter_mut_for_doc(doc) {
             state.drilled_class = Some(qualified.clone());
         }
@@ -2338,13 +2339,13 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
     });
 }
 
-// ─── Compile plugin ──────────────────────────────────────────────────────────
+// ─── Compile command plugin ────────────────────────────────────────────────
 
 /// Bundles all compile/run/fast-run observers + modal renderers +
 /// modal-state resources. Added by the parent `ModelicaCommandsPlugin`.
-pub(super) struct CompilePlugin;
+pub(super) struct CompileCommandsPlugin;
 
-impl Plugin for CompilePlugin {
+impl Plugin for CompileCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CompileClassPickerState>()
             .init_resource::<FastRunSetupState>()

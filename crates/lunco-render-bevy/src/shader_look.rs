@@ -41,10 +41,123 @@ use bevy::shader::Shader;
 use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
 use lunco_render::SurfaceAlpha;
 
+/// The small set of blend-state variants the fast custom-shader fallback needs.
+/// Mask cutoffs intentionally use one conservative threshold: this profile is
+/// about avoiding shader pipelines, not reproducing a user shader's details.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum FastAlpha {
+    Opaque,
+    Mask,
+    Blend,
+    Add,
+}
+
+impl FastAlpha {
+    fn from_surface(alpha: SurfaceAlpha) -> Self {
+        match alpha {
+            SurfaceAlpha::Opaque => Self::Opaque,
+            SurfaceAlpha::Mask(_) => Self::Mask,
+            SurfaceAlpha::Blend => Self::Blend,
+            SurfaceAlpha::Add => Self::Add,
+        }
+    }
+
+    fn material_alpha_mode(self) -> AlphaMode {
+        match self {
+            Self::Opaque => AlphaMode::Opaque,
+            Self::Mask => AlphaMode::Mask(0.5),
+            Self::Blend => AlphaMode::Blend,
+            Self::Add => AlphaMode::Add,
+        }
+    }
+}
+
+/// Fast mode keeps one unlit fallback for each required pipeline state. This
+/// preserves batching for the hundreds of terrain tiles that normally share a
+/// WGSL material, while avoiding shader and texture asset loading altogether.
+#[derive(Resource, Default)]
+struct FastShaderFallbacks {
+    materials: HashMap<(FastAlpha, bool), Handle<StandardMaterial>>,
+}
+
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
 /// Sharing, the `unshared` bypass, and eviction all live in
 /// [`LookCache`](crate::look_cache::LookCache), shared with the PBR binder.
 pub type ShaderLookCache = LookCache<ShaderLook>;
+
+/// Bind custom-shader intent without loading custom shaders.
+///
+/// This is intentionally a separate build path rather than a flag threaded
+/// through the regular binder: `ShaderMaterialPlugin` must not be registered in
+/// fast mode, otherwise wgpu still compiles every authored WGSL pipeline.
+pub(crate) fn build_fast(app: &mut App) {
+    app.init_resource::<FastShaderFallbacks>()
+        .add_observer(bind_fast_shader_look)
+        .add_systems(Update, rebind_changed_fast_shader_look);
+}
+
+fn fast_material_for(
+    look: &ShaderLook,
+    fallbacks: &mut FastShaderFallbacks,
+    materials: &mut Assets<StandardMaterial>,
+) -> Handle<StandardMaterial> {
+    let key = (FastAlpha::from_surface(look.alpha), look.double_sided);
+    fallbacks
+        .materials
+        .entry(key)
+        .or_insert_with(|| {
+            materials.add(StandardMaterial {
+                // ShaderLook has no universal base-colour field. A neutral
+                // lunar grey is an honest, stable fallback for arbitrary WGSL.
+                base_color: Color::srgb(0.42, 0.42, 0.42),
+                unlit: true,
+                alpha_mode: key.0.material_alpha_mode(),
+                double_sided: key.1,
+                cull_mode: if key.1 {
+                    None
+                } else {
+                    Some(bevy::render::render_resource::Face::Back)
+                },
+                ..default()
+            })
+        })
+        .clone()
+}
+
+fn bind_fast_shader_look(
+    add: On<Add, ShaderLook>,
+    looks: Query<&ShaderLook>,
+    mut fallbacks: ResMut<FastShaderFallbacks>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    let entity = add.entity;
+    let Ok(look) = looks.get(entity) else {
+        return;
+    };
+    let handle = fast_material_for(look, &mut fallbacks, &mut materials);
+    commands
+        .entity(entity)
+        .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+        .try_insert(MeshMaterial3d(handle));
+    apply_shadow_intent(&mut commands, entity, look);
+}
+
+fn rebind_changed_fast_shader_look(
+    changed: Query<(Entity, &ShaderLook), Changed<ShaderLook>>,
+    mut fallbacks: ResMut<FastShaderFallbacks>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    for (entity, look) in &changed {
+        let handle = fast_material_for(look, &mut fallbacks, &mut materials);
+        commands
+            .entity(entity)
+            .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+            .try_insert(MeshMaterial3d(handle));
+        apply_shadow_intent(&mut commands, entity, look);
+    }
+}
 
 impl CachedLook for ShaderLook {
     type Key = ShaderLookKey;
@@ -471,6 +584,39 @@ mod tests {
         assert_eq!(m.normal_map.as_ref(), Some(&normal));
         assert!(m.height_map.is_none());
         assert_eq!(mats.len(), 2, "a bound texture is part of the sharing key");
+    }
+
+    #[test]
+    fn fast_mode_falls_back_without_creating_a_shader_material() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>();
+        build_fast(&mut app);
+        let e = app
+            .world_mut()
+            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"))
+            .id();
+
+        app.update();
+
+        let material = app
+            .world()
+            .entity(e)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .expect("fast fallback material")
+            .0
+            .clone();
+        assert!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&material)
+                .expect("fallback asset")
+                .unlit
+        );
+        assert!(!app
+            .world()
+            .entity(e)
+            .contains::<MeshMaterial3d<ShaderMaterial>>());
     }
 
     /// A USD material can be projected as plain PBR before its WGSL binding is

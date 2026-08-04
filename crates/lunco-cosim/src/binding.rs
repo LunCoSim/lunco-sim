@@ -129,6 +129,19 @@ pub fn bind_connections(world: &mut World) {
             || matches!(dst, Some(EndpointLifecycle::Pending))
             || matches!(model_status(spec.start_element), Some(SimStatus::Compiling))
             || matches!(model_status(spec.end_element), Some(SimStatus::Compiling));
+        // A terminal participant failure is already an authoritative runtime
+        // fact on the endpoint. Retire the edge without manufacturing a second
+        // "missing port" authoring fault: the failed participant must not enter
+        // the propagation fabric, and the participant's own diagnostic owns the
+        // explanation. This also prevents a failed program from being mistaken
+        // for an algebraic-loop participant.
+        if endpoints_failed {
+            world
+                .entity_mut(edge)
+                .insert(ConnectionBinding::Failed)
+                .remove::<BoundConnection>();
+            continue;
+        }
         // Binding validates the declared topology, not whether a source has
         // produced a sample yet. Ordinary outputs still use their live value;
         // endpoints with an explicit declared-output contract are also valid
@@ -402,5 +415,35 @@ mod tests {
             world.get::<ConnectionBinding>(edge),
             Some(&ConnectionBinding::Pending)
         );
+    }
+
+    #[test]
+    fn failed_endpoint_retires_edge_without_secondary_port_fault() {
+        let (mut world, source, target) = world_with_ports("target");
+        world.entity_mut(source).insert(crate::SimComponent {
+            status: SimStatus::Error("Python runtime unavailable".into()),
+            ..default()
+        });
+        let edge = world
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "source".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "target".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+
+        world.resource_mut::<BindingRevision>().seal_epoch();
+        world.run_system_once(bind_connections).unwrap();
+
+        assert_eq!(
+            world.get::<ConnectionBinding>(edge),
+            Some(&ConnectionBinding::Failed)
+        );
+        assert!(world.get::<BoundConnection>(edge).is_none());
+        assert!(world.resource::<CosimDiagnostics>().faults.is_empty());
     }
 }

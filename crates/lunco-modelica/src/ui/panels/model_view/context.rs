@@ -174,8 +174,12 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
 
     // Editor buffer sync removed.
     //
-    // Buffer synchronization is observer-driven, not a per-frame poll.
-    // The pipeline is:
+    // This function used to overwrite `EditorBufferState.{text,
+    // detected_name, model_path, bound_doc}` from `doc.source()`
+    // every frame. That was the old push-from-doc-to-buffer
+    // pipeline; it ran *before* `CodeEditorPanel::render` and
+    // clobbered any uncommitted typing whenever the mismatch
+    // condition tripped. The new pipeline is:
     //
     // - `editor_on_doc_changed` observer — push-driven, fires on
     //   `DocumentChanged`, syncs the bound doc's buffer from

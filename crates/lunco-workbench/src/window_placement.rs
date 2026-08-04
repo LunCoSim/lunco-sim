@@ -32,6 +32,8 @@
 //! `memory/project_window_placement_wayland.md` for the full investigation.
 
 #[cfg(not(target_arch = "wasm32"))]
+use bevy::log::warn;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::prelude::*;
 
 /// Where on the screen the `--window-pos` flag parks the OS window.
@@ -80,7 +82,7 @@ impl WindowPlacement {
             if args[i] == "--window-pos" && i + 1 < args.len() {
                 let p = Self::parse(&args[i + 1]);
                 if p.is_none() {
-                    eprintln!(
+                    warn!(
                         "[window] unrecognized --window-pos '{}' (use left|right|top-left|top-right|bottom-left|bottom-right)",
                         args[i + 1]
                     );
@@ -124,7 +126,7 @@ pub fn wire_window_placement(app: &mut App, args: &[String]) {
         .map(|v| !v.is_empty())
         .unwrap_or(false);
     if on_wayland {
-        eprintln!(
+        warn!(
             "[window] --window-pos {p:?} ignored: native Wayland forbids apps from positioning their own window. \
              Tile manually on COSMIC with Super+←/→ (or enable auto-tiling, Super+Y). \
              --window-pos works on X11/XWayland."

@@ -58,7 +58,9 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
-use lunco_workbench::{PanelId, Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout};
+use lunco_workbench::{
+    MenuCtx, PanelId, Perspective, PerspectiveId, UndoProbeCtx, WorkbenchAppExt, WorkbenchLayout,
+};
 // Core document/library/compile state moved out of `ui` into `crate::state`.
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
 use lunco_doc_bevy::DocumentDiagnostics;
@@ -116,11 +118,8 @@ pub mod session_codec;
 use crate::ModelicaModel;
 
 /// Shadow-sync observer: Modelica doc opened → register entry in the
-/// Workspace session.
-///
-/// The document registry and Modelica tab registry are the authoritative
-/// sources for the Workspace's document list; this observer mirrors their
-/// lifecycle into the workspace session.
+/// Workspace session. The Workspace list is populated from the Modelica
+/// document lifecycle, while the Modelica registry remains the domain owner.
 /// Invalidate every source-derived memo when any doc changes — the merged icons in
 /// `ModelicaEngine` and the decoded bitmap textures on the paint side.
 ///
@@ -548,8 +547,9 @@ impl Perspective for AnalyzePerspective {
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Side dock = Twin Browser only. It is the single browser for
-        // workspace classes, MSL, bundled models, and future domains.
+        // Side dock = Twin Browser only. Modelica contributes its library
+        // section to that browser, so there is one authoritative browse
+        // surface for workspace classes and standard libraries.
         // Two sibling tabs in the side dock — Twin (everything you
         // browse by name: workspace classes, MSL, bundled, future
         // USD/SysML — matches Dymola/OMEdit's single-Package-Browser
@@ -733,6 +733,30 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<crate::sim_default::RunTargetOverrides>()
             .init_resource::<crate::model_tabs_types::TabRenderContext>()
             .init_resource::<panels::code_editor::EditorBufferState>()
+            .add_observer(panels::code_editor::on_editor_settings_changed)
+            .add_observer(panels::code_editor::on_code_editor_menu_action)
+            .add_observer(panels::code_editor::on_editor_buffer_changed)
+            .add_observer(panels::code_editor::on_commit_editor_buffer_requested)
+            .add_observer(panels::code_editor::on_ensure_editor_buffer_state)
+            .add_observer(panels::canvas_diagram::on_apply_ops_requested)
+            .add_observer(panels::canvas_diagram::on_drill_into_class_requested)
+            .add_observer(crate::ui::commands::sim::on_set_model_input_requested)
+            .add_observer(panels::palette::on_clear_component_drag_payload)
+            .add_observer(panels::palette::on_place_component_requested)
+            .add_observer(panels::console::on_clear_console_requested)
+            .add_observer(panels::diagnostics::on_clear_diagnostics_requested)
+            .add_observer(panels::diagnostics::on_diagnostic_jump_requested)
+            .add_observer(panels::package_browser::on_open_package_class_requested)
+            .add_observer(panels::experiments::on_load_experiment_requested)
+            .add_observer(panels::experiments::on_export_experiment_requested)
+            .add_observer(panels::experiments::on_rerun_experiment_requested)
+            .add_observer(panels::experiments::on_set_experiment_run_target_requested)
+            .add_observer(panels::inspector::on_plot_binding_requested)
+            .add_observer(panels::inspector::on_plot_title_requested)
+            .add_observer(panels::inspector::on_diagram_text_requested)
+            .add_observer(panels::graphs::on_export_graph_requested)
+            .add_observer(panels::model_view::on_sync_model_tab_requested)
+            .add_observer(panels::model_view::on_fast_run_setup_requested)
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical
@@ -972,17 +996,35 @@ fn register_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Code Editor").weak().small());
-        let mut buf = world.resource_mut::<panels::code_editor::EditorBufferState>();
-        ui.checkbox(&mut buf.word_wrap, "Word wrap")
+        let Some((original_word_wrap, original_auto_indent)) = ctx
+            .resource::<panels::code_editor::EditorBufferState>()
+            .map(|buf| (buf.word_wrap, buf.auto_indent))
+        else {
+            return;
+        };
+        let mut word_wrap = original_word_wrap;
+        let mut auto_indent = original_auto_indent;
+        ui.checkbox(&mut word_wrap, "Word wrap")
             .on_hover_text("Wrap long lines at editor width");
-        ui.checkbox(&mut buf.auto_indent, "Auto indent")
+        ui.checkbox(&mut auto_indent, "Auto indent")
             .on_hover_text("Copy previous line's indent on Enter");
-        drop(buf);
+        if word_wrap != original_word_wrap || auto_indent != original_auto_indent {
+            ctx.trigger(panels::code_editor::EditorSettingsChanged {
+                word_wrap,
+                auto_indent,
+            });
+        }
         ui.separator();
         ui.label(egui::RichText::new("Component Palette").weak().small());
-        let mut palette = world.resource_mut::<panels::canvas_diagram::PaletteSettings>();
+        let Some(mut palette) = ctx
+            .resource::<panels::canvas_diagram::PaletteSettings>()
+            .cloned()
+        else {
+            return;
+        };
+        let original_palette = palette.clone();
         ui.checkbox(
             &mut palette.show_icon_only_classes,
             "Show icon-only classes",
@@ -993,10 +1035,18 @@ fn register_settings_menu(world: &mut World) {
              because they have no connectors and typically aren't \
              what a user wants to drop on a diagram.",
         );
-        drop(palette);
+        if palette != original_palette {
+            ctx.set_resource(palette);
+        }
         ui.separator();
         ui.label(egui::RichText::new("Diagram").weak().small());
-        let mut limits = world.resource_mut::<panels::canvas_diagram::DiagramProjectionLimits>();
+        let Some(mut limits) = ctx
+            .resource::<panels::canvas_diagram::DiagramProjectionLimits>()
+            .cloned()
+        else {
+            return;
+        };
+        let original_limits = limits.clone();
         ui.horizontal(|ui| {
             ui.label("Max nodes");
             ui.add(
@@ -1031,7 +1081,9 @@ fn register_settings_menu(world: &mut World) {
                 limits.max_duration = std::time::Duration::from_secs(secs);
             }
         });
-        drop(limits);
+        if limits != original_limits {
+            ctx.set_resource(limits);
+        }
         ui.add_space(4.0);
         // ── Drag snap ────────────────────────────────────────────
         // Off by default — a lot of Modelica source uses
@@ -1039,8 +1091,15 @@ fn register_settings_menu(world: &mut World) {
         // have their authored placements auto-rounded unless they
         // opted in. When on, drags quantise *live* (visible during
         // the drag itself) to multiples of `step` Modelica units.
-        let mut snap = world.resource_mut::<panels::canvas_diagram::CanvasSnapSettings>();
-        ui.checkbox(&mut snap.enabled, "Snap to grid on drag")
+        let Some((original_snap_enabled, original_snap_step)) = ctx
+            .resource::<panels::canvas_diagram::CanvasSnapSettings>()
+            .map(|snap| (snap.enabled, snap.step))
+        else {
+            return;
+        };
+        let mut snap_enabled = original_snap_enabled;
+        let mut snap_step = original_snap_step;
+        ui.checkbox(&mut snap_enabled, "Snap to grid on drag")
             .on_hover_text(
                 "When on, dragging an icon quantises its position to a \
              grid. Applies live during the drag and at commit. Off \
@@ -1049,8 +1108,8 @@ fn register_settings_menu(world: &mut World) {
         ui.horizontal(|ui| {
             ui.label("Grid step");
             ui.add_enabled(
-                snap.enabled,
-                egui::DragValue::new(&mut snap.step)
+                snap_enabled,
+                egui::DragValue::new(&mut snap_step)
                     .range(0.5..=50.0)
                     .speed(0.5)
                     .suffix(" units"),
@@ -1061,7 +1120,12 @@ fn register_settings_menu(world: &mut World) {
                  (fine), 5 (medium), 10 (coarse).",
             );
         });
-        drop(snap);
+        if snap_enabled != original_snap_enabled || snap_step != original_snap_step {
+            ctx.set_resource(panels::canvas_diagram::CanvasSnapSettings {
+                enabled: snap_enabled,
+                step: snap_step,
+            });
+        }
     });
     layout.register_settings_submenu("Data & libraries", render_assets_settings);
 }
@@ -1069,16 +1133,19 @@ fn register_settings_menu(world: &mut World) {
 /// Settings rows for the "Assets" section — MSL load state, bundle URL,
 /// local override, last-fetched bookkeeping, and quick actions
 /// (open cache folder, clear cache).
-fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
+fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
     use lunco_assets::msl::{MslLoadPhase, MslLoadState};
 
     // Current state line.
-    let state = world.get_resource::<MslLoadState>().cloned();
+    let state = ctx.resource::<MslLoadState>().cloned();
 
     // If the Modelica UI is active, the MslSettings resource MUST exist
     // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds MslRemotePlugin).
-    let mut settings = world.resource_mut::<crate::msl_settings::MslSettings>();
+    let Some(mut settings) = ctx.resource::<crate::msl_settings::MslSettings>().cloned() else {
+        return;
+    };
+    let original_settings = settings.clone();
 
     ui.label(egui::RichText::new("Assets — MSL").weak().small());
 
@@ -1183,12 +1250,12 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
                 .small(),
         );
     }
-    drop(settings);
+    if settings != original_settings {
+        ctx.set_resource(settings);
+    }
 
     // Actions.
-    let load_state = world
-        .get_resource::<lunco_assets::msl::MslLoadState>()
-        .cloned();
+    let load_state = ctx.resource::<lunco_assets::msl::MslLoadState>().cloned();
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let install_running = matches!(
         load_state,
@@ -1208,7 +1275,10 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if install_running {
-                if let Some(cancel) = world.get_resource::<crate::msl_remote::MslInstallCancel>() {
+                if ctx
+                    .resource::<crate::msl_remote::MslInstallCancel>()
+                    .is_some()
+                {
                     if ui
                         .button("Cancel")
                         .on_hover_text(
@@ -1218,8 +1288,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
                         )
                         .clicked()
                     {
-                        cancel.0.store(true, std::sync::atomic::Ordering::Relaxed);
-                        bevy::log::info!("[MSL] cancel requested by user");
+                        ctx.trigger(crate::msl_remote::MslInstallAction::Cancel);
                     }
                 }
             } else if install_failed {
@@ -1231,7 +1300,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
                     )
                     .clicked()
                 {
-                    crate::msl_remote::reinstall_msl(world);
+                    ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
                 }
             } else if install_ready {
                 if ui
@@ -1242,7 +1311,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
                     )
                     .clicked()
                 {
-                    crate::msl_remote::reinstall_msl(world);
+                    ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
                 }
             }
         }
@@ -1252,10 +1321,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
             .on_hover_text("Reveal the MSL cache directory in the system file manager.")
             .clicked()
         {
-            let path = lunco_assets::cache_subdir("msl");
-            if let Err(e) = open_in_file_manager(&path) {
-                bevy::log::warn!("[Assets] could not open {}: {e}", path.display());
-            }
+            ctx.trigger(crate::msl_remote::MslInstallAction::OpenCacheFolder);
         }
         if ui
             .button("Clear cache")
@@ -1265,13 +1331,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
             )
             .clicked()
         {
-            let path = lunco_assets::cache_subdir("msl");
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => bevy::log::info!("[Assets] cleared {}", path.display()),
-                Err(e) => {
-                    bevy::log::warn!("[Assets] could not clear {}: {e}", path.display())
-                }
-            }
+            ctx.trigger(crate::msl_remote::MslInstallAction::ClearCache);
         }
     });
 
@@ -1283,7 +1343,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     // line on completion. The indexer picks these up on its next
     // run (or on app restart).
     #[cfg(not(target_arch = "wasm32"))]
-    render_optional_libraries(ui, world);
+    render_optional_libraries(ui);
 }
 
 /// Parse `assets/manifests/modelica.toml` exactly once. Reading and parsing it
@@ -1303,7 +1363,7 @@ fn bundled_asset_manifest() -> &'static Result<lunco_assets::download::AssetMani
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn render_optional_libraries(ui: &mut bevy_egui::egui::Ui, _world: &mut World) {
+fn render_optional_libraries(ui: &mut bevy_egui::egui::Ui) {
     use bevy_egui::egui;
 
     // NOTE(CQ-216): the per-entry `dest.exists()` + `read_dir` below is
@@ -1405,30 +1465,6 @@ fn spawn_optional_library_install(
     .detach();
 }
 
-/// Best-effort "reveal in file manager" — spawns the platform's
-/// default file browser at `path`. Returns an io error if the spawn
-/// fails outright (the file manager itself may still pop up an error
-/// dialog; we don't try to capture that).
-fn open_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open").arg(path).spawn()?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(path).spawn()?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer").arg(path).spawn()?;
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = path;
-    }
-    Ok(())
-}
-
 /// Contribute Cut/Copy/Paste/Select-All entries to the workbench's
 /// global Edit menu. The entries flip flags on
 /// [`panels::code_editor::CodeEditorMenuRequest`]; the code-editor
@@ -1443,16 +1479,16 @@ fn register_edit_menu(world: &mut World) {
     // answers only for documents this registry owns (same ownership
     // check as `resolve_editor_intent`), so Undo greys out with a
     // "Nothing to undo" hint instead of firing a no-op intent.
-    layout.register_undo_probe(|world| {
-        let doc = world
+    layout.register_undo_probe(|ctx: &UndoProbeCtx| {
+        let doc = ctx
             .resource::<lunco_workspace::WorkspaceResource>()
-            .active_document?;
-        let host = world
-            .get_resource::<crate::state::ModelicaDocumentRegistry>()?
+            .and_then(|workspace| workspace.0.active_document)?;
+        let host = ctx
+            .resource::<crate::state::ModelicaDocumentRegistry>()?
             .host(doc)?;
         Some((host.can_undo(), host.can_redo()))
     });
-    layout.register_edit_menu(|ui, world| {
+    layout.register_edit_menu(|ui, ctx| {
         // TODO: promote Cut / Copy / Paste / Select All to typed
         // `#[Command]` events so the HTTP API can drive them too
         // (mirrors the existing `Undo` / `Redo` commands in
@@ -1461,22 +1497,21 @@ fn register_edit_menu(world: &mut World) {
         // currently-focused egui TextEdit, which has no
         // representation on the API side — a typed command would
         // need an explicit `doc` + range/text payload.
-        let mut req = world.resource_mut::<panels::code_editor::CodeEditorMenuRequest>();
         if ui.button("Cut\tCtrl+X").clicked() {
-            req.cut = true;
+            ctx.trigger(panels::code_editor::CodeEditorMenuAction::Cut);
             ui.close();
         }
         if ui.button("Copy\tCtrl+C").clicked() {
-            req.copy = true;
+            ctx.trigger(panels::code_editor::CodeEditorMenuAction::Copy);
             ui.close();
         }
         if ui.button("Paste\tCtrl+V").clicked() {
-            req.paste = true;
+            ctx.trigger(panels::code_editor::CodeEditorMenuAction::Paste);
             ui.close();
         }
         ui.separator();
         if ui.button("Select All\tCtrl+A").clicked() {
-            req.select_all = true;
+            ctx.trigger(panels::code_editor::CodeEditorMenuAction::SelectAll);
             ui.close();
         }
     });

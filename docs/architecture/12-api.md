@@ -44,12 +44,12 @@ curl http://127.0.0.1:4101/api/commands/schema | jq .
 # List all entities  (a POST request — there is no GET entities route)
 curl -s http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"type":"ListEntities"}' | jq .
+  -d '{"command":"ListEntities","params":{}}' | jq .
 
 # Query a specific entity by its numeric api_id (from ListEntities)
 curl -s http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":98466552102768}}' | jq .
+  -d '{"command":"QueryEntity","params":{"id":98466552102768}}' | jq .
 ```
 
 ## Endpoints
@@ -386,7 +386,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 }
 ```
 
-Data responses include a `data` envelope. For example, `{"type":"ListEntities"}` returns:
+Data responses include a `data` envelope. For example, `{"command":"ListEntities","params":{}}` returns:
 ```json
 {
   "data": {
@@ -539,12 +539,18 @@ id. This is used by `CaptureScreenshot` and `RunRhai`; callers receive the
 actual payload or error without a second endpoint or an exposed command id.
 
 ```bash
-# A deferred command response is complete on the original request:
-curl -s :4101/api/commands -d '{"type":"ExecuteCommand","command":"RunRhai","params":{"code":"print(2+2)"}}'
-# → {"data":{"stdout":"4"}}
+# 1. dispatch → get the request id
+curl -s :4101/api/commands -d '{"command":"RunPython","params":{"code":"print(2+2)"}}'
+# → {"command_id": 7}
+
+# 2. poll the outcome by id
+curl -s :4101/api/commands -d '{"command":"QueryCommandResult","params":{"id":7}}'
+# → {"data":{"id":7,"outcome":{"Succeeded":{"assigned":{"stdout":"4\n"}}}}}
 ```
 
-The response carries the actual payload or an error; no outcome polling is needed.
+The response carries the actual payload or an error. Commands that complete
+immediately may return their result directly; deferred commands are queried by
+the returned command id.
 
 Long-running lifecycles (queued, progress, cancel) remain domain state, such as
 an experiment's `RunStatus`, and are read through the owning query provider.
@@ -614,5 +620,5 @@ that want a runtime-toggleable opt-out.
 |---|---|
 | Connection refused | Make sure sim was started with `--api` flag |
 | "Command not found" | Check `/api/commands/schema` for available commands |
-| "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid ULID strings — there is no `GET /api/entities` route |
+| "Entity not found" | `POST /api/commands` with `{"command":"ListEntities","params":{}}` for valid numeric api ids — there is no `GET /api/entities` route |
 | `lunco_api` not found in `Cargo.toml` | Add `lunco-api = { path = "../lunco-api" }` dependency |

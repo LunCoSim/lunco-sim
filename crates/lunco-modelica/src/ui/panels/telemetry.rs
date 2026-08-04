@@ -202,22 +202,16 @@ impl Panel for TelemetryPanel {
                 }
             });
             if run_clicked {
-                ctx.defer(move |world| {
-                    world.trigger(crate::ui::commands::RunActiveModel {
-                        doc: doc_id,
-                        class: None,
-                    });
+                ctx.trigger(crate::ui::commands::RunActiveModel {
+                    doc: doc_id,
+                    class: None,
                 });
             }
             if pause_clicked {
-                ctx.defer(move |world| {
-                    world.trigger(crate::ui::commands::PauseActiveModel { doc: doc_id });
-                });
+                ctx.trigger(crate::ui::commands::PauseActiveModel { doc: doc_id });
             }
             if reset_clicked {
-                ctx.defer(move |world| {
-                    world.trigger(crate::ui::commands::ResetActiveModel { doc: doc_id });
-                });
+                ctx.trigger(crate::ui::commands::ResetActiveModel { doc: doc_id });
             }
             ui.separator();
 
@@ -269,14 +263,10 @@ impl Panel for TelemetryPanel {
                         });
                 });
                 for (name, v) in input_changes {
-                    ctx.defer(move |world| {
-                        if let Ok(mut m) =
-                            world.query::<&mut ModelicaModel>().get_mut(world, entity)
-                        {
-                            if let Some(inp) = m.inputs.get_mut(&name) {
-                                *inp = v;
-                            }
-                        }
+                    ctx.trigger(crate::ui::commands::sim::SetModelInputRequested {
+                        doc: doc_id,
+                        name,
+                        value: v,
                     });
                 }
             }
@@ -338,14 +328,11 @@ impl Panel for TelemetryPanel {
             }
         });
         if filter_changed {
-            let new_filter = filter_text.clone();
-            ctx.defer(move |world| {
-                if let Some(mut vis) =
-                    world.get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
-                {
-                    vis.var_filter = new_filter;
-                }
-            });
+            ctx.resource_scope::<crate::ui::panels::experiments::ExperimentVisibility, _>(
+                |_, visibility| {
+                    visibility.var_filter = filter_text.clone();
+                },
+            );
         }
         let filter_lower = filter_text.to_ascii_lowercase();
 
@@ -395,13 +382,11 @@ impl Panel for TelemetryPanel {
                 });
         });
         if let Some(t) = new_target {
-            ctx.defer(move |world| {
-                if let Some(mut vis) =
-                    world.get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
-                {
-                    vis.target_plot = t;
-                }
-            });
+            ctx.resource_scope::<crate::ui::panels::experiments::ExperimentVisibility, _>(
+                |_, visibility| {
+                    visibility.target_plot = t;
+                },
+            );
         }
 
         // Picked-for-experiments set, snapshotted once. Routes
@@ -584,27 +569,26 @@ impl Panel for TelemetryPanel {
         // viz registry (live cosim) and PlotPanelStates (Fast Run) so the
         // user picks once. Deferred because both are resource mutations.
         if !toggles.is_empty() {
-            ctx.defer(move |world| {
-                for (name, on) in toggles {
-                    if let Some(e) = entity {
-                        if let Some(mut reg) =
-                            world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
-                        {
-                            set_signal_plotted(
-                                &mut reg,
-                                target_plot,
-                                lunco_viz::SignalRef::new(e, name.clone()),
-                                on,
-                            );
-                        }
-                    }
-                    if let Some(mut states) =
-                        world.get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
-                    {
-                        states.set_var(target_plot, name, on);
+            let toggled = toggles;
+            ctx.resource_scope::<lunco_viz::VisualizationRegistry, _>(|_, registry| {
+                if let Some(e) = entity {
+                    for (name, on) in &toggled {
+                        set_signal_plotted(
+                            registry,
+                            target_plot,
+                            lunco_viz::SignalRef::new(e, name.clone()),
+                            *on,
+                        );
                     }
                 }
             });
+            ctx.resource_scope::<crate::ui::panels::experiments::PlotPanelStates, _>(
+                |_, states| {
+                    for (name, on) in toggled {
+                        states.set_var(target_plot, name, on);
+                    }
+                },
+            );
         }
 
         // Auto-Fit button was here but moved to the Graphs panel's own
@@ -638,13 +622,11 @@ fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelC
         }
     });
     if let Some(doc) = compile_doc {
-        ctx.defer(move |world| {
-            world.trigger(crate::ui::commands::CompileModel {
-                doc,
-                class: None,
-                force: false,
-                resume_after_compile: false,
-            });
+        ctx.trigger(crate::ui::commands::CompileModel {
+            doc,
+            class: None,
+            force: false,
+            resume_after_compile: false,
         });
     }
 }
@@ -662,8 +644,7 @@ fn render_selected_components_inspector(
 ) {
     use crate::document::ModelicaOp;
     use crate::ui::panels::canvas_diagram::{
-        active_class_for_doc_ctx, active_doc_from_world_ctx, apply_ops_public, CanvasDiagramState,
-        IconNodeData,
+        active_class_for_doc_ctx, active_doc_from_world_ctx, CanvasDiagramState, IconNodeData,
     };
 
     let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
@@ -684,7 +665,9 @@ fn render_selected_components_inspector(
         let Some(state) = ctx.resource::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get(Some(doc_id));
+        let Some(docstate) = state.get_for_doc(doc_id) else {
+            return;
+        };
         let scene = &docstate.canvas.scene;
         let selection = &docstate.canvas.selection;
         selection
@@ -806,7 +789,10 @@ fn render_selected_components_inspector(
             }
         });
     if !collected_ops.is_empty() {
-        ctx.defer(move |world| apply_ops_public(world, doc_id, collected_ops));
+        ctx.trigger(crate::ui::panels::canvas_diagram::ApplyOpsRequested {
+            doc: doc_id,
+            ops: collected_ops,
+        });
     }
     ui.separator();
 }
@@ -1183,7 +1169,7 @@ fn format_param_value(raw: &str) -> String {
 
 fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: egui::Color32) {
     use crate::document::ModelicaOp;
-    use crate::ui::panels::canvas_diagram::{active_doc_from_world_ctx, apply_ops_public};
+    use crate::ui::panels::canvas_diagram::active_doc_from_world_ctx;
 
     let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
         return;
@@ -1370,6 +1356,6 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
             value,
         })
         .collect();
-    ctx.defer(move |world| apply_ops_public(world, doc_id, ops));
+    ctx.trigger(crate::ui::panels::canvas_diagram::ApplyOpsRequested { doc: doc_id, ops });
     ui.separator();
 }

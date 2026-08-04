@@ -40,9 +40,12 @@ pub(crate) fn register_settings_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings(|ui, ctx| {
         ui.label(egui::RichText::new("Assets").weak().small());
-        let mut settings = world.resource_mut::<AssetVisibilitySettings>();
+        let Some(mut settings) = ctx.resource::<AssetVisibilitySettings>().copied() else {
+            return;
+        };
+        let original = settings;
         ui.checkbox(&mut settings.show_test_assets, "Show test scenes")
             .on_hover_text(
                 "Scenes and scenarios under `tests/` — rigs that exist to be run by \
@@ -50,5 +53,8 @@ pub(crate) fn register_settings_menu(world: &mut World) {
                  and looked at. Hidden by default so the Scene menu lists what is \
                  worth opening.",
             );
+        if settings != original {
+            ctx.set_resource(settings);
+        }
     });
 }

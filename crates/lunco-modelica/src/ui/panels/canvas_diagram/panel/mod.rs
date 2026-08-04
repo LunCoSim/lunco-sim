@@ -43,7 +43,7 @@ impl Panel for CanvasDiagramPanel {
             let active_doc = active_doc_from_world_ctx(ctx);
 
             if active_doc.is_none() {
-                state.get_mut(None).canvas.scene = Scene::new();
+                state.get_mut_for_render(None, None).canvas.scene = Scene::new();
                 self.render_canvas(ui, ctx, state);
                 return;
             }
@@ -55,9 +55,8 @@ impl Panel for CanvasDiagramPanel {
         });
 
         if present.is_none() {
-            ctx.defer(|w| {
-                w.init_resource::<CanvasDiagramState>();
-            });
+            // The resource is normally initialized by the UI plugin. A missing
+            // state means this host is not ready to render the panel.
         }
     }
 }

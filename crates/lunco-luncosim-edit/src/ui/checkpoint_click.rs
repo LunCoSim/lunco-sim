@@ -39,6 +39,7 @@ use lunco_core::{
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding;
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{

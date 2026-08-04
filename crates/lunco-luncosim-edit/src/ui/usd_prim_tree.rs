@@ -253,25 +253,10 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
     if let Some(entity) = to_select {
-        ctx.defer(move |world| {
-            let old: Vec<Entity> = world
-                .query_filtered::<Entity, With<crate::selection::Selected>>()
-                .iter(world)
-                .collect();
-            world.resource_scope(
-                |world, mut selected: Mut<lunco_scene_commands::SelectedEntities>| {
-                    let mut commands = world.commands();
-                    crate::selection::apply_selection(
-                        &mut commands,
-                        &mut selected,
-                        old,
-                        entity,
-                        false,
-                        false,
-                    );
-                },
-            );
-            world.flush();
+        ctx.trigger(crate::selection::SelectEntityTarget {
+            target: entity,
+            extend: false,
+            toggle: false,
         });
     }
 }

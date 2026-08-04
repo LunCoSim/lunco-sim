@@ -33,6 +33,62 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::api::{ApiOp, ApplyModelicaOps};
 
+#[derive(Event, Clone, Debug)]
+pub(crate) struct PlotBindingRequested {
+    doc: lunco_doc::DocumentId,
+    node: lunco_canvas::NodeId,
+    entity_bits: u64,
+    path: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct PlotTitleRequested {
+    doc: lunco_doc::DocumentId,
+    node: lunco_canvas::NodeId,
+    title: String,
+}
+
+#[derive(Event, Clone, Debug)]
+pub(crate) struct DiagramTextRequested {
+    doc: lunco_doc::DocumentId,
+    node: lunco_canvas::NodeId,
+    index: usize,
+    text: String,
+}
+
+pub(crate) fn on_plot_binding_requested(trigger: On<PlotBindingRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        apply_plot_binding(
+            world,
+            request.doc,
+            request.node,
+            request.entity_bits,
+            &request.path,
+        );
+    });
+}
+
+pub(crate) fn on_plot_title_requested(trigger: On<PlotTitleRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        apply_plot_title(world, request.doc, request.node, &request.title);
+    });
+}
+
+pub(crate) fn on_diagram_text_requested(trigger: On<DiagramTextRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        apply_diagram_text_string(
+            world,
+            request.doc,
+            request.node,
+            request.index,
+            &request.text,
+        );
+    });
+}
+
 pub struct InspectorPanel;
 
 impl Panel for InspectorPanel {
@@ -89,7 +145,7 @@ impl Panel for InspectorPanel {
         let primary = ctx
             .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
             .and_then(|cs| {
-                let docstate = cs.get(Some(doc_id));
+                let docstate = cs.get_for_doc(doc_id)?;
                 let primary = docstate.canvas.selection.primary()?;
                 match primary {
                     SelectItem::Node(node_id) => {
@@ -286,9 +342,7 @@ impl Panel for InspectorPanel {
                     value,
                 })
                 .collect();
-            ctx.defer(move |world| {
-                world.trigger(ApplyModelicaOps { doc: doc_id, ops });
-            });
+            ctx.trigger(ApplyModelicaOps { doc: doc_id, ops });
         }
     }
 }
@@ -321,7 +375,7 @@ fn render_plot_node_editor(
     let current: PlotNodeData = ctx
         .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
         .and_then(|cs| {
-            cs.get(Some(doc_id))
+            cs.get_for_doc(doc_id)?
                 .canvas
                 .scene
                 .node(node_id)?
@@ -342,7 +396,12 @@ fn render_plot_node_editor(
     } else {
         ui.label(egui::RichText::new(format!("Bound to: {}", current.signal_path)).small());
         if ui.button("Unbind").clicked() {
-            ctx.defer(move |world| apply_plot_binding(world, doc_id, node_id, 0, ""));
+            ctx.trigger(PlotBindingRequested {
+                doc: doc_id,
+                node: node_id,
+                entity_bits: 0,
+                path: String::new(),
+            });
         }
         // Title editor — writes back to source as the
         // `LunCoAnnotations.PlotNode(title="…")` field. Buffer per node
@@ -368,7 +427,11 @@ fn render_plot_node_editor(
         }
         if committed && buf != current.title {
             let title = buf.clone();
-            ctx.defer(move |world| apply_plot_title(world, doc_id, node_id, &title));
+            ctx.trigger(PlotTitleRequested {
+                doc: doc_id,
+                node: node_id,
+                title,
+            });
             ui.memory_mut(|m| m.data.remove::<String>(buf_id));
         }
     }
@@ -407,7 +470,12 @@ fn render_plot_node_editor(
                 if resp.clicked() && !is_current {
                     let bits = entity.to_bits();
                     let path = path.clone();
-                    ctx.defer(move |world| apply_plot_binding(world, doc_id, node_id, bits, &path));
+                    ctx.trigger(PlotBindingRequested {
+                        doc: doc_id,
+                        node: node_id,
+                        entity_bits: bits,
+                        path,
+                    });
                 }
             }
         });
@@ -427,7 +495,10 @@ fn apply_plot_title(
     // to update).
     let signal_path = {
         let state = world.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
-        let scene = &state.get(Some(doc_id)).canvas.scene;
+        let Some(docstate) = state.get_for_doc(doc_id) else {
+            return;
+        };
+        let scene = &docstate.canvas.scene;
         let Some(node) = scene.node(node_id) else {
             return;
         };
@@ -447,7 +518,9 @@ fn apply_plot_title(
     {
         let mut state =
             world.resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
-        let docstate = state.get_mut(Some(doc_id));
+        let Some(docstate) = state.get_mut_for_doc(doc_id) else {
+            return;
+        };
         if let Some(node) = docstate.canvas.scene.node_mut(node_id) {
             if let Some(prev) = node.data.downcast_ref::<PlotNodeData>() {
                 let updated = PlotNodeData {
@@ -495,7 +568,10 @@ fn apply_plot_binding(
     // optimistic in-memory swap consistent with the source rewrite.
     let (prev_signal, prev_binding, rect, kind_is_plot) = {
         let state = world.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
-        let scene = &state.get(Some(doc_id)).canvas.scene;
+        let Some(docstate) = state.get_for_doc(doc_id) else {
+            return;
+        };
+        let scene = &docstate.canvas.scene;
         let Some(node) = scene.node(node_id) else {
             return;
         };
@@ -538,7 +614,9 @@ fn apply_plot_binding(
     {
         let mut state =
             world.resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
-        let docstate = state.get_mut(Some(doc_id));
+        let Some(docstate) = state.get_mut_for_doc(doc_id) else {
+            return;
+        };
         if let Some(node) = docstate.canvas.scene.node_mut(node_id) {
             node.data = data;
         }
@@ -605,7 +683,10 @@ fn render_text_node_editor(
         else {
             return;
         };
-        let scene = &state.get(Some(doc_id)).canvas.scene;
+        let Some(docstate) = state.get_for_doc(doc_id) else {
+            return;
+        };
+        let scene = &docstate.canvas.scene;
         let Some(node) = scene.node(node_id) else {
             return;
         };
@@ -648,7 +729,12 @@ fn render_text_node_editor(
         || (resp.lost_focus() && !resp.has_focus());
     if committed && buf != current_text {
         let text = buf.clone();
-        ctx.defer(move |world| apply_diagram_text_string(world, doc_id, node_id, idx, &text));
+        ctx.trigger(DiagramTextRequested {
+            doc: doc_id,
+            node: node_id,
+            index: idx,
+            text,
+        });
         ui.memory_mut(|m| m.data.remove::<String>(buf_id));
     }
 }
@@ -667,7 +753,9 @@ fn apply_diagram_text_string(
     {
         let mut state =
             world.resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
-        let docstate = state.get_mut(Some(doc_id));
+        let Some(docstate) = state.get_mut_for_doc(doc_id) else {
+            return;
+        };
         if let Some(node) = docstate.canvas.scene.node_mut(node_id) {
             if let Some(prev) = node.data.downcast_ref::<TextNodeData>() {
                 let updated = TextNodeData {

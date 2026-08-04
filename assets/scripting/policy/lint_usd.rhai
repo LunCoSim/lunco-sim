@@ -50,7 +50,7 @@
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
 //
-//   facts.legacy_program_prims[]  paths authored as the retired `LunCoProgram`
+//   facts.unsupported_program_prims[]  paths authored as unsupported `LunCoProgram`
 //       concrete type. This narrow fact exists because an unregistered concrete
 //       type has no applied schemas and therefore cannot appear in `facts.prims`.
 //
@@ -61,7 +61,7 @@
 //       standard computed collection membership from the composed stage.
 //
 //   facts.network_scopes[] #{ path, parent, members[], modelica_member_count,
-//                             island_count, dangling_connectors[],
+//                             units[], dangling_connectors[],
 //                             invalid_program_sources[], invalid_causal_properties[],
 //                             ambiguous_boundary_sources[], collection_error }
 //       scopes applying CollectionAPI:components, including codeless-schema
@@ -110,14 +110,13 @@ fn schemas_of(facts, path) {
 /// Return "" if every member's acausal connector agrees on one name, or a string
 /// naming the first two distinct names found (e.g. "`p` and `port`").
 ///
-/// ⚠ A SEPARATE FUNCTION FOR THE SAME REASON `electrical_tally` is one: rhai caps
-/// expression complexity and rejects the whole policy at compile time if the
-/// nested member/program/connector loop carries an `if/else if` inside it. Flat
-/// helpers that return early are the documented workaround.
+/// ⚠ A SEPARATE FUNCTION FOR THE SAME REASON the unit rules use small loops:
+/// rhai caps expression complexity and rejects the whole policy at compile time
+/// if nested member/program/connector logic becomes too dense.
 /// Flat list of every acausal connector name a scope's members declare, in walk
 /// order. Split out of `scope_connector_mismatch` for the same reason
-/// `electrical_tally` is split: rhai caps expression complexity and rejects the
-/// whole policy if the member/program/connector nesting carries logic inside it.
+/// the unit rules keep their member/program nesting shallow: rhai caps expression
+/// complexity and rejects the whole policy if the nesting carries dense logic.
 fn scope_connector_list(facts, members) {
     let list = [];
     for member in members {
@@ -189,7 +188,7 @@ fn mixed_connector_domains(facts) {
 fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
-    for f in retired_program_prim_type(facts) { out.push(f); }
+    for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }
     for f in connector_requires_network_scope(facts) { out.push(f); }
     for f in nested_body_no_joint(facts) { out.push(f); }
@@ -203,7 +202,6 @@ fn lint_usd(facts) {
     for f in collision_group_is_inert(facts) { out.push(f); }
     for f in empty_component_network(facts) { out.push(f); }
     for f in invalid_component_collection(facts) { out.push(f); }
-    for f in disconnected_component_network(facts) { out.push(f); }
     for f in dangling_network_connector(facts) { out.push(f); }
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
@@ -307,20 +305,11 @@ fn electrical_role(program) {
     [1, source]
 }
 
-/// `[electrical_member_count, potential_setting_count]` for one network scope.
-///
-/// ⚠ A SEPARATE FUNCTION FOR A MECHANICAL REASON, not for tidiness. Inlined into
-/// `electrical_island_reference_device` this is three nested `for`s over a
-/// `finding(...)` call, and rhai's EXPRESSION COMPLEXITY CAP rejects it at COMPILE
-/// time — which does not disable one rule, it fails the whole policy to compile and
-/// the linter then registers nothing at all and reports zero findings on every
-/// scene. MEASURED here: `Expression exceeds maximum complexity (line 177)`, and
-/// `lint_selftest` went from 3 failures to 10 because every OTHER rule had silently
-/// stopped running too. Same trap the `finding()` helper exists to prevent.
-fn electrical_tally(facts, scope) {
+/// `[electrical_member_count, potential_setting_count]` for one synthesized unit.
+fn electrical_unit_tally(facts, members) {
     let electrical = 0;
     let sources = 0;
-    for member in scope.members {
+    for member in members {
         for program in facts.connector_programs {
             if program.path != member { continue; }
             let role = electrical_role(program);
@@ -331,7 +320,7 @@ fn electrical_tally(facts, scope) {
     [electrical, sources]
 }
 
-/// An electrical island needs EXACTLY ONE potential-setting device.
+/// Every synthesized electrical unit needs EXACTLY ONE potential-setting device.
 ///
 /// Zero leaves the node voltage free and the DAE structurally singular; two
 /// over-determine it. Neither is reported as such by the solver — the first shows
@@ -340,39 +329,42 @@ fn electrical_tally(facts, scope) {
 /// decidable from the authored stage, which is the whole reason this is a rule.
 ///
 /// Scopes with no electrical member at all are not this rule's business: a purely
-/// thermal or mechanical network has its own reference and must not be told to
-/// add a battery.
+/// thermal or mechanical unit has its own reference and must not be told to add
+/// a battery.
+fn electrical_unit_reference_finding(scope_path, electrical, sources) {
+    if sources == 0 {
+        let m = "electrical unit of " + electrical + " device(s) has no device that ";
+        m += "sets the node voltage — every member states a current, so `p.v` is ";
+        m += "unconstrained and the generated DAE is structurally singular. The unit ";
+        m += "will compile and then never publish a port. Add a battery (or another ";
+        m += "device that states `p.v`) to this collection.";
+        finding("electrical-island-has-no-reference", "error", scope_path, m)
+    } else {
+        let m = "electrical unit has " + sources + " devices that each set the node ";
+        m += "voltage — LunCo devices carry ONE pin and no Ground, so the bus node is ";
+        m += "over-determined and the solve fails on an unrelated member's current. ";
+        m += "Keep one voltage source per unit and let the others state current.";
+        finding("electrical-island-over-determined", "error", scope_path, m)
+    }
+}
+
+fn electrical_scope_reference_findings(facts, scope) {
+    let out = [];
+    for unit in scope.units {
+        let tally = electrical_unit_tally(facts, unit.members);
+        let electrical = tally[0];
+        let sources = tally[1];
+        if electrical == 0 || sources == 1 { continue; }
+        out.push(electrical_unit_reference_finding(scope.path, electrical, sources));
+    }
+    out
+}
+
 fn electrical_island_reference_device(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        // ONE NODE IS THE PREMISE. This rule counts per SCOPE, and that is only the
-        // same thing as counting per NODE while the scope holds a single connected
-        // island. A scope holding two disconnected islands legitimately carries two
-        // voltage sources — one per node — and `disconnected-component-network` has
-        // already reported the split as its own error. Without this the rule fires
-        // on `/LintSelftest/DisconnectedElectrical` and calls two correctly
-        // referenced buses over-determined.
-        if scope.island_count > 1 { continue; }
-        let tally = electrical_tally(facts, scope);
-        let electrical = tally[0];
-        let sources = tally[1];
-        if electrical == 0 { continue; }
-        if sources == 1 { continue; }
-
-        if sources == 0 {
-            let m = "electrical island of " + electrical + " device(s) has no device that ";
-            m += "sets the node voltage — every member states a current, so `p.v` is ";
-            m += "unconstrained and the generated DAE is structurally singular. The island ";
-            m += "will compile and then never publish a port. Add a battery (or another ";
-            m += "device that states `p.v`) to this collection.";
-            out.push(finding("electrical-island-has-no-reference", "error", scope.path, m));
-        } else {
-            let m = "electrical island has " + sources + " devices that each set the node ";
-            m += "voltage — LunCo devices carry ONE pin and no Ground, so the bus node is ";
-            m += "over-determined and the solve fails on an unrelated member's current. ";
-            m += "Keep one voltage source per island and let the others state current, or ";
-            m += "split them into separate CollectionAPI:components scopes.";
-            out.push(finding("electrical-island-over-determined", "error", scope.path, m));
+        for item in electrical_scope_reference_findings(facts, scope) {
+            out.push(item);
         }
     }
     out
@@ -430,12 +422,12 @@ fn connector_requires_modelica(facts) {
 
 /// `LunCoProgram` was a concrete type. Programs are an applied capability so
 /// they compose onto a `Scope` (or intrinsic owner) instead.
-fn retired_program_prim_type(facts) {
+fn unsupported_program_prim_type(facts) {
     let out = [];
-    for path in facts.legacy_program_prims {
-        let m = "uses retired concrete type LunCoProgram — author a Scope with ";
+    for path in facts.unsupported_program_prims {
+        let m = "uses unsupported concrete type LunCoProgram — author a Scope with ";
         m += "prepend apiSchemas = [LunCoProgramAPI] and keep the standard info:* source fields.";
-        out.push(finding("retired-program-prim-type", "error", path, m));
+        out.push(finding("unsupported-program-prim-type", "error", path, m));
     }
     out
 }
@@ -509,19 +501,6 @@ fn ambiguous_modelica_boundary(facts) {
             m += " preserve distinct boundary sources or insert an explicit causal Modelica block.";
             out.push(finding("ambiguous-modelica-boundary", "error", subject, m));
         }
-    }
-    out
-}
-
-/// One compiler scope must describe exactly one independently solved acausal
-/// network. Separate failure/scheduling domains belong in separate USD scopes.
-fn disconnected_component_network(facts) {
-    let out = [];
-    for scope in facts.network_scopes {
-        if scope.island_count <= 1 { continue; }
-        let m = "contains " + scope.island_count + " disconnected acausal networks —";
-        m += " author one Scope with CollectionAPI:components per independently solved network.";
-        out.push(finding("disconnected-component-network", "error", scope.path, m));
     }
     out
 }

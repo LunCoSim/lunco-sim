@@ -1,25 +1,88 @@
 use crate::{
-    schema::{ApiRequest, ApiResponse},
+    schema::{ApiErrorCode, ApiRequest, ApiResponse},
     transports::envelope::{ApiRequestUnified, ApiResponseEnvelope},
     transports::HttpBridge,
 };
 use axum::{
     extract::{Json, State},
     http::{header, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
+use std::time::Duration;
+
+/// How long the synchronous path waits for a fire-and-forget command's
+/// terminal outcome before returning a pending response.
+const SYNC_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const SYNC_POLL_INTERVAL: Duration = Duration::from_millis(15);
 
 pub async fn handle_api_commands(
     State(bridge): State<HttpBridge>,
     Json(req): Json<ApiRequestUnified>,
-) -> impl IntoResponse {
-    let api_req: ApiRequest = req.into();
-    execute_api_request(bridge, api_req).await
+) -> Response {
+    let api_req: ApiRequest = match req.try_into() {
+        Ok(req) => req,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ApiResponseEnvelope::from(ApiResponse::error(
+                    ApiErrorCode::DeserializationError,
+                    error,
+                ))),
+            )
+                .into_response();
+        }
+    };
+    execute_api_request(bridge, api_req).await.into_response()
 }
 
-/// `GET /api/health` — liveness. Answers from the transport thread without
-/// touching the world, so it stays truthful even while the app is busy: a reply
-/// means the process is up and the API port is served.
+/// Map a serialized [`lunco_core::CommandOutcome`] to a terminal status.
+fn terminal_status(outcome: &serde_json::Value) -> Option<&'static str> {
+    if outcome.get("Succeeded").is_some() {
+        Some("succeeded")
+    } else if outcome.get("Failed").is_some() {
+        Some("failed")
+    } else if outcome.get("Rejected").is_some() {
+        Some("rejected")
+    } else {
+        None
+    }
+}
+
+async fn await_command_outcome(bridge: &HttpBridge, id: u64) -> ApiResponse {
+    let max_polls = (SYNC_WAIT_TIMEOUT.as_millis() / SYNC_POLL_INTERVAL.as_millis().max(1)).max(1);
+    for _ in 0..max_polls {
+        if let Ok(ApiResponse::Ok {
+            data: Some(data), ..
+        }) = bridge.execute(ApiRequest::QueryCommandResult { id }).await
+        {
+            let outcome = data
+                .get("outcome")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if let Some(status) = terminal_status(&outcome) {
+                return ApiResponse::Ok {
+                    command_id: Some(id),
+                    data: Some(serde_json::json!({
+                        "command_id": id,
+                        "status": status,
+                        "outcome": outcome,
+                    })),
+                };
+            }
+        }
+        tokio::time::sleep(SYNC_POLL_INTERVAL).await;
+    }
+    ApiResponse::Ok {
+        command_id: Some(id),
+        data: Some(serde_json::json!({
+            "command_id": id,
+            "status": "pending",
+            "note": "no terminal outcome recorded within the sync-wait window; the command was accepted — poll QueryCommandResult for its outcome",
+        })),
+    }
+}
+
+/// `GET /api/health` — liveness.
 pub async fn handle_health() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -31,13 +94,8 @@ pub async fn handle_health() -> impl IntoResponse {
         .into_response()
 }
 
-/// `GET /api/ready` — readiness. Unlike `/api/health` (liveness, no world
-/// access), this reaches into the world for the `ReadinessRegistry` state via the
-/// `GetReadiness` query provider: `ready` is true only when nothing is holding on
-/// a scene load / program compile / participant init. Answers `200` with the
-/// structured status either way — "not ready" is a valid state, not an error.
+/// `GET /api/ready` — readiness.
 pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse {
-    // The query provider returns its data inline.
     execute_api_request(
         bridge,
         ApiRequest::ExecuteCommand {
@@ -48,13 +106,8 @@ pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse
     .await
 }
 
-/// `GET /api/diagnostics` — co-sim connection health. Reaches into the world for
-/// the `GetBrokenConnections` query: the wiring targets that dropped their write
-/// on the last propagation tick, each tagged `fault` (genuine dangling wire) vs
-/// structural/still-loading. `200` with the report either way — "some broken" is
-/// a valid state to report, not a request error.
+/// `GET /api/diagnostics` — co-sim connection health.
 pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoResponse {
-    // The query provider returns its data inline.
     execute_api_request(
         bridge,
         ApiRequest::ExecuteCommand {
@@ -65,15 +118,12 @@ pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoRe
     .await
 }
 
-/// `GET /api/commands/schema` — the derived command schema (`DiscoverSchema`).
-/// Same data the MCP tool list is built from; a GET so it is trivially
-/// browsable and scriptable.
+/// `GET /api/commands/schema` — the derived command schema.
 pub async fn handle_schema(State(bridge): State<HttpBridge>) -> impl IntoResponse {
-    // DiscoverSchema returns its data inline.
     execute_api_request(bridge, ApiRequest::DiscoverSchema).await
 }
 
-pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> impl IntoResponse {
+pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> Response {
     let response = match bridge.execute(api_req).await {
         Ok(resp) => resp,
         Err(_) => ApiResponse::Error {
@@ -82,7 +132,17 @@ pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> imp
         },
     };
 
-    // Screenshot responses return raw PNG bytes directly.
+    // Fire-and-forget commands are acknowledged with an id, then waited on for
+    // a bounded interval so callers receive a useful terminal status whenever
+    // the handler reports one promptly.
+    let response = match response {
+        ApiResponse::Ok {
+            command_id: Some(id),
+            data: None,
+        } => await_command_outcome(&bridge, id).await,
+        other => other,
+    };
+
     if let ApiResponse::Screenshot { png_bytes } = response {
         return (
             StatusCode::OK,
@@ -93,12 +153,27 @@ pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> imp
     }
 
     let envelope = ApiResponseEnvelope::from(response);
-    // Honour the TYPED error code. Every error used to be a 500, which threw
-    // away `CommandNotFound` (400), `EntityNotFound` (404) and
-    // `DeserializationError` (422) — codes `ApiErrorCode` has always carried.
     let status = match envelope.error_code {
         Some(code) => StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         None => StatusCode::OK,
     };
     (status, Json(envelope)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_status;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn terminal_status_maps_outcome_variants() {
+        assert_eq!(
+            terminal_status(&json!({"Succeeded": {}})),
+            Some("succeeded")
+        );
+        assert_eq!(terminal_status(&json!({"Failed": "boom"})), Some("failed"));
+        assert_eq!(terminal_status(&json!({"Rejected": {}})), Some("rejected"));
+        assert_eq!(terminal_status(&json!("Pending")), None);
+        assert_eq!(terminal_status(&Value::Null), None);
+    }
 }

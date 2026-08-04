@@ -15,8 +15,8 @@
 //! back, and the object does not move — a property this pair could not have had
 //! while they lived in different crates with different ideas about frames.
 //!
-//! The wire uses the canonical command envelope:
-//! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
+//! The command uses the canonical API envelope:
+//! `{"command":"QueryEntity","params":{"id":…}}`.
 
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;

@@ -77,7 +77,7 @@ pub struct Crater {
     pub softness: f64,
     /// Bowl cross-section exponent `p` in `−depth·(1−dᵖ)`. `2` = paraboloid
     /// (fresh simple craters — continuously curving walls), larger = wider flat
-    /// floor with a steep wall band (infilled/degraded morphology; the legacy
+    /// floor with a steep wall band (infilled/degraded morphology; the earlier
     /// profile was a fixed `4`). Tie it to the degradation state: a fresh sharp
     /// rim over a degraded flat floor is a strong "stamped" cue.
     pub bowl_power: f64,

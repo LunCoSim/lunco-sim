@@ -109,7 +109,7 @@ cargo run --bin lunica      # Modelica workbench
 - **`egui_dock`-backed dock tree** — drag tabs to rearrange, drag to
   edges to split, double-click tabs to maximise, multiple tabs per
   region.
-- `Panel` trait with uniform `&mut World` signature.
+- `Panel` trait with a capability-limited `PanelCtx` render context.
 - Default-slot registration — panel goes where its author said it
   should the first time it's registered.
 - Slot-setter DSL (`set_side_browser` / `set_center` /
@@ -132,12 +132,9 @@ cargo run --bin lunica      # Modelica workbench
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /
   Observe) — host apps define them as they migrate panels.
-- **Layout persistence** — dock changes reset on launch (egui_dock has
-  serde support for the tree; wiring is a follow-up).
 - **Command palette** — `Ctrl+P` unbound.
 - **`PanelSlot::Floating`** — placeholder; egui_dock's window support
   is there but not wired to our `Panel` registration yet.
-- **Theming / keybinds** — egui defaults only.
 
 ## Design rationale
 

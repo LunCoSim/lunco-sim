@@ -608,10 +608,10 @@ pub(crate) fn collect_inherited_components_with(
     }
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Recursion into a base's *own* extends chain resolves against the base's
-    // qualified path, not this file's AST, so an empty context is the right
+    // qualified path, not this file's AST, so an empty definition is the right
     // second-arg. Allocate it once for the whole walk rather than per-`extends`
     // (CQ-203 — `StoredDefinition::default()` is not free at this fan-out).
-    let empty_context = StoredDefinition::default();
+    let empty_definition = StoredDefinition::default();
     for ext in &class.extends {
         let raw = ext.base_name.to_string();
         if raw.is_empty() {
@@ -679,7 +679,7 @@ pub(crate) fn collect_inherited_components_with(
         for (name, comp) in collect_inherited_components_with(
             base,
             Some(&base_qpath),
-            &empty_context,
+            &empty_definition,
             depth + 1,
             msl_mode,
         ) {

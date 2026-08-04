@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize)]
 pub struct ApiResponseEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -21,66 +23,84 @@ pub struct ApiResponseEnvelope {
     pub error_code: Option<u16>,
 }
 
-/// The single request envelope accepted by every API transport.
+/// Canonical `/api/commands` request envelope.
 ///
-/// A command is always explicitly tagged as `ExecuteCommand`; domain queries
-/// use the same command channel and are registered by the crate that owns the
-/// queried data. Keeping the wire discriminator closed makes malformed or
-/// stale envelopes fail at the transport boundary instead of being promoted
-/// into a different command with default parameters.
+/// Every command and query uses the same shape:
+/// `{"command":"Name","params":{...}}`. Query-specific arguments live
+/// inside `params` as well, so transports do not carry parallel wire formats.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum ApiRequestUnified {
-    ExecuteCommand {
-        command: String,
-        #[serde(default)]
-        params: serde_json::Value,
-    },
-    DiscoverSchema,
-    ListEntities,
-    SubscribeTelemetry {
-        filter: Option<serde_json::Value>,
-    },
-    UnsubscribeTelemetry {
-        /// Entity ids are JSON numbers on the wire. `GlobalEntityId` is
-        /// bounded to the exact-integer range of JSON numbers.
-        id: u64,
-    },
+#[serde(deny_unknown_fields)]
+pub struct ApiRequestUnified {
+    pub command: String,
+    #[serde(default = "default_params")]
+    pub params: serde_json::Value,
 }
 
-impl From<ApiRequestUnified> for ApiRequest {
-    fn from(env: ApiRequestUnified) -> Self {
-        match env {
-            ApiRequestUnified::ExecuteCommand { command, params } => {
-                ApiRequest::ExecuteCommand { command, params }
+impl TryFrom<ApiRequestUnified> for ApiRequest {
+    type Error = String;
+
+    fn try_from(env: ApiRequestUnified) -> Result<Self, Self::Error> {
+        match env.command.as_str() {
+            "DiscoverSchema" => Ok(ApiRequest::DiscoverSchema),
+            "ListEntities" => Ok(ApiRequest::ListEntities),
+            // `QueryEntity` is a PROVIDER (owned by `lunco-scene-commands`, beside
+            // `MoveEntity` — same entities, same frame), not a built-in variant.
+            "QueryEntity" => {
+                require_numeric_param(&env.params, "id")?;
+                Ok(ApiRequest::ExecuteCommand {
+                    command: "QueryEntity".to_string(),
+                    params: env.params,
+                })
             }
-            ApiRequestUnified::DiscoverSchema => ApiRequest::DiscoverSchema,
-            ApiRequestUnified::ListEntities => ApiRequest::ListEntities,
-            ApiRequestUnified::SubscribeTelemetry { filter } => ApiRequest::SubscribeTelemetry {
-                filter: filter.and_then(|value| serde_json::from_value(value).ok()),
-            },
-            ApiRequestUnified::UnsubscribeTelemetry { id } => {
-                ApiRequest::UnsubscribeTelemetry { id }
+            "QueryCommandResult" => Ok(ApiRequest::QueryCommandResult {
+                id: require_numeric_param(&env.params, "id")?,
+            }),
+            "SubscribeTelemetry" => {
+                let filter = match env.params.get("filter") {
+                    None => None,
+                    Some(value) => Some(
+                        serde_json::from_value(value.clone())
+                            .map_err(|e| format!("invalid telemetry filter: {e}"))?,
+                    ),
+                };
+                Ok(ApiRequest::SubscribeTelemetry { filter })
             }
+            "UnsubscribeTelemetry" => Ok(ApiRequest::UnsubscribeTelemetry {
+                id: require_numeric_param(&env.params, "id")?,
+            }),
+            _ => Ok(ApiRequest::ExecuteCommand {
+                command: env.command,
+                params: env.params,
+            }),
         }
     }
+}
+
+fn require_numeric_param(params: &serde_json::Value, name: &str) -> Result<u64, String> {
+    params
+        .get(name)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("parameter `{name}` must be a JSON number"))
+}
+
+fn default_params() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse(json: &str) -> Result<ApiRequest, serde_json::Error> {
-        serde_json::from_str::<ApiRequestUnified>(json).map(Into::into)
+    fn parse(json: &str) -> ApiRequest {
+        serde_json::from_str::<ApiRequestUnified>(json)
+            .unwrap()
+            .try_into()
+            .unwrap()
     }
 
     #[test]
-    fn canonical_query_entity_uses_the_execute_command_envelope() {
-        match parse(
-            r#"{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":98466552102768}}"#,
-        )
-        .unwrap()
-        {
+    fn query_entity_uses_the_canonical_command_envelope() {
+        match parse(r#"{"command":"QueryEntity","params":{"id":98466552102768}}"#) {
             ApiRequest::ExecuteCommand { command, params } => {
                 assert_eq!(command, "QueryEntity");
                 assert_eq!(params["id"], 98466552102768_u64);
@@ -90,57 +110,68 @@ mod tests {
     }
 
     #[test]
-    fn command_params_are_left_for_typed_validation() {
-        assert!(parse(
-            r#"{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":"98466552102768"}}"#,
-        )
-        .is_ok());
-
-        // The envelope carries JSON params; command/provider validation is
-        // responsible for rejecting a string where the provider expects u64.
-        let request = parse(
-            r#"{"type":"ExecuteCommand","command":"UnsubscribeTelemetry","params":{"id":"42"}}"#,
+    fn query_entity_string_id_is_rejected() {
+        let env = serde_json::from_str::<ApiRequestUnified>(
+            r#"{"command":"QueryEntity","params":{"id":"98466552102768"}}"#,
         )
         .unwrap();
-        assert!(matches!(request, ApiRequest::ExecuteCommand { .. }));
+        assert!(ApiRequest::try_from(env).is_err());
     }
 
     #[test]
-    fn untagged_command_forms_are_rejected() {
-        assert!(parse(r#"{"command":"SetCamera","params":{"eye":[1,2,3]}}"#).is_err());
-        assert!(parse(r#"{"type":"QueryEntity","id":42}"#).is_err());
-        assert!(parse(r#"{"type":"QueryCommandResult","id":42}"#).is_err());
-        assert!(
-            parse(r#"{"type":"ExecuteCommand","command":"SetCamera","eye":[1,2,3]}"#,).is_err()
-        );
+    fn command_params_are_forwarded_verbatim() {
+        match parse(r#"{"command":"SetCamera","params":{"eye":[1.0,2.0,3.0]}}"#) {
+            ApiRequest::ExecuteCommand { command, params } => {
+                assert_eq!(command, "SetCamera");
+                assert_eq!(params["eye"], serde_json::json!([1.0, 2.0, 3.0]));
+            }
+            other => panic!("expected ExecuteCommand, got {other:?}"),
+        }
     }
 
     #[test]
-    fn response_envelope_contains_ack_data_without_a_command_id() {
-        let envelope = ApiResponseEnvelope::from(ApiResponse::accepted());
-        assert_eq!(envelope.data.unwrap()["accepted"], true);
+    fn missing_params_use_an_empty_object() {
+        match parse(r#"{"command":"SetCamera"}"#) {
+            ApiRequest::ExecuteCommand { command, params } => {
+                assert_eq!(command, "SetCamera");
+                assert_eq!(params, serde_json::json!({}));
+            }
+            other => panic!("expected ExecuteCommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_command_result_id_is_a_number() {
+        match parse(r#"{"command":"QueryCommandResult","params":{"id":42}}"#) {
+            ApiRequest::QueryCommandResult { id } => assert_eq!(id, 42),
+            other => panic!("expected QueryCommandResult, got {other:?}"),
+        }
     }
 }
 
 impl From<ApiResponse> for ApiResponseEnvelope {
     fn from(response: ApiResponse) -> Self {
         match response {
-            ApiResponse::Ok { data } => ApiResponseEnvelope {
+            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope {
+                command_id,
                 data,
                 error: None,
                 error_code: None,
             },
             ApiResponse::Error { code, message } => ApiResponseEnvelope {
+                command_id: None,
                 data: None,
                 error: Some(message),
                 error_code: Some(code),
             },
             ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope {
+                command_id: None,
                 data: Some(serde_json::json!(event)),
                 error: None,
                 error_code: None,
             },
             ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
+                command_id: None,
                 data: None,
                 error: Some("unexpected screenshot response".into()),
                 error_code: Some(crate::schema::ApiErrorCode::InternalError as u16),

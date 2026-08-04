@@ -13,15 +13,13 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
-use rumoca_sim::SimulationSession;
 use serde::{Deserialize, Serialize};
 
 use lunco_assets::modelica_dir;
 
 use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::sim_stream::SimSnapshot;
-use crate::sim_stream::SimStream;
+use crate::sim_stream::{SimSnapshot, SimStream};
+use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 
@@ -41,12 +39,11 @@ use lunco_experiments::solver;
 /// So the family comes from [`solver::resolve`], the same call the batch path
 /// makes, from where the model runs: stepped inside the frame loop, and whether
 /// it drives a client-predicted body. A live model resolves to a backend that
-/// declares `usable_live`, and a predicted one to a backend that declares
-/// `realtime_tolerated` — because those backends *declare* it, not because a
-/// function body asserts it.
+/// declares `usable_live`; a predicted one is admitted only by a backend that
+/// is both fixed-step and deterministic.
 fn live_stepper_options(
     profile: solver::RuntimeProfile,
-) -> Result<rumoca_sim::SimOptions, solver::SolverError> {
+) -> Result<(solver::SolverSpec, rumoca_sim::SimOptions), solver::SolverError> {
     crate::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
@@ -57,29 +54,7 @@ fn live_stepper_options(
         authored: None,
     })?;
 
-    // A4: a predicted model just landed on a backend that is not fixed-step
-    // deterministic. It is eligible only because it declares
-    // `realtime_tolerated`, so two peers integrating the same inputs can take
-    // different substeps and diverge. Declaring the gap in the registry
-    // documents it; this is the one place that REPORTS it, because this is where
-    // a model is actually put on such a stepper. Once per process, keyed on
-    // nothing else: the condition is a property of what is registered, not of
-    // the model, so repeating it per compile would only teach the reader to
-    // scroll past it.
-    if solver::served_by_concession(&spec, &profile) {
-        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            bevy::log::warn!(
-                "[solver] client-predicted models are running on `{}`, which is not \
-                 fixed-step deterministic — it serves them only through the declared \
-                 A4 concession (`realtime_tolerated`), so peers can diverge. Registering \
-                 a genuinely fixed-step backend retires this with no call-site edit.",
-                spec.id
-            );
-        }
-    }
-
-    crate::solver_backends::rumoca_options(
+    let options = crate::solver_backends::rumoca_options(
         &spec,
         &solver::SolverParams {
             atol: LIVE_TOL,
@@ -93,7 +68,8 @@ fn live_stepper_options(
             t_start: 0.0,
             t_end: f64::from(u32::MAX),
         },
-    )
+    )?;
+    Ok((spec, options))
 }
 
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
@@ -113,9 +89,9 @@ fn live_stepper_options(
 /// producing nothing. That silence is what let broken islands ship.
 /// The realtime half of the solver request for one model.
 ///
-/// A model absent from the set is NOT predicted — which for every co-simulated
-/// prim is the truth by construction: they are stamped `NotPredictable`, so an
-/// adaptive implicit solver is not merely permitted but correct for them.
+/// A model absent from the set is NOT predicted. The live path still requires a
+/// frame-loop-usable backend; offline/batch paths are where adaptive implicit
+/// solvers are selected.
 fn profile_for(
     entity: Entity,
     realtime_models: &std::collections::HashSet<Entity>,
@@ -130,11 +106,11 @@ fn profile_for(
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
-) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    let opts = live_stepper_options(profile).map_err(|e| {
+) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
+    let (spec, opts) = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
-    crate::simulation_session::live(&comp_res.dae, opts)
+    crate::simulation_session::live(&comp_res.dae, &spec, opts)
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -147,11 +123,10 @@ pub struct ModelicaChannels {
     pub tx: Sender<ModelicaCommand>,
     /// Receiver for `ModelicaResult` <- worker
     pub rx: Receiver<ModelicaResult>,
-    /// Receiver for `ModelicaCommand` <- UI (used by the wasm Web Worker transport)
+    /// Receiver for `ModelicaCommand` <- UI (used by wasm32 inline worker)
     #[cfg(target_arch = "wasm32")]
     pub rx_cmd: Receiver<ModelicaCommand>,
-    /// Sender for `ModelicaResult` -> UI (used when the Web Worker transport
-    /// cannot start and must fail a queued command explicitly)
+    /// Sender for `ModelicaResult` -> UI (used by wasm32 inline worker)
     #[cfg(target_arch = "wasm32")]
     pub tx_res: Sender<ModelicaResult>,
 }
@@ -192,11 +167,9 @@ pub enum ModelicaCommand {
         /// prim declare `lunco:program:realtimeSafe`?
         ///
         /// Carried on the command because the worker thread has no ECS: it is
-        /// the second of the two facts solver selection is made of (the first,
-        /// whether the model is implicit, is read off the compiled DAE). DECLARED
-        /// upstream, never inferred here — a worker that guessed this is exactly
-        /// how the explicit stepper ended up on co-simulated electrical islands
-        /// that cannot be solved with it.
+        /// the prediction fact solver selection needs. DECLARED upstream, never
+        /// inferred from the compiled DAE: solvability and backend lowering are
+        /// owned by the selected solver.
         realtime_safe: bool,
         /// Stable session URI for the primary document (the document's
         /// canonical identity from `DocumentOrigin::session_uri` — a file
@@ -216,15 +189,15 @@ pub enum ModelicaCommand {
         extra_sources: Vec<(String, String)>,
         /// Lock-free snapshot handle the worker publishes into after
         /// every successful Step (Phase A of the multi-sim arch).
-        /// `None` = main-thread transport; it receives per-sample data via
-        /// `ModelicaResult.outputs` and pushes it into
+        /// `None` = result-stream path; main thread still receives per-sample
+        /// data via `ModelicaResult.outputs` and pushes it into
         /// `SignalRegistry`. When `Some`, the worker updates the
         /// stream directly and the main-thread handler can skip the
         /// per-sample push loop.
         ///
         /// Skipped by serde: the `Arc<ArcSwap<_>>` only makes sense
         /// inside one address space. On wasm (Web Worker transport)
-        /// this is always serialized as `None`, selecting the
+        /// this is always serialized as `None`, using the
         /// outputs-via-result path. Native is unaffected.
         #[serde(skip)]
         stream: Option<SimStream>,
@@ -396,7 +369,7 @@ impl ModelicaResult {
     /// Overlay the `experiment(...)` annotation defaults lifted from a
     /// compile result onto this message. Single source of the
     /// `DaeCompilationResult` → `experiment_*` field mapping, which was
-    /// copy-pasted at both worker compile sites (native + Web Worker).
+    /// copy-pasted at both worker compile sites (native + inline-worker).
     fn with_experiment(mut self, comp_res: &rumoca_compile::compile::DaeCompilationResult) -> Self {
         self.experiment_start_time = comp_res.experiment_start_time;
         self.experiment_stop_time = comp_res.experiment_stop_time;
@@ -559,8 +532,30 @@ fn rebuild_from_cache(
 /// plots NaN. Filtering out parameters / inputs happens downstream in
 /// [`handle_modelica_responses`]; we report everything here so the UI has
 /// the full picture and decides what goes into `model.variables`.
-pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(String, f64)> {
-    let Ok(state) = stepper.state() else {
+pub(crate) trait ObservableStepper {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError>;
+}
+
+impl ObservableStepper for LiveStepper {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
+        self.state()
+    }
+}
+
+impl ObservableStepper for rumoca_sim::SimulationSession {
+    fn observable_state(
+        &self,
+    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
+        self.state()
+    }
+}
+
+pub(crate) fn collect_stepper_observables<S: ObservableStepper>(stepper: &S) -> Vec<(String, f64)> {
+    let Ok(state) = stepper.observable_state() else {
         return Vec::new();
     };
     state
@@ -572,7 +567,7 @@ pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(S
 
 /// Fixed solver tolerance on the LIVE path. Explicit, and deliberately NOT the
 /// model's `experiment(Tolerance=…)` annotation nor the batch runner's default —
-/// see [`live_stepper_options`] (A4).
+/// see [`live_stepper_options`] and the runtime solver capability contract.
 const LIVE_TOL: f64 = 1e-6;
 
 /// The LIVE path's **micro-step**: the one and only step size handed to the
@@ -619,13 +614,13 @@ fn micro_steps_for(dt: f64) -> u32 {
 
 /// Integrate one macro step: `micro_steps_for(dt)` fixed micro-steps.
 ///
-/// The ONE integration loop for the live path — native and wasm workers both
-/// call it, so the two `#[cfg]` twins cannot drift on step policy.
+/// The ONE integration loop for the live path — native worker and wasm inline
+/// worker both call it, so the two `#[cfg]` twins cannot drift on step policy.
 /// Advances the model's own clock by exactly `micro_steps_for(dt) *
 /// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
 /// side reconciles any residual against the world clock next tick.
 fn integrate_macro_step(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     dt: f64,
 ) -> Result<(), rumoca_sim::SimulationDiagnosticError> {
     for _ in 0..micro_steps_for(dt) {
@@ -699,53 +694,6 @@ fn reset_ok(
     }
 }
 
-/// Build the lifecycle-shaped error delivered when the browser Web Worker is
-/// unavailable. Keeping the command's entity/session and lifecycle flags lets
-/// the normal response handler release compile/step state instead of leaving
-/// a spinner or coupling barrier waiting forever.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn worker_unavailable_result(
-    cmd: ModelicaCommand,
-    reason: &str,
-) -> Option<ModelicaResult> {
-    let mut result = match cmd {
-        ModelicaCommand::Step {
-            entity, session_id, ..
-        } => result_ok(entity, session_id),
-        ModelicaCommand::Compile {
-            entity, session_id, ..
-        } => ModelicaResult {
-            entity,
-            session_id,
-            is_new_model: true,
-            ..Default::default()
-        },
-        ModelicaCommand::UpdateParameters {
-            entity, session_id, ..
-        } => ModelicaResult {
-            entity,
-            session_id,
-            is_parameter_update: true,
-            ..Default::default()
-        },
-        ModelicaCommand::Reset { entity, session_id } => ModelicaResult {
-            entity,
-            session_id,
-            is_reset: true,
-            ..Default::default()
-        },
-        // Despawn is fire-and-forget; there is no UI lifecycle state to close.
-        ModelicaCommand::Despawn { .. } => return None,
-        ModelicaCommand::LoadSourceRoot { id, .. } => ModelicaResult {
-            entity: Entity::PLACEHOLDER,
-            loaded_source_root_id: Some(id),
-            ..Default::default()
-        },
-    };
-    result.error = Some(reason.to_string());
-    Some(result)
-}
-
 /// Where a captured default was declared, which decides how its leaf name is
 /// matched against the compiled model's runtime input slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -798,7 +746,7 @@ fn resolve_default_slots(known: &[String], name: &str, origin: DefaultOrigin) ->
 /// (primary document, sibling docs, seated library members) arrives here in the
 /// same map and is resolved by [`resolve_default_slots`].
 fn apply_input_defaults_validated(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     input_defaults: &HashMap<String, InputDefault>,
     ctx: &str,
 ) {
@@ -861,7 +809,7 @@ fn apply_input_defaults_validated(
 /// sibling docs — with the bound-`input` workaround applied to EVERY member.
 ///
 /// All worker compile paths (Compile, Reset, Step auto-init, UpdateParameters;
-/// native and Web Worker) assemble their sources through
+/// native and inline) assemble their sources through
 /// [`assemble_compile_unit`], so no path can hand rumoca an unstripped string:
 /// rumoca demotes a bound `input Real x = <default>` to an algebraic, which
 /// deletes the runtime slot and silently drops every wire into it (see
@@ -1098,7 +1046,7 @@ fn default_issue_message(issue: &InputDefaultIssue) -> String {
 /// is silently discarded forever — warn ONCE per (entity, name).
 #[cfg(not(target_arch = "wasm32"))]
 fn set_input_or_warn(
-    stepper: &mut SimulationSession,
+    stepper: &mut LiveStepper,
     rejected_inputs: &mut std::collections::HashSet<(Entity, String)>,
     entity: Entity,
     name: &str,
@@ -1239,17 +1187,17 @@ fn prune_entity_temp_dirs(
 /// **Native only.** It is spawned on a real `std::thread` (see
 /// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
 /// has neither: wasm dispatches the *same* commands through
-/// [`process_command`] in the `lunica_worker` Web Worker bundle, with the
-/// source carried in the message instead of read from a path.
+/// [`process_inline_command`] (inline, or in the `lunica_worker` Web Worker
+/// bundle) with the source carried in the message instead of read from a path.
 /// Gating it native-only is what keeps `std::fs` out of the wasm bundle rather
 /// than shipping calls that always `Err` in a browser.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
-    let mut steppers: HashMap<Entity, (u64, String, SimulationSession)> = HashMap::default();
+    let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // Which models declared the realtime promise, from `Compile`. Half of the
-    // solver-selection input (the other half is read off the compiled DAE), kept
-    // per entity because every later rebuild — Reset, parameter update, Step
+    // solver-selection input, kept per entity because every later rebuild — Reset,
+    // parameter update, Step
     // auto-init — must resolve the SAME solver as the original compile did.
     let mut realtime_models: std::collections::HashSet<Entity> = Default::default();
     // Inputs the SOLVER rejected, deduped per (entity, name). `set_input` used to
@@ -1893,7 +1841,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 }
                                 // Macro step: integrate the requested `dt` — the
                                 // gap between the model's clock and the world's —
-                                // as a fixed ladder of micro-steps (A3/A4).
+                                // as a fixed ladder of micro-steps.
                                 let step_err = integrate_macro_step(stepper, dt).err();
                                 if let Some(e) = step_err {
                                     let mut r = result_ok(entity, session_id);
@@ -2133,10 +2081,22 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 }
 
 // =============================================================================
-// Web Worker simulation state (wasm32 only)
+// WebAssembly Inline Worker (wasm32 only - no thread support in browser)
 // =============================================================================
 //
-/// Simulation state owned by one wasm Web Worker.
+// Why this exists:
+//   - std::thread::spawn panics on wasm32-unknown-unknown (no OS thread support)
+//   - Web Workers are not available from Rust/wasm-bindgen without additional
+//     tooling (wasm-bindgen-rayon, etc.)
+//   - Instead, we process one simulation command per frame in a Bevy system.
+//     This keeps the UI responsive while still running full Modelica simulation.
+//
+// Trade-offs:
+//   - One command per frame limits throughput (fine for interactive use)
+//   - No back-pressure: commands pile up in the channel if the worker falls behind
+//   - All state lives in a Resource, so it resets on page reload (by design)
+
+/// Inner simulation state for wasm32 inline worker.
 /// Mirrors the local variables in `modelica_worker` on desktop.
 ///
 /// `pub` so the off-thread worker bin (`bin/lunica_worker.rs`) can own
@@ -2144,8 +2104,8 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 /// crosses crate boundaries.
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
-pub struct WorkerState {
-    steppers: HashMap<Entity, (u64, String, SimulationSession)>,
+pub struct InlineWorkerInner {
+    steppers: HashMap<Entity, (u64, String, LiveStepper)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiler: Option<ModelicaCompiler>,
@@ -2158,7 +2118,7 @@ pub struct WorkerState {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl WorkerState {
+impl InlineWorkerInner {
     /// Lazily-built shared compiler. Same instance the regular
     /// Compile path uses, so RunFast hits the same warm caches.
     pub fn compiler(&mut self) -> &mut ModelicaCompiler {
@@ -2166,19 +2126,84 @@ impl WorkerState {
     }
 }
 
-/// Apply a single `ModelicaCommand` against a Web Worker state, sending
+/// Thread-safe wrapper for wasm32 inline worker state.
+///
+/// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
+/// SimulationSession internally uses Rc<RefCell<>> which is !Send, but since no threads
+/// exist on this target, we can safely implement Send/Sync.
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+pub(crate) struct InlineWorker {
+    inner: InlineWorkerInner,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl InlineWorker {
+    /// Drop any previously-constructed `ModelicaCompiler`. Used by the
+    /// MSL drain when the in-memory bundle finishes loading: a compiler
+    /// that was lazily built before MSL was available has an empty
+    /// session and would yield `unresolved type reference` for every
+    /// MSL ref. The next compile will re-init via
+    /// `get_or_insert_with(ModelicaCompiler::new)` and pick up the
+    /// global MSL source.
+    pub(crate) fn reset_compiler(&mut self) {
+        self.inner.compiler = None;
+        // The fresh compiler will see the just-landed MSL bundle — anything
+        // compiled against the old (possibly MSL-less) session is stale.
+        self.inner.library_gen += 1;
+    }
+}
+
+// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for InlineWorker {}
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for InlineWorker {}
+
+/// Processes Modelica commands inline on wasm32 (no background thread).
+///
+/// Runs each frame in the Update schedule. Drains one command from the
+/// channel and processes it synchronously, sending results back immediately.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn inline_worker_process(
+    mut worker: ResMut<InlineWorker>,
+    channels: Res<ModelicaChannels>,
+) {
+    // If the off-thread Web Worker is wired up
+    // (`worker_transport::install_worker` succeeded), it owns the
+    // `rx_cmd` queue: its pump system drains commands and forwards them
+    // to the worker bundle. We must not also consume from the same
+    // queue here or commands would race. Bail out — the worker
+    // pipeline is the active one.
+    if crate::worker_transport::is_worker_active() {
+        return;
+    }
+    // Process one command per frame to avoid blocking the main thread.
+    let Ok(cmd) = channels.rx_cmd.try_recv() else {
+        return;
+    };
+    let tx = channels.tx_res.clone();
+    process_inline_command(&mut worker.inner, cmd, |r| {
+        let _ = tx.send(r);
+    });
+}
+
+/// Apply a single `ModelicaCommand` against the inline worker state, sending
 /// any resulting `ModelicaResult` values through `send`.
 ///
-/// This is the same dispatch the desktop `modelica_worker` loop runs. Passing
-/// a closure rather than a concrete `Sender` keeps this fn agnostic to whether
-/// results go to a crossbeam channel, a `Vec`, or a `postMessage` queue.
+/// Same dispatch the desktop `modelica_worker` loop runs, parameterised over
+/// the result sink so both the in-process inline path
+/// (`inline_worker_process`) and the off-thread Web Worker entry
+/// (`bin/lunica_worker.rs`) can share it. Passing a closure rather than a
+/// concrete `Sender` keeps this fn agnostic to whether results go to a
+/// crossbeam channel, a `Vec`, or a `postMessage` queue.
 ///
 /// `state` carries the per-entity `SimulationSession` map, DAE cache, and the lazy
 /// `ModelicaCompiler`. The wasm worker bin owns one of these for the lifetime
 /// of the page and reuses it across postMessage dispatches.
 #[cfg(target_arch = "wasm32")]
-pub fn process_command<F: FnMut(ModelicaResult)>(
-    state: &mut WorkerState,
+pub fn process_inline_command<F: FnMut(ModelicaResult)>(
+    state: &mut InlineWorkerInner,
     cmd: ModelicaCommand,
     mut send: F,
 ) {
@@ -2233,7 +2258,7 @@ pub fn process_command<F: FnMut(ModelicaResult)>(
                     for (name, val) in &inputs {
                         let _ = stepper.set_input(name, *val);
                     }
-                    // Same macro-step ladder as the native worker (A3/A4).
+                    // Same macro-step ladder as the native worker.
                     let step_err = integrate_macro_step(stepper, dt).err();
 
                     if let Some(e) = step_err {
@@ -2315,8 +2340,10 @@ pub fn process_command<F: FnMut(ModelicaResult)>(
             } else {
                 w.realtime_models.remove(&entity);
             }
-            // The wasm Web Worker transport does not publish a lock-free
-            // SimStream across wasm instances; it uses result messages.
+            // NB: the wasm inline worker runs on the Bevy main thread
+            // today and does not publish to a lock-free SimStream.
+            // Phase A lands on desktop first; TODO(arch-phase-b) wire
+            // the wasm path once the inline worker moves off-thread.
             w.current_sessions.insert(entity, session_id);
             // Raw sibling docs for the cache — see the native Compile arm.
             let raw_extras = extra_sources.clone();
@@ -2617,7 +2644,7 @@ pub fn process_command<F: FnMut(ModelicaResult)>(
         }
         ModelicaCommand::LoadSourceRoot { id, payload } => {
             // Wasm path: matches the native handler. Worker thread
-            // (whether native or off-main Web Worker) merges the
+            // (whether off-main Web Worker or inline) merges the
             // library into its session. Idempotent.
             // M3: invalidate cached compiled artifacts (see native arm).
             w.library_gen += 1;
@@ -2632,7 +2659,7 @@ pub fn process_command<F: FnMut(ModelicaResult)>(
                 }
             };
             log::info!(
-                "[modelica-worker] LoadSourceRoot `{}`: {} parsed / {} \
+                "[inline-worker] LoadSourceRoot `{}`: {} parsed / {} \
                  inserted in {:.2}s",
                 id,
                 report.parsed_file_count,
@@ -3322,7 +3349,7 @@ pub fn handle_modelica_responses(
 }
 
 // ===========================================================================
-// The macro-step contract (A3/A4/A5)
+// The macro-step contract
 // ===========================================================================
 #[cfg(test)]
 mod macro_step_tests {
@@ -3470,7 +3497,7 @@ mod macro_step_tests {
     }
 
     /// The micro-step ladder is an integer function of `dt` alone — same on
-    /// every peer, clamped, and never zero for a positive `dt` (A4).
+    /// every peer, clamped, and never zero for a positive `dt`.
     #[test]
     fn micro_step_ladder_is_deterministic_and_clamped() {
         assert_eq!(micro_steps_for(0.0), 0);

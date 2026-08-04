@@ -5,7 +5,7 @@
 //! it snapshots the change-gated [`UsdBrowserView`] (built by
 //! [`produce_usd_browser_view`](crate::ui::loaded_stages::produce_usd_browser_view))
 //! through `BrowserCtx::resource`, paints the row + prim tree, and emits
-//! viewport intent via `BrowserCtx::defer`. No `&mut World`, no inline
+//! viewport intent through typed commands. No `&mut World`, no inline
 //! parse, no resource take-and-restore.
 
 use bevy_egui::egui;
@@ -60,7 +60,7 @@ impl BrowserSection for UsdSceneSection {
             .unwrap_or(egui::Color32::LIGHT_RED);
 
         // Snapshot the view-model out of the (immutable) ctx borrow so
-        // the later `ctx.defer` dispatch is free to take `&mut`. Rows
+        // typed commands can be emitted after row painting. Rows
         // are cheap to clone (Arc readers + short strings).
         let rows: Vec<UsdStageRow> = match ctx.resource::<UsdBrowserView>() {
             Some(view) => view.stages.clone(),
@@ -128,14 +128,12 @@ impl BrowserSection for UsdSceneSection {
         // Clicking any stage / prim row retargets the shared USD
         // viewport at the owning doc and focuses the viewport tab.
         // `SetActiveUsdViewport` / `FocusPanel` are typed commands —
-        // emitted after paint via `defer` so the egui pass stays a
+        // emitted after paint so the egui pass stays a
         // pure read.
         if let Some(doc) = focus_doc {
-            ctx.defer(move |world| {
-                world.trigger(SetActiveUsdViewport { doc });
-                world.trigger(lunco_workbench::FocusPanel {
-                    id: USD_VIEWPORT_PANEL_ID.0.to_string(),
-                });
+            ctx.trigger(SetActiveUsdViewport { doc });
+            ctx.trigger(lunco_workbench::FocusPanel {
+                id: USD_VIEWPORT_PANEL_ID.0.to_string(),
             });
         }
     }

@@ -49,7 +49,7 @@ impl MslPackageNode {
 /// component expects a functional block, not an icon shell").
 /// Persisted as a Bevy resource; the Settings dropdown flips the
 /// `show_icon_only_classes` flag to override.
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct PaletteSettings {
     /// When `true`, pure-icon classes (matched by
     /// [`crate::ui::class_display::is_icon_only_class`]) appear in the
@@ -69,7 +69,7 @@ impl Default for PaletteSettings {
 /// Soft guards for the canvas projection. Prevent accidental
 /// attempts to diagram huge packages without getting in the way of
 /// deeply composed real models. Exposed via the Settings dropdown.
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct DiagramProjectionLimits {
     /// Maximum component count the projector will accept before
     /// returning `None`. Default

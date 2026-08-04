@@ -752,7 +752,8 @@ impl CanonicalStages {
     /// in the load frame. Building here, at the first read, makes the canonical
     /// stage available regardless of system ordering. Cached,
     /// so the whole prim cascade shares one composed stage. `None` only if the
-    /// asset was supplied without a composition recipe or the build fails.
+    /// asset carries no recipe (for example, an in-memory test asset) or the
+    /// build fails.
     pub fn get_or_build(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,

@@ -1,6 +1,6 @@
 //! Plugin-driven registry of document kinds.
 //!
-//! Each domain crate (`lunco-modelica`, future
+//! Provides an open registry: each domain crate (`lunco-modelica`, future
 //! `lunco-julia`, `lunco-usd`, …) registers its own kind on plugin
 //! `build()`, and consumers iterate the registry rather than matching
 //! a fixed enum.

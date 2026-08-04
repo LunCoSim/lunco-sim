@@ -41,10 +41,11 @@ use std::thread;
 
 /// Typed identity for a Modelica class across the workbench.
 ///
-/// Converts serialized tree identifiers (`msl_path:`, `bundled://…#`, raw file
-/// paths, `mem://`) into one `ClassRef { library, path }` value that flows
-/// through opening, drill-in, tab dedup, projection target lookup, and
-/// documentation lookup.
+/// Replaces the former string ID schemes (`msl_path:`, `bundled://…#`,
+/// raw file paths, `mem://`) with a single `ClassRef { library, path }`
+/// value that flows through opening, drill-in, tab dedup, projection
+/// target lookup, and documentation lookup. See module docs for the
+/// migration map.
 pub mod class_ref;
 
 /// Unified read-side metadata for Modelica classes — folds the
@@ -122,10 +123,11 @@ pub mod icon_memo;
 /// destination screen rect, mapping Modelica diagram coordinates
 /// (+Y up) to egui screen coordinates (+Y down).
 // `icon_paint` lives under `ui/` — it's a UI/rendering concern, not
-// a model-semantics one. Keep a crate-private root alias for the UI modules;
-// external callers use the owning `ui::icon_paint` module.
+// a model-semantics one. Re-exported here so the previous flat path
+// (`lunco_modelica::icon_paint::*`) keeps compiling for any external
+// consumer that hardcoded it.
 #[cfg(feature = "ui")]
-pub(crate) use ui::icon_paint;
+pub use ui::icon_paint;
 
 /// Single 2×3 affine transform per node from Modelica icon-local
 /// coords to canvas world coords. Replaces the scattered
@@ -147,6 +149,7 @@ pub mod doc_extract;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
+pub mod fixed_step;
 /// Default-simulation-class resolution + run-target overrides
 /// (was `ui::panels::model_view::context::default_simulation_class` & friends).
 /// The rumoca backends, registered into `lunco_experiments::solver`. Solver
@@ -1637,10 +1640,12 @@ impl Plugin for ModelicaWorkbenchPlugin {
         app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
-        // inline rumoca compile or parse (seconds for non-trivial models)
-        // freezes the render loop. The worker pool is started lazily when
-        // the first Modelica operation needs it; document parsing waits for
-        // that worker rather than falling back to the page's main thread.
+        // inline rumoca *compile* (seconds for non-trivial models) freezes the
+        // render loop. The worker pool handles that heavy compile/run work —
+        // but it is NOT spawned here. Spawning it eagerly at boot is a cold
+        // compile of each worker bundle and can take tens of seconds on a
+        // weak machine. We only register the worker URL now; parsing-for-
+        // diagram runs on the main thread until a worker is warm.
         #[cfg(target_arch = "wasm32")]
         worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }
@@ -1736,8 +1741,8 @@ fn build_modelica_core(app: &mut App) {
     // funnel (`ModelicaApiEditPlugin` — already UI-free), the A3 journal-wire
     // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
     // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
-    // adds core first, so the GUI still gets them. Guarded/idempotent so a
-    // second UI initialization is a no-op.
+    // adds core first, so the GUI still gets them. Guarded/idempotent so the
+    // UI and headless hosts share the same idempotent initialization.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
     app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
@@ -1831,16 +1836,20 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
+        app.insert_resource(worker::InlineWorker::default());
         // Command dispatch on wasm always goes through the Web Worker. If the
-        // bundle cannot start, the transport drains commands into explicit
-        // errors; it never runs Modelica on the page's main thread.
-        app.add_systems(Update, worker_transport::pump_commands_to_worker);
+        // bundle cannot start, the inline worker remains a functional fallback.
+        app.add_systems(
+            Update,
+            worker_transport::pump_commands_to_worker.before(worker::inline_worker_process),
+        );
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.
         app.add_systems(Update, |_world: &mut World| {
             worker_transport::pump_worker_respawns();
         });
+        app.add_systems(Update, worker::inline_worker_process);
         app.add_systems(Update, crate::state::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on

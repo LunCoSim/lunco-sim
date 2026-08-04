@@ -242,6 +242,7 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
 /// each frame, so `JoinServer`/`LeaveServer` flipping [`NetworkRole`] at runtime
 /// enables/disables the set on the spot. `Option` so a bare test app without
 /// the role resource reads as "no wire" instead of panicking.
+#[cfg(feature = "networking")]
 pub(crate) fn wire_is_live(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
     role.is_some_and(|r| r.is_networked())
 }

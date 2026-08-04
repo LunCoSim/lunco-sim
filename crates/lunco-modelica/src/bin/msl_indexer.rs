@@ -2,8 +2,8 @@
 //!
 //! The actual indexer lives in `lunco_modelica::indexer` as a library
 //! entry point so the workbench can drive the same workflow in-process
-//! on `AsyncComputeTaskPool` after a fresh MSL download. This binary parses
-//! CLI args and hands off to `indexer::run`.
+//! on `AsyncComputeTaskPool` after a fresh MSL download. This binary
+//! parses CLI arguments and invokes `indexer::run`.
 //!
 //! Native-only: `lunco_modelica::indexer` is `#[cfg(not(wasm32))]` (it walks a
 //! filesystem the browser doesn't have), and indexing is a build/host step —

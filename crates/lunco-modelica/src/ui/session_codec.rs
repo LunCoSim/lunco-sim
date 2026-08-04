@@ -177,8 +177,9 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             // Tab already projected (an auto-opened / already-rendered
             // doc) — snap the live camera now; the initial-projection
             // path won't re-run for it.
-            let ds = cds.get_mut(Some(doc));
-            ds.canvas.viewport.snap_to(view.center, view.zoom);
+            if let Some(ds) = cds.get_mut_for_doc(doc) {
+                ds.canvas.viewport.snap_to(view.center, view.zoom);
+            }
         } else {
             // Freshly restored: the tab doesn't exist yet (async open).
             // Stash so `get_mut_for_tab` seeds it and the initial
@@ -196,7 +197,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         // Map the saved dock tab instance (old ModelTabs id) to the live one
         // `restore` just opened for this doc. `restore` calls
         // `ensure_for(doc, None)`, so the live primary tab exists; look it up
-        // read-only. No old id recorded (0, e.g. legacy file) → nothing to
+        // read-only. No valid id recorded (0, e.g. an older saved workspace) → nothing to
         // remap.
         if snap.tab_instance == 0 {
             return None;

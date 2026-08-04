@@ -49,10 +49,7 @@ pub(crate) fn render_diagram_canvas(
     mark("snapshots+sigreg", &mut phase_t, &mut phase_log);
 
     let (response, events) = {
-        let docstate = match (render_tab_id, active_doc) {
-            (Some(t), Some(d)) => state.get_mut_for_tab(t, d),
-            _ => state.get_mut(active_doc),
-        };
+        let docstate = state.get_mut_for_render(render_tab_id, active_doc);
         docstate.canvas.read_only = tab_read_only;
         docstate.canvas.snap = snap_settings;
         docstate.canvas.ui(ui)
@@ -60,13 +57,12 @@ pub(crate) fn render_diagram_canvas(
     mark("canvas.ui (scene render)", &mut phase_t, &mut phase_log);
 
     let gesture_down = response.is_pointer_button_down_on();
-    ctx.defer(move |world| {
-        if let Some(mut active) =
-            world.get_resource_mut::<crate::ui::wasm_autosave::IsGestureActive>()
-        {
-            active.canvas = gesture_down;
-        }
-    });
+    let mut gesture = ctx
+        .resource::<crate::ui::wasm_autosave::IsGestureActive>()
+        .copied()
+        .unwrap_or_default();
+    gesture.canvas = gesture_down;
+    ctx.set_resource(gesture);
 
     // ─── Overlays ───
     //
@@ -79,8 +75,8 @@ pub(crate) fn render_diagram_canvas(
     // handoff overlaps handles via
     // `CanvasDiagramState::pending_projection_handoff`, and AST
     // reparse runs through `track_ast_reparse_busy`. The bus is
-    // never momentarily empty mid-flight, so the overlay needs no
-    // local fallback predicates.
+    // never momentarily empty mid-flight, so the overlay needs only
+    // the lifecycle projection.
     {
         let theme = ctx
             .resource::<lunco_theme::Theme>()
@@ -93,10 +89,7 @@ pub(crate) fn render_diagram_canvas(
             })
             .unwrap_or_default();
         let lifecycle = {
-            let docstate = match render_tab_id {
-                Some(t) => state.get_for_tab(t),
-                None => state.get(active_doc),
-            };
+            let docstate = state.get_for_render(render_tab_id, active_doc);
             let has_content = docstate.canvas.scene.node_count() > 0;
             active_doc
                 .and_then(|d| {
@@ -177,10 +170,7 @@ pub(crate) fn render_diagram_canvas(
             _ => None,
         });
         let (has_content, reproject_pending) = {
-            let docstate = match render_tab_id {
-                Some(t) => state.get_for_tab(t),
-                None => state.get(active_doc),
-            };
+            let docstate = state.get_for_render(render_tab_id, active_doc);
             (
                 docstate.canvas.scene.node_count() > 0,
                 docstate.force_reproject,
@@ -280,17 +270,15 @@ pub(crate) fn render_diagram_canvas(
         tab_read_only,
         editing_class.as_deref(),
     );
-    handle_node_double_click(ctx, state, &events, active_doc);
+    handle_node_double_click(ctx, state, &events, active_doc, render_tab_id);
 
     if let (Some(doc_id), Some(class)) = (doc_id, editing_class.as_ref()) {
         let mut all_ops = ops::build_ops_from_events(ctx, state, &events, class);
         all_ops.extend(menu_ops);
         if !all_ops.is_empty() {
-            ctx.defer(move |world| {
-                #[cfg(feature = "lunco-api")]
-                crate::api::trigger_apply_ops(world, doc_id, all_ops);
-                #[cfg(not(feature = "lunco-api"))]
-                super::super::ops::apply_ops_public(world, doc_id, all_ops);
+            ctx.trigger(super::super::ApplyOpsRequested {
+                doc: doc_id,
+                ops: all_ops,
             });
         }
     }
@@ -303,14 +291,10 @@ pub(crate) fn render_diagram_canvas(
     if let Some(doc_id) = active_doc {
         let writes = lunco_viz::kinds::canvas_plot_node::drain_input_writes(ui.ctx());
         for (name, value) in writes {
-            ctx.defer(move |world| {
-                if let Err(err) = crate::ui::commands::sim::apply_set_model_input(
-                    world, doc_id, &name, value,
-                ) {
-                    bevy::log::warn!(
-                        "[CanvasDiagram] in-canvas input write failed: name={name} value={value} err={err:?}"
-                    );
-                }
+            ctx.trigger(crate::ui::commands::sim::SetModelInputRequested {
+                doc: doc_id,
+                name,
+                value,
             });
         }
     }

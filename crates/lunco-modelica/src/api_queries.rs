@@ -139,7 +139,6 @@ impl ApiQueryProvider for ListSolversProvider {
                     "usable_live": s.caps.usable_live,
                     "fixed_step": s.caps.fixed_step,
                     "deterministic": s.caps.deterministic,
-                    "realtime_tolerated": s.caps.realtime_tolerated,
                 })
             })
             .collect();
@@ -1124,7 +1123,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
 
         // Modelica docs are the only kind in the `ModelicaDocumentRegistry`
         // today; future kinds (USD, SysML) will need their own registries
-        // and a fan-out by document kind id here. The cross-domain
+        // and a fan-out by `DocumentKindId` here. The cross-domain
         // workspace entry tells us which registry to query, so this
         // dispatch is centralised.
         let ws = world.resource::<WorkspaceResource>();
@@ -1151,8 +1150,8 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
         }
         let entry = entry.expect("checked above");
 
-        match entry.kind {
-            kind if kind.as_str() == "modelica" => {
+        match entry.kind.as_str() {
+            "modelica" => {
                 let registry = world.resource::<ModelicaDocumentRegistry>();
                 let Some(host) = registry.host(doc_id) else {
                     return err_doc_not_found(doc_id);
@@ -1177,7 +1176,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
                     format!(
                         "GetDocumentSource not yet implemented for kind `{}` — \
                          only Modelica docs expose source today.",
-                        document_kind_label(&other),
+                        other,
                     ),
                 )
             }
@@ -1789,7 +1788,7 @@ fn err_doc_not_found(doc_id: DocumentId) -> ApiResponse {
 
 /// Stable string label for a registered document kind.
 fn document_kind_label(kind: &DocumentKindId) -> String {
-    kind.as_str().to_owned()
+    kind.to_string()
 }
 
 /// Project a [`lunco_doc::DocumentOrigin`] onto a JSON object. Untitled docs carry

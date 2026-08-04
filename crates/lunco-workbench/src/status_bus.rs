@@ -19,7 +19,7 @@
 //! - **Discrete** events ([`StatusBus::push`]) are appended to `history`
 //!   and shown in Console / Diagnostics. Use for "MSL ready",
 //!   "compile started", "save failed".
-//! - **Progress** events ([`StatusBus::begin`] + [`StatusBus::with_progress`]) replace the
+//! - **Progress** events ([`StatusBus::set_progress`]) replace the
 //!   most recent progress entry from the same source instead of being
 //!   appended — they would otherwise spam the history during a long
 //!   download. Each `(done, total)` tick *replaces* the prior tick from
@@ -107,7 +107,7 @@ pub enum BusyOutcome {
 /// RAII guard for an in-flight busy entry. Move into the task / per-tab
 /// state whose lifetime defines the work; on `Drop` the bus removes the
 /// entry on the next frame (via a drained mpsc channel) so callers
-/// cannot leak progress state by forgetting to end the work.
+/// cannot leak progress state by forgetting to remove the owning handle.
 ///
 /// Send-safe: may be moved into `AsyncComputeTaskPool` futures.
 pub struct BusyHandle {
@@ -178,7 +178,8 @@ pub enum StatusLevel {
     /// Failure — red dot, console `error`, surfaces in Diagnostics.
     Error,
     /// In-flight progress tick. Replaces the last `Progress` from the
-    /// same source instead of appending. Use [`StatusBus::with_progress`].
+    /// same source instead of appending. Use [`StatusBus::set_progress`]
+    /// for state mirrors or [`StatusBus::begin`] for task-owned work.
     Progress,
 }
 
@@ -267,13 +268,16 @@ pub struct StatusBus {
     /// [`STATUS_HISTORY_CAPACITY`]. Older entries fall off the front.
     history: VecDeque<StatusEvent>,
     /// Latest in-flight progress per `(scope, source)`. Replaced on every
-    /// `with_progress` from the same key; cleared by `end`,
+    /// `set_progress` from the same key; cleared by `remove_progress`,
     /// `end`, or [`BusyHandle`] drop.
     active_progress: HashMap<(BusyScope, &'static str), StatusEvent>,
     /// Reverse index: which `(scope, source)` does a given `BusyId` own?
     /// Lets [`BusyHandle::Drop`] clear the right entry without the caller
     /// remembering its own scope/source.
     by_id: HashMap<BusyId, (BusyScope, &'static str)>,
+    /// Handles retained by level-triggered state mirrors. Task-owned work
+    /// keeps its handle in the task or domain state instead.
+    mirror_handles: HashMap<(BusyScope, &'static str), BusyHandle>,
     /// Bumped on every push (discrete or progress). Renderers cache the
     /// last seq they saw to skip work when the bus hasn't changed.
     seq: u64,
@@ -305,6 +309,7 @@ impl Default for StatusBus {
             history: VecDeque::new(),
             active_progress: HashMap::new(),
             by_id: HashMap::new(),
+            mirror_handles: HashMap::new(),
             seq: 0,
             history_total: 0,
             next_id: 0,
@@ -320,7 +325,7 @@ impl StatusBus {
     pub fn push(&mut self, source: &'static str, level: StatusLevel, message: impl Into<String>) {
         debug_assert!(
             level != StatusLevel::Progress,
-            "use begin + with_progress for Progress events"
+            "use set_progress or begin for Progress events"
         );
         let ev = StatusEvent {
             scope: BusyScope::Global,
@@ -340,19 +345,64 @@ impl StatusBus {
         self.seq = self.seq.wrapping_add(1);
     }
 
+    /// Set the active progress projection for a state source. The bus owns
+    /// the handle because a state mirror has no task object whose lifetime
+    /// can hold one. Repeated calls update the same entry; `remove_progress`
+    /// ends it. This does not append to `history` — call `push(..., Info, ...)`
+    /// separately to mark phase transitions you want preserved.
+    ///
+    /// The entry's `at` is the *start* time: when a tick replaces an
+    /// existing entry at the same `(Global, source)` key, the original
+    /// `at` is preserved rather than reset to now. This keeps
+    /// [`Self::display_latest`]'s "longest-running stays pinned" contract
+    /// intact for sources that tick continuously — e.g. the MSL download
+    /// (which starts at boot and re-pushes every frame) must stay the
+    /// pinned status-bar entry even when a later, shorter task (a queued
+    /// compile) begins. Resetting `at` each tick made MSL perennially the
+    /// *youngest* entry, so the bar flipped to "Compiling…" and the
+    /// download progress disappeared.
+    pub fn set_progress(
+        &mut self,
+        source: &'static str,
+        message: impl Into<String>,
+        done: u64,
+        total: u64,
+    ) {
+        let message = message.into();
+        let key = (BusyScope::Global, source);
+        if !self.mirror_handles.contains_key(&key) {
+            let handle = self.begin(BusyScope::Global, source, message.clone());
+            self.mirror_handles.insert(key, handle);
+        }
+        let Some(id) = self.mirror_handles.get(&key).map(BusyHandle::id) else {
+            return;
+        };
+        self.update_progress_by_id(id, done, total);
+        self.update_label_by_id(id, message);
+    }
+
+    /// Remove the active progress projection for `source`.
+    pub fn remove_progress(&mut self, source: &'static str) {
+        let key = (BusyScope::Global, source);
+        if let Some(handle) = self.mirror_handles.remove(&key) {
+            self.clear_by_id(handle.id, BusyOutcome::Succeeded);
+        }
+    }
+
     /// Begin tracking an in-flight unit of work. Returns a [`BusyHandle`]
     /// whose `Drop` removes the entry on the next frame (via
     /// `drain_busy_drops`). Move the handle into the future / per-tab
     /// state whose lifetime defines the work.
     ///
     /// Replaces any existing entry at `(scope, source)` — this is the
-    /// same dedup behaviour as [`Self::with_progress`], extended to scopes.
+    /// same dedup behaviour as [`Self::set_progress`], extended to scopes.
     pub fn begin(
         &mut self,
         scope: BusyScope,
         source: &'static str,
         label: impl Into<String>,
     ) -> BusyHandle {
+        self.mirror_handles.remove(&(scope, source));
         let id = BusyId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         // Evict any prior entry at the same (scope, source) — keep the
@@ -405,7 +455,16 @@ impl StatusBus {
     /// Update the progress tick for an outstanding [`BusyHandle`].
     /// `total == 0` means indeterminate.
     pub fn with_progress(&mut self, handle: &BusyHandle, done: u64, total: u64) {
-        let Some(&(scope, source)) = self.by_id.get(&handle.id) else {
+        self.update_progress_by_id(handle.id, done, total);
+    }
+
+    /// Update the human-readable label for an outstanding [`BusyHandle`].
+    pub fn with_label(&mut self, handle: &BusyHandle, label: impl Into<String>) {
+        self.update_label_by_id(handle.id, label);
+    }
+
+    fn update_progress_by_id(&mut self, id: BusyId, done: u64, total: u64) {
+        let Some(&(scope, source)) = self.by_id.get(&id) else {
             return;
         };
         let Some(ev) = self.active_progress.get_mut(&(scope, source)) else {
@@ -415,9 +474,8 @@ impl StatusBus {
         self.seq = self.seq.wrapping_add(1);
     }
 
-    /// Update the human-readable label for an outstanding [`BusyHandle`].
-    pub fn with_label(&mut self, handle: &BusyHandle, label: impl Into<String>) {
-        let Some(&(scope, source)) = self.by_id.get(&handle.id) else {
+    fn update_label_by_id(&mut self, id: BusyId, label: impl Into<String>) {
+        let Some(&(scope, source)) = self.by_id.get(&id) else {
             return;
         };
         let Some(ev) = self.active_progress.get_mut(&(scope, source)) else {
@@ -783,6 +841,16 @@ mod tests {
     }
 
     #[test]
+    fn mirrored_progress_targets_global_scope() {
+        let mut bus = StatusBus::default();
+        bus.set_progress("MSL", "loading", 1, 10);
+        assert!(bus.is_busy(BusyScope::Global));
+        assert_eq!(bus.entries_in(BusyScope::Global).count(), 1);
+        bus.remove_progress("MSL");
+        assert!(!bus.is_busy(BusyScope::Global));
+    }
+
+    #[test]
     fn begin_and_drop_clears_via_drain() {
         let mut bus = StatusBus::default();
         let handle = bus.begin(BusyScope::Tab(7), "drill-in", "Loading…");
@@ -822,23 +890,22 @@ mod tests {
     }
 
     #[test]
-    fn with_progress_preserves_start_time_so_display_latest_pins_oldest() {
+    fn mirrored_progress_preserves_start_time_so_display_latest_pins_oldest() {
         // The status bar's `display_latest` shows the longest-running
         // active entry. A continuously-ticking source (MSL download) must
         // stay pinned even when a later, shorter task (compile) begins —
         // updating progress must NOT reset the entry's `at` to now.
         let mut bus = StatusBus::default();
-        let msl = bus.begin(BusyScope::Global, "MSL", "downloading");
-        bus.with_progress(&msl, 1, 100);
+        bus.set_progress("MSL", "downloading", 1, 100);
         let msl_at = bus.display_latest().expect("msl entry").at;
         // A later task starts after MSL.
         let _compile = bus.begin(BusyScope::Document(1), "compile", "Compiling…");
         // MSL keeps ticking (every frame).
-        bus.with_progress(&msl, 50, 100);
+        bus.set_progress("MSL", "downloading", 50, 100);
         // The pinned entry is still MSL (oldest start), not the compile.
         let shown = bus.display_latest().expect("an entry");
         assert_eq!(shown.source, "MSL");
-        assert_eq!(shown.at, msl_at, "with_progress must preserve start time");
+        assert_eq!(shown.at, msl_at, "set_progress must preserve start time");
     }
 
     #[test]

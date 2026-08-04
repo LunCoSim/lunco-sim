@@ -179,7 +179,7 @@ pub fn paint_graphics_with_resolver(
 
 /// Same as [`paint_graphics_with_resolver`], but with an explicit
 /// theme palette. Pass `Some(&theme.modelica_icons)` for the active
-/// theme to apply remapping; `None` keeps the authored colours unchanged.
+/// theme to apply remap; `None` for identity.
 pub fn paint_graphics_themed(
     painter: &egui::Painter,
     screen_rect: egui::Rect,

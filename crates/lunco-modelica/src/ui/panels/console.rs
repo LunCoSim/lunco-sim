@@ -33,6 +33,17 @@ const MAX_MESSAGES: usize = 2000;
 /// Panel id.
 pub const CONSOLE_PANEL_ID: PanelId = PanelId("modelica_console");
 
+/// Clear the console after the panel has completed its read-only paint pass.
+#[derive(Event, Clone, Copy, Default)]
+pub(crate) struct ClearConsoleRequested;
+
+pub(crate) fn on_clear_console_requested(
+    _trigger: On<ClearConsoleRequested>,
+    mut log: ResMut<ConsoleLog>,
+) {
+    log.clear();
+}
+
 /// Severity / colour classification for a console line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsoleLevel {
@@ -134,14 +145,6 @@ impl Panel for ConsolePanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        if ctx.resource::<ConsoleLog>().is_none() {
-            ctx.defer(|world| {
-                if world.get_resource::<ConsoleLog>().is_none() {
-                    world.insert_resource(ConsoleLog::default());
-                }
-            });
-        }
-
         let theme = ctx
             .resource::<lunco_theme::Theme>()
             .cloned()
@@ -261,11 +264,7 @@ impl Panel for ConsolePanel {
         }
 
         if clear_requested {
-            ctx.defer(|world| {
-                if let Some(mut log) = world.get_resource_mut::<ConsoleLog>() {
-                    log.clear();
-                }
-            });
+            ctx.trigger(ClearConsoleRequested);
         }
     }
 }

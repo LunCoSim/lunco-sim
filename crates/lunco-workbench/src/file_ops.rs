@@ -220,7 +220,7 @@ fn on_show_open_file_picker(
     }
 
     if extensions.is_empty() {
-        warn!("[ShowOpenFilePicker] no document kinds registered with file extensions");
+        warn!("[OpenFilePicker] no document kinds are registered");
         return;
     }
 

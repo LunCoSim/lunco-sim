@@ -40,6 +40,19 @@ use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
 /// Multi-instance kind id. Each instance is a `VizId.0`.
 pub const MODELICA_PLOT_KIND: PanelId = PanelId("modelica_plot");
 
+/// Export one plot's current curves after the panel has painted.
+#[derive(Event, Clone, Copy)]
+pub(crate) struct ExportGraphRequested {
+    pub(crate) viz: VizId,
+}
+
+pub(crate) fn on_export_graph_requested(trigger: On<ExportGraphRequested>, mut commands: Commands) {
+    let viz = trigger.viz;
+    commands.queue(move |world: &mut World| {
+        export_graph_to_csv(world, viz);
+    });
+}
+
 #[derive(Default)]
 pub struct ModelicaPlotPanel;
 
@@ -86,17 +99,15 @@ impl InstancePanel for ModelicaPlotPanel {
 /// then dispatches to the experiments overlay + LinePlot kind.
 fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     // Telemetry browser rows use the shared ChannelDragPayload. The graph
-    // body is a drop target; registry mutation is deferred through PanelCtx.
+    // body is a drop target; registry mutation is scoped to the owning resource.
     let drop_target = ui.interact(
         ui.max_rect(),
         ui.id().with(("graph_drop_target", viz_id.0)),
         egui::Sense::hover(),
     );
     if let Some(payload) = drop_target.dnd_release_payload::<lunco_viz::ChannelDragPayload>() {
-        ctx.defer(move |world| {
-            if let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() {
-                lunco_viz::bind_dropped_channel(&mut registry, viz_id, &payload);
-            }
+        let _ = ctx.resource_scope::<VisualizationRegistry, _>(|_, registry| {
+            lunco_viz::bind_dropped_channel(registry, viz_id, &payload);
         });
     }
 
@@ -108,16 +119,11 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     // (boot, headless, key-only navigation) so a fresh tab gets
     // promoted on first frame. The write is pure global-state intent
     // (this panel never reads ActivePlot back this frame), so it is
-    // deferred to run after paint.
     let panel_rect = ui.max_rect();
     let hovered_here = ui.rect_contains_pointer(panel_rect);
-    ctx.defer(move |world| {
-        if let Some(mut active) =
-            world.get_resource_mut::<crate::ui::panels::experiments::ActivePlot>()
-        {
-            if active.0.is_none() || hovered_here {
-                active.0 = Some(viz_id);
-            }
+    let _ = ctx.resource_scope::<crate::ui::panels::experiments::ActivePlot, _>(|_, active| {
+        if active.0.is_none() || hovered_here {
+            active.0 = Some(viz_id);
         }
     });
     // Bootstrap the registry entry for the default graph the first
@@ -143,12 +149,9 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
             // retire the stale tab after this paint instead of presenting a
             // dead "not found" panel to the user.
             let stale_instance = viz_id.0;
-            ctx.defer(move |world| {
-                if let Some(mut layout) =
-                    world.get_resource_mut::<lunco_workbench::WorkbenchLayout>()
-                {
-                    layout.close_instance(MODELICA_PLOT_KIND, stale_instance);
-                }
+            ctx.trigger(lunco_workbench::CloseTab {
+                kind: MODELICA_PLOT_KIND,
+                instance: stale_instance,
             });
             return;
         }
@@ -243,33 +246,23 @@ pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id:
         csv = true;
     }
 
-    // All four actions are user-intent mutations (trigger / resource
-    // write / file IO) that don't affect this frame's paint, so defer
-    // them to run after the UI is drawn.
+    // All four actions are typed intents that don't affect this frame's paint.
     if new_plot {
-        ctx.defer(move |world| {
-            world
-                .commands()
-                .trigger(crate::ui::commands::NewPlotPanel::default());
-        });
+        ctx.trigger(crate::ui::commands::NewPlotPanel::default());
     }
     if dup {
-        ctx.defer(move |world| {
-            world.commands().trigger(crate::ui::commands::NewPlotPanel {
-                source: viz_id.0,
-                ..Default::default()
-            });
+        ctx.trigger(crate::ui::commands::NewPlotPanel {
+            source: viz_id.0,
+            ..Default::default()
         });
     }
     if fit {
-        ctx.defer(move |world| {
-            if let Some(mut reqs) = world.get_resource_mut::<VizFitRequests>() {
-                reqs.request(viz_id);
-            }
+        let _ = ctx.resource_scope::<VizFitRequests, _>(|_, requests| {
+            requests.request(viz_id);
         });
     }
     if csv {
-        ctx.defer(move |world| export_graph_to_csv(world, viz_id));
+        ctx.trigger(ExportGraphRequested { viz: viz_id });
     }
 }
 

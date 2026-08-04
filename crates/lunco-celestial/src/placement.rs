@@ -112,8 +112,8 @@ pub fn anchor_solar_frame_to_site(
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
     // One-shot latch for the "declared a site but cannot anchor it" diagnostics
-    // below. Latched, not rate-limited: the condition is structural, so it would
-    // otherwise repeat every gated frame for the life of the scene.
+    // below. It is paired with a settle counter so asynchronous celestial
+    // bootstrap does not produce a permanent false alarm during scene load.
     mut warned: Local<bool>,
     // Celestial entities and ephemeris data arrive in separate projections. Do
     // not turn their expected startup ordering into a permanent scene warning.

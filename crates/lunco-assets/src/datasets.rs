@@ -303,6 +303,17 @@ pub struct DatasetRegistry {
     pending_failures: Vec<String>,
 }
 
+/// User intent to start a declared dataset download.
+///
+/// The UI emits this event instead of mutating [`DatasetRegistry`] directly;
+/// the registry remains the only owner of download authorisation and task
+/// lifecycle.
+#[derive(Event, Clone, Debug)]
+pub struct RequestDataset {
+    /// Manifest key of the dataset to fetch.
+    pub key: String,
+}
+
 impl DatasetRegistry {
     /// Register every entry of an embedded `Assets.toml` as ENGINE-scoped
     /// (destination: the shared cache).
@@ -551,6 +562,10 @@ impl DatasetRegistry {
             self.request(&k);
         }
     }
+}
+
+fn on_request_dataset(trigger: On<RequestDataset>, mut registry: ResMut<DatasetRegistry>) {
+    registry.request(&trigger.event().key);
 }
 
 /// How often the stall watchdog samples the liveness counter. Small relative to
@@ -876,6 +891,7 @@ pub struct DatasetsPlugin;
 impl Plugin for DatasetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DatasetRegistry>();
+        app.add_observer(on_request_dataset);
         app.add_systems(Update, drain_dataset_status);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, scan_engine_manifests);

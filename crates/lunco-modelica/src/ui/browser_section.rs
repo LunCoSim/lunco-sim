@@ -264,10 +264,8 @@ fn render_workspace_doc_row(
                 .unwrap_or(false)
             {
                 resp.request_focus();
-                ctx.defer(|world| {
-                    if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
-                        s.needs_focus = false;
-                    }
+                let _ = ctx.resource_scope::<DocRenameState, _>(|_, state| {
+                    state.needs_focus = false;
                 });
             }
             let enter = resp.lost_focus() && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
@@ -431,44 +429,31 @@ fn render_workspace_doc_row(
             RenameTarget::UntitledOrigin => {
                 if !new_name.is_empty() {
                     let new_name = new_name.clone();
-                    ctx.defer(move |world| {
-                        if let Some(mut registry) =
-                            world.get_resource_mut::<ModelicaDocumentRegistry>()
-                        {
-                            if let Some(host) = registry.host_mut(doc_id) {
-                                host.document_mut().set_origin(
-                                    lunco_doc::DocumentOrigin::untitled(new_name.clone()),
-                                );
-                            }
+                    let _ = ctx.resource_scope::<ModelicaDocumentRegistry, _>(|_, registry| {
+                        if let Some(host) = registry.host_mut(doc_id) {
+                            host.document_mut()
+                                .set_origin(lunco_doc::DocumentOrigin::untitled(new_name.clone()));
                         }
                     });
                 }
             }
             RenameTarget::None => {}
         }
-        ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
-                s.editing = None;
-            }
+        let _ = ctx.resource_scope::<DocRenameState, _>(|_, state| {
+            state.editing = None;
         });
     } else if cancel_rename {
-        ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
-                s.editing = None;
-            }
+        let _ = ctx.resource_scope::<DocRenameState, _>(|_, state| {
+            state.editing = None;
         });
     } else if let Some(initial) = start_rename {
-        ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
-                s.editing = Some((doc_id, initial));
-                s.needs_focus = true;
-            }
+        let _ = ctx.resource_scope::<DocRenameState, _>(|_, state| {
+            state.editing = Some((doc_id, initial));
+            state.needs_focus = true;
         });
     } else if let Some(draft) = update_draft {
-        ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
-                s.editing = Some((doc_id, draft));
-            }
+        let _ = ctx.resource_scope::<DocRenameState, _>(|_, state| {
+            state.editing = Some((doc_id, draft));
         });
     }
 }

@@ -232,6 +232,17 @@ impl ClassEntry {
         matches!(self.kind, ClassKind::ExpandableConnector)
     }
 
+    /// Convenience: `Some(&description)` when non-empty, `None`
+    /// otherwise. This is the optional-description projection used by the
+    /// browser and inspector.
+    pub fn short_description(&self) -> Option<&str> {
+        if self.description.is_empty() {
+            None
+        } else {
+            Some(self.description.as_str())
+        }
+    }
+
     /// First plain-text paragraph of the class's Documentation(info=…)
     /// annotation, when authored. Same as `documentation.0` —
     /// preserved as a method for symmetry with the deleted

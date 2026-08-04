@@ -57,7 +57,6 @@ pub mod prelude {
     pub use crate::diagrams::{time_series_plot, ChartSeries};
     pub use crate::widget;
     pub use crate::Label3D;
-    pub use crate::UiContext;
     pub use crate::UiSelection;
     pub use crate::WidgetCache;
     pub use crate::WidgetId;
@@ -78,6 +77,7 @@ impl Plugin for LuncoUiPlugin {
         // WP-8 view-model for Mission Control — collapses the panel's
         // per-frame world scans into one change-gated producer.
         app.init_resource::<mission_control::MissionControlView>()
+            .add_observer(mission_control::on_set_possession_policy)
             .add_systems(Update, mission_control::populate_mission_control_view);
         // Modal host: single-source-of-truth for dialogs. Panels never
         // call `egui::Window::show` directly; they push to ModalQueue

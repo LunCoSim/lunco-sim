@@ -1,4 +1,4 @@
-//! Tools palette panel — WorkbenchPanel implementation.
+//! Tools palette panel — `lunco-workbench::Panel` implementation.
 //!
 //! A dockable "🛠 Tools" view holding the in-scene editing tools. Today it hosts
 //! the terrain-sculpt brushes; new tools slot in as further sections. Pure
@@ -11,6 +11,38 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::terrain_tools::{TerrainTool, TerrainToolState};
+
+/// Typed UI intent for the editor-owned terrain/script tool resources.
+#[derive(Event)]
+pub(crate) enum TerrainUiAction {
+    /// Update the brush selection and numeric parameters.
+    SetTerrain {
+        tool: TerrainTool,
+        radius: f32,
+        strength: f32,
+    },
+    /// Arm or disarm a named script tool.
+    SetScriptTool(Option<String>),
+}
+
+pub(crate) fn on_terrain_ui_action(
+    trigger: On<TerrainUiAction>,
+    mut terrain: ResMut<TerrainToolState>,
+    mut script: ResMut<lunco_core::ArmedScriptTool>,
+) {
+    match &trigger.event() {
+        TerrainUiAction::SetTerrain {
+            tool,
+            radius,
+            strength,
+        } => {
+            terrain.tool = *tool;
+            terrain.radius = *radius;
+            terrain.strength = *strength;
+        }
+        TerrainUiAction::SetScriptTool(name) => script.0 = name.clone(),
+    }
+}
 
 /// Tools palette — arms terrain brushes and sizes them.
 pub struct ToolsPanel;
@@ -54,8 +86,7 @@ impl Panel for ToolsPanel {
 fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::DesignTokens) {
     ui.heading("Terrain");
 
-    // Snapshot current state (the panel can't hold a mutable borrow across
-    // paint — it defers writes into the world).
+    // Snapshot current state; writes are emitted as typed UI actions.
     let (tool, mut radius, mut strength) = ctx
         .resource::<TerrainToolState>()
         .map(|s| (s.tool, s.radius, s.strength))
@@ -85,10 +116,10 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
             .logarithmic(true),
     );
     if (radius - r0).abs() > f32::EPSILON {
-        ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() {
-                s.radius = radius;
-            }
+        ctx.trigger(TerrainUiAction::SetTerrain {
+            tool,
+            radius,
+            strength,
         });
     }
     let s0 = strength;
@@ -98,10 +129,10 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
             .logarithmic(true),
     );
     if (strength - s0).abs() > f32::EPSILON {
-        ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() {
-                s.strength = strength;
-            }
+        ctx.trigger(TerrainUiAction::SetTerrain {
+            tool,
+            radius,
+            strength,
         });
     }
 
@@ -161,13 +192,11 @@ fn script_tools_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_th
                 .on_hover_text(format!("{}::on_click — click a scene object", tool.name))
                 .clicked()
             {
-                ctx.defer(move |world| {
-                    if let Some(mut a) = world.get_resource_mut::<lunco_core::ArmedScriptTool>() {
-                        // Toggle: clicking the armed tool disarms it, as the
-                        // brushes do.
-                        a.0 = if is_armed { None } else { Some(name.clone()) };
-                    }
-                });
+                ctx.trigger(TerrainUiAction::SetScriptTool(if is_armed {
+                    None
+                } else {
+                    Some(name)
+                }));
             }
         }
     });
@@ -227,9 +256,13 @@ fn tool_button(
 }
 
 fn set_tool(ctx: &mut PanelCtx, tool: TerrainTool) {
-    ctx.defer(move |world| {
-        if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() {
-            s.tool = tool;
-        }
+    let (radius, strength) = ctx
+        .resource::<TerrainToolState>()
+        .map(|s| (s.radius, s.strength))
+        .unwrap_or((5.0, 0.5));
+    ctx.trigger(TerrainUiAction::SetTerrain {
+        tool,
+        radius,
+        strength,
     });
 }

@@ -858,13 +858,10 @@ pub fn run() -> u8 {
     let broken: Vec<String> = faults
         .iter()
         // A self-coupled plant (Avian state → Modelica → Avian force) is a
-        // valid co-simulation topology. The propagation master deliberately
-        // inserts a one-step delay and records the synthetic loop diagnostic,
-        // but that is not a wire that failed to land.
-        .filter(|(port, _)| {
-            !port.starts_with(lunco_cosim::systems::propagate::ALGEBRAIC_LOOP_PORT)
-                && !expected.contains(port)
-        })
+        // valid explicit causal co-simulation topology, not a missing-port
+        // fault. Causal exchange is handled by the fixed-step master; acausal
+        // equations belong to a backend island.
+        .filter(|(port, _)| !expected.contains(port))
         .map(|(_, label)| label.clone())
         .collect();
     // …and a declared fault that never happened fails it too: the fixture stopped

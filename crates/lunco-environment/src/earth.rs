@@ -71,8 +71,8 @@ pub struct LocalEarth {
     pub direction: Vec3,
 }
 
-/// Computes [`LocalEarth`] for every explicit environment probe from
-/// [`EarthDirectionWorld`].
+/// Computes [`LocalEarth`] for every environment probe that has a composed
+/// Earth-vector consumer from [`EarthDirectionWorld`].
 ///
 /// Change-guarded (writes only when the direction actually moves) — mirrors
 /// `compute_local_solar` and `compute_local_gravity`. Earth barely moves, so
@@ -83,7 +83,17 @@ pub fn compute_local_earth(
     dir: Option<Res<EarthDirectionWorld>>,
     q_targets: Query<
         (Entity, Option<&LocalEarth>, Option<&GlobalTransform>),
-        With<crate::EnvironmentProbe>,
+        (
+            With<crate::EnvironmentProbe>,
+            With<crate::EarthDirectionRequired>,
+        ),
+    >,
+    mut q_no_longer_required: Query<
+        (Entity, Option<&LocalEarth>),
+        (
+            With<crate::EnvironmentProbe>,
+            Without<crate::EarthDirectionRequired>,
+        ),
     >,
     // One-shot latch for the no-data diagnostic below. Latched rather than
     // rate-limited: "nobody has said where Earth is" is a structural fact about
@@ -91,6 +101,11 @@ pub fn compute_local_earth(
     mut warned: Local<bool>,
     mut missing_frames: Local<u8>,
 ) {
+    for (entity, existing) in &mut q_no_longer_required {
+        if existing.is_some() {
+            commands.entity(entity).remove::<LocalEarth>();
+        }
+    }
     if q_targets.is_empty() {
         return;
     }
@@ -167,12 +182,16 @@ pub fn compute_local_earth(
 /// Earth direction as unavailable instead of commanding a zero vector.
 pub fn inject_local_earth_into_cosim(
     mut q: Query<
-        (Option<&LocalEarth>, &mut lunco_cosim::SimComponent),
+        (
+            Option<&LocalEarth>,
+            Option<&crate::EarthDirectionRequired>,
+            &mut lunco_cosim::SimComponent,
+        ),
         With<crate::EnvironmentProbe>,
     >,
 ) {
-    for (earth, mut comp) in &mut q {
-        let Some(earth) = earth else {
+    for (earth, required, mut comp) in &mut q {
+        let Some(earth) = earth.filter(|_| required.is_some()) else {
             comp.outputs.remove(EARTH_MOUNT_X_CONNECTOR);
             comp.outputs.remove(EARTH_MOUNT_Y_CONNECTOR);
             comp.outputs.remove(EARTH_MOUNT_Z_CONNECTOR);
@@ -212,6 +231,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::EnvironmentProbe,
+                crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
             ))
             .id();
@@ -224,6 +244,21 @@ mod tests {
     }
 
     #[test]
+    fn an_environment_probe_without_an_earth_wire_does_not_request_direction() {
+        let mut app = App::new();
+        app.insert_resource(EarthDirectionWorld(Vec3::NEG_Z));
+        app.add_systems(Update, compute_local_earth);
+        let entity = app.world_mut().spawn(crate::EnvironmentProbe).id();
+
+        app.update();
+
+        assert!(
+            app.world().get::<LocalEarth>(entity).is_none(),
+            "gravity and solar probes must not become Earth trackers without a composed Earth wire"
+        );
+    }
+
+    #[test]
     fn missing_earth_direction_removes_only_earth_outputs() {
         let mut app = App::new();
         let mut sim = lunco_cosim::SimComponent::default();
@@ -232,7 +267,10 @@ mod tests {
         sim.outputs.insert(EARTH_MOUNT_Z_CONNECTOR.to_owned(), 3.0);
         sim.outputs
             .insert(lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
-        let entity = app.world_mut().spawn((crate::EnvironmentProbe, sim)).id();
+        let entity = app
+            .world_mut()
+            .spawn((crate::EnvironmentProbe, crate::EarthDirectionRequired, sim))
+            .id();
         app.add_systems(Update, inject_local_earth_into_cosim);
 
         app.update();
@@ -269,6 +307,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::EnvironmentProbe,
+                crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
             ))
             .id();
@@ -313,6 +352,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::EnvironmentProbe,
+                crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
                 GlobalTransform::from(facing_east),
             ))
@@ -345,6 +385,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::EnvironmentProbe,
+                crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
                 GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_x(
                     std::f32::consts::FRAC_PI_2,

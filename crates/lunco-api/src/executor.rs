@@ -75,6 +75,7 @@ pub fn api_request_observer(
     query_registry: Res<ApiQueryRegistry>,
     visibility: Res<ApiVisibility>,
     type_registry: Res<AppTypeRegistry>,
+    cmd_results: Res<lunco_core::CommandResults>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     q_meta: Query<(
         Option<&Name>,
@@ -98,6 +99,7 @@ pub fn api_request_observer(
             &query_registry,
             &visibility,
             &type_reg,
+            &cmd_results,
             &mut subscriptions,
             &q_meta,
             deferred_commands.as_deref(),
@@ -175,8 +177,7 @@ pub fn validate_command_params(
 
     let constructible = registration
         .data::<bevy::reflect::ReflectFromReflect>()
-        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
-        .unwrap_or(true);
+        .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
     if !constructible {
         return Err(format!(
             "Command '{command}': params are not constructible into the command type (a required field is missing or invalid)"
@@ -259,16 +260,14 @@ pub fn api_command_dispatcher(
                 {
                     // Guard against a panic in `ReflectEvent::trigger`: it builds
                     // the concrete type via `FromReflect`, falling back to
-                    // `Default`/`FromWorld` and PANICKING when none apply (e.g. a
-                    // struct still missing a no-`Default` field). Verify the value
-                    // is fully constructible first so a malformed command logs and
-                    // is dropped instead of killing the process. Types without
-                    // a registered `ReflectFromReflect` use Bevy's normal
-                    // reflected-event path.
+                    // `Default`/`FromWorld` and panicking when none apply. Verify
+                    // the value is fully constructible first so malformed
+                    // commands are logged and dropped instead of killing the
+                    // process. Types without a registered `ReflectFromReflect`
+                    // use Bevy's normal reflected-event path.
                     let constructible = registration
                         .data::<bevy::reflect::ReflectFromReflect>()
-                        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
-                        .unwrap_or(true);
+                        .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
                     if !constructible {
                         let msg = format!(
                             "command '{cmd_name}' not constructible from params (missing/invalid fields)"
@@ -569,6 +568,7 @@ fn execute_request(
     query_registry: &ApiQueryRegistry,
     visibility: &ApiVisibility,
     type_registry: &TypeRegistry,
+    cmd_results: &lunco_core::CommandResults,
     subscriptions: &mut TelemetrySubscriptions,
     q_meta: &Query<(
         Option<&Name>,
@@ -679,7 +679,7 @@ fn execute_request(
                 id: command_id,
             });
 
-            Some(ApiResponse::accepted())
+            Some(ApiResponse::command_accepted(command_id))
         }
         ApiRequest::ListEntities => {
             let entities: Vec<serde_json::Value> = registry
@@ -736,6 +736,13 @@ fn execute_request(
             // reconnected piled up a new one every time.
             subscriptions.unsubscribe(*id);
             Some(ApiResponse::ok(serde_json::json!({ "unsubscribed": id })))
+        }
+        ApiRequest::QueryCommandResult { id } => {
+            let outcome = cmd_results.get(*id);
+            Some(ApiResponse::ok(serde_json::json!({
+                "id": id,
+                "outcome": outcome,
+            })))
         }
     }
 }
@@ -1076,6 +1083,12 @@ mod tests {
         pub fail: bool,
     }
 
+    #[derive(Reflect)]
+    #[reflect(from_reflect = false)]
+    struct NoConstructor {
+        pub fail: bool,
+    }
+
     #[on_command(TestEcho)]
     fn on_test_echo(trigger: On<TestEcho>) -> Result<Ack, String> {
         if cmd.fail {
@@ -1129,6 +1142,22 @@ mod tests {
         let mut reg = bevy::reflect::TypeRegistry::new();
         reg.register::<TestEcho>();
         reg
+    }
+
+    #[test]
+    fn missing_constructor_fails_validation() {
+        let mut reg = bevy::reflect::TypeRegistry::new();
+        reg.register::<NoConstructor>();
+        let registration = reg.get_with_short_type_path("NoConstructor").unwrap();
+        let err = validate_command_params(
+            "NoConstructor",
+            &serde_json::json!({ "fail": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .expect_err("a reflected command without a constructor must be rejected");
+        assert!(err.contains("not constructible"), "unexpected error: {err}");
     }
 
     #[test]

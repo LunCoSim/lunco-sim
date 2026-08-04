@@ -37,6 +37,39 @@ pub struct ComponentDragPayload {
     pub def: Option<crate::index::ClassEntry>,
 }
 
+/// Clear the palette drag payload after a canvas drop/miss.
+#[derive(Event, Clone, Copy, Default)]
+pub(crate) struct ClearComponentDragPayload;
+
+pub(crate) fn on_clear_component_drag_payload(
+    _trigger: On<ClearComponentDragPayload>,
+    mut payload: ResMut<ComponentDragPayload>,
+) {
+    payload.def = None;
+}
+
+/// Request a component insertion from the palette. The observer owns the
+/// document/op pipeline; the panel only supplies the selected class and the
+/// optional placement coordinates.
+#[derive(Event)]
+pub(crate) struct PlaceComponentRequested {
+    pub(crate) def: crate::index::ClassEntry,
+    pub(crate) target_doc: Option<lunco_doc::DocumentId>,
+    pub(crate) placement: Option<(f32, f32)>,
+}
+
+pub(crate) fn on_place_component_requested(
+    trigger: On<PlaceComponentRequested>,
+    mut commands: Commands,
+) {
+    let def = trigger.def.clone();
+    let target_doc = trigger.target_doc;
+    let placement = trigger.placement;
+    commands.queue(move |world: &mut World| {
+        place_component(world, &def, target_doc, placement);
+    });
+}
+
 /// Per-frame UI state for the palette. Holds the search query + the
 /// active category filter chip.
 ///
@@ -110,7 +143,7 @@ fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
 ///   one onto a canvas is a category error.
 /// - **`partial` classes** can't be instantiated directly per
 ///   MLS §4.4; they only exist to be inherited via `extends`. This
-///   replaces folder-name heuristics such as `.Interfaces.`.
+///   replaces the old `.Interfaces.` path heuristic.
 ///
 /// `.Internal.` (library-private convention) is not filtered — it's
 /// MSL author lore with no formal language marker, and users with a
@@ -226,16 +259,6 @@ impl Panel for ComponentPalettePanel {
             .unwrap_or_else(lunco_theme::Theme::dark);
         let all_chip_color = theme.tokens.text_subdued;
         let muted_text = theme.tokens.text_subdued;
-
-        // Ensure the per-frame state resource exists (panels are
-        // instantiated once; the resource may or may not be present).
-        if ctx.resource::<PaletteState>().is_none() {
-            ctx.defer(|world| {
-                if world.get_resource::<PaletteState>().is_none() {
-                    world.insert_resource(PaletteState::default());
-                }
-            });
-        }
 
         // Snapshot the query + selected category up front.
         let state = ctx.resource::<PaletteState>();
@@ -353,22 +376,17 @@ impl Panel for ComponentPalettePanel {
 
         // Write back state changes.
         if clear_all {
-            ctx.defer(|world| {
-                if let Some(mut s) = world.get_resource_mut::<PaletteState>() {
-                    s.query.clear();
-                    s.category = None;
-                }
+            ctx.resource_scope::<PaletteState, _>(|_, state| {
+                state.query.clear();
+                state.category = None;
             });
             // Skip subsequent rendering with stale query.
             return;
         }
         if new_query != query || new_category != selected_category {
-            let nq = new_query.clone();
-            ctx.defer(move |world| {
-                if let Some(mut s) = world.get_resource_mut::<PaletteState>() {
-                    s.query = nq;
-                    s.category = new_category;
-                }
+            ctx.resource_scope::<PaletteState, _>(|_, state| {
+                state.query = new_query.clone();
+                state.category = new_category;
             });
         }
         let query_lc = new_query.to_lowercase();
@@ -519,17 +537,19 @@ impl Panel for ComponentPalettePanel {
         // successive clicks don't all land on top of each other. The
         // canvas's auto-arrange button lets users tidy after.
         if let Some(def) = clicked {
-            ctx.defer(move |world| place_component(world, &def, None, None));
+            ctx.trigger(PlaceComponentRequested {
+                def,
+                target_doc: None,
+                placement: None,
+            });
         }
 
         // Stash drag payload for the canvas drop handler. Overwrites
         // any previous payload — only one drag can be active at a
         // time. The canvas clears it on drop (hit or miss).
         if let Some(def) = drag_started_def {
-            ctx.defer(move |world| {
-                world
-                    .get_resource_or_insert_with::<ComponentDragPayload>(Default::default)
-                    .def = Some(def);
+            ctx.resource_scope::<ComponentDragPayload, _>(|_, payload| {
+                payload.def = Some(def);
             });
         }
     }

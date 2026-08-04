@@ -304,7 +304,8 @@ pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
     })
     .to_string();
     serde_json::from_str::<transports::ApiRequestUnified>(&json)
-        .map(Into::into)
+        .map_err(|e| format!("rhai_request: {e}"))?
+        .try_into()
         .map_err(|e| format!("rhai_request: {e}"))
 }
 

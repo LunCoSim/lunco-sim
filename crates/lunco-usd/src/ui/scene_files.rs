@@ -308,9 +308,7 @@ impl BrowserSection for SceneFilesSection {
             .on_hover_text("Re-walk the scene's references")
             .clicked()
         {
-            ctx.defer(|world| {
-                world.resource_mut::<SceneFileRescan>().0 = true;
-            });
+            ctx.set_resource(SceneFileRescan(true));
         }
 
         if no_roots {

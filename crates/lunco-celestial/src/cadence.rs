@@ -219,7 +219,14 @@ pub(crate) fn celestial_needs_solve(
     settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
     real: Res<Time<Real>>,
+    activity: Option<Res<lunco_core::gate::GateActivity>>,
 ) -> bool {
+    let step = settings
+        .map(|s| s.max_epoch_step_jd())
+        .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
+    if let Some(activity) = activity {
+        activity.expect_open("celestial_needs_solve", step <= 0.0);
+    }
     if revision.0 != solved.revision {
         return true;
     }
@@ -227,9 +234,6 @@ pub(crate) fn celestial_needs_solve(
     let Some(world) = world else {
         return true;
     };
-    let step = settings
-        .map(|s| s.max_epoch_step_jd())
-        .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
     // EXACT is the deterministic scene-test contract. Production extreme warp
     // uses the angular budget but cannot spend an expensive full-cluster solve
     // on every render frame.
