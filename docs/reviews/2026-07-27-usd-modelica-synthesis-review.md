@@ -1,6 +1,7 @@
 # USD → Modelica dynamic model building — review (2026-07-27)
 
-> Status: Acted on (2026-07-28) — every finding below is fixed or resolved; see
+> Status: Acted on (2026-07-28); C2 was superseded by the synthesis-unit boundary
+> on 2026-08-04 — every finding below is fixed or resolved; see
 > "Disposition" at the end for what each one became. Kept as the record of WHY
 > the code is shaped the way it now is.
 
@@ -21,18 +22,18 @@ Scope: the runtime path that turns composed USD into compiled Modelica.
 
 ## Concept-level problems
 
-### C1. Three implementations of "read a Modelica facet from USD"
+### C1. Historical divergence in "read a Modelica facet from USD"
 
 | Concern | per-prim program | network member | lint fact |
 |---|---|---|---|
-| gate | `info:sourceAsset` extension (`cosim.rs:465-473`) | `implementationSource == "sourceAsset"` **and** `.mo` (`domain_projection.rs:501-515`) | `implementationSource == "sourceAsset"` **and** `.mo` (`lint.rs:588-599`) |
-| class name | irrelevant (whole file is the model) | derived from **path** (`domain_projection.rs:833`) | not checked |
+| gate | `info:sourceAsset` extension (`cosim.rs:465-473`) | composed source reference (`program.rs::modelica_source_ref`) plus loaded declaration | composed source reference (`program.rs::modelica_source_ref`) |
+| class name | irrelevant (whole file is the model) | resolved from loaded source text | deferred to the runtime source resolver |
 | interface check | `UsdModelicaPortContract` vs compiled DAE (`cosim.rs:596-671`) | none | USD-vs-USD only |
 | islands | n/a | not partitioned (see C2) | BFS island count (`lint.rs:648-661`) |
 
 Three readers that must agree about one authoring contract, and they already don't. `lint.rs:539-700` re-derives member scan, program-source validity, connector-target existence, ambiguous boundary sources and causal fan-in — all of which `read_network`/`validate_network` already compute. Per the house rule (facts = Rust once, rules = rhai), the fact producer should *call* the runtime reader, not restate it.
 
-Concretely divergent today: an asset that lints clean (`…/parts/Battery.mo`) fails at runtime, because the runtime additionally needs a `models/` path segment to invent the class name (C3/B6).
+The former divergence allowed an asset that linted clean (`…/parts/Battery.mo`) to fail at runtime because the projector invented a class from a path. That path-derived behavior is removed; the loaded source declaration is authoritative.
 
 Same duplication one layer down: `cosim.rs:757-831` and `domain_projection.rs:350-396` are the same five steps (parse → extract name/params/inputs → build `ModelicaModel` → `send(Compile)` → handle a closed channel), written twice, with unexplained differences in `is_stepping`, `is_compiling`, `resume_after_compile` and error routing. One `dispatch_compile(entity, source, doc_uri, opts)` would remove the drift surface.
 
@@ -80,7 +81,11 @@ The model name embeds the instance GID (`domain_projection.rs:439`), and the fin
 
 ### B6. The Modelica class name is guessed from the file path
 
-`model_class_from_asset` (`domain_projection.rs:833-844`) does `split("models/").nth(1)` and replaces `/` with `.`. It never opens the `.mo`. Consequences: a source outside a `models/` root (a twin's own parts) is rejected as "not a Modelica source asset"; a path containing `models/` twice splits at the wrong one; renaming a directory silently changes the emitted class and produces a "class not found" from the worker with no pointer back to USD. The authoritative answer is in the file — `within LunCo.Electrical;` + the class name — and the parser is already a dependency.
+The previous projector guessed a class from the asset path and never opened the `.mo`.
+That rejected twin-owned sources outside a `models/` root and made directory renames
+silently change the generated class. The current source-resolution boundary reads
+`within` plus the declared class from the loaded file; a pending source stays pending
+and a failed source becomes a terminal projection error.
 
 ### B7. Non-finite constants are emitted verbatim
 
@@ -105,11 +110,11 @@ The model name embeds the instance GID (`domain_projection.rs:439`), and the fin
 | B3 | `retain_connected_acausal_components` returns what it omitted; `read_network` drops the boundary outputs published through omitted parts (with a warning) instead of rejecting the whole island. Covered by `tests/domain_projection_reader.rs`. |
 | B4 | `GeneratedModelicaSource` API query — lists every projected network or returns one by `network_root`, with the exact compiled text, its `generated://` URI and last error. |
 | B5 | Projection defers while `UsdInstanceMember` is present (identity pending), so an island compiles once, under a name that is unique per spawn. Confirmed real: instance descendants are parked as `Provenance::Local` until the root id is minted, so two spawns previously shared one `generated://…` worker session. |
-| B6 | Class derivation moved to `lunco_usd_bevy::program::model_class_from_asset`: last `models/` segment (not first), result validated as a Modelica class name, and a source with no derivable class is a named error asking for `info:sourceAsset:subIdentifier`. |
+| B6 | Class resolution uses the loaded Modelica source; path-derived class naming was removed. The composed USD validator only checks the source reference and optional `subIdentifier`, while the runtime records pending/invalid source verdicts explicitly. |
 | B7 | Non-finite constants are rejected at read time, against the property that carries them. |
 | B8 | `lunco_hash::fnv1a64` replaces `DefaultHasher`. |
-| C1 | One reader (`lunco_usd_bevy::program`) for "is this a Modelica program facet and what class is it", used by the projector AND the lint facts; one `lunco_modelica::parse_model_interface` for the parse-and-extract both dispatch paths open-coded. |
-| C2 | `partition_islands` deleted. A `Scope` is one compilation unit; multi-island scopes stay a lint rule, and the comment says so. |
+| C1 | One composed-USD source-reference reader (`lunco_usd_bevy::program`) is used by the projector AND lint facts; the loaded source resolver owns the declared class, with one `lunco_modelica::parse_model_interface` path for extraction. |
+| C2 | Superseded on 2026-08-04: `ProgramGraph` and `partition_network` now belong to the synthesizer. A Scope remains one runtime participant, while disconnected graph units are emitted as explicit composite Modelica child models; the lint rejection was removed. |
 | C3 | Doc 37 §8 now carries a `NOT IMPLEMENTED` status note describing what actually ships. |
 | C4 | Projected networks carry a `UsdModelicaPortContract` too, so the existing post-compile validator holds a generated wrapper to its authored boundary. |
 | Tests | `tests/domain_projection_reader.rs` covers `read_network` + `emit_modelica` against composed USD fixtures — the layer that had none. |
