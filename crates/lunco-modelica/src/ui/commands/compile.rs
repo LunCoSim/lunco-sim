@@ -1185,6 +1185,7 @@ pub fn on_compile_model(
                 source,
                 doc_uri: primary_doc_uri,
                 extra_sources,
+                parameter_overrides: Vec::new(),
                 stream: Some(stream),
                 // A model opened in the workbench is being authored and
                 // inspected, not driving a client-predicted body — the realtime

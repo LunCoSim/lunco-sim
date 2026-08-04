@@ -19,12 +19,16 @@ model PositionPID3D
   input Real imu_coordinate_accel_local_x = 0.0 "IMU local coordinate acceleration X (m/s²)";
   input Real imu_coordinate_accel_local_y = 0.0 "IMU local coordinate acceleration Y (m/s²)";
   input Real imu_coordinate_accel_local_z = 0.0 "IMU local coordinate acceleration Z (m/s²)";
-  input Real initial_pos_x = 0.0 "Mission-initialized X navigation state (m)";
-  input Real initial_pos_y = 0.0 "Mission-initialized Y navigation state (m)";
-  input Real initial_pos_z = 0.0 "Mission-initialized Z navigation state (m)";
-  input Real initial_vel_x = 0.0 "Mission-initialized X velocity (m/s)";
-  input Real initial_vel_y = 0.0 "Mission-initialized Y velocity (m/s)";
-  input Real initial_vel_z = 0.0 "Mission-initialized Z velocity (m/s)";
+  input Real imu_attitude_quat_w = 1.0 "IMU attitude quaternion W";
+  input Real imu_attitude_quat_x = 0.0 "IMU attitude quaternion X";
+  input Real imu_attitude_quat_y = 0.0 "IMU attitude quaternion Y";
+  input Real imu_attitude_quat_z = 0.0 "IMU attitude quaternion Z";
+  parameter Real initial_pos_x = 0.0 "Mission-initialized X navigation state (m)";
+  parameter Real initial_pos_y = 0.0 "Mission-initialized Y navigation state (m)";
+  parameter Real initial_pos_z = 0.0 "Mission-initialized Z navigation state (m)";
+  parameter Real initial_vel_x = 0.0 "Mission-initialized X velocity (m/s)";
+  parameter Real initial_vel_y = 0.0 "Mission-initialized Y velocity (m/s)";
+  parameter Real initial_vel_z = 0.0 "Mission-initialized Z velocity (m/s)";
   input Real altimeter_mount_offset = 3.3 "Altimeter-to-COM offset (m)";
   input Real vertical_velocity_correction_gain = 2.0
     "Range-rate correction gain for the vertical estimator (1/s)";
@@ -87,7 +91,13 @@ model PositionPID3D
 
   // The component instances are intentional: the Modelica diagram shows the
   // sensor icon, guidance icon, and three Logic PID icons as a real scheme.
-  LanderNavigation navigation;
+  LanderNavigation navigation(
+    initial_pos_x = initial_pos_x,
+    initial_pos_y = initial_pos_y,
+    initial_pos_z = initial_pos_z,
+    initial_vel_x = initial_vel_x,
+    initial_vel_y = initial_vel_y,
+    initial_vel_z = initial_vel_z);
   PIDAxis pid_x;
   PIDAxis pid_y;
   PIDAxis pid_z;
@@ -98,6 +108,7 @@ model PositionPID3D
   Real unsaturated_throttle;
   Real pitch_command_raw;
   Real roll_command_raw;
+  Real tilt_reference_accel;
   Real pid_y_command;
   Real vertical_limiter_output;
   Real throttle_command_value;
@@ -114,12 +125,13 @@ equation
   navigation.imu_coordinate_accel_local_x = imu_coordinate_accel_local_x;
   navigation.imu_coordinate_accel_local_y = imu_coordinate_accel_local_y;
   navigation.imu_coordinate_accel_local_z = imu_coordinate_accel_local_z;
-  navigation.initial_pos_x = initial_pos_x;
-  navigation.initial_pos_y = initial_pos_y;
-  navigation.initial_pos_z = initial_pos_z;
-  navigation.initial_vel_x = initial_vel_x;
-  navigation.initial_vel_y = initial_vel_y;
-  navigation.initial_vel_z = initial_vel_z;
+  navigation.imu_attitude_quat_w = imu_attitude_quat_w;
+  navigation.imu_attitude_quat_x = imu_attitude_quat_x;
+  navigation.imu_attitude_quat_y = imu_attitude_quat_y;
+  navigation.imu_attitude_quat_z = imu_attitude_quat_z;
+  navigation.gravity_nav_x = 0.0;
+  navigation.gravity_nav_y = -g;
+  navigation.gravity_nav_z = 0.0;
   navigation.altimeter_mount_offset = altimeter_mount_offset;
   navigation.vertical_velocity_correction_gain = vertical_velocity_correction_gain;
 
@@ -182,10 +194,16 @@ equation
   // Body +Y is the engine axis. Convert the desired world acceleration vector
   // into bounded tilt requests; the airframe's attitude stabilizer closes the
   // angular loop and turns those requests into torque.
-  pitch_command_raw = -lateral_accel_z
-    / max(minimum_vertical_accel_mps2, vertical_limiter_output);
-  roll_command_raw = lateral_accel_x
-    / max(minimum_vertical_accel_mps2, vertical_limiter_output);
+  // A free-falling vehicle can still need a bounded lateral correction. Using
+  // `vertical_limiter_output` alone makes that case divide by zero and turn a
+  // small position error into a saturated ninety-degree attitude request. The
+  // local gravity magnitude is the physical reference for a lateral tilt when
+  // vertical thrust demand is below hover; it keeps the command a real thrust
+  // vector without inventing a world-frame quantity.
+  tilt_reference_accel = max(minimum_vertical_accel_mps2,
+    max(g, vertical_limiter_output));
+  pitch_command_raw = lateral_accel_z / tilt_reference_accel;
+  roll_command_raw = -lateral_accel_x / tilt_reference_accel;
   // A landed vehicle must not continue steering against its leg constraints.
   // Touchdown is a measured airframe state, not a Rhai timer or a scene-specific
   // controller branch. The continuous transition from AboveThreshold lets the

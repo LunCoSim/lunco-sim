@@ -162,6 +162,7 @@ impl Plugin for CoSimPlugin {
             })
             .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
             .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
+            .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
             .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)

@@ -98,6 +98,7 @@ fn compile_balloon_model(
             source,
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
+            parameter_overrides: Vec::new(),
             stream: None,
             // Not a client-predicted body: this balloon is stepped by the
             // co-sim worker, so the solver choice comes off the DAE alone.

@@ -31,13 +31,15 @@
 //! The current plume is the cone of length `a <= len` and half-width
 //! `wid * (1 - a/len)`, where
 //!
-//!     len = throttle                       (normalised to the authored volume)
-//!     wid = width_idle + (1 - width_idle) * throttle
+//!     response = throttle ^ throttle_exponent
+//!     len = response                         (normalised to the authored volume)
+//!     wid = width_idle + (1 - width_idle) * response
 //!
-//! Width blooms fast and then saturates; length tracks throttle. Both are
-//! FRACTIONS of the authored volume, which is what keeps the per-instance sizing
-//! in USD — the outer shroud and the inner core differ only in their prim's
-//! scale, and this file has no opinion about either.
+//! The exponent is a visual response control, not a second engine command. It
+//! keeps a low but real valve opening visible without making zero throttle glow.
+//! Both values are FRACTIONS of the authored volume, which is what keeps the
+//! per-instance sizing in USD — the outer shroud and the inner core differ only
+//! in their prim's scale, and this file has no opinion about either.
 //!
 //! ## Flicker
 //!
@@ -78,6 +80,8 @@
 //!@default core_color    6.0,3.5,0.9
 //!@ui      throttle      0 1   "Throttle (driven by the engine)"
 //!@default throttle      0.0
+//!@ui      throttle_exponent 0.1 1 "Visual length response to throttle"
+//!@default throttle_exponent 0.35
 //!@ui      edge_color    color "Flank colour (cooler outer gas)"
 //!@default edge_color    3.0,1.0,0.12
 //!@ui      width_idle    0 1   "Half-width fraction at zero throttle"
@@ -95,6 +99,7 @@
 struct Material {
     core_color:    vec3<f32>,
     throttle:      f32,
+    throttle_exponent: f32,
     edge_color:    vec3<f32>,
     width_idle:    f32,
     flicker:       f32,
@@ -160,15 +165,28 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
         return vec4<f32>(0.0);
     }
 
-    let len = max(t, 1e-3);
-    let wid = mat.width_idle + (1.0 - mat.width_idle) * t;
+    // Thrust and visible plume length are different observables. A low valve
+    // opening still produces a hot, camera-readable jet; the authored exponent
+    // makes that perceptual mapping explicit and editable while zero throttle
+    // remains exactly dark. The photometry model continues to use raw throttle.
+    let visual_throttle = pow(t, clamp(mat.throttle_exponent, 0.1, 1.0));
+    let len = max(visual_throttle, 1e-3);
+    let wid = mat.width_idle + (1.0 - mat.width_idle) * visual_throttle;
 
     // Mesh-local ray. The fragment is on the volume's front face, so it IS the
     // entry point; the camera gives the direction.
     let local_from_world = mesh_functions::get_local_from_world(input.instance_index);
     let entry = (local_from_world * vec4<f32>(input.world_position.xyz, 1.0)).xyz;
     let eye = (local_from_world * vec4<f32>(view.world_position, 1.0)).xyz;
-    let dir = normalize(entry - eye);
+    // `doubleSided` is authored on the exhaust gprim because a camera can see
+    // either side of a short RCS jet. A back-face fragment is the far boundary
+    // of the volume, so its march must run back toward the camera; marching away
+    // from that face samples empty space and makes the live plume disappear.
+    let surface_dir = normalize(entry - eye);
+    var dir = surface_dir;
+    if (!is_front) {
+        dir = -surface_dir;
+    }
 
     // The longest chord of a unit-radius, unit-height cone is under 2.3; 2.5 is a
     // bound that needs no per-instance number.
@@ -200,9 +218,12 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let alpha = 1.0 - exp(-mat.density * optical_depth);
     let emissive = emitted * mat.density;
 
-    // Black albedo: the plume is a source, not a surface, so the sun must not add
-    // a diffuse term to it. Routing through `lit` still gets the emissive the same
-    // fog and tonemapping treatment as every other surface in frame.
-    let c = lit(input, is_front, vec3<f32>(0.0), 1.0, 0.0, emissive);
-    return vec4<f32>(c.rgb, alpha);
+    // A plume is a participating emitter, not a PBR surface. Return the
+    // accumulated emission directly so its colour cannot be attenuated by a
+    // geometric normal or a directional-light term. The gprim's authored
+    // `lunco:surface:additive` selects Bevy's premultiplied additive pipeline;
+    // alpha must therefore be zero, otherwise the blend state would also erase
+    // the terrain behind the exhaust. The physical light is a separate
+    // SphereLight driven by Modelica photometry.
+    return vec4<f32>(emissive, 0.0);
 }

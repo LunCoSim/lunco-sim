@@ -1,24 +1,21 @@
 within LunCo.Sensors;
 
-// A gravity-referenced attitude conversion using only IMU outputs.
+// A body-frame upright reference using the attitude measurement exposed by the IMU.
 //
-// The estimator propagates the measured gravity direction with gyro rate and
-// slowly corrects it toward the accelerometer direction.  It intentionally has
-// no rigid-body quaternion input: truth attitude belongs to Avian, not to flight
-// software.  The outputs are the body-frame upright error consumed by the
-// attitude controller.
+// Avian publishes the primitive rigid-body quaternion through the IMU sensor
+// boundary. Modelica normalizes that measurement and converts navigation +Y
+// into the body frame. Accelerometer specific force is deliberately not used as
+// a gravity vector here: while the engine is firing, it contains thrust and
+// would bias an accelerometer-only attitude estimate toward the nozzle axis.
 model AttitudeReference
   extends LunCo.Icons.Sensor;
 
-  parameter Real correction_gain = 2.0 "Accelerometer correction rate (1/s)";
-  parameter Real minimum_specific_force = 0.01 "Minimum force for gravity update (m/s2)";
+  parameter Real quaternion_epsilon = 1.0e-12 "Quaternion normalization floor";
 
-  input Real specific_force_x = 0.0 "IMU specific force X (m/s2)";
-  input Real specific_force_y = 0.0 "IMU specific force Y (m/s2)";
-  input Real specific_force_z = 0.0 "IMU specific force Z (m/s2)";
-  input Real gyro_x = 0.0 "IMU angular rate X (rad/s)";
-  input Real gyro_y = 0.0 "IMU angular rate Y (rad/s)";
-  input Real gyro_z = 0.0 "IMU angular rate Z (rad/s)";
+  input Real attitude_quat_w = 1.0 "IMU attitude quaternion W";
+  input Real attitude_quat_x = 0.0 "IMU attitude quaternion X";
+  input Real attitude_quat_y = 0.0 "IMU attitude quaternion Y";
+  input Real attitude_quat_z = 0.0 "IMU attitude quaternion Z";
 
   output Real error_x "Body-frame upright error about X";
   output Real error_y "Body-frame upright error about Y";
@@ -27,40 +24,35 @@ model AttitudeReference
   output Real estimated_up_y "Estimated world-up direction in body Y";
   output Real estimated_up_z "Estimated world-up direction in body Z";
 
-  Real force_norm;
-  Real measured_up_x;
-  Real measured_up_y;
-  Real measured_up_z;
-  Real estimated_up_x_state(start = 0.0);
-  Real estimated_up_y_state(start = 1.0);
-  Real estimated_up_z_state(start = 0.0);
+  Real q_norm;
+  Real q_w;
+  Real q_x;
+  Real q_y;
+  Real q_z;
 
 equation
-  force_norm = sqrt(
-    specific_force_x * specific_force_x
-      + specific_force_y * specific_force_y
-      + specific_force_z * specific_force_z);
-  measured_up_x = if force_norm > minimum_specific_force then specific_force_x / force_norm
-    else estimated_up_x_state;
-  measured_up_y = if force_norm > minimum_specific_force then specific_force_y / force_norm
-    else estimated_up_y_state;
-  measured_up_z = if force_norm > minimum_specific_force then specific_force_z / force_norm
-    else estimated_up_z_state;
+  q_norm = sqrt(max(quaternion_epsilon,
+    attitude_quat_w * attitude_quat_w
+      + attitude_quat_x * attitude_quat_x
+      + attitude_quat_y * attitude_quat_y
+      + attitude_quat_z * attitude_quat_z));
+  q_w = attitude_quat_w / q_norm;
+  q_x = attitude_quat_x / q_norm;
+  q_y = attitude_quat_y / q_norm;
+  q_z = attitude_quat_z / q_norm;
 
-  der(estimated_up_x_state) =
-    -gyro_y * estimated_up_z_state + gyro_z * estimated_up_y_state
-      + correction_gain * (measured_up_x - estimated_up_x_state);
-  der(estimated_up_y_state) =
-    -gyro_z * estimated_up_x_state + gyro_x * estimated_up_z_state
-      + correction_gain * (measured_up_y - estimated_up_y_state);
-  der(estimated_up_z_state) =
-    -gyro_x * estimated_up_y_state + gyro_y * estimated_up_x_state
-      + correction_gain * (measured_up_z - estimated_up_z_state);
-
-  estimated_up_x = estimated_up_x_state;
-  estimated_up_y = estimated_up_y_state;
-  estimated_up_z = estimated_up_z_state;
-  error_x = -estimated_up_z_state;
+  // World/navigation +Y expressed in the body frame (the transpose of the
+  // body-to-navigation quaternion rotation).
+  estimated_up_x = 2.0 * (q_x * q_y + q_w * q_z);
+  estimated_up_y = 1.0 - 2.0 * (q_x * q_x + q_z * q_z);
+  estimated_up_z = 2.0 * (q_y * q_z - q_w * q_x);
+  // With body +Y as the engine axis, a positive body-X rotation moves the
+  // thrust vector toward +Z.  The restoring error therefore has the same
+  // sign as the measured world-up component in body Z: the hold law applies
+  // a negative X torque when the vehicle is tilted toward +Z.
+  error_x = estimated_up_z;
   error_y = 0.0;
-  error_z = estimated_up_x_state;
+  // A positive body-Z rotation moves body +Y toward -X.  Negating the body-X
+  // up component gives the restoring sign for the Z-axis torque.
+  error_z = -estimated_up_x;
 end AttitudeReference;

@@ -257,10 +257,34 @@ impl Plugin for ScenePortsPlugin {
 }
 
 pub fn build(app: &mut App) {
-    app.init_resource::<PortRegistry>()
+    app.add_observer(mark_point_light_surface_ready)
+        .add_observer(mark_spot_light_surface_ready)
+        .init_resource::<PortRegistry>()
         .world_mut()
         .resource_mut::<PortRegistry>()
         .register(SCENE_PROPERTY_BACKEND);
+}
+
+/// Publish the generic port-surface lifecycle event after Bevy has installed a
+/// light component.  USD projection and runtime-created lights use the same
+/// backend, so this belongs at the scene-property boundary rather than in a
+/// campaign scene or a connection special case.
+fn mark_point_light_surface_ready(
+    trigger: On<Add, PointLight>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(lunco_core::PortSurfaceReady);
+}
+
+fn mark_spot_light_surface_ready(
+    trigger: On<Add, SpotLight>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(lunco_core::PortSurfaceReady);
 }
 
 #[cfg(test)]

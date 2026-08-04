@@ -309,6 +309,21 @@ pub struct Port {
     pub value: f64,
 }
 
+/// Marks an entity whose dynamic scene-property port surface is now present.
+///
+/// Some engine-owned backends are installed after the USD entity itself is
+/// projected.  A `SphereLight`, for example, is first represented by the USD
+/// prim and only then receives its Bevy `PointLight`/`SpotLight` component.
+/// Co-simulation binding must be notified at the moment that component-backed
+/// surface exists; otherwise a wire can be checked once, classified as
+/// missing, and never reconsidered.  This marker is the dependency-neutral
+/// lifecycle contract: the producer of a port surface adds it, while the wire
+/// engine observes it.  It is intentionally not light-specific so the same
+/// contract works for any deferred scene-property backend.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct PortSurfaceReady;
+
 // ── Control surface ───────────────────────────────────────────────────────────
 
 /// An entity's declared **`inputs:*` port surface**, with current values.

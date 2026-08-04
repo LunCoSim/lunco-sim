@@ -8,7 +8,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -22,6 +22,7 @@ use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
 use crate::sim_stream::{SimSnapshot, SimStream};
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
+use lunco_experiments::{ParamPath, ParamValue};
 
 /// Solver options for the **LIVE** (co-simulated) path.
 ///
@@ -135,6 +136,32 @@ fn build_stepper(
     crate::simulation_session::live(&comp_res.dae, opts)
 }
 
+/// Apply the instance's USD parameter values to a freshly compiled DAE before
+/// constructing its live stepper.
+///
+/// Modelica parameters are not runtime inputs. Passing them only through the
+/// ECS `SimComponent` metadata leaves the worker's compiled DAE at source
+/// defaults, which is especially dangerous for initial conditions: the model
+/// remains solvable while its estimator starts from a different mission state.
+/// The experiment runner already owns the canonical DAE-level binding operation;
+/// this live path uses that same operation and keeps the bound DAE in its cache.
+fn apply_compile_parameter_overrides(
+    comp_res: &mut rumoca_compile::compile::DaeCompilationResult,
+    overrides: &[(String, f64)],
+) -> Result<(), String> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+    let bindings: BTreeMap<ParamPath, ParamValue> = overrides
+        .iter()
+        .map(|(name, value)| (ParamPath(name.clone()), ParamValue::Real(*value)))
+        .collect();
+    crate::experiments_runner::apply_value_bindings_to_dae(
+        std::sync::Arc::make_mut(&mut comp_res.dae),
+        &bindings,
+    )
+}
+
 /// Channels for communicating with the background simulation worker.
 ///
 /// This resource holds the crossbeam channel endpoints that the main Bevy thread
@@ -211,6 +238,11 @@ pub enum ModelicaCommand {
         /// `AnnotatedRocketStage.Tank` from a sibling untitled
         /// package) resolve. Empty when only one doc is open.
         extra_sources: Vec<(String, String)>,
+        /// USD-authored values for Modelica parameters. Parameters are
+        /// compile-time values, so the worker applies these to the compiled
+        /// DAE before building the live stepper.
+        #[serde(default)]
+        parameter_overrides: Vec<(String, f64)>,
         /// Lock-free snapshot handle the worker publishes into after
         /// every successful Step (Phase A of the multi-sim arch).
         /// `None` = legacy path; main thread still receives per-sample
@@ -426,6 +458,9 @@ struct CachedModel {
     /// same cross-doc references the original Compile did (the source-only
     /// cache silently dropped these and recompiled the primary alone).
     extra_sources: Vec<(String, String)>,
+    /// Instance parameter values applied to the cached DAE. Reapplied if a
+    /// library invalidates the artifact and it must be compiled again.
+    parameter_overrides: Vec<(String, f64)>,
     /// The document's stable session URI (see `ModelicaCommand::Compile`'s
     /// `doc_uri`). Every cached-source recompile — Reset, Step auto-init,
     /// UpdateParameters — re-seats under this SAME key so the reused rumoca
@@ -494,13 +529,22 @@ fn rebuild_from_cache(
     entity: Entity,
     library_gen: u64,
 ) -> Option<CacheRebuild> {
-    let (model_name, doc_uri, source, extras, cached_hash, cached_gen) = {
+    let (
+        model_name,
+        doc_uri,
+        source,
+        extras,
+        parameter_overrides,
+        cached_hash,
+        cached_gen,
+    ) = {
         let c = cached_models.get(&entity)?;
         (
             c.model_name.clone(),
             c.doc_uri.clone(),
             Arc::clone(&c.source),
             c.extra_sources.clone(),
+            c.parameter_overrides.clone(),
             c.unit_hash,
             c.library_gen,
         )
@@ -534,6 +578,10 @@ fn rebuild_from_cache(
     } else {
         compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
     };
+    let outcome = outcome.and_then(|mut comp_res| {
+        apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides)
+            .map(|()| comp_res)
+    });
     if let Ok(comp_res) = &outcome {
         if let Some(c) = cached_models.get_mut(&entity) {
             c.compiled = comp_res.clone();
@@ -1409,6 +1457,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             // (parameter substitution rewrites one doc),
                                             // matching the compile above.
                                             extra_sources: Vec::new(),
+                                            parameter_overrides: Vec::new(),
                                             doc_uri: doc_uri.clone(),
                                             compiled: comp_res.clone(),
                                             unit_hash,
@@ -1459,6 +1508,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         source,
                         doc_uri,
                         extra_sources,
+                        parameter_overrides,
                         stream,
                         realtime_safe,
                     } => {
@@ -1538,11 +1588,24 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             },
                         );
                         match _compile_outcome {
-                            Ok(comp_res) => {
-                                match build_stepper(
-                                    &comp_res,
-                                    profile_for(entity, &realtime_models),
-                                ) {
+                            Ok(mut comp_res) => {
+                                let stepper_result =
+                                    apply_compile_parameter_overrides(
+                                        &mut comp_res,
+                                        &parameter_overrides,
+                                    )
+                                    .map_err(|e| {
+                                        rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                                            "parameter binding failed: {e}"
+                                        ))
+                                    })
+                                    .and_then(|()| {
+                                        build_stepper(
+                                            &comp_res,
+                                            profile_for(entity, &realtime_models),
+                                        )
+                                    });
+                                match stepper_result {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
                                         apply_input_defaults_validated(
@@ -1576,6 +1639,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                 model_name: model_name.clone(),
                                                 source: Arc::from(source),
                                                 extra_sources: raw_extras,
+                                                parameter_overrides,
                                                 doc_uri: doc_uri.clone(),
                                                 compiled: comp_res.clone(),
                                                 unit_hash,
@@ -1794,6 +1858,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                     // hold (CQ-213).
                                                     source: Arc::from(source.clone()),
                                                     extra_sources: Vec::new(),
+                                                    parameter_overrides: Vec::new(),
                                                     doc_uri,
                                                     compiled: comp_res.clone(),
                                                     unit_hash,
@@ -2334,6 +2399,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             source,
             doc_uri,
             extra_sources,
+            parameter_overrides,
             stream: _stream,
             realtime_safe,
         } => {
@@ -2359,8 +2425,20 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
             };
             match compile_outcome {
-                Ok(comp_res) => {
-                    match build_stepper(&comp_res, profile_for(entity, &w.realtime_models)) {
+                Ok(mut comp_res) => {
+                    let stepper_result = apply_compile_parameter_overrides(
+                        &mut comp_res,
+                        &parameter_overrides,
+                    )
+                    .map_err(|e| {
+                        rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                            "parameter binding failed: {e}"
+                        ))
+                    })
+                    .and_then(|()| {
+                        build_stepper(&comp_res, profile_for(entity, &w.realtime_models))
+                    });
+                    match stepper_result {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(
                                 &mut stepper,
@@ -2376,6 +2454,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                     model_name: model_name.clone(),
                                     source: Arc::from(source.clone()),
                                     extra_sources: raw_extras,
+                                    parameter_overrides,
                                     doc_uri: doc_uri.clone(),
                                     compiled: comp_res.clone(),
                                     unit_hash,
@@ -2574,6 +2653,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                     // Parameter substitution rewrites one doc —
                                     // compiled without extras, matching above.
                                     extra_sources: Vec::new(),
+                                    parameter_overrides: Vec::new(),
                                     doc_uri: doc_uri.clone(),
                                     compiled: comp_res.clone(),
                                     unit_hash,
@@ -3574,6 +3654,7 @@ mod lane_tests {
             realtime_safe: false,
             doc_uri: "doc.mo".into(),
             extra_sources: Vec::new(),
+            parameter_overrides: Vec::new(),
             stream: None,
         }
     }

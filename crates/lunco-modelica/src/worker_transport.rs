@@ -1278,6 +1278,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         source: source.to_string(),
         doc_uri: "model.mo".to_string(),
         extra_sources: Vec::new(),
+        parameter_overrides: Vec::new(),
         stream: None,
         // A transport smoke-test compile drives no predicted body.
         realtime_safe: false,

@@ -1,6 +1,7 @@
 within LunCo.Propulsion;
 model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   extends LunCo.Icons.Propulsion;
+  constant Real pi = 3.141592653589793 "Circle constant";
   // The nozzle's PARAMETERS live in USD (they are the vehicle's design), the
   // consequences of those parameters live here (they are physics). Nothing
   // about a nozzle changes per frame, so nothing about it belongs in a
@@ -55,8 +56,8 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   output Real isp_vac "Specific impulse at this design point (s)";
   output Real thrust "Thrust at chamber pressure (N)";
 equation
-  throat_area = Modelica.Constants.pi * throat_radius ^ 2;
-  exit_area = Modelica.Constants.pi * exit_radius ^ 2;
+  throat_area = pi * throat_radius ^ 2;
+  exit_area = pi * exit_radius ^ 2;
   expansion_ratio = exit_area / throat_area;
 
   r_station_1 = throat_radius + (exit_radius - throat_radius) * (1.0 / 3.0) ^ contour;

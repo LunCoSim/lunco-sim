@@ -1007,6 +1007,16 @@ pub fn dispatch_loaded_modelica_sources(
         // the component, or the next tick overwrites it. Closed-channel
         // detection is `send(..).is_err()`, the same test
         // `source_roots::ensure_loaded` uses.
+        let parameter_overrides = usd_defaults
+            .map(|defaults| {
+                defaults
+                    .0
+                    .iter()
+                    .filter(|(name, _)| parameters.contains_key(*name))
+                    .map(|(name, value)| (name.clone(), *value))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let dispatch_error = channels
             .tx
             .send(ModelicaCommand::Compile {
@@ -1019,6 +1029,7 @@ pub fn dispatch_loaded_modelica_sources(
                 // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
                 doc_uri: pending.asset_path.to_string(),
                 extra_sources: Vec::new(),
+                parameter_overrides,
                 stream: None,
                 // Declared, never inferred. A program without the promise is not
                 // client-predicted, so an adaptive implicit solver is correct for

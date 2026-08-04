@@ -33,6 +33,10 @@ def Xform "PositionPIDGuidance"
         float inputs:imu_coordinate_accel_local_x = 0.0
         float inputs:imu_coordinate_accel_local_y = 0.0
         float inputs:imu_coordinate_accel_local_z = 0.0
+        float inputs:imu_attitude_quat_w = 1.0
+        float inputs:imu_attitude_quat_x = 0.0
+        float inputs:imu_attitude_quat_y = 0.0
+        float inputs:imu_attitude_quat_z = 0.0
         float inputs:vehicle_mass = 2000.0
         float inputs:piloted = 0.0
         float inputs:touchdown = 0.0

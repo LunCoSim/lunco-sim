@@ -157,6 +157,10 @@ def Xform "LanderTest" (
             float inputs:imu_coordinate_accel_local_x.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_x>
             float inputs:imu_coordinate_accel_local_y.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_y>
             float inputs:imu_coordinate_accel_local_z.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_z>
+            float inputs:imu_attitude_quat_w.connect = </LanderTest/Lander/IMU.outputs:attitude_quat_w>
+            float inputs:imu_attitude_quat_x.connect = </LanderTest/Lander/IMU.outputs:attitude_quat_x>
+            float inputs:imu_attitude_quat_y.connect = </LanderTest/Lander/IMU.outputs:attitude_quat_y>
+            float inputs:imu_attitude_quat_z.connect = </LanderTest/Lander/IMU.outputs:attitude_quat_z>
 
             # The mission target is a live kinematic USD body. Moving it in the
             # Inspector changes the guidance setpoint through the normal USD graph.

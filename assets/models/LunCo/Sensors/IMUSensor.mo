@@ -52,6 +52,11 @@ model IMUSensor
   output Real gyro_y "Measured angular rate Y (rad/s)";
   output Real gyro_z "Measured angular rate Z (rad/s)";
   output Real sensor_health "1 when the raw Avian quaternion is usable";
+  output Real attitude_quat_w "Measured attitude quaternion W";
+  output Real attitude_quat_x "Measured attitude quaternion X";
+  output Real attitude_quat_y "Measured attitude quaternion Y";
+  output Real attitude_quat_z "Measured attitude quaternion Z";
+  output Real attitude_quat_valid "1 when the measured attitude is usable";
 
   Real q_norm_sq;
   Real world_accel_x;
@@ -168,7 +173,12 @@ equation
   gyro_x = raw_angvel_x + gyro_bias_x;
   gyro_y = raw_angvel_y + gyro_bias_y;
   gyro_z = raw_angvel_z + gyro_bias_z;
+  attitude_quat_w = raw_quat_w / sqrt(q_norm_sq);
+  attitude_quat_x = raw_quat_x / sqrt(q_norm_sq);
+  attitude_quat_y = raw_quat_y / sqrt(q_norm_sq);
+  attitude_quat_z = raw_quat_z / sqrt(q_norm_sq);
   sensor_health = if raw_quat_w * raw_quat_w + raw_quat_x * raw_quat_x
       + raw_quat_y * raw_quat_y + raw_quat_z * raw_quat_z
       > quaternion_epsilon then 1.0 else 0.0;
+  attitude_quat_valid = sensor_health;
 end IMUSensor;

@@ -49,4 +49,9 @@ def Xform "Imu" (
     float outputs:gyro_y
     float outputs:gyro_z
     float outputs:sensor_health
+    float outputs:attitude_quat_w
+    float outputs:attitude_quat_x
+    float outputs:attitude_quat_y
+    float outputs:attitude_quat_z
+    float outputs:attitude_quat_valid
 }

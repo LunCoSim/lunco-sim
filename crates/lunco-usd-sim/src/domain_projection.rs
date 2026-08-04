@@ -1346,6 +1346,7 @@ pub fn project_domain_islands(
             source,
             doc_uri,
             extra_sources: Vec::new(),
+            parameter_overrides: Vec::new(),
             stream: None,
             // A projected domain island is a NETWORK of components — a battery
             // bus, a thermal loop — not a program driving a client-predicted

@@ -32,7 +32,7 @@ def Xform "Altimeter" (
 )
 {
     token lunco:raycast:axis = "-Y"
-    float lunco:raycast:maxDistance = 150.0
+    float lunco:raycast:maxDistance = 220.0
     double3 lunco:raycast:offset = (0.0, 0.0, 0.0)
 
     # This is a Modelica conversion attached to the raw ray query. The
@@ -48,6 +48,17 @@ def Xform "Altimeter" (
         float inputs:ray_distance_m.connect = </Altimeter.outputs:ray_distance>
         float inputs:ray_hit_valid.connect = </Altimeter.outputs:ray_hit_valid>
         float inputs:ray_sample_time.connect = </Altimeter.outputs:ray_sample_time>
+        # The direction is part of the authored ray geometry. Modelica uses the
+        # live IMU attitude to turn its Avian hit distance into vertical clearance.
+        float inputs:ray_direction_local_x = 0.0
+        float inputs:ray_direction_local_y = -1.0
+        float inputs:ray_direction_local_z = 0.0
+        float inputs:minimum_vertical_projection = 0.05
+        float inputs:minimum_range_m = 0.001
+        float inputs:attitude_quat_w = 1.0
+        float inputs:attitude_quat_x = 0.0
+        float inputs:attitude_quat_y = 0.0
+        float inputs:attitude_quat_z = 0.0
         # The differentiator bandwidth is authored with the reusable sensor so
         # each vehicle can choose its measurement dynamics in USD.
         float inputs:range_filter_time_constant_s = 0.02
@@ -56,6 +67,8 @@ def Xform "Altimeter" (
         float outputs:range_valid
         float outputs:range_rate_valid
         float outputs:sample_time_s
+        float outputs:vertical_projection
+        float outputs:ray_direction_nav_y
     }
 
     # The beam the sensor draws. There is no `rangeVisualize` flag: this prim IS the

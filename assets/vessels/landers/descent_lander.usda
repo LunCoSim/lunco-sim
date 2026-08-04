@@ -363,10 +363,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_pos_a_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsPitchPosBModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -378,10 +388,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_pos_b_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsPitchNegModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -393,10 +413,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_neg_a_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsPitchNegBModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -408,10 +438,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:pitch_neg_b_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsRollPosModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -423,10 +463,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_pos_a_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsRollPosBModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -438,10 +488,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_pos_b_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsRollNegModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -453,10 +513,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_neg_a_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsRollNegBModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -468,10 +538,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:roll_neg_b_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsYawPosModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -483,10 +563,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_pos_a_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsYawPosBModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -498,10 +588,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_pos_b_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsYawNegModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -513,10 +613,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_neg_a_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
         def Scope "RcsYawNegBModel" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -528,10 +638,20 @@ def Xform "DescentLander" (
             float inputs:f_nom_n = 2500.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
+            float inputs:plume_width_m = 0.18
+            float inputs:plume_length_m = 0.72
+            float inputs:plume_luminance = 5.475
+            float inputs:plume_exitance = 44200.0
+            float inputs:plume_width_idle = 0.28
+            float inputs:plume_throttle_exponent = 0.35
+            float inputs:plume_radius_idle = 0.06
+            float inputs:plume_radius_gain = 0.6
             float inputs:valve_opening.connect = </DescentLander/AttitudePropulsion.inputs:yaw_neg_b_valve>
             float outputs:thrust_n
             float outputs:mass_flow_kgs
             float outputs:activity
+            float outputs:light_intensity
+            float outputs:light_radius
         }
     }
 
@@ -607,6 +727,7 @@ def Xform "DescentLander" (
                 # The value here is the pre-first-tick state — a scene that loads
                 # paused shows no plume, which is the only safe start.
                 float inputs:throttle = 0
+                float inputs:throttle_exponent = 0.35
                 float inputs:flicker = 1.0
                 token outputs:surface
             }
@@ -623,6 +744,7 @@ def Xform "DescentLander" (
                 color3f inputs:core_color = (6.0, 3.5, 0.9)
                 color3f inputs:edge_color = (3.0, 1.2, 0.2)
                 float inputs:throttle = 0
+                float inputs:throttle_exponent = 0.35
                 # Shallower than the shroud's: the core is the denser, steadier
                 # part of the jet and a hard shimmer on it reads as a bug.
                 float inputs:flicker = 0.5
@@ -646,6 +768,7 @@ def Xform "DescentLander" (
                 color3f inputs:core_color = (0.35, 2.8, 7.0)
                 color3f inputs:edge_color = (0.03, 0.35, 1.8)
                 float inputs:throttle = 0
+                float inputs:throttle_exponent = 0.35
                 float inputs:flicker = 0.8
                 float inputs:flicker_speed = 11.0
                 float inputs:flicker_scale = 10.0
@@ -666,6 +789,7 @@ def Xform "DescentLander" (
                 color3f inputs:core_color = (1.5, 6.0, 12.0)
                 color3f inputs:edge_color = (0.2, 1.2, 4.0)
                 float inputs:throttle = 0
+                float inputs:throttle_exponent = 0.35
                 float inputs:flicker = 0.35
                 float inputs:flicker_speed = 9.0
                 float inputs:flicker_scale = 8.0
@@ -951,6 +1075,13 @@ def Xform "DescentLander" (
     {
         double3 xformOp:translate = (0.0, -3.3, 0.0) # nozzle bottom
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Model"
+        {
+            float inputs:attitude_quat_w.connect = </DescentLander/IMU.outputs:attitude_quat_w>
+            float inputs:attitude_quat_x.connect = </DescentLander/IMU.outputs:attitude_quat_x>
+            float inputs:attitude_quat_y.connect = </DescentLander/IMU.outputs:attitude_quat_y>
+            float inputs:attitude_quat_z.connect = </DescentLander/IMU.outputs:attitude_quat_z>
+        }
     }
 
     # IMU: 9-DOF attitude + accel source. Mounted at the body centre of mass.
@@ -994,12 +1125,10 @@ def Xform "DescentLander" (
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/AttitudeReference.mo@
         uniform bool lunco:program:realtimeSafe = true
-        float inputs:specific_force_x.connect = </DescentLander/IMU.outputs:specific_force_x>
-        float inputs:specific_force_y.connect = </DescentLander/IMU.outputs:specific_force_y>
-        float inputs:specific_force_z.connect = </DescentLander/IMU.outputs:specific_force_z>
-        float inputs:gyro_x.connect = </DescentLander/IMU.outputs:gyro_x>
-        float inputs:gyro_y.connect = </DescentLander/IMU.outputs:gyro_y>
-        float inputs:gyro_z.connect = </DescentLander/IMU.outputs:gyro_z>
+        float inputs:attitude_quat_w.connect = </DescentLander/IMU.outputs:attitude_quat_w>
+        float inputs:attitude_quat_x.connect = </DescentLander/IMU.outputs:attitude_quat_x>
+        float inputs:attitude_quat_y.connect = </DescentLander/IMU.outputs:attitude_quat_y>
+        float inputs:attitude_quat_z.connect = </DescentLander/IMU.outputs:attitude_quat_z>
         float outputs:error_x
         float outputs:error_y
         float outputs:error_z
@@ -1202,6 +1331,8 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/Flame_Mat>
         float[] primvars:displayOpacity = [0.4]
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         # Exhaust is light being EMITTED, not matter blocking it. Translucency alone
         # does not say this: a blended surface still rasterises opaquely into the
@@ -1225,6 +1356,8 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/FlameCore_Mat>
         float[] primvars:displayOpacity = [0.85]
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
 
@@ -1253,6 +1386,7 @@ def Xform "DescentLander" (
             float inputs:w_max = 0.5
             float inputs:l_max = 2.5
             float inputs:width_idle = 0.28
+            float inputs:throttle_exponent = 0.35
             # Rec.709 luma of `FlameCore_Mat`'s `core_color` (6.0, 3.5, 0.9):
             # 0.2126*6.0 + 0.7152*3.5 + 0.0722*0.9 = 3.844. Retint the plume and
             # this must be re-derived — see the note on the material.
@@ -1533,6 +1667,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
@@ -1540,6 +1676,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "pitch_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsPitchPosModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchPosModel.outputs:light_radius>
+        }
     }
     def Cone "RcsPitchPosCore"
     {
@@ -1551,6 +1699,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
@@ -1567,6 +1717,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
@@ -1574,6 +1726,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "pitch_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsPitchNegModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchNegModel.outputs:light_radius>
+        }
     }
     def Cone "RcsPitchNegCore"
     {
@@ -1585,6 +1749,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
@@ -1601,6 +1767,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
@@ -1608,6 +1776,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "roll_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsRollPosModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollPosModel.outputs:light_radius>
+        }
     }
     def Cone "RcsRollPosCore"
     {
@@ -1619,6 +1799,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
@@ -1635,6 +1817,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
@@ -1642,6 +1826,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "roll_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsRollNegModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollNegModel.outputs:light_radius>
+        }
     }
     def Cone "RcsRollNegCore"
     {
@@ -1653,6 +1849,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
@@ -1669,6 +1867,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, -1)
@@ -1676,6 +1876,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "yaw_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsYawPosModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawPosModel.outputs:light_radius>
+        }
     }
     def Cone "RcsYawPosCore"
     {
@@ -1687,6 +1899,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
@@ -1703,6 +1917,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, -1)
@@ -1710,6 +1926,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "yaw_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:light_radius>
+        }
     }
     def Cone "RcsYawNegCore"
     {
@@ -1721,6 +1949,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_activity>
@@ -1742,6 +1972,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
@@ -1749,6 +1981,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "pitch_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsPitchPosBModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchPosBModel.outputs:light_radius>
+        }
     }
     def Cone "RcsPitchPosBCore"
     {
@@ -1760,6 +2004,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
@@ -1776,6 +2022,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
@@ -1783,6 +2031,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "pitch_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsPitchNegBModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchNegBModel.outputs:light_radius>
+        }
     }
     def Cone "RcsPitchNegBCore"
     {
@@ -1794,6 +2054,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
@@ -1810,6 +2072,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
@@ -1817,6 +2081,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "roll_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsRollPosBModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollPosBModel.outputs:light_radius>
+        }
     }
     def Cone "RcsRollPosBCore"
     {
@@ -1828,6 +2104,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
@@ -1844,6 +2122,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
@@ -1851,6 +2131,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "roll_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsRollNegBModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollNegBModel.outputs:light_radius>
+        }
     }
     def Cone "RcsRollNegBCore"
     {
@@ -1862,6 +2154,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
@@ -1878,6 +2172,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, 1)
@@ -1885,6 +2181,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "yaw_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsYawPosBModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawPosBModel.outputs:light_radius>
+        }
     }
     def Cone "RcsYawPosBCore"
     {
@@ -1896,6 +2204,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
@@ -1912,6 +2222,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, 1)
@@ -1919,6 +2231,18 @@ def Xform "DescentLander" (
         custom string lunco:forceActuator:commandOutput = "yaw_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_activity>
+        def SphereLight "RcsLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            bool inputs:shadow:enable = false
+            color3f inputs:color = (0.20, 0.65, 1.0)
+            float lunco:light:range = 12.0
+            float inputs:light_intensity.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:light_intensity>
+            float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:light_radius>
+        }
     }
     def Cone "RcsYawNegBCore"
     {
@@ -1930,6 +2254,8 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
+        uniform bool doubleSided = true
+        bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_activity>

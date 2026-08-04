@@ -1,6 +1,7 @@
 within LunCo.Propulsion;
 model PlumePhotometry "What an exhaust plume is worth as a light source."
   extends LunCo.Icons.Propulsion;
+  constant Real pi = 3.141592653589793 "Circle constant";
   // Emissive geometry in a forward renderer illuminates nothing. A descent burn
   // therefore leaves the regolith directly under the vehicle lit only by the sun,
   // which on an airless body — hard shadows, no atmospheric scatter to hide it —
@@ -33,6 +34,8 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   input Real l_max = 2.5 "Plume length at full throttle (m)";
   input Real width_idle = 0.28
     "Base-radius fraction at zero throttle; width blooms fast, then saturates";
+  input Real throttle_exponent = 0.35
+    "Perceptual plume response; must match the bound plume shader";
 
   // ── Photometry ────────────────────────────────────────────────────────────
   // Rec.709 luma of the plume's authored colour. The standard luminance
@@ -75,20 +78,27 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   output Real length "Plume length at this throttle (m)";
   output Real area "Lateral surface of the plume cone (m^2)";
   output Real intensity "Luminous power (lm) — Bevy PointLight.intensity";
+  output Real visual_intensity
+    "Luminous power using the shader's visible throttle response (lm)";
   output Real radius "Physical source radius (m) — Bevy PointLight.radius";
+  output Real visual_radius
+    "Source radius using the shader's visible throttle response (m)";
 
   Real t "Throttle, saturated to 0..1";
+  Real visual_t "Shader-matched visible throttle response";
 equation
   t = min(1.0, max(0.0, throttle));
+  visual_t = if t <= 0.0 then 0.0
+    else t ^ max(0.1, min(1.0, throttle_exponent));
 
   // The same shape law the shader draws, so the light cannot describe a plume
   // other than the one on screen.
-  width = (width_idle + (1.0 - width_idle) * t) * w_max;
-  length = t * l_max;
+  width = (width_idle + (1.0 - width_idle) * visual_t) * w_max;
+  length = visual_t * l_max;
 
   // The plume radiates from its FLANK, so the emitting surface is the cone's
   // lateral area — not its base, not its volume: A = pi * r * sqrt(r^2 + h^2).
-  area = Modelica.Constants.pi * width * sqrt(width ^ 2 + length ^ 2);
+  area = pi * width * sqrt(width ^ 2 + length ^ 2);
 
   // Radiant output tracks chamber power, which for a throttled engine is very
   // nearly linear in mass flow. It comes out slightly superlinear here because
@@ -101,6 +111,15 @@ equation
   // thousands of lumens and every coasting shot would pick up a phantom glow from
   // underneath.
   intensity = t * exitance * luminance * area;
+  // This companion channel is the photometric equivalent of the plume that is
+  // actually drawn.  The shader deliberately expands a small valve opening
+  // with `throttle_exponent` so a viewer can see control activity; a light
+  // driven from raw `t` would remain effectively black during those same RCS
+  // pulses.  Keeping both channels makes the distinction explicit: `intensity`
+  // is the physical raw-throttle estimate, while `visual_intensity` is the
+  // reusable source-to-render coupling for an authored visible plume.
+  visual_intensity = visual_t * exitance * luminance * area;
 
   radius = r_idle + t * r_gain;
+  visual_radius = r_idle + visual_t * r_gain;
 end PlumePhotometry;

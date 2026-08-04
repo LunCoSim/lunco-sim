@@ -334,6 +334,38 @@ fn opacity_drives_alpha_blend_and_ior() {
     assert!((look.ior - 1.45).abs() < 1e-4, "ior bound");
 }
 
+const ADDITIVE_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Glow"
+    {
+        token outputs:surface.connect = </World/Glow/S.outputs:surface>
+        def Shader "S"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (1.0, 0.2, 0.02)
+            float inputs:opacity = 0.4
+            token outputs:surface
+        }
+    }
+    def Cube "Plume" ( apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"] )
+    {
+        rel material:binding = </World/Glow>
+        bool lunco:surface:additive = true
+        double size = 2.0
+    }
+}
+"#;
+
+/// The authored surface policy wins over preview-surface opacity: an emissive
+/// volume must add radiance without darkening the surface behind it.
+#[test]
+fn authored_additive_surface_uses_additive_blending() {
+    let look = material_for(ADDITIVE_STAGE, "/World/Plume");
+    assert!(matches!(look.alpha, SurfaceAlpha::Add));
+}
+
 const CUTOUT_STAGE: &str = r#"#usda 1.0
 ( defaultPrim = "World" )
 def Xform "World"

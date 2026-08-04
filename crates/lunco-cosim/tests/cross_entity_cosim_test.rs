@@ -198,6 +198,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             source: oscillator_mo().to_string(),
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
+            parameter_overrides: Vec::new(),
             stream: None,
             // Worker-stepped, not client-predicted: solver choice comes off the DAE.
             realtime_safe: false,

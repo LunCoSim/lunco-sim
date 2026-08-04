@@ -2237,7 +2237,17 @@ fn apply_standard_material(
     // `opacityThreshold` is a cutout (`Mask`); otherwise any sub-1 opacity or a
     // connected opacity input is alpha-blended; fully-opaque stays `Opaque` so
     // the depth-sorted transparent pass is only paid for when needed.
-    let alpha_mode = if opacity_threshold > 0.0 {
+    //
+    // `lunco:surface:additive` is a gprim-level USD surface policy, not a
+    // shader opacity. It is the standard authored meaning of an emissive volume
+    // such as an engine plume: add radiance without occluding the terrain behind
+    // it. Read it here, at the USD material boundary, so every additive surface
+    // (not only this episode's plume) gets the same render semantics.
+    let additive = light::get_attribute_as_bool(reader, sdf_path, "lunco:surface:additive")
+        .unwrap_or(false);
+    let alpha_mode = if additive {
+        SurfaceAlpha::Add
+    } else if opacity_threshold > 0.0 {
         SurfaceAlpha::Mask(opacity_threshold)
     } else if alpha < 1.0 || opacity_connected {
         SurfaceAlpha::Blend
