@@ -2508,6 +2508,7 @@ fn setup_physical_wheel(
         // bookkeeping — a `joint_count` underflow that corrupted the solver. Owning it here
         // makes that structurally impossible: no orphans, no reaper, no mask.
         ChildOf(chassis),
+        lunco_usd_avian::ScenePhysicsOwned,
         // All-wheel drive. The throttle port already carries the skid rover's
         // per-side differential (drive_left/drive_right), so a single mapping here
         // yaws the skid body; on the Ackermann rover all wheels share one throttle

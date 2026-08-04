@@ -163,6 +163,7 @@ fn on_run_scenario(
         // A `RunScenario` carries SOURCE TEXT, not a location — there is no asset
         // id to anchor a relative import against.
         None,
+        false,
         guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
@@ -189,6 +190,9 @@ pub(crate) fn attach_rhai_scenario(
     // location, so a RELATIVE `import` in it cannot be anchored and must fail
     // rather than silently resolve against some invented root.
     asset_id: Option<String>,
+    // Whether the source was authored on a prim in the currently loaded USD
+    // scene. API and timeline scenarios have their own explicit lifecycle.
+    scene_owned: bool,
     authority: Option<lunco_core::SessionId>,
     registry: &mut ScriptRegistry,
     alloc: &mut ScenarioDocAllocator,
@@ -259,6 +263,11 @@ pub(crate) fn attach_rhai_scenario(
         // gates each entity on it per peer.
         scope,
     ));
+    if scene_owned {
+        commands.entity(target).try_insert(crate::SceneOwnedScript);
+    } else {
+        commands.entity(target).remove::<crate::SceneOwnedScript>();
+    }
 
     (doc_id_raw, generation)
 }
@@ -292,6 +301,7 @@ pub fn attach_embedded_scenarios(
             // Present only for the FILE-backed path below; an inline `lunco:script`
             // authored straight into USD legitimately has no asset id.
             asset_id.map(|id| id.0.clone()),
+            true,
             // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
             None,
             &mut registry,
@@ -674,6 +684,7 @@ fn on_run_timeline(
         String::new(),
         // Generated source — no file, no id, no relative imports.
         None,
+        false,
         guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
@@ -778,6 +789,7 @@ fn on_run_stored_timeline(
         String::new(),
         // Generated source — no file, no id, no relative imports.
         None,
+        false,
         guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,

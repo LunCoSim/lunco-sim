@@ -2043,9 +2043,9 @@ pub enum MemberClass {
 /// How long a member source may stay unresolved before the projector reports a
 /// source-resolution error.
 ///
-/// Same reasoning as `cosim::SCENE_LOAD_MAX_SECS`: on the web a fetch can 404
-/// without ever reporting a failure, and a projection that waits forever is
-/// strictly worse than one that reports the source failure explicitly.
+/// A source-resolution transaction has its own explicit terminal state. It is
+/// intentionally independent of the scene-load transaction: a missing member
+/// source must not make the whole scene browser unavailable.
 const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 
 /// The class each member source declares — the ONE authority on what a generated

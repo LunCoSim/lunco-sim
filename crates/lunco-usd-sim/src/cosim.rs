@@ -44,7 +44,9 @@ use lunco_scripting::python::{get_python_status, PythonStatus};
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
-    ScriptRegistry,
+    scenario::ScenarioDriver,
+    world_bridge::RhaiScenarioRuntime,
+    SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::{
     CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
@@ -185,43 +187,28 @@ struct ValidatedUsdModelicaPortContract {
     session_id: u64,
 }
 
-/// Single-flight guard for [`LoadScene`]: set the instant a scene load is
-/// dispatched, cleared once `sync_usd_visuals` has drained every
-/// `UsdAwaitingStage` prim for that scene's stage asset.
+/// Scene transition transaction: set when a scene load is dispatched, cleared
+/// once sync_usd_visuals has drained every UsdAwaitingStage prim for that
+/// scene's stage asset.
 ///
-/// **Why.** Two independent triggers fire `LoadScene` on web startup —
-/// the boot policy's `StartTutorial` (which `load_scene`s its own
-/// environment) and the page's `autoloadDefaultScene` hook (which
-/// `LoadScene`s the deploy default, e.g. moonbase). On a first run
-/// both land in the same event-loop window. Without a guard, the
-/// second `LoadScene`'s cleanup despawns the first scene's prims while
-/// `sync_usd_visuals` still has deferred writes queued for them → the
-/// "Entity despawned" panic that aborts wasm (the `try_insert` patch
-/// above makes that a quiet no-op, but the deeper fix is to prevent the
-/// second load from firing at all while the first is still spawning).
+/// A different request replaces the current transaction immediately, after the
+/// same teardown boundary. This is cancellation by ownership, not a silent
+/// drop: the old parked entities are reclaimed, its stage identity can no
+/// longer match the new transaction, and the newest request is mounted.
 ///
-/// **Policy: first in-flight load wins.** A `LoadScene` arriving while
-/// this guard holds a *different* path is suppressed (log + no-op). The
-/// tutorial's `load_scene` runs during `Startup`, the page autoload
-/// runs after the first frame paints — so the tutorial load is queued
-/// first and the page autoload is the one suppressed. On a returning
-/// run the boot policy stands down (no `StartTutorial`), no load is
-/// in-flight by autoload time, and the moonbase autoload proceeds
-/// normally. A later user-driven `LoadScene` (picking a different scene
-/// in the browser) finds the guard cleared (the prior scene finished
-/// spawning) and proceeds via the normal clear+respawn path.
-///
-/// The guard is keyed by stage `AssetId` (not path string) so the
-/// clearing system can match it against `UsdPrimPath::stage_handle.id()`
-/// on draining `UsdAwaitingStage` entities.
+/// The transaction is keyed by stage AssetId (not path string), so the clearing
+/// system can match it against UsdPrimPath::stage_handle.id() on draining
+/// UsdAwaitingStage entities.
 #[derive(Resource)]
 pub struct SceneLoadInFlight {
-    /// Asset-relative path of the in-flight scene (informational; logged
-    /// on suppression so the console names the losing load).
+    /// Asset-relative path of the in-flight scene.
     pub path: String,
+    /// Concrete root identity, so another root in the same stage is a real
+    /// transition rather than an accidental no-op.
+    pub root_prim: String,
     /// Stage asset id of the in-flight load. The clearing system watches
-    /// for the last `UsdAwaitingStage` entity carrying this id to gain
-    /// `UsdVisualSynced` (i.e. leave the awaiting pool).
+    /// for the last UsdAwaitingStage entity carrying this id to leave the
+    /// awaiting pool.
     pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
 }
 
@@ -266,128 +253,74 @@ fn any_unwrapped_modelica(
     !q.is_empty()
 }
 
-/// How long [`SceneLoadInFlight`] may be held before the watchdog in
-/// [`clear_scene_load_in_flight`] declares the load lost and drops it.
-///
-/// 60 s, matching the readiness ticket derived from this same guard and
-/// `lunco_terrain_surface`'s `GEN_STATUS_MAX_SECS`. It has to clear a genuine
-/// worst case — a cold web fetch of a large stage plus its reference closure —
-/// so it is deliberately generous; the guard exists to serialise two loads that
-/// arrive in the same event-loop window, not to bound a slow one. A load that
-/// really is still working at 60 s has already blown the readiness deadline, so
-/// nothing downstream is waiting on this guard by then anyway.
-const SCENE_LOAD_MAX_SECS: f64 = 60.0;
-
-/// Clears [`SceneLoadInFlight`] once `sync_usd_visuals` has drained every
-/// `UsdAwaitingStage` prim for the in-flight scene's stage — i.e. once the
-/// scene's prims have all spawned (or failed to load). After this runs, a
-/// later `LoadScene` (e.g. the user picking a different scene in the
-/// browser) proceeds via the normal clear+respawn path instead of being
-/// suppressed. Runs every `Update` but is a single `is_empty` query when no
-/// guard is set.
-///
-/// At the moment the in-flight guard drops — the single authoritative "scene
-/// finished spawning" edge — this also enforces the lighting invariant: a
-/// scene that is meant to be seen must provide at least one `DirectionalLight`
-/// (a UsdLux `DistantLight`, the celestial bootstrap sun, or both). The sun is
-/// scene content, authored in USD like every other light, so an absent sun is a
-/// real authoring defect, not a missing default — and it fails LOUD here rather
-/// than rendering dark and silent. `bevy_light`'s `DirectionalLight` is
-/// render-free, so this check is layer-appropriate in this render-free crate.
-///
-/// **Give-up path.** Neither intended clear — the drain, or
-/// `AssetLoadFailedEvent` via `lunco_usd_bevy::fail_awaiting_stage_prims` — is
-/// guaranteed to arrive: a web fetch that 404s can report no failure at all. So
-/// the guard also carries a [`SCENE_LOAD_MAX_SECS`] wall-clock deadline, after
-/// which it is dropped and the abandonment published as
-/// [`lunco_usd_bevy::SCENE_LOAD_FAILED`]. A stuck guard is the worst outcome
-/// available here: it suppresses every subsequent `LoadScene`, so the app looks
-/// alive and never loads a scene again, with nothing but a log line to say so.
-/// The lighting invariant is NOT checked on the watchdog path — a scene that
-/// never finished spawning has not earned that verdict.
+/// Release the scene transaction only on an explicit asset outcome:
+/// every parked prim was synchronised, or the asset boundary recorded failure.
+/// There is no wall-clock unstick path. A later LoadScene request is allowed to
+/// replace an active transaction, so an unresolved old request cannot make the
+/// process permanently unable to load scenes.
 fn clear_scene_load_in_flight(
     in_flight: Option<Res<SceneLoadInFlight>>,
+    failed: Option<Res<lunco_usd_bevy::FailedSceneLoad>>,
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
-    // REAL time, deliberately, and for the same reason
-    // `lunco_api::executor::expire_deferred_requests` uses it: a paused or
-    // time-warped simulation must not change when a load is declared lost.
-    time: Res<Time<bevy::time::Real>>,
-    // Deadline for the guard currently held, re-armed whenever the in-flight
-    // stage changes. A `Local` rather than a field on `SceneLoadInFlight`
-    // because the resource is constructed elsewhere (`lunco_usd::commands`) and
-    // its shape is public.
-    mut deadline: Local<Option<(bevy::asset::AssetId<UsdStageAsset>, f64)>>,
+    asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     let Some(g) = in_flight else {
-        // No guard held — forget any deadline so the next load arms a fresh one.
-        *deadline = None;
         return;
     };
-    let now = time.elapsed_secs_f64();
-    let expires = match *deadline {
-        Some((stage, at)) if stage == g.stage_id => at,
-        // First frame of this load (or a different scene took the guard).
-        _ => {
-            let at = now + SCENE_LOAD_MAX_SECS;
-            *deadline = Some((g.stage_id, at));
-            at
+
+    let recorded_failure = failed
+        .as_deref()
+        .is_some_and(|failure| failure.stage_id == g.stage_id);
+    if recorded_failure || asset_server.load_state(g.stage_id).is_failed() {
+        if !recorded_failure {
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: lunco_usd_bevy::SCENE_LOAD_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(g.path.clone()),
+                timestamp: 0.0,
+            });
         }
-    };
-    // Still spawning if any prim tagged for this stage hasn't been
-    // processed by `sync_usd_visuals` (i.e. still carries
-    // `UsdAwaitingStage`).
+        commands.remove_resource::<SceneLoadInFlight>();
+        commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+        return;
+    }
+
+    // A transaction is not complete until the stage asset itself is loaded.
+    // This prevents the first reconciliation pass from treating the short
+    // window before the deferred scene-root spawn as a successful empty scene.
+    if !asset_server.load_state(g.stage_id).is_loaded() {
+        return;
+    }
+
     let still_awaiting = q_awaiting
         .iter()
-        .any(|upp| upp.stage_handle.id() == g.stage_id);
+        .any(|prim| prim.stage_handle.id() == g.stage_id);
     if still_awaiting {
-        if now < expires {
-            return;
-        }
-        // WATCHDOG. The two intended clear paths are "every awaiting prim
-        // drained" and `AssetLoadFailedEvent` — and on web a 404 can report
-        // neither (see `lunco_usd_bevy::fail_awaiting_stage_prims`). Left alone
-        // the guard is permanent, and a permanent guard SILENTLY suppresses
-        // every later `LoadScene`: the app looks alive and simply never loads a
-        // scene again. Dropping it is strictly better than that — a second
-        // `LoadScene` can at worst repeat the failure, loudly.
-        error!(
-            "[scene] `{}` never finished spawning within {SCENE_LOAD_MAX_SECS:.0}s — \
-             abandoning the in-flight guard so later scene loads are not suppressed. \
-             Prims still awaiting this stage will never instantiate; the stage asset \
-             most likely failed to load without reporting a failure (a web 404).",
-            g.path
-        );
-        commands.trigger(lunco_core::TelemetryEvent {
-            name: lunco_usd_bevy::SCENE_LOAD_FAILED.into(),
-            source: 0,
-            severity: lunco_core::Severity::Error,
-            data: lunco_core::TelemetryValue::String(g.path.clone()),
-            timestamp: 0.0,
-        });
-        *deadline = None;
-        commands.remove_resource::<SceneLoadInFlight>();
         return;
     }
-    *deadline = None;
-    // Scene fully spawned — enforce the lighting invariant before dropping the
-    // guard. The celestial bootstrap sun (`lunco_celestial::big_space_setup`)
-    // spawns on site-anchor detection during this same load window and is a
-    // `DirectionalLight`, so its presence satisfies the check; only a scene
-    // that authors NEITHER a `DistantLight` NOR triggers the celestial sun is
-    // flagged.
+
+    // A scene that is meant to be visible must provide its light through USD
+    // (or the authored celestial bootstrap). Absence is reported, but it does
+    // not change the transaction outcome.
     if q_lights.is_empty() {
         error!(
-            "[scene] `{}` finished loading with no DirectionalLight — the scene \
-             will render dark. Author a UsdLux `DistantLight` (the sun) in the \
-             scene, or ensure a celestial site anchor is present so the solar \
-             bootstrap provides one. There is no Rust fallback sun: scene \
-             lighting is scene content.",
+            "[scene] `{}` finished loading with no DirectionalLight — author a \\
+             UsdLux DistantLight or a celestial site anchor",
             g.path
         );
     }
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: lunco_usd_bevy::SCENE_LOAD_COMPLETED.into(),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::String(g.path.clone()),
+        timestamp: 0.0,
+    });
     commands.remove_resource::<SceneLoadInFlight>();
+    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
 }
 
 pub(crate) fn process_usd_cosim_prims(
@@ -1268,13 +1201,18 @@ pub fn dispatch_loaded_python_sources(
                 last_saved_generation: None,
             },
         );
-        commands.entity(entity).try_insert(ScriptedModel {
-            document_id: Some(doc_id.raw()),
-            language: Some(ScriptLanguage::Python),
-            paused: false,
-            inputs: Default::default(),
-            outputs: Default::default(),
-        });
+        commands.entity(entity).try_insert((
+            ScriptedModel {
+                document_id: Some(doc_id.raw()),
+                language: Some(ScriptLanguage::Python),
+                paused: false,
+                inputs: Default::default(),
+                outputs: Default::default(),
+            },
+            // This Python document was synthesized from a USD prim and has
+            // the same scene ownership boundary as an embedded Rhai script.
+            SceneOwnedScript,
+        ));
 
         // Script loaded: flip the bind-published `SimComponent` live. It was
         // created `Compiling` at bind carrying the USD-declared interface — do NOT
@@ -3015,10 +2953,11 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 ///
 /// Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
 /// for every entity carrying a `ModelicaModel` (the Modelica worker
-/// drops its `steppers` / `cached_models` / `sim_streams` entries) and
-/// drops `ScriptRegistry::documents` entries for every `ScriptedModel`.
-/// Without this, repeated reloads accumulate stale steppers and parsed
-/// scripts indefinitely.
+/// drops its `steppers` / `cached_models` / `sim_streams` entries). Scene-owned
+/// Rhai documents are stopped and closed by the shared `SceneTeardown` owner;
+/// independent API/editor documents remain open until their explicit close.
+/// Without these ownership boundaries, repeated reloads accumulate stale
+/// workers or make an unrelated interactive document disappear.
 #[Command(default)]
 pub struct LoadScene {
     /// USD asset path (relative to `assets/`).
@@ -3094,6 +3033,10 @@ fn on_restart_scene(
         .unwrap_or_else(|| "restarted-scene".to_string());
     info!("[restart-scene] reloading `{}` from disk", label);
 
+    // Restart is an explicit replacement transaction. Cancel the old load
+    // identity before reclaiming its parked entities.
+    commands.remove_resource::<SceneLoadInFlight>();
+
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
     // Every scene-authored entity (incl. the Avatar camera) carries `UsdPrimPath`,
     // so `try_despawn` (hierarchy-recursive) tears the old camera down here — no
@@ -3141,42 +3084,23 @@ fn on_clear_scene(
         return;
     }
     info!("[clear-scene] clearing viewport");
+    // Clearing is also cancellation: a parked stage must not arrive later and
+    // repopulate a viewport the caller explicitly emptied.
+    commands.remove_resource::<SceneLoadInFlight>();
+    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
     clear_scene_entities(&mut commands, &scene);
 }
 
-/// Despawn the current scene's USD entities + cosim wires.
-/// External/worker state (such as Modelica steppers or Python script documents)
-/// is cleaned up automatically via reactive `On<Remove, T>` component observers
-/// registered in their respective home crates (`lunco-modelica` and `lunco-scripting`).
-/// Shared by [`LoadScene`] (clear-before-reload) and [`ClearScene`]
-/// (clear-to-empty). Despawns are deferred through `commands`.
+/// Despawn the current scene's USD entities, synthesized physics entities, and
+/// cosim wires.
 ///
-/// TODO(avian-bump): this plain batch despawn trips a DEBUG-only assert in avian
-/// 0.7 — `island.contact_count == 0` (islands/mod.rs:1372), from
-/// `BodyIslandNode::on_remove` when an island's last body leaves while a contact is
-/// still registered against it. It is currently silenced by
-/// `[profile.dev.package.avian3d] debug-assertions = false` (see the workspace
-/// Cargo.toml for the full rationale) — a MASK, not a fix. Verified benign: the
-/// island is deleted on the next line, and physics simulates correctly after a
-/// reload (rover stays finite and rests on terrain).
+/// The shared SceneTeardown schedule runs first. Its subsystem owners stop
+/// scenario runtimes, retire Avian graph membership, and reset scene-derived
+/// resources while the outgoing entities still exist. The deferred despawns
+/// below then reclaim every entity under the same ownership boundary.
 ///
-/// DO NOT "fix" this by reordering the teardown. Every sanctioned order was tried
-/// and ALL still panic: remove `RigidBody` then `Collider`; `Collider` then
-/// `RigidBody`; `RigidBody` alone; insert `ColliderDisabled` + `RigidBodyDisabled`;
-/// gather colliders via `RigidBodyColliders` rather than the Bevy hierarchy; and
-/// even stepping `PhysicsSchedule` mid-teardown. Each left islands holding contacts.
-/// Root cause is upstream: a collider's contacts drain ONLY on adding
-/// `ColliderDisabled`/`Disabled` or REMOVING `ColliderMarker` — and since
-/// `ColliderMarker` is a REQUIRED component, dropping `Collider` drains nothing
-/// while still unlinking it from `RigidBodyColliders` (which defeats the body's own
-/// drain); and `remove_collider_on` early-returns on a non-TOUCHING edge without
-/// unlinking it from the island. Re-test on the next avian bump.
-///
-/// NOTE: any system that touches scene entities through `Commands` must use the
-/// FALLIBLE forms (`try_despawn`/`try_remove`/`try_insert`) — its queries are built
-/// before this despawn flushes, so its targets can already be dead. A plain
-/// `remove`/`insert` panics in `apply_deferred` and takes the app down mid-reload
-/// (that was the `sync_gizmo_camera` crash).
+/// Commands touching this query use fallible forms because several teardown
+/// owners may have already reclaimed a target in the same transaction.
 /// The scene-owned entities a teardown touches, bundled as one `SystemParam`.
 ///
 /// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd`), `ClearScene`,
@@ -3200,6 +3124,10 @@ pub struct SceneEntities<'w, 's> {
     /// alive while a replacement USD Avatar claims the viewport is the only
     /// route to two local cameras after a full reload.
     provisional_avatars: Query<'w, 's, Entity, With<lunco_avatar::ProvisionalAvatarCamera>>,
+    /// Physics-created joint entities and world-anchor bodies have no USD prim
+    /// path, so their explicit scene-ownership marker is the authoritative
+    /// reclamation key.
+    physics_owned: Query<'w, 's, Entity, With<lunco_usd_avian::ScenePhysicsOwned>>,
 }
 
 pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
@@ -3209,13 +3137,14 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // `lunco_usd_bevy::scene_lifecycle`.
     commands.queue(lunco_usd_bevy::scene_lifecycle::run_scene_teardown);
 
-    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_provisional_avatars) = (
+    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_provisional_avatars, q_physics_owned) = (
         &scene.grid,
         &scene.origin,
         &scene.scene_roots,
         &scene.prims,
         &scene.wires,
         &scene.provisional_avatars,
+        &scene.physics_owned,
     );
     let mut despawned = 0usize;
 
@@ -3275,6 +3204,10 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         commands.entity(e).try_despawn();
         despawned += 1;
     }
+    for e in q_physics_owned.iter() {
+        commands.entity(e).try_despawn();
+        despawned += 1;
+    }
     info!(
         "[scene] cleanup: {despawned} grid children and {stage_prim_despawns} stage prims queued for despawn"
     );
@@ -3283,6 +3216,37 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // may survive into the next scene. This is the single choke point all three reload
     // paths funnel through, so the reset lives here, not at each call site.
     commands.trigger(lunco_time::ResetTime {});
+}
+
+/// End scene-owned script documents before their USD entities are removed.
+///
+/// The generic driver normally notices a detached entity on its next fixed
+/// tick. That is deliberately too late for a scene boundary: the old
+/// `on_stop` hook could then publish commands into the replacement scene, and
+/// the driver's compiled `this` state would remain alive across the swap. The
+/// marker is the ownership declaration; interactive/API documents are not
+/// touched here.
+fn stop_scene_owned_scripts(world: &mut World) {
+    let targets: Vec<(Entity, Option<u64>)> = {
+        let mut query =
+            world.query_filtered::<(Entity, Option<&ScriptedModel>), With<SceneOwnedScript>>();
+        query
+            .iter(world)
+            .map(|(entity, model)| (entity, model.and_then(|m| m.document_id)))
+            .collect()
+    };
+
+    for (entity, document_id) in targets {
+        ScenarioDriver::<RhaiScenarioRuntime>::stop_entity(world, entity);
+        if let Some(mut entity_mut) = world.get_entity_mut(entity).ok() {
+            entity_mut.remove::<ScriptedModel>();
+        }
+        if let Some(document_id) = document_id {
+            if let Some(mut registry) = world.get_resource_mut::<ScriptRegistry>() {
+                registry.documents.remove(&DocumentId::new(document_id));
+            }
+        }
+    }
 }
 
 /// Despawn a single USD prim **subtree** (one runtime prim and its descendants).
@@ -3664,6 +3628,14 @@ pub(crate) fn install(app: &mut App) {
         apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
     };
     use lunco_modelica::ModelicaSet;
+
+    // Scene-owned scripting state must end at the same boundary as the USD
+    // entities that gave it meaning. This runs before clear_scene_entities'
+    // deferred despawns, so the outgoing hook still sees the outgoing world.
+    app.add_systems(
+        lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+        stop_scene_owned_scripts,
+    );
 
     // Ensure the source asset types this module's systems read/allocate are
     // registered. Idempotent — production registers these via the Modelica /

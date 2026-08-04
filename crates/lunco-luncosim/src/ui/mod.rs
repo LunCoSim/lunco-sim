@@ -816,34 +816,39 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                             .italics(),
                     );
                 }
-                for entry in &entries {
-                    let mb = (entry.total_bytes as f64) / (1024.0 * 1024.0);
-                    let label = if entry.name.is_empty() {
-                        format!("Downloaded twin  ({mb:.0} MB)")
-                    } else {
-                        format!("{}  ({mb:.0} MB)", entry.name)
-                    };
-                    if ui.button(label).clicked() {
-                        if let Some(scene) = entry.default_scene.clone() {
-                            // Mounts the cache dir as this twin's root and yields the
-                            // same `twin://<name>/<rel>` the host uses for the scene.
-                            let twins = ctx
-                                .resource::<lunco_assets::twin_source::TwinRoots>()
-                                .clone();
-                            let path = lunco_networking::scenario_sync::mount_scenario_twin(
-                                &twins,
-                                &entry.scenario_id,
-                                &entry.name,
-                                &scene,
-                            );
-                            ctx.trigger(lunco_usd::LoadScene {
-                                path,
-                                root_prim: String::new(),
-                            });
-                            ui.close();
+                bevy_egui::egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for entry in &entries {
+                            let mb = (entry.total_bytes as f64) / (1024.0 * 1024.0);
+                            let label = if entry.name.is_empty() {
+                                format!("Downloaded twin  ({mb:.0} MB)")
+                            } else {
+                                format!("{}  ({mb:.0} MB)", entry.name)
+                            };
+                            if ui.button(label).clicked() {
+                                if let Some(scene) = entry.default_scene.clone() {
+                                    // Mounts the cache dir as this twin's root and yields the
+                                    // same `twin://<name>/<rel>` the host uses for the scene.
+                                    let twins = ctx
+                                        .resource::<lunco_assets::twin_source::TwinRoots>()
+                                        .clone();
+                                    let path = lunco_networking::scenario_sync::mount_scenario_twin(
+                                        &twins,
+                                        &entry.scenario_id,
+                                        &entry.name,
+                                        &scene,
+                                    );
+                                    ctx.trigger(lunco_usd::LoadScene {
+                                        path,
+                                        root_prim: String::new(),
+                                    });
+                                    ui.close();
+                                }
+                            }
                         }
-                    }
-                }
+                    });
             });
         }
 
@@ -929,23 +934,28 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             |ui: &mut bevy_egui::egui::Ui,
              ctx: &mut MenuCtx,
              items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
-                for (asset, desc) in items {
-                    let label = clean_scene_name(&asset.stem);
-                    let resp = ui.button(label);
-                    // Show the plain-language "what is this demo" blurb on hover.
-                    // `on_hover_text` consumes and returns the `Response` (chaining API).
-                    let resp = match desc {
-                        Some(d) => resp.on_hover_text(d.as_str()),
-                        None => resp,
-                    };
-                    if resp.clicked() {
-                        ctx.trigger(lunco_usd::LoadScene {
-                            path: asset.asset_path.clone(),
-                            root_prim: String::new(),
-                        });
-                        ui.close();
-                    }
-                }
+                bevy_egui::egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (asset, desc) in items {
+                            let label = clean_scene_name(&asset.stem);
+                            let resp = ui.button(label);
+                            // Show the plain-language "what is this demo" blurb on hover.
+                            // `on_hover_text` consumes and returns the `Response` (chaining API).
+                            let resp = match desc {
+                                Some(d) => resp.on_hover_text(d.as_str()),
+                                None => resp,
+                            };
+                            if resp.clicked() {
+                                ctx.trigger(lunco_usd::LoadScene {
+                                    path: asset.asset_path.clone(),
+                                    root_prim: String::new(),
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
             };
 
         let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
@@ -1036,25 +1046,30 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             return;
         }
 
-        for meta in registry.ordered() {
-            let done = progress.completed.iter().any(|c| c == &meta.id);
-            // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
-            let label = format!(
-                "{} {}  ·  {}",
-                if done { "✓" } else { "🎓" },
-                meta.title,
-                meta.difficulty
-            );
-            let resp = ui.button(label);
-            // Hover tip: the plain-language "what this teaches" blurb.
-            let resp = resp.on_hover_text(meta.blurb.as_str());
-            if resp.clicked() {
-                ctx.trigger(lunco_tutorial::StartTutorial {
-                    id: meta.id.to_string(),
-                });
-                ui.close();
-            }
-        }
+        egui::ScrollArea::vertical()
+            .max_height(360.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for meta in registry.ordered() {
+                    let done = progress.completed.iter().any(|c| c == &meta.id);
+                    // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
+                    let label = format!(
+                        "{} {}  ·  {}",
+                        if done { "✓" } else { "🎓" },
+                        meta.title,
+                        meta.difficulty
+                    );
+                    let resp = ui.button(label);
+                    // Hover tip: the plain-language "what this teaches" blurb.
+                    let resp = resp.on_hover_text(meta.blurb.as_str());
+                    if resp.clicked() {
+                        ctx.trigger(lunco_tutorial::StartTutorial {
+                            id: meta.id.to_string(),
+                        });
+                        ui.close();
+                    }
+                }
+            });
     });
 }
 

@@ -377,6 +377,41 @@ impl<R: ScenarioRuntime + Default> Default for ScenarioDriver<R> {
 }
 
 impl<R: ScenarioRuntime> ScenarioDriver<R> {
+    /// Stop one scenario synchronously at an ownership boundary.
+    ///
+    /// The ordinary dead-entity path runs during the next driver tick. That is
+    /// correct for an entity disappearing during normal ECS work, but it is too
+    /// late for a scene transition: the old `on_stop` must run before the old
+    /// scene is despawned, otherwise its cleanup commands can target the next
+    /// scene. Scene and tutorial teardown call this method before removing the
+    /// owning entity.
+    pub fn stop_entity(world: &mut World, entity: Entity) {
+        let Some(driver) = world.get_resource::<ScenarioDriver<R>>() else {
+            return;
+        };
+        if !driver.fsm.contains_key(&entity) {
+            return;
+        }
+
+        world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
+            let Some(state) = driver.fsm.remove(&entity) else {
+                return;
+            };
+            let _scope = bridge_core::WorldScope::enter(world);
+            // The entity is still present, but the scene/tutor owns the
+            // transition. Its final cleanup is host-authoritative, matching
+            // the normal despawn teardown path below.
+            bridge_core::set_script_authority(None);
+            bridge_core::set_script_client_local(false);
+            if state.started && state.compiled {
+                let _ = driver
+                    .runtime
+                    .call_hook(entity, ScenarioHook::Stop, state.gid);
+            }
+            driver.runtime.forget(entity);
+        });
+    }
+
     /// Exclusive-system body: drive every non-paused `ScriptedModel { language }`
     /// through its lifecycle against the live World. Fully language-neutral — only
     /// the `R` trait calls touch the interpreter.

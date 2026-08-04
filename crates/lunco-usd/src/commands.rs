@@ -505,6 +505,10 @@ fn on_load_scene(
     let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
         return;
     };
+    // A new transaction supersedes any terminal failure recorded for the
+    // outgoing stage. The failure record belongs to one stage identity, not to
+    // the process or the next scene.
+    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
     // A real scene is committed to mount — drop any empty-viewport reason. This
     // is the authoritative "scene loaded" signal; see the note on `empty_reason`
     // above for why this clear lives here and not in the per-frame placeholder
@@ -525,44 +529,19 @@ fn on_load_scene(
     }
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
-    // Single-flight guard, asked FIRST — before the `asset_server.load()` below.
-    //
-    // A load is already in flight, so this one never proceeds; only the message
-    // differs:
-    //
-    // - SAME path: this scene is already being mounted. The `q_usd` check below
-    //   cannot see that yet (its prims have not spawned, which is exactly what
-    //   "in flight" means), so without this arm a redundant request would clear
-    //   and remount a scene that is mid-spawn. That is the client's
-    //   scenario-ready `LoadScene` landing ~1 s after its own boot load, and it
-    //   tore down the live scene — a teardown that can trip avian's island
-    //   solver. The two guards are complementary: `SceneLoadInFlight` covers the
-    //   spawn window, `q_usd` covers everything after it, so a repeat request is
-    //   a no-op at any point in a scene's life.
-    // - DIFFERENT path: the in-flight load wins. Prevents the startup race where
-    //   the boot policy's tutorial `load_scene` and the page's moonbase autoload
-    //   both fire before either scene's prims have spawned. See
-    //   `SceneLoadInFlight` for the ordering argument for why the tutorial (the
-    //   higher-priority onboarding intent on a first run) is the one that wins.
-    //
-    // ORDER MATTERS. This used to sit below the no-op guard, which meant a
-    // suppressed request had already called `asset_server.load()` to get an id to
-    // compare with — kicking off a real fetch for a scene we had just decided not
-    // to mount. The log then read "suppressing X" immediately followed by
-    // bevy_asset's "Failed to load asset X", two lines that flatly contradict each
-    // other. Neither guard below needs to run when a load is in flight, and this
-    // one needs no asset id, so it goes first and the fetch never starts.
+    // A load already in flight is a transaction, not a global lock. The exact
+    // same identity is a no-op; a different identity replaces the transaction
+    // and performs the normal teardown before mounting the new request. This
+    // keeps a failed or slow asset from disabling the scene browser.
     if let Some(g) = &in_flight {
-        if g.path == path {
+        if g.path == path && g.root_prim == root_prim {
             info!("[load-scene] `{}` is already mounting — no-op", path);
-        } else {
-            info!(
-                "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \
-                 the in-flight load wins",
-                path, g.path
-            );
+            return;
         }
-        return;
+        info!(
+            "[load-scene] replacing in-flight scene `{}` with `{}`",
+            g.path, path
+        );
     }
 
     // Blender-style no-op: same stage, same root prim, already mounted.
@@ -598,16 +577,32 @@ fn on_load_scene(
             "[load-scene] `{}` @ `{}` already loaded — no-op",
             path, root_prim
         );
+        commands.trigger(lunco_core::TelemetryEvent {
+            name: lunco_usd_bevy::SCENE_LOAD_COMPLETED.into(),
+            source: 0,
+            severity: lunco_core::Severity::Info,
+            data: lunco_core::TelemetryValue::String(path),
+            timestamp: 0.0,
+        });
         return;
     }
 
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
 
-    // Record the in-flight load so a concurrent `LoadScene` (different path) is
-    // suppressed until this scene's prims have all spawned.
+    // Record the transaction identity. A later request with a different
+    // identity replaces it through the same teardown path; the transaction is
+    // not a process-wide lock on scene selection.
     commands.insert_resource(SceneLoadInFlight {
         path: path.clone(),
+        root_prim: root_prim.clone(),
         stage_id: new_id,
+    });
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: lunco_usd_bevy::SCENE_LOAD_STARTED.into(),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::String(path.clone()),
+        timestamp: 0.0,
     });
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).

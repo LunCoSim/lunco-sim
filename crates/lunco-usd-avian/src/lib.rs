@@ -43,6 +43,7 @@
 
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
+use bevy::ecs::component::ComponentId;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
@@ -69,6 +70,16 @@ use openusd::usd::Stage;
 pub mod big_space_bridge;
 pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 
+/// Marks an Avian entity synthesized for the currently mounted USD scene.
+///
+/// Authored physics prims carry [`UsdPrimPath`] and are owned by that stage.
+/// Synthesized wheel joints and world-anchor bodies have no authored prim path,
+/// so they need this explicit ownership marker for the same teardown transaction
+/// to disable and reclaim them. It is not a physics mode or a second lifecycle;
+/// it is the ownership fact that the scene boundary cannot infer from hierarchy.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct ScenePhysicsOwned;
+
 pub mod lint;
 pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
 
@@ -85,11 +96,67 @@ pub use collision_groups::{CollisionGroupTable, CollisionGroupTables};
 /// `Update` schedule **after** `sync_usd_visuals` to ensure assets are loaded.
 pub struct UsdAvianPlugin;
 
+/// Remove scene physics from Avian's graphs before the scene entities are
+/// despawned.
+///
+/// Avian 0.7 removes contacts when ColliderMarker is removed, and removes a
+/// joint from its island when the authoritative joint component is removed. A
+/// raw batch despawn skips those graph transitions long enough for
+/// BodyIslandNode::on_remove to observe stale constraints. Removing the joint
+/// component itself is important: removing `JointDisabled` during despawn is
+/// Avian's supported re-enable transition and would add the joint back after
+/// its bodies are gone.
+fn prepare_scene_physics_teardown(world: &mut World) {
+    let joints: Vec<(Entity, ComponentId)> = {
+        let mut query = world.query_filtered::<(
+            Entity,
+            &avian3d::dynamics::solver::joint_graph::JointComponentId,
+        ), (
+            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>,
+        )>();
+        query
+            .iter(world)
+            .filter_map(|(entity, joint)| joint.id().map(|id| (entity, id)))
+            .collect()
+    };
+    let colliders: Vec<Entity> = {
+        let mut query = world.query_filtered::<Entity, (
+            With<Collider>,
+            Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>,
+        )>();
+        query.iter(world).collect()
+    };
+
+    // Retire constraints before contacts and bodies. The component-removal
+    // hook is the authoritative Avian graph transition; the order is
+    // intentional: graph removal must happen while both endpoint bodies still
+    // exist. This is an exclusive system so the component observers run before
+    // this schedule returns; deferring removal until the same flush as
+    // recursive despawn is too late for Avian's island bookkeeping.
+    for (entity, component_id) in joints {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.remove_by_id(component_id);
+        }
+    }
+    // Removing ColliderMarker is Avian's supported contact-graph removal path;
+    // removing only Collider leaves its required marker alive until too late.
+    for entity in colliders {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.remove::<ColliderMarker>();
+        }
+    }
+}
+
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(JointAttachPlugin);
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            prepare_scene_physics_teardown,
+        );
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
         //   right after `sync_usd_visuals` translates each prim, so the
@@ -2075,8 +2142,10 @@ fn build_usd_physics_joints(
         // the authored `localPos`/`localRot` — expressed in the world frame when
         // the rel is empty — apply as that anchor's local frame unchanged. A
         // static body is admitted by construction (see [`admit_pending_joints`]).
-        let b0 = body0_ent.unwrap_or_else(|| commands.spawn(RigidBody::Static).id());
-        let b1 = body1_ent.unwrap_or_else(|| commands.spawn(RigidBody::Static).id());
+        let b0 = body0_ent
+            .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
+        let b1 = body1_ent
+            .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
 
         debug!(
             "Built USD joint {} -> {} <-> {}",
