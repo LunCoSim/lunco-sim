@@ -34,10 +34,6 @@ fn b3_tilted(me) {
     tilt_deg(find("/SlopeTest/Rover")) > 15.0
 }
 
-fn b3_at_top(me) {
-    distance(find("/SlopeTest/Rover"), find("/SlopeTest/Marker")) < 6.0
-}
-
 fn b3_reached_top(me) {
     notify_kind("Straight up, gentle throttle — that's how a bad rover climbs a good line.", "success");
 }
@@ -99,8 +95,7 @@ fn mission(me) {
         objective("reach_top", #{
             text: "Now climb straight up the fall-line to the marker at the top",
             requires: ["feel_the_edge"],
-            done: Fn("b3_at_top"),
-            dwell: 0.4,
+            requires_event: "enter:waypoint",
             on_complete: Fn("b3_reached_top"),
         }),
     ]

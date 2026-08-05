@@ -202,11 +202,10 @@ def Xform "LanderTest" (
     }
 
     # ── Rover drive-to waypoints ────────────────────────────────────────────
-    # Three translucent glowing domes (the same reusable marker asset) forming a
-    # course, revealed one at a time. Each carries an overlap-only Sensor, but the
-    # rover's raycast-wheel compound collider doesn't reliably trip it, so
-    # `rover_surface_ops.rhai` judges arrival with a distance read and emits its own
-    # `waypoint_reached` event for anything downstream (the tutorial) to wait on.
+    # Three translucent glowing markers (the same reusable marker asset) forming a
+    # course. Each visible Sphere is also an overlap-only Sensor; the runtime emits
+    # `waypoint.reached` and `rover_surface_ops.rhai` translates those authoritative
+    # events for anything downstream (the tutorial) to wait on.
     def Xform "RoverTarget1" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )

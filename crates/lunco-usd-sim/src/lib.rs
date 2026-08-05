@@ -347,10 +347,34 @@ fn retire_scene_cameras(
     }
 }
 
+/// Reset scene-faulted simulation state before the outgoing entities are
+/// reclaimed. A terminal fault deliberately stops physics for the bad scene,
+/// but it must not become a process-wide lock that prevents the next tutorial
+/// or scenario from loading. The fault and its safety hold have the same scene
+/// ownership, so they are cleared together at the one teardown boundary.
+fn reset_scene_runtime_safety(
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+) {
+    if let Some(faults) = faults.as_deref_mut() {
+        if faults.active() {
+            info!("[scene] clearing terminal runtime fault for replacement scene");
+            faults.clear();
+        }
+    }
+    if let Some(holds) = holds.as_deref_mut() {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, false);
+    }
+}
+
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         crate::shader_ports::build(app);
         app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies);
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            reset_scene_runtime_safety,
+        );
         app.add_systems(
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
             retire_scene_cameras,

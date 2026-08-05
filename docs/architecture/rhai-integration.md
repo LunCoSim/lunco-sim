@@ -129,7 +129,6 @@ checkpoints), `mission.rhai` (coordinator reacting via `on_event`),
 
 - ROS2 bridge (needs an `rclrs` transport crate) — seam ready, see §7d.
 - Inspector/editor params UI (exposing `ScriptedModel` + doc source).
-- Avian sensor-volume checkpoint auto-emit (rhai `arrived()` polling already covers it).
 
 ---
 
@@ -394,28 +393,22 @@ directly), but correct for our *category*: a **deterministic networked sim**
 command stream and reads are local. Reads-via-reflection and a lifecycle callback
 (`on_tick`) are universally standard.
 
-**Scenario layer: this is where we were under-built.** Leading with "scenario =
-imperative rhai + hand-rolled state machine (`i += 1`)" is the low-level version
-of what every engine gives authors. Missing, in priority order:
+**Scenario layer: implemented.** The current runtime is event-first and keeps
+policy out of the Rust engine core:
 
-1. **Coroutines / sequencing (#1 gap).** "Do X, wait until Y, then Z" is *the*
-   scenario primitive — Unity `yield return WaitUntil`, Godot `await`, Luau
-   `task.wait`, Unreal latent actions. rhai has **no async** — this is the real
-   cost of picking rhai over Luau. Must be paid back with a Sequencer/BT layer.
-2. **Events/signals + trigger volumes.** Checkpoints in real engines are **Avian
-   sensor volumes firing on_enter**, not `arrived(pos,tol)` distance polling.
-   Need a script-facing event/signal bus (telemetry-subscribe is a stub,
-   `executor.rs:584`). Scripting is event-driven first, tick-driven second.
-3. **Behavior Trees** for reactive multi-goal behavior (patrol → react → resume) —
-   the game-AI standard (Unreal), more composable than an imperative loop.
-4. **Declarative objectives (the real "KSP-grade" part).** KSP contracts are a
-   declarative objective/condition system (reach X, dwell, plant flag) with
-   completion + branching — evaluated, not imperatively scripted. rhai = glue for
-   custom conditions. We under-weighted this.
-5. **Time-warp coupling.** Scenarios tick in sim-time, respecting `TimeTransport`
-   (pause / speed). Ties into the timer/coroutine layer.
-6. **Observability/debugging** — inspect/step scenario state, visualize active
-   goal/BT node.
+1. **Sequencing** — `seq`/`par_*`/`repeat`/`wait_*` are data nodes executed by the
+   behavior kernel; Rhai authors the policy and callbacks.
+2. **Events and Sensors** — `TelemetryEvent` reaches `on_event`; Avian overlap
+   Sensors publish waypoint arrivals. A waypoint's visible sphere and Sensor are
+   one USD primitive with one standard `radius`; mission scripts do not scale
+   markers or poll a duplicate arrival tolerance.
+3. **Behavior Trees** — BT.CPP v4 XML owns route topology and the native behavior
+   kernel executes it; USD owns waypoint identity and geometry.
+4. **Objectives** — declarative Rhai objectives consume real event/state predicates
+   and publish completion to the tutorial HUD.
+5. **Simulation time** — waits use simulation time and respect pause/transport rate.
+6. **Observability** — `ScriptStatus`, `ScriptInspect`, route cursor state, and
+   `ReachedWaypoints` expose execution and arrival state.
 
 **Corrected layering — everything above the core line is rhai, not Rust:**
 ```
@@ -432,16 +425,12 @@ of what every engine gives authors. Missing, in priority order:
   Events/Triggers from Avian sensors (volumes, not distance polling)
   USD scene/prefab (static authoring)
 ```
-The Sequencer/BT "coroutine substitute" is **rhai stdlib, not core** — advanced
-one step per `on_tick`, state in the persistent `Scope`. The core has no
-`Objective`/`BehaviorTree`/`Goal` *logic* type; it only ticks hooks and moves
-messages. This honors "lean core, policy as data" and keeps Luau's missing
-coroutines a non-issue (the substitute lives in script-space).
+The Sequencer is **Rhai policy data, not core logic**. BT.CPP route topology is
+decoded by the autopilot domain and executed by its generic behavior kernel. The
+engine core only provides lifecycle, command, observation, and event mechanisms.
 
-**Honest caveat:** rhai has no native coroutines (Luau does); we pay it back with
-the rhai-stdlib Sequencer/BT — independently the more standard tool for game AI.
-Fair trade, but the sequencing layer is **core to the product**, just not core to
-the *engine* (it's shipped rhai, hot-reloadable).
+Rhai has no native coroutines; the cooperative task tree is the deterministic,
+hot-reloadable replacement and does not create a second engine loop.
 
 ## 7d. Core/script boundary (mechanism vs policy) + ROS2
 
@@ -516,13 +505,12 @@ This gives the third verb with zero new types:
 | `cmd()` (Ch.1) | imperative "do this" | reflect command → RBAC, replicated | service / action-request |
 | `emit()`/`on_event()` (Ch.3) | "this happened" | **`TelemetryEvent` / `SampledParameter`** | topic / action-feedback |
 
-**Subscription/delivery — finish the existing path, don't add one:**
+**Subscription/delivery — one existing path:**
 `ApiRequest::SubscribeTelemetry { filter }` (`schema.rs:35`) + `TelemetryResponse`
-(`schema.rs:74`) are already the designed pub/sub; the executor handler is a STUB
-returning "Subscription created" (`executor.rs:584`). Implement it to stream
-filtered `TelemetryEvent`/`SampledParameter`. That ONE path then feeds *all*
-consumers: rhai scenarios (`on_event`), external API/MCP subscribers, the ROS2
-topic bridge, and the UI. No second event model.
+(`schema.rs:74`) are the pub/sub surface. The executor registers a filtered
+subscription, and the same `TelemetryEvent`/`SampledParameter` stream feeds Rhai
+scenarios (`on_event`), external API/MCP subscribers, the ROS2 topic bridge, and
+the UI. No second event model.
 
 **rhai verbs are just produce/consume of TelemetryEvent:**
 - `emit(name, severity, value)` → fires a `TelemetryEvent` (e.g.
@@ -561,10 +549,10 @@ subset for UI (`SyncChannel::Local` vs `ControlStream`). No client-side divergen
 
 ## 7f. Script topology — attaching to entities & inter-script interaction
 
-**Attach a script to an entity:** reuse `ScriptedModel` (`doc.rs:100`) — already
-the per-entity hook (`document_id`, `language`, `paused`, `inputs`/`outputs`). Set
-`language: Rhai` and add a rhai branch to `run_scripted_models` (Python-only
-today, `lib.rs:81`). The script's `on_tick(self)` identity IS the host entity.
+**Attach a script to an entity:** reuse `ScriptedModel` (`doc.rs:100`) — the
+per-entity hook (`document_id`, `language`, `paused`, `inputs`/`outputs`). Rhai
+scenarios use `RhaiScenarioRuntime`; Python `ScriptedModel`s use the separate
+cached Python executor. The script's `on_tick(self)` identity IS the host entity.
 
 **Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
 **per-entity `AST` + persistent `Scope`** (compiled once, hot-reloaded on source
@@ -607,8 +595,8 @@ behavior) vs *centralized* (one scenario `cmd()`s many entities).
   reads); finish the `EntityProxy` stub as the read plane.
 - Higher-level constructs (objectives, behavior trees, sequencer, navigation) →
   **rhai stdlib, NOT core**. Core ships mechanism only.
-- Events → **reuse `TelemetryEvent`/`SampledParameter`** (no new type); finish the
-  `SubscribeTelemetry` stub as the single pub/sub path.
+- Events → **reuse `TelemetryEvent`/`SampledParameter`** (no new type); the typed
+  `SubscribeTelemetry` path is the single pub/sub surface.
 - Event subject identity → **YAMCS mnemonic** in `name` (zero schema change).
 - ROS2 → events↔topics, commands↔services/actions, objectives↔actions; keep the
   message bus as the bridge seam; rhai stays ROS-agnostic.

@@ -9,7 +9,7 @@
 // or `dt()` integration in rhai — timing and state come from the simulation.
 //
 // Phases: follow the lander down → wait for its `lander_touchdown` event → detach
-// the rover → `rover_deployed` → reveal a 3-gate course one dome at a time.
+// the rover → `rover_deployed` → consume the marker Sensor's waypoint events.
 //
 // Every phase it reaches, it ANNOUNCES on the bus: `rover_deployed`,
 // `waypoint_1_reached` … `waypoint_3_reached`, `course_complete`. That's the whole
@@ -17,82 +17,112 @@
 // `rover_deployed`, the tutorial turns the rest into a student checklist. Neither
 // reaches into this script's state, and this script knows about neither.
 
-/// Reveal (`on`) or hide a waypoint dome by scaling its mesh. Resolved by path at
-/// call time (inside a step closure).
-fn show_wp(n, on) {
-    let s = if on { 1.0 } else { 0.0 };
-    set(find("/LanderTest/RoverTarget" + n + "/Dome"), "Transform.scale", [s, s, s]);
+// The marker's visible Sphere is also its overlap Sensor. The runtime emits
+// `waypoint.reached` with the composed marker path as its value; mission policy
+// translates that event into the named course events.
+fn on_event(me, evt) {
+    let rover = find("/LanderTest/SkidRover");
+    if evt.name != "waypoint.reached" || evt.source != rover { return; }
+    if evt.value == "/LanderTest/RoverTarget1" {
+        emit("waypoint_1_reached");
+    } else if evt.value == "/LanderTest/RoverTarget2" {
+        emit("waypoint_2_reached");
+    } else if evt.value == "/LanderTest/RoverTarget3" {
+        emit("waypoint_3_reached");
+        emit("course_complete");
+    }
 }
 
-/// True once the rover is within `r` metres of waypoint `n`. A reliable distance
-/// check that works whether the autopilot or the player drives — the rover's
-/// raycast-wheel compound collider doesn't reliably trip an avian Sensor, so we
-/// read positions directly instead of waiting on a zone-enter event.
-fn at_wp(n, r) {
-    let t = world_pos(find("/LanderTest/RoverTarget" + n));
-    if t == () { return false; }
-    arrived(find("/LanderTest/SkidRover"), t, r)
+fn begin_descent(me) {
+    follow(find("/LanderTest/Lander"));
+    notify_kind("Powered descent - the GNC is flying the lander down.", "info");
+}
+
+fn touchdown_notice(me) {
+    notify_kind("Touchdown.", "success");
+}
+
+fn release_notice(me) {
+    detach_joint(find("/LanderTest/LanderRoverJoint"));
+    notify("Releasing the rover...");
+}
+
+fn engage_notice(me) {
+    emit("rover_deployed");
+    cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
+    notify_kind("Rover deployed - autopilot driving the course. Click the rover (or press F) to take over.", "success");
+}
+
+fn gate_one_notice(me) {
+    notify_kind("Waypoint 1 reached! Continue to marker 2 (2 of 3).", "success");
+}
+
+fn gate_two_notice(me) {
+    notify_kind("Waypoint 2 reached! Continue to marker 3 (3 of 3).", "success");
+}
+
+fn gate_three_notice(me) {
+    notify_kind("All waypoints reached - course complete!", "success");
 }
 
 /// The engine auto-runs a `task(me)` if defined (prelude `__init_task`). Phases:
 /// land (wait for the lander's own `lander_touchdown` event) → deploy rover →
-/// drive a 3-gate course, each gate revealed only after the previous is reached.
-fn task(me) {
+/// drive a 3-gate course, with each arrival reported by its marker Sensor.
+fn descent() {
     seq([
-        once(|m| {
-            // Camera rides along WITHOUT possessing: `follow` inserts a chase camera
-            // (SpringArmCamera) but no ControllerLink, so the lander stays UNPOSSESSED
-            // → its `piloted` port reads 0 → the internal GNC flies it. Possessing it
-            // would set piloted=1 and hand control to the pilot — reserved for a human
-            // (or an autopilot) deliberately taking over.
-            follow(find("/LanderTest/Lander"));
-            show_wp(2, false);
-            show_wp(3, false);
-            notify_kind("Powered descent - the GNC is flying the lander down.", "info");
-        }),
+        once(Fn("begin_descent")),
         // The lander's supervisor emits `lander_touchdown` when it settles.
         wait_for("lander_touchdown"),
-        once(|m| {
-            notify_kind("Touchdown.", "success");
-        }),
-        wait(1.5),                                       // brief settle (sim seconds)
-        once(|m| {
-            detach_joint(find("/LanderTest/LanderRoverJoint"));
-            notify("Releasing the rover...");
-        }),
-        wait(2.0),                                       // let the rover fall clear
-        once(|m| {
-            // Engage the rover's autopilot (it drives the course until the player
-            // takes the wheel). The rover's own script listens for this event.
-            emit("rover_deployed");
-            cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
-            notify_kind("Rover deployed - autopilot driving the course. Click the rover (or press F) to take over.", "success");
-        }),
-
-        // ── 3-gate course ──────────────────────────────────────────────────
-        // Arrival = the rover within range of each gate (reliable distance check).
-        // Each arrival hides the reached dome, reveals the next — "show the next
-        // after it's done once" — and emits its own event for watchers.
-        wait_until(|m| at_wp(1, 5.0)),
-        once(|m| {
-            show_wp(1, false);
-            show_wp(2, true);
-            emit("waypoint_1_reached");
-            notify_kind("Waypoint 1 reached! Next dome revealed (2 of 3).", "success");
-        }),
-        wait_until(|m| at_wp(2, 5.0)),
-        once(|m| {
-            show_wp(2, false);
-            show_wp(3, true);
-            emit("waypoint_2_reached");
-            notify_kind("Waypoint 2 reached! Final dome revealed (3 of 3).", "success");
-        }),
-        wait_until(|m| at_wp(3, 5.0)),
-        once(|m| {
-            show_wp(3, false);
-            emit("waypoint_3_reached");
-            emit("course_complete");
-            notify_kind("All waypoints reached - course complete!", "success");
-        }),
+        once(Fn("touchdown_notice")),
     ])
+}
+
+fn release_rover() {
+    seq([
+        wait(1.5),                                       // brief settle (sim seconds)
+        once(Fn("release_notice")),
+        wait(2.0),                                       // let the rover fall clear
+    ])
+}
+
+fn engage_rover() {
+    seq([
+        once(Fn("engage_notice")),
+    ])
+}
+
+fn gate_one() {
+    seq([
+        // ── 3-gate course ──────────────────────────────────────────────────
+        // Arrival is the shared marker Sensor event. The USD-backed waypoint
+        // projection tints only the marker that actually emitted this event.
+        wait_for("waypoint_1_reached"),
+        once(Fn("gate_one_notice")),
+    ])
+}
+
+fn gate_two() {
+    seq([
+        wait_for("waypoint_2_reached"),
+        once(Fn("gate_two_notice")),
+    ])
+}
+
+fn gate_three() {
+    seq([
+        wait_for("waypoint_3_reached"),
+        once(Fn("gate_three_notice")),
+    ])
+}
+
+fn descent_and_deploy() {
+    seq([descent(), release_rover(), engage_rover()])
+}
+
+fn survey_course() {
+    seq([gate_one(), gate_two(), gate_three()])
+}
+
+fn task(me) {
+    seq([descent_and_deploy(), survey_course()])
 }

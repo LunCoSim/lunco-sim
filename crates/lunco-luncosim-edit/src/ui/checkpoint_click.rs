@@ -953,9 +953,9 @@ fn target_matches(a: &str, b: &str) -> bool {
     a == b || a.ends_with(b) || b.ends_with(a)
 }
 
-/// Runtime visual progress for one route. The collision-backed set is the
-/// durable arrival record; the behavior cursor fills the gap for wheel rigs
-/// whose child colliders do not emit a waypoint Sensor overlap.
+/// Runtime visual progress for one route. Only the collision-backed set is
+/// evidence that a waypoint was visited. The behavior cursor identifies the
+/// active leg, but never changes visited state.
 #[derive(Clone, Debug, Default)]
 struct RouteVisualState {
     visited: Vec<bool>,
@@ -969,32 +969,26 @@ fn route_visual_state(
     completed: bool,
     looping: bool,
 ) -> RouteVisualState {
-    let mut visited = targets
+    let visited = targets
         .iter()
         .map(|target| {
             reached.is_some_and(|reached| reached.0.iter().any(|done| target_matches(done, target)))
         })
         .collect::<Vec<_>>();
 
-    if let Some(cursor) = cursor {
-        for done in visited.iter_mut().take(cursor) {
-            *done = true;
+    let cursor_index = cursor.and_then(|index| {
+        if targets.is_empty() {
+            None
+        } else if looping {
+            Some(index % targets.len())
+        } else {
+            (index < targets.len()).then_some(index)
         }
-    }
-    if completed {
-        visited.fill(true);
-    }
-
+    });
     let active_index = if completed {
         None
     } else {
-        visited.iter().position(|visited| !visited).or_else(|| {
-            looping
-                .then_some(cursor)
-                .flatten()
-                .filter(|_| !targets.is_empty())
-                .map(|i| i % targets.len())
-        })
+        cursor_index.or_else(|| visited.iter().position(|visited| !visited))
     };
 
     RouteVisualState {
@@ -2412,10 +2406,10 @@ mod tests {
     }
 
     #[test]
-    fn route_progress_uses_autopilot_cursor_when_sensor_arrival_is_missing() {
+    fn route_progress_does_not_mark_unobserved_waypoints_visited() {
         let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
         let state = route_visual_state(&targets, None, Some(1), false, false);
-        assert_eq!(state.visited, vec![true, false]);
+        assert_eq!(state.visited, vec![false, false]);
         assert_eq!(state.active_index, Some(1));
     }
 
@@ -2454,10 +2448,18 @@ mod tests {
     }
 
     #[test]
-    fn route_progress_marks_completion_without_a_cursor() {
+    fn route_progress_completion_keeps_unvisited_waypoints_unvisited() {
         let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
-        let state = route_visual_state(&targets, None, None, true, false);
-        assert_eq!(state.visited, vec![true, true]);
+        let mut reached = std::collections::HashSet::new();
+        reached.insert("/Route/W0".to_string());
+        let state = route_visual_state(
+            &targets,
+            Some(&ReachedWaypoints(reached)),
+            None,
+            true,
+            false,
+        );
+        assert_eq!(state.visited, vec![true, false]);
         assert_eq!(state.active_index, None);
     }
 

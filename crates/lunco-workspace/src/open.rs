@@ -58,17 +58,6 @@ fn twin_open_failed(detail: impl Into<String>) -> TelemetryEvent {
     }
 }
 
-/// Scene/workspace opens are terminally disabled after a runtime fault. The
-/// fault owns the session boundary: replacing the Twin would destroy the
-/// causal scene and leave a partially reset process behind.
-fn scene_open_rejected(faults: Option<&lunco_core::RuntimeFaults>, operation: &str) -> bool {
-    let Some(reason) = faults.and_then(|faults| faults.scene_mutation_rejection(operation)) else {
-        return false;
-    };
-    error!("[workspace] {reason}");
-    true
-}
-
 /// Open a Twin folder — strict: the folder must contain a `twin.toml`.
 ///
 /// VS Code semantics: this **replaces** the currently open folders. Use
@@ -86,14 +75,10 @@ pub struct OpenTwin {
 #[on_command(OpenTwin)]
 fn on_open_twin(
     trigger: On<OpenTwin>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut workspace: ResMut<WorkspaceResource>,
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
 ) {
-    if scene_open_rejected(faults.as_deref(), "open a Twin") {
-        return;
-    }
     let path = trigger.event().path.clone();
     if path.is_empty() {
         // "Ask the human" — a windowed host answers this with a picker; a
@@ -131,14 +116,10 @@ pub struct OpenFolder {
 #[on_command(OpenFolder)]
 fn on_open_folder(
     trigger: On<OpenFolder>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut workspace: ResMut<WorkspaceResource>,
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
 ) {
-    if scene_open_rejected(faults.as_deref(), "open a folder") {
-        return;
-    }
     let path = trigger.event().path.clone();
     if path.is_empty() {
         warn!(
@@ -177,13 +158,9 @@ pub struct AddFolderToWorkspace {
 #[on_command(AddFolderToWorkspace)]
 fn on_add_folder_to_workspace(
     trigger: On<AddFolderToWorkspace>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
 ) {
-    if scene_open_rejected(faults.as_deref(), "add a folder to the workspace") {
-        return;
-    }
     let path = trigger.event().path.clone();
     if path.is_empty() {
         return; // windowed hosts answer this with a picker
@@ -212,14 +189,7 @@ pub struct AddTwin {
 }
 
 #[on_command(AddTwin)]
-fn on_add_twin(
-    trigger: On<AddTwin>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
-    mut pending: ResMut<PendingTwinOpens>,
-) {
-    if scene_open_rejected(faults.as_deref(), "add a Twin to the workspace") {
-        return;
-    }
+fn on_add_twin(trigger: On<AddTwin>, mut pending: ResMut<PendingTwinOpens>) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
         return; // windowed hosts answer this with a picker
@@ -318,16 +288,11 @@ pub fn spawn_twin_scan(
 /// and fire [`TwinAdded`]; in-flight ones are kept for the next frame.
 pub fn drain_pending_twin_opens(
     mut pending: ResMut<PendingTwinOpens>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut workspace: ResMut<WorkspaceResource>,
     mut commands: Commands,
 ) {
     use bevy::tasks::futures_lite::future;
     if pending.tasks.is_empty() {
-        return;
-    }
-    if scene_open_rejected(faults.as_deref(), "finish opening a Twin") {
-        pending.tasks.clear();
         return;
     }
     let mut still_running = Vec::with_capacity(pending.tasks.len());

@@ -18,6 +18,10 @@ fn on_event(me, evt) {
     }
 }
 
+fn runtime_waypoint_fail(detail) {
+    report_verdict([detail], "RUNTIME WAYPOINT", "RUNTIME_WAYPOINT");
+}
+
 fn on_tick(me) {
     if this.done { return; }
     this.elapsed += dt();
@@ -33,8 +37,7 @@ fn on_tick(me) {
         if !result.ok {
             if this.elapsed <= 10.0 { return; }
             this.done = true;
-            report_verdict(["SpawnEntity failed: " + result.error],
-                           "RUNTIME WAYPOINT", "RUNTIME_WAYPOINT");
+            runtime_waypoint_fail("SpawnEntity failed: " + result.error);
             return;
         }
         this.spawn_issued = true;
@@ -48,8 +51,7 @@ fn on_tick(me) {
         if this.rover < 0 {
             if this.elapsed > 10.0 {
                 this.done = true;
-                report_verdict(["spawned Ackermann rover did not materialize"],
-                               "RUNTIME WAYPOINT", "RUNTIME_WAYPOINT");
+                runtime_waypoint_fail("spawned Ackermann rover did not materialize");
             }
             return;
         }
@@ -58,14 +60,13 @@ fn on_tick(me) {
     if !this.waypoint_issued {
         let result = cmd("AddRuntimeWaypoint", #{
             target: this.rover,
-            // Ground-level marker origin; its shared Zone is lifted to the
-            // rover's chassis height and has a 4 m arrival radius.
+            // Ground-level marker origin; the visible marker is also the
+            // overlap Sensor, so its authored radius is shared by both.
             position: [0.0, 0.0, 0.0],
         });
         if !result.ok {
             this.done = true;
-            report_verdict(["AddRuntimeWaypoint failed: " + result.error],
-                           "RUNTIME WAYPOINT", "RUNTIME_WAYPOINT");
+            runtime_waypoint_fail("AddRuntimeWaypoint failed: " + result.error);
             return;
         }
         this.waypoint_issued = true;
@@ -94,7 +95,6 @@ fn on_tick(me) {
                 " reached_count=" + status.reached_count +
                 " arrival_events=" + this.arrival_events;
         }
-        report_verdict(["runtime waypoint did not arrive: " + detail],
-                       "RUNTIME WAYPOINT", "RUNTIME_WAYPOINT");
+        runtime_waypoint_fail("runtime waypoint did not arrive: " + detail);
     }
 }

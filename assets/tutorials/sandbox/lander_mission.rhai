@@ -4,8 +4,8 @@
 //! The lesson IS this script (run by the launcher on the tutorial host). It loads
 //! `lander_ops.usda`, whose OWN embedded scenarios fly the mission:
 //!   • `/LanderTest/Scenario` → `rover_surface_ops.rhai`: powered descent →
-//!     `lander_touchdown` → detach the joint → `rover_deployed` → reveal a 3-gate
-//!     course one dome at a time, announcing `waypoint_N_reached` / `course_complete`.
+//!     `lander_touchdown` → detach the joint → `rover_deployed` → consume the
+//!     three marker Sensor events, announcing `waypoint_N_reached` / `course_complete`.
 //!   • `/LanderTest/SkidRover` → `lander_rover_patrol.btxml`: drives the course after
 //!     `rover_deployed`, and yields the moment a human takes the rover.
 //! Both emit their phase events on the global bus, so this tutorial just *watches*:
@@ -58,11 +58,6 @@ fn lander_human_takeover(me) {
 
 fn lander_human_has_control(me) {
     human_drives(find("/LanderTest/SkidRover"))
-}
-
-fn lander_at_final_gate(me) {
-    let d = distance(find("/LanderTest/SkidRover"), find("/LanderTest/RoverTarget3"));
-    d >= 0.0 && d < 6.0
 }
 
 fn lander_course_finished(me) {
@@ -132,14 +127,12 @@ fn mission(me) {
             done: Fn("lander_human_has_control"),
             on_complete: Fn("lander_human_takeover"),
         }),
-        // 4 — drive the course home. Gated on the takeover, then completes on a
-        // plain distance read to the final gate. dwell 0.4s so a fly-through won't
-        // count.
+        // 4 — drive the course home. Gated on the takeover, then completes on
+        // the scene's authoritative final-marker event.
         objective("finish", #{
             text: "Drive the rover to the final waypoint",
             requires: ["takeover"],
-            done: Fn("lander_at_final_gate"),
-            dwell: 0.4,
+            requires_event: "waypoint_3_reached",
             on_complete: Fn("lander_course_finished"),
         }),
     ]
@@ -149,9 +142,9 @@ fn on_event(me, evt) {
     // Coach the course from the scene's own gate events — the scenario counts the
     // gates, the tutorial narrates them.
     if evt.name == "waypoint_1_reached" {
-        hint("One gate down. The next dome just lit up — head for it.");
+        hint("One gate down. Continue to the next marker.");
     } else if evt.name == "waypoint_2_reached" {
-        hint("Two down. The final dome is revealed.");
+        hint("Two down. Continue to the final marker.");
     } else if evt.name == "MISSION_COMPLETE" {
         // The engine emits MISSION_COMPLETE once every objective is done.
         hint("Mission complete! You've flown a descent and driven a rover. Free-roam, or replay any lesson from the 🎓 Tutorials menu.");

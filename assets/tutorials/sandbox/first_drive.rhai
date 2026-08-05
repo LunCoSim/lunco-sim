@@ -22,11 +22,6 @@ fn first_drive_possessed(me) {
     hint("Now use W / A / S / D to drive to the glowing flag.");
 }
 
-fn first_drive_at_flag(me) {
-    let d = distance(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"));
-    d >= 0.0 && d < 6.0
-}
-
 fn first_drive_finished(me) {
     notify_kind("You reached the flag — nice driving!", "success");
 }
@@ -44,14 +39,12 @@ fn mission(me) {
             requires_event: "cmd:PossessVessel",
             on_complete: Fn("first_drive_possessed"),
         }),
-        // Step 2 — drive to the flag. Gated on step 1, then completes on distance
-        // (robust: a plain world-position read, no dependence on a trigger volume).
-        // dwell 0.4s so a fly-through blip doesn't count.
+        // Step 2 — drive to the flag. Gated on step 1, then completed by the
+        // flag's shared visible-marker Sensor event.
         objective("reach_flag", #{
             text: "Drive to the glowing flag",
             requires: ["possess"],
-            done: Fn("first_drive_at_flag"),
-            dwell: 0.4,
+            requires_event: "enter:waypoint",
             on_complete: Fn("first_drive_finished"),
         }),
     ]

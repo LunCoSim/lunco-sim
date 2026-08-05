@@ -65,13 +65,44 @@ The engine that runs it comes from the source's extension, so nothing about the 
 needs a binding of its own — and deleting the prim deletes the mission, which is exactly
 what a patrol should be.
 
-Two things fell out of the existing codebase rather than being invented:
+Two things are deliberately shared rather than duplicated:
 
-- **The pin visual already existed** — `assets/vessels/markers/waypoint.usda`, a
-  translucent dome with an arrival trigger zone, had **no Rust reader**. It was built
-  for this and never wired up.
-- **`BehaviorSpec`'s own doc** already declared JSON its wire format and named "USD
-  metadata" as an intended channel.
+- **The marker is one USD shape** — `assets/vessels/markers/waypoint.usda` authors
+  one `UsdGeomSphere` named `Dome`. Its standard USD `radius` is the only waypoint
+  size input. The same composed sphere is rendered and projected as the overlap-only
+  Avian `Sensor`; there is no invisible `Zone` with a second radius.
+- **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
+  vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with the marker
+  path. The route UI uses that set for visited appearance; an autopilot cursor may
+  identify the active leg but cannot mark a waypoint visited.
+
+This keeps USD as the source of truth for identity, geometry, placement, and sensor
+size. Rhai consumes the event and sequences mission policy; it does not scale marker
+meshes or poll a duplicate distance tolerance.
+
+`BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
+metadata" as an intended channel.
+
+### One authored marker, one radius, one arrival path
+
+The reusable marker follows the standard-schema boundary:
+
+```usda
+def Sphere "Dome" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+{
+    double radius = 2.5
+    double3 xformOp:translate = (0, 2.5, 0)
+    bool physics:collisionEnabled = true
+    custom string lunco:triggerZone = "waypoint"
+}
+```
+
+`lunco:triggerZone` is the mission meaning that USD does not define; `radius`,
+transform, visibility, material, and collision are standard USD/UsdPhysics data.
+`lunco-usd-bevy::read_shape_dims` is the shared shape projection used by both the
+visual mesh and the Avian collider, so changing `radius` changes both together.
+The sensor is non-solid and remains visibly present after arrival; the live route
+projection tints only entries in `ReachedWaypoints` gray.
 
 ### Waypoints are not children of the vessel
 

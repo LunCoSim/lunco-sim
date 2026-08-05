@@ -23,11 +23,6 @@ fn b1_driving_started(me) {
     hint("You're driving. W / S throttle forward and back, A / D steer, Space brakes. Read the telemetry while you roll onto the ramp.");
 }
 
-fn b1_at_flag(me) {
-    let d = distance(find("/DrivingBasics/Rover"), find("/DrivingBasics/Flag"));
-    d >= 0.0 && d < 6.0
-}
-
 fn b1_finished(me) {
     clear_spotlight();
     notify_kind("Nice climb — that's the feel of a grade under wheels.", "success");
@@ -41,13 +36,12 @@ fn mission(me) {
             requires_event: "cmd:PossessVessel",
             on_complete: Fn("b1_driving_started"),
         }),
-        // 2 — climb the ramp to the finish flag. The drive out + the climb are one
-        // objective, measured by arrival (a plain distance read, robust to path).
+        // 2 — climb the ramp to the finish flag. The marker's shared Sensor
+        // supplies the authoritative arrival event.
         objective("reach_flag", #{
             text: "Drive out, then climb the ramp and stop at the finish flag",
             requires: ["possess"],
-            done: Fn("b1_at_flag"),
-            dwell: 0.4,
+            requires_event: "enter:waypoint",
             on_complete: Fn("b1_finished"),
         }),
     ]

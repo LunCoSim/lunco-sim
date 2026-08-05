@@ -6,9 +6,9 @@
 )
 
 # Reusable mission waypoint marker — a translucent glowing DOME a vehicle is
-# meant to drive to. It NEVER collides with physics: the dome has no collider,
-# and the trigger volume is an overlap-only avian Sensor (non-solid). Arrival is
-# an EVENT (`enter:waypoint`) reacted to in rhai, not a per-tick distance poll.
+# meant to drive to. It NEVER collides as a solid body: the visible dome is also
+# an overlap-only avian Sensor (non-solid). Arrival is an EVENT
+# (`enter:waypoint`) reacted to in rhai, not a per-tick distance poll.
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`. Transparency
 # uses the standard `primvars:displayOpacity` (folded into base-color alpha +
@@ -51,17 +51,18 @@ def Xform "WaypointMarker" (
         }
     }
 
-    # Translucent emissive dome. A sphere centred at the marker origin (ground
-    # level): the upper half reads as a half-sphere dome; the lower half sits
-    # below the surface and is hidden. Purely visual — no collider.
-    def Sphere "Dome"
+    # Translucent emissive dome and overlap Sensor. This is deliberately one
+    # Sphere: its standard USD radius is the single waypoint-size input used by
+    # both the rendered marker and the Avian collider projection.
+    def Sphere "Dome" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
     {
         custom string lunco:interaction:left = "pass_through"
         custom string lunco:interaction:right = "context"
         double radius = 2.5
-        # The marker origin is the terrain contact point. Lift the visual
-        # centre by one radius so the complete dome is above the surface;
-        # the trigger remains independently authored at ground level.
+        # The marker origin is the terrain contact point. Lift the sphere centre
+        # by one radius so the complete visible dome is above the surface.
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
@@ -72,23 +73,10 @@ def Xform "WaypointMarker" (
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow.
         bool primvars:doNotCastShadows = true
-        bool physics:collisionEnabled = false
-    }
-
-    # Geofence trigger volume — overlap-only Sensor (invisible, NON-SOLID, so it
-    # never pushes the rover). `lunco:triggerZone` fires `enter:waypoint` /
-    # `exit:waypoint` events when a vehicle crosses it. Radius = arrival
-    # tolerance. Override `lunco:triggerZone` on the referencing prim if a scene
-    # has several waypoints.
-    def Sphere "Zone" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
-    {
-        double radius = 4.0
-        double3 xformOp:translate = (0, 1.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:collisionEnabled = true
-        token visibility = "invisible"
+        # The visible sphere itself is the non-solid arrival sensor. Its
+        # authored radius above therefore defines both the visual footprint
+        # and the arrival tolerance, with no second size variable to drift.
         custom string lunco:triggerZone = "waypoint"
     }
 }

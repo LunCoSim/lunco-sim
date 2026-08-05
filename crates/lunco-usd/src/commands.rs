@@ -268,7 +268,6 @@ fn on_scene_transition_intent(
 /// workspace eagerly opens them, each resolving its own starting scene.
 fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     workspace: Res<WorkspaceResource>,
     twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
     // Optional: headless/test apps (MinimalPlugins) have no `AssetServer` /
@@ -281,13 +280,6 @@ fn open_usd_docs_on_twin_added(
     mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
 ) {
-    if let Some(reason) = faults
-        .as_deref()
-        .and_then(|faults| faults.scene_mutation_rejection("open a Twin"))
-    {
-        error!("[twin] {reason}");
-        return;
-    }
     let twin_id = trigger.event().twin;
     let Some(twin) = workspace.twin(twin_id) else {
         return;
@@ -496,7 +488,6 @@ fn on_load_scene(
     // panic — a required `Res` here aborts the whole `Main` schedule.
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut commands: Commands,
     q_usd: Query<(
         Entity,
@@ -515,13 +506,6 @@ fn on_load_scene(
     // query would still read non-empty and clobber the reason mid-open).
     mut empty_reason: ResMut<EmptyViewportReason>,
 ) {
-    if let Some(reason) = faults
-        .as_deref()
-        .and_then(|faults| faults.scene_mutation_rejection("load a scene"))
-    {
-        error!("[load-scene] {reason}");
-        return;
-    }
     // Accept an absolute path (Twin manifests join `default_scene` to the Twin
     // root) or an already-relative asset path; bail if an absolute path lies
     // outside the assets dir.
@@ -698,15 +682,7 @@ fn on_restart_scene_refresh_active_document(
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
     twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     role: Option<Res<lunco_core::NetworkRole>>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
 ) {
-    if let Some(reason) = faults
-        .as_deref()
-        .and_then(|faults| faults.scene_mutation_rejection("restart a scene"))
-    {
-        error!("[restart-scene] {reason}");
-        return;
-    }
     // The authoritative host/standalone process owns the source file. Clients
     // restart the currently replicated asset and must not invent a local base.
     if role.as_deref().is_some_and(|role| !role.is_authoritative()) {
@@ -800,20 +776,9 @@ fn on_restart_scene_refresh_active_document(
 // `spawn_scene_root_world` loads the stage through the `AssetServer` (by
 // path, no fs), so this half carries no I/O of its own.
 #[on_command(OpenFile)]
-fn on_open_file(
-    trigger: On<OpenFile>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
-    mut commands: Commands,
-) {
+fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
     if !is_usd_path(&path) {
-        return;
-    }
-    if let Some(reason) = faults
-        .as_deref()
-        .and_then(|faults| faults.scene_mutation_rejection("import a scene"))
-    {
-        error!("[open-file] {reason}");
         return;
     }
     // Scheme-qualified sources are direct, read-only asset mounts rather than

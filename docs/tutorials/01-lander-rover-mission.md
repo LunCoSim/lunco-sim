@@ -798,45 +798,32 @@ away. We point it at an autopilot script now and write that in Step 10.
 
 ## Step 8 — Plant the waypoints
 
-The rover's job is to visit three spots. A glowing marker with an invisible trigger
-bubble already exists at `assets/vessels/markers/waypoint.usda`; it looks like this:
+The rover's job is to visit three spots. A glowing marker whose visible sphere is
+also its overlap Sensor already exists at `assets/vessels/markers/waypoint.usda`:
 
 ```usda
 def Xform "WaypointMarker"
 {
-    def Sphere "Dome"
+    def Sphere "Dome" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {
         double radius = 2.5
+        double3 xformOp:translate = (0, 2.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.2, 0.95, 0.5)
         color3f primvars:emissiveColor = (0.12, 0.85, 0.42)
         float primvars:displayOpacity = 0.28
-        bool physics:collisionEnabled = false
-    }
-
-    def Sphere "Zone" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
-    {
-        double radius = 4.0
-        double3 xformOp:translate = (0, 1.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:collisionEnabled = true
-        token visibility = "invisible"
         custom string lunco:triggerZone = "waypoint"
     }
 }
 ```
 
-The dome is just for show (no collider). The `Zone` is the clever bit:
-`lunco:triggerZone` turns it into a sensor that doesn't block anything but *fires an
-event* — `enter:waypoint` — the moment something drives into it. The event carries
-who entered and which sensor fired, so a script can wait on one specific gate with
-`wait_for_from("enter:waypoint", "/Mission/RoverTarget2/Zone")` and tell it apart
-from its identical siblings.
-
-One honest caveat, and it's why the mission below doesn't use those events: this
-rover's wheels are raycasts rather than solid colliders, so its chassis doesn't
-reliably overlap the bubble. Trigger zones are the right tool for a walking
-astronaut or a solid crate; for this rover we read the distance instead. Reach for
-whichever actually fires.
+The standard USD `radius` above is the single size input for both the rendered
+marker and the Avian collider. `lunco:triggerZone` makes that same sphere a
+non-solid Sensor: it emits `enter:waypoint`, and the waypoint projection records
+the composed marker path in `ReachedWaypoints` and emits `waypoint.reached`.
+There is no second invisible volume and no distance-polling fallback. The marker
+stays visible after arrival; the route UI tints only the marker recorded as reached.
 
 Drop three markers into the scene:
 
@@ -881,23 +868,22 @@ step either *does* something once, *waits* for some time, or *waits* for a condi
 or an event.
 
 ```rhai
-fn show_wp(n, on) {
-    let s = if on { 1.0 } else { 0.0 };
-    set(find("/Mission/RoverTarget" + n + "/Dome"), "Transform.scale", [s, s, s]);
-}
-
-/// True once the rover is within `r` metres of waypoint `n`.
-fn at_wp(n, r) {
-    let t = world_pos(find("/Mission/RoverTarget" + n));
-    if t == () { return false; }
-    arrived(find("/Mission/SkidRover"), t, r)
+fn on_event(me, evt) {
+    let rover = find("/Mission/SkidRover");
+    if evt.name != "waypoint.reached" || evt.source != rover { return; }
+    if evt.value == "/Mission/RoverTarget1" {
+        emit("waypoint_1_reached");
+    } else if evt.value == "/Mission/RoverTarget2" {
+        emit("waypoint_2_reached");
+    } else if evt.value == "/Mission/RoverTarget3" {
+        emit("waypoint_3_reached");
+    }
 }
 
 fn task(me) {
     seq([
         once(|m| {
             follow(find("/Mission/Lander"));           // ride the camera down
-            show_wp(2, false); show_wp(3, false);      // only the first dome shows
             notify_kind("Powered descent - the GNC is flying the lander down.", "info");
         }),
 
@@ -914,16 +900,14 @@ fn task(me) {
             notify_kind("Rover deployed - autopilot driving. Click the rover (or press F) to take over.", "success");
         }),
 
-        // The course. Reaching a gate hides it, reveals the next, and announces
-        // itself on the bus so anything watching can react.
-        wait_until(|m| at_wp(1, 5.0)),
-        once(|m| { show_wp(1, false); show_wp(2, true); emit("waypoint_1_reached");
-                   notify_kind("Waypoint 1 reached (2 of 3).", "success"); }),
-        wait_until(|m| at_wp(2, 5.0)),
-        once(|m| { show_wp(2, false); show_wp(3, true); emit("waypoint_2_reached");
-                   notify_kind("Waypoint 2 reached (3 of 3).", "success"); }),
-        wait_until(|m| at_wp(3, 5.0)),
-        once(|m| { show_wp(3, false); emit("course_complete");
+        // The course. The scene's Sensor events are the only arrival facts;
+        // the marker projection owns the visited tint.
+        wait_for("waypoint_1_reached"),
+        once(|m| notify_kind("Waypoint 1 reached (2 of 3).", "success")),
+        wait_for("waypoint_2_reached"),
+        once(|m| notify_kind("Waypoint 2 reached (3 of 3).", "success")),
+        wait_for("waypoint_3_reached"),
+        once(|m| { emit("course_complete");
                    notify_kind("All waypoints reached - course complete!", "success"); }),
     ])
 }
@@ -1030,8 +1014,10 @@ or give each waypoint a time limit and fail the mission if it's missed.
   `min`/`max`, or arithmetic; chained `else if` doesn't translate cleanly.
 - Need a model to *decide* something from a wired-in value? Put the condition and
   hysteresis in Modelica, then connect its 0/1 output to `LunCoEvent` (Step 6).
-- A trigger zone never fires? Check what's entering it. Raycast-wheeled rovers don't
-  reliably overlap sensors; read a distance instead (Step 8).
+- A waypoint never reaches? Check that the referenced marker has its standard
+  `radius`, `PhysicsCollisionAPI`, `physics:collisionEnabled = true`, and
+  `lunco:triggerZone = "waypoint"`; the same sphere supplies the visual and Sensor
+  footprint (Step 8).
 - Possessed the vehicle, and only Space does anything? Your model has no `pitch` /
   `roll` / `yaw` inputs, so the `Controls` profile is writing ports nobody reads.
   Ports bind by NAME — a typo is silence, not an error.

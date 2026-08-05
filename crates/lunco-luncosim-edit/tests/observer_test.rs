@@ -65,7 +65,7 @@ fn test_detach_joint_command() {
 }
 
 #[test]
-fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
+fn marker_sensor_enter_marks_the_waypoint_reached_without_deleting_it() {
     let mut app = App::new();
 
     // Initialize required resources and register event / types
@@ -80,7 +80,7 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
     app.register_type::<lunco_usd::commands::ApplyUsdOp>();
     // The arrival bus: avian hands CollisionStart to this system as a message.
     app.init_resource::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>();
-    // The system under test: arrival driven by the marker's own trigger zone,
+    // The system under test: arrival driven by the marker's own Sensor,
     // scheduled in FixedPostUpdate (after the physics writeback).
     app.add_systems(
         FixedPostUpdate,
@@ -123,15 +123,15 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
         ))
         .id();
 
-    // The marker's trigger ZONE — arrival is this zone reporting an entrant, not
-    // a distance the editor measured itself.
-    let zone = app
+    // The marker's visible Sphere is also the Sensor — arrival is this marker
+    // reporting an entrant, not a distance the editor measured itself.
+    let marker_sensor = app
         .world_mut()
         .spawn((
             lunco_core::TriggerZone("waypoint".to_string()),
             lunco_usd_bevy::UsdPrimPath {
                 stage_handle: Default::default(),
-                path: format!("{MARKER}/Zone"),
+                path: format!("{MARKER}/Dome"),
             },
             avian3d::prelude::Sensor,
         ))
@@ -142,7 +142,7 @@ fn zone_enter_marks_the_waypoint_reached_without_deleting_it() {
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>()
         .write(avian3d::prelude::CollisionStart {
-            collider1: zone,
+            collider1: marker_sensor,
             collider2: vessel_entity,
             body1: None,
             body2: Some(vessel_entity),
@@ -204,13 +204,13 @@ fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
         .world_mut()
         .spawn(lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding { vessel, index: 0 })
         .id();
-    let zone = app
+    let marker_sensor = app
         .world_mut()
         .spawn((
             lunco_core::TriggerZone("waypoint".to_string()),
             lunco_usd_bevy::UsdPrimPath {
                 stage_handle: Default::default(),
-                path: "/WaypointMarker/Zone".to_string(),
+                path: "/WaypointMarker/Dome".to_string(),
             },
             avian3d::prelude::Sensor,
             ChildOf(marker),
@@ -220,7 +220,7 @@ fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
     app.world_mut()
         .resource_mut::<bevy::ecs::message::Messages<avian3d::prelude::CollisionStart>>()
         .write(avian3d::prelude::CollisionStart {
-            collider1: zone,
+            collider1: marker_sensor,
             collider2: vessel,
             body1: None,
             body2: Some(vessel),

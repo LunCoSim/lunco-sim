@@ -757,11 +757,17 @@ fn register_graphics_settings(world: &mut World) {
     });
 }
 
+const SCENARIO_MENU_WIDTH: f32 = 360.0;
+const SCENARIO_MENU_ITEM_WIDTH: f32 = 332.0;
+const SCENARIO_MENU_HEIGHT: f32 = 360.0;
+
 fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, ctx| {
+        ui.set_min_width(SCENARIO_MENU_WIDTH);
+        ui.set_max_width(SCENARIO_MENU_WIDTH);
         let has_scene = ctx.resource::<CurrentScenePath>().is_some();
 
         ui.add_enabled_ui(has_scene, |ui| {
@@ -796,6 +802,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
             ui.menu_button(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
+                ui.set_min_width(SCENARIO_MENU_WIDTH);
+                ui.set_max_width(SCENARIO_MENU_WIDTH);
                 if entries.is_empty() {
                     ui.label(
                         bevy_egui::egui::RichText::new("(connect to a server to download one)")
@@ -804,9 +812,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     );
                 }
                 bevy_egui::egui::ScrollArea::vertical()
-                    .max_height(360.0)
+                    .max_height(SCENARIO_MENU_HEIGHT)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.set_min_width(SCENARIO_MENU_ITEM_WIDTH);
+                        ui.set_max_width(SCENARIO_MENU_ITEM_WIDTH);
                         for entry in &entries {
                             let mb = (entry.total_bytes as f64) / (1024.0 * 1024.0);
                             let label = if entry.name.is_empty() {
@@ -814,7 +824,13 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                             } else {
                                 format!("{}  ({mb:.0} MB)", entry.name)
                             };
-                            if ui.button(label).clicked() {
+                            if ui
+                                .add_sized(
+                                    [SCENARIO_MENU_ITEM_WIDTH, 0.0],
+                                    bevy_egui::egui::Button::new(label).wrap(),
+                                )
+                                .clicked()
+                            {
                                 if let Some(scene) = entry.default_scene.clone() {
                                     // Mounts the cache dir as this twin's root and yields the
                                     // same `twin://<name>/<rel>` the host uses for the scene.
@@ -921,13 +937,20 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             |ui: &mut bevy_egui::egui::Ui,
              ctx: &mut MenuCtx,
              items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
+                ui.set_min_width(SCENARIO_MENU_WIDTH);
+                ui.set_max_width(SCENARIO_MENU_WIDTH);
                 bevy_egui::egui::ScrollArea::vertical()
-                    .max_height(360.0)
+                    .max_height(SCENARIO_MENU_HEIGHT)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.set_min_width(SCENARIO_MENU_ITEM_WIDTH);
+                        ui.set_max_width(SCENARIO_MENU_ITEM_WIDTH);
                         for (asset, desc) in items {
                             let label = clean_scene_name(&asset.stem);
-                            let resp = ui.button(label);
+                            let resp = ui.add_sized(
+                                [SCENARIO_MENU_ITEM_WIDTH, 0.0],
+                                bevy_egui::egui::Button::new(label).wrap(),
+                            );
                             // Show the plain-language "what is this demo" blurb on hover.
                             // `on_hover_text` consumes and returns the `Response` (chaining API).
                             let resp = match desc {
@@ -1016,6 +1039,8 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         .unwrap_or_default();
 
     ui.menu_button("🎓 Tutorials", |ui| {
+        ui.set_min_width(SCENARIO_MENU_WIDTH);
+        ui.set_max_width(SCENARIO_MENU_WIDTH);
         let Some(registry) = registry else {
             ui.label(
                 egui::RichText::new("(tutorials unavailable)")
@@ -1034,9 +1059,11 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         }
 
         egui::ScrollArea::vertical()
-            .max_height(360.0)
+            .max_height(SCENARIO_MENU_HEIGHT)
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_min_width(SCENARIO_MENU_ITEM_WIDTH);
+                ui.set_max_width(SCENARIO_MENU_ITEM_WIDTH);
                 for meta in registry.ordered() {
                     let done = progress.completed.iter().any(|c| c == &meta.id);
                     // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
@@ -1046,7 +1073,10 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                         meta.title,
                         meta.difficulty
                     );
-                    let resp = ui.button(label);
+                    let resp = ui.add_sized(
+                        [SCENARIO_MENU_ITEM_WIDTH, 0.0],
+                        egui::Button::new(label).wrap(),
+                    );
                     // Hover tip: the plain-language "what this teaches" blurb.
                     let resp = resp.on_hover_text(meta.blurb.as_str());
                     if resp.clicked() {

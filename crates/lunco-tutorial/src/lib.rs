@@ -1168,10 +1168,16 @@ fn sync_twin_curriculum_root(
 /// a completion tick; clicking starts one. Shared by every workbench app.
 #[cfg(feature = "ui")]
 fn register_tutorials_menu(world: &mut World) {
+    const MENU_WIDTH: f32 = 360.0;
+    const MENU_ITEM_WIDTH: f32 = 332.0;
+    const MENU_HEIGHT: f32 = 360.0;
+
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
     layout.register_custom_menu("🎓 Tutorials", |ui, ctx| {
+        ui.set_min_width(MENU_WIDTH);
+        ui.set_max_width(MENU_WIDTH);
         let registry = ctx
             .resource::<TutorialRegistry>()
             .cloned()
@@ -1224,20 +1230,32 @@ fn register_tutorials_menu(world: &mut World) {
                 .map(|t| t.label.clone())
                 .unwrap_or_else(|| app_key.clone());
             ui.menu_button(label, |ui| {
-                for meta in metas {
-                    let done = progress.is_completed(&meta.id);
-                    let glyph = if done { "✓" } else { "🎓" };
-                    if ui
-                        .button(format!("{glyph}  {}", meta.title))
-                        .on_hover_text(meta.blurb.as_str())
-                        .clicked()
-                    {
-                        ctx.trigger(StartTutorial {
-                            id: meta.id.to_string(),
-                        });
-                        ui.close();
-                    }
-                }
+                ui.set_min_width(MENU_WIDTH);
+                ui.set_max_width(MENU_WIDTH);
+                egui::ScrollArea::vertical()
+                    .max_height(MENU_HEIGHT)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_width(MENU_ITEM_WIDTH);
+                        ui.set_max_width(MENU_ITEM_WIDTH);
+                        for meta in metas {
+                            let done = progress.is_completed(&meta.id);
+                            let glyph = if done { "✓" } else { "🎓" };
+                            if ui
+                                .add_sized(
+                                    [MENU_ITEM_WIDTH, 0.0],
+                                    egui::Button::new(format!("{glyph}  {}", meta.title)).wrap(),
+                                )
+                                .on_hover_text(meta.blurb.as_str())
+                                .clicked()
+                            {
+                                ctx.trigger(StartTutorial {
+                                    id: meta.id.to_string(),
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
             });
         }
 

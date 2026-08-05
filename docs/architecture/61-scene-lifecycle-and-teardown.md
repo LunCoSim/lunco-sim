@@ -47,6 +47,13 @@ Resources, caches and worker-side handles are not entities and are not covered
 by a despawn. They are unloaded by the `SceneTeardown` schedule
 (`lunco_usd_bevy::scene_lifecycle`), run from the same teardown.
 
+Scene safety state follows the same boundary. `lunco_core::RuntimeFaults` records
+the first terminal physics/runtime failure for the active scene, while
+`PhysicsHolds::SAFETY_FAILURE` stops unsafe stepping. The USD simulation owner
+clears both in `SceneTeardown` before the replacement scene integrates. A bad
+scene therefore stops safely, but cannot become a process-wide load lock; there
+is no restart-process fallback or mutation-rejection shim in the scene commands.
+
 It is a **schedule**, not a registry, and that choice is the design:
 
 - Bevy already expresses "run these systems at this lifecycle edge" — that is

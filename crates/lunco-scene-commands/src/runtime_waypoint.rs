@@ -30,7 +30,7 @@ use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 pub struct AddRuntimeWaypoint {
     /// Spawned rover root receiving the waypoint.
     pub target: Entity,
-    /// Grid-absolute waypoint origin. The shared marker's trigger zone is
+    /// Grid-absolute waypoint origin. The shared marker's overlap Sensor is
     /// positioned relative to this point.
     pub position: Vec3,
 }
@@ -375,7 +375,7 @@ pub fn mark_reached_waypoints_on_enter(
         {
             continue;
         }
-        info!("[waypoint] reached {key} (zone enter)");
+        info!("[waypoint] reached {key} (sensor enter)");
         let mut set = q_reached
             .get(vessel)
             .map(|reached| reached.0.clone())

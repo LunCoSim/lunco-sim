@@ -2998,19 +2998,11 @@ pub struct RestartScene {
 #[on_command(RestartScene)]
 fn on_restart_scene(
     trigger: On<RestartScene>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     scene: SceneEntities,
 ) {
-    if let Some(reason) = faults
-        .as_deref()
-        .and_then(|faults| faults.scene_mutation_rejection("restart a scene"))
-    {
-        error!("[restart-scene] {reason}");
-        return;
-    }
     // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
     // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
     // (`twin://…`, `lunco://…`) — is respawned. Resolving via `.path()` would
@@ -3081,19 +3073,7 @@ fn on_restart_scene(
 pub struct ClearScene {}
 
 #[on_command(ClearScene)]
-fn on_clear_scene(
-    trigger: On<ClearScene>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
-    mut commands: Commands,
-    scene: SceneEntities,
-) {
-    if let Some(reason) = faults
-        .as_deref()
-        .and_then(|faults| faults.scene_mutation_rejection("clear the scene"))
-    {
-        error!("[clear-scene] {reason}");
-        return;
-    }
+fn on_clear_scene(trigger: On<ClearScene>, mut commands: Commands, scene: SceneEntities) {
     info!("[clear-scene] clearing viewport");
     commands.trigger(lunco_core::SceneTransitionStarted {
         transition: SceneTransition::Clear,
