@@ -44,7 +44,6 @@ def Xform "Altimeter" (
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/Altimeter.mo@
-        uniform bool lunco:program:realtimeSafe = true
         float inputs:ray_distance_m.connect = </Altimeter.outputs:ray_distance>
         float inputs:ray_hit_valid.connect = </Altimeter.outputs:ray_hit_valid>
         float inputs:ray_sample_time.connect = </Altimeter.outputs:ray_sample_time>

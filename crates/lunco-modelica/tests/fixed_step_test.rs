@@ -1,4 +1,9 @@
-use lunco_modelica::{fixed_step::FixedStepSession, ModelicaCompiler};
+use lunco_experiments::solver::{self, RuntimeProfile, SolverParams, SolverRequest};
+use lunco_modelica::{
+    fixed_step::FixedStepSession,
+    simulation_session::{self, LiveStepper},
+    solver_backends, ModelicaCompiler,
+};
 use rumoca_sim::{SimOptions, SimSolverMode};
 
 fn ramp_model() -> &'static str {
@@ -59,4 +64,41 @@ fn fixed_rk4_repeats_the_same_operation_sequence() {
             .expect("right visible")
             .to_bits()
     );
+}
+
+#[test]
+fn predicted_live_resolution_constructs_the_fixed_backend() {
+    let mut compiler = ModelicaCompiler::new();
+    let compiled = compiler
+        .compile_str("FixedRamp", ramp_model(), "fixed_ramp.mo")
+        .expect("fixed ramp compiles");
+
+    solver_backends::ensure_builtin_solvers();
+    let spec = solver::resolve(&SolverRequest {
+        profile: RuntimeProfile {
+            live: true,
+            predicted: true,
+        },
+        authored: None,
+    })
+    .expect("prediction resolves to a deterministic backend");
+    assert_eq!(spec.id, solver::SolverId::from("fixed-rk4"));
+
+    let options = solver_backends::rumoca_options(
+        &spec,
+        &SolverParams {
+            atol: 1.0e-6,
+            rtol: 1.0e-6,
+            h0: Some(0.01),
+            t_start: 0.0,
+            t_end: 1.0,
+        },
+    )
+    .expect("the resolved backend maps to Rumoca options");
+    let mut stepper = simulation_session::live(&compiled.dae, &spec, options)
+        .expect("the resolved prediction backend constructs");
+
+    assert!(matches!(&stepper, LiveStepper::Fixed(_)));
+    stepper.step(0.01).expect("fixed prediction step");
+    assert_eq!(stepper.time().to_bits(), 0.01_f64.to_bits());
 }

@@ -17,7 +17,6 @@ def Xform "Imu" (
     token visibility = "invisible"
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/IMUSensor.mo@
-    uniform bool lunco:program:realtimeSafe = true
 
     float inputs:raw_velocity_x = 0.0
     float inputs:raw_velocity_y = 0.0
