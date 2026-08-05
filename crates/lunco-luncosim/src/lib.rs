@@ -165,6 +165,32 @@ fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String>
     Ok(profile)
 }
 
+#[cfg(feature = "ui")]
+fn parse_record_preset(
+    args: &[String],
+) -> Result<lunco_workbench::screenshot::OfflineVideoPreset, String> {
+    let mut preset = lunco_workbench::screenshot::OfflineVideoPreset::default();
+    let mut index = 0;
+    while index < args.len() {
+        let value = if args[index] == "--record-preset" {
+            index += 1;
+            args.get(index)
+                .map(String::as_str)
+                .ok_or_else(|| {
+                    "`--record-preset` needs ultrafast, veryfast, or medium".to_string()
+                })?
+        } else if let Some(value) = args[index].strip_prefix("--record-preset=") {
+            value
+        } else {
+            index += 1;
+            continue;
+        };
+        preset = lunco_workbench::screenshot::OfflineVideoPreset::parse(value)?;
+        index += 1;
+    }
+    Ok(preset)
+}
+
 /// Read the one explicit startup-scene argument, if present.
 ///
 /// Startup has no scene default. Keeping this parser pure makes the empty-shell
@@ -279,6 +305,9 @@ RECORDING:
                          path streams straight into ffmpeg (falls back to a
                          PNG sequence, loudly, if ffmpeg is not installed).
         --record-fps N   Recording output frame rate (default 60).
+        --record-preset MODE
+                         Direct-video H.264 preset (default ultrafast; use
+                         veryfast or medium for archival capture files).
         --record-frames N
                          Stop the recording automatically after N frames.
         --offscreen      GPU-full windowless recording: no window opens, the
@@ -386,6 +415,14 @@ fn run_with_mode(headless: bool) -> AppExit {
             return AppExit::error();
         }
     };
+    #[cfg(feature = "ui")]
+    let record_preset = match parse_record_preset(&args) {
+        Ok(preset) => preset,
+        Err(error) => {
+            eprintln!("luncosim: {error}");
+            return AppExit::error();
+        }
+    };
     log_build_identity(headless, offscreen);
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
@@ -416,6 +453,11 @@ fn run_with_mode(headless: bool) -> AppExit {
     };
 
     let mut app = build_sim_app_with_profile(headless, offscreen, None, render_profile);
+
+    #[cfg(feature = "ui")]
+    app.insert_resource(lunco_workbench::screenshot::OfflineVideoSettings {
+        preset: record_preset,
+    });
 
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     if let Some(inbox) = deeplink_inbox {

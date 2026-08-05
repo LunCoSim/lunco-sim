@@ -52,9 +52,10 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::{ChildOf, Entity, Event, Name, On};
+use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
@@ -68,6 +69,35 @@ use crate::{LINE_PLOT_KIND, VIZ_PANEL_KIND};
 /// Panel id — new id, not the deleted stub's `"telemetry"`, so stale
 /// saved layouts referencing the tombstone don't resurrect over us.
 pub const TELEMETRY_BROWSER_PANEL_ID: PanelId = PanelId("telemetry_browser");
+
+/// Runtime-authored view intent for the telemetry browser.
+///
+/// The browser remains the owner of its egui-local state; commands publish a
+/// typed request here and the panel consumes it on its next render. This keeps
+/// HTTP/Rhai automation independent of a concrete dock layout or panel object.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct TelemetryBrowserView {
+    pub filter: String,
+    pub signal: String,
+}
+
+#[Command(default)]
+pub struct SetTelemetryBrowserView {
+    pub filter: String,
+    pub signal: String,
+}
+
+#[on_command(SetTelemetryBrowserView)]
+fn on_set_telemetry_browser_view(
+    trigger: On<SetTelemetryBrowserView>,
+    mut view: ResMut<TelemetryBrowserView>,
+) {
+    let request = trigger.event();
+    view.filter = request.filter.clone();
+    view.signal = request.signal.clone();
+}
+
+register_commands!(on_set_telemetry_browser_view);
 
 /// Insert a newly configured visualization after the browser has finished
 /// painting. The panel emits the domain operation; the observer owns the
@@ -290,6 +320,7 @@ fn build_tree(
     let mut root = TreeNode::new("root".to_string(), "Telemetry".to_string());
     for (sig, _hist) in reg.iter_scalar() {
         let meta = reg.meta(sig);
+        let has_authored_owner = usd_path_of(sig.entity).is_some() || name_of(sig.entity).is_some();
         let provenance = meta.and_then(|m| m.provenance.clone());
         let model_internal = provenance.as_deref() == Some("cosim")
             || sig.path.starts_with("sim.")
@@ -352,14 +383,14 @@ fn build_tree(
         // component path. The user sees the model that owns the value rather
         // than an implementation container. This remains producer-neutral:
         // every hierarchical model path gets the same treatment.
+        let group_path = meta.and_then(|metadata| {
+            metadata
+                .group_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+        });
         let mut structure = signal_structure(
-            meta.and_then(|metadata| {
-                metadata
-                    .group_path
-                    .as_deref()
-                    .filter(|path| !path.is_empty())
-            })
-            .unwrap_or(&sig.path),
+            group_path.unwrap_or(if has_authored_owner { "" } else { &sig.path }),
         );
         // Canonical paths may repeat the USD ancestry already represented by
         // the entity lineage (for example `SandboxScene/Rover/Battery`). Drop
@@ -369,6 +400,17 @@ fn build_tree(
             .is_some_and(|(id, _)| lineage.iter().any(|(parent_id, _)| parent_id == id))
         {
             structure.remove(0);
+        }
+        // `group_path` is an authored ownership path. Once its shared USD prefix
+        // has been removed, the remaining component names are presentation
+        // structure, not new USD prims. Keep that distinction explicit so a
+        // generated solver wrapper cannot reappear as a second authored branch.
+        if group_path.is_some_and(|path| path.trim_start().starts_with('/')) {
+            for (id, _) in &mut structure {
+                if let Some(segment) = id.rsplit('/').next().filter(|s| !s.is_empty()) {
+                    *id = format!("signal-structure:{segment}");
+                }
+            }
         }
         // A resolved group path means the projection supplied an authored
         // ownership target. Replace the runtime wrapper leaf regardless of
@@ -391,30 +433,8 @@ fn build_tree(
         }
         node.rows.push(row);
     }
-    collapse_singleton_leaves(&mut root);
     sort_tree(&mut root);
     root
-}
-
-/// Keep the visual tree useful at narrow widths: a structural node that owns
-/// exactly one scalar has no grouping value to communicate, so its row is
-/// promoted to the parent. Nodes with multiple values or descendants remain
-/// intact.
-fn collapse_singleton_leaves(node: &mut TreeNode) {
-    for child in node.children.values_mut() {
-        collapse_singleton_leaves(child);
-    }
-    let singleton_ids: Vec<String> = node
-        .children
-        .iter()
-        .filter(|(_, child)| child.children.is_empty() && child.rows.len() == 1)
-        .map(|(id, _)| id.clone())
-        .collect();
-    for id in singleton_ids {
-        if let Some(mut child) = node.children.remove(&id) {
-            node.rows.append(&mut child.rows);
-        }
-    }
 }
 
 fn sort_tree(node: &mut TreeNode) {
@@ -486,6 +506,13 @@ fn signal_structure(path: &str) -> Vec<(String, String)> {
         .filter(|segment| !segment.is_empty())
         .map(str::to_owned)
         .collect();
+    // A scalar channel with a flat name belongs directly to its owning entity.
+    // Only a dotted/slashed namespace contributes a structural grouping node;
+    // making every bare channel a one-child tree creates presentation noise and
+    // hides the entity's actual ownership boundary.
+    if segments.len() == 1 && !segments[0].contains('.') {
+        return Vec::new();
+    }
     if let Some(last) = segments.last_mut() {
         if let Some((component, _value)) = last.rsplit_once('.') {
             *last = component.to_owned();
@@ -854,6 +881,19 @@ impl Panel for TelemetryBrowserPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        if let Some(view) = ctx.resource::<TelemetryBrowserView>().cloned() {
+            if self.filter != view.filter {
+                self.filter = view.filter;
+            }
+            if !view.signal.is_empty()
+                && self
+                    .selected
+                    .as_ref()
+                    .is_none_or(|selected| selected.path != view.signal)
+            {
+                self.selected = None;
+            }
+        }
         let Some(theme) = ctx.resource::<lunco_theme::Theme>().cloned() else {
             ui.label("Theme not installed.");
             return;
@@ -906,6 +946,16 @@ impl Panel for TelemetryBrowserPanel {
             ui.label(egui::RichText::new("SignalRegistry not installed.").color(subdued));
             return;
         };
+
+        if let Some(view) = ctx.resource::<TelemetryBrowserView>().cloned() {
+            if !view.signal.is_empty() {
+                self.selected = registry
+                    .iter_scalar()
+                    .map(|(signal, _)| signal)
+                    .find(|signal| signal.path == view.signal)
+                    .cloned();
+            }
+        }
 
         // ── Change-driven catalog rebuild ────────────────────────
         // Two independent invalidators: the channel SET (a sim started, a vessel

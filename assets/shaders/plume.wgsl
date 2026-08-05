@@ -166,10 +166,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = clamp(cutoff * (0.55 + 0.35 * shimmer), 0.0, 1.0);
     let emissive = tint * mat.density * radiance;
 
-    // The gprim's authored `lunco:surface:additive` selects Bevy's premultiplied
-    // additive pipeline, so return both radiance and coverage. Alpha is not an
-    // opaque cutout here: it weights the emitted RGB while the additive blend
-    // keeps the terrain and vehicle behind the exhaust visible. The physical
-    // light remains a separate SphereLight driven by Modelica photometry.
+    // The gprim's authored sub-1 `displayOpacity` selects Bevy's translucent
+    // pipeline, so return both radiance and coverage. Alpha is not an opaque
+    // cutout here: it weights the emitted RGB while the blend keeps the terrain
+    // and vehicle behind the exhaust visible. The physical light remains a
+    // separate SphereLight driven by Modelica photometry.
     return vec4<f32>(emissive, alpha);
 }

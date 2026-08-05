@@ -231,16 +231,14 @@ impl CompiledWiring {
         self.detect_algebraic_loops(world);
     }
 
-    /// M6 — algebraic-loop detection over the wire graph (nodes = participant
-    /// entities, one edge per wire), treating every participant as direct
-    /// feedthrough — conservative: the substrate has no causality metadata yet,
-    /// so any cycle MAY be an algebraic loop.
+    /// Find force-producing feedback SCCs over the explicit causal wire graph.
     ///
-    /// The master is single-pass Jacobi with ZOH inputs: each feedthrough hop on
-    /// a cycle costs one fixed step of delay, and nothing iterates the loop to
-    /// convergence. That 1-step-delay behaviour is the documented contract and
-    /// is NOT changed here — a detected loop only lands one entry in the faults
-    /// ledger so the otherwise invisible coupling error is diagnosable.
+    /// The master is single-pass Jacobi with ZOH inputs: a cycle therefore has
+    /// dynamic one-step delay semantics. A cycle by itself is not evidence of an
+    /// algebraic equation; acausal equations are classified from typed connector
+    /// properties and synthesized inside a backend island. The SCC pass remains
+    /// only for the separate realtime-safety decision when a cycle reaches a
+    /// physics force or torque port.
     ///
     /// Single-entity self-wires (`netForce`→`force_y` on ONE entity — the
     /// balloon pattern, an engine exchanging with its own body) are the intended
@@ -498,13 +496,18 @@ pub fn propagate_connections(
             }
         }
 
-        // Algebraic-loop entries describe the current fabric, so retract stale
-        // entries on rebuild and publish exactly one deterministic entry per loop.
+        // Causal feedback is a valid dynamic exchange: the fixed-step master
+        // reads the previous state and writes the next input. Only a loop that
+        // reaches a typed physics force/torque port needs a safety decision;
+        // ordinary body→sensor→controller feedback is not an authoring fault.
         world
             .resource_mut::<crate::diagnostics::CosimDiagnostics>()
             .faults
             .retain(|(_, port), _| !port.starts_with(ALGEBRAIC_LOOP_PORT));
         for loop_info in &compiled.loops {
+            if !loop_info.force_producing {
+                continue;
+            }
             if loop_info.force_producing && loop_info.realtime_safe {
                 if reported.insert(loop_info.port.clone()) {
                     info!(
@@ -515,34 +518,24 @@ pub fn propagate_connections(
                 continue;
             }
             if reported.insert(loop_info.port.clone()) {
-                if loop_info.force_producing {
-                    error!(
-                        "[cosim] unsafe force-producing algebraic loop rejected: {}",
-                        loop_info.port
-                    );
-                } else {
-                    warn!(
-                        "[cosim] algebraic loop in the wiring — co-simulated with a 1-step delay: {}",
-                        loop_info.port
-                    );
-                }
+                error!(
+                    "[cosim] unsafe force-producing algebraic loop rejected: {}",
+                    loop_info.port
+                );
             }
-            if loop_info.force_producing {
-                let raised = world
-                    .get_resource_mut::<lunco_core::RuntimeFaults>()
-                    .is_some_and(|mut faults| {
-                        faults.raise(
-                            "cosim-unsafe-force-loop",
-                            Some(loop_info.entity),
-                            "co-simulation wiring",
-                            loop_info.port.clone(),
-                        )
-                    });
-                if raised {
-                    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>()
-                    {
-                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-                    }
+            let raised = world
+                .get_resource_mut::<lunco_core::RuntimeFaults>()
+                .is_some_and(|mut faults| {
+                    faults.raise(
+                        "cosim-unsafe-force-loop",
+                        Some(loop_info.entity),
+                        "co-simulation wiring",
+                        loop_info.port.clone(),
+                    )
+                });
+            if raised {
+                if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>() {
+                    holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
                 }
             }
             world
@@ -1137,11 +1130,11 @@ mod wire_order_tests {
             .collect()
     }
 
-    /// M6: a feedthrough cycle spanning two participants is an algebraic loop —
-    /// the single-pass ZOH master cannot iterate it to convergence — and must
-    /// land exactly ONE entry in the faults ledger, naming the wires on it.
+    /// A cycle in the explicit causal fabric is a dynamic feedback loop, not an
+    /// algebraic fault. Acausal equations are classified by typed network
+    /// connectors and never enter this wiring graph.
     #[test]
-    fn a_two_entity_feedthrough_loop_is_recorded_as_one_fault() {
+    fn a_two_entity_causal_feedback_loop_is_not_a_fault() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
@@ -1155,12 +1148,9 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
 
-        let loops = loop_faults(&world);
-        assert_eq!(loops.len(), 1, "one loop, one ledger entry: {loops:?}");
         assert!(
-            loops[0].contains("out") && loops[0].contains("in"),
-            "the entry names the ports on the loop: {}",
-            loops[0]
+            loop_faults(&world).is_empty(),
+            "explicit causal feedback is stepped with ZOH, not reported as algebraic"
         );
 
         // Removing the back-edge dissolves the loop; the rebuild retracts it.
@@ -1172,7 +1162,7 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
         assert!(
             loop_faults(&world).is_empty(),
-            "a loop entry is a fact about the current fabric — retracted on rewire"
+            "removing the back-edge keeps the causal fabric clean"
         );
     }
 

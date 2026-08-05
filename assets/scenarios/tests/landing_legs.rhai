@@ -1,18 +1,15 @@
 // ── Landing-gear test — the sprung legs take the vehicle's weight ───────────
 //
 // TEST-ONLY. Runs against `scenes/tests/landing_legs.usda`: one airframe,
-// four raked prismatic legs with welded footpads, flat ground, 3 m drop. No
+// four vertical prismatic legs with fixed flat footpads, flat ground, 3 m drop. No
 // guidance, no rover, no mission — so anything this test sees is the LEG
 // MECHANISM and nothing else.
 //
-// WHAT IT GUARDS. A landing leg is the one mechanism in this project whose joint
-// frames are not cardinal: the struts are raked 25° off vertical, so both halves
-// of each `UsdPhysicsJoint` frame (`physics:localRot0` on the hull,
-// `localRot1` on the strut) have to agree, and the pad welds have to carry the
-// inverse rake so the footpads stay flat. Get any of that wrong and the joint
-// starts violated in ORIENTATION — which no amount of position checking sees.
-// The solver then resolves 25° of error impulsively through a 3.5 m lever arm
-// and the vehicle disassembles at several km/s.
+// WHAT IT GUARDS. Each landing leg has one vertical prismatic degree of freedom.
+// Both halves of each `UsdPhysicsJoint` frame (`physics:localRot0` on the hull,
+// `localRot1` on the leg) use the same 180° basis, so travel points hull→ground
+// while the rotational lock keeps the leg and its child pad level. The pad is a
+// child collider, not a second free rigid body.
 //
 // So the assertions are about the vehicle STILL BEING A VEHICLE after the drop:
 // bodies at finite, bounded positions, the hull level and at rest, and all four
@@ -115,11 +112,10 @@ fn strut_strokes(springs) {
 /// joint is supposed to hold rigid, and the spring never feels the landing. That
 /// is invisible in position, height and tilt: the vehicle looks perfectly landed.
 fn frame_errors(hull, legs) {
-    // `localRot0 * physics:axis`, per leg: the free axis in the HULL's frame.
-    let a0 = [[0.42262, -0.90631, 0.0], [-0.42262, -0.90631, 0.0],
-              [0.0, -0.90631, 0.42262], [0.0, -0.90631, -0.42262]];
-    // `localRot1 * physics:axis`: every leg authors `localRot1` as the bare 180°
-    // flip — the rake lives in the leg's own transform — so this is -Y for all four.
+    // `localRot0 * physics:axis`, per leg: all four physical slider axes are -Y
+    // in the HULL frame. `localRot1` uses the same 180° basis on every leg.
+    let a0 = [[0.0, -1.0, 0.0], [0.0, -1.0, 0.0],
+              [0.0, -1.0, 0.0], [0.0, -1.0, 0.0]];
     let a1 = [0.0, -1.0, 0.0];
     let out = [];
     for i in 0..legs.len() {
@@ -129,8 +125,9 @@ fn frame_errors(hull, legs) {
     out
 }
 
-/// Each footpad's tilt from level, in degrees. The pads gimbal freely inside a
-/// 30° cone, so this is how far each has articulated to meet the ground.
+/// Each footpad's tilt from level, in degrees. Pads are fixed child colliders of
+/// the vertical leg bodies, so a non-zero result reports a broken rigid child
+/// transform rather than intentional articulation.
 fn pad_tilts(pads) {
     let out = [];
     for i in pads { out.push(r2(tilt_deg(i))); }
@@ -299,25 +296,15 @@ fn verdict(s) {
     // assertions above already test the half that carries the information.
     // Asserting an angle here would be asserting the load, in the wrong units.
 
-    // The footpads must still be GIMBALLING — the check is PINNING, nothing finer.
-    //
-    // Each pad hangs on a spherical joint with a 30° cone and nothing centring it,
-    // so it finds its own angle against the ground; that is what a gimbal is for.
-    // Measured on flat ground the four wander a 5..24° band and stay there, because
-    // the raked strut scuffs the foot sideways as it strokes and friction rolls it
-    // back. Asserting any tighter angle would be asserting that wander, which is
-    // not a contract — it is weather.
-    //
-    // What IS a contract: a pad driven onto its cone stop has stopped being a
-    // gimbal. The ball becomes a rigid corner and the leg starts taking ground load
-    // through it as a moment instead of as travel — the same class of failure as a
-    // strut that bends rather than strokes, one joint further out.
+    // The footpads are fixed child colliders, not independent gimbals. Their
+    // orientation must remain level while the leg body contracts vertically;
+    // otherwise the child transform is rotating freely and the contact geometry
+    // is no longer the authored four-foot landing interface.
     for i in 0..4 {
         let a = s.pad_tilt[i];
         if a >= 0.0 {
-            f.push(t_range(a, 0.0, 29.0,
-                "pad " + names[i] + " tilt (deg) — pinned against its 30° cone " +
-                "limit, so the foot is no longer articulating"));
+            f.push(t_range(a, 0.0, 0.5,
+                "pad " + names[i] + " tilt (deg) — fixed child pad rotated"));
         }
     }
 

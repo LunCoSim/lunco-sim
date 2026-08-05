@@ -14,9 +14,10 @@
 //!
 //! # What becomes a node vs an edge
 //!
-//! - **Node** — an active prim that has connectors (`inputs:*` / `outputs:*`)
-//!   or is a rigid body (`PhysicsRigidBodyAPI`). Xforms, cameras, lights, scopes
-//!   are dropped so the canvas shows the wiring, not the whole scene tree.
+//! - **Node** — normally an active prim that has connectors (`inputs:*` /
+//!   `outputs:*`) or is a rigid body (`PhysicsRigidBodyAPI`). A scene may
+//!   author `lunco:ui:schemaNode = true` on system boundaries; when it does,
+//!   those typed USD boundaries become the readable schema projection.
 //! - **Dataflow edge** — one per authored `inputs:<c>.connect` (the co-sim wire:
 //!   sink `inputs:` ← source `outputs:`). Drawn source-output → sink-input.
 //! - **Joint edge** — one per prim carrying both `physics:body0` and
@@ -72,6 +73,10 @@ pub(crate) struct PrimNode {
     pub path: String,
     pub type_name: String,
     pub is_body: bool,
+    /// Optional authored presentation column/row.  These are USD layout
+    /// properties, not an engine-side classification of the prim.
+    pub schema_column: Option<i32>,
+    pub schema_row: Option<i32>,
     /// Connector leaf names (no `inputs:` prefix).
     pub inputs: Vec<String>,
     /// Connector leaf names (no `outputs:` prefix).
@@ -106,7 +111,46 @@ pub(crate) fn collect_graph(
     let mut nodes: Vec<PrimNode> = Vec::new();
     let mut wires: Vec<Wire> = Vec::new();
 
+    // A scene may author a presentation subset for a readable system-level
+    // schema.  These are typed USD properties, not name/path heuristics:
+    // `schemaNode` selects boundaries and `schemaRoot` scopes them to one
+    // authored instance. Scenes without either property retain the complete
+    // connection graph.
+    let schema_roots: BTreeSet<String> = prim_paths
+        .iter()
+        .filter_map(|path| {
+            let p = SdfPath::new(path).ok()?;
+            (view.is_active(&p) && view.scalar::<bool>(&p, "lunco:ui:schemaRoot") == Some(true))
+                .then(|| path.clone())
+        })
+        .collect();
+    let schema_nodes: Option<BTreeSet<String>> = {
+        let marked: BTreeSet<String> = prim_paths
+            .iter()
+            .filter_map(|path| {
+                let p = SdfPath::new(path).ok()?;
+                let in_root = schema_roots.is_empty()
+                    || schema_roots.iter().any(|root| {
+                        path == root
+                            || path
+                                .strip_prefix(root)
+                                .is_some_and(|rest| rest.starts_with('/'))
+                    });
+                (in_root
+                    && view.is_active(&p)
+                    && view.scalar::<bool>(&p, "lunco:ui:schemaNode") == Some(true))
+                .then(|| path.clone())
+            })
+            .collect();
+        (!marked.is_empty()).then_some(marked)
+    };
+
     for path in prim_paths {
+        if let Some(marked) = &schema_nodes {
+            if !marked.contains(path) {
+                continue;
+            }
+        }
         let Ok(p) = SdfPath::new(path) else {
             continue;
         };
@@ -132,6 +176,8 @@ pub(crate) fn collect_graph(
 
         let type_name = view.type_name(&p).unwrap_or_default();
         let is_body = view.has_api_schema(&p, "PhysicsRigidBodyAPI");
+        let schema_column = view.scalar::<i32>(&p, "lunco:ui:schemaColumn");
+        let schema_row = view.scalar::<i32>(&p, "lunco:ui:schemaRow");
         let mut inputs: Vec<String> = Vec::new();
         let mut outputs: Vec<String> = Vec::new();
 
@@ -165,6 +211,8 @@ pub(crate) fn collect_graph(
             path,
             type_name,
             is_body,
+            schema_column,
+            schema_row,
             inputs,
             outputs,
         });
@@ -217,40 +265,29 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         }
     }
 
-    // Dataflow layering: rank(sink) ≥ rank(source) + 1, relaxed to a fixed
-    // point. `n` passes converge any DAG; the final clamp bounds cycles.
-    let mut rank: Vec<i32> = vec![0; n];
-    for _ in 0..n {
-        let mut changed = false;
-        for w in &wires {
-            if w.kind != WireKind::Dataflow {
-                continue;
-            }
-            let (s, t) = (index[&w.source_path], index[&w.target_path]);
-            if rank[t] < rank[s] + 1 {
-                rank[t] = rank[s] + 1;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    let max_rank = (n as i32 - 1).max(0);
-    for r in rank.iter_mut() {
-        *r = (*r).min(max_rank);
-    }
+    // Collapse real dataflow cycles into strongly connected components, then
+    // rank the resulting DAG.  The old fixed-point relaxation promoted every
+    // member of a feedback loop until the clamp, which made a cyclic Modelica
+    // schema appear as one giant column.  SCC condensation is a graph-layout
+    // operation, not a classification heuristic: authored USD connections are
+    // still the sole source of topology.
+    let rank = dataflow_ranks(n, &wires, &index);
 
-    // Position: column by rank, row by order-within-rank.
-    let mut rows_per_rank: HashMap<i32, u32> = HashMap::new();
+    // Position: authored schema columns/rows win.  Unauthored nodes use the
+    // deterministic dataflow rank and stable traversal order as a useful
+    // fallback for generic scenes.
+    let mut rows_per_column: HashMap<i32, u32> = HashMap::new();
     let mut positions: Vec<Pos> = vec![Pos::default(); n];
     for i in 0..n {
-        let r = rank[i];
-        let row = *rows_per_rank.get(&r).unwrap_or(&0);
-        rows_per_rank.insert(r, row + 1);
+        let column = relevant[i].schema_column.unwrap_or(rank[i]).max(0);
+        let row = relevant[i].schema_row.unwrap_or_else(|| {
+            let row = *rows_per_column.get(&column).unwrap_or(&0);
+            rows_per_column.insert(column, row + 1);
+            row as i32
+        });
         positions[i] = Pos::new(
-            MARGIN + r as f32 * COL_SPACING,
-            MARGIN + row as f32 * ROW_SPACING,
+            MARGIN + column as f32 * COL_SPACING,
+            MARGIN + row.max(0) as f32 * ROW_SPACING,
         );
     }
 
@@ -356,6 +393,103 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
     scene
 }
 
+/// Longest-path ranks of the dataflow graph after collapsing strongly
+/// connected components.  A feedback loop is one logical component, while
+/// components downstream of it still receive a meaningful left-to-right rank.
+fn dataflow_ranks(node_count: usize, wires: &[Wire], index: &HashMap<String, usize>) -> Vec<i32> {
+    if node_count == 0 {
+        return Vec::new();
+    }
+
+    let mut graph = vec![Vec::<usize>::new(); node_count];
+    let mut reverse = vec![Vec::<usize>::new(); node_count];
+    for wire in wires {
+        if wire.kind != WireKind::Dataflow {
+            continue;
+        }
+        let (Some(&source), Some(&target)) =
+            (index.get(&wire.source_path), index.get(&wire.target_path))
+        else {
+            continue;
+        };
+        if !graph[source].contains(&target) {
+            graph[source].push(target);
+            reverse[target].push(source);
+        }
+    }
+
+    fn visit(node: usize, graph: &[Vec<usize>], seen: &mut [bool], order: &mut Vec<usize>) {
+        if seen[node] {
+            return;
+        }
+        seen[node] = true;
+        for &next in &graph[node] {
+            visit(next, graph, seen, order);
+        }
+        order.push(node);
+    }
+
+    fn assign(node: usize, component: usize, reverse: &[Vec<usize>], components: &mut [usize]) {
+        if components[node] != usize::MAX {
+            return;
+        }
+        components[node] = component;
+        for &next in &reverse[node] {
+            assign(next, component, reverse, components);
+        }
+    }
+
+    let mut seen = vec![false; node_count];
+    let mut order = Vec::with_capacity(node_count);
+    for node in 0..node_count {
+        visit(node, &graph, &mut seen, &mut order);
+    }
+
+    let mut components = vec![usize::MAX; node_count];
+    let mut component_count = 0;
+    for &node in order.iter().rev() {
+        if components[node] == usize::MAX {
+            assign(node, component_count, &reverse, &mut components);
+            component_count += 1;
+        }
+    }
+
+    let mut condensation = BTreeSet::<(usize, usize)>::new();
+    let mut indegree = vec![0usize; component_count];
+    for source in 0..node_count {
+        for &target in &graph[source] {
+            let from = components[source];
+            let to = components[target];
+            if from != to && condensation.insert((from, to)) {
+                indegree[to] += 1;
+            }
+        }
+    }
+
+    let mut ready = BTreeSet::new();
+    for (component, &degree) in indegree.iter().enumerate() {
+        if degree == 0 {
+            ready.insert(component);
+        }
+    }
+    let mut component_rank = vec![0i32; component_count];
+    while let Some(component) = ready.pop_first() {
+        for &(from, to) in condensation.range((component, 0)..=(component, usize::MAX)) {
+            debug_assert_eq!(from, component);
+            component_rank[to] = component_rank[to].max(component_rank[from] + 1);
+            indegree[to] -= 1;
+            if indegree[to] == 0 {
+                ready.insert(to);
+            }
+        }
+    }
+
+    components
+        .into_iter()
+        .map(|component| component_rank[component])
+        .collect()
+}
+
 /// Even vertical distribution of `count` ports down a `NODE_H`-tall edge:
 /// port `k` sits at `H·(k+1)/(count+1)`.
 fn port_y(k: usize, count: usize) -> f32 {
@@ -371,6 +505,8 @@ mod tests {
             path: path.to_string(),
             type_name: "Xform".to_string(),
             is_body,
+            schema_column: None,
+            schema_row: None,
             inputs: ins.iter().map(|s| s.to_string()).collect(),
             outputs: outs.iter().map(|s| s.to_string()).collect(),
         }

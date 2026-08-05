@@ -530,6 +530,18 @@ fn collect_child_colliders_from_usd(
         .any(|(c, _)| effective_purpose(reader, c) == Purpose::Proxy);
 
     for (child_path, mut child_tf) in candidates {
+        // A typed trigger zone owns an overlap sensor entity of its own.  It is
+        // deliberately not part of an ancestor body's compound collider: doing
+        // both would create a second, solid copy attached to the rigid body and
+        // the vehicle would be pushed by the touchdown volume before contact.
+        // `lunco:triggerZone` is the authored semantic contract; this is not a
+        // path/name exception.
+        if reader
+            .text(&child_path, "lunco:triggerZone")
+            .is_some_and(|zone| !zone.trim().is_empty())
+        {
+            continue;
+        }
         // `guide` is annotation — a debug axis, a sensor cone, a planned path. It
         // is never physical, whatever geometry it happens to be made of.
         let purpose = effective_purpose(reader, &child_path);

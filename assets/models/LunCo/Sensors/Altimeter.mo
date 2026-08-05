@@ -51,6 +51,8 @@ model Altimeter
   Real ray_direction_nav_x;
   Real ray_direction_nav_z;
   Real projected_range_m;
+  Real vertical_validity;
+  Real range_validity;
 
 equation
   // The raw ray is authored in the altimeter frame. Its attitude is supplied
@@ -85,13 +87,23 @@ equation
       + 2.0 * (q_y * q_z - q_w * q_x) * ray_direction_normalized_y
       + (1.0 - 2.0 * (q_x * q_x + q_y * q_y)) * ray_direction_normalized_z;
   vertical_projection = max(0.0, -ray_direction_nav_y);
+  // Keep the sensor contract continuous for fixed-step participants. A ray
+  // validity transition is a measurement confidence change, not a discrete
+  // event in the flight software; saturating ramps preserve the same 0/1
+  // values for ordinary samples without making the Modelica stepper search for
+  // roots at the terrain horizon.
+  vertical_validity = max(0.0, min(1.0,
+    (vertical_projection - minimum_vertical_projection)
+      / max(minimum_vertical_projection, 1.0e-6)));
+  range_validity = max(0.0, min(1.0,
+    (ray_distance_m - minimum_range_m)
+      / max(minimum_range_m, 1.0e-6)));
   range_valid = max(0.0, min(1.0, ray_hit_valid))
-    * (if vertical_projection >= minimum_vertical_projection
-        and ray_distance_m >= minimum_range_m then 1.0 else 0.0);
+    * vertical_validity * range_validity;
   projected_range_m = max(0.0, ray_distance_m) * vertical_projection;
-  range_m = if range_valid > 0.5 then projected_range_m else 0.0;
+  range_m = range_valid * projected_range_m;
   range_filter.u = range_m;
-  range_rate_mps = if range_valid > 0.5 then range_filter.y else 0.0;
+  range_rate_mps = range_valid * range_filter.y;
   range_rate_valid = range_valid;
   sample_time_s = ray_sample_time;
 end Altimeter;

@@ -97,8 +97,15 @@ pub struct UsdCanvasState {
 
 impl Default for UsdCanvasState {
     fn default() -> Self {
+        let mut canvas = Canvas::new(build_registry());
+        // USD scenes can contain many composed participants.  The generic
+        // canvas minimum (0.25) is intentionally comfortable for hand-built
+        // diagrams, but it prevents a composed flight stack from ever fitting
+        // in one frame.  The connection view owns this scale policy because
+        // it knows the scene is a document-sized graph, not a small sketch.
+        canvas.viewport.config.zoom_min = 0.04;
         Self {
-            canvas: Canvas::new(build_registry()),
+            canvas,
             stage_id: None,
             doc: None,
             topo_hash: 0,
@@ -115,9 +122,11 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
     let mut keys: Vec<String> = Vec::with_capacity(nodes.len() + wires.len());
     for n in nodes {
         keys.push(format!(
-            "N|{}|{}|{}|{}",
+            "N|{}|{}|{:?}|{:?}|{}|{}",
             n.path,
             n.is_body,
+            n.schema_column,
+            n.schema_row,
             n.inputs.join(","),
             n.outputs.join(",")
         ));
@@ -188,7 +197,6 @@ pub fn produce_usd_canvas(
         return;
     }
 
-    let first_for_stage = !state.built || state.stage_id != Some(stage_id);
     let scene = build_scene(nodes, wires);
     let bounds = scene.bounds();
     bevy::log::debug!(
@@ -212,10 +220,15 @@ pub fn produce_usd_canvas(
         viewport_state.as_deref(),
     );
 
-    // Request a frame-to-fit the first time a stage is shown. The actual fit
-    // runs in the panel's next render, which alone knows the real widget size
-    // (`F` re-fits precisely anytime thereafter).
-    if first_for_stage && bounds.is_some() {
+    // Request a frame-to-fit after every topology rebuild.  Composed scenes
+    // can acquire late Modelica participants while their programs compile;
+    // fitting only the first snapshot leaves the subsequently-added graph
+    // outside the viewport.  The actual fit runs in the panel's next render,
+    // which alone knows the real widget size (`F` re-fits precisely anytime
+    // thereafter).  Structural rebuilds are the one case where restoring the
+    // complete authored graph is more important than preserving a transient
+    // pan position.
+    if bounds.is_some() {
         state.needs_fit = true;
     }
 }

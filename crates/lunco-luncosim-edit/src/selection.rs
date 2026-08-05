@@ -16,6 +16,7 @@ use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command};
 use lunco_scene_commands::SelectedEntities;
+use lunco_usd_bevy::UsdPrimPath;
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -66,6 +67,18 @@ pub struct SelectEntity {
     /// If true, maintains the previous selection and adds this entity to it (like Shift-click)
     pub extend: bool,
     /// If true, toggles the selection state of the entity (like Cmd/Ctrl-click)
+    pub toggle: bool,
+}
+
+/// Select a composed USD prim by its authored path.
+///
+/// The path is resolved against the live `UsdPrimPath` projection rather than
+/// an episode-specific entity id. This keeps scripted presentation commands
+/// stable across scene reloads and across duplicated asset instances.
+#[Command(default)]
+pub struct SelectEntityByPath {
+    pub path: String,
+    pub extend: bool,
     pub toggle: bool,
 }
 
@@ -200,7 +213,7 @@ pub fn select_possessed_vessel(
 // `SelectEntity` is editor-only (Inspector highlight + gizmo), so it is registered
 // by `SandboxEditPlugin` rather than the headless `SpawnCommandPlugin` — but it goes
 // through the SAME type+observer registration as every other verb.
-register_commands!(on_select_entity);
+register_commands!(on_select_entity, on_select_entity_by_path);
 
 #[on_command(SelectEntity)]
 pub fn on_select_entity(
@@ -239,6 +252,38 @@ pub fn on_select_entity(
         "SELECT_ENTITY: selected api_id={} ({target:?})",
         cmd.entity_id
     );
+}
+
+#[on_command(SelectEntityByPath)]
+pub fn on_select_entity_by_path(
+    trigger: On<SelectEntityByPath>,
+    q_paths: Query<(Entity, &UsdPrimPath)>,
+    mut selected: ResMut<SelectedEntities>,
+    q_old: Query<Entity, With<Selected>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let Some(target) = q_paths
+        .iter()
+        .find(|(_, path)| path.path == cmd.path)
+        .map(|(entity, _)| entity)
+    else {
+        warn!("SELECT_ENTITY_BY_PATH: no composed prim at `{}`", cmd.path);
+        if !cmd.extend && !cmd.toggle {
+            clear_selection(&mut commands, &mut selected, q_old.iter());
+        }
+        return;
+    };
+
+    apply_selection(
+        &mut commands,
+        &mut selected,
+        q_old.iter(),
+        target,
+        cmd.extend,
+        cmd.toggle,
+    );
+    info!("SELECT_ENTITY_BY_PATH: selected {}", cmd.path);
 }
 
 /// Finds the most appropriate entity to select from a hit entity.
