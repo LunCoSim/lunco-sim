@@ -60,7 +60,9 @@ pub mod world_bridge;
 use doc::{ScriptDocument, ScriptedModel};
 #[cfg(feature = "rhai")]
 use lunco_api::executor::DeferredCommandAppExt;
-use lunco_doc::{Document, DocumentHost, DocumentId};
+#[cfg(any(feature = "rhai", feature = "python"))]
+use lunco_doc::Document;
+use lunco_doc::{DocumentHost, DocumentId};
 use std::collections::HashMap;
 // Brings the pyo3 method traits (`PyDictMethods::{set_item,get_item}`,
 // `PyAnyMethods::{downcast,extract}`) into scope for `run_scripted_models`.
@@ -260,7 +262,9 @@ impl Plugin for LunCoScriptingPlugin {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);
         }
         // `.rhai` source asset loader — backs `lunco:scriptPath` (file-referenced
-        // scenarios). Independent of the python feature.
+        // scenarios). It belongs to the Rhai feature because its discovery and
+        // import registry are owned by `lunco-assets`.
+        #[cfg(feature = "rhai")]
         if !app.is_plugin_added::<source_asset::RhaiSourceAssetPlugin>() {
             app.add_plugins(source_asset::RhaiSourceAssetPlugin);
         }
@@ -436,9 +440,6 @@ impl Plugin for LunCoScriptingPlugin {
         // the only backend today.
         #[allow(unused_mut)]
         let mut backends = backend::ScriptBackends::default();
-        // Rhai (pure Rust, wasm-clean) — the default backend, on by default.
-        #[cfg(feature = "rhai")]
-        backends.insert(doc::ScriptLanguage::Rhai, Box::new(backend::RhaiBackend));
         #[cfg(feature = "python")]
         backends.insert(
             doc::ScriptLanguage::Python,

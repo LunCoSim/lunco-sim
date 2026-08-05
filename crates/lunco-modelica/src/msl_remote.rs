@@ -124,48 +124,6 @@ pub fn parsed_msl_bundle(
     GLOBAL_PARSED_MSL.get()
 }
 
-/// Kick the native `parsed-msl.bin` lazy decode onto a background thread so the
-/// first palette drill-in / class lookup is an in-memory hit instead of paying
-/// the ~1–3 s bincode decode inline. No-op if the slot is already populated or
-/// the bundle isn't on disk (indexer hasn't run). Detached: nothing awaits it —
-/// it just races to fill `GLOBAL_PARSED_MSL` before the user needs it.
-///
-/// **Call this at first actual need, never from `Startup`.** It used to run as a
-/// startup system, and that quietly inverted the native design.
-/// `drive_msl_bootstrap` eager-installs iff this slot is populated; native is
-/// meant to fall through to the lazy path precisely because `MslLoadState` goes
-/// `Ready` at boot for *anyone* with the MSL tree on disk, including users who
-/// never open a model. Warming at startup made that predicate true on every
-/// launch, so every launch paid the eager install — a ~173 MB clone plus
-/// `replace_parsed_source_set`, on the main thread, in one frame.
-///
-/// Measured on the summer-space-school twin, a terrain/rover scene containing no
-/// Modelica at all: a **1645 ms** main-thread stall during startup
-/// (`clone=1209ms lock=0ms replace=436ms`, 2554 docs), with two full seconds
-/// rendering *zero frames* — paid for a standard library the scene never touches.
-///
-/// Idempotent through the `OnceLock` guard, so wiring it at several entry points
-/// (Modelica document open, canvas, compile) is safe and is the robust choice.
-///
-/// TODO(msl-warm-callsites): **this currently has NO callers.** Removing the
-/// startup warm removed the cost; it also removed the pre-warm that Modelica
-/// scenes want, so they fall back to the lazy per-class path. Wire it at first
-/// actual need — Modelica document open, canvas open, and `compile_model`.
-/// Verify via the
-/// `[EngineBootstrap]` log line: absent on a non-Modelica scene (the twin),
-/// present with `clone=`/`replace=` once a Modelica scene opens.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn warm_parsed_msl() {
-    if GLOBAL_PARSED_MSL.get().is_some() {
-        return;
-    }
-    bevy::tasks::AsyncComputeTaskPool::get()
-        .spawn(async {
-            let _ = parsed_msl_bundle();
-        })
-        .detach();
-}
-
 /// zstd level for the native `parsed-msl.bin` write. 9 is a good
 /// ratio/speed balance for a one-time (cold-parse / indexer) write — the
 /// disk win over raw bincode is ~10× either way; higher levels buy little.
@@ -659,12 +617,10 @@ impl Plugin for MslRemotePlugin {
                 app.insert_resource(MslLoadState::NotStarted);
             }
 
-            // NO startup warm — see `warm_parsed_msl`. Filling the
-            // parsed slot here flipped `drive_msl_bootstrap` onto its eager
-            // branch on every native launch, costing a measured 1645 ms
-            // main-thread stall on a scene with no Modelica in it. The warm now
-            // happens at first actual need (Modelica document / canvas /
-            // compile), which is also where a user has signalled they want it.
+            // NO startup warm. Filling the parsed slot here would flip
+            // `drive_msl_bootstrap` onto its eager branch on every native launch,
+            // costing a measured 1645 ms main-thread stall on a scene with no
+            // Modelica in it. `parsed_msl_bundle` loads lazily at first lookup.
         }
 
         // Web: create the dormant fetch slot. The Settings menu inserts an

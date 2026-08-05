@@ -61,15 +61,18 @@ impl Plugin for PythonSourceAssetPlugin {
 /// [`lunco_core::EmbeddedScenarioSource`] (inline `lunco:script`). Lets a scene
 /// reference a scenario by `lunco:scriptPath` and keep the source as an
 /// editable, hot-reloadable `.rhai` file instead of a string baked into USD.
+#[cfg(feature = "rhai")]
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct RhaiSource {
     /// Raw `.rhai` text. UTF-8.
     pub text: String,
 }
 
+#[cfg(feature = "rhai")]
 #[derive(Default, TypePath)]
 pub struct RhaiSourceLoader;
 
+#[cfg(feature = "rhai")]
 impl AssetLoader for RhaiSourceLoader {
     type Asset = RhaiSource;
     type Settings = ();
@@ -108,6 +111,7 @@ impl AssetLoader for RhaiSourceLoader {
 /// This only works because loaders RETAIN their handles in
 /// [`ScriptSources::retain`](lunco_assets::script_source::ScriptSources::retain).
 /// An asset whose handle was dropped is already gone when the event arrives.
+#[cfg(feature = "rhai")]
 fn publish_rhai_sources(
     mut events: MessageReader<AssetEvent<RhaiSource>>,
     assets: Res<Assets<RhaiSource>>,
@@ -156,6 +160,7 @@ fn publish_rhai_sources(
 /// Re-runs whenever the manifest changes (it lands late on the web) or a Twin is
 /// opened, so a campaign repo mounted mid-session becomes importable without a
 /// restart. Already-loaded paths are skipped by the registry's own residency.
+#[cfg(feature = "rhai")]
 fn preload_importable_scripts(
     asset_server: Res<AssetServer>,
     manifest: Res<lunco_assets::discovery::AssetManifest>,
@@ -184,8 +189,10 @@ fn preload_importable_scripts(
 
 /// Plugin that registers the `.rhai` asset loader. Pulled in by
 /// `LunCoScriptingPlugin`.
+#[cfg(feature = "rhai")]
 pub struct RhaiSourceAssetPlugin;
 
+#[cfg(feature = "rhai")]
 impl Plugin for RhaiSourceAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<RhaiSource>()

@@ -34,67 +34,6 @@ impl ScriptBackends {
     }
 }
 
-/// Pure-Rust backend (rhai). The default, browser-capable runtime: compiles to
-/// `wasm32-unknown-unknown`, sandboxed (op/depth/size caps), deterministic.
-/// Gated on the `rhai` feature (on by default).
-#[cfg(feature = "rhai")]
-pub struct RhaiBackend;
-
-#[cfg(feature = "rhai")]
-impl ScriptBackend for RhaiBackend {
-    fn eval(&self, code: &str) -> Result<String, String> {
-        use std::sync::{Arc, Mutex};
-
-        let mut engine = rhai::Engine::new();
-
-        // Replace rhai's default `FileModuleResolver` BEFORE anything can import:
-        // it reads arbitrary files relative to the process CWD, so a one-shot
-        // snippet could `import "../../../etc/passwd"`. Same mechanism the
-        // World-bridge engine installs (`build_world_engine`) — the limits alone
-        // do not close this hole.
-        //
-        // The registry is EMPTY here because this backend is constructed as a unit
-        // struct (`LunCoScriptingPlugin`) and has no `ScriptSources` handle. Empty
-        // means "no import resolves", which is the correct fail-closed default for
-        // an ad-hoc snippet; see the TODO for wiring the real registry.
-        //
-        // TODO(one-shot-imports): give `RhaiBackend` a `ScriptSources` field and
-        // construct it from the resource in `LunCoScriptingPlugin::build`, so a
-        // one-shot snippet can `import "lunco://…"` the same libraries a scenario
-        // can. Nothing calls this backend today, so the empty registry is not a
-        // regression.
-        engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(
-            lunco_assets::script_source::ScriptSources::default(),
-        ));
-
-        crate::rhai_limits::apply(&mut engine);
-
-        // Capture `print(...)` output so callers get script stdout, mirroring
-        // the Python backend's StringIO redirect.
-        let out = Arc::new(Mutex::new(String::new()));
-        let sink = out.clone();
-        engine.on_print(move |s| {
-            if let Ok(mut buf) = sink.lock() {
-                buf.push_str(s);
-                buf.push('\n');
-            }
-        });
-
-        let result = engine
-            .eval::<rhai::Dynamic>(code)
-            .map_err(|e| e.to_string())?;
-
-        let mut captured = out
-            .lock()
-            .map_err(|_| "print buffer poisoned".to_string())?
-            .clone();
-        if !result.is_unit() {
-            captured.push_str(&result.to_string());
-        }
-        Ok(captured)
-    }
-}
-
 /// CPython backend (via pyo3). Captures stdout so callers get script output.
 #[cfg(feature = "python")]
 pub struct PythonBackend;
