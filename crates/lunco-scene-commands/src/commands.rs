@@ -1261,9 +1261,8 @@ pub fn on_set_usd_attribute(
 /// reload. One row per param makes that structurally impossible: a field cannot
 /// exist in one table and not the other, because there is only one table.
 pub(crate) struct WheelParam {
-    /// Accepted `SetObjectProperty` names — the Rust field name first, USD-style
-    /// aliases after (`radius`, `spring_stiffness`, …).
-    pub aliases: &'static [&'static str],
+    /// The single public `SetObjectProperty` name for this parameter.
+    pub name: &'static str,
     /// Live setter on `WheelRaycast`. Non-capturing closures coerce to `fn`.
     pub set: fn(&mut lunco_mobility::WheelRaycast, f64),
     /// The USD attribute the loader reads back into this field (`float`).
@@ -1275,52 +1274,52 @@ pub(crate) struct WheelParam {
 /// tune round-trips through the runtime layer on reload.
 pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
-        aliases: &["drive_torque", "drive_torque_max"],
+        name: "drive_torque",
         set: |w, v| w.drive_torque_max = v,
         usd_attr: "physxVehicleEngine:peakTorque",
     },
     WheelParam {
-        aliases: &["brake_torque", "brake_torque_max"],
+        name: "brake_torque",
         set: |w, v| w.brake_torque_max = v,
         usd_attr: "physxVehicleWheel:maxBrakeTorque",
     },
     WheelParam {
-        aliases: &["slip_stiffness"],
+        name: "slip_stiffness",
         set: |w, v| w.slip_stiffness = v,
         usd_attr: "physxVehicleTire:longitudinalStiffness",
     },
     WheelParam {
-        aliases: &["bearing_damping", "damping_rate"],
+        name: "bearing_damping",
         set: |w, v| w.bearing_damping = v,
         usd_attr: "physxVehicleWheel:dampingRate",
     },
     WheelParam {
-        aliases: &["friction_mu", "friction"],
+        name: "friction_mu",
         set: |w, v| w.friction_mu = v,
         usd_attr: "lunco:tire:frictionCoefficient",
     },
     WheelParam {
-        aliases: &["mass"],
+        name: "mass",
         set: |w, v| w.mass = v,
         usd_attr: "physics:mass",
     },
     WheelParam {
-        aliases: &["moi", "moment_of_inertia"],
+        name: "moi",
         set: |w, v| w.moment_of_inertia = v,
         usd_attr: "physxVehicleWheel:moi",
     },
     WheelParam {
-        aliases: &["wheel_radius", "radius"],
+        name: "wheel_radius",
         set: |w, v| w.wheel_radius = v,
         usd_attr: "physxVehicleWheel:radius",
     },
 ];
 
-/// Look a `SetObjectProperty` property name up in [`WHEEL_PARAMS`], or `None`
+/// Look a canonical `SetObjectProperty` name up in [`WHEEL_PARAMS`], or `None`
 /// if it isn't a wheel field. Both the live-mutation path and the USD-authoring
 /// path go through this one lookup.
 pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
-    WHEEL_PARAMS.iter().find(|p| p.aliases.contains(&name))
+    WHEEL_PARAMS.iter().find(|p| p.name == name)
 }
 
 /// Persist a `SetObjectProperty` **wheel-dynamics**, **visibility** or **PBR
@@ -3624,10 +3623,10 @@ mod tests {
         use std::collections::HashSet;
 
         assert!(!WHEEL_PARAMS.is_empty());
-        let mut seen_alias: HashSet<&str> = HashSet::new();
+        let mut seen_name: HashSet<&str> = HashSet::new();
         let mut seen_attr: HashSet<&str> = HashSet::new();
         for p in WHEEL_PARAMS {
-            assert!(!p.aliases.is_empty(), "a param with no name is unreachable");
+            assert!(!p.name.is_empty(), "a param with no name is unreachable");
             assert!(
                 !p.usd_attr.is_empty(),
                 "every param must round-trip through USD"
@@ -3637,13 +3636,11 @@ mod tests {
                 "duplicate USD attr {}",
                 p.usd_attr
             );
-            for a in p.aliases {
-                assert!(seen_alias.insert(a), "duplicate alias {a}");
-                // Both consumers (live setter + USD persister) resolve through the
-                // SAME lookup, so a name that sets a field always has an attr.
-                let row = wheel_param(a).expect("alias resolves");
-                assert_eq!(row.usd_attr, p.usd_attr);
-            }
+            assert!(seen_name.insert(p.name), "duplicate wheel name {}", p.name);
+            // Both consumers (live setter + USD persister) resolve through the
+            // same canonical lookup, so a name that sets a field always has an attr.
+            let row = wheel_param(p.name).expect("wheel name resolves");
+            assert_eq!(row.usd_attr, p.usd_attr);
         }
 
         // The two names the old split tables disagreed about are now complete.
@@ -3652,6 +3649,19 @@ mod tests {
             assert!(!row.usd_attr.is_empty(), "{name} persists to USD");
         }
         assert!(wheel_param("not_a_wheel_field").is_none());
+        for obsolete in [
+            "drive_torque_max",
+            "brake_torque_max",
+            "damping_rate",
+            "friction",
+            "moment_of_inertia",
+            "radius",
+        ] {
+            assert!(
+                wheel_param(obsolete).is_none(),
+                "obsolete wheel alias still accepted: {obsolete}"
+            );
+        }
 
         // Setters write the field they claim.
         let mut w = lunco_mobility::WheelRaycast::default();

@@ -116,7 +116,6 @@ impl Plugin for LuncoVizPlugin {
 fn reconcile_persisted_plot_bindings(
     mut plots: ResMut<VisualizationRegistry>,
     ids: Query<(Entity, &lunco_core::GlobalEntityId)>,
-    signals: Res<SignalRegistry>,
 ) {
     let mut gid_of = HashMap::new();
     let mut entity_of = HashMap::new();
@@ -124,28 +123,10 @@ fn reconcile_persisted_plot_bindings(
         gid_of.insert(entity, *gid);
         entity_of.insert(*gid, entity);
     }
-    // Pre-identity layouts carried only a session-local entity plus mnemonic.
-    // There is one safe migration: exactly one currently published scalar with
-    // that mnemonic. Zero is unavailable and more than one is ambiguous, so
-    // neither case is silently rebound to the wrong vehicle.
-    let mut unique_scalar_by_path: HashMap<String, Option<SignalRef>> = HashMap::new();
-    for (source, signal_type) in signals.iter_signals() {
-        if signal_type != SignalType::Scalar {
-            continue;
-        }
-        match unique_scalar_by_path.entry(source.path.clone()) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(Some(source.clone()));
-            }
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                entry.insert(None);
-            }
-        }
-    }
 
     for config in plots.values_mut() {
         for binding in &mut config.inputs {
-            reconcile_persisted_binding(binding, &gid_of, &entity_of, &unique_scalar_by_path);
+            reconcile_persisted_binding(binding, &gid_of, &entity_of);
         }
         if config.kind == LINE_PLOT_KIND {
             kinds::line_plot::reconcile_persisted_x_source(config, &gid_of, &entity_of);
@@ -158,21 +139,12 @@ fn reconcile_persisted_binding(
     binding: &mut SignalBinding,
     gid_of: &HashMap<Entity, lunco_core::GlobalEntityId>,
     entity_of: &HashMap<lunco_core::GlobalEntityId, Entity>,
-    unique_scalar_by_path: &HashMap<String, Option<SignalRef>>,
 ) -> bool {
     let mut changed = false;
     if binding.persisted_source.is_none() {
-        // A saved pre-identity binding can no longer name its owner. Adopt a
-        // live source only when its mnemonic is unambiguous, then immediately
-        // capture the stable identity so this fallback is never needed again.
-        if !gid_of.contains_key(&binding.source.entity) {
-            if let Some(Some(source)) = unique_scalar_by_path.get(&binding.source.path) {
-                if binding.source != *source {
-                    binding.source = source.clone();
-                    changed = true;
-                }
-            }
-        }
+        // A live binding captures its stable owner identity while the entity is
+        // present. A stale binding without that identity stays unresolved; its
+        // mnemonic is not sufficient to choose another entity.
         let persisted = binding.source.to_persisted(|e| gid_of.get(&e).copied());
         if persisted.is_some() {
             binding.persisted_source = persisted;
@@ -204,22 +176,16 @@ mod tests {
         old_ids.insert(old, gid);
         let mut entities = HashMap::new();
         entities.insert(gid, replacement);
-        let mut unique = HashMap::new();
-        unique.insert(
-            "power.soc".to_string(),
-            Some(SignalRef::new(replacement, "power.soc")),
-        );
         assert!(reconcile_persisted_binding(
             &mut binding,
             &old_ids,
-            &entities,
-            &unique,
+            &entities
         ));
         assert_eq!(binding.source, SignalRef::new(replacement, "power.soc"));
     }
 
     #[test]
-    fn legacy_binding_only_adopts_an_unambiguous_live_mnemonic() {
+    fn unpersisted_binding_stays_unresolved_after_reload() {
         let stale = Entity::from_raw_u32(7).unwrap();
         let replacement = Entity::from_raw_u32(9).unwrap();
         let gid = lunco_core::GlobalEntityId::from_raw(42);
@@ -228,30 +194,8 @@ mod tests {
         ids.insert(replacement, gid);
         let mut entities = HashMap::new();
         entities.insert(gid, replacement);
-        let mut unique = HashMap::new();
-        unique.insert(
-            "power.soc".to_string(),
-            Some(SignalRef::new(replacement, "power.soc")),
-        );
-
-        assert!(reconcile_persisted_binding(
-            &mut binding,
-            &ids,
-            &entities,
-            &unique,
-        ));
-        assert_eq!(binding.source, SignalRef::new(replacement, "power.soc"));
-        assert!(binding.persisted_source.is_some());
-
-        let mut ambiguous = SignalBinding::live(SignalRef::new(stale, "power.soc"), "y");
-        unique.insert("power.soc".to_string(), None);
-        assert!(!reconcile_persisted_binding(
-            &mut ambiguous,
-            &ids,
-            &entities,
-            &unique,
-        ));
-        assert_eq!(ambiguous.source, SignalRef::new(stale, "power.soc"));
-        assert!(ambiguous.persisted_source.is_none());
+        assert!(!reconcile_persisted_binding(&mut binding, &ids, &entities));
+        assert_eq!(binding.source, SignalRef::new(stale, "power.soc"));
+        assert!(binding.persisted_source.is_none());
     }
 }
