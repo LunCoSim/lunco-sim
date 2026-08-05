@@ -57,6 +57,10 @@ register_commands!(on_update_obstacle_field_spec);
 
 impl Plugin for ObstacleFieldPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_core::subsystems::SubsystemToggles>();
+        app.world_mut()
+            .resource_mut::<lunco_core::subsystems::SubsystemToggles>()
+            .register("obstacle-field");
         app.register_type::<ObstacleFieldSpec>()
             .register_type::<UpdateObstacleFieldSpec>()
             .init_resource::<ObstacleFieldSpec>();

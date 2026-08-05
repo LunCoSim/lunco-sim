@@ -10,6 +10,10 @@ fn ramp_model() -> &'static str {
     "model FixedRamp\n  Real x(start=0);\nequation\n  der(x) = 1;\nend FixedRamp;"
 }
 
+fn input_ramp_model() -> &'static str {
+    "model FixedInputRamp\n  input Real u = 0;\n  Real x(start=0);\nequation\n  der(x) = u;\nend FixedInputRamp;"
+}
+
 fn options() -> SimOptions {
     SimOptions {
         solver_mode: SimSolverMode::RkLike,
@@ -101,4 +105,83 @@ fn predicted_live_resolution_constructs_the_fixed_backend() {
     assert!(matches!(&stepper, LiveStepper::Fixed(_)));
     stepper.step(0.01).expect("fixed prediction step");
     assert_eq!(stepper.time().to_bits(), 0.01_f64.to_bits());
+}
+
+/// Production acceptance for the predicted/live construction boundary.
+///
+/// This deliberately drives two independently constructed `LiveStepper`s
+/// through the same changing input schedule and compares every published
+/// visible value bit-for-bit after every exact fixed step. A unit test of
+/// `FixedStepSession` alone would not catch the resolver or construction path
+/// accidentally selecting an adaptive backend.
+#[test]
+fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
+    let mut compiler = ModelicaCompiler::new();
+    let compiled = compiler
+        .compile_str("FixedInputRamp", input_ramp_model(), "fixed_input_ramp.mo")
+        .expect("fixed input ramp compiles");
+
+    solver_backends::ensure_builtin_solvers();
+    let spec = solver::resolve(&SolverRequest {
+        profile: RuntimeProfile {
+            live: true,
+            predicted: true,
+        },
+        authored: None,
+    })
+    .expect("prediction resolves to a deterministic backend");
+    assert_eq!(spec.id, solver::SolverId::from("fixed-rk4"));
+
+    let options = solver_backends::rumoca_options(
+        &spec,
+        &SolverParams {
+            atol: 1.0e-6,
+            rtol: 1.0e-6,
+            h0: Some(0.01),
+            t_start: 0.0,
+            t_end: 100.0,
+        },
+    )
+    .expect("fixed-rk4 options are valid");
+    let mut left = simulation_session::live(&compiled.dae, &spec, options.clone())
+        .expect("left live stepper constructs");
+    let mut right = simulation_session::live(&compiled.dae, &spec, options)
+        .expect("right live stepper constructs");
+
+    assert!(matches!(&left, LiveStepper::Fixed(_)));
+    assert!(matches!(&right, LiveStepper::Fixed(_)));
+    assert_eq!(left.input_names(), &["u".to_string()]);
+
+    for step in 0..512 {
+        let input = ((step % 11) as f64 - 5.0) * 0.125;
+        left.set_input("u", input).expect("left input is accepted");
+        right
+            .set_input("u", input)
+            .expect("right input is accepted");
+        left.step(0.01).expect("left fixed step");
+        right.step(0.01).expect("right fixed step");
+
+        let left_state = left.state().expect("left state is observable");
+        let right_state = right.state().expect("right state is observable");
+        assert_eq!(
+            left_state.time.to_bits(),
+            right_state.time.to_bits(),
+            "step {step}"
+        );
+        assert_eq!(
+            left_state.values.len(),
+            right_state.values.len(),
+            "step {step}"
+        );
+        for ((left_name, left_value), (right_name, right_value)) in
+            left_state.values.iter().zip(right_state.values.iter())
+        {
+            assert_eq!(left_name, right_name, "step {step}");
+            assert_eq!(
+                left_value.to_bits(),
+                right_value.to_bits(),
+                "step {step}, {left_name}"
+            );
+        }
+    }
 }

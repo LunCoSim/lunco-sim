@@ -676,7 +676,7 @@ pub fn on_compile_model(
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
-    mut sim_streams: ResMut<crate::SimStreamRegistry>,
+    mut sim_streams: ResMut<lunco_signal::SimRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
     model_tabs: Res<crate::model_tabs::ModelTabs>,

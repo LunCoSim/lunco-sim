@@ -33,7 +33,7 @@
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use lunco_core::subsystems::{SubsystemToggles, SUBSYSTEMS};
+use lunco_core::subsystems::SubsystemToggles;
 use lunco_core::{
     on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
@@ -497,10 +497,11 @@ pub struct StartTutorial {
 pub struct SkipTutorial {}
 
 /// Enable/disable a simulation subsystem at runtime (progressive fidelity).
-/// `name` must be in [`SUBSYSTEMS`]. Rhai: `set_subsystem(name, on)`.
+/// `name` must be registered by the owning subsystem plugin. Rhai:
+/// `set_subsystem(name, on)`.
 #[Command(default)]
 pub struct SetSubsystemEnabled {
-    /// Subsystem key from the [`SUBSYSTEMS`] allow-list.
+    /// Registered subsystem key.
     pub name: String,
     /// `true` enables, `false` disables.
     pub on: bool,
@@ -690,14 +691,21 @@ fn on_set_subsystem_enabled(
     mut commands: Commands,
 ) {
     let ev = trigger.event();
-    if !SubsystemToggles::is_known(&ev.name) {
+    if !toggles.is_registered(&ev.name) {
         warn!(
-            "[subsystem] unknown subsystem '{}' (allow-list: {:?}) — ignored",
-            ev.name, SUBSYSTEMS
+            "[subsystem] unknown subsystem '{}' (registered: {:?}) — ignored",
+            ev.name,
+            toggles.registered_names()
         );
         return;
     }
-    toggles.set(ev.name.clone(), ev.on);
+    if !toggles.set(ev.name.clone(), ev.on) {
+        warn!(
+            "[subsystem] '{}' was unregistered before its state could be set",
+            ev.name
+        );
+        return;
+    }
     info!("[subsystem] {} = {}", ev.name, ev.on);
     commands.trigger(TelemetryEvent {
         name: format!("subsystem:{}", ev.name),

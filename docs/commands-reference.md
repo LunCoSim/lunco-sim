@@ -1953,13 +1953,14 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `SetSubsystemEnabled`
 
  Enable/disable a simulation subsystem at runtime (progressive fidelity).
- `name` must be in [`SUBSYSTEMS`]. Rhai: `set_subsystem(name, on)`.
+ `name` must be registered by the owning subsystem plugin. Rhai:
+ `set_subsystem(name, on)`.
 
 - *defined in:* `crates/lunco-tutorial/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | `String` |  Subsystem key from the [`SUBSYSTEMS`] allow-list. |
+| `name` | `String` |  Registered subsystem key. |
 | `on` | `bool` |  `true` enables, `false` disables. |
 
 #### `SkipTutorial`

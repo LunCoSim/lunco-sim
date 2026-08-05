@@ -94,6 +94,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-settings = { path = "../lunco-settings" }
+lunco-signal = { path = "../lunco-signal" }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-web = { workspace = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
@@ -119,11 +120,6 @@ egui_extras = { version = "0.35", features = ["all_loaders"], optional = true }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
 htmd = { version = "0.5", optional = true }
-# Lock-free publish path from the Modelica worker thread into the UI:
-# each running sim owns an `Arc<ArcSwap<SimSnapshot>>` that the worker
-# updates after every Step. Plots read via `load()` — no mutex, no
-# per-sample work on the main thread. See `sim_stream.rs`.
-arc-swap = "1"
 # Polygon tessellator with EvenOdd fill-rule support — matches the
 # de-facto Modelica standard (Qt's QPainterPath default that OMEdit
 # and Dymola rely on). egui's built-in `Shape::convex_polygon` only

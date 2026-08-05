@@ -1352,7 +1352,6 @@ pub mod experiments_runner;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod indexer;
 pub mod msl_settings;
-pub mod sim_stream;
 pub mod worker;
 
 /// Bevy resource wrapping the singleton [`experiments_runner::ModelicaRunner`].
@@ -1382,8 +1381,6 @@ pub mod api;
 
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
-pub use sim_stream::{new_sim_stream, SimSample, SimSnapshot, SimStream, VarHistory};
-
 /// UI-agnostic per-frame queue of live sim samples.
 ///
 /// The core worker handler ([`worker::handle_modelica_responses`]) appends one
@@ -1437,46 +1434,6 @@ pub struct SimSampleBatch {
     pub samples: Vec<(String, f64)>,
     pub is_new_model: bool,
     pub is_parameter_update: bool,
-}
-
-/// UI-thread registry of per-entity lock-free sim streams (Phase A
-/// of the multi-sim architecture). On Compile the command observer
-/// calls [`SimStreamRegistry::get_or_insert`] and ships a clone of
-/// the returned `SimStream` to the worker thread; plots and
-/// telemetry query the registry to get the same handle and render
-/// without locking.
-///
-/// TODO(arch-phase-b): promote this into the full `SimRegistry`
-///   keyed by `SimId` (not `Entity`) so non-Modelica backends can
-///   publish snapshots through the same channel.
-#[derive(Resource, Default)]
-pub struct SimStreamRegistry {
-    streams: std::collections::HashMap<Entity, SimStream>,
-}
-
-impl SimStreamRegistry {
-    /// Existing stream for `entity`, or a freshly-created one. The
-    /// returned handle is cheap to clone (Arc bump) and safe to
-    /// share across threads.
-    pub fn get_or_insert(&mut self, entity: Entity) -> SimStream {
-        self.streams
-            .entry(entity)
-            .or_insert_with(sim_stream::new_sim_stream)
-            .clone()
-    }
-
-    /// Returns the stream for `entity` if one has been registered.
-    /// Readers never need mutable access — they just `load()` the
-    /// `ArcSwap`.
-    pub fn get(&self, entity: Entity) -> Option<&SimStream> {
-        self.streams.get(&entity)
-    }
-
-    /// Drop the stream for `entity`. Called on despawn so stale
-    /// snapshots don't pin memory.
-    pub fn remove(&mut self, entity: Entity) {
-        self.streams.remove(&entity);
-    }
 }
 
 /// System sets for Modelica stepping in [`FixedUpdate`].
@@ -1730,7 +1687,7 @@ fn build_modelica_core(app: &mut App) {
     }
 
     app.init_resource::<crate::state::WorkbenchState>();
-    app.init_resource::<SimStreamRegistry>();
+    app.init_resource::<lunco_signal::SimRegistry>();
     app.init_resource::<SimSampleStream>();
     app.add_message::<ModelicaNotice>();
     app.add_message::<CompileRequested>();

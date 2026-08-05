@@ -7,50 +7,64 @@
 //! (`SetSubsystemEnabled`, defined in `lunco-tutorial` — the `#[Command]` derive
 //! can't expand inside `lunco-core` itself) that a rhai step can call:
 //!
-//! ```rhai
-//! cmd("SetSubsystemEnabled", #{ name: "thermal", on: true });
-//! ```
+//! The command accepts a name registered by the owning subsystem plugin.
 //!
-//! **Opt-in gating.** A subsystem honours a toggle by reading
-//! [`SubsystemToggles::enabled`] in its own systems; absence defaults to `true`,
-//! so adding the substrate changes nothing until a subsystem opts in. The set of
-//! valid names is an allow-list ([`SUBSYSTEMS`]) so a typo is rejected loudly
-//! instead of silently creating a dead flag. The resource lives here (every crate
-//! depends on `lunco-core`); the command that flips it lives in `lunco-tutorial`.
+//! **Opt-in gating.** A subsystem registers its own toggle name when its plugin
+//! is added, then honours [`SubsystemToggles::enabled`] in its systems. An
+//! unset registered toggle defaults to `true`, so adding the substrate changes
+//! nothing until a subsystem opts in. The resource lives here (every crate
+//! depends on `lunco-core`); the command that flips it lives in
+//! `lunco-tutorial`.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
-
-/// The subsystems a tutorial may toggle. Extend as subsystems opt into gating.
-/// Keep names short, stable, and lower-kebab.
-// TODO(backlog): replace this hardcoded allowlist with dynamic registration
-// (subsystems self-register their toggle name, matching the project's
-// dynamic-registries direction); see the engineering-backlog doc in
-// docs/architecture (dynamic subsystem registry).
-pub const SUBSYSTEMS: &[&str] = &["thermal", "comms-degradation", "obstacle-field"];
+use std::collections::{BTreeSet, HashMap};
 
 /// Runtime enable/disable state per subsystem. Missing key ⇒ enabled (`true`),
 /// so the toggle only ever *removes* fidelity a tutorial hasn't introduced yet.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct SubsystemToggles {
     enabled: HashMap<String, bool>,
+    registered: BTreeSet<String>,
 }
 
 impl SubsystemToggles {
-    /// Is `name` currently enabled? Unknown/unset ⇒ `true` (opt-in gating).
+    /// Register the toggle owned by a subsystem plugin.
+    pub fn register(&mut self, name: impl Into<String>) -> bool {
+        let name = name.into();
+        if name.is_empty()
+            || name
+                .bytes()
+                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+        {
+            return false;
+        }
+        self.registered.insert(name)
+    }
+
+    /// Is `name` currently enabled? An unset registered toggle is enabled.
     pub fn enabled(&self, name: &str) -> bool {
         self.enabled.get(name).copied().unwrap_or(true)
     }
 
-    /// Set `name`'s state. No allow-list check here — the command handler
-    /// validates before calling; direct callers are trusted.
-    pub fn set(&mut self, name: impl Into<String>, on: bool) {
-        self.enabled.insert(name.into(), on);
+    /// Set a registered subsystem's state. Unknown names are rejected and do
+    /// not create a dead toggle with no consuming subsystem.
+    pub fn set(&mut self, name: impl Into<String>, on: bool) -> bool {
+        let name = name.into();
+        if !self.registered.contains(&name) {
+            return false;
+        }
+        self.enabled.insert(name, on);
+        true
     }
 
-    /// True if `name` is a recognised subsystem ([`SUBSYSTEMS`]).
-    pub fn is_known(name: &str) -> bool {
-        SUBSYSTEMS.contains(&name)
+    /// True if a subsystem plugin has registered `name`.
+    pub fn is_registered(&self, name: &str) -> bool {
+        self.registered.contains(name)
+    }
+
+    /// Registered names in deterministic order, for diagnostics and APIs.
+    pub fn registered_names(&self) -> Vec<String> {
+        self.registered.iter().cloned().collect()
     }
 }
 
@@ -59,4 +73,28 @@ impl SubsystemToggles {
 /// mutates it is registered by `lunco-tutorial`.
 pub(crate) fn build_subsystems(app: &mut App) {
     app.init_resource::<SubsystemToggles>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subsystem_plugins_register_their_own_names() {
+        let mut toggles = SubsystemToggles::default();
+        assert!(!toggles.set("obstacle-field", false));
+        assert!(toggles.register("obstacle-field"));
+        assert!(!toggles.register("obstacle-field"));
+        assert!(toggles.set("obstacle-field", false));
+        assert!(!toggles.enabled("obstacle-field"));
+        assert_eq!(toggles.registered_names(), vec!["obstacle-field"]);
+    }
+
+    #[test]
+    fn invalid_names_are_not_registered() {
+        let mut toggles = SubsystemToggles::default();
+        assert!(!toggles.register("Thermal"));
+        assert!(!toggles.register(""));
+        assert!(!toggles.is_registered("Thermal"));
+    }
 }

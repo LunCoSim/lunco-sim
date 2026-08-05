@@ -317,8 +317,15 @@ pub fn setup_big_space_hierarchy(
     // `SetSubsystemEnabled { name: "obstacle-field", on: true }` re-enables
     // it live for rover-testing on a twin.
     if let Some(mut toggles) = subsystems {
-        toggles.set("obstacle-field", false);
-        info!("celestial takeover: obstacle-field subsystem defaulted OFF (site-anchored scene)");
+        if toggles.set("obstacle-field", false) {
+            info!(
+                "celestial takeover: obstacle-field subsystem defaulted OFF (site-anchored scene)"
+            );
+        } else {
+            warn!(
+                "celestial takeover: obstacle-field plugin did not register its subsystem toggle"
+            );
+        }
     }
     // NO HARDCODED PLANET IMAGERY.
     //

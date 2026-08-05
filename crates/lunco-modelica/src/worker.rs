@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 use lunco_assets::modelica_dir;
 
 use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
-use crate::sim_stream::{SimSnapshot, SimStream};
 use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 use lunco_experiments::{ParamPath, ParamValue};
+use lunco_signal::{SimSnapshot, SimStream};
 
 /// Solver options for the **LIVE** (co-simulated) path.
 ///
@@ -219,7 +219,7 @@ pub enum ModelicaCommand {
         #[serde(default)]
         parameter_overrides: Vec<(String, f64)>,
         /// Lock-free snapshot handle the worker publishes into after
-        /// every successful Step (Phase A of the multi-sim arch).
+        /// every successful Step when the command stays in this address space.
         /// `None` = result-stream path; main thread still receives per-sample
         /// data via `ModelicaResult.outputs` and pushes it into
         /// `SignalRegistry`. When `Some`, the worker updates the
@@ -1247,8 +1247,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     // Compiled-artifact cache per entity (M3) — Reset and Step auto-init
     // rebuild steppers from `CachedModel::compiled` without recompiling.
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
-    // Lock-free publish stream per entity (Phase A of the multi-sim
-    // refactor — see `sim_stream.rs`). The UI side holds a clone of
+    // Lock-free publish stream per entity. The UI side holds a clone of
     // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
     // publishes a new snapshot so plots render without locking or
     // involving the main thread in per-sample work.
@@ -1820,18 +1819,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     // variable_names + input_names collection.
                                     let outputs = collect_stepper_observables(stepper);
                                     let new_time = stepper.time();
-                                    // Phase A: also publish to the
-                                    // lock-free stream so consumers that
-                                    // wire into it (plots, telemetry —
-                                    // see TODO arch-phase-a2) can read
-                                    // without main-thread round-tripping.
-                                    // We continue to ship `outputs`
-                                    // through the crossbeam channel as
-                                    // well until plots have migrated;
-                                    // once they read from `SimStream`
-                                    // exclusively, the `outputs` Vec
-                                    // can be cleared here to drop the
-                                    // per-sample main-thread push loop.
+                                    // Publish the immutable stream projection
+                                    // for same-address-space readers. The
+                                    // result still carries `outputs` because
+                                    // it is the transport boundary for the
+                                    // main thread and wasm worker contexts.
                                     if let Some(stream) = sim_streams.get(&entity) {
                                         let prev = stream.load();
                                         let next = SimSnapshot::advance(&prev, new_time, &outputs);
@@ -2067,6 +2059,7 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 #[derive(Default)]
 pub struct InlineWorkerInner {
     steppers: HashMap<Entity, (u64, String, LiveStepper)>,
+    sim_streams: HashMap<Entity, SimStream>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiler: Option<ModelicaCompiler>,
@@ -2237,6 +2230,11 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         w.steppers.remove(&entity);
                     } else {
                         let outputs = collect_stepper_observables(stepper);
+                        if let Some(stream) = w.sim_streams.get(&entity) {
+                            let prev = stream.load();
+                            let next = SimSnapshot::advance(&prev, stepper.time(), &outputs);
+                            stream.store(Arc::new(next));
+                        }
                         send(ModelicaResult {
                             entity,
                             session_id,
@@ -2291,7 +2289,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             doc_uri,
             extra_sources,
             parameter_overrides,
-            stream: _stream,
+            stream,
             realtime_safe,
         } => {
             if realtime_safe {
@@ -2299,10 +2297,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             } else {
                 w.realtime_models.remove(&entity);
             }
-            // NB: the wasm inline worker runs on the Bevy main thread
-            // today and does not publish to a lock-free SimStream.
-            // Phase A lands on desktop first; TODO(arch-phase-b) wire
-            // the wasm path once the inline worker moves off-thread.
+            if let Some(stream) = stream {
+                stream.store(Arc::new(SimSnapshot::empty_at_zero()));
+                w.sim_streams.insert(entity, stream);
+            }
             w.current_sessions.insert(entity, session_id);
             // Raw sibling docs for the cache — see the native Compile arm.
             let raw_extras = extra_sources.clone();
@@ -2443,6 +2441,9 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             let symbols = collect_stepper_observables(&stepper);
                             w.steppers
                                 .insert(entity, (session_id, rb.model_name.clone(), stepper));
+                            if let Some(stream) = w.sim_streams.get(&entity) {
+                                stream.store(Arc::new(SimSnapshot::empty_at_zero()));
+                            }
                             send(reset_ok(
                                 entity,
                                 session_id,
@@ -2612,6 +2613,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
         ModelicaCommand::Despawn { entity } => {
             w.steppers.remove(&entity);
             w.cached_models.remove(&entity);
+            w.sim_streams.remove(&entity);
         }
         ModelicaCommand::LoadSourceRoot { id, payload } => {
             // Wasm path: matches the native handler. Worker thread
@@ -2748,8 +2750,13 @@ pub struct ModelicaModel {
 /// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
 /// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
-pub fn on_remove_modelica(trigger: On<Remove, ModelicaModel>, channels: Res<ModelicaChannels>) {
+pub fn on_remove_modelica(
+    trigger: On<Remove, ModelicaModel>,
+    channels: Res<ModelicaChannels>,
+    mut sim_registry: ResMut<lunco_signal::SimRegistry>,
+) {
     let entity = trigger.entity;
+    sim_registry.remove_entity(entity);
     let _ = channels.tx.send(ModelicaCommand::Despawn { entity });
     info!(
         "[modelica] observer: sent Despawn to Modelica for entity {:?}",

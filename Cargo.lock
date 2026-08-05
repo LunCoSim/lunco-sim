@@ -7529,7 +7529,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
- "arc-swap",
  "base64",
  "bevy",
  "bevy_egui",
@@ -7556,6 +7555,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-signal",
  "lunco-storage",
  "lunco-theme",
  "lunco-tutorial",
@@ -7799,7 +7799,9 @@ dependencies = [
 name = "lunco-signal"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "bevy",
+ "indexmap",
  "lunco-core",
  "serde",
 ]

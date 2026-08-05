@@ -212,20 +212,20 @@ mount placement separated from the root prim's authored xform, so that
 
 ## 6. Architecture debt
 
-### Core purity: the `SUBSYSTEMS` allowlist
+### Core purity: dynamic subsystem registration
 
-**What:** Replace the hardcoded `SUBSYSTEMS` allowlist in `lunco-core` with
-dynamic registration.
+**What:** Subsystems register their toggle names from their owning plugins;
+`lunco-core` supplies only the shared toggle resource.
 
 **Why:** The standing rule is that nothing domain-specific enters `lunco-core`
 ([`38-domains-as-packages.md`](38-domains-as-packages.md)). The drive kernels
 half of this has landed — `DriveInputs`/`DriveMix`/`ControlKernelRegistry` now
 live in `lunco-mobility` with the systems that consume them, and core no longer
-names a vehicle concept. The static allowlist is the same disease in registry
-form: adding a subsystem should be registration, not a core edit.
+names a vehicle concept. Subsystem names now follow the same ownership rule:
+adding one is registration by its domain plugin, not a core edit.
 
-**Scope:** small–medium; a registration API plus the sites that read the
-allowlist.
+**Status:** complete. The registration API rejects unregistered writes and
+the obstacle-field plugin is the first production owner.
 
 ### `UsdDocument` stores `sdf::Data`, so every edit round-trips through text
 
