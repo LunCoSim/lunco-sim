@@ -352,33 +352,35 @@ fn build_tree(
         // component path. The user sees the model that owns the value rather
         // than an implementation container. This remains producer-neutral:
         // every hierarchical model path gets the same treatment.
-        let mut structure = signal_structure(
-            meta.and_then(|metadata| {
-                metadata
-                    .group_path
-                    .as_deref()
-                    .filter(|path| !path.is_empty())
-            })
-            .unwrap_or(&sig.path),
-        );
-        // Canonical paths may repeat the USD ancestry already represented by
-        // the entity lineage (for example `SandboxScene/Rover/Battery`). Drop
-        // that shared prefix so the visual tree does not duplicate the vessel.
-        while structure
-            .first()
-            .is_some_and(|(id, _)| lineage.iter().any(|(parent_id, _)| parent_id == id))
-        {
-            structure.remove(0);
+        let group_path = meta.and_then(|metadata| {
+            metadata
+                .group_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+        });
+        let mut structure = signal_structure(group_path.unwrap_or(&sig.path));
+        // Canonical authored paths may repeat the USD ancestry already
+        // represented by the entity lineage. Remove the complete shared
+        // prefix, then make the remaining nodes relative to their owner.
+        let shared_prefix_len = structure
+            .iter()
+            .zip(&lineage)
+            .take_while(|((structure_id, _), (lineage_id, _))| structure_id == lineage_id)
+            .count();
+        if shared_prefix_len > 0 {
+            structure.drain(..shared_prefix_len);
+            for (id, _) in &mut structure {
+                if id.starts_with('/') {
+                    if let Some(segment) = id.rsplit('/').find(|segment| !segment.is_empty()) {
+                        *id = format!("signal-structure:{segment}");
+                    }
+                }
+            }
         }
         // A resolved group path means the projection supplied an authored
         // ownership target. Replace the runtime wrapper leaf regardless of
         // whether that projection entity currently has a USD path component.
-        if meta
-            .and_then(|metadata| metadata.group_path.as_ref())
-            .is_some_and(|path| !path.is_empty())
-            && !structure.is_empty()
-            && !lineage.is_empty()
-        {
+        if group_path.is_some() && !structure.is_empty() && !lineage.is_empty() {
             lineage.pop();
         }
         lineage.extend(structure);
@@ -391,30 +393,8 @@ fn build_tree(
         }
         node.rows.push(row);
     }
-    collapse_singleton_leaves(&mut root);
     sort_tree(&mut root);
     root
-}
-
-/// Keep the visual tree useful at narrow widths: a structural node that owns
-/// exactly one scalar has no grouping value to communicate, so its row is
-/// promoted to the parent. Nodes with multiple values or descendants remain
-/// intact.
-fn collapse_singleton_leaves(node: &mut TreeNode) {
-    for child in node.children.values_mut() {
-        collapse_singleton_leaves(child);
-    }
-    let singleton_ids: Vec<String> = node
-        .children
-        .iter()
-        .filter(|(_, child)| child.children.is_empty() && child.rows.len() == 1)
-        .map(|(id, _)| id.clone())
-        .collect();
-    for id in singleton_ids {
-        if let Some(mut child) = node.children.remove(&id) {
-            node.rows.append(&mut child.rows);
-        }
-    }
 }
 
 fn sort_tree(node: &mut TreeNode) {
@@ -490,6 +470,11 @@ fn signal_structure(path: &str) -> Vec<(String, String)> {
         if let Some((component, _value)) = last.rsplit_once('.') {
             *last = component.to_owned();
         }
+    }
+    // A plain scalar belongs directly to its owning entity. Only a qualified
+    // name or an authored path contributes an intermediate presentation node.
+    if segments.len() == 1 && !decoded.contains('.') && !absolute {
+        return Vec::new();
     }
     let mut authored_path = String::new();
     segments
@@ -1221,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_uses_parentage_not_signal_name_to_group_subsystems() {
+    fn tree_uses_parentage_for_subsystems_and_signal_structure_for_values() {
         let mut reg = SignalRegistry::default();
         let rover = ent(1);
         let motors = ent(2);
@@ -1257,7 +1242,9 @@ mod tests {
                 .len(),
             2
         );
-        assert_eq!(rover.children[&entity_key(comms)].rows.len(), 1);
+        let comms = &rover.children[&entity_key(comms)];
+        let beam = &comms.children["signal-structure:beam"];
+        assert_eq!(beam.rows.len(), 1);
     }
 
     #[test]
