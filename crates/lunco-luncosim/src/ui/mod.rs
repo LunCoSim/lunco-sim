@@ -45,8 +45,8 @@ struct DismissTerrainOverlay;
 ///
 /// Added by the app shell only for a windowed run. A headless server runs the
 /// sim, physics, scene, cosim, and networking host (all in `SandboxCorePlugin`)
-/// *without* any of this — the render plugins still load in `backends: None`
-/// mode so the asset stores exist, but nothing here (GPU / window / pointer)
+/// *without* any of this — headless mode omits the renderer and keeps only the
+/// simulation-facing asset/type plugins, so nothing here (GPU / window / pointer)
 /// is wired.
 pub(crate) struct SandboxUiPlugin;
 
@@ -757,8 +757,7 @@ fn register_graphics_settings(world: &mut World) {
     });
 }
 
-const SCENARIO_MENU_WIDTH: f32 = 360.0;
-const SCENARIO_MENU_ITEM_WIDTH: f32 = 332.0;
+const SCENARIO_MENU_WIDTH: f32 = 300.0;
 const SCENARIO_MENU_HEIGHT: f32 = 360.0;
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
@@ -815,8 +814,6 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     .max_height(SCENARIO_MENU_HEIGHT)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_min_width(SCENARIO_MENU_ITEM_WIDTH);
-                        ui.set_max_width(SCENARIO_MENU_ITEM_WIDTH);
                         for entry in &entries {
                             let mb = (entry.total_bytes as f64) / (1024.0 * 1024.0);
                             let label = if entry.name.is_empty() {
@@ -826,7 +823,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                             };
                             if ui
                                 .add_sized(
-                                    [SCENARIO_MENU_ITEM_WIDTH, 0.0],
+                                    [ui.available_width(), 0.0],
                                     bevy_egui::egui::Button::new(label).wrap(),
                                 )
                                 .clicked()
@@ -834,9 +831,12 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                 if let Some(scene) = entry.default_scene.clone() {
                                     // Mounts the cache dir as this twin's root and yields the
                                     // same `twin://<name>/<rel>` the host uses for the scene.
-                                    let twins = ctx
+                                    let Some(twins) = ctx
                                         .resource::<lunco_assets::twin_source::TwinRoots>()
-                                        .clone();
+                                        .cloned()
+                                    else {
+                                        continue;
+                                    };
                                     let path = lunco_networking::scenario_sync::mount_scenario_twin(
                                         &twins,
                                         &entry.scenario_id,
@@ -943,12 +943,10 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     .max_height(SCENARIO_MENU_HEIGHT)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_min_width(SCENARIO_MENU_ITEM_WIDTH);
-                        ui.set_max_width(SCENARIO_MENU_ITEM_WIDTH);
                         for (asset, desc) in items {
                             let label = clean_scene_name(&asset.stem);
                             let resp = ui.add_sized(
-                                [SCENARIO_MENU_ITEM_WIDTH, 0.0],
+                                [ui.available_width(), 0.0],
                                 bevy_egui::egui::Button::new(label).wrap(),
                             );
                             // Show the plain-language "what is this demo" blurb on hover.
@@ -1062,8 +1060,6 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             .max_height(SCENARIO_MENU_HEIGHT)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_min_width(SCENARIO_MENU_ITEM_WIDTH);
-                ui.set_max_width(SCENARIO_MENU_ITEM_WIDTH);
                 for meta in registry.ordered() {
                     let done = progress.completed.iter().any(|c| c == &meta.id);
                     // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
@@ -1073,10 +1069,8 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                         meta.title,
                         meta.difficulty
                     );
-                    let resp = ui.add_sized(
-                        [SCENARIO_MENU_ITEM_WIDTH, 0.0],
-                        egui::Button::new(label).wrap(),
-                    );
+                    let resp =
+                        ui.add_sized([ui.available_width(), 0.0], egui::Button::new(label).wrap());
                     // Hover tip: the plain-language "what this teaches" blurb.
                     let resp = resp.on_hover_text(meta.blurb.as_str());
                     if resp.clicked() {

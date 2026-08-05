@@ -268,6 +268,13 @@ impl ControlBinding {
         seen.into_iter()
     }
 
+    /// Whether this binding routes the given semantic intent to any port.
+    /// Consumers use this to install intent-specific domain actuators only when
+    /// the authored control profile actually exposes that intent.
+    pub fn has_intent(&self, intent: UserIntent) -> bool {
+        self.binds.iter().any(|(bound, _, _)| *bound == intent)
+    }
+
     /// Resolve active intents into summed, clamped port writes. Every port named
     /// by the binding is present (0.0 when its intents are idle) so a released
     /// input writes 0 and clears the setpoint. `active(intent)` is the sole input
@@ -647,5 +654,22 @@ mod tests {
         ] {
             assert_eq!(parse_camera_follow(old_spelling), None, "{old_spelling}");
         }
+    }
+
+    #[test]
+    fn control_binding_reports_only_authored_intents() {
+        let rover = ControlBinding::from_intent_entries(&[
+            ("forward".into(), "throttle".into(), 1.0),
+            ("backward".into(), "throttle".into(), -1.0),
+            ("left".into(), "steer".into(), -1.0),
+        ])
+        .expect("rover profile has authored controls");
+        assert!(!rover.has_intent(UserIntent::Release));
+        assert!(rover.has_intent(UserIntent::MoveForward));
+
+        let lander =
+            ControlBinding::from_intent_entries(&[("release".into(), "release".into(), 1.0)])
+                .expect("lander profile has an authored release control");
+        assert!(lander.has_intent(UserIntent::Release));
     }
 }

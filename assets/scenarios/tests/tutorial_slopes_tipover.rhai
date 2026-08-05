@@ -11,9 +11,6 @@ fn verdict(pass, reason) {
 }
 
 fn on_start(me) {
-    expect_fault("earth_mount_x");
-    expect_fault("earth_mount_y");
-    expect_fault("earth_mount_z");
     this.possess_count = 0;
     this.port_writes = 0;
     this.edge_seen = false;

@@ -49,7 +49,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 ///
 /// Implementations live alongside the feature that owns them — e.g.
 /// the perf HUD owns `PerfHudSettings`. Choose a stable [`KEY`] —
-/// it's part of the on-disk schema and renaming it migrates badly.
+/// it is the authoritative on-disk section name.
 ///
 /// [`KEY`]: SettingsSection::KEY
 pub trait SettingsSection:
@@ -232,9 +232,9 @@ pub trait AppSettingsExt {
     /// Register a typed section.
     ///
     /// On registration, deserialises the section's slice out of the
-    /// loaded `Settings` (or inserts the `Default` if absent), and
-    /// adds a per-frame system that writes back to `Settings` when
-    /// the resource changes.
+    /// loaded `Settings` (or uses the current `Default` if absent or
+    /// invalid), removes an invalid stored value, and adds a system
+    /// that writes the current section back when the resource changes.
     fn register_settings_section<S: SettingsSection>(&mut self) -> &mut Self;
 }
 
@@ -249,13 +249,8 @@ impl AppSettingsExt for App {
                 None => S::default(),
                 Some(v) => match serde_json::from_value::<S>(v.clone()) {
                     Ok(s) => s,
-                    Err(e) => {
-                        let bad_key = format!("{}.bad", S::KEY);
-                        warn!(
-                            "[Settings:{}] stored section failed to parse ({e}); preserving it as \"{bad_key}\" and using defaults",
-                            S::KEY
-                        );
-                        settings.raw.insert(bad_key, v);
+                    Err(_) => {
+                        settings.raw.remove(S::KEY);
                         settings.dirty = true;
                         S::default()
                     }
@@ -496,6 +491,45 @@ impl SettingsSection for DownloadSettings {
 #[cfg(test)]
 mod disk_guard_tests {
     use super::*;
+
+    #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+    #[serde(deny_unknown_fields)]
+    struct TestSection {
+        enabled: bool,
+    }
+
+    impl Default for TestSection {
+        fn default() -> Self {
+            Self { enabled: false }
+        }
+    }
+
+    impl SettingsSection for TestSection {
+        const KEY: &'static str = "test_section";
+    }
+
+    #[test]
+    fn invalid_section_is_removed_and_current_defaults_are_registered() {
+        let mut app = App::new();
+        app.insert_resource(Settings {
+            raw: BTreeMap::from([(
+                TestSection::KEY.to_string(),
+                serde_json::json!({ "enabled": true, "obsolete": 1 }),
+            )]),
+            dirty: false,
+        });
+
+        app.register_settings_section::<TestSection>();
+
+        assert_eq!(
+            app.world().resource::<TestSection>().enabled,
+            TestSection::default().enabled
+        );
+        let settings = app.world().resource::<Settings>();
+        assert!(settings.raw(TestSection::KEY).is_none());
+        assert!(settings.raw("test_section.bad").is_none());
+        assert!(settings.dirty);
+    }
 
     #[test]
     fn terrain_settings_migrate_missing_visual_lod_fields_to_defaults() {

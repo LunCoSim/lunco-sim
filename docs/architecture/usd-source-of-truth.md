@@ -111,7 +111,7 @@ so it is a no-op.
 
 | Property | Mutation | Authors USD? |
 |---|---|---|
-| `drive_torque_max`, `brake_torque_max`, `friction_mu`, `wheel_radius`, `spring_k`, … | `WheelRaycast` fields (`wheel_param_setter`) | no |
+| `drive_torque`, `brake_torque`, `friction_mu`, `wheel_radius`, `moi`, `spring_k`, … | `WheelRaycast` fields through the canonical wheel-parameter registry | yes — persisted through the USD runtime overlay |
 | `shader` | swaps the `ShaderLook`'s shader | no |
 | `visible` | sets `Visibility` (Hidden/Visible) | no |
 | `base_color`, `emissive`, `metallic`, `roughness`, `ior`, `alpha`, `double_sided` | the entity's `PbrLook` via `apply_pbr_look` | **yes** — as `UsdPreviewSurface` `inputs:*` (`double_sided` → `doubleSided` on the Gprim) |

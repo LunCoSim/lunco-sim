@@ -171,14 +171,26 @@ fn register_release_backend(reg: Option<ResMut<lunco_core::ports::PortRegistry>>
 /// actuator must live there. `joint_release_system` bridges to the joint by path.)
 fn attach_release_actuator(
     mut commands: Commands,
-    q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
+    q: Query<
+        (
+            Entity,
+            &lunco_core::ControlBinding,
+            Option<&ReleaseActuator>,
+        ),
+        Changed<lunco_core::ControlBinding>,
+    >,
 ) {
-    for e in &q {
-        // `try_insert`: scene-load churn (or a doc-backed reload) can despawn a
-        // just-added ControlBinding entity before this deferred insert applies —
-        // a plain `insert` then panics on the invalid entity. Same despawn-safe
-        // idiom as gizmo/hardware/terrain-surface.
-        commands.entity(e).try_insert(ReleaseActuator::default());
+    for (e, binding, actuator) in &q {
+        let has_release = binding.has_intent(lunco_core::architecture::UserIntent::Release);
+        if has_release && actuator.is_none() {
+            // `try_insert`: scene-load churn (or a doc-backed reload) can despawn a
+            // just-added ControlBinding entity before this deferred insert applies —
+            // a plain `insert` then panics on the invalid entity. Same despawn-safe
+            // idiom as gizmo/hardware/terrain-surface.
+            commands.entity(e).try_insert(ReleaseActuator::default());
+        } else if !has_release && actuator.is_some() {
+            commands.entity(e).try_remove::<ReleaseActuator>();
+        }
     }
 }
 
@@ -1296,7 +1308,7 @@ pub fn on_set_usd_attribute(
 /// reload. One row per param makes that structurally impossible: a field cannot
 /// exist in one table and not the other, because there is only one table.
 pub(crate) struct WheelParam {
-    /// Canonical `SetObjectProperty` name, matching the Rust field name.
+    /// The single public `SetObjectProperty` name for this parameter.
     pub name: &'static str,
     /// Live setter on `WheelRaycast`. Non-capturing closures coerce to `fn`.
     pub set: fn(&mut lunco_mobility::WheelRaycast, f64),
@@ -1309,12 +1321,12 @@ pub(crate) struct WheelParam {
 /// tune round-trips through the runtime layer on reload.
 pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
-        name: "drive_torque_max",
+        name: "drive_torque",
         set: |w, v| w.drive_torque_max = v,
         usd_attr: "physxVehicleEngine:peakTorque",
     },
     WheelParam {
-        name: "brake_torque_max",
+        name: "brake_torque",
         set: |w, v| w.brake_torque_max = v,
         usd_attr: "physxVehicleWheel:maxBrakeTorque",
     },
@@ -1339,7 +1351,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
         usd_attr: "physics:mass",
     },
     WheelParam {
-        name: "moment_of_inertia",
+        name: "moi",
         set: |w, v| w.moment_of_inertia = v,
         usd_attr: "physxVehicleWheel:moi",
     },
@@ -1350,7 +1362,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     },
 ];
 
-/// Look a `SetObjectProperty` property name up in [`WHEEL_PARAMS`], or `None`
+/// Look a canonical `SetObjectProperty` name up in [`WHEEL_PARAMS`], or `None`
 /// if it isn't a wheel field. Both the live-mutation path and the USD-authoring
 /// path go through this one lookup.
 pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
@@ -1957,8 +1969,8 @@ pub fn clear_kinematic_pulse_velocity(
 ///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` toggles `Visibility`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-///   `drive_torque_max`, `brake_torque_max`, `slip_stiffness`, `bearing_damping`,
-///   `friction_mu`, `mass`, `moment_of_inertia`, `wheel_radius`, `rest_length`, `spring_k`,
+///   `drive_torque`, `brake_torque`, `slip_stiffness`, `bearing_damping`,
+///   `friction_mu`, `mass`, `moi`, `wheel_radius`, `rest_length`, `spring_k`,
 ///   `damping_c` → set that `f64` field on the wheel's `WheelRaycast` live.
 ///   Each wheel is its own entity, so this gives independent per-wheel control.
 #[Command(default)]
@@ -3745,8 +3757,8 @@ mod tests {
                 p.usd_attr
             );
             // Both consumers (live setter + USD persister) resolve through the
-            // SAME lookup, so a name that sets a field always has an attr.
-            let row = wheel_param(p.name).expect("canonical name resolves");
+            // same canonical lookup, so a name that sets a field always has an attr.
+            let row = wheel_param(p.name).expect("wheel name resolves");
             assert_eq!(row.usd_attr, p.usd_attr);
         }
 
@@ -3756,6 +3768,19 @@ mod tests {
             assert!(!row.usd_attr.is_empty(), "{name} persists to USD");
         }
         assert!(wheel_param("not_a_wheel_field").is_none());
+        for obsolete in [
+            "drive_torque_max",
+            "brake_torque_max",
+            "damping_rate",
+            "friction",
+            "moment_of_inertia",
+            "radius",
+        ] {
+            assert!(
+                wheel_param(obsolete).is_none(),
+                "obsolete wheel alias still accepted: {obsolete}"
+            );
+        }
 
         // Setters write the field they claim.
         let mut w = lunco_mobility::WheelRaycast::default();

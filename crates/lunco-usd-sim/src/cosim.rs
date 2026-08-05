@@ -509,9 +509,8 @@ fn project_usd_telemetry(
     }
 }
 
-/// Reads one cosim prim's attributes and dispatches its model + wires + events,
-/// generic over the read source ([`UsdRead`]) — drives off either the live
-/// canonical `StageView` or the flattened `sdf::Data`, identically.
+/// Reads one cosim prim's attributes and dispatches its model + wires + events
+/// from the live composed [`UsdRead`] surface.
 fn process_usd_cosim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,

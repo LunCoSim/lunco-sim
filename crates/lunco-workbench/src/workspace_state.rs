@@ -242,8 +242,7 @@ pub struct PerspectiveDockSnapshot {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceState {
-    /// Version of the persisted representation. Version 2 is the first
-    /// version that records per-perspective docks explicitly.
+    /// Version of the persisted representation.
     pub schema_version: u32,
     /// The Twin root this state belongs to (empty when no Twin is
     /// active — a "no-folder" session still hot-exits its docs). Stored

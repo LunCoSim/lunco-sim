@@ -76,12 +76,8 @@ impl Plugin for UsdTerrainPlugin {
 }
 
 /// Marks a USD prim already examined by the DEM bridge (one-shot per prim).
-///
-/// Public because the app's ground-collider gate reads it: while any prim is still
-/// unexamined, a terrain build may yet be requested, and dynamic bodies must not
-/// activate over not-yet-collidable ground.
 #[derive(Component)]
-pub struct DemBridged;
+struct DemBridged;
 
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
 /// child layer prim's attributes through the stage reader, so terrain-surface's layer

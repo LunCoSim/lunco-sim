@@ -427,8 +427,8 @@ actually call, with the fields the deserializer actually accepts. See the
    reflected schema resolves the type; colours are `r,g,b`.
  - `visible` → `true`/`false` toggles `Visibility`.
  - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-   `drive_torque_max`, `brake_torque_max`, `slip_stiffness`, `bearing_damping`,
-   `friction_mu`, `mass`, `moment_of_inertia`, `wheel_radius`, `rest_length`, `spring_k`,
+   `drive_torque`, `brake_torque`, `slip_stiffness`, `bearing_damping`,
+   `friction_mu`, `mass`, `moi`, `wheel_radius`, `rest_length`, `spring_k`,
    `damping_c` → set that `f64` field on the wheel's `WheelRaycast` live.
    Each wheel is its own entity, so this gives independent per-wheel control.
 

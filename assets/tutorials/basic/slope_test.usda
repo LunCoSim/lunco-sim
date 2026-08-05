@@ -79,12 +79,13 @@ def Xform "SlopeTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # Marker at the top of the grade — the climb goal.
+    # Marker at the top of the grade — the climb goal. Its origin is the
+    # ground anchor; the shared marker asset lifts the visible sensor dome.
     def Xform "Marker" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
-        double3 xformOp:translate = (23.0, 11.0, 0.0)
+        double3 xformOp:translate = (23.0, 8.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

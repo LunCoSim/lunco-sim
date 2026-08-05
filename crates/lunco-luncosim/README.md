@@ -60,9 +60,9 @@ GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
 - `celestial` — bundled Earth texture + Artemis-II ephemeris (10s of MB).
 - `recording`, `tracy`, `net-diag`, `drive-diag` — opt-in diagnostics/tools.
 
-The render asset-store features (`bevy_pbr`/`mesh`/`light`/`window`) stay always
-on even headless: the `--no-ui` server runs `RenderPlugin` in `backends: None`
-mode so USD visual sync can populate the meshes avian colliders key off.
+The simulation-facing asset and component features (`mesh`/`light`/`window`)
+stay enabled in headless builds. Headless mode omits `RenderPlugin` and its
+render-world consumers while USD visual sync remains available to the simulator.
 
 ## Builds
 

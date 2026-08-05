@@ -80,6 +80,37 @@ def Xform "RockerBogieTest" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
+        # This is a local mobility test, not an Earth-tracking scene.  The
+        # shared rover antenna is therefore scenery here: remove its dynamic
+        # links and controller so this stage does not request an Earth frame or
+        # admit unattached mechanism bodies into the rover solve.
+        over "Antenna"
+        {
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (
+                active = false
+            )
+            {
+            }
+            over "YawJoint" (
+                active = false
+            )
+            {
+            }
+            over "ElevationJoint" (
+                active = false
+            )
+            {
+            }
+        }
         double3 xformOp:translate = (0, 1.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

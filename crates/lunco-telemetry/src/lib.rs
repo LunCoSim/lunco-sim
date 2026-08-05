@@ -60,13 +60,12 @@ use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, Telemetr
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
-use serde::{de::Deserializer, Deserialize, Serialize};
-
-const TELEMETRY_SETTINGS_SCHEMA_VERSION: u32 = 1;
+use serde::{Deserialize, Serialize};
 
 /// Persisted telemetry defaults. Stored under the `"telemetry"` key of
 /// `settings.json`.
-#[derive(Resource, Serialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct TelemetrySettings {
     /// Rate for a channel that doesn't specify one.
     ///
@@ -89,9 +88,6 @@ pub struct TelemetrySettings {
     pub default_retention: usize,
     /// Master switch.
     pub enabled: bool,
-    /// On-disk schema revision. Private because it is migration metadata, not
-    /// a runtime setting.
-    schema_version: u32,
 }
 
 impl Default for TelemetrySettings {
@@ -107,39 +103,7 @@ impl Default for TelemetrySettings {
             max_channels: 2048,
             default_retention: 1500,
             enabled: true,
-            schema_version: TELEMETRY_SETTINGS_SCHEMA_VERSION,
         }
-    }
-}
-
-#[derive(Deserialize)]
-struct StoredTelemetrySettings {
-    default_rate_hz: f64,
-    max_channels: usize,
-    default_retention: usize,
-    enabled: bool,
-    schema_version: u32,
-}
-
-impl<'de> Deserialize<'de> for TelemetrySettings {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let stored = StoredTelemetrySettings::deserialize(deserializer)?;
-        if stored.schema_version != TELEMETRY_SETTINGS_SCHEMA_VERSION {
-            return Err(serde::de::Error::custom(format!(
-                "unsupported telemetry settings schema version {} (current {})",
-                stored.schema_version, TELEMETRY_SETTINGS_SCHEMA_VERSION
-            )));
-        }
-        Ok(Self {
-            default_rate_hz: stored.default_rate_hz,
-            max_channels: stored.max_channels,
-            default_retention: stored.default_retention,
-            enabled: stored.enabled,
-            schema_version: stored.schema_version,
-        })
     }
 }
 
@@ -524,6 +488,21 @@ fn discover_runtime_port_channels(world: &mut World) {
     }
 }
 
+/// Runtime-discovered channels belong to the entity whose port they sample.  Retire those
+/// channel entities at the source lifecycle boundary so a scene reload cannot leave a
+/// channel pointing at a recycled or despawned entity.
+fn despawn_runtime_channels_for_removed_source(
+    trigger: On<Remove, lunco_signal::SignalSource>,
+    channels: Query<(Entity, &Parameter), With<RuntimePortChannel>>,
+    mut commands: Commands,
+) {
+    for (channel, parameter) in &channels {
+        if parameter.target == Some(trigger.entity) {
+            commands.entity(channel).despawn();
+        }
+    }
+}
+
 /// Cheap change detector in front of the exclusive sampler: any added/changed/
 /// removed `Parameter` or `TimeBinding` invalidates the plan. Runs on normal
 /// (parallel) system params — the archetype-level `Changed` check and the
@@ -562,6 +541,7 @@ impl Plugin for LunCoTelemetryPlugin {
         app.init_resource::<lunco_signal::TelemetryFocus>();
         app.init_resource::<RuntimePortDiscovery>();
         app.add_observer(retain_sample);
+        app.add_observer(despawn_runtime_channels_for_removed_source);
         app.add_observer(drop_signal_of_removed_channel);
         app.add_observer(lunco_signal::drop_signals_of_removed_source);
         register_all_commands(app);
@@ -1151,35 +1131,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_unversioned_telemetry_settings_section() {
-        let result = serde_json::from_str::<TelemetrySettings>(
-            r#"{
-                "default_rate_hz": 10.0,
-                "max_channels": 1024,
-                "default_retention": 2000,
-                "enabled": true
-            }"#,
-        );
-        assert!(
-            result.is_err(),
-            "settings without a schema are not current data"
-        );
+    fn persisted_settings_use_only_the_current_shape() {
+        let value = serde_json::to_value(TelemetrySettings::default()).unwrap();
+        assert!(value.get("schema_version").is_none());
+        assert!(serde_json::from_value::<TelemetrySettings>(value).is_ok());
     }
 
     #[test]
-    fn preserves_a_versioned_explicit_channel_cap() {
-        let settings: TelemetrySettings = serde_json::from_str(
-            r#"{
-                "default_rate_hz": 10.0,
-                "max_channels": 1024,
-                "default_retention": 2000,
-                "enabled": true,
-                "schema_version": 1
-            }"#,
-        )
-        .expect("the current settings shape must be readable");
-
-        assert_eq!(settings.max_channels, 1024);
+    fn obsolete_schema_marker_is_rejected() {
+        let value = serde_json::json!({
+            "default_rate_hz": 10.0,
+            "max_channels": 1024,
+            "default_retention": 2000,
+            "enabled": true,
+            "schema_version": 1
+        });
+        assert!(serde_json::from_value::<TelemetrySettings>(value).is_err());
     }
 
     #[test]
@@ -1201,6 +1168,38 @@ mod tests {
             .scalar_history(&signal)
             .expect("runtime port telemetry must exist");
         assert_eq!(history.samples.back().unwrap().value, 7.5);
+    }
+
+    #[test]
+    fn discovered_port_channels_follow_source_lifecycle() {
+        let mut app = app();
+        app.init_resource::<PortRegistry>();
+        app.world_mut()
+            .resource_mut::<PortRegistry>()
+            .register(TEST_OUTPUT_BACKEND);
+        let source = app.world_mut().spawn(TestOutput(7.5)).id();
+
+        step_fixed(&mut app, 2);
+
+        let channel = {
+            let mut channels = app
+                .world_mut()
+                .query::<(Entity, &Parameter, &RuntimePortChannel)>();
+            channels
+                .iter(app.world())
+                .find(|(_, parameter, _)| parameter.target == Some(source))
+                .map(|(entity, _, _)| entity)
+                .expect("runtime discovery must create a channel for the source")
+        };
+        assert!(app.world().get_entity(channel).is_ok());
+
+        app.world_mut().despawn(source);
+        app.update();
+
+        assert!(
+            app.world().get_entity(channel).is_err(),
+            "a scene source must not leave its runtime channel behind"
+        );
     }
 
     /// Runtime discovery is for the user-facing simulation surface, not the

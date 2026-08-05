@@ -164,6 +164,10 @@ fn contact_gid(reg: &ApiEntityRegistry, collider: Entity, body: Option<Entity>) 
     reg.api_id_for(collider)
         .or_else(|| body.and_then(|b| reg.api_id_for(b)))
         .map(|g| g.get())
+        // `0` is the wire sentinel used by contact_pair for an unregistered
+        // side. Never turn an invalid/reserved zero identity into a named
+        // arrival that a scenario cannot resolve back to an entity.
+        .filter(|id| *id != 0)
 }
 
 /// `"a:b"` gid pair for a contact, or `None` if neither side is a registered
@@ -187,8 +191,10 @@ fn contact_pair(
 /// The named trigger-zone events a contact produces: for each side that is a
 /// *named* sensor (a trigger volume carrying a `Name`), an
 /// `("<verb>:<zone>", entrant_gid)` pair, where the entrant is the OTHER side
-/// (`0` if unregistered). Empty when neither side is a named zone — those
-/// contacts still surface as the generic `COLLISION_START`/`COLLISION_END`.
+/// and has a registered stable id. The entrant must be a moving rigid body;
+/// static terrain, scenery, and unidentified contacts are not arrivals. Empty
+/// when neither side is a named zone — those contacts still surface as the
+/// generic `COLLISION_START`/`COLLISION_END`.
 ///
 /// `zone_name` maps a collider entity to its zone name (the sensor's `Name`);
 /// abstracted as a closure so this stays a pure, unit-testable function.
@@ -200,18 +206,23 @@ fn zone_events(
     b2: Option<Entity>,
     zone_name: impl Fn(Entity) -> Option<String>,
     reg: &ApiEntityRegistry,
+    is_moving_body: impl Fn(Option<Entity>) -> bool,
 ) -> Vec<(String, i64, u64)> {
     // (event name, entrant gid → payload, ZONE gid → event source)
     let mut out = Vec::new();
-    if let Some(name) = zone_name(c1) {
-        let entrant = contact_gid(reg, c2, b2).unwrap_or(0) as i64;
-        let zone = contact_gid(reg, c1, b1).unwrap_or(0);
-        out.push((format!("{verb}:{name}"), entrant, zone));
+    if is_moving_body(b2) && contact_gid(reg, c2, b2).is_some() {
+        if let Some(name) = zone_name(c1) {
+            let entrant = contact_gid(reg, c2, b2).unwrap_or(0) as i64;
+            let zone = contact_gid(reg, c1, b1).unwrap_or(0);
+            out.push((format!("{verb}:{name}"), entrant, zone));
+        }
     }
-    if let Some(name) = zone_name(c2) {
-        let entrant = contact_gid(reg, c1, b1).unwrap_or(0) as i64;
-        let zone = contact_gid(reg, c2, b2).unwrap_or(0);
-        out.push((format!("{verb}:{name}"), entrant, zone));
+    if is_moving_body(b1) && contact_gid(reg, c1, b1).is_some() {
+        if let Some(name) = zone_name(c2) {
+            let entrant = contact_gid(reg, c1, b1).unwrap_or(0) as i64;
+            let zone = contact_gid(reg, c2, b2).unwrap_or(0);
+            out.push((format!("{verb}:{name}"), entrant, zone));
+        }
     }
     out
 }
@@ -228,6 +239,7 @@ fn bridge_collision_events(
     mut ends: MessageReader<CollisionEnd>,
     registry: Res<ApiEntityRegistry>,
     zones: Query<(Option<&TriggerZone>, &Name), With<Sensor>>,
+    bodies: Query<&RigidBody>,
     world: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
 ) {
@@ -249,6 +261,14 @@ fn bridge_collision_events(
                 .unwrap_or_else(|| name.as_str().to_string())
         })
     };
+    let is_moving_body = |body: Option<Entity>| {
+        body.is_some_and(|entity| {
+            matches!(
+                bodies.get(entity),
+                Ok(RigidBody::Dynamic | RigidBody::Kinematic)
+            )
+        })
+    };
 
     for ev in starts.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
@@ -267,6 +287,7 @@ fn bridge_collision_events(
             ev.body2,
             &zone_name,
             &registry,
+            &is_moving_body,
         ) {
             fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
@@ -288,6 +309,7 @@ fn bridge_collision_events(
             ev.body2,
             &zone_name,
             &registry,
+            &is_moving_body,
         ) {
             fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
@@ -373,21 +395,40 @@ mod tests {
         // rover (side 1) enters pad (side 2, the named sensor) → "enter:pad_2"
         // with the entrant (rover, 42) as payload, and pad (7) as zone.
         assert_eq!(
-            zone_events("enter", rover, None, pad, None, &zone_name, &reg),
+            zone_events("enter", rover, None, pad, None, &zone_name, &reg, |_| true),
             vec![("enter:pad_2".to_string(), 42, 7)]
         );
         // Order-independent: the named side can be side 1.
         assert_eq!(
-            zone_events("exit", pad, None, rover, None, &zone_name, &reg),
+            zone_events("exit", pad, None, rover, None, &zone_name, &reg, |_| true),
             vec![("exit:pad_2".to_string(), 42, 7)]
         );
         // A contact with no named sensor produces no zone events.
-        assert!(zone_events("enter", rover, None, plain, None, &zone_name, &reg).is_empty());
-        // Unregistered entrant → gid 0, but the zone event still fires (zone gid 7).
-        let ghost = world.spawn_empty().id();
-        assert_eq!(
-            zone_events("enter", pad, None, ghost, None, &zone_name, &reg),
-            vec![("enter:pad_2".to_string(), 0, 7)]
+        assert!(
+            zone_events("enter", rover, None, plain, None, &zone_name, &reg, |_| {
+                true
+            })
+            .is_empty()
         );
+        // An unregistered entrant cannot be a script-addressable arrival.
+        let ghost = world.spawn_empty().id();
+        assert!(
+            zone_events("enter", pad, None, ghost, None, &zone_name, &reg, |_| true).is_empty()
+        );
+
+        // A static terrain/body contact is not a vehicle arrival, even when the
+        // zone side is named. The bridge supplies this predicate from Avian's
+        // authoritative rigid-body state.
+        assert!(zone_events(
+            "enter",
+            pad,
+            None,
+            ghost,
+            Some(ghost),
+            &zone_name,
+            &reg,
+            |body| body == Some(rover),
+        )
+        .is_empty());
     }
 }

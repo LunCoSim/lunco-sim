@@ -53,11 +53,7 @@ fn b3_cross_grade_done(me) {
 }
 
 fn b3_climb(me) {
-    nav_to(find("/SlopeTest/Rover"), world_pos(find("/SlopeTest/Marker")), 0.55, 5.0)
-}
-
-fn b3_climb_done(me) {
-    arrived(find("/SlopeTest/Rover"), world_pos(find("/SlopeTest/Marker")), 6.0)
+    nav_to(find("/SlopeTest/Rover"), world_pos(find("/SlopeTest/Marker")), 0.55, 1.5)
 }
 
 fn b3_report_tip(me) {
@@ -122,7 +118,10 @@ fn task(me) {
         // the demo must exercise the same objective chain a student does, or CI
         // proves a path nobody takes.
         step(Fn("b3_cross_grade"), Fn("b3_cross_grade_done")),
-        step(Fn("b3_climb"), Fn("b3_climb_done")),
+        // The marker sensor is the sole arrival contract. The action continues
+        // until that event, with no wider distance predicate that could stop the
+        // rover outside the authored trigger volume.
+        #{ act: Fn("b3_climb"), event: "enter:waypoint" },
         once(Fn("b3_report_tip")),
         #{ act: Fn("b3_brake"), secs: 1.5 },
     ])

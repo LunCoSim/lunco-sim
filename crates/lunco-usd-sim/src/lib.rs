@@ -587,16 +587,10 @@ pub struct PendingDifferential {
     pub rocker_a: String,
     /// Composed prim path of the body the second hinge turns.
     pub rocker_b: String,
-    /// Hinge axis in the chassis-local frame.
-    pub axis: DVec3,
-    /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`. Was read
-    /// and logged but THROWN AWAY before this field existed, so every geared
-    /// joint silently behaved as the `-1` mirror case no matter what the scene
-    /// authored.
+    /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
     pub ratio: f64,
     pub rest_offset: f64,
     pub stiffness: f64,
-    pub damping: f64,
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
@@ -850,6 +844,7 @@ fn collect_joint_scan_read(
 ) {
     for path in reader.prim_paths() {
         let joint_type = reader.type_name(&path);
+        let body1_target = reader.rel_target(&path, "physics:body1");
         if matches!(
             joint_type.as_deref(),
             Some(
@@ -864,22 +859,36 @@ fn collect_joint_scan_read(
                 .rel_target(&path, "physics:body0")
                 .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
                 .unwrap_or_default();
-            let body1 = reader
-                .rel_target(&path, "physics:body1")
+            let body1 = body1_target
+                .clone()
                 .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
                 .unwrap_or_default();
+            let is_physical_wheel_joint = joint_type.as_deref() == Some("PhysicsRevoluteJoint")
+                && body1_target.as_deref().is_some_and(|target| {
+                    SdfPath::new(target)
+                        .ok()
+                        .is_some_and(|wheel| reader.has_api_schema(&wheel, "PhysxVehicleWheelAPI"))
+                });
             debug!(
                 "USD authored joint topology: {} -> ({}, {})",
                 path.as_str(),
                 body0,
                 body1
             );
-            topology
-                .authored_joints
-                .insert(path.as_str().to_string(), (body0, body1));
+            // A physical wheel's authored revolute joint is the USD identity of
+            // the wheel attachment, but the mobility projector owns the runtime
+            // constraint: it creates the admitted wheel joint with the actuator
+            // motor on the wheel entity's actual chassis mount. Keeping the
+            // authored identity in the generic readiness set would wait forever,
+            // because that synthesized joint intentionally has no USD prim path.
+            if !is_physical_wheel_joint {
+                topology
+                    .authored_joints
+                    .insert(path.as_str().to_string(), (body0, body1));
+            }
         }
         if joint_type.as_deref() == Some("PhysicsRevoluteJoint") {
-            if let Some(body1) = reader.rel_target(&path, "physics:body1") {
+            if let Some(body1) = body1_target {
                 debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
                 let is_vehicle_wheel = SdfPath::new(&body1)
                     .ok()
@@ -917,10 +926,9 @@ fn collect_joint_scan_read(
     }
 }
 
-/// Per-prim sim-schema extractor (Pass 2), generic over the read source
-/// ([`UsdRead`]) — maps one composed prim's authored `lunco:*` / PhysX-vehicle
-/// schemas to its sim/avatar/wheel components off either the live canonical
-/// `StageView` or the flattened `sdf::Data`, identically.
+/// Per-prim sim-schema extractor (Pass 2) over the live composed [`UsdRead`]
+/// surface — maps one composed prim's authored `lunco:*` / PhysX-vehicle
+/// schemas to its sim/avatar/wheel components.
 #[allow(clippy::too_many_arguments)]
 /// Collect behavior-tree program children below a vehicle, including a
 /// namespace such as `OBC`. Program discovery is capability-based and recursive;
@@ -1556,8 +1564,9 @@ fn process_usd_sim_prim_read(
     //
     // Nothing here is rocker-bogie code. A gear joint is a gear joint, and any
     // geared linkage authored this way gets the same coupling with no new Rust.
-    // The compliance is the joint's own `PhysicsDriveAPI` — a rigid gear would fight
-    // the terrain and chatter, so it is enforced as a strong spring.
+    // A gear joint is a zero-compliance relation. A positive authored angular
+    // stiffness enables the relation; zero disables it for an explicit control
+    // scene.
     //
     // Defer-resolved once both geared bodies spawn.
     if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint") {
@@ -1577,17 +1586,6 @@ fn process_usd_sim_prim_read(
         };
         if let (Some((body_a, frame)), Some((body_b, _))) = (geared(&hinges.0), geared(&hinges.1)) {
             let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
-            // The hinges turn about a shared axis; take it from the first.
-            let axis = SdfPath::new(hinges.0.as_deref().unwrap_or_default())
-                .ok()
-                .and_then(|h| reader.text(&h, "physics:axis"))
-                .as_deref()
-                .map(|a| match a {
-                    "Y" => DVec3::Y,
-                    "Z" => DVec3::Z,
-                    _ => DVec3::X,
-                })
-                .unwrap_or(DVec3::X);
             let ratio = read_f("physxGearJoint:gearRatio", -1.0);
             info!(
                 "Gear joint {} couples {} / {} (ratio {})",
@@ -1597,11 +1595,9 @@ fn process_usd_sim_prim_read(
                 chassis: frame,
                 rocker_a: body_a,
                 rocker_b: body_b,
-                axis,
                 ratio,
                 rest_offset: read_f("drive:angular:physics:targetPosition", 0.0),
                 stiffness: read_f("drive:angular:physics:stiffness", 200_000.0),
-                damping: read_f("drive:angular:physics:damping", 20_000.0),
             });
         }
     }
@@ -3215,11 +3211,9 @@ fn resolve_differential_coupling(
             chassis,
             rocker_a,
             rocker_b,
-            axis: pending.axis,
             ratio: pending.ratio,
             rest_offset: pending.rest_offset,
             stiffness: pending.stiffness,
-            damping: pending.damping,
         });
         commands.entity(joint).remove::<PendingDifferential>();
         info!(
@@ -3280,55 +3274,50 @@ fn activate_dynamic_bodies(
         let has_pending_admission = q_pending_admissions
             .iter()
             .any(|pending| pending.body0 == entity || pending.body1 == entity);
-        let has_unready_authored_joint =
-            topology_index
-                .get(path.stage_handle.id())
-                .is_some_and(|topology| {
-                    topology
-                        .authored_joints
-                        .iter()
-                        .any(|(joint_path, (body0, body1))| {
-                            if body0 != &path.path && body1 != &path.path {
-                                return false;
-                            }
-                            let joint_ready = q_joint_states
-                                .iter()
-                                .find(|(joint, ..)| {
-                                    joint.stage_handle == path.stage_handle
-                                        && joint.path == *joint_path
-                                })
-                                .is_some_and(
-                                    |(
-                                        _,
-                                        pending_usd,
-                                        pending_native,
-                                        revolute,
-                                        prismatic,
-                                        fixed,
-                                        spherical,
-                                        distance,
-                                    )| {
-                                        pending_usd.is_none()
-                                            && pending_native.is_none()
-                                            && (revolute
-                                                || prismatic
-                                                || fixed
-                                                || spherical
-                                                || distance)
-                                    },
-                                );
-                            !joint_ready
-                        })
-                });
+        let has_unready_authored_joint = topology_index
+            .get(path.stage_handle.id())
+            .and_then(|topology| {
+                topology
+                    .authored_joints
+                    .iter()
+                    .find_map(|(joint_path, (body0, body1))| {
+                        if body0 != &path.path && body1 != &path.path {
+                            return None;
+                        }
+                        let joint_ready = q_joint_states
+                            .iter()
+                            .find(|(joint, ..)| {
+                                joint.stage_handle == path.stage_handle && joint.path == *joint_path
+                            })
+                            .is_some_and(
+                                |(
+                                    _,
+                                    pending_usd,
+                                    pending_native,
+                                    revolute,
+                                    prismatic,
+                                    fixed,
+                                    spherical,
+                                    distance,
+                                )| {
+                                    pending_usd.is_none()
+                                        && pending_native.is_none()
+                                        && (revolute || prismatic || fixed || spherical || distance)
+                                },
+                            );
+                        (!joint_ready).then_some(())
+                    })
+            })
+            .is_some();
         let has_pending_diff = q_pending_diffs
             .iter()
             .any(|d_path| d_path.stage_handle == path.stage_handle);
-        if !ground_pending.0
-            && !has_pending_joint
-            && !has_pending_admission
-            && !has_unready_authored_joint
-            && !has_pending_diff
-        {
+        let blocked = ground_pending.0
+            || has_pending_joint
+            || has_pending_admission
+            || has_unready_authored_joint
+            || has_pending_diff;
+        if !blocked {
             // Despawn-safe: scene-load churn / doc-backed reload can despawn a
             // ShouldBeDynamic entity between this queue and `apply_deferred`; a plain
             // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
@@ -3408,6 +3397,10 @@ def Xform "Rover" {
         assert_eq!(
             topology.wheel_attachment_targets.get("/Rover/Wheel"),
             Some(&"/Rover/Suspension".to_string())
+        );
+        assert!(
+            !topology.authored_joints.contains_key("/Rover/WheelJoint"),
+            "the physical-wheel projector owns the synthesized wheel constraint"
         );
         assert_eq!(topology.canonical_generation, Some(stage.generation()));
         assert_eq!(topology.projection_revision, Some(1));

@@ -142,8 +142,9 @@ fn reconcile_persisted_binding(
 ) -> bool {
     let mut changed = false;
     if binding.persisted_source.is_none() {
-        // Capture the stable identity only from the exact live source. A stale
-        // session-local entity is not rebound by a matching signal name.
+        // A live binding captures its stable owner identity while the entity is
+        // present. A stale binding without that identity stays unresolved; its
+        // mnemonic is not sufficient to choose another entity.
         let persisted = binding.source.to_persisted(|e| gid_of.get(&e).copied());
         if persisted.is_some() {
             binding.persisted_source = persisted;
@@ -181,5 +182,20 @@ mod tests {
             &entities,
         ));
         assert_eq!(binding.source, SignalRef::new(replacement, "power.soc"));
+    }
+
+    #[test]
+    fn unpersisted_binding_stays_unresolved_after_reload() {
+        let stale = Entity::from_raw_u32(7).unwrap();
+        let replacement = Entity::from_raw_u32(9).unwrap();
+        let gid = lunco_core::GlobalEntityId::from_raw(42);
+        let mut binding = SignalBinding::live(SignalRef::new(stale, "power.soc"), "y");
+        let mut ids = HashMap::new();
+        ids.insert(replacement, gid);
+        let mut entities = HashMap::new();
+        entities.insert(gid, replacement);
+        assert!(!reconcile_persisted_binding(&mut binding, &ids, &entities));
+        assert_eq!(binding.source, SignalRef::new(stale, "power.soc"));
+        assert!(binding.persisted_source.is_none());
     }
 }

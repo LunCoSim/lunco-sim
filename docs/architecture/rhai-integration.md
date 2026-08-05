@@ -173,7 +173,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | RBAC/authz on commands | `#[authz_target]`, `SessionRegistry::may_possess`, sender-identity binding |
 | Stable entity ids | `GlobalEntityId(u64)` (`lunco-core/src/lib.rs:121`), `ApiEntityRegistry::resolve` |
 | Scene/Twin/Modelica/cosim verbs | LoadScene/Spawn/SetObjectProperty/Compile/... |
-| Sandboxed rhai engine | `RhaiBackend` op/depth/size caps (`backend.rs:40-77`) |
+| Sandboxed Rhai scenario runtime | `ScenarioDriver` owns the persistent per-entity engine and lifecycle caps |
 | rhai → World access | `ScenarioRuntime` exposes host functions to rhai engine |
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
 | Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting/src/task_tree.rs`) |
@@ -205,15 +205,11 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 ## 3. Layer A — the World bridge (manipulate everything)
 
 ### 3.1 Giving rhai access to the World
-`ScriptBackend::eval(&self, code)` has no World. Run scenario/command scripts in
-an **exclusive system** (`&mut World`) and expose a scoped World pointer to host
-functions for the eval duration — the standard bevy-scripting pattern
-(`bevy_mod_scripting`). Reads run synchronously; writes mirror
-`executor.rs:134-161` (build reflected event, `ReflectEvent::trigger`).
-
-> Keep the existing pure `RhaiBackend` for the trivial `RunRhai{code}` stdout
-> case. Add a *new* world-bound execution context for scenarios/commands. Don't
-> overload `eval`.
+Scenario and command scripts run in an **exclusive system** (`&mut World`) and
+expose the scoped world bridge for the evaluation duration. Reads run
+synchronously; writes mirror `executor.rs:134-161` (build the reflected event,
+then trigger it). The scenario driver is the single authoritative Rhai runtime;
+there is no separate one-shot backend or compatibility execution path.
 
 ### 3.2 Exposed verbs (the entire vocabulary, ~6 functions)
 ```rust
