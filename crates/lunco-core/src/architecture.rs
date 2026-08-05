@@ -146,26 +146,22 @@ impl Default for IntentAnalogState {
     }
 }
 
-/// Parse a control-intent name (case-insensitive, `Move` prefix optional, with
-/// vessel-friendly aliases) into a [`UserIntent`]. Used by USD authoring
-/// ([`ControlBinding::from_intent_entries`]) so a scene can name intents in plain
-/// words (`"forward"`, `"brake"`, `"yaw_left"`).
+/// Parse a canonical control-intent name (case-insensitive) into a
+/// [`UserIntent`]. Used by USD authoring ([`ControlBinding::from_intent_entries`])
+/// and the API; authored bindings use one vocabulary everywhere.
 pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
     match name.trim().to_ascii_lowercase().as_str() {
-        "forward" | "moveforward" | "pitch_down" => Some(UserIntent::MoveForward),
-        // NOTE: `"back"` is NOT an alias here — it belongs to `Cancel` below
-        // (menu/unpossess "go back"). Listing it in both arms made this arm win
-        // and silently drove the vessel backward on an unpossess binding.
-        "backward" | "movebackward" | "pitch_up" => Some(UserIntent::MoveBackward),
-        "left" | "moveleft" | "roll_left" => Some(UserIntent::MoveLeft),
-        "right" | "moveright" | "roll_right" => Some(UserIntent::MoveRight),
-        "up" | "moveup" | "yaw_right" => Some(UserIntent::MoveUp),
-        "down" | "movedown" | "yaw_left" => Some(UserIntent::MoveDown),
-        "action" | "brake" | "arm" | "fire" => Some(UserIntent::Action),
-        "release" | "detach" | "eject" | "decouple" => Some(UserIntent::Release),
-        "switchmode" | "switch_mode" => Some(UserIntent::SwitchMode),
+        "forward" => Some(UserIntent::MoveForward),
+        "backward" => Some(UserIntent::MoveBackward),
+        "left" => Some(UserIntent::MoveLeft),
+        "right" => Some(UserIntent::MoveRight),
+        "yaw_right" => Some(UserIntent::MoveUp),
+        "yaw_left" => Some(UserIntent::MoveDown),
+        "action" => Some(UserIntent::Action),
+        "release" => Some(UserIntent::Release),
+        "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
-        "cancel" | "back" | "unpossess" => Some(UserIntent::Cancel),
+        "cancel" => Some(UserIntent::Cancel),
         _ => None,
     }
 }
@@ -203,9 +199,9 @@ pub enum CameraFollow {
 /// `None`, so the caller keeps the default (`Heading`).
 pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "heading" | "springarm" | "yaw" => Some(CameraFollow::Heading),
-        "orbit" | "stable" | "external" => Some(CameraFollow::Orbit),
-        "chase" | "cockpit" | "attitude" | "full" => Some(CameraFollow::Chase),
+        "heading" => Some(CameraFollow::Heading),
+        "orbit" => Some(CameraFollow::Orbit),
+        "chase" => Some(CameraFollow::Chase),
         _ => None,
     }
 }
@@ -589,22 +585,67 @@ mod tests {
         assert_eq!(world.get::<Port>(brake).unwrap().value, 1.0);
     }
 
-    /// `"back"` used to appear in BOTH the `MoveBackward` and the `Cancel` arm;
-    /// the first arm won, so a scene binding `"back"` to unpossess drove the
-    /// vessel backward instead. `"back"` belongs to `Cancel` only.
+    /// Intent parsing accepts exactly the authored control vocabulary and rejects
+    /// former aliases instead of silently changing their meaning.
     #[test]
-    fn back_parses_as_cancel_not_move_backward() {
-        assert_eq!(parse_user_intent("back"), Some(UserIntent::Cancel));
-        assert_eq!(parse_user_intent("Back"), Some(UserIntent::Cancel));
-        assert_eq!(
-            parse_user_intent("backward"),
-            Some(UserIntent::MoveBackward)
-        );
-        assert_eq!(
-            parse_user_intent("movebackward"),
-            Some(UserIntent::MoveBackward)
-        );
-        assert_eq!(parse_user_intent("cancel"), Some(UserIntent::Cancel));
-        assert_eq!(parse_user_intent("unpossess"), Some(UserIntent::Cancel));
+    fn parse_user_intent_accepts_only_canonical_names() {
+        for (name, expected) in [
+            ("forward", UserIntent::MoveForward),
+            ("backward", UserIntent::MoveBackward),
+            ("left", UserIntent::MoveLeft),
+            ("right", UserIntent::MoveRight),
+            ("yaw_right", UserIntent::MoveUp),
+            ("yaw_left", UserIntent::MoveDown),
+            ("action", UserIntent::Action),
+            ("release", UserIntent::Release),
+            ("switch_mode", UserIntent::SwitchMode),
+            ("pause", UserIntent::Pause),
+            ("cancel", UserIntent::Cancel),
+        ] {
+            assert_eq!(parse_user_intent(name), Some(expected), "{name}");
+        }
+        for old_spelling in [
+            "moveforward",
+            "movebackward",
+            "moveleft",
+            "moveright",
+            "moveup",
+            "movedown",
+            "up",
+            "down",
+            "pitch_up",
+            "pitch_down",
+            "roll_left",
+            "roll_right",
+            "brake",
+            "arm",
+            "fire",
+            "detach",
+            "eject",
+            "decouple",
+            "switchmode",
+            "back",
+            "unpossess",
+        ] {
+            assert_eq!(parse_user_intent(old_spelling), None, "{old_spelling}");
+        }
+    }
+
+    #[test]
+    fn camera_follow_accepts_only_canonical_tokens() {
+        assert_eq!(parse_camera_follow("heading"), Some(CameraFollow::Heading));
+        assert_eq!(parse_camera_follow("orbit"), Some(CameraFollow::Orbit));
+        assert_eq!(parse_camera_follow("CHASE"), Some(CameraFollow::Chase));
+        for old_spelling in [
+            "springarm",
+            "yaw",
+            "stable",
+            "external",
+            "cockpit",
+            "attitude",
+            "full",
+        ] {
+            assert_eq!(parse_camera_follow(old_spelling), None, "{old_spelling}");
+        }
     }
 }

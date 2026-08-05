@@ -26,21 +26,17 @@ pub struct ScriptDocument {
     /// [`apply`](Self::apply) — mirrors `ModelicaDocument`. Per-entity
     /// scenarios attached via `RunScenario` start `Untitled`; tool-library
     /// files loaded from the Twin carry a writable `File` origin.
-    #[serde(default = "default_origin")]
     pub origin: DocumentOrigin,
     /// Metadata about expected input pins (e.g., "battery_voltage"). Drives the
     /// cosim port graph (`lunco-usd-sim`) for Python scripted models.
-    #[serde(default)]
     pub inputs: Vec<String>,
     /// Metadata about expected output pins (e.g., "motor_current").
-    #[serde(default)]
     pub outputs: Vec<String>,
     /// Scenario parameters as a JSON object string (e.g. `{"speed":1.5}`), empty
     /// for none. Injected into the runtime so the script reads them as a `params`
     /// constant (`params.speed`) — lets one scenario be reused across entities /
     /// missions without baking values into the source. Stored as text so this
     /// (always-compiled) module needs no `serde_json` dep.
-    #[serde(default)]
     pub params: String,
     /// Canonical asset id this script was loaded from (`twin://ep1/main.rhai`),
     /// or `None` when the source is not file-backed (inline USD `lunco:script`,
@@ -56,7 +52,6 @@ pub struct ScriptDocument {
     ///
     /// `None` is load-bearing, not a missing value: a script with no location
     /// must NOT have relative imports silently anchored to some default root.
-    #[serde(default)]
     pub asset_id: Option<String>,
     /// Generation this document was last written to (or read from) disk at.
     /// `None` = never saved (untitled) ⇒ always dirty. Drives
@@ -64,16 +59,7 @@ pub struct ScriptDocument {
     /// to refresh this document from disk or must preserve the user's unsaved
     /// work. Mirrors `ModelicaDocument` / `UsdDocument`.
     ///
-    /// `serde(default)` ⇒ documents persisted before this field existed load as
-    /// `None` (dirty), which is the safe direction: a re-open will preserve them
-    /// rather than silently overwrite from disk.
-    #[serde(default)]
     pub last_saved_generation: Option<u64>,
-}
-
-/// Serde fallback for documents persisted before `origin` existed.
-fn default_origin() -> DocumentOrigin {
-    DocumentOrigin::untitled("Untitled")
 }
 
 impl ScriptDocument {

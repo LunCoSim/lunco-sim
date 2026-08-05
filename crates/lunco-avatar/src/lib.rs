@@ -403,15 +403,6 @@ pub struct ProvisionalAvatarCamera;
 #[reflect(Component)]
 pub struct SurfaceRelativeMode;
 
-/// Marker for the nested grid created for surface operations.
-///
-/// **Deprecated**: In the merged Body+Grid design, the camera is parented
-/// directly to the Body entity (which IS the Grid). No intermediate surface
-/// grid is needed.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-pub struct AvatarSurfaceGrid;
-
 /// Tunable thresholds for entering/exiting surface-relative camera mode.
 ///
 /// Hysteresis prevents rapid toggling at boundary altitude:
@@ -1053,12 +1044,12 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
 
 fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) {
     let binding = lunco_core::ControlBinding::from_intent_entries(&[
-        ("MoveForward".to_string(), "forward".to_string(), 1.0),
-        ("MoveBackward".to_string(), "forward".to_string(), -1.0),
-        ("MoveRight".to_string(), "side".to_string(), 1.0),
-        ("MoveLeft".to_string(), "side".to_string(), -1.0),
-        ("MoveUp".to_string(), "up".to_string(), 1.0),
-        ("MoveDown".to_string(), "up".to_string(), -1.0),
+        ("forward".to_string(), "forward".to_string(), 1.0),
+        ("backward".to_string(), "forward".to_string(), -1.0),
+        ("right".to_string(), "side".to_string(), 1.0),
+        ("left".to_string(), "side".to_string(), -1.0),
+        ("yaw_right".to_string(), "up".to_string(), 1.0),
+        ("yaw_left".to_string(), "up".to_string(), -1.0),
     ]);
     // No `ActuatorPorts` (no hardware actuators — `apply_fly` reads the command
     // inputs directly) and no `DriveMix` (an avatar is not a wheeled chassis; it is

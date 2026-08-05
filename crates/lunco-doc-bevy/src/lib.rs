@@ -933,10 +933,9 @@ pub struct PendingEvents {
 /// WHY IT LIVES HERE, not in `lunco-doc`:
 /// * `lunco-twin-journal` depends on `lunco-doc`, so `lunco-doc` reaching the
 ///   journal is a dependency CYCLE. (`JournalResource` is in this crate anyway.)
-/// * It must be a Bevy `Resource` so each domain can alias it
-///   (`type DocumentRegistry<UsdDocument> = DocumentRegistry<UsdDocument>`) and its call
-///   sites keep working; the orphan rule blocks `impl Resource` for a foreign
-///   type from here.
+/// * It must be a Bevy `Resource` so every domain can share the same registry
+///   resource; the orphan rule blocks `impl Resource` for a foreign type from
+///   here.
 /// * `lunco-doc`'s [`OpRecorder`](lunco_doc::OpRecorder) contract already says
 ///   the concrete recorder "lives in the ECS layer" — this crate IS that layer.
 ///   The per-domain registries each wired the journal themselves; this hoists

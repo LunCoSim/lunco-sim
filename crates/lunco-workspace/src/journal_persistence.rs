@@ -141,21 +141,19 @@ fn write_journal_bytes(twin_root: &Path, bytes: &[u8]) -> lunco_storage::Storage
     lunco_storage::write_file_sync(&journal_path(twin_root), bytes)
 }
 
-/// Decode a journal at the persistence boundary and normalize its Twin id.
-/// Journals written before the stable root-derived id existed are migrated
-/// once here; current journals are not rewritten. Keeping this decision next
-/// to deserialization prevents callers from accidentally using an ephemeral
-/// workspace handle or forgetting to persist the normalized identity.
-fn decode_and_normalize_journal(
-    bytes: &[u8],
-    target_id: &JournalTwinId,
-) -> Result<(CanonicalJournal, bool), String> {
-    let mut journal = CanonicalJournal::from_bytes(bytes).map_err(|err| err.to_string())?;
-    let needs_rewrite = journal.twin() != target_id;
-    if needs_rewrite {
-        journal.set_twin(target_id.clone());
+/// Decode a journal at the persistence boundary. A journal belongs to exactly
+/// one Twin root; a mismatched identity is invalid data, not an invitation to
+/// rewrite the journal into the current folder.
+fn decode_journal(bytes: &[u8], target_id: &JournalTwinId) -> Result<CanonicalJournal, String> {
+    let journal = CanonicalJournal::from_bytes(bytes).map_err(|err| err.to_string())?;
+    if journal.twin() != target_id {
+        return Err(format!(
+            "journal belongs to Twin {}, expected {}",
+            journal.twin().0,
+            target_id.0
+        ));
     }
-    Ok((journal, needs_rewrite))
+    Ok(journal)
 }
 
 /// Bind the in-memory [`JournalResource`] to a newly-opened Twin: flush the
@@ -204,9 +202,8 @@ pub(crate) fn on_twin_added_load_journal(
         }
     }
 
-    // 2. Load this Twin's journal (or start fresh), bound to its stable id.
-    //    Re-stamping normalises journals written before the Twin had a stable
-    //    id, so subsequent saves route back to this same folder.
+    // 2. Load this Twin's journal (or start fresh), already bound to its
+    //    stable id.
     //
     //    A Twin that does not persist gets a fresh journal: it is stamped and
     //    recorded into for the session, but never read from or written to disk.
@@ -222,31 +219,8 @@ pub(crate) fn on_twin_added_load_journal(
     let root = persisting_root;
 
     let loaded = match read_journal_bytes(&root) {
-        Some(bytes) => match decode_and_normalize_journal(&bytes, &target_id) {
-            Ok((j, needs_rewrite)) => {
-                if needs_rewrite {
-                    match j.to_bytes() {
-                        Ok(normalized) => {
-                            if let Err(err) = write_journal_bytes(&root, &normalized) {
-                                warn!(
-                                    "[journal] migrated {} in memory but could not rewrite it: {err}",
-                                    journal_path(&root).display()
-                                );
-                            } else {
-                                info!(
-                                    "[journal] migrated {} to stable Twin id {}",
-                                    journal_path(&root).display(),
-                                    target_id.0
-                                );
-                            }
-                        }
-                        Err(err) => {
-                            warn!("[journal] migrated Twin id but could not serialize it: {err}")
-                        }
-                    }
-                }
-                j
-            }
+        Some(bytes) => match decode_journal(&bytes, &target_id) {
+            Ok(j) => j,
             Err(err) => {
                 // A corrupt journal must never be overwritten by the fresh
                 // empty one on the next save — that would destroy the twin's
@@ -500,8 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_id_migration_rewrites_serialized_journal() {
-        // A journal written before stable ids existed carries a placeholder id.
+    fn a_journal_with_a_different_twin_id_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let mut before = CanonicalJournal::new(JournalTwinId::new("local-twin"), AuthorId::local());
         before.record_lifecycle(
@@ -512,23 +485,6 @@ mod tests {
         let original = before.to_bytes().unwrap();
 
         let target = journal_twin_id(dir.path());
-        let (migrated, needs_rewrite) = decode_and_normalize_journal(&original, &target).unwrap();
-        assert!(needs_rewrite);
-        assert_eq!(migrated.twin(), &target);
-
-        // The bytes written by the migration are the bytes future sessions
-        // read; this catches the old bug where only the in-memory journal was
-        // re-stamped and the file kept routing through the placeholder id.
-        let rewritten = migrated.to_bytes().unwrap();
-        write_journal_bytes(dir.path(), &rewritten).unwrap();
-        let loaded =
-            CanonicalJournal::from_bytes(&read_journal_bytes(dir.path()).unwrap()).unwrap();
-        assert_eq!(loaded.twin(), &target);
-        assert_eq!(loaded.len(), 1);
-
-        // Binding a loaded journal to the storage identity remains explicit.
-        let mut rebound = CanonicalJournal::from_bytes(&original).unwrap();
-        rebound.set_twin(target.clone());
-        assert_eq!(rebound.twin(), &target);
+        assert!(decode_journal(&original, &target).is_err());
     }
 }

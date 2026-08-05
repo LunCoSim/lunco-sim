@@ -37,7 +37,7 @@ def Xform "ModelicaBalloon" (
     # The body owns Avian physics ports. `force_y` is intentionally NOT a
     # Modelica input: it is the solver force sink on this rigid body.
     float inputs:force_y.connect = </ModelicaBalloon/Plant.outputs:netForce>
-    float outputs:height = 0.0
+    float outputs:position_y = 0.0
     float outputs:velocity_y = 0.0
 
     # A separate source node publishes place-dependent facts. The plant remains
@@ -55,7 +55,7 @@ def Xform "ModelicaBalloon" (
     def Scope "Plant" (prepend apiSchemas = ["LunCoProgramAPI"])
     {
         uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
-        float inputs:height.connect = </ModelicaBalloon.outputs:height>
+        float inputs:height.connect = </ModelicaBalloon.outputs:position_y>
         float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
         float inputs:gravity.connect = </ModelicaBalloon/Environment.outputs:gravity_accel>
         # `rho0` is left at the model's default of 0 — VACUUM. This asset is

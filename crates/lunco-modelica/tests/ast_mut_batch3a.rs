@@ -1,5 +1,5 @@
 //! TDD contract tests for batch-3a helpers in
-//! [`lunco_modelica::ast_mut`]: `add_variable`, `remove_variable`,
+//! [`lunco_modelica::ast_mut`]: `add_variable`, `remove_component`,
 //! `add_class`, `remove_class`.
 //!
 //! Shape: parse → mutate → **splice the patch into the source** → reparse →
@@ -127,13 +127,13 @@ fn add_variable_duplicate_returns_error() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// remove_variable (alias of remove_component)
+// RemoveVariable lowers to the canonical component mutation.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
 fn remove_variable_drops_target() {
     let class = mutate_class("model M\n  Real a;\n  Real b;\nend M;\n", "M", |c, e| {
-        ast_mut::remove_variable(c, e, "a")
+        ast_mut::remove_component(c, e, "a")
     });
     assert!(!class.components.contains_key("a"));
     assert!(class.components.contains_key("b"));
@@ -142,7 +142,7 @@ fn remove_variable_drops_target() {
 #[test]
 fn remove_variable_unknown_returns_error() {
     let err = class_err("model M\nend M;\n", "M", |c, e| {
-        ast_mut::remove_variable(c, e, "nope")
+        ast_mut::remove_component(c, e, "nope")
     });
     assert!(matches!(
         err,

@@ -1935,11 +1935,9 @@ fn reduce_generic_joint_typed(
 /// Observer that fires when a USD prim entity is added.
 ///
 /// Detects physics joints (PhysicsRevoluteJoint, PhysicsPrismaticJoint, …) and
-/// stamps the deferred [`PendingUsdJoint`] carrier. Ph0′: reads the STANDARD
+/// stamps the deferred [`PendingUsdJoint`] carrier by reading the STANDARD
 /// UsdPhysics joint schema off the LIVE canonical stage
-/// ([`read_joint_spec_typed`]); the flattened raw-attribute path below is a
-/// transition fallback for recipe-less assets, deleted once every asset carries
-/// a `StageRecipe`.
+/// ([`read_joint_spec_typed`]).
 fn on_add_usd_prim(
     trigger: On<Add, UsdPrimPath>,
     query: Query<&UsdPrimPath>,

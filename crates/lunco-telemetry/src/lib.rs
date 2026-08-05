@@ -63,7 +63,6 @@ use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
 use serde::{de::Deserializer, Deserialize, Serialize};
 
 const TELEMETRY_SETTINGS_SCHEMA_VERSION: u32 = 1;
-const LEGACY_DEFAULT_MAX_CHANNELS: usize = 1024;
 
 /// Persisted telemetry defaults. Stored under the `"telemetry"` key of
 /// `settings.json`.
@@ -119,7 +118,6 @@ struct StoredTelemetrySettings {
     max_channels: usize,
     default_retention: usize,
     enabled: bool,
-    #[serde(default)]
     schema_version: u32,
 }
 
@@ -128,15 +126,13 @@ impl<'de> Deserialize<'de> for TelemetrySettings {
     where
         D: Deserializer<'de>,
     {
-        let mut stored = StoredTelemetrySettings::deserialize(deserializer)?;
-        // Versions before the schema marker used 1024 as the implicit cap.
-        // That cap is now too small for an ordinary multi-rover scene. Only an
-        // unversioned section is migrated; a versioned 1024 is an explicit
-        // user choice and remains authoritative.
-        if stored.schema_version == 0 && stored.max_channels == LEGACY_DEFAULT_MAX_CHANNELS {
-            stored.max_channels = TelemetrySettings::default().max_channels;
+        let stored = StoredTelemetrySettings::deserialize(deserializer)?;
+        if stored.schema_version != TELEMETRY_SETTINGS_SCHEMA_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported telemetry settings schema version {} (current {})",
+                stored.schema_version, TELEMETRY_SETTINGS_SCHEMA_VERSION
+            )));
         }
-        stored.schema_version = stored.schema_version.max(TELEMETRY_SETTINGS_SCHEMA_VERSION);
         Ok(Self {
             default_rate_hz: stored.default_rate_hz,
             max_channels: stored.max_channels,
@@ -1155,19 +1151,19 @@ mod tests {
     }
 
     #[test]
-    fn migrates_the_unversioned_legacy_channel_cap() {
-        let settings: TelemetrySettings = serde_json::from_str(
+    fn rejects_an_unversioned_telemetry_settings_section() {
+        let result = serde_json::from_str::<TelemetrySettings>(
             r#"{
                 "default_rate_hz": 10.0,
                 "max_channels": 1024,
                 "default_retention": 2000,
                 "enabled": true
             }"#,
-        )
-        .expect("the historical settings shape must remain readable");
-
-        assert_eq!(settings.max_channels, 2048);
-        assert_eq!(settings.schema_version, TELEMETRY_SETTINGS_SCHEMA_VERSION);
+        );
+        assert!(
+            result.is_err(),
+            "settings without a schema are not current data"
+        );
     }
 
     #[test]

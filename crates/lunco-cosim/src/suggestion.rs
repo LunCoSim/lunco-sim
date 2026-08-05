@@ -191,7 +191,7 @@ pub fn generate_suggestions(
         if KNOWN_HEIGHT_INPUTS.contains(&input_name.as_str()) {
             suggestions.push(WireSuggestion {
                 start_element: entity,
-                start_connector: "height".into(),
+                start_connector: "position_y".into(),
                 end_element: entity,
                 end_connector: input_name.clone(),
                 reason: format!("'{input_name}' is a known height input"),

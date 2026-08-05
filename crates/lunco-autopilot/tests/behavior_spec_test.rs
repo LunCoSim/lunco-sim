@@ -7,21 +7,29 @@ use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec};
 
 #[test]
 fn spec_round_trips_patrol_waypoints() {
-    // The bare-array waypoint shape (`[[x,y,z], ...]`) — the shorthand
-    // `patrol.rhai` documents — parses as a no-action waypoint.
-    let json = r#"{"kind":"patrol","waypoints":[[1.0,0.0,0.0],[2.0,0.0,0.0]],"speed":0.6,"radius":2.0,"dwell":0.0}"#;
+    let json = r#"{"kind":"patrol","waypoints":[{"pos":[1.0,0.0,0.0]},{"pos":[2.0,0.0,0.0]}],"speed":0.6,"radius":2.0,"dwell":0.0}"#;
     let spec = AutopilotBehaviorSpec::from_json(json).expect("patrol spec parses");
     let wps = spec.patrol_waypoints().expect("patrol exposes waypoints");
     assert_eq!(wps.len(), 2);
     assert_eq!(wps[0].pos, [1.0, 0.0, 0.0]);
     assert!(
         wps[0].on_arrival.is_empty(),
-        "bare-array shorthand → no actions"
+        "object waypoint without actions"
     );
     // Round-trip back to JSON.
     let out = spec.to_json().expect("serialize");
     let reparsed: BehaviorSpec = serde_json::from_str(&out).expect("reparse");
     assert!(matches!(reparsed, BehaviorSpec::Patrol { .. }));
+}
+
+#[test]
+fn patrol_rejects_the_removed_bare_array_waypoint_shape() {
+    let old =
+        r#"{"kind":"patrol","waypoints":[[1.0,0.0,0.0]],"speed":0.6,"radius":2.0,"dwell":0.0}"#;
+    assert!(
+        AutopilotBehaviorSpec::from_json(old).is_err(),
+        "waypoints must use the canonical object shape"
+    );
 }
 
 #[test]

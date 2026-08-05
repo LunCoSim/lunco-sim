@@ -3,10 +3,7 @@
 //! Built with the default `ui` feature.
 fn main() -> lunco_luncosim::AppExit {
     #[cfg(not(target_family = "wasm"))]
-    if std::env::args()
-        .skip(1)
-        .any(|a| a == "--debug-scene" || a == "test")
-    {
+    if std::env::args().skip(1).any(|a| a == "test") {
         std::process::exit(lunco_luncosim::debug_scene::run() as i32);
     }
 

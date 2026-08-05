@@ -29,5 +29,6 @@ sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
 # design doc above; wire a consumer or drop the entry.
 
 [lunar_color.process]
+kind = "texture"
 target_resolution = [2048, 1024]
 output = "textures/terrain_albedo.png"

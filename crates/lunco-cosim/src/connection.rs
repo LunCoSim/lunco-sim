@@ -26,7 +26,7 @@ pub use lunco_core::ports::PortDirection;
 /// Connector names are resolved by [`propagate_connections`](crate::systems::propagate::propagate_connections):
 ///
 /// - `"netForce"`, `"volume"`, etc. → [`crate::SimComponent`](crate::SimComponent) outputs
-/// - `"height"`, `"force_y"`, etc. → [`crate::AvianSim`](crate::AvianSim) outputs/inputs
+/// - `"position_y"`, `"force_y"`, etc. → Avian rigid-body outputs/inputs
 ///
 /// ## Example
 ///

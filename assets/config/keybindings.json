@@ -1,14 +1,14 @@
 {
-  "_comment": "Default key -> UserIntent bindings for avatar + vessel control. Keys are bevy KeyCode variant names (e.g. 'KeyW', 'Space'); intents are lunco_core::UserIntent variants. A vessel maps these intents to its ports via its USD Controls profile (see assets/vessels/control_profiles.usda). Mouse Look/Zoom axes are added in code (not key-bindable). This file is the single source of the default keymap — no keys are hardcoded in Rust.",
-  "MoveForward":  ["KeyW"],
-  "MoveBackward": ["KeyS"],
-  "MoveLeft":     ["KeyA"],
-  "MoveRight":    ["KeyD"],
-  "MoveUp":       ["KeyE"],
-  "MoveDown":     ["KeyQ"],
-  "Action":       ["KeyF", "Space"],
-  "Release":      ["KeyG"],
-  "SwitchMode":   ["KeyV"],
-  "Pause":        ["KeyP"],
-  "Cancel":       ["Backspace", "Escape"]
+  "_comment": "Default key -> UserIntent bindings for avatar + vessel control. Keys are bevy KeyCode variant names (e.g. 'KeyW', 'Space'); intents use the canonical USD control names. A vessel maps these intents to its ports via its USD Controls profile (see assets/vessels/control_profiles.usda). Mouse Look/Zoom axes are added in code (not key-bindable). This file is the single source of the default keymap — no keys are hardcoded in Rust.",
+  "forward":    ["KeyW"],
+  "backward":   ["KeyS"],
+  "left":       ["KeyA"],
+  "right":      ["KeyD"],
+  "yaw_right":  ["KeyE"],
+  "yaw_left":   ["KeyQ"],
+  "action":     ["KeyF", "Space"],
+  "release":    ["KeyG"],
+  "switch_mode": ["KeyV"],
+  "pause":      ["KeyP"],
+  "cancel":     ["Backspace", "Escape"]
 }

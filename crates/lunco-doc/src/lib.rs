@@ -167,8 +167,8 @@ pub trait Resolver {
 /// the app's Document population.
 ///
 /// Derives `Reflect` so commands and other reflect-aware structs can carry
-/// `DocumentId` directly without hand-rolling `u64` shims at every API
-/// boundary. `bevy_reflect` is already in our dep tree via `lunco-core`,
+/// `DocumentId` directly instead of repeating raw `u64` conversions at every
+/// API boundary. `bevy_reflect` is already in our dep tree via `lunco-core`,
 /// so this adds no new dependency cost.
 #[derive(
     Debug,

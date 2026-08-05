@@ -234,10 +234,7 @@ use lunco_core::tools::{ToolFired, ToolInvocation};
 /// engine injects them into the compiled tree (see `build_patrol`). rhai/JSON
 /// authors *data*, not trees.
 ///
-/// **Compact-form serde:** a bare `[x, y, z]` array deserializes into a
-/// waypoint at that position with no actions and no dwell. Use the object
-/// form when a waypoint needs `dwell` or `on_arrival` actions.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PatrolWaypoint {
     /// World-space position `[x, y, z]`.
     pub pos: [f32; 3],
@@ -251,7 +248,7 @@ pub struct PatrolWaypoint {
 }
 
 impl PatrolWaypoint {
-    /// A bare waypoint at `pos` with no actions and no per-waypoint dwell.
+    /// A waypoint at `pos` with no actions and no per-waypoint dwell.
     pub fn at(pos: [f32; 3]) -> Self {
         Self {
             pos,
@@ -276,44 +273,6 @@ pub enum WaypointAction {
         #[serde(default)]
         args: String,
     },
-}
-
-// A bare `[x, y, z]` array is the compact no-action waypoint form. The object
-// shape is used when a waypoint carries `dwell` or `on_arrival`.
-//
-// NOTE: this dual-shape (array vs object) handling is JSON-only — it peeks at
-// `serde_json::Value` to pick the branch, so it won't work with bincode or other
-// self-describing formats. That's fine here: `BehaviorSpec`'s only wire path is
-// JSON (rhai `to_json` / the HTTP API / USD metadata), never bincode. If a
-// binary format is ever needed, give `PatrolWaypoint` two explicit
-// `#[serde(deserialize_with = …)]` arms or a newtype wrapper instead.
-impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
-        #[derive(Deserialize)]
-        struct Full {
-            pos: [f32; 3],
-            #[serde(default)]
-            dwell: Option<f64>,
-            #[serde(default)]
-            on_arrival: Vec<WaypointAction>,
-        }
-        // Two accepted shapes:
-        //  1. `[x, y, z]`                        — position only, no dwell/actions.
-        //  2. `{pos: [...], dwell?, on_arrival?}` — full struct.
-        let v = serde_json::Value::deserialize(d)?;
-        if v.is_array() {
-            // Compact bare-array form.
-            let p: [f32; 3] = serde_json::from_value(v).map_err(D::Error::custom)?;
-            return Ok(PatrolWaypoint::at(p));
-        }
-        let f: Full = serde_json::from_value(v).map_err(D::Error::custom)?;
-        Ok(PatrolWaypoint {
-            pos: f.pos,
-            dwell: f.dwell,
-            on_arrival: f.on_arrival,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -370,10 +329,8 @@ pub enum BehaviorSpec {
     /// `forever(sequence([drive_to, wait?]...))` — the common patrol pattern as one
     /// node. See [`build_tree`].
     Patrol {
-        /// Ordered waypoints. Each carries a position + optional per-waypoint
-        /// dwell and arrival actions (e.g. `take_photo`). Accepts the compact
-        /// `[[x,y,z], ...]` bare-array shape (no actions) — see
-        /// [`PatrolWaypoint`]'s serde implementation.
+        /// Ordered waypoint objects. Each carries a position plus optional
+        /// per-waypoint dwell and arrival actions (e.g. `take_photo`).
         waypoints: Vec<PatrolWaypoint>,
         /// Cruise speed `[0, 1]`.
         #[serde(default = "default_speed")]

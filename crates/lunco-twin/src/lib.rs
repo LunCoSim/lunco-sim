@@ -309,10 +309,9 @@ impl Twin {
     /// manifest shape. Keeping it in one place is what stops the boot path and
     /// the command path from drifting.
     ///
-    /// The synthetic manifest leaves `uuid` as `None` on purpose: the
-    /// networking scenario-sync layer derives a stable id (path digest) when
-    /// `uuid` is absent, so a folder-Twin keeps a stable identity across
-    /// restarts without anyone writing a `twin.toml` into the user's folder.
+    /// The synthetic manifest leaves `uuid` as `None` on purpose: a plain
+    /// folder remains local until it is explicitly promoted with a
+    /// `twin.toml` carrying a stable UUID.
     pub fn set_default_scene(&mut self, rel: impl Into<String>) {
         let rel = rel.into();
         match &mut self.manifest {

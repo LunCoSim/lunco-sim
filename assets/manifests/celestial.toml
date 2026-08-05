@@ -25,6 +25,7 @@ dest = "textures/earth_source.jpg"
 sha256 = "a9f0088972dee0254610af851c4d6838ca3f2cf79176987e0a5713e2c15ec042"
 
 [earth.process]
+kind = "texture"
 target_resolution = [4096, 2048]
 output = "textures/earth.png"
 
@@ -40,6 +41,7 @@ dest = "textures/moon_source.tif"
 sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
 
 [moon.process]
+kind = "texture"
 target_resolution = [4096, 2048]
 output = "textures/moon.png"
 

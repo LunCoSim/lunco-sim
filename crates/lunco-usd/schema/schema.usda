@@ -1245,14 +1245,11 @@ class "LunCoControlBindingAPI" (
     )
     uniform token lunco:cameraFollow = "" (
         doc = """Follow mode the camera adopts when this vessel is possessed —
-        authored on the `Controls` scope itself, not a binding child. Canonical
-        spellings `heading` | `orbit` | `chase` (synonyms accepted by
-        `lunco_core::parse_camera_follow`); empty = the engine default.
-
-        The token set is CLOSED — `parse_camera_follow` returns `None` for
-        anything else and the follow is dropped — so every spelling it accepts is
-        listed, synonyms included. A spelling added there must be added here."""
-        allowedTokens = ["", "heading", "springarm", "yaw", "orbit", "stable", "external", "chase", "cockpit", "attitude", "full"]
+        authored on the `Controls` scope itself, not a binding child. The
+        canonical values are `heading`, `orbit`, and `chase`; empty means the
+        engine default. Values outside this closed set are rejected by the
+        reader. A new value must be added here and to the reader together."""
+        allowedTokens = ["", "heading", "orbit", "chase"]
     )
 }
 

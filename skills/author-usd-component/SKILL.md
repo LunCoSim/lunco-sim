@@ -333,7 +333,7 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
     uniform bool lunco:program:realtimeSafe = true
 
     float inputs:force_y.connect = </Balloon.outputs:netForce>
-    float inputs:height.connect  = </Balloon.outputs:height>
+    float inputs:height.connect  = </Balloon.outputs:position_y>
 }
 ```
 

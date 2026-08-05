@@ -25,10 +25,10 @@ use usvg::{Options, Tree};
 
 /// Processing configuration from `Assets.toml`.
 ///
-/// `kind` selects the pipeline (default `"texture"`); other fields apply
+/// `kind` selects the pipeline; other fields apply
 /// per pipeline:
 ///
-/// - `kind = "texture"` (default): resize an image to `target_resolution`
+/// - `kind = "texture"`: resize an image to `target_resolution`
 ///   and re-encode as PNG. Used by Earth/Moon textures.
 /// - `kind = "gltf"`: run a fixed `gltf-transform` cleanup pipeline on a
 ///   downloaded `.glb` to strip extensions Bevy 0.18's `bevy_gltf` doesn't
@@ -56,9 +56,7 @@ use usvg::{Options, Tree};
 ///   `lunco-terrain-core`'s derived bake: `normalize(-dh/dx, 1, -dh/dz)`).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ProcessConfig {
-    /// Pipeline selector. Defaults to `"texture"` for backwards
-    /// compatibility with Earth/Moon entries.
-    #[serde(default = "default_kind")]
+    /// Pipeline selector.
     pub kind: String,
     /// Target [width, height] in pixels (texture pipeline only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -150,10 +148,6 @@ pub struct ProcessConfig {
     #[serde(default)]
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub frame: Option<String>,
-}
-
-fn default_kind() -> String {
-    "texture".to_string()
 }
 
 fn default_output_root() -> String {

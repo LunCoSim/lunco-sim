@@ -155,7 +155,7 @@ fn patrol_loops_waypoints_and_dwells_at_each() {
     // A patrol with a dwell brakes at each waypoint, and — because it loops forever —
     // keeps dwelling across laps (the WaitNode timer resets each lap).
     let json = r#"{"kind":"patrol","dwell":2.0,"radius":2.0,"waypoints":[
-        [5.0,0.0,0.0],[5.0,0.0,5.0]
+        {"pos":[5.0,0.0,0.0]},{"pos":[5.0,0.0,5.0]}
     ]}"#;
     let mut behavior = AutopilotBehavior::from_json(json).expect("patrol spec must build");
     let wps = [DVec3::new(5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 5.0)];

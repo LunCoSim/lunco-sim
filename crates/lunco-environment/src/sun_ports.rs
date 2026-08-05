@@ -33,10 +33,8 @@ use bevy::light::DirectionalLight;
 use bevy::prelude::*;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
 
-/// One named scalar on the sun light. The angle pair carries three spellings each
-/// (`sun_azimuth` / `azimuth` / `sun_yaw`) because scenes and models authored both
-/// the qualified and the bare name; they are aliases of ONE value, not three
-/// states — every spelling reads and writes the same Euler component.
+/// One named scalar on the sun light. The canonical qualified names are the
+/// connection contract for scene-authored lighting data.
 struct SunPort {
     name: &'static str,
     read: fn(&World, Entity) -> Option<f64>,
@@ -51,26 +49,6 @@ const SUN_PORTS: &[SunPort] = &[
     },
     SunPort {
         name: "sun_elevation",
-        read: read_sun_elevation,
-        write: write_sun_elevation,
-    },
-    SunPort {
-        name: "azimuth",
-        read: read_sun_azimuth,
-        write: write_sun_azimuth,
-    },
-    SunPort {
-        name: "elevation",
-        read: read_sun_elevation,
-        write: write_sun_elevation,
-    },
-    SunPort {
-        name: "sun_yaw",
-        read: read_sun_azimuth,
-        write: write_sun_azimuth,
-    },
-    SunPort {
-        name: "sun_pitch",
         read: read_sun_elevation,
         write: write_sun_elevation,
     },

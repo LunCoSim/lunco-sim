@@ -35,7 +35,7 @@ per kind), not a mirror component. The available ports:
 
 | Kind | Ports |
 |---|---|
-| **Rigid body** | out: `position_{x,y,z}`, `height`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}`; in: `force_{x,y,z}`, `force_local_{x,y,z}`, `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
+| **Rigid body** | out: `position_{x,y,z}`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}`; in: `force_{x,y,z}`, `force_local_{x,y,z}`, `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
 | **Revolute joint** | `angle` (out = measured, in = drives `AngularMotor`) |
 | **Prismatic joint** | `displacement` (out = slider offset, in = drives `LinearMotor`) |
 | **Avian observations** | Native rigid-body/contact ports plus generic ray ray_distance, ray_hit_valid, hit point/normal, and sample time |

@@ -1296,9 +1296,8 @@ pub fn on_set_usd_attribute(
 /// reload. One row per param makes that structurally impossible: a field cannot
 /// exist in one table and not the other, because there is only one table.
 pub(crate) struct WheelParam {
-    /// Accepted `SetObjectProperty` names — the Rust field name first, USD-style
-    /// aliases after (`radius`, `spring_stiffness`, …).
-    pub aliases: &'static [&'static str],
+    /// Canonical `SetObjectProperty` name, matching the Rust field name.
+    pub name: &'static str,
     /// Live setter on `WheelRaycast`. Non-capturing closures coerce to `fn`.
     pub set: fn(&mut lunco_mobility::WheelRaycast, f64),
     /// The USD attribute the loader reads back into this field (`float`).
@@ -1310,42 +1309,42 @@ pub(crate) struct WheelParam {
 /// tune round-trips through the runtime layer on reload.
 pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
-        aliases: &["drive_torque", "drive_torque_max"],
+        name: "drive_torque_max",
         set: |w, v| w.drive_torque_max = v,
         usd_attr: "physxVehicleEngine:peakTorque",
     },
     WheelParam {
-        aliases: &["brake_torque", "brake_torque_max"],
+        name: "brake_torque_max",
         set: |w, v| w.brake_torque_max = v,
         usd_attr: "physxVehicleWheel:maxBrakeTorque",
     },
     WheelParam {
-        aliases: &["slip_stiffness"],
+        name: "slip_stiffness",
         set: |w, v| w.slip_stiffness = v,
         usd_attr: "physxVehicleTire:longitudinalStiffness",
     },
     WheelParam {
-        aliases: &["bearing_damping", "damping_rate"],
+        name: "bearing_damping",
         set: |w, v| w.bearing_damping = v,
         usd_attr: "physxVehicleWheel:dampingRate",
     },
     WheelParam {
-        aliases: &["friction_mu", "friction"],
+        name: "friction_mu",
         set: |w, v| w.friction_mu = v,
         usd_attr: "lunco:tire:frictionCoefficient",
     },
     WheelParam {
-        aliases: &["mass"],
+        name: "mass",
         set: |w, v| w.mass = v,
         usd_attr: "physics:mass",
     },
     WheelParam {
-        aliases: &["moi", "moment_of_inertia"],
+        name: "moment_of_inertia",
         set: |w, v| w.moment_of_inertia = v,
         usd_attr: "physxVehicleWheel:moi",
     },
     WheelParam {
-        aliases: &["wheel_radius", "radius"],
+        name: "wheel_radius",
         set: |w, v| w.wheel_radius = v,
         usd_attr: "physxVehicleWheel:radius",
     },
@@ -1355,7 +1354,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
 /// if it isn't a wheel field. Both the live-mutation path and the USD-authoring
 /// path go through this one lookup.
 pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
-    WHEEL_PARAMS.iter().find(|p| p.aliases.contains(&name))
+    WHEEL_PARAMS.iter().find(|p| p.name == name)
 }
 
 /// Persist a `SetObjectProperty` **wheel-dynamics**, **visibility** or **PBR
@@ -1391,15 +1390,15 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
             .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
     } else if matches!(
         cmd.property.as_str(),
-        "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping"
+        "rest_length" | "spring_k" | "damping_c"
     ) {
         // `springStrength` / `springDamperRate` are NVIDIA's canonical
         // PhysxVehicleSuspensionAPI names; `restLength` has no PhysX
         // equivalent, so it lives under the lunco: namespace.
         let usd_attr = match cmd.property.as_str() {
             "rest_length" => "lunco:suspension:restLength",
-            "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStrength",
-            "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamperRate",
+            "spring_k" => "physxVehicleSuspension:springStrength",
+            "damping_c" => "physxVehicleSuspension:springDamperRate",
             _ => unreachable!(),
         };
         cmd.value
@@ -1958,8 +1957,8 @@ pub fn clear_kinematic_pulse_velocity(
 ///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` toggles `Visibility`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-///   `drive_torque`, `brake_torque`, `slip_stiffness`, `bearing_damping`,
-///   `friction_mu`, `mass`, `moi`, `wheel_radius`, `rest_length`, `spring_k`,
+///   `drive_torque_max`, `brake_torque_max`, `slip_stiffness`, `bearing_damping`,
+///   `friction_mu`, `mass`, `moment_of_inertia`, `wheel_radius`, `rest_length`, `spring_k`,
 ///   `damping_c` → set that `f64` field on the wheel's `WheelRaycast` live.
 ///   Each wheel is its own entity, so this gives independent per-wheel control.
 #[Command(default)]
@@ -2278,7 +2277,7 @@ pub fn on_set_object_property(
 
     // Per-wheel suspension tuning (both joint-based and raycast).
     match cmd.property.as_str() {
-        "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping" => {
+        "rest_length" | "spring_k" | "damping_c" => {
             let Ok(value) = cmd.value.trim().parse::<f64>() else {
                 warn!(
                     "SET_PROPERTY: '{}' expects a number, got '{}'",
@@ -2297,10 +2296,10 @@ pub fn on_set_object_property(
                 "rest_length" => {
                     susp.rest_length = value;
                 }
-                "spring_k" | "spring_stiffness" => {
+                "spring_k" => {
                     susp.spring_k = value;
                 }
-                "damping_c" | "spring_damping" => {
+                "damping_c" => {
                     susp.damping_c = value;
                 }
                 _ => {}
@@ -3473,7 +3472,6 @@ mod tests {
     #[test]
     fn move_entity_splits_a_grid_absolute_target_across_cells() {
         use super::*;
-        use bevy::prelude::*;
         use big_space::prelude::{CellCoord, Grid};
 
         const EDGE: f32 = 2000.0;
@@ -3535,7 +3533,6 @@ mod tests {
     #[test]
     fn move_entity_leaves_a_cell_less_entity_alone() {
         use super::*;
-        use bevy::prelude::*;
         use big_space::prelude::CellCoord;
 
         let mut app = App::new();
@@ -3646,7 +3643,6 @@ mod tests {
         api_id: u64,
     ) -> (bevy::prelude::App, lunco_doc::DocumentId) {
         use super::*;
-        use bevy::prelude::*;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -3686,7 +3682,6 @@ mod tests {
     #[test]
     fn move_of_authored_prim_persists_to_runtime_layer() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let (mut app, doc) = app_with_runtime_producer("/World", 42);
@@ -3731,10 +3726,15 @@ mod tests {
         use std::collections::HashSet;
 
         assert!(!WHEEL_PARAMS.is_empty());
-        let mut seen_alias: HashSet<&str> = HashSet::new();
+        let mut seen_name: HashSet<&str> = HashSet::new();
         let mut seen_attr: HashSet<&str> = HashSet::new();
         for p in WHEEL_PARAMS {
-            assert!(!p.aliases.is_empty(), "a param with no name is unreachable");
+            assert!(!p.name.is_empty(), "a param with no name is unreachable");
+            assert!(
+                seen_name.insert(p.name),
+                "duplicate property name {}",
+                p.name
+            );
             assert!(
                 !p.usd_attr.is_empty(),
                 "every param must round-trip through USD"
@@ -3744,13 +3744,10 @@ mod tests {
                 "duplicate USD attr {}",
                 p.usd_attr
             );
-            for a in p.aliases {
-                assert!(seen_alias.insert(a), "duplicate alias {a}");
-                // Both consumers (live setter + USD persister) resolve through the
-                // SAME lookup, so a name that sets a field always has an attr.
-                let row = wheel_param(a).expect("alias resolves");
-                assert_eq!(row.usd_attr, p.usd_attr);
-            }
+            // Both consumers (live setter + USD persister) resolve through the
+            // SAME lookup, so a name that sets a field always has an attr.
+            let row = wheel_param(p.name).expect("canonical name resolves");
+            assert_eq!(row.usd_attr, p.usd_attr);
         }
 
         // The two names the old split tables disagreed about are now complete.
@@ -3776,7 +3773,6 @@ mod tests {
     #[test]
     fn undo_document_reverts_the_last_usd_op() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_doc::Document;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
@@ -3826,7 +3822,6 @@ mod tests {
     #[test]
     fn move_of_unowned_entity_is_skipped() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_doc::Document;
 
         // Entity bound to a prim the document does NOT contain (e.g. a palette
@@ -3855,7 +3850,6 @@ mod tests {
     #[test]
     fn spawn_persists_referenced_prim_to_runtime_layer() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let mut app = App::new();

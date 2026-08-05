@@ -17,8 +17,8 @@
 //! ## Fidelity rules
 //!
 //! * **Attribute values are JSON.** Numbers, bools, arrays and objects are written as
-//!   JSON text (`waypoints="[[10.0,0.0,-5.0]]"`) and decoded by *shape*, so a
-//!   one-element vector-of-vectors and an empty vector survive. A string that would
+//!   JSON text (`waypoints="[{\"pos\":[10.0,0.0,-5.0]}]"`) and decoded as
+//!   structured values, so a one-element waypoint list and an empty list survive. A string that would
 //!   itself parse as JSON is written quoted (`label="&quot;42&quot;"`) so it comes
 //!   back a string; anything else (`{goal}` blackboard refs, plain words) is written
 //!   verbatim. Newlines/tabs are numeric character references, because XML

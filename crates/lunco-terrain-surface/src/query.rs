@@ -108,7 +108,7 @@ impl ApiQueryProvider for TerrainHeightProvider {
         // `collider_ring.rs`). Height comes back AS THE ORACLE GIVES IT — already
         // absolute body-datum metres (the DEM keeps the GeoTIFF's own values; see
         // `lunco-terrain-bake::dem`) — matching `world_pos`, the entity's own
-        // `position_y`/`height` ports, and the sibling `GroundHeight` raycast.
+        // `position_y` port, and the sibling `GroundHeight` raycast.
         for (entity, oracle) in terrains {
             // The footprint test + sample are `surface_query::height_in_footprint`
             // — one implementation shared with `GridSurfaceQuery`, so this

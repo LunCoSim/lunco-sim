@@ -111,7 +111,7 @@ autopilot compiles today.
 | `drive_to` | `target`, `speed`, `radius` | Steer toward a world point; `Success` (and brake) within `radius`. |
 | `follow` | `target` (GlobalEntityId), `speed`, `radius` | Track a **moving** entity: steer toward its *live* pose each tick, hold station within `radius`. Never finishes — stays `Running` while the target resolves, `Failure` (braking) if it vanishes so a fallback takes over. |
 | `intercept` | `target` (GlobalEntityId), `speed`, `radius`, `lead` | Lead-pursuit: aim `lead` seconds *ahead* of the target along its velocity (cut it off, don't tail it); `Success` on contact (within `radius` of its actual pose), `Failure` (braking) if it vanishes. A catch-it pursuit that **finishes**, unlike `follow`. |
-| `patrol` | `waypoints`, `speed`, `radius`, `dwell` | Loop waypoints forever; optionally dwell (braked) `dwell` s at each (a per-waypoint `dwell` overrides it). Sugar for `forever(sequence([drive_to, wait?, run_tool?…]…))`. Each waypoint is a `PatrolWaypoint` — either a bare `[x,y,z]` (legacy, no actions) or a `{pos, dwell?, on_arrival?}` map carrying per-waypoint arrival actions (e.g. `take_photo`). The declarative home for "fire a tool at a waypoint" — no rhai tree-composition needed. |
+| `patrol` | `waypoints`, `speed`, `radius`, `dwell` | Loop waypoint objects forever; optionally dwell (braked) `dwell` s at each (a per-waypoint `dwell` overrides it). Sugar for `forever(sequence([drive_to, wait?, run_tool?…]…))`. Each `PatrolWaypoint` is a `{pos, dwell?, on_arrival?}` map carrying per-waypoint arrival actions (e.g. `take_photo`). The declarative home for "fire a tool at a waypoint" — no rhai tree-composition needed. |
 | `face` | `target`, `tolerance` (deg) | Pivot in place (steer only, no throttle) to face the target; `Success` when within `tolerance`. Aim before driving, point an instrument. |
 | `cruise` | `throttle`, `steer` | Hold a constant setpoint; always `Running`. |
 | `brake` | — | Full brake; `Success`. |
@@ -139,7 +139,7 @@ autopilot compiles today.
 
 ```json
 {"kind":"patrol","speed":0.7,"radius":3.0,"dwell":1.0,
- "waypoints":[[10,0,0],[10,0,10],[0,0,10],[0,0,0]]}
+ "waypoints":[{"pos":[10,0,0]},{"pos":[10,0,10]},{"pos":[0,0,10]},{"pos":[0,0,0]}]}
 ```
 
 **Patrol + photograph at the first waypoint** — armed waypoints (no tree
@@ -154,8 +154,8 @@ composition; the patrol engine injects the `run_tool` after the drive):
  ]}
 ```
 
-Bare-array waypoints (`[x,y,z]`) and map waypoints (`{pos, dwell?, on_arrival?}`)
-may be freely mixed — the bare form is a waypoint with no dwell and no actions.
+Waypoint entries use the object form (`{pos, dwell?, on_arrival?}`); omit optional
+fields when a stop needs no dwell or arrival actions.
 
 **Drive to a goal, but keep braking the instant you arrive** — reactive fallback:
 
@@ -189,7 +189,7 @@ may be freely mixed — the bare form is a waypoint with no dwell and no actions
 ```json
 {"kind":"reactive_selector","children":[
   {"kind":"follow","target":4869542932533563,"speed":0.7,"radius":6.0},
-  {"kind":"patrol","waypoints":[[0,0,0],[20,0,0]],"speed":0.5}]}
+  {"kind":"patrol","waypoints":[{"pos":[0,0,0]},{"pos":[20,0,0]}],"speed":0.5}]}
 ```
 
 `target` is the leader's GlobalEntityId (api_id). From rhai, interpolate it:

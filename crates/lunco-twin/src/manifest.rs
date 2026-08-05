@@ -60,11 +60,9 @@ pub struct TwinManifest {
     /// the scenario-manifest builder; the uuid says "this scenario",
     /// the digest says "this version of it".
     ///
-    /// Absent on Twins authored before the field existed; minted
-    /// automatically by [`TwinManifest::new`] and
-    /// [`Twin::promote_to_twin`](crate::Twin::promote_to_twin). The
-    /// networking layer falls back to a path-derived digest when this
-    /// is `None`, so old `twin.toml` files keep working.
+    /// Optional for a plain local folder that has not been promoted to a
+    /// networkable Twin. A networking host requires this field; it never
+    /// derives an identity from a path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uuid: Option<Uuid>,
 

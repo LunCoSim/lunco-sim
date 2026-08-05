@@ -418,7 +418,7 @@ pub fn op_to_patch(
         ModelicaOp::RemoveVariable { class, name } => {
             ast_check_no_parse_error(ast)?;
             let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::remove_variable(c, e, &name)
+                crate::ast_mut::remove_component(c, e, &name)
             })
             .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ComponentRemoved { class, name };

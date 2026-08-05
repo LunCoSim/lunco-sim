@@ -177,7 +177,7 @@ fn python_balloon_asset_wiring_migrated() {
     );
     assert_eq!(
         conns(&app, id, "/PythonBalloon", "inputs:height"),
-        ["/PythonBalloon.outputs:height"]
+        ["/PythonBalloon.outputs:position_y"]
     );
     assert_eq!(
         conns(&app, id, "/PythonBalloon", "inputs:velocity"),
@@ -203,7 +203,7 @@ fn modelica_balloon_asset_wiring_migrated() {
     );
     assert_eq!(
         conns(&app, id, "/ModelicaBalloon/Plant", "inputs:height"),
-        ["/ModelicaBalloon.outputs:height"]
+        ["/ModelicaBalloon.outputs:position_y"]
     );
     assert_eq!(
         conns(&app, id, "/ModelicaBalloon/Plant", "inputs:velocity"),

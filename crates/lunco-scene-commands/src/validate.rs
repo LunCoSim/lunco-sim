@@ -478,7 +478,7 @@ fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
         .any(|c| c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port"))
 }
 
-/// Spellings [`lunco_core::parse_user_intent`] accepts. Used ONLY to suggest a
+/// Canonical names [`lunco_core::parse_user_intent`] accepts. Used ONLY to suggest a
 /// correction: the check itself calls `parse_user_intent`, never this list, so a
 /// stale entry can never accept or reject a binding — only make a hint worse.
 /// `intent_spellings_all_parse` pins every entry against the real parser.
@@ -487,22 +487,13 @@ const INTENT_SPELLINGS: &[&str] = &[
     "backward",
     "left",
     "right",
-    "up",
-    "down",
     "yaw_left",
     "yaw_right",
-    "roll_left",
-    "roll_right",
-    "pitch_up",
-    "pitch_down",
     "action",
-    "brake",
     "release",
-    "detach",
     "switch_mode",
     "pause",
     "cancel",
-    "unpossess",
 ];
 
 /// Nearest accepted spelling, when the name is close enough to be a typo rather

@@ -85,7 +85,6 @@ fn test_avian_body_ports_listed() {
         "position_x",
         "position_y",
         "position_z",
-        "height",
         "velocity_x",
         "velocity_y",
         "velocity_z",
@@ -116,7 +115,6 @@ fn test_avian_body_ports_read_live_state() {
     let w = app.world();
     assert_eq!(ports().read_output_port(w, e, "position_x"), Some(100.0));
     assert_eq!(ports().read_output_port(w, e, "position_y"), Some(1200.0));
-    assert_eq!(ports().read_output_port(w, e, "height"), Some(1200.0)); // alias
     assert_eq!(ports().read_output_port(w, e, "velocity_y"), Some(3.2));
 }
 
@@ -230,7 +228,7 @@ fn test_propagate_avian_to_sim_component() {
 
     let mut app = build_test_app();
 
-    // Spawn a rigid body (auto-exposes the `height` output from Position) with a
+    // Spawn a rigid body (auto-exposes the `position_y` output from Position) with a
     // SimComponent that has a `height` input.
     let entity = app
         .world_mut()
@@ -248,10 +246,10 @@ fn test_propagate_avian_to_sim_component() {
         ))
         .id();
 
-    // Wire: avian height output → SimComponent height input (same entity).
+    // Wire: avian position_y output → SimComponent height input (same entity).
     app.world_mut().spawn(SimConnection {
         start_element: entity,
-        start_connector: "height".into(),
+        start_connector: "position_y".into(),
         start_is_input: false,
         end_element: entity,
         end_connector: "height".into(),
@@ -261,7 +259,7 @@ fn test_propagate_avian_to_sim_component() {
 
     app.update();
 
-    // Propagate — the source `height` is read live from Position (no snapshot
+    // Propagate — the source `position_y` is read live from Position (no snapshot
     // system needed); avian state is stable until a physics step runs.
     app.world_mut()
         .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
@@ -285,7 +283,7 @@ fn test_rigid_body_exposes_ports_by_presence() {
     let plain = app.world_mut().spawn_empty().id();
     assert!(
         ports()
-            .read_output_port(app.world(), plain, "height")
+            .read_output_port(app.world(), plain, "position_y")
             .is_none(),
         "a non-body entity exposes no avian ports"
     );
@@ -295,9 +293,9 @@ fn test_rigid_body_exposes_ports_by_presence() {
         .spawn((RigidBody::Dynamic, Position(DVec3::new(0.0, 7.0, 0.0))))
         .id();
     assert_eq!(
-        ports().read_output_port(app.world(), body, "height"),
+        ports().read_output_port(app.world(), body, "position_y"),
         Some(7.0),
-        "a RigidBody+Position entity exposes the height port"
+        "a RigidBody+Position entity exposes the position_y port"
     );
 }
 

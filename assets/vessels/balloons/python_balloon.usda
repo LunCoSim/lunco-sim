@@ -35,11 +35,11 @@ def Xform "PythonBalloon" (
     # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
     # `reconcile_usd_connections`). Self-loop on this one prim, which carries both
     # the Python model ports (out: netForce; in: height, velocity) and the Avian
-    # physics ports (out: height, velocity_y; in: force_y). `inputs:`/`outputs:`
+    # physics ports (out: position_y, velocity_y; in: force_y). `inputs:`/`outputs:`
     # attrs are the active-cosim marker; the connector name is the leaf.
     float outputs:netForce = 0.0
     float inputs:force_y.connect = </PythonBalloon.outputs:netForce>
-    float inputs:height.connect = </PythonBalloon.outputs:height>
+    float inputs:height.connect = </PythonBalloon.outputs:position_y>
     float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
 
     # Buoyancy uses the same local gravity as physics, supplied by a distinct

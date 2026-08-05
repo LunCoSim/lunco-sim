@@ -9,7 +9,7 @@
 //!
 //! | Model       | Inputs                      | Outputs                          |
 //! |-------------|-----------------------------|----------------------------------|
-//! | **AvianSim**   | `force_y`, `force_x`        | `height`, `velocity_y`, ...     |
+//! | **AvianSim**   | `force_y`, `force_x`        | `position_y`, `velocity_y`, ... |
 //! | **SimComponent** (Modelica) | `height`, `velocity`, `g` | `netForce`, `volume`, ... |
 //! | **SimComponent** (FMU)     | `current_in`            | `soc`, `voltage`, ...         |
 //!
@@ -30,7 +30,7 @@
 //! // Wire: Avian height → Modelica height input
 //! commands.spawn(SimConnection {
 //!     start_element: balloon_entity,
-//!     start_connector: "height".into(),
+//!     start_connector: "position_y".into(),
 //!     end_element: balloon_entity,
 //!     end_connector: "height".into(),
 //!     scale: 1.0,

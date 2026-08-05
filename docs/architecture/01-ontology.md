@@ -205,7 +205,7 @@ A Bevy entity that links a source port on one component to a target port on anot
 Metadata for a named interface point — `{ name, direction: In|Out|InOut, type: Force|Kinematic|Electrical|Thermal|Signal }`. Used by UI to list connectable endpoints and by connection validators to enforce type compatibility.
 
 ### AvianSim
-A Bevy component that represents Avian physics as a co-simulation model. Inputs = forces (`force_x`, `force_y`, `force_z`). Outputs = state (`position_*`, `velocity_*`, `height`). Auto-added to any entity with a `RigidBody`.
+A Bevy component that represents Avian physics as a co-simulation model. Inputs = forces (`force_x`, `force_y`, `force_z`). Outputs = state (`position_*`, `velocity_*`). Auto-added to any entity with a `RigidBody`.
 
 ---
 

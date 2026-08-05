@@ -314,13 +314,6 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.z)),
             write: None,
         },
-        // `height` is the conventional alias for `position_y`.
-        AvianPort {
-            name: "height",
-            dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
-            write: None,
-        },
         AvianPort {
             name: "velocity_x",
             dir: PortDirection::Out,

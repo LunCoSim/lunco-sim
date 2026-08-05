@@ -59,17 +59,16 @@ pub enum WindowPlacement {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WindowPlacement {
-    /// Parse a `--window-pos` spec. Accepts the long form (`top-left`),
-    /// underscores (`top_left`), and short aliases (`l`, `r`, `tl`, `tr`,
-    /// `bl`, `br`). Returns `None` for anything unrecognized.
+    /// Parse a canonical `--window-pos` spec. Returns `None` for anything
+    /// unrecognized.
     pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().replace('_', "-").as_str() {
-            "left" | "l" => Some(Self::LeftHalf),
-            "right" | "r" => Some(Self::RightHalf),
-            "top-left" | "tl" => Some(Self::TopLeft),
-            "top-right" | "tr" => Some(Self::TopRight),
-            "bottom-left" | "bl" => Some(Self::BottomLeft),
-            "bottom-right" | "br" => Some(Self::BottomRight),
+        match s.to_ascii_lowercase().as_str() {
+            "left" => Some(Self::LeftHalf),
+            "right" => Some(Self::RightHalf),
+            "top-left" => Some(Self::TopLeft),
+            "top-right" => Some(Self::TopRight),
+            "bottom-left" => Some(Self::BottomLeft),
+            "bottom-right" => Some(Self::BottomRight),
             _ => None,
         }
     }

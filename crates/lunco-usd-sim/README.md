@@ -58,7 +58,7 @@ def Sphere "RedBalloon" (
 
     # Self-loop: the model's outputs are the body's inputs, and back again.
     float inputs:force_y.connect = </SandboxScene/RedBalloon.outputs:netForce>
-    float inputs:height.connect  = </SandboxScene/RedBalloon.outputs:height>
+    float inputs:height.connect  = </SandboxScene/RedBalloon.outputs:position_y>
     float inputs:velocity.connect = </SandboxScene/RedBalloon.outputs:velocity_y>
 }
 ```

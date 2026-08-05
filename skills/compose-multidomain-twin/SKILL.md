@@ -123,7 +123,7 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian po
     def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
-        float inputs:altitude.connect     = </Lander.outputs:height>
+        float inputs:altitude.connect     = </Lander.outputs:position_y>
         float inputs:descent_rate.connect = </Lander.outputs:velocity_y>
         float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>
         float inputs:g = 1.62                                           # only if the Modelica contract declares a runtime input

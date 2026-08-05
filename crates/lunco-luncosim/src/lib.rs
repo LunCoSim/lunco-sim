@@ -101,7 +101,7 @@ mod url_scheme;
 pub mod rhai_repl;
 
 /// Headless authored-scene regression runner, also exposed by
-/// `luncosim --debug-scene`. Keeping the implementation in the luncosim crate
+/// `luncosim test`. Keeping the implementation in the luncosim crate
 /// lets the standalone test binary and the production CLI use one runner.
 #[cfg(not(target_family = "wasm"))]
 #[path = "debug_scene.rs"]
@@ -313,8 +313,6 @@ SUBCOMMAND:
                          Reads stdin, or -e SNIPPET / -f FILE for one-shot.
     test --scene PATH    Run an authored scene's Rhai regression test headless.
                          Deterministic; exits 0=PASS, 1=FAIL, 2=no verdict.
-    --debug-scene         Explicit alias for `test`, useful while diagnosing a
-                         scene or its scenario.
 
 Measuring FPS? Use --no-vsync --no-throttle, else you are timing the
 compositor and the unfocused power-save throttle, not the renderer.",

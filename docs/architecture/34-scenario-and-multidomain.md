@@ -56,7 +56,7 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)        # the rigid body (avian port
     def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
-        float inputs:altitude.connect      = </Lander.outputs:height>
+        float inputs:altitude.connect      = </Lander.outputs:position_y
         float inputs:descent_rate.connect  = </Lander.outputs:velocity_y>
         float inputs:g.connect             = </Environment.outputs:gravity_accel>
         float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>

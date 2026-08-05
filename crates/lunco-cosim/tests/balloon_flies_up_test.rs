@@ -148,7 +148,7 @@ fn setup_balloon_wires(
         });
         commands.spawn(SimConnection {
             start_element: entity,
-            start_connector: "height".into(),
+            start_connector: "position_y".into(),
             start_is_input: false,
             end_element: entity,
             end_connector: "height".into(),

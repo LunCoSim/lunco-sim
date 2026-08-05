@@ -679,8 +679,8 @@ pub fn key_label(keys: &[KeyCode]) -> String {
 }
 
 /// Build an avatar `InputMap<UserIntent>` from a key→intent JSON object
-/// (`{"MoveForward":["KeyW"], "Action":["KeyF","Space"], …}`; keys are bevy
-/// `KeyCode` variant names, intents `UserIntent` variants via
+/// (`{"forward":["KeyW"], "action":["KeyF","Space"], …}`; keys are bevy
+/// `KeyCode` variant names, intents are canonical USD control names via
 /// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
 /// and unknown intents are skipped. The mouse `Look`/`Zoom` axes are not
 /// key-bindable, so they're always added in code.

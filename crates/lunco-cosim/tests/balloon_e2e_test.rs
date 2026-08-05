@@ -11,8 +11,8 @@ fn test_balloon_force_propagation() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(CoSimPlugin);
 
-    // Spawn balloon entity: a rigid body (auto-exposes `height` from Position)
-    // plus a SimComponent. The body sits at y=5, so its `height` output is 5.0.
+    // Spawn balloon entity: a rigid body (auto-exposes `position_y` from Position)
+    // plus a SimComponent. The body sits at y=5, so its `position_y` output is 5.0.
     let balloon = app
         .world_mut()
         .spawn((
@@ -57,7 +57,7 @@ fn test_balloon_force_propagation() {
     app.world_mut().spawn((
         SimConnection {
             start_element: balloon,
-            start_connector: "height".into(),
+            start_connector: "position_y".into(),
             start_is_input: false,
             end_element: balloon,
             end_connector: "height".into(),

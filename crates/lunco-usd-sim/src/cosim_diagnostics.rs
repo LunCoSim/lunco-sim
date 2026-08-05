@@ -1,4 +1,5 @@
-//! `GetBrokenConnections` API query — the read side of [`lunco_cosim::CosimDiagnostics`].
+//! `GetBrokenConnections` API query — the read side of co-simulation and
+//! scene-scoped runtime diagnostics.
 //!
 //! Lives here, not in `lunco-cosim` or `lunco-api`, because this is the crate that
 //! already sees BOTH: `lunco-api` (the query trait + registry) and `lunco-cosim`
@@ -23,7 +24,8 @@ use lunco_cosim::CosimDiagnostics;
 /// `cosim_tracked: false` rather than a hopeful empty "all clear".
 ///
 /// params: none · returns:
-/// `{ cosim_tracked, broken_count, pending_count, fault_count, broken: [...], pending: [...] }`
+/// `{ cosim_tracked, broken_count, pending_count, fault_count, broken: [...],
+///    pending: [...], runtime_fault: ... }`
 pub struct BrokenConnectionsProvider;
 
 impl ApiQueryProvider for BrokenConnectionsProvider {
@@ -33,6 +35,17 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
 
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         let diag = world.get_resource::<CosimDiagnostics>();
+        let runtime_fault = world
+            .get_resource::<lunco_core::RuntimeFaults>()
+            .and_then(|faults| faults.first.as_ref())
+            .map(|fault| {
+                serde_json::json!({
+                    "kind": fault.kind,
+                    "entity_bits": fault.entity.map(|entity| entity.to_bits()),
+                    "subject": fault.subject,
+                    "detail": fault.detail,
+                })
+            });
         let encode = |items: &[lunco_cosim::BrokenConnection]| {
             items
                 .iter()
@@ -53,9 +66,10 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
             "cosim_tracked": diag.is_some(),
             "broken_count": broken.len(),
             "pending_count": pending.len(),
-            "fault_count": broken.len(),
+            "fault_count": broken.len() + usize::from(runtime_fault.is_some()),
             "broken": broken,
             "pending": pending,
+            "runtime_fault": runtime_fault,
         }))
     }
 }

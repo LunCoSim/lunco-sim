@@ -124,11 +124,6 @@ impl DocumentDiagnostics {
         self.started.remove(&id);
     }
 
-    /// Alias of [`clear`](Self::clear) — drop all state for a removed document.
-    pub fn remove(&mut self, id: DocumentId) {
-        self.clear(id);
-    }
-
     /// The tracked entry for a document, if any.
     pub fn get(&self, id: DocumentId) -> Option<&DocDiagnostics> {
         self.by_doc.get(&id)
@@ -166,6 +161,6 @@ pub fn drop_diagnostics_on_close(
     diagnostics: Option<ResMut<DocumentDiagnostics>>,
 ) {
     if let Some(mut d) = diagnostics {
-        d.remove(trigger.event().doc);
+        d.clear(trigger.event().doc);
     }
 }

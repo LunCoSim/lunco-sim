@@ -197,12 +197,3 @@ pub fn remove_component(
     class.components.shift_remove(name);
     Ok(())
 }
-
-/// Remove a variable by name.
-pub fn remove_variable(
-    class: &mut ClassDef,
-    edit: &mut Edit<'_>,
-    name: &str,
-) -> Result<(), AstMutError> {
-    remove_component(class, edit, name)
-}

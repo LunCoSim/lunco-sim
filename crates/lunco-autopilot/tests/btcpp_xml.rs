@@ -35,8 +35,7 @@ fn assert_builds(v: &Value) {
 
 #[test]
 fn patrol_one_waypoint_keeps_its_nesting() {
-    let v =
-        json!({"kind":"patrol","waypoints":[[10.0,0.0,-5.0]],"speed":0.6,"radius":2.0,"dwell":0.0});
+    let v = json!({"kind":"patrol","waypoints":[{"pos":[10.0,0.0,-5.0]}],"speed":0.6,"radius":2.0,"dwell":0.0});
     roundtrip(v.clone());
     assert_builds(&xml_to_value(&value_to_xml(&v).unwrap()).unwrap());
 }
@@ -52,7 +51,7 @@ fn patrol_no_waypoints_stays_an_empty_array() {
 fn patrol_many_waypoints() {
     let v = json!({
         "kind":"patrol",
-        "waypoints":[[10.0,0.0,-5.0],[0.0,0.0,12.5],[-3.0,1.0,0.0]],
+        "waypoints":[{"pos":[10.0,0.0,-5.0]},{"pos":[0.0,0.0,12.5]},{"pos":[-3.0,1.0,0.0]}],
         "speed":0.6,"radius":2.0,"dwell":1.5
     });
     roundtrip(v.clone());
@@ -161,7 +160,7 @@ fn all_control_and_decorator_kinds_roundtrip() {
 fn all_leaf_kinds_roundtrip_and_build() {
     let v = json!({"kind":"sequence","children":[
         {"kind":"drive_to","target":[10.0,0.0,0.0],"speed":0.6,"radius":2.0},
-        {"kind":"patrol","waypoints":[[1.0,0.0,1.0]],"speed":0.6,"radius":2.0,"dwell":0.0},
+        {"kind":"patrol","waypoints":[{"pos":[1.0,0.0,1.0]}],"speed":0.6,"radius":2.0,"dwell":0.0},
         {"kind":"arrived","target":[0.0,0.0,0.0],"radius":3.0},
         {"kind":"wait","seconds":1.5},
         {"kind":"cruise","throttle":0.3,"steer":-0.2},

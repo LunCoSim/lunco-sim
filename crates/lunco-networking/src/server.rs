@@ -67,7 +67,6 @@ use crate::shared::{
 };
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use wtransport::tls::{Certificate, CertificateChain, PrivateKey};
 
@@ -1155,7 +1154,11 @@ use lunco_twin::is_runtime_state;
 fn collect_scenario_input(
     twin: &Twin,
     journal_head: Option<lunco_twin_journal::EntryId>,
-) -> ScenarioBuildInput {
+) -> Option<ScenarioBuildInput> {
+    let manifest = twin.manifest.as_ref()?;
+    let scenario_id = manifest.uuid?.into_bytes();
+    let name = manifest.name.clone();
+
     // 1. Folder walk → in-tree assets keyed by absolute path (dedup). A parent
     //    Twin's `files()` recurses into child-Twin subdirs, so the same asset can
     //    surface twice; the map keeps one. `is_runtime_state` is judged on the
@@ -1244,29 +1247,6 @@ fn collect_scenario_input(
         });
     }
 
-    let scenario_id = twin
-        .manifest
-        .as_ref()
-        .and_then(|m| m.uuid)
-        .map(|u| u.into_bytes())
-        // No `twin.toml` uuid (unmanaged folder / pre-uuid twin): derive a
-        // *stable* id from the scenario root path rather than emitting all-zeros.
-        // The host owns this derivation (the client only sees the wire id and
-        // can't recompute a path digest it never learns), and it keeps two
-        // distinct folder-scenarios from colliding on `[0u8; 16]` — which would
-        // clobber each other in the client's `scenarios/<id>/` asset cache.
-        .unwrap_or_else(|| scenario_id_from_path(&twin.root));
-    let name = twin
-        .manifest
-        .as_ref()
-        .map(|m| m.name.clone())
-        .unwrap_or_else(|| {
-            twin.root
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
     // 5. Two entry-scene forms:
     //    - `twin_scene` = the Twin-relative path (raw `default_scene`), so a
     //      client holding the Twin locally loads `twin://<name>/<twin_scene>` —
@@ -1284,14 +1264,14 @@ fn collect_scenario_input(
             .unwrap_or(ds)
     });
 
-    ScenarioBuildInput {
+    Some(ScenarioBuildInput {
         scenario_id,
         name,
         default_scene,
         twin_scene,
         descriptors,
         journal_head,
-    }
+    })
 }
 
 /// Extension → manifest media type (USD text/binary, glTF binary, images).
@@ -1318,18 +1298,6 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
         }
     }
     out
-}
-
-/// Stable 16-byte scenario id derived from the scenario root path — the
-/// fallback when a Twin has no `twin.toml` uuid. SHA-256 of the path string,
-/// truncated to 16 bytes (the wire `scenario_id` width). Deterministic for a
-/// given path so the same folder-scenario keeps one identity across host
-/// restarts; distinct folders get distinct ids (vs the old all-zeros collapse).
-fn scenario_id_from_path(root: &Path) -> [u8; 16] {
-    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
-    let mut id = [0u8; 16];
-    id.copy_from_slice(&digest[..16]);
-    id
 }
 
 /// Off-thread step: read + SHA-256-hash every descriptor and assemble the
@@ -1421,7 +1389,14 @@ fn spawn_manifest_build(
     journal_head: Option<lunco_twin_journal::EntryId>,
     pending: &mut PendingScenarioManifest,
 ) {
-    let input = collect_scenario_input(twin, journal_head);
+    let Some(input) = collect_scenario_input(twin, journal_head) else {
+        warn!(
+            "[net] cannot build a scenario manifest for {}: a twin.toml UUID is required",
+            twin.root.display()
+        );
+        pending.task = None;
+        return;
+    };
     let pool = AsyncComputeTaskPool::get();
     pending.task = Some(pool.spawn(async move { build_manifest_from_input(input) }));
 }
