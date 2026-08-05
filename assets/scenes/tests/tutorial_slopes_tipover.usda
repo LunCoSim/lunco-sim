@@ -12,6 +12,42 @@ def Xform "SlopeTest" (
 {
     custom string lunco:scenario = "tutorial-slopes-tipover"
 
+    # This lesson is a local lunar mobility exercise; it does not author a
+    # celestial frame for Earth tracking. The shared rover's communications
+    # mechanism is therefore explicitly scenery in this stage. Its links are
+    # disabled as well as its controller so the stage contains no unattached
+    # dynamic mechanism bodies and no request for an absent Earth direction.
+    over "Rover"
+    {
+        over "Antenna"
+        {
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (
+                active = false
+            )
+            {
+            }
+            over "YawJoint" (
+                active = false
+            )
+            {
+            }
+            over "ElevationJoint" (
+                active = false
+            )
+            {
+            }
+        }
+    }
+
     def Scope "Scenario" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )

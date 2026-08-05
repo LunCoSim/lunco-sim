@@ -171,14 +171,26 @@ fn register_release_backend(reg: Option<ResMut<lunco_core::ports::PortRegistry>>
 /// actuator must live there. `joint_release_system` bridges to the joint by path.)
 fn attach_release_actuator(
     mut commands: Commands,
-    q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
+    q: Query<
+        (
+            Entity,
+            &lunco_core::ControlBinding,
+            Option<&ReleaseActuator>,
+        ),
+        Changed<lunco_core::ControlBinding>,
+    >,
 ) {
-    for e in &q {
-        // `try_insert`: scene-load churn (or a doc-backed reload) can despawn a
-        // just-added ControlBinding entity before this deferred insert applies —
-        // a plain `insert` then panics on the invalid entity. Same despawn-safe
-        // idiom as gizmo/hardware/terrain-surface.
-        commands.entity(e).try_insert(ReleaseActuator::default());
+    for (e, binding, actuator) in &q {
+        let has_release = binding.has_intent(lunco_core::architecture::UserIntent::Release);
+        if has_release && actuator.is_none() {
+            // `try_insert`: scene-load churn (or a doc-backed reload) can despawn a
+            // just-added ControlBinding entity before this deferred insert applies —
+            // a plain `insert` then panics on the invalid entity. Same despawn-safe
+            // idiom as gizmo/hardware/terrain-surface.
+            commands.entity(e).try_insert(ReleaseActuator::default());
+        } else if !has_release && actuator.is_some() {
+            commands.entity(e).try_remove::<ReleaseActuator>();
+        }
     }
 }
 
@@ -3437,7 +3449,6 @@ mod tests {
     #[test]
     fn move_entity_splits_a_grid_absolute_target_across_cells() {
         use super::*;
-        use bevy::prelude::*;
         use big_space::prelude::{CellCoord, Grid};
 
         const EDGE: f32 = 2000.0;
@@ -3499,7 +3510,6 @@ mod tests {
     #[test]
     fn move_entity_leaves_a_cell_less_entity_alone() {
         use super::*;
-        use bevy::prelude::*;
         use big_space::prelude::CellCoord;
 
         let mut app = App::new();
@@ -3538,7 +3548,6 @@ mod tests {
         api_id: u64,
     ) -> (bevy::prelude::App, lunco_doc::DocumentId) {
         use super::*;
-        use bevy::prelude::*;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -3578,7 +3587,6 @@ mod tests {
     #[test]
     fn move_of_authored_prim_persists_to_runtime_layer() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let (mut app, doc) = app_with_runtime_producer("/World", 42);
@@ -3679,7 +3687,6 @@ mod tests {
     #[test]
     fn undo_document_reverts_the_last_usd_op() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_doc::Document;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
@@ -3729,7 +3736,6 @@ mod tests {
     #[test]
     fn move_of_unowned_entity_is_skipped() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_doc::Document;
 
         // Entity bound to a prim the document does NOT contain (e.g. a palette
@@ -3758,7 +3764,6 @@ mod tests {
     #[test]
     fn spawn_persists_referenced_prim_to_runtime_layer() {
         use super::*;
-        use bevy::prelude::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let mut app = App::new();

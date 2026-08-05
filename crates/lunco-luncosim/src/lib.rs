@@ -443,19 +443,13 @@ fn run_with_mode(headless: bool) -> AppExit {
 
 /// Build the base [`DefaultPlugins`] group for the chosen mode.
 ///
-/// This is the one place the GUI/headless split touches plugin *configuration*,
-/// because the render backend and the window must be decided at `PluginGroup`
+/// This is the one place the GUI/headless split touches plugin *configuration*.
+/// The render backend and the window must be decided at `PluginGroup`
 /// build time — a plugin added later cannot reconfigure `RenderPlugin`/
-/// `WindowPlugin`. Headless (and every `--no-ui`-feature build) uses `backends:
-/// None`: the asset stores still initialise (so USD visual sync can populate the
-/// meshes avian colliders read), but no GPU device is created and nothing is
-/// drawn — `ScheduleRunnerPlugin` (added by [`SandboxHeadlessPlugin`]) ticks the
-/// app in winit's place.
-///
-/// NB: with no backend, `RenderPlugin` does NOT build the render world — it skips
-/// `ExtractPlugin`/`SyncWorldPlugin` entirely, while still installing the render-
-/// sync component hooks that expect them. [`SandboxHeadlessPlugin`] adds
-/// `SyncWorldPlugin` back to keep despawns from aborting; see the note there.
+/// `WindowPlugin`. Headless builds retain the simulation's asset/type plugins,
+/// but omit the renderer and its render-world consumers entirely. The
+/// [`ScheduleRunnerPlugin`] added by [`SandboxHeadlessPlugin`] ticks the app in
+/// winit's place.
 /// THE simulation app — asset sources, engine plugins, and every LunCo domain
 /// system. This is the whole application minus its user interface.
 ///
@@ -541,6 +535,7 @@ fn build_sim_app_with_profile(
     app.add_plugins(log_dedup::LogDedupPlugin);
     app.add_plugins(SandboxCorePlugin {
         headless,
+        #[cfg(feature = "ui")]
         render_profile,
     });
     app
@@ -620,7 +615,7 @@ fn apply_luncosim_window_icon(
 
 #[cfg(all(test, feature = "ui"))]
 mod window_tests {
-    use super::sandbox_window;
+    use super::{sandbox_window, SandboxRenderProfile};
 
     #[test]
     fn custom_chrome_window_remains_resizable() {
@@ -658,8 +653,6 @@ fn default_plugins_with_profile(
     // GPU stack, it fails to compile. It did: `cargo check -p lunco-luncosim-server` was
     // broken, and nothing caught it because `--workspace` unifies `ui` on and the CI render
     // guard only runs `cargo tree` (which resolves the graph but never builds it).
-    #[cfg(feature = "ui")]
-    use bevy::render::settings::WgpuSettings;
     // `headless`/`offscreen` only select render/window config in `ui` builds; a
     // no-`ui` build is always windowless, so the params are unused there.
     #[cfg(not(feature = "ui"))]
@@ -709,17 +702,6 @@ fn default_plugins_with_profile(
         (title, present)
     };
 
-    #[cfg(feature = "ui")]
-    let render_creation = if headless {
-        WgpuSettings {
-            backends: None,
-            ..default()
-        }
-        .into()
-    } else {
-        lunco_workbench::preferred_wgpu_settings().into()
-    };
-
     let group = DefaultPlugins
         .set(AssetPlugin {
             file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
@@ -752,23 +734,37 @@ fn default_plugins_with_profile(
             ..default()
         });
 
-    // Only a `ui` build has a render stack to configure. Without `ui`, `DefaultPlugins`
-    // carries no `RenderPlugin` (bevy_render isn't linked) and there is nothing to set.
+    // Only a windowed `ui` build owns the renderer. A headless `ui` build keeps
+    // the asset/type plugins above but removes every render-world consumer from
+    // the default group, so no plugin can assume a RenderApp exists.
     #[cfg(feature = "ui")]
-    let group = group.set(bevy::render::RenderPlugin {
-        render_creation,
-        ..default()
-    });
+    let group = if headless {
+        group
+            .disable::<bevy::render::RenderPlugin>()
+            .disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
+            .disable::<bevy::core_pipeline::CorePipelinePlugin>()
+            .disable::<bevy::post_process::PostProcessPlugin>()
+            .disable::<bevy::anti_alias::AntiAliasPlugin>()
+            .disable::<bevy::sprite_render::SpriteRenderPlugin>()
+            .disable::<bevy::ui_render::UiRenderPlugin>()
+            .disable::<bevy::gltf::GltfPlugin>()
+            .disable::<bevy::pbr::PbrPlugin>()
+            .disable::<bevy::gizmos_render::GizmoRenderPlugin>()
+    } else {
+        group.set(bevy::render::RenderPlugin {
+            render_creation: lunco_workbench::preferred_wgpu_settings().into(),
+            ..default()
+        })
+    };
 
     #[cfg(feature = "ui")]
     let vertical = std::env::args().any(|a| a == "--vertical");
 
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
     // picks the windowless variant (no primary window, WinitPlugin disabled) —
-    // and so does `offscreen`, which is windowless WITH a GPU (the
-    // `render_creation` above stays `preferred_wgpu_settings` because
-    // `offscreen` never sets `headless`; wgpu renders surfaceless into the
-    // offscreen target image).
+    // and so does `offscreen`, which is windowless WITH a GPU; the windowed
+    // branch above supplies `preferred_wgpu_settings`, and wgpu renders
+    // surfaceless into the offscreen target image.
     // Without `ui` there's no winit crate to disable, so just declare a
     // windowless `WindowPlugin`.
     #[cfg(feature = "ui")]
@@ -2216,10 +2212,11 @@ mod policy_projection_tests {
 ///
 /// The render plugins are configured in [`default_plugins`] (added before this);
 /// here every plugin is pure-CPU sim/state. USD visual sync only writes the
-/// mesh/material asset stores (never touches a GPU device), so it's safe under
-/// `backends: None`.
+/// mesh/material asset stores (never touches a GPU device), so it is safe in
+/// headless mode.
 pub struct SandboxCorePlugin {
     pub headless: bool,
+    #[cfg(feature = "ui")]
     render_profile: SandboxRenderProfile,
 }
 
@@ -2293,6 +2290,7 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "ui")]
         app.add_plugins(jitter_probe::JitterProbePlugin);
         // Render profile is installed before the render plugin below.
+        #[cfg(feature = "ui")]
         if self.render_profile == SandboxRenderProfile::Fast {
             app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
             info!("[render] fast profile enabled");
@@ -2892,49 +2890,64 @@ impl Plugin for SandboxCorePlugin {
     }
 }
 
-/// Hold dynamic-body activation while ground might still be on its way:
-/// - a DEM terrain build is in flight (`DemTerrainRequest` — removed in the same
-///   command batch that inserts the finished collider / oracle), OR
-/// - the DEM bridge hasn't examined every USD prim yet (`Without<DemBridged>`) —
-///   a terrain prim may be about to request a build, and rovers activate within
-///   frames of spawn, so gating only on the request loses the startup race.
+/// Hold dynamic-body activation while an actual DEM terrain build is in flight.
 ///
-/// Without this gate a rover spawned over not-yet-collidable terrain free-falls
-/// through the surface during the multi-second off-thread collider bake and is
-/// lost below the map. Bounded by a timeout so a permanently-unbridgeable prim
-/// (stage asset without a recipe) degrades to a loud warning instead of freezing
-/// every dynamic body forever. This crate is the assembly point that sees both
-/// `lunco-terrain-surface` (the request) and `lunco-usd-sim` (the activation
-/// gate resource, via the `lunco-usd` facade).
+/// The USD terrain bridge is ordered before this system and its deferred commands
+/// are flushed at that boundary, so the query sees the authoritative
+/// [`DemTerrainRequest`] for a newly composed terrain in the same update. A query
+/// over every [`UsdPrimPath`] is incorrect: most USD prims are not terrain and
+/// would keep the entire simulation kinematic until an arbitrary timeout.
+///
+/// The request is removed together with the finished collider/oracle by the
+/// terrain-surface owner. This crate only mirrors that domain-owned readiness into
+/// the USD-simulation activation resource.
 fn track_ground_collider_pending(
-    time: Res<Time>,
     building: Query<(), With<lunco_terrain_surface::DemTerrainRequest>>,
-    unexamined: Query<
-        (),
-        (
-            With<lunco_usd::UsdPrimPath>,
-            Without<lunco_usd_terrain::DemBridged>,
-        ),
-    >,
-    mut held_secs: Local<f32>,
     mut pending: ResMut<lunco_usd::GroundColliderPending>,
 ) {
-    const MAX_HOLD_SECS: f32 = 30.0;
-    let want = !building.is_empty() || !unexamined.is_empty();
-    if want {
-        *held_secs += time.delta_secs();
-    } else {
-        *held_secs = 0.0;
-    }
-    let now = want && *held_secs < MAX_HOLD_SECS;
-    if want && !now && pending.0 {
-        warn!(
-            "[terrain] ground-collider gate held {MAX_HOLD_SECS}s — releasing dynamic bodies \
-             (unbridgeable USD prim or stuck terrain build?)"
-        );
-    }
-    if pending.0 != now {
-        pending.0 = now;
+    pending.0 = !building.is_empty();
+}
+
+#[cfg(test)]
+mod ground_collider_gate_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_active_dem_request_holds_dynamic_activation() {
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default())
+            .init_resource::<lunco_usd::GroundColliderPending>()
+            .add_systems(Update, track_ground_collider_pending);
+
+        // A loaded USD stage contains many prims that are not terrain. They do
+        // not participate in this gate.
+        let stage = Handle::<UsdStageAsset>::default();
+        app.world_mut().spawn(UsdPrimPath {
+            stage_handle: stage,
+            path: "/Rover/Chassis".into(),
+        });
+        app.update();
+        assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
+
+        let terrain = app
+            .world_mut()
+            .spawn(lunco_terrain_surface::DemTerrainRequest {
+                uri: "terrain/site".into(),
+                half_window: 1.0,
+                target_res: 0,
+                lod_viz: false,
+                collider_ring: false,
+                with_default_material: false,
+            })
+            .id();
+        app.update();
+        assert!(app.world().resource::<lunco_usd::GroundColliderPending>().0);
+
+        app.world_mut()
+            .entity_mut(terrain)
+            .remove::<lunco_terrain_surface::DemTerrainRequest>();
+        app.update();
+        assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
     }
 }
 
@@ -3438,9 +3451,8 @@ fn bind_terrain_layers(
 /// take: the process exits by itself once the recording drains.
 ///
 /// Contrast with [`SandboxHeadlessPlugin`] (the `--no-ui` SERVER: no GPU at
-/// all, `backends: None`): offscreen must NOT insert `NoRenderVisuals` (meshes
-/// really load) and must NOT re-add `SyncWorldPlugin` (a real backend builds
-/// the render world itself — adding it again would double-register).
+/// all): offscreen must NOT insert `NoRenderVisuals`, because it owns a real
+/// render world and GPU target.
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 pub struct SandboxOffscreenPlugin;
 
@@ -3752,42 +3764,6 @@ impl Plugin for SandboxHeadlessPlugin {
         // physics — otherwise raycast rovers defer their drivetrain forever and
         // the authoritative server can't simulate or replicate a drivable rover.
         app.insert_resource(lunco_usd::NoRenderVisuals);
-
-        // Restore the render-world SYNC BOOKKEEPING that `backends: None` skips.
-        //
-        // Without this, `LoadScene` ABORTS the process headless. `RenderPlugin`
-        // only adds `ExtractPlugin` — and hence `SyncWorldPlugin`, the owner of
-        // the `PendingSyncEntity` resource — when a GPU backend actually comes up
-        // (bevy_render/src/lib.rs: "We only create the render world ... if we have
-        // a rendering backend"). But the per-component plugins it adds
-        // UNCONDITIONALLY (`SyncComponentPlugin`, via `CameraPlugin` and friends)
-        // still install component hooks that do a bare
-        // `world.resource_mut::<PendingSyncEntity>()`. So on a backend-less app the
-        // hook fires with no resource → `Res` validation failure → non-unwinding
-        // panic in a Drop → `abort`.
-        //
-        // It only bites on REMOVAL, which is why boot survived and only scene
-        // swaps died: the *add* observer lives in the absent `SyncWorldPlugin`, but
-        // the *remove* hook lives in the always-present `SyncComponentPlugin`.
-        // `NoRenderVisuals` keeps `Mesh3d` off a headless entity, but `Camera` and
-        // the lights are render-synced too — and `LoadScene` despawns them.
-        //
-        // `SyncWorldPlugin` alone is the minimal repair: it inits the resource and
-        // adds the matching add/remove observers, with NO render sub-app (adding
-        // `ExtractPlugin` would build one and then run render schedules against a
-        // device that doesn't exist). Nothing drains `PendingSyncEntity` here, so
-        // it accumulates — but only one small record per synced-entity spawn/despawn,
-        // never per frame, so a server that loads a scene now and then grows by a
-        // few hundred KB, not without bound in steady state.
-        //
-        // Upstream shape: bevy registers hooks that assume a plugin it may not have
-        // added. Re-test on the next bevy bump and drop this if it starts adding
-        // `SyncWorldPlugin` unconditionally.
-        // ONLY in a `ui` build. The hooks this works around are installed by
-        // `RenderPlugin` itself — with no bevy_render linked (the `--no-ui` server) there
-        // are no render-sync hooks, so there is nothing to repair and no plugin to add.
-        #[cfg(feature = "ui")]
-        app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
 
         // No winit event loop drives updates headless, so install a runner that
         // ticks the app at the sim's fixed rate. (Windowed builds are paced by

@@ -34,10 +34,10 @@
 #
 # ── The control ──────────────────────────────────────────────────────────────
 #
-# `Parked` mounts the same component on the same kind of body and switches the
-# joint off with stock `physics:jointEnabled = false` — what a host does when it
-# wants the dish as scenery (`components/comms/ground_station.usda` parks its
-# dish this way, for stations with no lunar target to track).
+# `Parked` mounts the same component on the same kind of body and deactivates the
+# mechanism while disabling both nested rigid bodies — what a host does when it
+# wants the dish as scenery (`components/comms/ground_station.usda` uses the same
+# contract for stations with no lunar target to track).
 #
 # Without it, every assertion here passes for a scene where the engine attaches a
 # joint to anything that asks, including things that asked not to. The control is
@@ -136,19 +136,29 @@ def Xform "AntennaMountTest" (
             double3 xformOp:translate = (0, 0.5, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
 
-            # `active = false` takes the joint off the composed stage entirely —
-            # the prim AND the `inputs:angle.connect` it carries. This is the
-            # idiom `components/comms/ground_station.usda` uses to park its dish,
-            # and it is the right one for a mount you do not want at all.
-            #
-            # NOT `physics:jointEnabled = false`, which keeps the prim and only
-            # stops it being simulated: the component's wire then targets an
-            # `angle` port that will never exist, and the harness's never-landed
-            # gate flags it — correctly. Both spellings are supported (the
-            # `jointEnabled` path is covered by `joint_disabled_by_physics_joint_\
-            # enabled_is_not_built` in `lunco-usd-avian`); they differ in whether
-            # the wire survives, and only one of them leaves the scene clean.
+            # The whole mechanism is scenery here. Deactivate both joints and the
+            # controller, and disable both nested bodies so neither link becomes a
+            # free dynamic body when its articulation is absent.
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (
+                active = false
+            )
+            {
+            }
             over "YawJoint" (
+                active = false
+            )
+            {
+            }
+            over "ElevationJoint" (
                 active = false
             )
             {

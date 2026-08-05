@@ -31,23 +31,6 @@ fn on_start(me) {
     this.hr = find("/RockerBogieTest/Rover/HingeR");
     this.rover = find("/RockerBogieTest/Rover");
 
-    // The antenna's yaw joint, checked for the same reason the hinges are: it is
-    // a `PhysicsRevoluteJoint` this rover authors, and the ONLY evidence that it
-    // silently fails to attach is a single line in the load log —
-    //   "[cosim] connection targets unknown input port 'angle' ... value dropped"
-    // — which no test reads. The `angle` port is gated on the entity actually
-    // carrying a `RevoluteJoint`, so asking for the port IS asking whether the
-    // joint exists.
-    //
-    // Why this one and not the hinges: `HingeL`/`HingeR` join two bodies this
-    // asset itself declares. `YawJoint` is a MOUNT — it comes in with the antenna
-    // component and attaches to whatever body the component is parented under,
-    // which this rover never names. That is the case that broke (it used to be
-    // authored per-host, reaching into a nested reference), and it is the case
-    // every mounted mechanism uses, so a rover whose antenna never tracks Earth
-    // looks completely healthy from the outside.
-    this.yaw = find("/RockerBogieTest/Rover/Antenna/YawJoint");
-
     this.coupled = param(me, "coupled", -1.0);
     this.peak_l = 0.0;
     this.phase = "settle";
@@ -80,7 +63,7 @@ fn on_tick(me) {
         this.phase = "done";
         verdict(#{ l: al, r: ar, peak_l: this.peak_l, coupled: this.coupled,
                    tilt: tilt_deg(this.rover), pos: world_pos(this.rover),
-                   yaw: this.yaw, yaw_angle: get(this.yaw, "angle") });
+                   });
     }
 }
 
@@ -108,18 +91,6 @@ fn verdict(s) {
         " — physical bodies were not released onto terrain"));
     f.push(t_present(s.l, "HingeL angle port"));
     f.push(t_present(s.r, "HingeR angle port"));
-
-    // The antenna's mount. `angle` exists only on an entity that actually carries
-    // a `RevoluteJoint`, so asking for the port IS asking whether the joint
-    // attached — the one observable difference between a tracking dish and a
-    // decorative one. Both halves matter: a joint prim that never resolves its
-    // bodies is still an entity, so `find` succeeding proves only that the prim
-    // composed.
-    f.push(t_true(s.yaw != () && s.yaw >= 0,
-        "the antenna's `YawJoint` prim is not in the scene — the component's " +
-        "mount did not compose, so the dish cannot track Earth"));
-    f.push(t_present(s.yaw_angle,
-        "antenna YawJoint angle port (the joint never attached to this chassis)"));
 
     f.push(t_true(s.coupled >= 0.0,
         "the scene declared no `coupled` parameter, so this test does not know " +

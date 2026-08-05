@@ -6,7 +6,7 @@
 )
 
 # G5 CONTROL scene — identical to `rocker_bogie.usda` but the differential
-# is DISABLED by zeroing the differential gear joint's angular-drive stiffness/damping
+# is DISABLED by zeroing the differential gear joint's angular-drive stiffness
 # with a local `over` on the Rover (a local opinion overrides the referenced value).
 # With the coupling off, the step under the left-front corner should ROLL the chassis
 # noticeably more than the coupled case — isolating the differential's leveling effect.
@@ -68,12 +68,41 @@ def Xform "RockerBogieTest" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
-        # Disable the differential: zero the gear joint's angular drive (a local
+        # This control is also a local mobility test.  Keep the shared antenna
+        # as visual scenery so its mechanism cannot become an unrelated dynamic
+        # body or request an Earth direction that this stage does not author.
+        over "Antenna"
+        {
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (
+                active = false
+            )
+            {
+            }
+            over "YawJoint" (
+                active = false
+            )
+            {
+            }
+            over "ElevationJoint" (
+                active = false
+            )
+            {
+            }
+        }
+        # Disable the differential: zero the authored gear engagement (a local
         # `over` opinion wins over the referenced asset's value).
         over "Differential"
         {
             float drive:angular:physics:stiffness = 0.0
-            float drive:angular:physics:damping = 0.0
         }
         double3 xformOp:translate = (0, 1.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
