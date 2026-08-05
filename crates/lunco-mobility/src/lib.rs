@@ -791,10 +791,15 @@ fn apply_wheel_suspension(
 /// is built — running AFTER the physics step (fresh chassis pose) and BEFORE the
 /// spatial query (which reads `Position`), so the cast sees this tick's pose.
 fn sync_raycast_wheel_physics_pose(
-    mut q_wheels: Query<(&mut Position, &mut Rotation, &Transform, &ChildOf), With<WheelRaycast>>,
+    mut q_wheels: Query<
+        (Entity, &mut Position, &mut Rotation, &Transform, &ChildOf),
+        With<WheelRaycast>,
+    >,
     q_chassis: Query<(&Position, &Rotation), (With<DriveMix>, Without<WheelRaycast>)>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
-    for (mut wpos, mut wrot, wtf, parent) in q_wheels.iter_mut() {
+    for (wheel, mut wpos, mut wrot, wtf, parent) in q_wheels.iter_mut() {
         if let Ok((cpos, crot)) = q_chassis.get(parent.parent()) {
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(cpos.0),
@@ -806,11 +811,31 @@ fn sync_raycast_wheel_physics_pose(
             // caster's local origin is `DVec3::ZERO`, so the global origin is
             // `Position + Rotation * ZERO` — and a NaN rotation poisons even that.
             // avian's `raycast` asserts `origin.is_finite()` and takes the whole
-            // app down with it, so a solver blow-up upstream must STOP HERE rather
-            // than becoming a panic in a system that did nothing wrong. Holding
-            // last tick's pose for a frame is strictly better than a crash; if the
-            // chassis recovers, the wheel snaps back on the next tick.
+            // app down with it. Do not leave the wheel on an old pose and let the
+            // next system interpret that pose as current physics. Record the
+            // invalid source as a terminal scene fault; the fault gate pauses
+            // force production and the scene lifecycle owns the explicit reset.
             if !hub_pos.0.is_finite() || !hub_rot.0.is_finite() {
+                if let Some(holds) = holds.as_deref_mut() {
+                    holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                }
+                if let Some(faults) = faults.as_deref_mut() {
+                    if faults.raise(
+                        "mobility-nonfinite-wheel-pose",
+                        Some(wheel),
+                        "raycast wheel",
+                        format!(
+                            "hub_position={:?}, hub_rotation={:?}, chassis={:?}",
+                            hub_pos.0,
+                            hub_rot.0,
+                            parent.parent(),
+                        ),
+                    ) {
+                        error!(
+                            "[mobility] terminal runtime failure: non-finite raycast wheel pose on {wheel:?}"
+                        );
+                    }
+                }
                 continue;
             }
             // Compare-gate like the bridge's writeback: the hub pose is a

@@ -737,7 +737,14 @@ fn on_set_time_transport(
     trigger: On<SetTimeTransport>,
     mut transport: ResMut<crate::TimeTransport>,
 ) {
+    let before = *transport;
     apply_time_transport(&mut transport, trigger.event());
+    if before.mode != transport.mode || before.rate.to_bits() != transport.rate.to_bits() {
+        info!(
+            "[time] transport changed: mode {:?} -> {:?}, rate {:.3} -> {:.3}",
+            before.mode, transport.mode, before.rate, transport.rate
+        );
+    }
 }
 
 fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTransport) {
@@ -904,6 +911,10 @@ fn on_set_clock(
     };
     let Some(clocks) = clocks else { return };
     let cmd = trigger.event();
+    info!(
+        "[time] clock command: clock={:?} parent={:?} scale={:?} offset={:?} epoch_jd={:?}",
+        cmd.clock, cmd.parent, cmd.scale, cmd.offset, cmd.epoch_jd
+    );
     let target = match cmd.clock {
         ClockId::Celestial => clocks.celestial,
         ClockId::Interaction => clocks.interaction,

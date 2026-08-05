@@ -101,6 +101,18 @@ impl GridSurfaceQuery<'_, '_> {
         self.sample(p).map(|(_, y)| y)
     }
 
+    /// Slope angle under a grid-absolute point, in radians.
+    ///
+    /// This keeps seminar/runtime diagnostics on the same analytic terrain
+    /// authority as placement and route planning; render-overlay normals are
+    /// view/LOD dependent and are not suitable for a measured grade.
+    pub fn slope_at(&self, p: GridPos, eps: f64) -> Option<f64> {
+        self.terrains.iter().find_map(|(_, terrain)| {
+            height_in_footprint(&terrain.0, p)
+                .map(|_| HeightSource::slope_at(terrain.0.as_ref(), p.0.x, p.0.z, eps.max(1.0e-6)))
+        })
+    }
+
     /// [`Self::height_at`] plus which terrain answered.
     pub fn sample(&self, p: GridPos) -> Option<(Entity, f64)> {
         for (entity, hf) in self.terrains.iter() {
@@ -366,6 +378,16 @@ mod tests {
         });
         let got = app.world_mut().run_system(sys).unwrap();
         assert_eq!(got, Some(SITE_ELEVATION));
+    }
+
+    #[test]
+    fn slope_at_uses_the_same_grid_absolute_terrain_authority() {
+        let (mut app, _) = world_with_terrain(SITE_ELEVATION);
+        let sys = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            q.slope_at(GridPos(DVec3::new(10.0, 0.0, -20.0)), 1.0)
+        });
+        let got = app.world_mut().run_system(sys).unwrap();
+        assert_eq!(got, Some(0.0));
     }
 
     #[test]

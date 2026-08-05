@@ -31,8 +31,31 @@ use lunco_mobility::WheelRaycast;
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct RuntimeOverlayInputs<'w> {
     terrain: Option<Res<'w, lunco_terrain_surface::TerrainGenStatus>>,
+    overlay: Option<Res<'w, lunco_terrain_surface::overlay::TerrainOverlayParams>>,
     #[cfg(feature = "networking")]
     scenario: Option<Res<'w, lunco_networking::scenario_sync::ScenarioDownloadStatus>>,
+}
+
+/// The small amount of edge state needed for seminar-grade runtime evidence.
+///
+/// These are event logs, not a second domain state store: the authoritative
+/// vessel pose, terrain oracle, battery outputs, and overlay resource remain
+/// owned by their existing systems.
+#[derive(Default)]
+pub(crate) struct SeminarExposureTrace {
+    current_vessel: Option<Entity>,
+    last_label: Option<String>,
+    tipped: bool,
+    max_slope_deg: Option<f32>,
+    last_soc_pct: Option<f32>,
+    overlay: Option<lunco_terrain_surface::overlay::TerrainOverlayParams>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SeminarTraceInputs<'w, 's> {
+    surface: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
+    prims: Query<'w, 's, &'static lunco_usd::UsdPrimPath>,
+    provenance: Query<'w, 's, &'static lunco_core::Provenance>,
 }
 
 /// Fallback amber threshold, for a vessel whose limits cannot be derived.
@@ -669,6 +692,11 @@ pub(crate) fn mark_exposure_dirty(
         .terrain
         .as_ref()
         .is_some_and(|status| status.is_changed());
+    let overlay_changed = overlay_changed
+        || overlays
+            .overlay
+            .as_ref()
+            .is_some_and(|params| params.is_changed());
     #[cfg(feature = "networking")]
     let overlay_changed = overlay_changed
         || overlays
@@ -694,24 +722,51 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     orbital_pin: Option<Res<'w, OrbitalViewPin>>,
 }
 
+/// Authoritative inputs for the driven-vessel projection.
+///
+/// Bevy's function-system adapter has a bounded number of direct system
+/// parameters. Keeping these queries in one `SystemParam` preserves the
+/// ownership boundary without making the publisher an unregistered plain
+/// function when seminar tracing adds another input.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ExposureQueries<'w, 's> {
+    avatar: Query<'w, 's, &'static ControllerLink, With<Avatar>>,
+    name: Query<'w, 's, &'static Name>,
+    callsign: Query<'w, 's, &'static lunco_core::markers::Callsign>,
+    gid: Query<'w, 's, &'static GlobalEntityId>,
+    velocity: Query<'w, 's, &'static LinearVelocity>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    grids: Query<'w, 's, &'static Grid>,
+    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+    links: Query<'w, 's, (Entity, &'static LinkState)>,
+    ids: Query<'w, 's, (Entity, &'static GlobalEntityId)>,
+    wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
+    com: Query<'w, 's, &'static ComputedCenterOfMass>,
+    sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+}
+
 pub(crate) fn publish_exposure(
-    q_avatar: Query<&ControllerLink, With<Avatar>>,
-    q_name: Query<&Name>,
-    q_callsign: Query<&lunco_core::markers::Callsign>,
-    q_gid: Query<&GlobalEntityId>,
-    q_vel: Query<&LinearVelocity>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_links: Query<(Entity, &LinkState)>,
-    q_ids: Query<(Entity, &GlobalEntityId)>,
-    q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
-    q_com: Query<&ComputedCenterOfMass>,
-    q_sim: Query<(Entity, &SimComponent)>,
+    queries: ExposureQueries,
     geo: GeodeticHud,
     mut runtime: ExposureRuntime,
     overlays: RuntimeOverlayInputs,
+    trace_inputs: SeminarTraceInputs,
+    mut seminar: Local<SeminarExposureTrace>,
 ) {
+    if let Some(overlay) = overlays.overlay.as_deref() {
+        if seminar.overlay != Some(*overlay) {
+            info!(
+                "[seminar] terrain overlay: enabled={} mode={} safe={:.1}° cliff={:.1}° opacity={:.2}",
+                overlay.enabled,
+                if overlay.lod_depth { "lod" } else { "slope" },
+                overlay.safe_deg,
+                overlay.cliff_deg,
+                overlay.opacity,
+            );
+            seminar.overlay = Some(*overlay);
+        }
+    }
+
     let timer_finished = runtime.timer.0.tick(runtime.time.delta()).just_finished();
     if !runtime.refresh.dirty || (!timer_finished && !runtime.refresh.first_update) {
         return;
@@ -722,22 +777,31 @@ pub(crate) fn publish_exposure(
     let mut ui = runtime.exposures.writer("driven-vessel");
 
     let Some(vessel) = resolve_driven(
-        &q_avatar,
-        &q_name,
-        &q_callsign,
-        &q_gid,
-        &q_vel,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
-        &q_links,
-        &q_ids,
-        &q_wheels,
-        &q_com,
-        &q_sim,
+        &queries.avatar,
+        &queries.name,
+        &queries.callsign,
+        &queries.gid,
+        &queries.velocity,
+        &queries.parents,
+        &queries.grids,
+        &queries.spatial,
+        &queries.links,
+        &queries.ids,
+        &queries.wheels,
+        &queries.com,
+        &queries.sim,
         geo.site.iter().next(),
         geo.bodies.as_deref(),
     ) else {
+        if let (Some(label), Some(soc_pct)) = (seminar.last_label.as_deref(), seminar.last_soc_pct)
+        {
+            info!("[seminar] battery end: vessel={} soc={soc_pct:.1}%", label);
+        }
+        seminar.current_vessel = None;
+        seminar.last_label = None;
+        seminar.tipped = false;
+        seminar.max_slope_deg = None;
+        seminar.last_soc_pct = None;
         ui.visible(false);
         drop(ui);
         publish_celestial_capability(
@@ -748,6 +812,83 @@ pub(crate) fn publish_exposure(
         publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
         return;
     };
+
+    if seminar.current_vessel != Some(vessel.entity) {
+        if let (Some(label), Some(soc_pct)) = (seminar.last_label.as_deref(), seminar.last_soc_pct)
+        {
+            info!("[seminar] battery end: vessel={} soc={soc_pct:.1}%", label);
+        }
+        seminar.current_vessel = Some(vessel.entity);
+        seminar.last_label = Some(vessel.label.clone());
+        seminar.tipped = false;
+        seminar.max_slope_deg = None;
+        seminar.last_soc_pct = None;
+        let prim = trace_inputs
+            .prims
+            .get(vessel.entity)
+            .map(|prim| prim.path.as_str())
+            .unwrap_or("<no USD prim>");
+        let provenance = trace_inputs
+            .provenance
+            .get(vessel.entity)
+            .map(|value| format!("{value:?}"))
+            .unwrap_or_else(|_| "<no provenance>".to_owned());
+        info!(
+            "[seminar] driven vessel resolved: label={} prim={} provenance={}",
+            vessel.label, prim, provenance
+        );
+    }
+
+    let tip_over = vessel.tilt_deg >= vessel.danger_deg;
+    if tip_over != seminar.tipped {
+        if tip_over {
+            warn!(
+                "[seminar] tip-over threshold crossed: vessel={} tilt={:.1}° limit={:.1}°",
+                vessel.label, vessel.tilt_deg, vessel.danger_deg
+            );
+        } else {
+            info!(
+                "[seminar] tip-over threshold cleared: vessel={} tilt={:.1}° limit={:.1}°",
+                vessel.label, vessel.tilt_deg, vessel.danger_deg
+            );
+        }
+        seminar.tipped = tip_over;
+    }
+
+    if let Some(slope_deg) = trace_inputs
+        .surface
+        .slope_at(lunco_core::coords::GridPos(vessel.pos), 1.0)
+        .map(|slope| slope.to_degrees() as f32)
+    {
+        let new_max = seminar
+            .max_slope_deg
+            .is_none_or(|previous| slope_deg > previous + 0.5);
+        if new_max {
+            seminar.max_slope_deg = Some(slope_deg);
+            info!(
+                "[seminar] terrain slope: vessel={} instantaneous={:.1}° maximum={:.1}°",
+                vessel.label, slope_deg, slope_deg
+            );
+        }
+    }
+
+    if let Some(energy) = vessel.energy.as_ref() {
+        let changed = seminar
+            .last_soc_pct
+            .is_none_or(|previous| (energy.soc_pct - previous).abs() >= 1.0);
+        if changed {
+            let phase = if seminar.last_soc_pct.is_none() {
+                "start"
+            } else {
+                "sample"
+            };
+            info!(
+                "[seminar] battery {phase}: vessel={} soc={:.1}% energy_wh={:?} capacity_wh={:?}",
+                vessel.label, energy.soc_pct, energy.energy_wh, energy.capacity_wh
+            );
+            seminar.last_soc_pct = Some(energy.soc_pct);
+        }
+    }
 
     let autopilot = geo
         .autopilots

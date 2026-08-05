@@ -168,6 +168,7 @@ fn on_set_terrain_overlay(
     trigger: On<SetTerrainOverlay>,
     mut params: ResMut<TerrainOverlayParams>,
 ) {
+    let before = *params;
     let ev = trigger.event();
     if let Some(lod_depth) = ev.lod_depth {
         params.lod_depth = lod_depth;
@@ -188,6 +189,16 @@ fn on_set_terrain_overlay(
         "[terrain-overlay] enabled={} lod_depth={} safe={}° cliff={}° opacity={}",
         params.enabled, params.lod_depth, params.safe_deg, params.cliff_deg, params.opacity
     );
+    if before.enabled != params.enabled || before.lod_depth != params.lod_depth {
+        info!(
+            "[seminar] terrain overlay toggle: enabled={} mode={} safe={:.1}° cliff={:.1}° opacity={:.2}",
+            params.enabled,
+            if params.lod_depth { "lod" } else { "slope" },
+            params.safe_deg,
+            params.cliff_deg,
+            params.opacity,
+        );
+    }
 }
 
 register_commands!(on_set_terrain_overlay);

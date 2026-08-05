@@ -621,6 +621,15 @@ pub struct MoveEntity {
     pub translation: [f64; 3],
 }
 
+/// Maximum one-command displacement for a physics body.
+///
+/// `MoveEntity` is also the gizmo's commit verb, so an input discontinuity must
+/// not turn one frame of pointer movement into a kilometre-scale teleport. Large
+/// deliberate teleports remain available for non-physics scene entities; dynamic
+/// and kinematic bodies use the authored scene bounds and this local continuity
+/// guard.
+pub const MAX_MOVE_ENTITY_DISPLACEMENT: f64 = 500.0;
+
 /// Observer for `MoveEntity`.
 #[on_command(MoveEntity)]
 pub fn on_move_entity_command(
@@ -638,6 +647,7 @@ pub fn on_move_entity_command(
     q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
+    bounds: Option<Res<lunco_physics::WorldBounds>>,
 ) {
     let cmd = trigger.event();
     if cmd.translation.iter().any(|value| !value.is_finite()) {
@@ -673,9 +683,35 @@ pub fn on_move_entity_command(
         &q_parents,
         &q_grids,
     );
+    let target_abs = DVec3::from_array(cmd.translation);
+    let delta = target_abs - prev_abs.0;
+    let physics_body = q_rb
+        .get(target)
+        .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
+    if physics_body {
+        if delta.length_squared() > MAX_MOVE_ENTITY_DISPLACEMENT.powi(2) {
+            warn!(
+                "MOVE_ENTITY: rejecting {:.1} m physics-body jump for api_id={} (limit {:.1} m)",
+                delta.length(),
+                cmd.entity_id,
+                MAX_MOVE_ENTITY_DISPLACEMENT,
+            );
+            return;
+        }
+        if bounds
+            .as_deref()
+            .is_some_and(|world| world.escaped(target_abs))
+        {
+            warn!(
+                "MOVE_ENTITY: rejecting physics-body target outside world bounds for api_id={} at {:?}",
+                cmd.entity_id, target_abs,
+            );
+            return;
+        }
+    }
     let (new_cell, new_local) = lunco_core::coords::grid_local_from_absolute(
         target,
-        lunco_core::coords::GridPos(DVec3::from_array(cmd.translation)),
+        lunco_core::coords::GridPos(target_abs),
         &q_parents,
         &q_grids,
     );
@@ -734,7 +770,6 @@ pub fn on_move_entity_command(
     // Grid-absolute delta: a displacement is frame-invariant across the cell
     // split, so this is the same vector whether or not the move crossed a cell
     // boundary — which `cmd.translation - tf.translation` was not.
-    let delta = lunco_core::coords::GridPos(DVec3::from_array(cmd.translation)) - prev_abs;
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }
@@ -3527,6 +3562,78 @@ mod tests {
             Vec3::new(1.0, 2.0, 3.0)
         );
         assert!(app.world().get::<CellCoord>(loose).is_none());
+    }
+
+    #[test]
+    fn move_entity_rejects_a_large_physics_body_jump() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(on_move_entity_command);
+
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(body, lunco_core::GlobalEntityId::from_raw(10));
+
+        app.world_mut().trigger(MoveEntity {
+            entity_id: 10,
+            translation: [MAX_MOVE_ENTITY_DISPLACEMENT + 1.0, 0.0, 0.0],
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Transform>(body).unwrap().translation,
+            Vec3::ZERO,
+            "a pointer discontinuity must not teleport a physics body"
+        );
+    }
+
+    #[test]
+    fn move_entity_rejects_a_physics_body_target_outside_world_bounds() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.insert_resource(lunco_physics::WorldBounds::Some {
+            min: DVec3::splat(-100.0),
+            max: DVec3::splat(100.0),
+        });
+        app.add_observer(on_move_entity_command);
+
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(body, lunco_core::GlobalEntityId::from_raw(11));
+
+        app.world_mut().trigger(MoveEntity {
+            entity_id: 11,
+            translation: [10.0, 0.0, 101.0],
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Transform>(body).unwrap().translation,
+            Vec3::ZERO,
+            "a physics body must remain inside the authored local world"
+        );
     }
 
     // ── C4b: move-transform → runtime-layer persistence ─────────────────

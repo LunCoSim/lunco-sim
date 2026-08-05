@@ -367,6 +367,32 @@ fn reset_scene_runtime_safety(
     }
 }
 
+#[cfg(test)]
+mod runtime_safety_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn scene_teardown_clears_only_scene_terminal_safety_state() {
+        let mut world = World::new();
+        let mut faults = lunco_core::RuntimeFaults::default();
+        faults.raise("physics-body-escaped", None, "rover", "out of bounds");
+        world.insert_resource(faults);
+
+        let mut holds = lunco_physics::PhysicsHolds::default();
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, true);
+        world.insert_resource(holds);
+
+        world.run_system_once(reset_scene_runtime_safety).unwrap();
+
+        assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+        let holds = world.resource::<lunco_physics::PhysicsHolds>();
+        assert!(!holds.holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+        assert!(holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
+    }
+}
+
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         crate::shader_ports::build(app);

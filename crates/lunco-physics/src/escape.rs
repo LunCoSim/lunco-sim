@@ -355,6 +355,7 @@ impl Plugin for EscapeDiagnosticPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PhysicsHolds;
 
     /// The orbital guarantee: with no static geometry the diagnostic has no
     /// opinion, so a body at heliocentric distance is NOT flagged. This is the
@@ -466,6 +467,48 @@ mod tests {
         assert!(
             app.world().resource::<ReportedEscapes>().0.len() == 1,
             "exactly one body should have been reported"
+        );
+    }
+
+    /// An escape is a terminal diagnostic, not a pose-correction mechanism.
+    /// The first bad state must remain available to the fault/recording
+    /// boundary; silently changing it would destroy the evidence and alter the
+    /// simulation's meaning.
+    #[test]
+    fn an_escape_reports_and_holds_without_mutating_the_body() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(WorldBounds::Some {
+            min: Vector::splat(-100.0),
+            max: Vector::splat(100.0),
+        });
+        world.insert_resource(ReportedEscapes::default());
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(lunco_core::RuntimeFaults::default());
+
+        let position = Vector::new(0.0, -1510.0, 0.0);
+        let velocity = Vector::new(0.0, -100.0, 0.0);
+        let entity = world
+            .spawn((
+                RigidBody::Dynamic,
+                Position(position),
+                LinearVelocity(velocity),
+                Name::new("escaped-body"),
+            ))
+            .id();
+
+        world.run_system_once(report_escaped_bodies).unwrap();
+
+        assert_eq!(world.get::<Position>(entity).unwrap().0, position);
+        assert_eq!(world.get::<LinearVelocity>(entity).unwrap().0, velocity);
+        assert!(world
+            .resource::<PhysicsHolds>()
+            .holds(PhysicsHolds::SAFETY_FAILURE));
+        let fault = world.resource::<lunco_core::RuntimeFaults>();
+        assert_eq!(
+            fault.first.as_ref().map(|fault| fault.kind),
+            Some("physics-body-escaped")
         );
     }
 

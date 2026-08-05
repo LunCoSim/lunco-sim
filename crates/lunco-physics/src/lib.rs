@@ -296,6 +296,30 @@ mod tests {
         assert!(!h.is_held());
     }
 
+    #[test]
+    fn force_production_is_closed_when_the_solver_cannot_consume_forces() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Physics>::default());
+        world.insert_resource(Time::<Virtual>::default());
+
+        assert!(world.run_system_once(physics_is_live).unwrap());
+
+        world.resource_mut::<Time<Physics>>().pause();
+        assert!(!world.run_system_once(physics_is_live).unwrap());
+        world.resource_mut::<Time<Physics>>().unpause();
+
+        world.resource_mut::<Time<Virtual>>().pause();
+        assert!(!world.run_system_once(physics_is_live).unwrap());
+        world.resource_mut::<Time<Virtual>>().unpause();
+
+        let mut faults = lunco_core::RuntimeFaults::default();
+        faults.raise("physics-body-escaped", None, "rover", "out of bounds");
+        world.insert_resource(faults);
+        assert!(!world.run_system_once(physics_is_live).unwrap());
+    }
+
     /// A queued step lets exactly ONE frame of physics through a hold, then the
     /// clock re-freezes. This is what lets a cutscene script advance the world
     /// deliberately instead of play/pausing it — pausing the world clock would stop
