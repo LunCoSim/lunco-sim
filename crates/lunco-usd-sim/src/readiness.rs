@@ -103,10 +103,11 @@ fn scene_still_loading(stage_loading: bool, wait_open: bool, binding_sealed: boo
 /// compiler. Until it has, the object is not a vehicle — it is a rock with a
 /// pending appointment — and it must not be falling.
 ///
-/// A compiling [`SimComponent`] is not ready even though it already exposes its
-/// USD-declared ports. The early interface prevents false dangling-wire errors;
-/// its status, rather than component existence, keeps the physics hold until a
-/// compiler result has made the model runnable or visibly failed.
+/// The `ModelicaModel` lifecycle is authoritative here. A bind-published
+/// [`SimComponent`] intentionally remains `Compiling` until its first solver
+/// tick, but that first tick cannot happen while offline recording is waiting
+/// for the visual gate. Waiting on the component status would therefore make
+/// the recorder wait on the event that the recorder itself must initiate.
 ///
 /// The wait is deliberately attached to the Modelica entity rather than the
 /// world. A cold compiler must not stop unrelated rovers, terrain streaming, or
@@ -120,7 +121,7 @@ fn track_model_compiles(
     mut commands: Commands,
 ) {
     for (entity, model, component) in &models {
-        let kind = modelica_wait_kind(component);
+        let kind = modelica_wait_kind(model, component);
         let wait = waits.get(entity).ok();
         match (kind, wait) {
             (Some(kind), None) => {
@@ -149,14 +150,24 @@ fn track_model_compiles(
 
 /// Whether the simulation must remain frozen for this model's compiler.
 ///
-/// No component means the source has parsed but its public interface has not
-/// been projected yet. An error becomes its own readiness fact so policy can
-/// fail closed or deliberately choose best-effort continuation.
-fn modelica_wait_kind(component: Option<&SimComponent>) -> Option<&'static str> {
-    match component.map(|component| &component.status) {
-        None | Some(lunco_cosim::SimStatus::Compiling) => Some(kinds::PROGRAM_COMPILE),
-        Some(lunco_cosim::SimStatus::Error(_)) => Some(kinds::PROGRAM_FAILED),
-        Some(_) => None,
+/// Source compilation and the first live solver tick are different lifecycle
+/// events. `ModelicaModel.is_compiled` closes this wait; the Modelica sync loop
+/// then performs the first tick and promotes the public component to Running.
+/// A component error remains a named readiness fact, even when the model field
+/// has not received the same diagnostic yet.
+fn modelica_wait_kind(
+    model: &ModelicaModel,
+    component: Option<&SimComponent>,
+) -> Option<&'static str> {
+    if model.last_error.is_some()
+        || component
+            .is_some_and(|component| matches!(component.status, lunco_cosim::SimStatus::Error(_)))
+    {
+        Some(kinds::PROGRAM_FAILED)
+    } else if model.is_compiling || !model.is_compiled {
+        Some(kinds::PROGRAM_COMPILE)
+    } else {
+        None
     }
 }
 
@@ -206,9 +217,13 @@ mod tests {
             status: lunco_cosim::SimStatus::Compiling,
             ..default()
         };
-        assert_eq!(modelica_wait_kind(None), Some(kinds::PROGRAM_COMPILE));
+        let model = ModelicaModel::default();
         assert_eq!(
-            modelica_wait_kind(Some(&compiling)),
+            modelica_wait_kind(&model, None),
+            Some(kinds::PROGRAM_COMPILE)
+        );
+        assert_eq!(
+            modelica_wait_kind(&model, Some(&compiling)),
             Some(kinds::PROGRAM_COMPILE)
         );
 
@@ -217,9 +232,19 @@ mod tests {
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(Some(&failed)),
+            modelica_wait_kind(&model, Some(&failed)),
             Some(kinds::PROGRAM_FAILED),
             "a failed model remains a named policy fact"
+        );
+
+        let compiled = ModelicaModel {
+            is_compiled: true,
+            ..default()
+        };
+        assert_eq!(
+            modelica_wait_kind(&compiled, Some(&compiling)),
+            None,
+            "the first solver tick must not be blocked by the component's bind-time status"
         );
     }
 

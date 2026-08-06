@@ -34,17 +34,9 @@ fn lunco_logic_class_is_registered_in_a_rumoca_session() {
             .add_document(&uri, &source)
             .unwrap_or_else(|error| panic!("{uri}: {error}"));
     }
-    for qualified in [
-        "LunCo.Propulsion.BellNozzle",
-        "LunCo.Pointing.SunTracker",
-        "LunCo.Logic.AboveThreshold",
-    ] {
+    for qualified in ["LunCo.Propulsion.BellNozzle", "LunCo.Pointing.SunTracker"] {
         eprintln!("{qualified}: {:?}", session.class_lookup_query(qualified));
     }
-    assert_eq!(
-        session.class_lookup_query("LunCo.Logic.AboveThreshold"),
-        Some("LunCo.Logic.AboveThreshold".to_string())
-    );
 }
 
 /// The regression itself: a package member compiles, by the short name the USD
@@ -185,18 +177,7 @@ fn earth_tracker_package_member_compiles() {
 }
 
 #[test]
-fn nested_logic_package_member_compiles_with_its_inline_icon_base() {
-    let mut compiler = ModelicaCompiler::new();
-    let result = compiler.compile_str(
-        "AboveThreshold",
-        &package_member("Logic/AboveThreshold.mo"),
-        "lunco://models/LunCo/Logic/AboveThreshold.mo",
-    );
-    assert!(result.is_ok(), "AboveThreshold: {:?}", result.err());
-}
-
-#[test]
-fn lander_resolves_nested_logic_dependency() {
+fn lander_compiles_without_a_dead_logic_dependency() {
     let mut compiler = ModelicaCompiler::new();
     let result = compiler.compile_str(
         "Lander",
@@ -207,7 +188,7 @@ fn lander_resolves_nested_logic_dependency() {
 }
 
 #[test]
-fn stripped_lander_resolves_nested_logic_dependency() {
+fn stripped_lander_compiles_without_a_dead_logic_dependency() {
     let source = lunco_modelica::models::get_model("Lander.mo").expect("bundled Lander.mo");
     let (stripped, _defaults, issues) =
         lunco_modelica::ast_extract::strip_input_defaults_with_report(source);
@@ -220,13 +201,13 @@ fn stripped_lander_resolves_nested_logic_dependency() {
     let result = compiler.compile_str("Lander", &stripped, "lunco://models/Lander.mo");
     assert!(
         result.is_ok(),
-        "worker-preprocessed Lander must resolve LunCo.Logic.AboveThreshold: {:?}",
+        "worker-preprocessed Lander must compile without a dead logic dependency: {:?}",
         result.err()
     );
 }
 
 #[test]
-fn disk_lander_resolves_nested_logic_dependency() {
+fn disk_lander_compiles_without_a_dead_logic_dependency() {
     let source = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models/Lander.mo"),
     )
@@ -242,7 +223,7 @@ fn disk_lander_resolves_nested_logic_dependency() {
     let result = compiler.compile_str("Lander", &stripped, "lunco://models/Lander.mo");
     assert!(
         result.is_ok(),
-        "disk Lander must resolve LunCo.Logic.AboveThreshold: {:?}",
+        "disk Lander must compile without a dead logic dependency: {:?}",
         result.err()
     );
 }

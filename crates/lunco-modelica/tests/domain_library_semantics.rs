@@ -32,21 +32,14 @@ fn mass_memory_converts_gigabits_to_gigabytes() {
 }
 
 #[test]
-fn signal_checks_are_reusable_and_branch_free() {
-    let source = model("Logic/AboveThreshold.mo");
-    assert!(source.contains("input Real value"));
-    assert!(source.contains("input Real threshold"));
-    assert!(source.contains("max(0.0, min(1.0,"));
-    assert!(!source.contains(" if "));
-    assert!(!source.contains("when "));
-}
-
-#[test]
-fn lander_composes_touchdown_from_the_shared_threshold_check() {
+fn lander_owns_touchdown_continuity_and_controller_inertia_inputs() {
     let source = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/models/Lander.mo"),
     )
     .unwrap();
-    assert!(source.contains("LunCo.Logic.AboveThreshold touchdown_check"));
-    assert!(source.contains("touchdown = touchdown_check.active;"));
+    assert!(source.contains("input Real controller_inertia_xx"));
+    assert!(source.contains("input Real controller_inertia_yy"));
+    assert!(source.contains("input Real controller_inertia_zz"));
+    assert!(source.contains("touchdown = 0.5 + 0.5 * touchdown_error"));
+    assert!(!source.contains("AboveThreshold"));
 }

@@ -1398,6 +1398,14 @@ pub fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
     acc
 }
 
+/// Rotate a vector authored in a prim's local frame into the composed world
+/// frame. USD physics velocity attributes are local-frame vectors, while
+/// Avian's runtime velocity components are world-frame. Keep that rotation in
+/// one helper so linear and angular initial state share the same convention.
+fn local_vector_to_world(reader: &StageView<'_>, path: &SdfPath, local: DVec3) -> DVec3 {
+    world_transform(reader, path).rotation.as_dquat() * local
+}
+
 /// Compose a prim's transform in the local frame of an authored body.
 ///
 /// Physical mount points use the body origin and rotation, never the render
@@ -2896,14 +2904,15 @@ fn apply_rigid_body_mass_props(
     // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
     // then carry them into the world frame through the body's composed rotation
     // — avian's velocity components are world-frame.
-    let authored_linear = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY).map(|vel| {
-        let world_rot = world_transform(reader, sdf_path).rotation.as_dquat();
-        world_rot * conv.point_d(vel)
-    });
+    let authored_linear = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY)
+        .map(|vel| local_vector_to_world(reader, sdf_path, conv.point_d(vel)));
     let authored_angular =
         read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY).map(|ang| {
-            let world_rot = world_transform(reader, sdf_path).rotation.as_dquat();
-            world_rot * (conv.dir_d(ang) * std::f64::consts::PI / 180.0)
+            local_vector_to_world(
+                reader,
+                sdf_path,
+                conv.dir_d(ang) * std::f64::consts::PI / 180.0,
+            )
         });
     if authored_linear.is_some() || authored_angular.is_some() {
         let dynamic = reader
