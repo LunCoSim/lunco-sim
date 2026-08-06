@@ -38,7 +38,7 @@ def Xform "LanderTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to release the rover, P to pause."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
 
@@ -51,6 +51,10 @@ def Xform "LanderTest" (
     double lunco:anchor:lon = 3.63
     double lunco:anchor:height = 0.0
     int lunco:anchor:body = 301
+    # Keep this interactive mission reproducible and visibly sunlit on load.
+    # The runtime time controls can advance the authored mission epoch after
+    # startup; this is only the deterministic initial condition.
+    double lunco:time:epochJd = 2461395.5
 
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>

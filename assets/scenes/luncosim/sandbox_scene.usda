@@ -8,7 +8,7 @@
 def Xform "SandboxScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     doc = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
     kind = "assembly"
 )
 {
@@ -28,17 +28,12 @@ def Xform "SandboxScene" (
     double lunco:anchor:lon = 3.63
     double lunco:anchor:height = 0.3
     int lunco:anchor:body = 301
-    # NO authored epoch: the sandbox runs at the WALL CLOCK, so the sun, the
-    # Earth's phase and its position in the sky are whatever they really are
-    # right now at Hadley. That is deliberate — an arena you open to check
-    # something should show today's sky, not a frozen demo moment.
-    #
-    # The cost is that "now" lands anywhere in the ~29.5-day lunar cycle,
-    # including night (~14 days of it). A scene that needs a GUARANTEED lighting
-    # condition authors `double lunco:time:epochJd = <JD>` here instead; measure
-    # the JD with
-    # `cargo run -p lunco-celestial-ephemeris --example sun_at_site -- 26.13 3.63`
-    # (columns: JD, sun az, sun el, earth az, earth el; az = deg CW from north).
+    # Deterministic demo epoch: local morning at the authored Hadley Rille site.
+    # Without this authored value the time domain follows the wall clock, which
+    # can place the Moon-side arena in its two-week night and make the scene
+    # legitimately unlit. The time UI/API may still advance or reset this
+    # mission epoch; this value is the reproducible load-time starting point.
+    double lunco:time:epochJd = 2461395.5
 
     # Celestial content — opt-in standard solar set (Sun, Earth, Moon).
     # Trajectories (OrbitViews) are enabled via `lunco:trajectory:userVisible = true` overrides.
@@ -60,6 +55,13 @@ def Xform "SandboxScene" (
                 bool lunco:trajectory:userVisible = true
             }
         }
+    }
+
+    # The arena is 4 km across. Keep the standard near cascade for rover contact
+    # detail, while extending the authored UsdLux shadow range across the plot.
+    over "Sun"
+    {
+        float inputs:shadow:distance = 3000.0
     }
 
     # ── Sky ────────────────────────────────────────────────────────────────

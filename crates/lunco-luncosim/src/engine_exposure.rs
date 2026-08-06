@@ -622,6 +622,32 @@ mod energy_thermal_tests {
     use super::*;
 
     #[test]
+    fn link_snapshot_publishes_explicit_unavailable_state() {
+        let values = link_snapshot(None, "muted", "ok", "danger");
+        assert_eq!(values.0, "none");
+        assert_eq!(values.1, "NO LINK");
+        assert!(!values.2.is_empty());
+        assert!(!values.3.is_empty());
+        assert_eq!(values.4, "—");
+        assert_eq!(values.5, "none");
+        assert_eq!(values.6, "muted");
+
+        let no_peers = LinkInfo {
+            connected: false,
+            peer_label: String::new(),
+            range_m: 0.0,
+            elevation_deg: None,
+            no_peers: true,
+        };
+        let values = link_snapshot(Some(&no_peers), "muted", "ok", "danger");
+        assert_eq!(values.1, "NO PEERS");
+        assert!(!values.2.is_empty());
+        assert!(!values.3.is_empty());
+        assert_eq!(values.4, "—");
+        assert_eq!(values.5, "none");
+    }
+
+    #[test]
     fn thermal_info_max_temp() {
         let t = ThermalInfo {
             temp_left_k: Some(290.0),
@@ -1321,11 +1347,11 @@ fn link_snapshot(
     let Some(link) = link else {
         return (
             "none",
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
+            "NO LINK".into(),
+            "—".into(),
+            "—".into(),
+            "—".into(),
+            "none".into(),
             muted.to_string(),
         );
     };
@@ -1334,9 +1360,9 @@ fn link_snapshot(
         return (
             "flex",
             "NO PEERS".into(),
-            String::new(),
-            String::new(),
-            String::new(),
+            "—".into(),
+            "—".into(),
+            "—".into(),
             "none".into(),
             muted.to_string(),
         );
@@ -1502,7 +1528,7 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
         };
         let detail = match (thermal.temp_left_k, thermal.temp_right_k) {
             (Some(left), Some(right)) => format!("L {:.0} K  ·  R {:.0} K", left, right),
-            _ => String::new(),
+            _ => "—".to_owned(),
         };
         ui.property("thermal_display", "flex");
         ui.property("thermal_color", thermal_color);

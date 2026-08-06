@@ -815,7 +815,17 @@ fn apply_runtime_ui_property(
         *properties_changed = true;
     }
     let css_name = format!("--ui-{}", name.replace('_', "-"));
-    if style.get(&css_name) != Some(rendered.as_str()) {
+    if rendered.trim().is_empty() {
+        // Empty custom-property values are not a valid Flair token stream.
+        // Keep the text property authoritative (an empty text value is valid),
+        // but remove the inline CSS override so the authored stylesheet value
+        // becomes effective again. This is an invariant at the presentation
+        // boundary, not a replacement value or a producer-side fallback.
+        if style.get(&css_name).is_some() {
+            style.remove(&css_name);
+            *style_changed = true;
+        }
+    } else if style.get(&css_name) != Some(rendered.as_str()) {
         style.set(css_name, rendered);
         *style_changed = true;
     }
@@ -1133,5 +1143,28 @@ mod tests {
             .validate()
             .expect_err("unsafe path must be rejected");
         assert!(error.contains("relative asset path"));
+    }
+
+    #[test]
+    fn empty_exposure_text_does_not_reach_flair_as_css() {
+        let mut properties = TemplateProperties::default().with("value", "previous");
+        let mut style = InlineStyle::default();
+        style.set("--ui-value", "previous");
+        let mut properties_changed = false;
+        let mut style_changed = false;
+
+        apply_runtime_ui_property(
+            "value",
+            String::new(),
+            &mut properties,
+            &mut style,
+            &mut properties_changed,
+            &mut style_changed,
+        );
+
+        assert!(properties_changed);
+        assert!(style_changed);
+        assert_eq!(properties.get("value").map(String::as_str), Some(""));
+        assert_eq!(style.get("--ui-value"), None);
     }
 }
