@@ -39,6 +39,8 @@ model Lander
   input Real guidance_yaw = 0.0;
   input Real ang_authority = 0.6
     "Angular acceleration authority per unit attitude command";
+  input Real command_tilt_limit_rad = 0.35
+    "Maximum commanded tilt angle for normalized guidance/pilot commands (rad)";
 
   // Local sensor signals. The sensor/estimator owns frame conversion; this
   // controller sees only body-frame rates and body-frame attitude error.
@@ -49,12 +51,14 @@ model Lander
   input Real attitude_error_y = 0.0 "Body-frame upright error about Y";
   input Real attitude_error_z = 0.0 "Body-frame upright error about Z";
 
-  // Landing-load signals remain local vehicle facts. A dedicated touchdown
-  // sensor can replace these inputs without changing the control contract.
-  input Real leg_force_px = 0.0;
-  input Real leg_force_nx = 0.0;
-  input Real leg_force_pz = 0.0;
-  input Real leg_force_nz = 0.0;
+  // Each landing leg is its own rigid body joined to the hull by a prismatic
+  // suspension joint. The pad collider therefore reports its load through the
+  // leg body, not through the hull body. Touchdown is the aggregate of those
+  // four native Avian contact forces; it is not inferred from altitude.
+  input Real leg_force_px = 0.0 "Native contact load on the +X leg (N)";
+  input Real leg_force_nx = 0.0 "Native contact load on the -X leg (N)";
+  input Real leg_force_pz = 0.0 "Native contact load on the +Z leg (N)";
+  input Real leg_force_nz = 0.0 "Native contact load on the -Z leg (N)";
 
   input Real attitude_hold = 0.0
     "Enable local attitude stabilization";
@@ -88,6 +92,8 @@ model Lander
   Real command_torque_x;
   Real command_torque_y;
   Real command_torque_z;
+  Real desired_tilt_x;
+  Real desired_tilt_z;
   Real hold_torque_x;
   Real hold_torque_y;
   Real hold_torque_z;
@@ -99,20 +105,25 @@ model Lander
   Real hold_rate_z;
   Real total_leg_force;
 
-  LunCo.Logic.AboveThreshold touchdown_check;
+  // A smooth contact transition keeps the touchdown signal compatible with
+  // the fixed-step flight solver.  Contact force itself is already a native
+  // non-negative Avian magnitude, so no branch or event-producing clamp is
+  // needed at this boundary.
+  Real touchdown_error;
+  Real touchdown_width;
 
 equation
   // Keep scene-tunable values live for the runtime Modelica interface.
   der(live_authority) = (ang_authority - live_authority)
-    / max(minimum_time_constant_s, authority_filter_tau_s);
+    / noEvent(max(minimum_time_constant_s, authority_filter_tau_s));
   der(filter_throttle) = (external_throttle - filter_throttle)
-    / max(minimum_time_constant_s, spool_tau);
+    / noEvent(max(minimum_time_constant_s, spool_tau));
   der(filter_pitch) = (pitch - filter_pitch)
-    / max(minimum_time_constant_s, spool_tau);
+    / noEvent(max(minimum_time_constant_s, spool_tau));
   der(filter_roll) = (roll - filter_roll)
-    / max(minimum_time_constant_s, spool_tau);
+    / noEvent(max(minimum_time_constant_s, spool_tau));
   der(filter_yaw) = (yaw - filter_yaw)
-    / max(minimum_time_constant_s, spool_tau);
+    / noEvent(max(minimum_time_constant_s, spool_tau));
 
   // The possession flag selects the command source; it is not an attitude
   // authority gate. Guidance and pilot commands therefore use the same law.
@@ -125,11 +136,20 @@ equation
   cmd_yaw = piloted * filter_yaw
     + (1.0 - piloted) * guidance_yaw;
 
-  throttle = max(command_lower_bound,
-    min(command_upper_bound, cmd_throttle));
-  command_torque_x = cmd_pitch * inertia_xx * live_authority;
+  throttle = noEvent(max(command_lower_bound,
+    min(command_upper_bound, cmd_throttle)));
+  // Pitch and roll are ATTITUDE requests, not direct torques.  The old
+  // boundary multiplied the normalized guidance value by inertia and applied
+  // it as a constant torque while the upright hold loop applied a competing
+  // torque.  That is not a cascaded flight controller: it leaves the vehicle
+  // tilted while the main engine accelerates it sideways.  Convert the
+  // normalized request to a physical tilt target and let the measured
+  // attitude/rate loop below close the RCS torque loop.
+  desired_tilt_x = cmd_pitch * command_tilt_limit_rad;
+  desired_tilt_z = cmd_roll * command_tilt_limit_rad;
+  command_torque_x = 0.0;
   command_torque_y = cmd_yaw * inertia_yy * live_authority;
-  command_torque_z = cmd_roll * inertia_zz * live_authority;
+  command_torque_z = 0.0;
 
   // Stabilization is expressed entirely in the body frame. The attitude
   // sensor emits the signed local error; the IMU emits local gyro rates.
@@ -138,18 +158,20 @@ equation
   // after touchdown while preserving the signed error outside the dead zone.
   // `max` is intentional: the Modelica runtime reconstructs continuous
   // algebraic observables from branch-free expressions.
-  hold_error_x = attitude_error_x * max(0.0,
-    1.0 - attitude_deadband_rad / max(1.0e-9, abs(attitude_error_x)));
-  hold_error_y = attitude_error_y * max(0.0,
-    1.0 - attitude_deadband_rad / max(1.0e-9, abs(attitude_error_y)));
-  hold_error_z = attitude_error_z * max(0.0,
-    1.0 - attitude_deadband_rad / max(1.0e-9, abs(attitude_error_z)));
-  hold_rate_x = gyro_x * max(0.0,
-    1.0 - rate_deadband_rad_s / max(1.0e-9, abs(gyro_x)));
-  hold_rate_y = gyro_y * max(0.0,
-    1.0 - rate_deadband_rad_s / max(1.0e-9, abs(gyro_y)));
-  hold_rate_z = gyro_z * max(0.0,
-    1.0 - rate_deadband_rad_s / max(1.0e-9, abs(gyro_z)));
+  hold_error_x = (attitude_error_x + desired_tilt_x) * noEvent(max(0.0,
+    1.0 - attitude_deadband_rad
+      / noEvent(max(1.0e-9, abs(attitude_error_x + desired_tilt_x)))));
+  hold_error_y = attitude_error_y * noEvent(max(0.0,
+    1.0 - attitude_deadband_rad / noEvent(max(1.0e-9, abs(attitude_error_y)))));
+  hold_error_z = (attitude_error_z + desired_tilt_z) * noEvent(max(0.0,
+    1.0 - attitude_deadband_rad
+      / noEvent(max(1.0e-9, abs(attitude_error_z + desired_tilt_z)))));
+  hold_rate_x = gyro_x * noEvent(max(0.0,
+    1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_x)))));
+  hold_rate_y = gyro_y * noEvent(max(0.0,
+    1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_y)))));
+  hold_rate_z = gyro_z * noEvent(max(0.0,
+    1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
   hold_torque_x = attitude_hold * inertia_xx
     * (hold_kp * hold_error_x - hold_kd * hold_rate_x);
@@ -163,9 +185,10 @@ equation
   torque_z = command_torque_z + hold_torque_z;
 
   total_leg_force = leg_force_px + leg_force_nx + leg_force_pz + leg_force_nz;
-  touchdown_check.threshold = touchdown_force_threshold_n;
-  touchdown_check.transition_width = touchdown_transition_width_n;
-  touchdown_check.minimum_transition_width = minimum_time_constant_s;
-  touchdown_check.value = total_leg_force;
-  touchdown = touchdown_check.active;
+  touchdown_error = total_leg_force - touchdown_force_threshold_n;
+  touchdown_width = sqrt(
+    touchdown_transition_width_n * touchdown_transition_width_n + 1.0e-12);
+  touchdown = 0.5 + 0.5 * touchdown_error
+    / sqrt(touchdown_error * touchdown_error
+      + touchdown_width * touchdown_width);
 end Lander;

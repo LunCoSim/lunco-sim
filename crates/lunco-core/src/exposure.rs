@@ -101,7 +101,8 @@ impl ExposureWriter<'_> {
         }
     }
 
-    pub fn property(&mut self, name: &str, value: impl Into<ExposureValue>) {
+    pub fn property(&mut self, name: impl AsRef<str>, value: impl Into<ExposureValue>) {
+        let name = name.as_ref();
         let value = value.into();
         if self.surface.properties.get(name) != Some(&value) {
             self.surface.properties.insert(name.to_owned(), value);

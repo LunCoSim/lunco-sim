@@ -47,6 +47,8 @@ model LanderNavigation
 
   Real nav_pos_y_integrated(start = 0.0)
     "Vertical position propagated while the raw ray is invalid";
+  Real nav_vel_y_integrated(start = 0.0)
+    "Vertical velocity propagated while the raw ray is invalid";
   Real vertical_position_value "Conditioned vertical position";
   Real measured_altitude_value "Conditioned altitude telemetry";
   Real q_norm;
@@ -99,21 +101,23 @@ equation
   der(nav_pos_x) = nav_vel_x;
   der(nav_pos_z) = nav_vel_z;
   der(nav_vel_x) = navigation_accel_x;
-  // Propagate vertical velocity from the IMU and correct it with measured
-  // range-rate when the ray is valid. This is a continuous complementary
-  // estimator: it remains sensor-only while avoiding an algebraic switch in the
-  // PID feedback path.
+  // The valid range-rate is the direct vertical-velocity measurement. Use it
+  // for the control output whenever the altimeter has a real return, and keep
+  // the IMU-propagated state as the out-of-range estimate. This is a
+  // continuous complementary estimator: the flight computer never mistakes
+  // a transient IMU integration state for a measured descent rate while the
+  // ray is valid.
   range_confidence = max(0.0, min(1.0, altimeter_valid));
-  der(nav_vel_y) = navigation_accel_y
-    + range_confidence * vertical_velocity_correction_gain
-      * (altimeter_range_rate - nav_vel_y);
+  der(nav_vel_y_integrated) = navigation_accel_y;
+  nav_vel_y = range_confidence * altimeter_range_rate
+    + (1.0 - range_confidence) * nav_vel_y_integrated;
   // With a downward ray over the landing surface, range and world +Y have the
   // same sign: a climbing vehicle increases the measured distance, while a
   // descending vehicle decreases it. Do not negate this measurement or the
   // derivative term will brake in the wrong direction during descent.
   der(nav_vel_z) = navigation_accel_z;
 
-  der(nav_pos_y_integrated) = nav_vel_y;
+  der(nav_pos_y_integrated) = nav_vel_y_integrated;
   vertical_position_value = range_confidence
     * (altimeter_range + altimeter_mount_offset)
     + (1.0 - range_confidence) * nav_pos_y_integrated;
@@ -126,6 +130,6 @@ initial equation
   nav_pos_y_integrated = initial_pos_y;
   nav_pos_z = initial_pos_z;
   nav_vel_x = initial_vel_x;
-  nav_vel_y = initial_vel_y;
+  nav_vel_y_integrated = initial_vel_y;
   nav_vel_z = initial_vel_z;
 end LanderNavigation;

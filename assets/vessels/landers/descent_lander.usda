@@ -1050,14 +1050,13 @@ def Xform "DescentLander" (
             string unit = "rad/s"
         }
     )
-    # Touchdown is a flight-software contact measurement, not the spring drive's
-    # commanded reaction. The spring force remains available on each joint for
-    # strut-load visualization; the controller reads the actual pad/terrain
-    # contact force from the collider that carries the load.
-    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
+    # Each leg is an independent rigid body constrained by a prismatic joint.
+    # Its pad collider's native contact force is exposed on the leg body; sum
+    # those four physical loads in Lander.mo to derive touchdown.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
 
     # ── Propellant events ────────────────────────────────────────────────────
     # Conditions are equations in Lander.mo. These prims only bind the model's
@@ -2768,6 +2767,10 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegPX>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (-0.173648, 0, 0, 0.984808)
+        # The leg body is authored with its strut along local -Y.  This
+        # half-turn makes the joint's +Y slider axis coincide with that
+        # physical hull-to-pad direction while the prismatic constraint still
+        # locks all three rotational DOF.
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
@@ -2784,6 +2787,8 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegNX>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (0.173648, 0, 0, 0.984808)
+        # Same body-side half-turn as the +X leg; the sign of localRot0 carries
+        # the mirrored rake, not a different rotational freedom.
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0

@@ -1,0 +1,120 @@
+<template>
+  <property name="title">LUNICA / FLIGHT CONTROL</property>
+  <property name="scope">Select an authored schema root</property>
+  <property name="count">0 authored blocks</property>
+  <property name="note">Typed USD nodes and their authored connections</property>
+  <property name="slot_0_0_title">BLOCK</property>
+  <property name="slot_0_0_role">USD connections</property>
+  <property name="slot_0_0_visible">none</property>
+  <property name="slot_0_1_title">BLOCK</property>
+  <property name="slot_0_1_role">USD connections</property>
+  <property name="slot_0_1_visible">none</property>
+  <property name="slot_1_0_title">BLOCK</property>
+  <property name="slot_1_0_role">USD connections</property>
+  <property name="slot_1_0_visible">none</property>
+  <property name="slot_1_1_title">BLOCK</property>
+  <property name="slot_1_1_role">USD connections</property>
+  <property name="slot_1_1_visible">none</property>
+  <property name="slot_2_0_title">BLOCK</property>
+  <property name="slot_2_0_role">USD connections</property>
+  <property name="slot_2_0_visible">none</property>
+  <property name="slot_2_1_title">BLOCK</property>
+  <property name="slot_2_1_role">USD connections</property>
+  <property name="slot_2_1_visible">none</property>
+  <property name="slot_3_0_title">BLOCK</property>
+  <property name="slot_3_0_role">USD connections</property>
+  <property name="slot_3_0_visible">none</property>
+  <property name="slot_3_1_title">BLOCK</property>
+  <property name="slot_3_1_role">USD connections</property>
+  <property name="slot_3_1_visible">none</property>
+  <property name="wire_0">—</property>
+  <property name="wire_0_visible">none</property>
+  <property name="wire_1">—</property>
+  <property name="wire_1_visible">none</property>
+  <property name="wire_2">—</property>
+  <property name="wire_2_visible">none</property>
+  <property name="wire_3">—</property>
+  <property name="wire_3_visible">none</property>
+  <property name="wire_4">—</property>
+  <property name="wire_4_visible">none</property>
+  <property name="wire_5">—</property>
+  <property name="wire_5_visible">none</property>
+  <property name="wire_6">—</property>
+  <property name="wire_6_visible">none</property>
+  <property name="wire_7">—</property>
+  <property name="wire_7_visible">none</property>
+
+  <node id="lunica-schema-root">
+    <node id="lunica-schema-heading">
+      <node>
+        <text id="lunica-schema-title">{title}</text>
+        <text id="lunica-schema-scope">{scope} · {count}</text>
+      </node>
+      <text id="lunica-schema-note">{note}</text>
+    </node>
+
+    <node id="lunica-schema-grid">
+      <node id="schema-column-0">
+        <text id="schema-column-0-title">GUIDANCE</text>
+        <node id="schema-slot-0-0">
+          <text id="schema-slot-0-0-title">{slot_0_0_title}</text>
+          <text id="schema-slot-0-0-role">{slot_0_0_role}</text>
+        </node>
+        <node id="schema-slot-0-1">
+          <text id="schema-slot-0-1-title">{slot_0_1_title}</text>
+          <text id="schema-slot-0-1-role">{slot_0_1_role}</text>
+        </node>
+      </node>
+      <text id="schema-arrow-0">→</text>
+      <node id="schema-column-1">
+        <text id="schema-column-1-title">AIRFRAME</text>
+        <node id="schema-slot-1-0">
+          <text id="schema-slot-1-0-title">{slot_1_0_title}</text>
+          <text id="schema-slot-1-0-role">{slot_1_0_role}</text>
+        </node>
+        <node id="schema-slot-1-1">
+          <text id="schema-slot-1-1-title">{slot_1_1_title}</text>
+          <text id="schema-slot-1-1-role">{slot_1_1_role}</text>
+        </node>
+      </node>
+      <text id="schema-arrow-1">→</text>
+      <node id="schema-column-2">
+        <text id="schema-column-2-title">ACTUATION</text>
+        <node id="schema-slot-2-0">
+          <text id="schema-slot-2-0-title">{slot_2_0_title}</text>
+          <text id="schema-slot-2-0-role">{slot_2_0_role}</text>
+        </node>
+        <node id="schema-slot-2-1">
+          <text id="schema-slot-2-1-title">{slot_2_1_title}</text>
+          <text id="schema-slot-2-1-role">{slot_2_1_role}</text>
+        </node>
+      </node>
+      <text id="schema-arrow-2">→</text>
+      <node id="schema-column-3">
+        <text id="schema-column-3-title">THRUST</text>
+        <node id="schema-slot-3-0">
+          <text id="schema-slot-3-0-title">{slot_3_0_title}</text>
+          <text id="schema-slot-3-0-role">{slot_3_0_role}</text>
+        </node>
+        <node id="schema-slot-3-1">
+          <text id="schema-slot-3-1-title">{slot_3_1_title}</text>
+          <text id="schema-slot-3-1-role">{slot_3_1_role}</text>
+        </node>
+      </node>
+    </node>
+
+    <node id="lunica-schema-flow">
+      <text id="lunica-schema-flow-title">LIVE SIGNAL FLOW</text>
+      <node id="lunica-schema-flow-lines">
+        <text id="schema-wire-0">{wire_0}</text>
+        <text id="schema-wire-1">{wire_1}</text>
+        <text id="schema-wire-2">{wire_2}</text>
+        <text id="schema-wire-3">{wire_3}</text>
+        <text id="schema-wire-4">{wire_4}</text>
+        <text id="schema-wire-5">{wire_5}</text>
+        <text id="schema-wire-6">{wire_6}</text>
+        <text id="schema-wire-7">{wire_7}</text>
+      </node>
+    </node>
+  </node>
+</template>
