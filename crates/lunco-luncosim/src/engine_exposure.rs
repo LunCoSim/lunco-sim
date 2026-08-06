@@ -11,15 +11,15 @@
 //! bounded exposure cadence. Static or paused scenes do not repeat the expensive
 //! resolution work.
 
-use avian3d::prelude::{ComputedCenterOfMass, LinearVelocity};
+use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Rotation};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
-use lunco_celestial::link::LinkState;
 use lunco_celestial::OrbitalViewPin;
+use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
-use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
+use lunco_core::exposure::{EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureWriter};
 use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
 use lunco_cosim::{CosimOutputMetadata, SimComponent};
 use lunco_mobility::WheelRaycast;
@@ -694,6 +694,8 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     exposures: ResMut<'w, EngineExposures>,
     selected: Res<'w, SelectedEntities>,
     bodies: Query<'w, 's, &'static CelestialBody>,
+    angular_velocity: Query<'w, 's, &'static AngularVelocity>,
+    rotation: Query<'w, 's, &'static Rotation>,
     orbital_pin: Option<Res<'w, OrbitalViewPin>>,
 }
 
@@ -749,6 +751,9 @@ pub(crate) fn publish_exposure(
             &q_name,
             &q_sim,
             &q_parents,
+            &q_vel,
+            &runtime.angular_velocity,
+            &runtime.rotation,
         );
         publish_celestial_capability(
             &mut runtime.exposures,
@@ -772,6 +777,9 @@ pub(crate) fn publish_exposure(
         &q_name,
         &q_sim,
         &q_parents,
+        &q_vel,
+        &runtime.angular_velocity,
+        &runtime.rotation,
     );
     publish_celestial_capability(
         &mut runtime.exposures,
@@ -825,18 +833,32 @@ fn publish_selected_control_exposure(
     q_name: &Query<&Name>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
+    q_vel: &Query<&LinearVelocity>,
+    q_angvel: &Query<&AngularVelocity>,
+    q_rotation: &Query<&Rotation>,
 ) {
     let mut ui = exposures.writer("lander-control");
     ui.visible(false);
     ui.property("vehicle", "No simulation selected");
     ui.property("status", "WAITING");
     ui.property("status_color", "var(--muted-color)");
+    ui.property("ground_speed", "—");
+    ui.property("lateral_speed", "—");
+    ui.property("vertical_speed", "—");
+    ui.property("altitude", "—");
+    ui.property("propellant", "—");
+    ui.property("propellant_width", "0%");
+    ui.property("roll", "—");
+    ui.property("pitch", "—");
+    ui.property("yaw", "—");
+    ui.property("spin", "—");
     ui.property("rcs_activity", "0%");
     ui.property("rcs_activity_width", "0%");
+    ui.property("rcs_axis", "OFF");
     ui.property("torque_x", "—");
     ui.property("torque_y", "—");
     ui.property("torque_z", "—");
-    ui.property("throttle", "—");
+    ui.property("main_engine", "—");
 
     let Some(root) = selected.primary() else {
         return;
@@ -868,6 +890,8 @@ fn publish_selected_control_exposure(
         || outputs.contains_key("torque_y")
         || outputs.contains_key("torque_z")
         || outputs.contains_key("throttle")
+        || outputs.contains_key("engine_activity")
+        || outputs.contains_key("propellant_mass")
         || max_valve > 0.0;
     if !has_control_outputs {
         return;
@@ -883,20 +907,102 @@ fn publish_selected_control_exposure(
                 .to_owned()
         })
         .unwrap_or_else(|_| "selected".to_owned());
+    let main_activity = output_alias(&outputs, &["engine_activity", "activity", "throttle"])
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
     let status = if touchdown >= 0.5 {
         ("TOUCHDOWN", "var(--ok-color)")
     } else if max_valve > 0.01 {
         ("RCS FIRING", "var(--accent-color)")
+    } else if main_activity > 0.01 {
+        ("ENGINE FIRING", "var(--active-text-color)")
     } else {
         ("ATTITUDE HOLD", "var(--ok-color)")
     };
+
+    let motion = q_vel.get(root).ok().map(|velocity| {
+        let v = velocity.0;
+        let ground_speed = v.x.hypot(v.z);
+        (ground_speed, v.x, v.y)
+    });
+    let attitude = q_rotation.get(root).ok().map(|rotation| {
+        let (yaw, pitch, roll) = rotation.0.to_euler(EulerRot::YXZ);
+        (roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees())
+    });
+    let spin = q_angvel.get(root).ok().map(|angular| angular.0.length());
+    let altitude = output_alias(&outputs, &["range_m", "altitude_m", "altitude"]);
+    let propellant_mass = output_alias(&outputs, &["propellant_mass", "propellant_mass_kg"]);
+    let propellant_fraction =
+        output_alias(&outputs, &["propellant_fraction"]).map(|value| value.clamp(0.0, 1.0));
 
     ui.visible(true);
     ui.property("vehicle", vehicle);
     ui.property("status", status.0);
     ui.property("status_color", status.1);
-    ui.property("rcs_activity", format!("{:.0}%", max_valve * 100.0));
-    ui.property("rcs_activity_width", format!("{:.1}%", max_valve * 100.0));
+    ui.property(
+        "ground_speed",
+        motion.map_or_else(|| "—".to_owned(), |(speed, _, _)| format!("{speed:.2} m/s")),
+    );
+    ui.property(
+        "lateral_speed",
+        motion.map_or_else(
+            || "—".to_owned(),
+            |(_, speed, _)| format!("{speed:+.2} m/s"),
+        ),
+    );
+    ui.property(
+        "vertical_speed",
+        motion.map_or_else(
+            || "—".to_owned(),
+            |(_, _, speed)| {
+                if speed < -0.01 {
+                    format!("DOWN {:.2} m/s", -speed)
+                } else if speed > 0.01 {
+                    format!("UP {speed:.2} m/s")
+                } else {
+                    "HOLD 0.00 m/s".to_owned()
+                }
+            },
+        ),
+    );
+    ui.property(
+        "altitude",
+        altitude.map_or_else(|| "—".to_owned(), |value| format!("{value:.1} m")),
+    );
+    ui.property(
+        "propellant",
+        match (propellant_fraction, propellant_mass) {
+            (Some(fraction), Some(mass)) => format!("{:.0}% · {:.0} kg", fraction * 100.0, mass),
+            (Some(fraction), None) => format!("{:.0}%", fraction * 100.0),
+            (None, Some(mass)) => format!("{mass:.0} kg"),
+            (None, None) => "—".to_owned(),
+        },
+    );
+    ui.property(
+        "propellant_width",
+        propellant_fraction
+            .map_or_else(|| "0%".to_owned(), |value| format!("{:.1}%", value * 100.0)),
+    );
+    ui.property(
+        "roll",
+        attitude.map_or_else(|| "—".to_owned(), |(roll, _, _)| format!("{roll:+.0}°")),
+    );
+    ui.property(
+        "pitch",
+        attitude.map_or_else(|| "—".to_owned(), |(_, pitch, _)| format!("{pitch:+.0}°")),
+    );
+    ui.property(
+        "yaw",
+        attitude.map_or_else(|| "—".to_owned(), |(_, _, yaw)| format!("{yaw:+.0}°")),
+    );
+    ui.property(
+        "spin",
+        spin.map_or_else(|| "—".to_owned(), |value| format!("{value:.2} rad/s")),
+    );
+    ui.property("rcs_activity", format!("{:.0}%", rcs_peak * 100.0));
+    ui.property("rcs_activity_width", format!("{:.1}%", rcs_peak * 100.0));
+    ui.property("rcs_axis", rcs_axis);
     ui.property(
         "torque_x",
         outputs
@@ -916,11 +1022,66 @@ fn publish_selected_control_exposure(
             .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
     );
     ui.property(
-        "throttle",
-        outputs
-            .get("throttle")
-            .map_or_else(|| "—".to_owned(), |value| format!("{:.0}%", value * 100.0)),
+        "main_engine",
+        if main_activity > 0.01 {
+            format!("FIRING {:.0}%", main_activity * 100.0)
+        } else {
+            "OFF".to_owned()
+        },
     );
+}
+
+fn output_alias(outputs: &std::collections::HashMap<String, f64>, aliases: &[&str]) -> Option<f64> {
+    aliases
+        .iter()
+        .find_map(|alias| outputs.get(*alias).copied())
+}
+
+/// RCS valve names are the authored actuator contract of AttitudeActuation:
+/// `pitch_pos_a_valve`, `roll_neg_b_valve`, and so on. This is classification
+/// of public model outputs, not a vehicle-path or film-specific heuristic.
+fn rcs_axis_label(outputs: &std::collections::HashMap<String, f64>) -> (String, f64) {
+    let mut axes = [("PITCH", 0.0_f64, ""), ("ROLL", 0.0, ""), ("YAW", 0.0, "")];
+    for (name, value) in outputs {
+        if !name.ends_with("_valve") {
+            continue;
+        }
+        let axis = if name.starts_with("pitch_") {
+            Some(0)
+        } else if name.starts_with("roll_") {
+            Some(1)
+        } else if name.starts_with("yaw_") {
+            Some(2)
+        } else {
+            None
+        };
+        let Some(axis) = axis else { continue };
+        let opening = value.clamp(0.0, 1.0);
+        if opening <= axes[axis].1 {
+            continue;
+        }
+        let direction = if name.contains("_pos_") {
+            "+"
+        } else if name.contains("_neg_") {
+            "-"
+        } else {
+            ""
+        };
+        axes[axis].1 = opening;
+        axes[axis].2 = direction;
+    }
+
+    let peak = axes.iter().map(|(_, value, _)| *value).fold(0.0, f64::max);
+    let active = axes
+        .iter()
+        .filter(|(_, value, _)| *value > 0.01)
+        .map(|(axis, _, direction)| format!("{axis} {direction}"))
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        ("OFF".to_owned(), peak)
+    } else {
+        (active.join(" · "), peak)
+    }
 }
 
 fn publish_runtime_overlay_exposures(

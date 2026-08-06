@@ -1,27 +1,29 @@
 @import "ui/runtime_fonts.css";
 
 :root {
-  --panel-background: rgba(20, 23, 38, 0.94);
+  --panel-background: rgba(15, 20, 34, 0.95);
   --panel-border: rgba(166, 173, 200, 0.42);
-  --text-color: rgba(205, 214, 244, 1);
+  --text-color: rgba(220, 226, 247, 1);
   --muted-color: rgba(166, 173, 200, 1);
   --accent-color: rgba(127, 212, 255, 1);
   --active-text-color: rgba(166, 227, 161, 1);
+  --warm-color: rgba(255, 185, 105, 1);
   --ui-status-color: var(--accent-color);
   --ui-rcs-activity-width: 0%;
+  --ui-propellant-width: 0%;
 }
 
 #control-response-root {
   display: flex;
   flex-direction: column;
-  row-gap: 13px;
+  row-gap: 11px;
   width: 100%;
   height: 100%;
-  padding: 18px 20px;
+  padding: 17px 19px;
   box-sizing: border-box;
   border-width: 1px;
   border-color: var(--panel-border);
-  border-radius: 9px;
+  border-radius: 10px;
   background-color: var(--panel-background);
   color: var(--text-color);
   font-family: "LunCo UI";
@@ -32,19 +34,25 @@
   align-items: flex-start;
   justify-content: space-between;
   column-gap: 18px;
-  padding-bottom: 10px;
+  padding-bottom: 9px;
   border-bottom-width: 1px;
   border-bottom-color: rgba(166, 173, 200, 0.25);
 }
 
 #control-response-kicker,
+#control-response-flight-title,
+#control-response-fuel-label,
+#control-response-attitude-title,
+#control-response-actuation-title,
+#control-response-actuation-rcs-label,
+#control-response-main-engine-label,
 #control-response-footer,
-#control-response-torque-x-label,
-#control-response-torque-y-label,
-#control-response-torque-z-label,
-#control-response-throttle-label {
+#control-response-ground-speed-label,
+#control-response-lateral-speed-label,
+#control-response-vertical-speed-label,
+#control-response-altitude-label {
   color: var(--muted-color);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -52,83 +60,234 @@
 #control-response-vehicle {
   padding-top: 3px;
   color: var(--active-text-color);
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 700;
 }
 
 #control-response-status {
   color: var(--ui-status-color);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 #control-response-explanation {
   color: var(--text-color);
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
-#control-response-activity {
+#control-response-flight {
   display: flex;
   flex-direction: column;
-  row-gap: 6px;
+  row-gap: 8px;
+  padding: 10px 11px;
+  border-width: 1px;
+  border-color: rgba(127, 212, 255, 0.22);
+  border-radius: 6px;
+  background-color: rgba(127, 212, 255, 0.055);
 }
 
-#control-response-activity-heading {
+#control-response-flight-speed,
+#control-response-fuel,
+#control-response-attitude,
+#control-response-actuation {
   display: flex;
-  justify-content: space-between;
-  color: var(--muted-color);
-  font-size: 10px;
+  flex-direction: column;
+  row-gap: 7px;
+}
+
+#control-response-flight-readouts {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 8px;
+  column-gap: 8px;
+}
+
+#control-response-ground-speed,
+#control-response-lateral-speed,
+#control-response-vertical-speed,
+#control-response-altitude {
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
+  width: 48%;
+}
+
+#control-response-ground-speed-value,
+#control-response-lateral-speed-value,
+#control-response-vertical-speed-value,
+#control-response-altitude-value {
+  color: var(--active-text-color);
+  font-size: 14px;
   font-weight: 700;
 }
 
-#control-response-activity-value {
+#control-response-lateral-speed-value {
   color: var(--accent-color);
-  font-size: 14px;
 }
 
+#control-response-vertical-speed-value {
+  color: var(--warm-color);
+}
+
+#control-response-fuel-heading,
+#control-response-actuation-rcs-heading {
+  display: flex;
+  justify-content: space-between;
+  column-gap: 12px;
+}
+
+#control-response-fuel-value,
+#control-response-activity-value {
+  color: var(--active-text-color);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#control-response-fuel-track,
 #control-response-activity-track {
   width: 100%;
-  height: 8px;
+  height: 6px;
   overflow: clip;
-  border-radius: 4px;
+  border-radius: 3px;
   background-color: rgba(166, 173, 200, 0.25);
+}
+
+#control-response-fuel-fill,
+#control-response-activity-fill {
+  height: 6px;
+  border-radius: 3px;
+}
+
+#control-response-fuel-fill {
+  width: var(--ui-propellant-width);
+  background-color: var(--active-text-color);
 }
 
 #control-response-activity-fill {
   width: var(--ui-rcs-activity-width);
-  height: 8px;
-  border-radius: 4px;
   background-color: var(--accent-color);
 }
 
-#control-response-grid {
+#control-response-lower {
   display: flex;
-  flex-wrap: wrap;
-  row-gap: 12px;
-  column-gap: 8px;
+  column-gap: 14px;
+  flex-grow: 1;
+  min-height: 0px;
+}
+
+#control-response-attitude,
+#control-response-actuation {
+  width: 48%;
+  min-width: 0px;
+}
+
+#control-response-attitude-body {
+  display: flex;
+  align-items: center;
+  column-gap: 10px;
+}
+
+#control-response-attitude-ball {
+  position: relative;
+  width: 74px;
+  height: 74px;
+  flex-shrink: 0;
+  border-width: 1px;
+  border-color: rgba(127, 212, 255, 0.75);
+  border-radius: 50%;
+  background-color: rgba(127, 212, 255, 0.07);
+}
+
+#control-response-attitude-ball-horizon {
+  position: absolute;
+  left: 8px;
+  top: 36px;
+  width: 56px;
+  height: 1px;
+  background-color: rgba(166, 227, 161, 0.75);
+}
+
+#control-response-attitude-ball-crosshair {
+  position: absolute;
+  left: 36px;
+  top: 8px;
+  width: 1px;
+  height: 56px;
+  background-color: rgba(166, 227, 161, 0.65);
+}
+
+#control-response-attitude-ball-mark {
+  position: absolute;
+  left: 28px;
+  top: 30px;
+  color: var(--text-color);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+#control-response-attitude-values {
+  display: flex;
+  flex-direction: column;
+  row-gap: 4px;
+  min-width: 0px;
+}
+
+#control-response-attitude-roll,
+#control-response-attitude-pitch,
+#control-response-attitude-yaw,
+#control-response-attitude-spin {
+  color: var(--text-color);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#control-response-attitude-spin {
+  color: var(--muted-color);
+  font-size: 9px;
+}
+
+#control-response-actuation {
+  padding-left: 12px;
+  border-left-width: 1px;
+  border-left-color: rgba(166, 173, 200, 0.25);
+}
+
+#control-response-rcs-axis {
+  min-height: 18px;
+  color: var(--accent-color);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#control-response-torque-grid {
+  display: flex;
+  flex-direction: column;
+  row-gap: 3px;
+  padding-top: 4px;
 }
 
 #control-response-torque-x,
 #control-response-torque-y,
-#control-response-torque-z,
-#control-response-throttle {
+#control-response-torque-z {
+  color: var(--muted-color);
+  font-size: 9px;
+}
+
+#control-response-main-engine {
   display: flex;
   flex-direction: column;
   row-gap: 3px;
-  width: 48%;
+  padding-top: 10px;
 }
 
-#control-response-torque-x-value,
-#control-response-torque-y-value,
-#control-response-torque-z-value,
-#control-response-throttle-value {
-  color: var(--active-text-color);
+#control-response-main-engine-value {
+  color: var(--warm-color);
   font-size: 15px;
   font-weight: 700;
 }
 
 #control-response-footer {
-  padding-top: 3px;
-  font-size: 9px;
+  padding-top: 2px;
+  font-size: 8px;
 }

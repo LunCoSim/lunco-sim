@@ -60,9 +60,9 @@ use lunco_usd_bevy::UsdRead;
 pub use bevy::app::AppExit;
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
+use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
-use lunco_cosim::CoSimPlugin;
 use lunco_environment::EnvironmentPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
@@ -174,11 +174,9 @@ fn parse_record_preset(
     while index < args.len() {
         let value = if args[index] == "--record-preset" {
             index += 1;
-            args.get(index)
-                .map(String::as_str)
-                .ok_or_else(|| {
-                    "`--record-preset` needs ultrafast, veryfast, or medium".to_string()
-                })?
+            args.get(index).map(String::as_str).ok_or_else(|| {
+                "`--record-preset` needs ultrafast, veryfast, or medium".to_string()
+            })?
         } else if let Some(value) = args[index].strip_prefix("--record-preset=") {
             value
         } else {
@@ -255,11 +253,10 @@ mod render_profile_tests {
 
     #[test]
     fn rejects_an_unknown_render_profile() {
-        assert!(parse_render_profile(&[
-            "luncosim".to_string(),
-            "--render-profile=turbo".to_string()
-        ])
-        .is_err());
+        assert!(
+            parse_render_profile(&["luncosim".to_string(), "--render-profile=turbo".to_string()])
+                .is_err()
+        );
     }
 }
 
@@ -440,7 +437,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     // below; a Bevy system drains it into the confirm prompt. Headless skips it.
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     let deeplink_inbox = if !headless && !offscreen {
-        use lunco_networking::single_instance::{acquire, LaunchOutcome};
+        use lunco_networking::single_instance::{LaunchOutcome, acquire};
         url_scheme::register_best_effort();
         match acquire() {
             // This process is just a courier — it forwarded the link to the
@@ -3520,6 +3517,12 @@ impl Plugin for SandboxOffscreenPlugin {
         app.add_plugins(lunco_theme::ThemePlugin);
         app.add_plugins(lunco_workbench::theme_command::ThemeCommandPlugin);
         lunco_workbench::input_overlay::register_input_overlay_commands(app);
+
+        // The recorder has no OS window and therefore no egui host. It still
+        // renders Bevy UI into the same image as the authored scene camera;
+        // install the shared HUI/Flair exposure layer so film HUDs are
+        // captured as pixels rather than remaining editor-only overlays.
+        crate::ui::add_runtime_ui_layer(app);
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).

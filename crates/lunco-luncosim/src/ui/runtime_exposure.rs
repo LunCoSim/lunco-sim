@@ -5,15 +5,16 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, PrimaryEguiContext};
+use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, TemplateProperties, UiId,
 };
 use lunco_core::exposure::EngineExposures;
+use lunco_render::SceneCamera;
 use lunco_workbench::{PanelId, PanelRects, ScenePickGate};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -536,16 +537,23 @@ fn runtime_ui_is_allowed(
     perspective_visible && gate_visible
 }
 
-/// Keep retained HTML surfaces on the same window-targeting camera as egui.
+/// Keep retained HTML surfaces on the presentation camera.
+///
+/// Windowed runs have a `PrimaryEguiContext` camera. Windowless recording does
+/// not create a window or egui host, so the same authored surface is bound to
+/// the active authored `SceneCamera` instead. This is what makes a runtime HUD
+/// part of the captured render target rather than editor chrome.
 pub(crate) fn bind_runtime_ui_to_camera(
     mut commands: Commands,
-    cameras: Query<Entity, With<PrimaryEguiContext>>,
-    roots: Query<
-        (Entity, Option<&UiTargetCamera>),
-        (With<RuntimeUiSurface>, Added<RuntimeUiSurface>),
-    >,
+    cameras: Query<(Entity, &Camera, Has<PrimaryEguiContext>, Has<SceneCamera>)>,
+    roots: Query<(Entity, Option<&UiTargetCamera>), With<RuntimeUiSurface>>,
 ) {
-    let Some(camera) = cameras.iter().next() else {
+    let camera = cameras
+        .iter()
+        .find(|(_, _, is_egui, _)| *is_egui)
+        .or_else(|| cameras.iter().find(|(_, _, _, is_scene)| *is_scene))
+        .map(|(entity, _, _, _)| entity);
+    let Some(camera) = camera else {
         return;
     };
 
