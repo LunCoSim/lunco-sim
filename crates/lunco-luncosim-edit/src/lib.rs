@@ -146,10 +146,8 @@ impl Plugin for SandboxEditPlugin {
         selection::register_all_commands(app);
         app.add_systems(Update, selection::draw_selection_bounds);
 
-        // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):
-        // 1. capture_gizmo_start - makes body kinematic when drag starts
-        // 2. sync_gizmo_transforms - syncs Position + GlobalTransform from Transform
-        // 3. restore_gizmo_dynamic - restores dynamic when drag ends
+        // Capture and restore are lifecycle edges. The pose itself is driven in
+        // InteractionSchedule below, which continues to run while physics is held.
         //
         // NOTE: TransformGizmoPlugin is added before this plugin, so its update_gizmos
         // system runs first in the Last schedule (systems run in registration order).
@@ -157,21 +155,20 @@ impl Plugin for SandboxEditPlugin {
             Last,
             (
                 gizmo::capture_gizmo_start,
-                gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
-                gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
+                gizmo::restore_gizmo_dynamic.after(gizmo::capture_gizmo_start),
             ),
         );
         app.add_systems(
-            PostUpdate,
-            gizmo::restore_dragged_transform
-                // The avatar and controller write their authoritative pose in
-                // InteractionSchedule.  Restore the drag anchor only after that
-                // cadence and after Avian writeback, so the editor cannot race
-                // either pose authority (and still works while virtual time is
-                // paused).
-                .after(lunco_time::InteractionStepSet)
-                .after(avian3d::schedule::PhysicsSystems::Writeback)
-                .before(bevy::transform::TransformSystems::Propagate),
+            lunco_time::InteractionSchedule,
+            (
+                gizmo::apply_gizmo_proxy_drag.after(lunco_time::InteractionRestoreSet),
+                gizmo::drive_gizmo_kinematic_pose
+                    .after(gizmo::apply_gizmo_proxy_drag)
+                    .before(lunco_time::InteractionRecordSet),
+                lunco_physics::apply_kinematic_drives
+                    .after(gizmo::drive_gizmo_kinematic_pose)
+                    .before(lunco_time::InteractionRecordSet),
+            ),
         );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
         // The gizmo crate reads a target's pose from `Transform` but its camera
@@ -187,26 +184,6 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(
             PostUpdate,
             gizmo::sync_gizmo_proxies.after(bevy::transform::TransformSystems::Propagate),
-        );
-        // Must land AFTER `restore_dragged_transform` and BEFORE propagation.
-        // `restore_dragged_transform` clamps `Transform` back to `prev.local_pos`
-        // every frame to cancel Avian's writeback; applying the drag before that
-        // (e.g. in `First`) gets silently erased, and `sync_gizmo_transforms`
-        // then never advances `prev` — the gizmo draws and picks up the drag, but
-        // the object never moves. The crate used to get this for free by writing
-        // `Transform` in `Last`, after the clamp.
-        app.add_systems(
-            PostUpdate,
-            gizmo::apply_gizmo_proxy_drag
-                // Apply the render-frame delta in the same PostUpdate cycle in
-                // which the avatar's InteractionSchedule has advanced.  The
-                // actual write must remain here: it is after Avian writeback
-                // and before transform propagation, which is the only ordering
-                // that prevents physics from erasing the edit or feeding it
-                // back through the proxy.
-                .after(lunco_time::InteractionStepSet)
-                .after(gizmo::restore_dragged_transform)
-                .before(bevy::transform::TransformSystems::Propagate),
         );
         app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
         // Publish the drag state as the core `GizmoDragging` marker so transform-

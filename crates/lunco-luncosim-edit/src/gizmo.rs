@@ -14,7 +14,8 @@
 use std::collections::HashSet;
 
 use avian3d::prelude::{
-    LinearVelocity, RigidBody, RotationInterpolation, TranslationInterpolation,
+    AngularVelocity, CustomPositionIntegration, LinearVelocity, RigidBody, RotationInterpolation,
+    TranslationInterpolation,
 };
 use bevy::camera::RenderTarget;
 use bevy::math::DVec3;
@@ -37,28 +38,9 @@ pub struct GizmoDragSession {
     origin_frozen: bool,
 }
 
-/// Tracks the previous parent-local position and metadata for drag lifecycle.
+/// Captures the pre-drag body state for drag lifecycle restoration.
 #[derive(Component)]
-pub struct GizmoPrevPos {
-    /// Parent-local position in the previous frame (meters).
-    pub local_pos: DVec3,
-    /// Parent-local rotation at the previous authoritative step.
-    ///
-    /// Avian writeback can restore the old orientation while virtual time is
-    /// paused. Keeping the rotation anchor beside the translation anchor makes
-    /// rotate and translate obey the same drag contract.
-    pub local_rotation: Quat,
-    /// Grid-ABSOLUTE position in the previous frame (meters).
-    ///
-    /// The drag velocity MUST be differenced from this, never from `local_pos`:
-    /// `Transform.translation` is the CELL REMAINDER, and big_space re-splits a
-    /// grid-direct entity's cell whenever it crosses a boundary. Freezing
-    /// `FloatingOrigin` stops the CAMERA from shifting the world; it does not stop
-    /// the dragged entity's own re-binning. So the remainder jumps a full
-    /// `cell_edge` (2 km) in one frame while the object barely moved, and Δ/dt
-    /// handed the solver ~1.2e5 m/s — which blew up every joint-coupled body into
-    /// NaN and surfaced as an `origin.is_finite()` panic inside avian's raycast.
-    pub abs_pos: DVec3,
+pub struct GizmoDragState {
     /// Original RigidBody type before drag started, or `None` if the entity had
     /// no `RigidBody` at all. `None` must stay `None` on restore: inserting a
     /// `Dynamic` body onto a prim that never had one gives avian a body with no
@@ -66,6 +48,10 @@ pub struct GizmoPrevPos {
     /// cause NaN values.") and hands the solver a NaN source that outlives the
     /// drag.
     pub original_body: Option<RigidBody>,
+    /// A drive that existed before this gizmo session, if any.
+    pub original_drive: Option<lunco_physics::KinematicDrive>,
+    /// Whether custom Avian position integration existed before capture.
+    pub had_custom_position_integration: bool,
     /// Whether the entity had TranslationInterpolation.
     pub had_translation_interpolation: bool,
     /// Whether the entity had RotationInterpolation.
@@ -194,11 +180,10 @@ pub fn sync_gizmo_proxies(
 /// mistake that produces unbounded cell-drift when a driver writes a render-frame
 /// value into a cell-local field and big_space re-bins it every frame.
 ///
-/// Runs in `PostUpdate`, after the interaction cadence and Avian writeback but
-/// before transform propagation.  The gizmo crate updates its proxy in `Last`,
-/// so this consumes that completed render-frame edit on the next authoritative
-/// cycle without making the real entity compete with the gizmo crate for its
-/// `Transform`.
+/// Runs in [`lunco_time::InteractionSchedule`]. The gizmo crate updates its
+/// proxy in `Last`, so this consumes that completed render-frame edit on the
+/// next authoritative cycle without making the real entity compete with the
+/// gizmo crate for its `Transform`.
 pub fn apply_gizmo_proxy_drag(
     mut q_proxies: Query<(&Transform, &mut GizmoProxy, &GizmoTarget)>,
     mut q_targets: Query<&mut Transform, Without<GizmoProxy>>,
@@ -219,6 +204,44 @@ pub fn apply_gizmo_proxy_drag(
         }
         link.last_translation = tf.translation;
         link.last_rotation = tf.rotation;
+    }
+}
+
+/// Converts the edited floating-origin pose into the Avian global pose held by
+/// the drag drive.
+///
+/// This is intentionally part of the unpaused interaction schedule. A gizmo
+/// edit is an interface operation, not a physics integration step; it must
+/// continue to update the physics pose while `Time<Physics>` is held.
+pub fn drive_gizmo_kinematic_pose(
+    gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
+    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform), Without<GizmoProxy>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&big_space::prelude::Grid>,
+    mut q_drives: Query<
+        &mut lunco_physics::KinematicDrive,
+        (With<GizmoDragState>, Without<GizmoProxy>),
+    >,
+) {
+    for (link, gizmo_target) in &gizmo_targets {
+        if !gizmo_target.is_active() {
+            continue;
+        }
+        let entity = link.target;
+        let Ok((cell, tf)) = q_spatial.get(entity) else {
+            continue;
+        };
+        let (position, rotation) = lunco_core::coords::world_pose_seeded(
+            entity,
+            &cell.copied().unwrap_or_default(),
+            tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        );
+        if let Ok(mut drive) = q_drives.get_mut(entity) {
+            drive.set_pose(position.0, rotation.0);
+        }
     }
 }
 
@@ -256,8 +279,11 @@ pub fn sync_gizmo_dragging_marker(
 pub fn capture_gizmo_start(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     q_rigid_bodies: Query<&RigidBody>,
+    q_kinematic_state: Query<(
+        Has<CustomPositionIntegration>,
+        Option<&lunco_physics::KinematicDrive>,
+    )>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    // The cell chain, for the grid-absolute drag anchor (`GizmoPrevPos::abs_pos`).
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
@@ -272,7 +298,7 @@ pub fn capture_gizmo_start(
         if !gizmo_target.is_active() {
             continue;
         }
-        // `GizmoPrevPos` is inserted through deferred commands. The session is
+        // `GizmoDragState` is inserted through deferred commands. The session is
         // the synchronous guard; without it, every Last pass before the insert
         // flushes captures and freezes FloatingOrigin again.
         if session.targets.contains(&entity) {
@@ -290,35 +316,47 @@ pub fn capture_gizmo_start(
         }
 
         let original_body = q_rigid_bodies.get(entity).copied().ok();
+        let (had_custom_position_integration, original_drive) = q_kinematic_state
+            .get(entity)
+            .map_or((false, None), |(had_custom, drive)| {
+                (had_custom, drive.copied())
+            });
 
-        // Resolve initial parent-local position, and the absolute pose the drag
-        // velocity is differenced from (see `GizmoPrevPos::abs_pos`).
-        let Ok((_, tf)) = q_spatial.get(entity) else {
+        // Resolve the initial global pose for the drive. `Transform` is the
+        // cell-local render remainder; the drive speaks Avian's global frame.
+        let Ok((cell, tf)) = q_spatial.get(entity) else {
             continue;
         };
         captured_any = true;
         session.targets.insert(entity);
-        let local_pos = tf.translation.as_dvec3();
-        let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
-            .map(|p| p.0)
-            .unwrap_or(local_pos);
+        let (position, rotation) = lunco_core::coords::world_pose_seeded(
+            entity,
+            &cell.copied().unwrap_or_default(),
+            tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        );
 
         info!(
-            "GIZMO: drag started for {:?}, local_pos={:?}",
-            entity, local_pos
+            "GIZMO: drag started for {:?}, global_pos={:?}",
+            entity, position.0
         );
 
         commands
             .entity(entity)
             .try_insert(RigidBody::Kinematic)
-            .try_insert(GizmoPrevPos {
-                local_pos,
-                local_rotation: tf.rotation,
-                abs_pos,
-                original_body,
-                had_translation_interpolation: had_translation,
-                had_rotation_interpolation: had_rotation,
-            });
+            .try_insert((
+                CustomPositionIntegration,
+                lunco_physics::KinematicDrive::new(position.0, rotation.0),
+                GizmoDragState {
+                    original_body,
+                    original_drive,
+                    had_custom_position_integration,
+                    had_translation_interpolation: had_translation,
+                    had_rotation_interpolation: had_rotation,
+                },
+            ));
     }
 
     if captured_any && !session.origin_frozen {
@@ -339,98 +377,6 @@ pub fn capture_gizmo_start(
             commands.entity(cam_ent).try_remove::<FloatingOrigin>();
             info!("GIZMO: freezing FloatingOrigin on camera {:?}", cam_ent);
         }
-    }
-}
-
-/// Syncs Avian `Position` and computes velocity from local coordinates.
-pub fn sync_gizmo_transforms(
-    gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    mut q_lin_vel: Query<&mut LinearVelocity>,
-    mut q_prev_pos: Query<&mut GizmoPrevPos>,
-    time: Res<Time>,
-) {
-    for (link, gizmo_target) in gizmo_targets.iter() {
-        let entity = link.target;
-        if !gizmo_target.is_active() {
-            continue;
-        }
-
-        let Ok((_, tf)) = q_spatial.get(entity) else {
-            continue;
-        };
-        let local_pos = tf.translation.as_dvec3();
-
-        // NO `Position`/`Rotation` write. Those are the BigSpace ROOT frame;
-        // `tf.translation` is the cell REMAINDER. Writing one into the other was
-        // right only in the origin cell and dropped `cell × edge` (2 km) anywhere
-        // else — the bridge's writeback then fed that short Position back into
-        // `Transform` (the drag pins the body Kinematic, which the writeback
-        // covers) and the object vanished a cell away. `pose_to_position` seats
-        // both from the `(cell, Transform)` the drag writes, which is the only
-        // side of this that knows the cell.
-
-        // `restore_dragged_transform` clamps the mesh back to `prev.local_pos`
-        // every frame (to cancel Avian's integrator writeback), so `prev` MUST
-        // advance to the gizmo's current position every frame — including while
-        // PAUSED. When paused, time is frozen and `delta_secs()` is 0; the old
-        // `if dt > 1e-6` gate wrapped the whole block, so `prev` went stale and
-        // the restore snapped the object back to its drag-start spot — the gizmo
-        // couldn't move anything while paused. Only the velocity estimate (which
-        // drags joint-coupled child bodies along and is meaningless at dt = 0)
-        // stays gated on dt.
-        if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
-            // ABSOLUTE, not the cell remainder — see `GizmoPrevPos::abs_pos`.
-            let abs_pos =
-                lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
-                    .map(|p| p.0)
-                    .unwrap_or(local_pos);
-            let dt = time.delta_secs();
-            if dt > 1e-6 {
-                let delta = abs_pos - prev.abs_pos;
-                if let Ok(mut lin_vel) = q_lin_vel.get_mut(entity) {
-                    let v = delta / dt as f64;
-                    // Finite AND bounded: a mid-drag reparent, a scene reload or a
-                    // teleport can still move the absolute pose arbitrarily far in
-                    // one frame, and this velocity is injected into a Kinematic body
-                    // that drags its joint-coupled children with it.
-                    lin_vel.0 = if v.is_finite() {
-                        v.clamp_length_max(1.0e3)
-                    } else {
-                        DVec3::ZERO
-                    };
-                }
-            }
-            prev.abs_pos = abs_pos;
-            prev.local_pos = local_pos;
-            prev.local_rotation = tf.rotation;
-        }
-    }
-}
-
-/// TODO: Architectural Workaround for User vs. Physics Authority Conflict
-///
-/// **Why we have this:**
-/// During active user-drag (gizmo), the visual editor (`transform-gizmo-bevy`)
-/// is the absolute authority on `Transform`. However, because the entity has
-/// `LinearVelocity` set (so joint-coupled dynamic child bodies are dragged along
-/// by the solver), Avian's integrator updates the physics `Position` and its
-/// writeback system overwrites `Transform` with `local_pos + delta`. Without this
-/// system restoring the visual position, `transform-gizmo-bevy` would read the
-/// overwritten value and add the new mouse delta on top of it, creating a 2x
-/// speed feedback loop (runaway/multiplication of movement).
-///
-/// **The Proper Fix:**
-/// Once Avian3D introduces a first-class Kinematic Drive/Teleport API (allowing
-/// manual positioning of kinematic bodies with implicit velocity calculation for
-/// joints *without* running the integrator step) or a way to disable writeback
-/// on a per-entity basis, this system should be replaced with that native API.
-pub fn restore_dragged_transform(mut q: Query<(&mut Transform, &GizmoPrevPos)>) {
-    for (mut tf, prev) in q.iter_mut() {
-        tf.translation = prev.local_pos.as_vec3();
-        tf.rotation = prev.local_rotation;
     }
 }
 
@@ -460,8 +406,8 @@ pub fn restore_dragged_transform(mut q: Query<(&mut Transform, &GizmoPrevPos)>) 
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
-    q_prev_pos: Query<(Entity, &GizmoPrevPos)>,
-    mut q_lin_vel: Query<&mut LinearVelocity>,
+    q_drag: Query<(Entity, &GizmoDragState)>,
+    mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_origin_holders: Query<(Entity, Has<FloatingOrigin>, Has<lunco_core::Avatar>)>,
     q_tf: Query<&Transform>,
@@ -479,7 +425,7 @@ pub fn restore_gizmo_dynamic(
     let released = mouse
         .as_deref()
         .is_some_and(|buttons| buttons.just_released(MouseButton::Left));
-    for (entity, prev) in q_prev_pos.iter() {
+    for (entity, drag) in q_drag.iter() {
         if !session.targets.contains(&entity) {
             continue;
         }
@@ -546,21 +492,22 @@ pub fn restore_gizmo_dynamic(
         }
 
         // 2. RESTORE INTERPOLATION
-        if prev.had_translation_interpolation {
+        if drag.had_translation_interpolation {
             commands.entity(entity).try_insert(TranslationInterpolation);
         }
-        if prev.had_rotation_interpolation {
+        if drag.had_rotation_interpolation {
             commands.entity(entity).try_insert(RotationInterpolation);
         }
 
-        if let Ok(mut vel) = q_lin_vel.get_mut(entity) {
-            vel.0 = DVec3::ZERO;
+        if let Ok((mut linear, mut angular)) = q_vel.get_mut(entity) {
+            linear.0 = DVec3::ZERO;
+            angular.0 = DVec3::ZERO;
         }
 
         // Hand the pre-drag body kind back. An entity that had NO `RigidBody`
         // gets the drag's Kinematic taken away again rather than being handed a
-        // fabricated `Dynamic` — see `GizmoPrevPos::original_body`.
-        match prev.original_body {
+        // fabricated `Dynamic` — see `GizmoDragState::original_body`.
+        match drag.original_body {
             Some(body) => {
                 commands.entity(entity).try_insert(body);
             }
@@ -568,7 +515,26 @@ pub fn restore_gizmo_dynamic(
                 commands.entity(entity).try_remove::<RigidBody>();
             }
         }
-        commands.entity(entity).try_remove::<GizmoPrevPos>();
+        match drag.original_drive {
+            Some(drive) => {
+                commands.entity(entity).try_insert(drive);
+            }
+            None => {
+                commands
+                    .entity(entity)
+                    .try_remove::<lunco_physics::KinematicDrive>();
+            }
+        }
+        if drag.had_custom_position_integration {
+            commands
+                .entity(entity)
+                .try_insert(CustomPositionIntegration);
+        } else {
+            commands
+                .entity(entity)
+                .try_remove::<CustomPositionIntegration>();
+        }
+        commands.entity(entity).try_remove::<GizmoDragState>();
 
         // AUTHOR THE MOVE. Queued AFTER the `original_body` insert above, so the
         // `MoveEntity` observer captures the pre-drag body kind (not the
@@ -697,16 +663,15 @@ mod tests {
     use lunco_controller::ControllerLink;
 
     #[test]
-    fn test_gizmo_prev_pos_component() {
-        let pos = GizmoPrevPos {
-            local_pos: DVec3::new(1.0, 2.0, 3.0),
-            local_rotation: Quat::IDENTITY,
-            abs_pos: DVec3::new(1.0, 2.0, 3.0),
+    fn test_gizmo_drag_state_component() {
+        let state = GizmoDragState {
             original_body: Some(RigidBody::Dynamic),
+            original_drive: None,
+            had_custom_position_integration: false,
             had_translation_interpolation: false,
             had_rotation_interpolation: false,
         };
-        assert_eq!(pos.local_pos, DVec3::new(1.0, 2.0, 3.0));
+        assert_eq!(state.original_body, Some(RigidBody::Dynamic));
     }
 
     #[test]
@@ -727,12 +692,13 @@ mod tests {
             .spawn((
                 Transform::from_translation(Vec3::ZERO),
                 RigidBody::Kinematic,
+                CustomPositionIntegration,
+                lunco_physics::KinematicDrive::new(DVec3::ZERO, bevy::math::DQuat::IDENTITY),
                 GizmoTarget::default(),
-                GizmoPrevPos {
-                    local_pos: DVec3::ZERO,
-                    local_rotation: Quat::IDENTITY,
-                    abs_pos: DVec3::ZERO,
+                GizmoDragState {
                     original_body: Some(RigidBody::Dynamic),
+                    original_drive: None,
+                    had_custom_position_integration: false,
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,
                 },
@@ -758,7 +724,15 @@ mod tests {
             app.world().get::<RigidBody>(vessel),
             Some(&RigidBody::Dynamic)
         );
-        assert!(app.world().get::<GizmoPrevPos>(vessel).is_none());
+        assert!(app.world().get::<GizmoDragState>(vessel).is_none());
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(vessel)
+            .is_none());
+        assert!(app
+            .world()
+            .get::<CustomPositionIntegration>(vessel)
+            .is_none());
     }
 
     /// Dragging a prop that was never a rigid body must not MAKE it one.
@@ -790,12 +764,13 @@ mod tests {
                 Transform::from_translation(Vec3::ZERO),
                 // What the drag put on it — not what it started with.
                 RigidBody::Kinematic,
+                CustomPositionIntegration,
+                lunco_physics::KinematicDrive::new(DVec3::ZERO, bevy::math::DQuat::IDENTITY),
                 GizmoTarget::default(),
-                GizmoPrevPos {
-                    local_pos: DVec3::ZERO,
-                    local_rotation: Quat::IDENTITY,
-                    abs_pos: DVec3::ZERO,
+                GizmoDragState {
                     original_body: None,
+                    original_drive: None,
+                    had_custom_position_integration: false,
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,
                 },
@@ -819,7 +794,12 @@ mod tests {
              fabricated Dynamic one — a mass-less Dynamic body makes avian \
              log 'has no mass or inertia' forever"
         );
-        assert!(app.world().get::<GizmoPrevPos>(prop).is_none());
+        assert!(app.world().get::<GizmoDragState>(prop).is_none());
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(prop)
+            .is_none());
+        assert!(app.world().get::<CustomPositionIntegration>(prop).is_none());
     }
 
     /// A2: the gizmo is not an authority — a completed drag authors USD.
@@ -859,24 +839,28 @@ mod tests {
         ws.active_document = Some(doc);
         app.insert_resource(lunco_workspace::WorkspaceResource(ws));
 
-        // An entity mid-drag (has `GizmoPrevPos`) whose drag just ended (no
+        // An entity mid-drag (has `GizmoDragState`) whose drag just ended (no
         // active `GizmoTarget`), sitting where the drag left it.
         let dragged = app
             .world_mut()
             .spawn((
                 Transform::from_translation(Vec3::new(3.0, 4.0, 5.0)),
                 RigidBody::Kinematic,
+                CustomPositionIntegration,
+                lunco_physics::KinematicDrive::new(
+                    DVec3::new(3.0, 4.0, 5.0),
+                    bevy::math::DQuat::IDENTITY,
+                ),
                 LinearVelocity::default(),
                 UsdPrimPath {
                     stage_handle: Handle::default(),
                     path: "/World".to_string(),
                 },
                 lunco_core::GlobalEntityId::from_raw(42),
-                GizmoPrevPos {
-                    local_pos: DVec3::new(3.0, 4.0, 5.0),
-                    local_rotation: Quat::IDENTITY,
-                    abs_pos: DVec3::new(3.0, 4.0, 5.0),
+                GizmoDragState {
                     original_body: Some(RigidBody::Dynamic),
+                    original_drive: None,
+                    had_custom_position_integration: false,
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,
                 },
@@ -909,6 +893,14 @@ mod tests {
             "base layer untouched by a runtime move"
         );
         // Drag bookkeeping still completes (body restored, marker cleared).
-        assert!(app.world().get::<GizmoPrevPos>(dragged).is_none());
+        assert!(app.world().get::<GizmoDragState>(dragged).is_none());
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(dragged)
+            .is_none());
+        assert!(app
+            .world()
+            .get::<CustomPositionIntegration>(dragged)
+            .is_none());
     }
 }
