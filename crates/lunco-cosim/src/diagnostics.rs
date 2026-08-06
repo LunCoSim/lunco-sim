@@ -45,6 +45,29 @@ pub struct BrokenConnection {
     pub dropped_value: f64,
 }
 
+/// A cycle in the current co-simulation fabric.
+///
+/// This is deliberately separate from [`BrokenConnection`]. A cycle is a
+/// topology diagnostic: the fixed-step master can execute it with a
+/// one-step delay, while a missing input port means a declared wire never
+/// reached an endpoint. Mixing the two makes a healthy scenario look like it
+/// has a dangling wire and makes API/test consumers guess from a synthetic
+/// port name.
+#[derive(Debug, Clone)]
+pub struct AlgebraicLoopDiagnostic {
+    /// Canonical participant chosen for this loop's stable identity.
+    pub entity: Entity,
+    /// Stable id, when assigned.
+    pub global_id: Option<GlobalEntityId>,
+    /// Deterministic description of the wires in the cycle.
+    pub detail: String,
+    /// The cycle reaches a physics force or torque input.
+    pub force_producing: bool,
+    /// The cycle is rejected because it reaches a client-predicted body
+    /// without the program's explicit realtime-safety promise.
+    pub rejected: bool,
+}
+
 /// The live set of unresolved connection targets, refreshed every propagation
 /// tick. Empty when every wire resolves. Read by the API's `GetBrokenConnections`
 /// query (registered in `lunco-usd-sim`, which sees both this crate and the API).
@@ -67,6 +90,9 @@ pub struct CosimDiagnostics {
     /// Targets that dropped their write after their endpoint contract became
     /// terminal. Rebuilt each propagation tick.
     pub broken: Vec<BrokenConnection>,
+    /// Topology cycles in the current wiring fabric. These are not missing
+    /// ports and therefore never enter [`Self::faults`].
+    pub algebraic_loops: Vec<AlgebraicLoopDiagnostic>,
     /// Wires that have NEVER successfully written, keyed by `(entity, port)` so a
     /// wire that drops on a thousand ticks is one entry.
     ///

@@ -24,8 +24,9 @@ use lunco_cosim::CosimDiagnostics;
 /// `cosim_tracked: false` rather than a hopeful empty "all clear".
 ///
 /// params: none · returns:
-/// `{ cosim_tracked, broken_count, pending_count, fault_count, broken: [...],
-///    pending: [...], runtime_fault: ... }`
+/// `{ cosim_tracked, broken_count, pending_count, algebraic_loop_count,
+///    fault_count, broken: [...], pending: [...], algebraic_loops: [...],
+///    runtime_fault: ... }`
 pub struct BrokenConnectionsProvider;
 
 impl ApiQueryProvider for BrokenConnectionsProvider {
@@ -62,13 +63,35 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
         };
         let broken = diag.map(|d| encode(&d.broken)).unwrap_or_default();
         let pending = diag.map(|d| encode(&d.pending)).unwrap_or_default();
+        let algebraic_loops = diag
+            .map(|d| {
+                d.algebraic_loops
+                    .iter()
+                    .map(|loop_diag| {
+                        serde_json::json!({
+                            "entity_bits": loop_diag.entity.to_bits(),
+                            "global_id": loop_diag.global_id.map(|g| g.get()),
+                            "detail": loop_diag.detail,
+                            "force_producing": loop_diag.force_producing,
+                            "rejected": loop_diag.rejected,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         ApiResponse::ok(serde_json::json!({
             "cosim_tracked": diag.is_some(),
             "broken_count": broken.len(),
             "pending_count": pending.len(),
+            "algebraic_loop_count": algebraic_loops.len(),
+            // Keep the historical count semantics: one entry per terminal
+            // connection/runtime fault. A rejected algebraic loop is exposed
+            // in `algebraic_loops` and its terminal effect in `runtime_fault`;
+            // counting both would report the same failure twice.
             "fault_count": broken.len() + usize::from(runtime_fault.is_some()),
             "broken": broken,
             "pending": pending,
+            "algebraic_loops": algebraic_loops,
             "runtime_fault": runtime_fault,
         }))
     }

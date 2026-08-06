@@ -75,7 +75,6 @@ fn compile_balloon_model(
         inputs.insert("rho0".to_string(), 1.225);
 
         commands.entity(entity).try_insert(ModelicaModel {
-            model_path: std::path::PathBuf::from("balloon.mo"),
             model_name: model_name.clone(),
             parameters: params,
             inputs: inputs.into_iter().collect(),

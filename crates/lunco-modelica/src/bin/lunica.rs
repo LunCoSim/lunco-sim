@@ -422,7 +422,6 @@ fn setup_web_workbench(
             WebWorkbench,
             Name::new("Modelica_Sandbox"),
             ModelicaModel {
-                model_path,
                 model_name: model_name.clone(),
                 parameters: initial_params,
                 inputs: initial_inputs,

@@ -115,17 +115,14 @@ struct CompiledTarget {
     resolved: Option<ResolvedPort>,
 }
 
-/// Prefix of the synthetic "port name" an algebraic-loop fault is keyed under
-/// in [`crate::diagnostics::CosimDiagnostics::faults`].
-pub const ALGEBRAIC_LOOP_PORT: &str = "<algebraic-loop>";
-
 /// One algebraic loop found at compile time, spanning at least two participants.
 #[derive(Clone)]
 struct DetectedLoop {
     entity: Entity,
     global_id: Option<lunco_core::GlobalEntityId>,
-    port: String,
+    detail: String,
     force_producing: bool,
+    requires_realtime_safe: bool,
     realtime_safe: bool,
 }
 
@@ -239,8 +236,9 @@ impl CompiledWiring {
     /// The master is single-pass Jacobi with ZOH inputs: each feedthrough hop on
     /// a cycle costs one fixed step of delay, and nothing iterates the loop to
     /// convergence. That 1-step-delay behaviour is the documented contract and
-    /// is NOT changed here — a detected loop only lands one entry in the faults
-    /// ledger so the otherwise invisible coupling error is diagnosable.
+    /// is NOT changed here — a detected loop is published as a topology
+    /// diagnostic so the otherwise invisible coupling error is diagnosable,
+    /// without pretending that any endpoint is missing a port.
     ///
     /// Single-entity self-wires (`netForce`→`force_y` on ONE entity — the
     /// balloon pattern, an engine exchanging with its own body) are the intended
@@ -331,15 +329,33 @@ impl CompiledWiring {
             // wires are already in P10 order, so the description is deterministic.
             let mut parts: Vec<String> = Vec::new();
             let mut force_producing = false;
+            let mut requires_realtime_safe = false;
             for w in &self.wires {
                 let dst = &self.targets[w.dst_index];
                 // A participant can feed a body-force port on itself (the
                 // common Modelica-to-Avian projection), so the force edge is
                 // intentionally not part of the multi-entity SCC above.
-                // It still makes the SCC's control loop force-producing and
-                // therefore subject to the RealtimeSafe contract.
-                if members.contains(&w.src_entity) && is_physics_force_port(&dst.name) {
+                // It still makes the SCC's control loop force-producing. The
+                // realtime contract applies only when that force reaches a
+                // client-predicted dynamic body; authoritative host/standalone
+                // co-simulation is already fixed-step and must not be rejected
+                // as though it were a prediction loop.
+                if members.contains(&w.src_entity)
+                    && (w.src_entity == dst.entity || members.contains(&dst.entity))
+                    && is_physics_force_port(&dst.name)
+                {
                     force_producing = true;
+                    let client_predicts = matches!(
+                        world.get_resource::<lunco_core::NetworkRole>().copied(),
+                        Some(lunco_core::NetworkRole::Client)
+                    );
+                    let predicted_dynamic = world
+                        .get::<avian3d::prelude::RigidBody>(dst.entity)
+                        .is_some_and(|body| matches!(body, avian3d::prelude::RigidBody::Dynamic))
+                        && world
+                            .get::<lunco_core::NotPredictable>(dst.entity)
+                            .is_none();
+                    requires_realtime_safe |= client_predicts && predicted_dynamic;
                 }
                 if w.src_entity != dst.entity
                     && members.contains(&w.src_entity)
@@ -383,8 +399,9 @@ impl CompiledWiring {
             self.loops.push(DetectedLoop {
                 entity,
                 global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
-                port: format!("{ALGEBRAIC_LOOP_PORT} {}", parts.join(", ")),
+                detail: parts.join(", "),
                 force_producing,
+                requires_realtime_safe,
                 realtime_safe,
             });
         }
@@ -470,7 +487,8 @@ pub fn propagate_connections(
 
         // Both ledgers are keyed by `(Entity, port)` and both RATCHET — `faults`
         // so a gate can ask "did anything never land", `landed` so a wire that
-        // once worked is never re-reported. Neither is scoped to a scene, and
+        // once worked is never re-reported. Topology loops are kept in their
+        // own current-fabric collection. Neither is scoped to a scene, and
         // nothing clears them on teardown: after `LoadScene` the entries of the
         // PREVIOUS scene remain, keyed to entities that no longer exist. A
         // verdict read after a reload (`scene_test`'s gate, `GET /api/diagnostics`)
@@ -498,36 +516,59 @@ pub fn propagate_connections(
             }
         }
 
-        // Algebraic-loop entries describe the current fabric, so retract stale
-        // entries on rebuild and publish exactly one deterministic entry per loop.
+        // Algebraic loops describe the current fabric. Keep them in their own
+        // diagnostic collection: they are topology facts, not missing-port
+        // faults, and therefore must not make a scenario fail the
+        // never-landed connection gate.
+        let loops = compiled
+            .loops
+            .iter()
+            .map(|loop_info| crate::diagnostics::AlgebraicLoopDiagnostic {
+                entity: loop_info.entity,
+                global_id: loop_info.global_id,
+                detail: loop_info.detail.clone(),
+                force_producing: loop_info.force_producing,
+                rejected: loop_info.force_producing
+                    && loop_info.requires_realtime_safe
+                    && !loop_info.realtime_safe,
+            })
+            .collect();
         world
             .resource_mut::<crate::diagnostics::CosimDiagnostics>()
-            .faults
-            .retain(|(_, port), _| !port.starts_with(ALGEBRAIC_LOOP_PORT));
+            .algebraic_loops = loops;
         for loop_info in &compiled.loops {
-            if loop_info.force_producing && loop_info.realtime_safe {
-                if reported.insert(loop_info.port.clone()) {
+            if loop_info.force_producing
+                && loop_info.requires_realtime_safe
+                && loop_info.realtime_safe
+            {
+                if reported.insert(loop_info.detail.clone()) {
                     info!(
                         "[cosim] force loop accepted under the declared realtime lockstep contract: {}",
-                        loop_info.port
+                        loop_info.detail
                     );
                 }
                 continue;
             }
-            if reported.insert(loop_info.port.clone()) {
-                if loop_info.force_producing {
+            if reported.insert(loop_info.detail.clone()) {
+                if loop_info.force_producing
+                    && loop_info.requires_realtime_safe
+                    && !loop_info.realtime_safe
+                {
                     error!(
                         "[cosim] unsafe force-producing algebraic loop rejected: {}",
-                        loop_info.port
+                        loop_info.detail
                     );
                 } else {
                     warn!(
                         "[cosim] algebraic loop in the wiring — co-simulated with a 1-step delay: {}",
-                        loop_info.port
+                        loop_info.detail
                     );
                 }
             }
-            if loop_info.force_producing {
+            if loop_info.force_producing
+                && loop_info.requires_realtime_safe
+                && !loop_info.realtime_safe
+            {
                 let raised = world
                     .get_resource_mut::<lunco_core::RuntimeFaults>()
                     .is_some_and(|mut faults| {
@@ -535,7 +576,7 @@ pub fn propagate_connections(
                             "cosim-unsafe-force-loop",
                             Some(loop_info.entity),
                             "co-simulation wiring",
-                            loop_info.port.clone(),
+                            loop_info.detail.clone(),
                         )
                     });
                 if raised {
@@ -545,19 +586,6 @@ pub fn propagate_connections(
                     }
                 }
             }
-            world
-                .resource_mut::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .insert(
-                    (loop_info.entity, loop_info.port.clone()),
-                    crate::diagnostics::BrokenConnection {
-                        entity: loop_info.entity,
-                        global_id: loop_info.global_id,
-                        port: loop_info.port.clone(),
-                        has_port_surface: true,
-                        dropped_value: 0.0,
-                    },
-                );
         }
     }
 
@@ -1052,7 +1080,11 @@ mod wire_order_tests {
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
         assert_eq!(diag.pending.len(), 1);
         assert!(diag.broken.is_empty());
-        assert!(diag.faults.is_empty());
+        assert!(
+            diag.faults.is_empty(),
+            "unexpected faults: {:?}",
+            diag.faults
+        );
 
         world.get_mut::<crate::SimComponent>(sink).unwrap().status = crate::SimStatus::Running;
         world.run_system_once(propagate_connections).unwrap();
@@ -1127,25 +1159,31 @@ mod wire_order_tests {
         ));
     }
 
-    fn loop_faults(world: &World) -> Vec<String> {
+    fn init_builtin_ports(world: &mut World) {
+        let mut registry = PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(registry);
+    }
+
+    fn loop_diagnostics(world: &World) -> Vec<String> {
         world
             .resource::<crate::diagnostics::CosimDiagnostics>()
-            .faults
-            .keys()
-            .filter(|(_, port)| port.starts_with(ALGEBRAIC_LOOP_PORT))
-            .map(|(_, port)| port.clone())
+            .algebraic_loops
+            .iter()
+            .map(|loop_diag| loop_diag.detail.clone())
             .collect()
     }
 
     /// M6: a feedthrough cycle spanning two participants is an algebraic loop —
     /// the single-pass ZOH master cannot iterate it to convergence — and must
-    /// land exactly ONE entry in the faults ledger, naming the wires on it.
+    /// publish exactly ONE topology diagnostic, naming the wires on it, while
+    /// leaving the missing-port ledger empty.
     #[test]
-    fn a_two_entity_feedthrough_loop_is_recorded_as_one_fault() {
+    fn a_two_entity_feedthrough_loop_is_recorded_as_one_topology_diagnostic() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
-        world.init_resource::<PortRegistry>();
+        init_builtin_ports(&mut world);
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
         let a = world.spawn(GlobalEntityId::from_raw(10)).id();
@@ -1155,8 +1193,15 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
 
-        let loops = loop_faults(&world);
-        assert_eq!(loops.len(), 1, "one loop, one ledger entry: {loops:?}");
+        let loops = loop_diagnostics(&world);
+        assert_eq!(loops.len(), 1, "one loop, one diagnostic: {loops:?}");
+        assert!(
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "a topology loop is not a missing-port fault"
+        );
         assert!(
             loops[0].contains("out") && loops[0].contains("in"),
             "the entry names the ports on the loop: {}",
@@ -1171,7 +1216,7 @@ mod wire_order_tests {
         world.entity_mut(conns[1]).despawn();
         world.run_system_once(propagate_connections).unwrap();
         assert!(
-            loop_faults(&world).is_empty(),
+            loop_diagnostics(&world).is_empty(),
             "a loop entry is a fact about the current fabric — retracted on rewire"
         );
     }
@@ -1186,20 +1231,27 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
-        world.init_resource::<PortRegistry>();
+        init_builtin_ports(&mut world);
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
         let a = world
             .spawn((
                 GlobalEntityId::from_raw(10),
-                SimComponent::default(),
+                SimComponent {
+                    inputs: std::collections::HashMap::from([("in".into(), 0.0)]),
+                    ..default()
+                },
                 RealtimeSafe,
+                avian3d::prelude::RigidBody::Dynamic,
             ))
             .id();
         let b = world
             .spawn((
                 GlobalEntityId::from_raw(20),
-                SimComponent::default(),
+                SimComponent {
+                    inputs: std::collections::HashMap::from([("in".into(), 0.0)]),
+                    ..default()
+                },
                 RealtimeSafe,
             ))
             .id();
@@ -1210,9 +1262,12 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            loop_faults(&world).is_empty(),
-            "a declared realtime-safe force loop is accepted, not reported as a generic fault"
+            !loop_diagnostics(&world).is_empty(),
+            "the current topology remains observable when its force loop is accepted"
         );
+        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        assert!(!diag.algebraic_loops[0].rejected);
+        assert!(diag.faults.is_empty());
     }
 
     /// The physical body is not a program and must not need a realtime promise
@@ -1222,14 +1277,24 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
-        world.init_resource::<PortRegistry>();
+        init_builtin_ports(&mut world);
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.insert_resource(lunco_core::NetworkRole::Client);
 
-        let body = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let body = world
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                avian3d::prelude::RigidBody::Dynamic,
+            ))
+            .id();
         let program = world
             .spawn((
                 GlobalEntityId::from_raw(20),
-                SimComponent::default(),
+                SimComponent {
+                    inputs: std::collections::HashMap::from([("height".into(), 0.0)]),
+                    ..default()
+                },
                 RealtimeSafe,
             ))
             .id();
@@ -1238,25 +1303,116 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
         assert!(
-            loop_faults(&world).is_empty(),
-            "a safe program may close a feedback loop through an unmarked body"
+            !loop_diagnostics(&world).is_empty(),
+            "the current topology remains observable when its force loop is accepted"
         );
+        assert!(
+            !world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .algebraic_loops[0]
+                .rejected
+        );
+        assert!(
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "unexpected faults: {:?}",
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+        );
+        assert!(world
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .is_none());
 
         let mut unsafe_world = World::new();
-        unsafe_world.init_resource::<PortRegistry>();
+        init_builtin_ports(&mut unsafe_world);
         unsafe_world.init_resource::<crate::diagnostics::CosimDiagnostics>();
-        let body = unsafe_world.spawn(GlobalEntityId::from_raw(10)).id();
+        unsafe_world.init_resource::<lunco_core::RuntimeFaults>();
+        unsafe_world.insert_resource(lunco_core::NetworkRole::Client);
+        let body = unsafe_world
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                avian3d::prelude::RigidBody::Dynamic,
+            ))
+            .id();
         let program = unsafe_world
-            .spawn((GlobalEntityId::from_raw(20), SimComponent::default()))
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                SimComponent {
+                    inputs: std::collections::HashMap::from([("height".into(), 0.0)]),
+                    ..default()
+                },
+            ))
             .id();
         wire(&mut unsafe_world, body, "height", program, "height");
         wire(&mut unsafe_world, program, "netForce", body, "force_y");
 
         unsafe_world.run_system_once(propagate_connections).unwrap();
         assert_eq!(
-            loop_faults(&unsafe_world).len(),
+            loop_diagnostics(&unsafe_world).len(),
             1,
             "an unpromised program must still reject the force loop"
+        );
+        assert_eq!(
+            unsafe_world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .map(|fault| fault.kind),
+            Some("cosim-unsafe-force-loop")
+        );
+    }
+
+    /// Authoritative standalone/host feedback is already a fixed-step causal
+    /// exchange. It may be diagnosed as a topology loop, but it must not be
+    /// rejected by the client-prediction realtime contract.
+    #[test]
+    fn authoritative_force_loop_is_not_rejected_as_prediction_failure() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        init_builtin_ports(&mut world);
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.insert_resource(lunco_core::NetworkRole::Standalone);
+
+        let body = world
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                avian3d::prelude::RigidBody::Dynamic,
+            ))
+            .id();
+        let program = world
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                SimComponent {
+                    inputs: std::collections::HashMap::from([("height".into(), 0.0)]),
+                    ..default()
+                },
+            ))
+            .id();
+        wire(&mut world, body, "height", program, "height");
+        wire(&mut world, program, "netForce", body, "force_y");
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        assert_eq!(diag.algebraic_loops.len(), 1);
+        assert!(!diag.algebraic_loops[0].rejected);
+        assert!(
+            diag.faults.is_empty(),
+            "unexpected faults: {:?}",
+            diag.faults
+        );
+        assert!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .is_none(),
+            "authoritative feedback is not a client-prediction safety failure"
         );
     }
 

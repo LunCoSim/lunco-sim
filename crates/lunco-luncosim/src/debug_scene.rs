@@ -819,6 +819,26 @@ pub fn run() -> u8 {
         cli.jitter, cli.seed, cli.tick_hz
     );
 
+    // A PASS cannot stand while the engine is still reporting a terminal
+    // runtime fault. This is a separate causal boundary from wiring: a
+    // rejected client-prediction loop, non-finite force, or escaped body must
+    // be reported as that fault, not disguised as a dangling connection.
+    if let Some(fault) = app
+        .world()
+        .get_resource::<lunco_core::RuntimeFaults>()
+        .and_then(|faults| faults.first.as_ref())
+    {
+        println!(
+            "luncosim test FAIL  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            cli.scene
+        );
+        println!(
+            "  terminal runtime fault kind={} subject={} detail={}",
+            fault.kind, fault.subject, fault.detail
+        );
+        return 1;
+    }
+
     // A PASS cannot stand while the engine is still reporting broken wires.
     //
     // `CosimDiagnostics.faults` is the substrate's OWN account of which
@@ -826,8 +846,9 @@ pub fn run() -> u8 {
     // sampled now. `broken` is the wrong field for a gate: propagation is
     // CHANGE-DRIVEN, so a wire that dropped its value at load is not retried
     // on a quiet tick and the live set reads empty long before the verdict.
-    // Only genuine faults are recorded (`has_port_surface`), so a structural
-    // or still-loading endpoint never reaches here.
+    // Only genuine missing-port faults are recorded (`has_port_surface`), so a
+    // structural endpoint or an algebraic-loop topology diagnostic never
+    // reaches here.
     // Nothing is inferred and no log is scraped; the harness reads the
     // diagnostic the propagation master already publishes.
     //

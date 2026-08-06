@@ -55,7 +55,7 @@ pub use avian::*;
 pub use binding::*;
 pub use component::*;
 pub use connection::*;
-pub use diagnostics::{BrokenConnection, CosimDiagnostics};
+pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
 pub use joint::*;
 pub use ports::*;
 pub use suggestion::*;
