@@ -91,8 +91,10 @@ def Xform "DescentLander" (
         float inputs:valve_opening.connect = </DescentLander.outputs:throttle>
         float outputs:thrust_n.connect = </DescentLander/MainPropulsion/MainChamber.outputs:thrust_n>
         float outputs:activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
+        float outputs:engine_activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
         float outputs:propellant_flow.connect = </DescentLander/MainPropulsion/MainChamber.outputs:propellant_flow>
         float outputs:propellant_mass.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_mass_kg>
+        float outputs:propellant_fraction.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_fraction>
         float outputs:propellant_used.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_used_kg>
         float outputs:low_fuel.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:low_fuel>
         float outputs:depleted.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:depleted>
@@ -257,6 +259,7 @@ def Xform "DescentLander" (
             float inputs:oxidizer_mass_kg.connect = </DescentLander/MainPropulsion/OxidizerTank.outputs:mass_kg>
             float outputs:propellant_mass_kg
             float outputs:propellant_used_kg
+            float outputs:propellant_fraction
             float outputs:low_fuel
             float outputs:depleted
         }
@@ -752,8 +755,10 @@ def Xform "DescentLander" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
-                color3f inputs:core_color = (9.0, 11.0, 8.0)
-                color3f inputs:edge_color = (3.0, 0.35, 0.015)
+                # LOX/kerosene visual order: hot amber core, darker red-orange edge.
+                # These are linear HDR radiance values, not display-space paint.
+                color3f inputs:core_color = (7.0, 1.8, 0.15)
+                color3f inputs:edge_color = (1.4, 0.02, 0.002)
                 # DECLARED so the wire is legal: the authoring pass intersects a
                 # gprim's connected `inputs:` with the parameters its bound shader
                 # declares, and a name the shader does not declare is refused.
@@ -779,8 +784,10 @@ def Xform "DescentLander" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
-                color3f inputs:core_color = (28.0, 30.0, 24.0)
-                color3f inputs:edge_color = (10.0, 5.0, 0.25)
+                # The inner tongue is near-white at its hottest point, with a
+                # warm amber falloff rather than the old green-grey flame.
+                color3f inputs:core_color = (30.0, 12.0, 1.2)
+                color3f inputs:edge_color = (6.0, 0.35, 0.005)
                 float inputs:throttle = 0
                 float inputs:throttle_exponent = 0.35
                 # Shallower than the shroud's: the core is the denser, steadier
@@ -1098,9 +1105,11 @@ def Xform "DescentLander" (
 
     # ── Physics + visible hull ───────────────────────────────────────────────
     # The body's mass and visible shape. The root is an `Xform` — a vehicle, not a
-    # cylinder — so the hull is an ordinary child gprim. The landing gear is the
-    # sole ground-contact path: the hull must remain clear while the four sprung
-    # pads take the load and expose their prismatic stroke. Gold multi-layer-
+    # cylinder — so the hull is an ordinary child gprim. The four sprung pads are
+    # the normal landing interface, but the hull remains a real collision shape so
+    # a tipped or inverted vehicle cannot pass through terrain. Because its bottom
+    # is well above the pads in the upright pose, it does not steal normal pad
+    # contact. Gold multi-layer-
     # insulation (MLI) foil: a
     # warm metallic `displayColor`, not wrapped in solar cells. The array lives on the
     # deployed side wings, so the body reads as a spacecraft hull, not a battery barrel.
@@ -1112,11 +1121,9 @@ def Xform "DescentLander" (
         double radius = 2.5
         double height = 3.0
         color3f[] primvars:displayColor = [(0.78, 0.62, 0.27)]
-        # Do not let the hull short-circuit the landing gear. Its bottom is 1.5 m
-        # below the body origin, while the footpads are deliberately much lower;
-        # enabling this collider makes the vehicle settle on its belly before a
-        # pad can touch, leaving every spring at zero stroke.
-        bool physics:collisionEnabled = false
+        # The pads land first in the intended upright pose; this hull collider is
+        # the rigid-body safety envelope for tipped and inverted poses.
+        bool physics:collisionEnabled = true
     }
 
     # ── Onboard sensors (reusable library primitives, referenced) ──
@@ -1402,7 +1409,7 @@ def Xform "DescentLander" (
 
         # The plume's ONE live input. It reaches the WGSL uniform through the same
         # port graph a thruster force uses — no resolver, no per-frame script.
-        float inputs:throttle.connect = </DescentLander.outputs:throttle>
+        float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:activity>
     }
     def Cone "FlameCore"
     {
@@ -1422,7 +1429,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
 
-        float inputs:throttle.connect = </DescentLander.outputs:throttle>
+        float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:activity>
 
         # WHAT THE PLUME IS WORTH AS A LIGHT — an equation, so it is in Modelica.
         #
@@ -1442,15 +1449,15 @@ def Xform "DescentLander" (
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
-            float inputs:throttle.connect = </DescentLander.outputs:throttle>
+            float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:activity>
             float inputs:w_max = 0.27
             float inputs:l_max = 0.92
             float inputs:width_idle = 0.28
             float inputs:throttle_exponent = 0.35
-            # Rec.709 luma of `FlameCore_Mat`'s `core_color` (28.0, 30.0, 24.0):
-            # 0.2126*28.0 + 0.7152*30.0 + 0.0722*24.0 = 29.142. Retint the plume and
+            # Rec.709 luma of `FlameCore_Mat`'s `core_color` (30.0, 12.0, 1.2):
+            # 0.2126*30.0 + 0.7152*12.0 + 0.0722*1.2 = 15.047. Retint the plume and
             # this must be re-derived — see the note on the material.
-            float inputs:luminance = 29.142
+            float inputs:luminance = 15.047
             # The ONE authored photometric constant: lm/m^2 per unit emissive
             # radiance. Everything that VARIES is derived in the model.
             float inputs:exitance = 180000
@@ -1509,7 +1516,7 @@ def Xform "DescentLander" (
             # ground with nothing meaningful to occlude.
             bool inputs:shadow:enable = false
             float inputs:radius = 0.06
-            color3f inputs:color = (0.9333, 1.0, 0.8)
+            color3f inputs:color = (1.0, 0.4, 0.04)
             # Schema-declared (LunCoLightAPI), so no `custom` — that qualifier is
             # for attributes no schema defines.
             float lunco:light:range = 25.0
@@ -1669,7 +1676,9 @@ def Xform "DescentLander" (
     # Four thruster blocks on the upper hull diagonals. The Modelica airframe
     # applies attitude torque every shot (the righting in shot 1, the banks in
     # shot 4); these give that force a visible source. The compact plume volumes
-    # below are driven by the stabiliser's six signed torque channels.
+    # below are driven by the stabiliser's six signed torque channels. The
+    # actuator direction is the force applied to the body; the visible cone is
+    # exhaust, so each cone points in the opposite direction.
     def Cube "RcsQuadPXPZ"
     {
         double size = 1.0
@@ -1723,7 +1732,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, 2.4)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -1755,7 +1764,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, 2.4)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -1773,7 +1782,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, -2.4)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -1805,7 +1814,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, -2.4)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -1823,7 +1832,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -1855,7 +1864,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -1873,7 +1882,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -1905,7 +1914,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -1923,7 +1932,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -1955,7 +1964,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -1973,7 +1982,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2005,7 +2014,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -2028,7 +2037,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, -2.4)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2060,7 +2069,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, -2.4)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -2078,7 +2087,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, 2.4)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2110,7 +2119,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (0, 0, 2.4)
-        double3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -2128,7 +2137,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2160,7 +2169,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -2178,7 +2187,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2210,7 +2219,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -2228,7 +2237,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2260,7 +2269,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (-2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>
@@ -2278,7 +2287,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlame_Mat>
@@ -2310,7 +2319,7 @@ def Xform "DescentLander" (
         double radius = 1.0
         double height = 1.0
         double3 xformOp:translate = (2.4, 0, 0)
-        double3 xformOp:rotateXYZ = (90.0, 0, 0)
+        double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/RcsFlameCore_Mat>

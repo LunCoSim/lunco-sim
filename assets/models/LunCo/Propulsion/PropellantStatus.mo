@@ -14,12 +14,15 @@ model PropellantStatus
   input Real oxidizer_mass_kg = 0.0;
   output Real propellant_mass_kg;
   output Real propellant_used_kg;
+  output Real propellant_fraction "Remaining fraction of the authored propellant load";
   output Real low_fuel;
   output Real depleted;
 
 equation
   propellant_mass_kg = max(0.0, fuel_mass_kg) + max(0.0, oxidizer_mass_kg);
   propellant_used_kg = max(0.0, initial_propellant_mass_kg - propellant_mass_kg);
+  propellant_fraction = max(0.0, min(1.0,
+    propellant_mass_kg / max(minimum_mass_kg, initial_propellant_mass_kg)));
   low_fuel = max(0.0, min(1.0,
     0.5 + 0.5 * (low_fuel_mass_kg - propellant_mass_kg)
       / max(minimum_mass_kg, event_transition_width_kg)));

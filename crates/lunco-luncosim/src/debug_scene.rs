@@ -785,7 +785,10 @@ pub fn run() -> u8 {
                     ) {
                         let size = max - min;
                         let center = (min + max) * 0.5;
-                        info!("[selection-aabb] Prim '{target_prim}' ({e:?}) bounds: min={min} max={max} center={center} size={size} max_extent={:.3}m", size.max_element());
+                        info!(
+                            "[selection-aabb] Prim '{target_prim}' ({e:?}) bounds: min={min} max={max} center={center} size={size} max_extent={:.3}m",
+                            size.max_element()
+                        );
                     } else {
                         warn!("[selection-aabb] Prim '{target_prim}' ({e:?}) has no mesh AABB");
                     }
@@ -908,7 +911,7 @@ pub fn run() -> u8 {
     match app.world().resource::<Verdict>().result.clone() {
         Some((channel, true)) if !broken.is_empty() => {
             println!(
-            "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+                "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
             println!(
@@ -924,14 +927,14 @@ pub fn run() -> u8 {
         }
         Some((channel, true)) => {
             println!(
-            "luncosim test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+                "luncosim test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
             0
         }
         Some((channel, false)) => {
             println!(
-            "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+                "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
             1
@@ -943,7 +946,7 @@ pub fn run() -> u8 {
                 "max-ticks exhausted with no verdict (scenario never finished — treated as a failure)"
             };
             println!(
-            "luncosim test NO-VERDICT  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}  — {why}",
+                "luncosim test NO-VERDICT  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}  — {why}",
                 cli.scene
             );
             2

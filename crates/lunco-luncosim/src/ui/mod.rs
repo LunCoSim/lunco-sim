@@ -50,6 +50,51 @@ struct DismissTerrainOverlay;
 /// is wired.
 pub(crate) struct SandboxUiPlugin;
 
+/// Install the retained runtime-authored HTML surface layer.
+///
+/// This is deliberately shared by the interactive workbench and the GPU
+/// windowless recorder. The latter has no egui host, but it still has a real
+/// Bevy UI render pass and a scene camera, so authored HUDs must use the same
+/// HUI/Flair and exposure path in both modes.
+pub(crate) fn add_runtime_ui_layer(app: &mut App) {
+    app.add_plugins((
+        bevy_hui::HuiPlugin,
+        bevy_flair::FlairPlugin,
+        runtime_exposure::RuntimeUiManifestPlugin,
+    ))
+    .init_resource::<runtime_exposure::RuntimeUiGates>()
+    .add_systems(Startup, runtime_exposure::load_runtime_ui_manifest)
+    .add_systems(
+        Update,
+        (
+            runtime_exposure::sync_runtime_ui_manifest,
+            update_runtime_ui_gates,
+            runtime_exposure::mount_runtime_ui_surfaces
+                .after(runtime_exposure::sync_runtime_ui_manifest)
+                .after(update_runtime_ui_gates)
+                .before(bevy_hui::HuiSystems::Build),
+            runtime_exposure::bind_runtime_ui_to_camera
+                .after(runtime_exposure::sync_runtime_ui_manifest),
+            runtime_exposure::attach_runtime_ui_names
+                .after(runtime_exposure::sync_runtime_ui_manifest)
+                .before(bevy_flair::style::StyleSystems::Prepare),
+            runtime_exposure::hand_runtime_ui_styling_to_flair
+                .after(bevy_hui::HuiSystems::Style)
+                .after(runtime_exposure::sync_runtime_ui_manifest),
+            runtime_exposure::apply_runtime_ui_exposures
+                .after(runtime_exposure::sync_runtime_ui_manifest)
+                .after(bevy_hui::HuiSystems::Style),
+        ),
+    )
+    .add_systems(
+        PostUpdate,
+        runtime_exposure::apply_runtime_ui_placement_after_style
+            .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+            .after(bevy::ui::UiSystems::Propagate)
+            .before(bevy::ui::UiSystems::Content),
+    );
+}
+
 impl Plugin for SandboxUiPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(
@@ -94,16 +139,12 @@ impl Plugin for SandboxUiPlugin {
             });
         }
 
-        app.add_plugins((
-            bevy_hui::HuiPlugin,
-            bevy_flair::FlairPlugin,
-            runtime_exposure::RuntimeUiManifestPlugin,
-            bevy::pbr::wireframe::WireframePlugin::default(),
-        ))
-        // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
-        // so scene selection / possession / spawn-placement run as click observers.
-        .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
-        .add_plugins(lunco_workbench::WorkbenchPlugin);
+        add_runtime_ui_layer(app);
+        app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
+            // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
+            // so scene selection / possession / spawn-placement run as click observers.
+            .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
+            .add_plugins(lunco_workbench::WorkbenchPlugin);
         if args.iter().any(|arg| arg == "--windowed-ui") {
             app.insert_resource(lunco_workbench::OfflineRecordingPresentation {
                 retain_workbench_chrome: true,
@@ -145,43 +186,12 @@ impl Plugin for SandboxUiPlugin {
                 use lunco_settings::AppSettingsExt;
                 use lunco_workbench::WorkbenchAppExt;
                 app.register_settings_section::<lunco_settings::DownloadSettings>();
-                app.init_resource::<runtime_exposure::RuntimeUiGates>();
-                app.add_systems(Startup, (runtime_exposure::load_runtime_ui_manifest,));
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_dismiss_terrain_overlay);
                 app.add_systems(
                     Update,
-                    (
-                        runtime_exposure::sync_runtime_ui_manifest,
-                        update_runtime_ui_gates,
-                        runtime_exposure::mount_runtime_ui_surfaces
-                            .after(runtime_exposure::sync_runtime_ui_manifest)
-                            .after(update_runtime_ui_gates)
-                            .before(bevy_hui::HuiSystems::Build),
-                        runtime_exposure::bind_runtime_ui_to_camera
-                            .after(runtime_exposure::sync_runtime_ui_manifest),
-                        runtime_exposure::attach_runtime_ui_names
-                            .after(runtime_exposure::sync_runtime_ui_manifest)
-                            .before(bevy_flair::style::StyleSystems::Prepare),
-                        runtime_exposure::hand_runtime_ui_styling_to_flair
-                            .after(bevy_hui::HuiSystems::Style)
-                            .after(runtime_exposure::sync_runtime_ui_manifest),
-                        runtime_exposure::apply_runtime_ui_exposures
-                            .after(runtime_exposure::sync_runtime_ui_manifest)
-                            // HUI replaces the template root's Node while building
-                            // the tree. Apply the manifest-owned rectangle only after
-                            // that authoritative build/deferred-command boundary.
-                            .after(bevy_hui::HuiSystems::Style),
-                        runtime_exposure::register_runtime_ui_input_regions
-                            .after(runtime_exposure::apply_runtime_ui_exposures),
-                    ),
-                );
-                app.add_systems(
-                    PostUpdate,
-                    runtime_exposure::apply_runtime_ui_placement_after_style
-                        .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
-                        .after(bevy::ui::UiSystems::Propagate)
-                        .before(bevy::ui::UiSystems::Content),
+                    runtime_exposure::register_runtime_ui_input_regions
+                        .after(runtime_exposure::apply_runtime_ui_exposures),
                 );
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);

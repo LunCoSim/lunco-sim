@@ -3529,6 +3529,12 @@ impl Plugin for SandboxOffscreenPlugin {
         app.add_plugins(lunco_workbench::theme_command::ThemeCommandPlugin);
         lunco_workbench::input_overlay::register_input_overlay_commands(app);
 
+        // The recorder has no OS window and therefore no egui host. It still
+        // renders Bevy UI into the same image as the authored scene camera;
+        // install the shared HUI/Flair exposure layer so film HUDs are
+        // captured as pixels rather than remaining editor-only overlays.
+        crate::ui::add_runtime_ui_layer(app);
+
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).
         app.init_resource::<lunco_workbench::status_bus::StatusBus>();

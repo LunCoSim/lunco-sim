@@ -9,20 +9,30 @@
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
         "status_color": { "source": "status_color" },
+        "ground_speed": { "source": "ground_speed" },
+        "lateral_speed": { "source": "lateral_speed" },
+        "vertical_speed": { "source": "vertical_speed" },
+        "altitude": { "source": "altitude" },
+        "propellant": { "source": "propellant" },
+        "propellant_width": { "source": "propellant_width" },
+        "roll": { "source": "roll" },
+        "pitch": { "source": "pitch" },
+        "yaw": { "source": "yaw" },
+        "spin": { "source": "spin" },
         "rcs_activity": { "source": "rcs_activity" },
         "rcs_activity_width": { "source": "rcs_activity_width" },
+        "rcs_axis": { "source": "rcs_axis" },
         "torque_x": { "source": "torque_x" },
         "torque_y": { "source": "torque_y" },
         "torque_z": { "source": "torque_z" },
-        "throttle": { "source": "throttle" }
+        "main_engine": { "source": "main_engine" }
       },
-      "visible_in_perspective": "rover_build",
       "placement": {
         "mode": "window",
         "anchor": "top_right",
         "offset": [-24.0, 72.0],
-        "width": 430.0,
-        "height": 310.0
+        "width": 470.0,
+        "height": 430.0
       }
     },
     {
