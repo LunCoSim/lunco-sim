@@ -17,6 +17,14 @@ fn test_rover_loading_physics() {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
+    // UsdSimPlugin's production schedule expects these shared projection
+    // resources. The minimal harness does not add the full app plugin stack,
+    // so initialize the same resources explicitly instead of allowing a
+    // missing-resource panic to hide the wheel contract this test exercises.
+    app.init_resource::<UsdStageRevision>();
+    app.init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>();
+    app.init_resource::<lunco_modelica::state::GeneratedModelicaSources>();
+    app.init_resource::<lunco_cosim::BindingRevision>();
     // The avian/sim extractors read the LIVE canonical stage; without
     // `UsdBevyPlugin` (which normally inits it) this minimal harness must
     // provide the resource itself so `get_or_build` can compose off the recipe.
@@ -49,23 +57,27 @@ def Xform "Rover" {
     }
     def Cylinder "Wheel" (
         prepend apiSchemas = [
-            "PhysxVehicleWheelAPI", "LunCoWheelAPI",
+            "PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI",
             "PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI",
             "PhysxVehicleTireAPI", "PhysicsMaterialAPI",
         ]
     ) {
+        double height = 0.3
         float physxVehicleWheel:radius = 0.4
-        int lunco:wheel:index = 0
+        int physxVehicleWheelAttachment:index = 0
+        float inputs:drive.connect = </Rover.outputs:drive_left>
 
         # The unified reader (`lunco_usd_sim::wheel_params`) requires the FULL
         # drivetrain set — these previously fell back to Rust constants and are
         # now part of the contract this fixture pins.
-        float physics:mass = 25.0
+        float physxVehicleWheel:mass = 25.0
         float physxVehicleEngine:peakTorque = 300.0
         # The ONE no-load axle speed, obeyed by BOTH wheel realizations (the
         # joint motor targets it; the raycast drive force rolls off toward it).
         # There is no `lunco:wheel:maxDriveOmega` any more.
         float physxVehicleEngine:maxRotationSpeed = 12.0
+        float physxVehicleWheel:width = 0.3
+        float physxVehicleWheel:moi = 2.0
         float physxVehicleWheel:dampingRate = 0.45
         float physxVehicleWheel:maxBrakeTorque = 1500.0
         float physxVehicleTire:longitudinalStiffness = 8000.0

@@ -287,7 +287,7 @@ fn publish_raycast_support_footprints(
 /// The same `skid_rover.usda` composed with `drivetrain = physical` masses 1100 kg
 /// (chassis 1000 + four 25 kg wheel bodies avian integrates in their own right),
 /// and with `drivetrain = raycast` massed 1000 kg — the proxy wheels are kinematic,
-/// so avian never saw their authored `physics:mass` at all. One variant switch
+/// so avian never saw their authored `physxVehicleWheel:mass` at all. One variant switch
 /// silently changed the vehicle by 10%, which no variant is allowed to do.
 ///
 /// That 10% is directly a speed error: `physxRigidBody:linearDamping` drags `c·m·v`,

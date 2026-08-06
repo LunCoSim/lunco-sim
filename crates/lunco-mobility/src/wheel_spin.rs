@@ -32,7 +32,7 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// balance `I·ω̇ = τ_drive + τ_brake − τ_traction − τ_bearing`. Every coefficient
 /// is read from the USD wheel component (mass, friction, motor curve) — see
 /// `setup_raycast_wheel` — so the spin you see is grounded in the authored data:
-/// - `I = ½·m·r²` — solid-disk inertia from USD `physics:mass` and radius.
+/// - `I = ½·m·r²` — solid-disk inertia from USD `physxVehicleWheel:mass` and radius.
 /// - `τ_drive = throttle · drive_torque_max` — actuator torque (signed for
 ///   reverse); `drive_torque_max` comes from the motor power / no-load speed.
 /// - **Grounded**: the contact slip `(ω·r − v)` is resisted by tire grip with a

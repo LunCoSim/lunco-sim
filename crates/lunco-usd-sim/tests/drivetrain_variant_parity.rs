@@ -8,7 +8,8 @@
 //! `drivetrain_parity` unwinnable for reasons no amount of tire tuning can reach.
 //!
 //! This happened: the raycast rover massed 1000 kg and its physical twin 1100 kg,
-//! because a raycast wheel is a kinematic proxy whose authored `physics:mass` avian
+//! because a raycast wheel is a kinematic proxy whose authored
+//! `physxVehicleWheel:mass` is still part of the shared wheel contract but was
 //! never weighed. Terminal speed goes as `F/(c·m)` under `physxRigidBody:linearDamping`,
 //! so a 10% mass error is a 10% speed error that looks exactly like a tire defect.
 //! `lunco_mobility::fold_proxy_wheel_mass` now folds the proxy wheels onto the
@@ -236,16 +237,22 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
 
     let mut checked = 0;
     for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
+        let raycast_path = SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap();
+        let physical_path = SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap();
+        // The shipped wheel composition applies wheel and suspension APIs directly
+        // on the wheel prim. That is the standard direct-composition form; a
+        // separate attachment prim may be supplied by a scene through the same
+        // reader argument.
         let pa = lunco_usd_sim::wheel_params::WheelParams::read(
             &view,
-            &SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap(),
-            None,
+            &raycast_path,
+            Some(&raycast_path),
             None,
         );
         let pb = lunco_usd_sim::wheel_params::WheelParams::read(
             &view,
-            &SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap(),
-            None,
+            &physical_path,
+            Some(&physical_path),
             None,
         );
 

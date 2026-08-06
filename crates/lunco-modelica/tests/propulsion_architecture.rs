@@ -19,6 +19,8 @@ fn package_member(suffix: &str) -> String {
 fn propulsion_members_compile_with_their_declared_icons_and_ports() {
     for suffix in [
         "Propulsion/PropellantStatus.mo",
+        "Propulsion/PropellantTank.mo",
+        "Propulsion/RCSFlowAggregator.mo",
         "Propulsion/RCSThruster.mo",
         "Propulsion/RCSJet.mo",
     ] {

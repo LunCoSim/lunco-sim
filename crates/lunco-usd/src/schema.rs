@@ -791,10 +791,6 @@ mod tests {
         // schema hint (produce_usd_param_view asks the composed attr FIRST) —
         // nothing to assert here at registry level, but the registry must not
         // invent hints for un-annotated names.
-        assert!(
-            reg.ui_hint("lunco:wheel:index").is_none(),
-            "lunco:wheel:index should carry no slider hint (wiring identity, not a knob)"
-        );
     }
 
     /// The physxVehicle attributes the wheel reader requires must ALSO surface
@@ -1086,7 +1082,6 @@ class "SquatterAPI" (
                 .type_name,
             "float",
         );
-        assert_eq!(reg.property("lunco:wheel:index").unwrap().type_name, "int",);
         assert_eq!(
             reg.property("lunco:suspensionVisual:role")
                 .unwrap()

@@ -291,6 +291,10 @@ struct StageJointTopology {
     authored_joints: HashMap<String, (String, String)>,
     articulation_roots: HashSet<String>,
     wheel_attachment_targets: HashMap<String, String>,
+    /// Standard attachment index, keyed by the referenced wheel path. The
+    /// index is authored on the attachment prim, never inferred from wheel
+    /// order or copied into a wheel-local compatibility attribute.
+    wheel_attachment_indices: HashMap<String, i32>,
 }
 
 /// Per-canonical-stage cache of immutable wheel/joint topology.
@@ -323,6 +327,7 @@ impl JointTopologyIndex {
         topology.authored_joints.clear();
         topology.articulation_roots.clear();
         topology.wheel_attachment_targets.clear();
+        topology.wheel_attachment_indices.clear();
         collect_joint_scan_read(reader, topology);
         topology.canonical_generation = Some(generation);
         topology.projection_revision = Some(projection_revision);
@@ -559,18 +564,15 @@ pub struct PhysicalWheel {
 /// Marker for wheels waiting for their FSW root to be spawned to complete wiring.
 #[derive(Component)]
 pub struct PendingWheelWiring {
-    pub index: i32,
     pub p_drive: Entity,
     pub p_steer: Entity,
-    /// G4: USD-authored actuator binding — the port name resolved from the
-    /// wheel's `inputs:drive.connect` connection (the target property minus its
-    /// `outputs:` prefix). When `Some`, this wheel wires to that FSW port
-    /// verbatim — overriding the index-parity default — so arbitrary topologies
-    /// (per-wheel drive, 6-wheel, rocker-bogie) are declared in USD rather than
-    /// hardcoded in `try_wire_wheel`.
-    pub drive_port_name: Option<String>,
-    /// G4: USD-authored steer binding, resolved the same way from the wheel's
-    /// `inputs:steer.connect`. `Some` overrides the `index < 2` front-steer default.
+    /// USD-authored actuator binding — the port name resolved from the wheel's
+    /// required `inputs:drive.connect` connection (the target property minus its
+    /// `outputs:` prefix). Drive topology is authored, never inferred from wheel
+    /// order or parity.
+    pub drive_port_name: String,
+    /// USD-authored steer binding, resolved the same way from the optional
+    /// `inputs:steer.connect`. Unsteered wheels leave this absent explicitly.
     pub steer_port_name: Option<String>,
 }
 
@@ -600,8 +602,8 @@ pub struct PendingDifferential {
 ///
 /// # What It Does
 ///
-/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `ActuatorPorts` with 4 digital ports
-///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `Vessel`.
+/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `ActuatorPorts` from the
+///    vehicle root's authored numeric `outputs:*` attributes, plus `Vessel`.
 /// 2. **Detects `PhysxVehicleTankDifferentialAPI`** → `DriveMix { kernel: "skid" }`.
 /// 3. **Detects `PhysxVehicleAckermannSteeringAPI`** → `DriveMix { kernel: "linear" }` + steering.
 ///    (A `lunco:driveKernel` attribute overrides both → `DriveMix { kernel: <hook_id> }`,
@@ -905,22 +907,40 @@ fn collect_joint_scan_read(
         }
         // Canonical wheel-attachment binding: an attachment prim names its wheel
         // (`physxVehicleWheelAttachment:wheel`) and its suspension
-        // (`physxVehicleWheelAttachment:suspension`) via USD relationships. We
-        // record wheel→suspension so Pass 2 can resolve a wheel's compliance from
-        // the referenced suspension prim rather than only from attrs on the wheel
-        // itself. See doc 53 §3.2.
+        // (`physxVehicleWheelAttachment:suspension`) via USD relationships. The
+        // standard schema also permits wheel/tire/suspension APIs directly on the
+        // attachment prim; that direct form is explicit and is handled by mapping
+        // the attachment to itself. There is no flat legacy fallback.
         if reader.has_api_schema(&path, "PhysxVehicleWheelAttachmentAPI") {
-            if let (Some(wheel), Some(suspension)) = (
-                reader.rel_target(&path, "physxVehicleWheelAttachment:wheel"),
-                reader.rel_target(&path, "physxVehicleWheelAttachment:suspension"),
-            ) {
+            let wheel = reader
+                .rel_target(&path, "physxVehicleWheelAttachment:wheel")
+                .or_else(|| {
+                    reader
+                        .has_api_schema(&path, "PhysxVehicleWheelAPI")
+                        .then(|| path.as_str().to_string())
+                });
+            let suspension = reader
+                .rel_target(&path, "physxVehicleWheelAttachment:suspension")
+                .or_else(|| {
+                    reader
+                        .has_api_schema(&path, "PhysxVehicleSuspensionAPI")
+                        .then(|| path.as_str().to_string())
+                });
+            if let (Some(wheel), Some(suspension)) = (wheel, suspension) {
                 debug!(
                     "USD wheel attachment: wheel {} → suspension {} (via {})",
                     wheel,
                     suspension,
                     path.as_str()
                 );
-                topology.wheel_attachment_targets.insert(wheel, suspension);
+                topology
+                    .wheel_attachment_targets
+                    .insert(wheel.clone(), suspension);
+                if let Some(index) =
+                    reader.scalar::<i32>(&path, "physxVehicleWheelAttachment:index")
+                {
+                    topology.wheel_attachment_indices.insert(wheel, index);
+                }
             }
         }
     }
@@ -1463,8 +1483,10 @@ fn process_usd_sim_prim_read(
     }
 
     // 1. Detect PhysxVehicleContextAPI (The Rover Root)
-    // Stamps `ActuatorPorts`: the 4 canonical digital actuator ports, plus any the
-    // vessel declares as `outputs:` attributes.
+    // Stamps `ActuatorPorts` exclusively from numeric `outputs:` attributes
+    // authored on the vehicle root. A vehicle without an authored actuator
+    // surface is under-specified; Rust does not fabricate drive/steer/brake
+    // ports from the fact that a PhysX vehicle schema is present.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
         info!(
             "Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface",
@@ -1472,18 +1494,11 @@ fn process_usd_sim_prim_read(
         );
 
         let mut port_map = HashMap::new();
-        // Canonical actuator ports the built-in skid/Ackermann mix drives.
-        let mut port_names: Vec<String> = ["drive_left", "drive_right", "steering", "brake"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        // Extra actuator ports the vessel DECLARES, as authored `outputs:`
-        // attributes on the vessel prim — a port is an attribute, the same way a
-        // command is an `inputs:` attribute. That lets a dynamic vehicle expose
-        // custom per-wheel actuators (`outputs:drive_w0` …) that wheels bind to
-        // with a USD CONNECTION and a wire/rhai/Modelica mix drives: arbitrary
-        // topology authored in USD, not hardcoded here. Deduped against the
-        // canonical set, so a vessel may re-declare a canonical port harmlessly.
+        let mut port_names: Vec<String> = Vec::new();
+        // A port is an authored numeric `outputs:` attribute, the same way a
+        // command is an `inputs:` attribute. This supports conventional
+        // drive_left/drive_right/steering/brake names and arbitrary per-wheel
+        // channels without a Rust-side compatibility vocabulary.
         for attr in reader.attr_names(&sdf_path) {
             let Some(name) = attr.strip_prefix("outputs:") else {
                 continue;
@@ -1498,6 +1513,14 @@ fn process_usd_sim_prim_read(
             if !port_names.iter().any(|n| n == name) {
                 port_names.push(name.to_string());
             }
+        }
+        if port_names.is_empty() {
+            error!(
+                "USD vehicle {} applies PhysxVehicleContextAPI but authors no numeric outputs:* actuator ports",
+                prim_path.path
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
         }
         for name in &port_names {
             // `ChildOf(entity)`: the actuator ports are owned by the vehicle so the
@@ -1537,7 +1560,7 @@ fn process_usd_sim_prim_read(
         //
         // `ActuatorPorts` is a different thing and is NOT the input surface: it
         // maps ACTUATOR names to their `Port` entities, built above from the
-        // canonical set plus the vessel prim's authored `outputs:` attributes. The
+        // vessel prim's authored `outputs:` attributes. The
         // two stay separate components on purpose — both carry a `"brake"`, and
         // they are not the same value (analog command vs discretized gate).
         commands
@@ -1704,9 +1727,9 @@ fn process_usd_sim_prim_read(
         info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
         // ONE unified read for BOTH wheel kinds (see `wheel_params`): every
-        // drivetrain/tire/inertia number plus suspension, resolved via the
-        // canonical two-step path (attachment prim, else flat off the wheel
-        // prim). Strict — all missing required attrs are collected and the
+        // drivetrain/tire/inertia number plus suspension, resolved through the
+        // standard attachment relationship or explicit direct wheel/suspension
+        // composition. Strict — all missing required attrs are collected and the
         // wheel refuses to spawn; the authored defaults live in
         // components/mobility/wheel.usda, which every wheel composes.
         // Read BEFORE spawning the port entities so an invalid wheel
@@ -1769,19 +1792,36 @@ fn process_usd_sim_prim_read(
             .spawn((Port::default(), Name::new("Port_Steer"), ChildOf(entity)))
             .id();
 
-        // `index` is LunCo-specific: NVIDIA's `physxVehicleWheelAttachment:index`
-        // lives on the WheelAttachment prim, which our flat composition doesn't
-        // have (the wheel prim composes both wheel + suspension directly). So
-        // we author the wheel's logical index under a LunCo namespace rather
-        // than squatting a non-existent `physxVehicleWheel:index` attr.
-        let index = reader
-            .scalar::<i32>(&sdf_path, "lunco:wheel:index")
-            .unwrap_or(0);
+        // Wheel identity belongs to the standard attachment schema. The index
+        // is looked up through the stage-local wheel→attachment map, so the
+        // canonical relationship form reads the value from the attachment
+        // prim and the direct self-composition form remains explicit. There is
+        // no wheel-order or parity fallback.
+        let Some(index) = topology
+            .wheel_attachment_indices
+            .get(&prim_path.path)
+            .copied()
+        else {
+            error!(
+                "USD wheel {} has no indexed PhysxVehicleWheelAttachmentAPI binding — refusing to spawn",
+                sdf_path.as_str()
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        };
+        if index < 0 {
+            error!(
+                "USD wheel {} has the standard attachment index {} — vehicle wheels must author a non-negative index",
+                sdf_path.as_str(),
+                index
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        }
 
         // Optional per-wheel actuator binding, as a USD CONNECTION:
         //   float inputs:drive.connect = </Rover.outputs:drive_left>
-        // This extracts the rover's wiring topology out of `try_wire_wheel`'s
-        // hardcoded index parity and into USD, enabling per-wheel drive and
+        // This keeps the rover's wiring topology in USD, enabling per-wheel drive and
         // non-2×N layouts.
         //
         // A connection, not a name: PCP resolves and PATH-TRANSLATES it through
@@ -1794,16 +1834,22 @@ fn process_usd_sim_prim_read(
             let (_, property) = source.rsplit_once('.')?;
             property.strip_prefix("outputs:").map(str::to_string)
         };
-        let drive_port_name = connected_port("inputs:drive");
+        let Some(drive_port_name) = connected_port("inputs:drive") else {
+            error!(
+                "USD wheel {} has no inputs:drive connection — drive topology must be authored",
+                sdf_path.as_str()
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        };
         let steer_port_name = connected_port("inputs:steer");
 
         // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
         commands.entity(entity).try_insert(PendingWheelWiring {
-            index,
             p_drive,
             p_steer,
             drive_port_name,
-            steer_port_name,
+            steer_port_name: steer_port_name.clone(),
         });
 
         // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
@@ -1815,11 +1861,7 @@ fn process_usd_sim_prim_read(
         // schema). Same for both wheel kinds: each attaches a shared
         // `SteeringActuator` (joint or raycast), so the model is identical.
         let steering_vehicle = steering_vehicle_of(reader, &prim_path.path);
-        let steer_for_wheel = if index < 2 && steering_vehicle.is_some() {
-            Some(p_steer)
-        } else {
-            None
-        };
+        let steer_for_wheel = steer_port_name.as_ref().map(|_| p_steer);
         // The steer lock belongs to the VEHICLE's steering system, not to a
         // wheel: PhysX deprecated the per-wheel `physxVehicleWheel:maxSteerAngle`
         // in favour of the steering APIs, and a skid rover's wheels have no such
@@ -2488,7 +2530,7 @@ fn setup_physical_wheel(
     // Keep the rigid collider identical to the authored cylinder that produced
     // the visual mesh. `Collider::cylinder` takes the full height; deriving a
     // width from radius made the collider wider/narrower than the tire.
-    let cyl = Collider::cylinder(params.radius, params.height);
+    let cyl = Collider::cylinder(params.radius, params.width);
     let collider = if wheel_axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {
         cyl
     } else {
@@ -3133,18 +3175,16 @@ fn on_add_usd_sim_prim(
 ///
 /// # Wiring Rules
 ///
-/// USD authority first (G4 — topology authored, not hardcoded):
+/// USD is the only topology authority:
 /// - `inputs:drive.connect = </Rover.outputs:<name>>` on the wheel → wire its
 ///   drive to that FSW port. The connection is PCP-resolved and path-translated
 ///   through reference arcs, so a referenced wheel binds to its own instance's port.
 /// - `inputs:steer.connect` likewise wires the wheel's steer.
 ///
-/// Default when unauthored (the canonical skid/Ackermann layout):
-/// - **Even index** → `drive_left`, **odd index** → `drive_right`.
-/// - **Index < 2** (front) → `steering` (only meaningful for Ackermann).
-///
-/// A named port that is absent from the rover's `ActuatorPorts` warns and is skipped —
-/// declare custom ports as `outputs:<name>` attributes on the rover root.
+/// A wheel without a drive connection is rejected during projection; there is no
+/// inferred drive or steering mapping. A named port that is absent from the
+/// rover's `ActuatorPorts` is reported and left pending until the authored port
+/// exists.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     // `ActuatorPorts` does double duty here: it LOCATES the vehicle root (only a rover
@@ -3164,15 +3204,8 @@ fn try_wire_wheel(
         });
 
         if let Some((_, _, actuators)) = vehicle_root {
-            // Drive: authored binding wins, else even/odd index parity.
-            let drive_port_name = pending.drive_port_name.clone().unwrap_or_else(|| {
-                if pending.index % 2 == 0 {
-                    "drive_left"
-                } else {
-                    "drive_right"
-                }
-                .to_string()
-            });
+            // Drive is an authored USD connection. No inferred mapping.
+            let drive_port_name = pending.drive_port_name.clone();
             if let Some(d_port) = actuators.get(&drive_port_name) {
                 // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
                 // on scene swap — the same general lifecycle contract the ports/joint use.
@@ -3198,13 +3231,9 @@ fn try_wire_wheel(
                 );
             }
 
-            // Steer: authored binding wins, else front wheels (index < 2) steer.
-            // An unauthored rear/skid wheel has no steer port — leave it unwired.
-            let steer_port_name = pending
-                .steer_port_name
-                .clone()
-                .or_else(|| (pending.index < 2).then(|| "steering".to_string()));
-            if let Some(name) = steer_port_name {
+            // Steering is optional, but if present it is also an authored USD
+            // connection. An unsteered wheel has no steering endpoint.
+            if let Some(name) = pending.steer_port_name.clone() {
                 if let Some(s_port) = actuators.get(&name) {
                     commands.spawn((
                         SimConnection {
@@ -3221,9 +3250,7 @@ fn try_wire_wheel(
                         "Wired wheel {} steering to FSW port {}",
                         prim_path.path, name
                     );
-                } else if pending.steer_port_name.is_some() {
-                    // Only warn when the author asked for a port that's missing;
-                    // a defaulted front wheel on a skid rover legitimately has none.
+                } else {
                     warn!(
                         "Wheel {} steer port '{}' not in rover ActuatorPorts; skipping",
                         prim_path.path, name
@@ -3543,6 +3570,7 @@ def Xform "Rover" {
     def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
         rel physxVehicleWheelAttachment:wheel = </Rover/Wheel>
         rel physxVehicleWheelAttachment:suspension = </Rover/Suspension>
+        int physxVehicleWheelAttachment:index = 7
     }
     def Xform "Suspension" {}
 }
@@ -3566,6 +3594,11 @@ def Xform "Rover" {
         assert_eq!(
             topology.wheel_attachment_targets.get("/Rover/Wheel"),
             Some(&"/Rover/Suspension".to_string())
+        );
+        assert_eq!(
+            topology.wheel_attachment_indices.get("/Rover/Wheel"),
+            Some(&7),
+            "the standard index is read from the attachment, not copied onto the wheel"
         );
         assert!(
             !topology.authored_joints.contains_key("/Rover/WheelJoint"),

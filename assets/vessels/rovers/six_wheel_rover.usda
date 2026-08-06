@@ -7,7 +7,7 @@
 
 # Six-wheel skid rover — demonstrates G4 (arbitrary actuator topology authored
 # in USD). Unlike the 4-wheel base rovers, the wheel→actuator wiring is NOT left
-# to `try_wire_wheel`'s index-parity default: each wheel connects its
+# to any Rust-side index heuristic: each wheel connects its
 # `inputs:drive` to the FSW drive port it listens to, an `outputs:` attribute on
 # the rover root. Three wheels per side connect to `outputs:drive_left`
 # / `outputs:drive_right`, so the built-in skid mix (`PhysxVehicleTankDifferentialAPI`) yaws the
@@ -56,6 +56,8 @@ def Xform "SixWheelRover" (
     # reference arcs instead of matched by name.
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
+    float outputs:steering = 0.0
+    float outputs:brake = 0.0
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
 
@@ -95,7 +97,7 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (-1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 0
+        int physxVehicleWheelAttachment:index = 0
         float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
     }
 
@@ -109,7 +111,7 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (-1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 2
+        int physxVehicleWheelAttachment:index = 2
         float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
     }
 
@@ -123,7 +125,7 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (-1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 4
+        int physxVehicleWheelAttachment:index = 4
         float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
     }
 
@@ -138,7 +140,7 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 1
+        int physxVehicleWheelAttachment:index = 1
         float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
     }
 
@@ -152,7 +154,7 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 3
+        int physxVehicleWheelAttachment:index = 3
         float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
     }
 
@@ -166,7 +168,7 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 5
+        int physxVehicleWheelAttachment:index = 5
         float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
     }
 

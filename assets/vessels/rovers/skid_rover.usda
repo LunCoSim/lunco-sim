@@ -88,6 +88,8 @@ def Xform "SkidRover" (
     float lunco:spawnLift = 1.0
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
+    float outputs:steering = 0.0
+    float outputs:brake = 0.0
 
     # Ground speed as a retained channel — the avian `speed` port on this body
     # (magnitude of its linear velocity). See `rocker_bogie.usda` for why speed is
@@ -173,7 +175,8 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (-1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 0
+        int physxVehicleWheelAttachment:index = 0
+        float inputs:drive.connect = </SkidRover.outputs:drive_left>
     }
 
     def Cylinder "Wheel_FR" (
@@ -188,7 +191,8 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 1
+        int physxVehicleWheelAttachment:index = 1
+        float inputs:drive.connect = </SkidRover.outputs:drive_right>
     }
 
     def Cylinder "Wheel_RL" (
@@ -203,7 +207,8 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (-1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 2
+        int physxVehicleWheelAttachment:index = 2
+        float inputs:drive.connect = </SkidRover.outputs:drive_left>
     }
 
     def Cylinder "Wheel_RR" (
@@ -218,7 +223,8 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 3
+        int physxVehicleWheelAttachment:index = 3
+        float inputs:drive.connect = </SkidRover.outputs:drive_right>
     }
 
     # --- Motors + reductions -------------------------------------------
@@ -232,8 +238,8 @@ def Xform "SkidRover" (
     # raycast and the physical wheel realization obey.
     #
     # `inputs:demand` wires to the SAME drive channel the wheel binds to: the
-    # index-parity default puts the even (left) wheels on `drive_left` and the odd
-    # (right) wheels on `drive_right`, and those ports live on this rover ROOT.
+    # Each wheel's authored connection selects `drive_left` or `drive_right`; those
+    # ports live on this rover ROOT.
     #
     # `lunco:motor:drivenWheel` names the WHEEL, not a joint, so it is authored here
     # UNCONDITIONALLY — outside every variant. A wheel exists in both realizations;
@@ -394,8 +400,7 @@ def Xform "SkidRover" (
     # A drive law is just a `LunCoProgramAPI` on the vessel and the file extension
     # picks the engine, so there is nothing for a closed variant list to add — it
     # could only ever name the laws that existed when this file was written.
-    # The wheels here use the index-parity default (even ⇒ drive_left, odd ⇒
-    # drive_right), which is exactly the port pair the skid law writes.
+    # The wheel drive connections below select the port pair the skid law writes.
 
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law (which decides how commands become drive) and

@@ -12,6 +12,9 @@ use bevy::prelude::*;
 use lunco_cosim::SimConnection;
 use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdRead, UsdStageAsset};
 use lunco_usd_sim::cosim::{rewire_usd_connections, WiringDirty};
+use lunco_usd_sim::domain_projection::{
+    ActuatorWrenchSynthesizer, DomainSynthesizer, MemberClasses, SynthContext, SynthOutcome,
+};
 use openusd::sdf::Path as SdfPath;
 
 const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
@@ -284,6 +287,40 @@ fn lander_asset_wiring_migrated() {
         ),
         ["/LanderTest/Lander.outputs:torque_x"]
     );
+    let attitude_actuation = SdfPath::new("/LanderTest/Lander/AttitudeActuation").unwrap();
+    assert_eq!(
+        view.text(&attitude_actuation, "lunco:synthesizer")
+            .as_deref(),
+        Some("actuator-wrench")
+    );
+    assert!(
+        !view.has_prim(&SdfPath::new("/LanderTest/Lander/AttitudeActuation/Allocator").unwrap()),
+        "the fixed valve allocator must not survive the geometry-derived projection"
+    );
+    assert_eq!(
+        view.connections(&SdfPath::new("/LanderTest/Lander").unwrap(), "inputs:mass"),
+        ["/LanderTest/Lander/MainPropulsion.outputs:vehicle_mass_kg"]
+    );
+    for (controller_port, source_port) in [
+        (
+            "inputs:controller_inertia_xx",
+            "/LanderTest/Lander/MainPropulsion.outputs:vehicle_inertia_xx_kg_m2",
+        ),
+        (
+            "inputs:controller_inertia_yy",
+            "/LanderTest/Lander/MainPropulsion.outputs:vehicle_inertia_yy_kg_m2",
+        ),
+        (
+            "inputs:controller_inertia_zz",
+            "/LanderTest/Lander/MainPropulsion.outputs:vehicle_inertia_zz_kg_m2",
+        ),
+    ] {
+        assert_eq!(
+            view.connections(&SdfPath::new("/LanderTest/Lander").unwrap(), controller_port),
+            [source_port],
+            "controller inertia must consume the same live Modelica source as the Avian inertia port"
+        );
+    }
 
     // The autopilot, composed on by the SCENE. The airframe authors no descent law and
     // no altitude — it flies what it is told, and this wire is what tells it.
@@ -340,6 +377,31 @@ fn lander_asset_wiring_migrated() {
     );
     assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_x"), Some(-5.0));
     assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_z"), Some(-5.0));
+}
+
+#[test]
+fn lander_actuator_projection_uses_all_authored_force_geometry() {
+    let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/vessels/landers/descent_lander.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose descent_lander.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+    let root = SdfPath::new("/DescentLander/AttitudeActuation").unwrap();
+    let classes = MemberClasses::default();
+    let outcome = ActuatorWrenchSynthesizer
+        .synthesize(
+            &view,
+            &root,
+            "DescentLander_AttitudeActuation",
+            &SynthContext { classes: &classes },
+        )
+        .expect("authored RCS geometry must be projectable");
+    let SynthOutcome::Ready(plan) = outcome else {
+        panic!("lander actuator collection must produce a generated plan");
+    };
+    assert_eq!(plan.component_paths.len(), 12);
+    assert_eq!(plan.outputs.len(), 12);
+    assert!(plan.source.contains("LunCo.Actuation.WrenchAllocator"));
+    assert!(!plan.source.contains("RcsValveAllocator"));
 }
 
 /// The airframe ALONE has no autopilot — nothing wires `guidance_throttle`, so it is

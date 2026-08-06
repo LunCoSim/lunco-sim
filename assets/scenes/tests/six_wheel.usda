@@ -14,7 +14,7 @@
 #
 # Verify: 6 wheels spawn; the server logs "Wired wheel .../Wheel_L* drive to FSW
 # port drive_left" and ".../Wheel_R* drive to FSW port drive_right" (the authored
-# bindings, not index parity). DriveRover should yaw the body by skid steering.
+# bindings, not an index heuristic). DriveRover should yaw the body by skid steering.
 
 def Xform "SixWheelTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>

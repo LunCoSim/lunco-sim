@@ -18,9 +18,9 @@
 //! | Param | Attribute | Required |
 //! |---|---|---|
 //! | radius | `physxVehicleWheel:radius` | yes |
-//! | height | `height` | yes |
-//! | mass | `physics:mass` | yes |
-//! | moment of inertia | `physxVehicleWheel:moi` | no (0 ⇒ derived ½·m·r² from authored mass+radius) |
+//! | width | `physxVehicleWheel:width` | yes |
+//! | mass | `physxVehicleWheel:mass` | yes |
+//! | moment of inertia | `physxVehicleWheel:moi` | yes (0 ⇒ derived ½·m·r² from authored mass+radius) |
 //! | peak axle torque | MOTOR `lunco:motor:stallTorque` x gearbox `ratio` x `efficiency` | via motor |
 //! | no-load axle speed | MOTOR `lunco:motor:noLoadSpeed` / gearbox `ratio` | via motor |
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
@@ -90,17 +90,16 @@ pub struct SuspensionParams {
 pub struct WheelParams {
     /// Wheel radius, m (`physxVehicleWheel:radius`).
     pub radius: f64,
-    /// Wheel width along its authored cylinder axis, m (`height`). This is read
-    /// from the same composed USD prim that produces the visual mesh so the
-    /// physical wheel collider cannot silently use a different width.
-    pub height: f64,
-    /// Wheel mass, kg (`physics:mass`). Same value for both kinds — the old
+    /// Wheel width along its authored cylinder axis, m (`physxVehicleWheel:width`).
+    /// This standard wheel value drives the collider in both realizations.
+    pub width: f64,
+    /// Wheel mass, kg (`physxVehicleWheel:mass`). Same value for both kinds — the old
     /// raycast-25 / physical-100 Rust fork is gone; feel is authored.
     pub mass: f64,
     /// Explicit axle moment of inertia, kg·m² (`physxVehicleWheel:moi`).
-    /// 0 ⇒ DERIVED as the solid-cylinder ½·m·r² from the authored `physics:mass`
-    /// and `physxVehicleWheel:radius`. That is a derivation from authored
-    /// physics, not an invented default — no number enters that nothing authored.
+    /// An authored zero means the documented solid-cylinder derivation
+    /// `½·m·r²` from the authored mass and radius; the attribute itself is still
+    /// required by the standard PhysX wheel schema.
     pub moment_of_inertia: f64,
     /// Rotor inertia reflected through the gearbox to the axle, kg·m²
     /// (`J·ratio²`, from the motor behind this wheel). `0` for an undriven
@@ -158,9 +157,9 @@ pub struct WheelParams {
 impl WheelParams {
     /// Read every wheel attribute off the composed prim, collecting ALL missing
     /// required names into the error. `attachment_suspension` is the suspension
-    /// prim a `PhysxVehicleWheelAttachmentAPI` binds this wheel to (canonical
-    /// Omniverse topology), if any; the flat path (attrs composed onto the
-    /// wheel prim itself, LunCo's compact composition) is the fallback.
+    /// prim selected by the standard `PhysxVehicleWheelAttachmentAPI`; direct
+    /// wheel/suspension API composition passes the wheel itself. A wheel without
+    /// an attachment is under-authored and is rejected.
     ///
     /// `powertrain` is the motor (and optional gearbox) that turns this wheel, found
     /// by the caller via `lunco:motor:drivenWheel`. Torque and no-load speed come from
@@ -188,8 +187,8 @@ impl WheelParams {
         };
 
         let radius = req("physxVehicleWheel:radius");
-        let height = req("height");
-        let mass = req("physics:mass");
+        let width = req("physxVehicleWheel:width");
+        let mass = req("physxVehicleWheel:mass");
         // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
         // therefore no torque — that is a castor, not a wheel with a default torque.
         // `max(1e-3)` on the speed keeps the raycast rolloff's divisor finite; it is a
@@ -213,10 +212,10 @@ impl WheelParams {
         let friction_mu = req("physics:dynamicFriction");
         let drive_damping = req("lunco:wheel:driveDamping");
 
-        // The ONE non-required number, and it is a DERIVATION, not a default:
-        // 0/unauthored means "solid cylinder", i.e. ½·m·r² computed downstream
-        // from the authored mass and radius. Nothing is invented.
-        let moment_of_inertia = reader.real(wheel, "physxVehicleWheel:moi").unwrap_or(0.0);
+        // A zero is an authored, documented solid-cylinder derivation. The
+        // standard PhysX wheel attribute itself remains required, so an
+        // omitted value is reported with the other missing contract fields.
+        let moment_of_inertia = req("physxVehicleWheel:moi");
 
         let steer_axis = match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:steerAxis")
         {
@@ -231,15 +230,30 @@ impl WheelParams {
             return Err(missing);
         }
 
-        let suspension = attachment_suspension
-            .and_then(|susp| read_suspension_attrs(reader, susp))
-            // A half-authored attachment must not read as "no suspension" —
-            // fall through to the flat path.
-            .or_else(|| read_suspension_attrs(reader, wheel));
+        // The shipped compact composition applies the attachment, wheel, and
+        // suspension APIs to one composed prim. That is an explicit standard
+        // direct-composition form, not a heuristic fallback. Relationship-form
+        // assets pass the referenced suspension from the stage topology map.
+        let direct_suspension = (attachment_suspension.is_none()
+            && reader.has_api_schema(wheel, "PhysxVehicleWheelAttachmentAPI")
+            && reader.has_api_schema(wheel, "PhysxVehicleSuspensionAPI"))
+        .then_some(wheel);
+        let suspension_prim = attachment_suspension.or(direct_suspension);
+        let suspension = match suspension_prim {
+            Some(susp) => read_suspension_attrs(reader, susp),
+            None => {
+                missing.push("PhysxVehicleWheelAttachmentAPI");
+                None
+            }
+        };
+
+        if !missing.is_empty() {
+            return Err(missing);
+        }
 
         Ok(WheelParams {
             radius,
-            height,
+            width,
             mass,
             moment_of_inertia,
             reflected_inertia,
@@ -363,8 +377,9 @@ impl WheelParams {
         tire + self.reflected_inertia
     }
 
-    /// Collider density realising `physics:mass` on the physical wheel's
-    /// cylinder collider (`cylinder(r, h = r/2)` ⇒ volume = π·r²·(r/2)).
+    /// Collider density realising `physxVehicleWheel:mass` on the physical wheel's
+    /// cylinder collider (`cylinder(r, h = physxVehicleWheel:width)` ⇒ volume
+    /// = π·r²·width).
     ///
     /// Mass goes in via DENSITY, not a forced `Mass`: avian derives
     /// `AngularInertia` from the collider at `ColliderDensity` even when `Mass`
@@ -372,21 +387,14 @@ impl WheelParams {
     /// contact+joint solver then can't build enough support impulse and the
     /// rover sinks through the one-sided terrain heightfield.
     pub fn wheel_density(&self) -> f32 {
-        let volume = std::f64::consts::PI * self.radius.powi(2) * self.height;
+        let volume = std::f64::consts::PI * self.radius.powi(2) * self.width;
         (self.mass / volume.max(1e-6)) as f32
     }
 }
 
-/// Resolve a wheel's ATTACHMENT suspension prim via the canonical two-step path
-/// (doc 53 §3.2):
-///
-/// 1. **Canonical (relationship):** if a `PhysxVehicleWheelAttachmentAPI` prim
-///    targets this wheel, the Pass-1 scan recorded the suspension prim it binds —
-///    return that path. The map belongs to one composed stage, so its keys are
-///    stage-local paths; independent instances retain independent topology maps.
-/// 2. **Flat (fallback):** `None` — [`WheelParams::read`] then reads the attrs
-///    directly off the wheel prim (LunCo's compact composition, where the wheel
-///    references the suspension and the attrs compose onto the wheel itself).
+/// Resolve a wheel's attachment suspension prim via the standard attachment
+/// topology. The map belongs to one composed stage, so its keys are stage-local
+/// paths; independent instances retain independent topology maps.
 pub(crate) fn attachment_suspension_path(
     wheel_path: &str,
     wheel_attachment_targets: &HashMap<String, String>,
@@ -429,14 +437,16 @@ fn read_suspension_attrs(
 
 /// Attribute families [`resync_wheels_for_stage`] claims from the generic
 /// refresh fallback. Prim-scoped where a name is not wheel-specific:
-/// `physics:mass` is claimed only on a wheel prim — on a chassis it must keep
+/// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
 pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> bool {
-    const WHEEL_ONLY_PREFIXES: [&str; 7] = [
+    if attr.starts_with("physxVehicleWheel:") {
+        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
+    }
+    const WHEEL_ONLY_PREFIXES: [&str; 6] = [
         "lunco:wheel:",
         "lunco:suspension:",
         "lunco:tire:",
-        "physxVehicleWheel:",
         "physxVehicleEngine:",
         "physxVehicleTire:",
         "physxVehicleSuspension:",
@@ -463,9 +473,6 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
             .rsplit_once('/')
             .and_then(|(parent, _)| parent.rsplit_once('/'))
             .is_some_and(|(_, scope)| scope == "DriveMix");
-    }
-    if attr == "physics:mass" {
-        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
     false
 }
@@ -608,7 +615,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         // for unrelated edits).
         if (old_radius as f64 - u.params.radius).abs() > 1e-6 {
             let radius = u.params.radius;
-            let cyl = Collider::cylinder(radius, u.params.height);
+            let cyl = Collider::cylinder(radius, u.params.width);
             let collider = if axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {
                 cyl
             } else {

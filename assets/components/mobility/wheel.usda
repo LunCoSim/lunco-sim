@@ -20,7 +20,7 @@
 #       double radius = 0.4
 #       double height = 0.3
 #       float physxVehicleWheel:radius = 0.4
-#       int lunco:wheel:index = 0
+#       int physxVehicleWheelAttachment:index = 0
 #       double3 xformOp:translate = (0.8, -0.2, 1.0)
 #   }
 #
@@ -48,8 +48,9 @@ def Cylinder "Wheel" (
     kind = "component"
     # Applied HERE, once: every wheel on every rover composes this prim, so the
     # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
-    # A rover authors only its own values — index, radius — never the schemas.
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
+    # A rover authors only its own values — attachment index, radius, and any
+    # per-vehicle overrides — never the schemas.
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
     prepend variantSets = ["tire"]
     variants = {
         string tire = "regolith"
@@ -70,12 +71,10 @@ def Cylinder "Wheel" (
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true
-    # The slider hint is authored HERE, per-asset: `physics:mass` is core
-    # UsdPhysics, and the vendored core schema is never stamped with LunCo
-    # opinions (unlike our own physxSchema reconstruction, which carries hints
-    # at schema level). One wheel mass for BOTH wheel kinds — the old
-    # raycast-25/physical-100 Rust fork is gone.
-    float physics:mass = 25.0 (
+    # Standard PhysX wheel mass is the single source for both wheel
+    # realizations; the old raycast/physical Rust fork is gone. The rigid-wheel
+    # projection uses the same value to derive collider density and inertia.
+    float physxVehicleWheel:mass = 25.0 (
         customData = {
             double min = 1
             double max = 500
@@ -88,10 +87,13 @@ def Cylinder "Wheel" (
     # The spin integrator (lunco_mobility::update_wheel_spin) reads these so the
     # visible rotation is grounded in authored data:
     #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
-    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). τ_drive arrives
+    # with I = physxVehicleWheel:moi (or the documented solid-cylinder derivation
+    # from physxVehicleWheel:mass + radius). τ_drive arrives
     # from the motor + gearbox driving this hub's joint; bearing drag is the wheel's own
     # authored physical property (dampingRate), never inferred from the drive torque.
     float physxVehicleWheel:radius = 0.4
+    float physxVehicleWheel:width = 0.3
+    float physxVehicleWheel:moi = 2.0
     # Axle bearing + rolling drag, N·m·s (τ_drag = this · ω). Sized from what the
     # hardware actually loses, not from the drive torque: a sealed, dry-lubricated
     # lunar wheel bearing plus regolith rolling resistance costs on the order of a

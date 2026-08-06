@@ -55,6 +55,10 @@ def Xform "AckermannRover" (
 
     float physics:mass = 1000.0
     float lunco:spawnLift = 1.0
+    float outputs:drive_left = 0.0
+    float outputs:drive_right = 0.0
+    float outputs:steering = 0.0
+    float outputs:brake = 0.0
 
     # Ground speed as a retained channel — the avian `speed` port on this body
     # (magnitude of its linear velocity). See `rocker_bogie.usda` for why speed is
@@ -114,7 +118,9 @@ def Xform "AckermannRover" (
         double3 xformOp:translate = (-1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 0
+        int physxVehicleWheelAttachment:index = 0
+        float inputs:drive.connect = </AckermannRover.outputs:drive_left>
+        float inputs:steer.connect = </AckermannRover.outputs:steering>
     }
 
     def Cylinder "Wheel_FR" (
@@ -127,7 +133,9 @@ def Xform "AckermannRover" (
         double3 xformOp:translate = (1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 1
+        int physxVehicleWheelAttachment:index = 1
+        float inputs:drive.connect = </AckermannRover.outputs:drive_right>
+        float inputs:steer.connect = </AckermannRover.outputs:steering>
     }
 
     def Cylinder "Wheel_RL" (
@@ -140,7 +148,8 @@ def Xform "AckermannRover" (
         double3 xformOp:translate = (-1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 2
+        int physxVehicleWheelAttachment:index = 2
+        float inputs:drive.connect = </AckermannRover.outputs:drive_left>
     }
 
     def Cylinder "Wheel_RR" (
@@ -153,7 +162,8 @@ def Xform "AckermannRover" (
         double3 xformOp:translate = (1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        int lunco:wheel:index = 3
+        int physxVehicleWheelAttachment:index = 3
+        float inputs:drive.connect = </AckermannRover.outputs:drive_right>
     }
 
     # --- Motors + reductions -------------------------------------------

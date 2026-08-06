@@ -124,21 +124,20 @@ The wheel→actuator **wiring topology** was hardcoded in two Rust spots: the po
 now USD-authorable:
 - **Per-wheel binding** — a USD **connection** on the wheel prim,
   `float inputs:drive.connect = </Rover.outputs:drive_left>` (and
-  `inputs:steer.connect`), names the FSW port it wires to, overriding index
-  parity. The reader resolves the connection and takes the target property name
+  `inputs:steer.connect`), names the FSW port it wires to. The reader resolves
+  the connection and takes the target property name
   minus its `outputs:` prefix as the port name. Because a connection is
   PCP-resolved and path-translated through reference arcs, a wheel arriving on a
   `references` arc binds to its own instance's port rather than to whatever prim
   shares a name; it is also typed, carries `customData` UI hints, and is visible
   in usdview. So a 6-wheel rover, per-wheel independent drive, or a non-2×N
-  layout is declared in USD, not coded. Wheels with no connection keep the
-  documented parity default (even→`drive_left`, odd→`drive_right`,
-  front→`steering`), so the 4-wheel base rovers are unchanged.
-- **Extensible port set** — each extra port is a real attribute on the rover
-  root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers ports by
-  scanning the vessel prim's authored `outputs:` attributes and spawns a named
-  `Port` per port beyond the canonical four, which wheels connect to and a
-  connection/rhai/Modelica mix drives.
+  layout is declared in USD, not coded. A wheel without the required drive
+  connection is rejected as incomplete; there is no parity or front-wheel
+  fallback.
+- **Extensible port set** — each port is a real numeric attribute on the rover
+  root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers the complete
+  authored set and spawns a named `Port` for each one; no canonical Rust port
+  vocabulary is required.
 - **Proof:** `assets/vessels/rovers/six_wheel_rover.usda` — a self-contained
   6-wheel skid rover whose three-per-side wheels bind explicitly via
   `inputs:drive.connect`; also authors G2 inertia/COM.
@@ -214,8 +213,8 @@ reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realiz
 - **`physxVehicleWheel:dampingRate` is required.** Bearing/rolling drag is a
   physical property of the hub in its own right; the old derivation from the drive
   torque is deleted.
-- **Also read:** `physxVehicleWheel:radius` / `:moi` / `:maxBrakeTorque`,
-  `physics:mass`, `physxVehicleEngine:peakTorque`,
+- **Also read:** `physxVehicleWheel:radius` / `:width` / `:mass` / `:moi` /
+  `:maxBrakeTorque`, `physxVehicleEngine:peakTorque`,
   `physxVehicleTire:longitudinalStiffness`, `physics:dynamicFriction`,
   `lunco:wheel:contactGripStiffness` / `:driveForcePerNormal` / `:driveDamping` /
   `:stallTorqueGain` / `:steerAxis`.
