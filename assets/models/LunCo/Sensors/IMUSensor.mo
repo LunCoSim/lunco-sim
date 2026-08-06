@@ -58,7 +58,6 @@ model IMUSensor
   output Real attitude_quat_z "Measured attitude quaternion Z";
   output Real attitude_quat_valid "1 when the measured attitude is usable";
 
-  Real q_norm_sq;
   Real world_accel_x;
   Real world_accel_y;
   Real world_accel_z;
@@ -80,6 +79,12 @@ model IMUSensor
   Real sensor_accel_x;
   Real sensor_accel_y;
   Real sensor_accel_z;
+  FrameVectorTransform offset_transform(
+    quaternion_epsilon = quaternion_epsilon);
+  FrameVectorTransform force_transform(
+    quaternion_epsilon = quaternion_epsilon);
+  FrameVectorTransform gyro_transform(
+    quaternion_epsilon = quaternion_epsilon);
   FilteredDerivative velocity_filter_x(
     time_constant_s = accel_filter_time_constant_s);
   FilteredDerivative velocity_filter_y(
@@ -94,9 +99,6 @@ model IMUSensor
     time_constant_s = angular_accel_filter_time_constant_s);
 
 equation
-  q_norm_sq = max(quaternion_epsilon,
-    raw_quat_w * raw_quat_w + raw_quat_x * raw_quat_x
-      + raw_quat_y * raw_quat_y + raw_quat_z * raw_quat_z);
 
   // Avian's world-frame velocity is a primitive state. A bounded-bandwidth
   // differentiator keeps the cross-engine boundary structurally valid while
@@ -114,19 +116,16 @@ equation
   angular_accel_y = angular_velocity_filter_y.y;
   angular_accel_z = angular_velocity_filter_z.y;
 
-  // Rotate the authored COM offset into the Avian frame.
-  offset_world_x =
-    ((1.0 - 2.0 * (raw_quat_y * raw_quat_y + raw_quat_z * raw_quat_z)) * mount_offset_x
-      + 2.0 * (raw_quat_x * raw_quat_y - raw_quat_w * raw_quat_z) * mount_offset_y
-      + 2.0 * (raw_quat_x * raw_quat_z + raw_quat_w * raw_quat_y) * mount_offset_z);
-  offset_world_y =
-    (2.0 * (raw_quat_x * raw_quat_y + raw_quat_w * raw_quat_z) * mount_offset_x
-      + (1.0 - 2.0 * (raw_quat_x * raw_quat_x + raw_quat_z * raw_quat_z)) * mount_offset_y
-      + 2.0 * (raw_quat_y * raw_quat_z - raw_quat_w * raw_quat_x) * mount_offset_z);
-  offset_world_z =
-    (2.0 * (raw_quat_x * raw_quat_z - raw_quat_w * raw_quat_y) * mount_offset_x
-      + 2.0 * (raw_quat_y * raw_quat_z + raw_quat_w * raw_quat_x) * mount_offset_y
-      + (1.0 - 2.0 * (raw_quat_x * raw_quat_x + raw_quat_y * raw_quat_y)) * mount_offset_z);
+  offset_transform.quaternion_w = raw_quat_w;
+  offset_transform.quaternion_x = raw_quat_x;
+  offset_transform.quaternion_y = raw_quat_y;
+  offset_transform.quaternion_z = raw_quat_z;
+  offset_transform.vector_x = mount_offset_x;
+  offset_transform.vector_y = mount_offset_y;
+  offset_transform.vector_z = mount_offset_z;
+  offset_world_x = offset_transform.world_frame_x;
+  offset_world_y = offset_transform.world_frame_y;
+  offset_world_z = offset_transform.world_frame_z;
 
   // Rigid-body transport: alpha x r + omega x (omega x r).
   lever_accel_x =
@@ -150,18 +149,16 @@ equation
   force_x = total_accel_x - gravity_x;
   force_y = total_accel_y - gravity_y;
   force_z = total_accel_z - gravity_z;
-  sensor_accel_x =
-    (1.0 - 2.0 * (raw_quat_y * raw_quat_y + raw_quat_z * raw_quat_z)) * force_x
-      + 2.0 * (raw_quat_x * raw_quat_y + raw_quat_w * raw_quat_z) * force_y
-      + 2.0 * (raw_quat_x * raw_quat_z - raw_quat_w * raw_quat_y) * force_z;
-  sensor_accel_y =
-    2.0 * (raw_quat_x * raw_quat_y - raw_quat_w * raw_quat_z) * force_x
-      + (1.0 - 2.0 * (raw_quat_x * raw_quat_x + raw_quat_z * raw_quat_z)) * force_y
-      + 2.0 * (raw_quat_y * raw_quat_z + raw_quat_w * raw_quat_x) * force_z;
-  sensor_accel_z =
-    2.0 * (raw_quat_x * raw_quat_z + raw_quat_w * raw_quat_y) * force_x
-      + 2.0 * (raw_quat_y * raw_quat_z - raw_quat_w * raw_quat_x) * force_y
-      + (1.0 - 2.0 * (raw_quat_x * raw_quat_x + raw_quat_y * raw_quat_y)) * force_z;
+  force_transform.quaternion_w = raw_quat_w;
+  force_transform.quaternion_x = raw_quat_x;
+  force_transform.quaternion_y = raw_quat_y;
+  force_transform.quaternion_z = raw_quat_z;
+  force_transform.vector_x = force_x;
+  force_transform.vector_y = force_y;
+  force_transform.vector_z = force_z;
+  sensor_accel_x = force_transform.body_frame_x;
+  sensor_accel_y = force_transform.body_frame_y;
+  sensor_accel_z = force_transform.body_frame_z;
 
   coordinate_accel_local_x = sensor_accel_x * accel_scale_factor + accel_bias_x;
   coordinate_accel_local_y = sensor_accel_y * accel_scale_factor + accel_bias_y;
@@ -170,18 +167,21 @@ equation
   specific_force_y = coordinate_accel_local_y;
   specific_force_z = coordinate_accel_local_z;
 
-  gyro_x = raw_angvel_x + gyro_bias_x;
-  gyro_y = raw_angvel_y + gyro_bias_y;
-  gyro_z = raw_angvel_z + gyro_bias_z;
-  attitude_quat_w = raw_quat_w / sqrt(q_norm_sq);
-  attitude_quat_x = raw_quat_x / sqrt(q_norm_sq);
-  attitude_quat_y = raw_quat_y / sqrt(q_norm_sq);
-  attitude_quat_z = raw_quat_z / sqrt(q_norm_sq);
-  // A normalized quaternion is valid when its squared norm is above the
-  // authored floor. Express that as a bounded confidence ramp so the sensor
-  // remains event-free under fixed-step integration.
-  sensor_health = max(0.0, min(1.0,
-    (q_norm_sq - quaternion_epsilon)
-      / max(quaternion_epsilon, 1.0e-12)));
-  attitude_quat_valid = sensor_health;
+  // The same shared conversion produces body-frame gyroscope rates.
+  gyro_transform.quaternion_w = raw_quat_w;
+  gyro_transform.quaternion_x = raw_quat_x;
+  gyro_transform.quaternion_y = raw_quat_y;
+  gyro_transform.quaternion_z = raw_quat_z;
+  gyro_transform.vector_x = raw_angvel_x;
+  gyro_transform.vector_y = raw_angvel_y;
+  gyro_transform.vector_z = raw_angvel_z;
+  gyro_x = gyro_transform.body_frame_x + gyro_bias_x;
+  gyro_y = gyro_transform.body_frame_y + gyro_bias_y;
+  gyro_z = gyro_transform.body_frame_z + gyro_bias_z;
+  attitude_quat_w = force_transform.normalized_quaternion_w;
+  attitude_quat_x = force_transform.normalized_quaternion_x;
+  attitude_quat_y = force_transform.normalized_quaternion_y;
+  attitude_quat_z = force_transform.normalized_quaternion_z;
+  sensor_health = force_transform.quaternion_valid;
+  attitude_quat_valid = force_transform.quaternion_valid;
 end IMUSensor;

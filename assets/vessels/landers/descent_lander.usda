@@ -2772,6 +2772,10 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegPX>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (-0.173648, 0, 0, 0.984808)
+        # The leg body is authored with its strut along local -Y.  This
+        # half-turn makes the joint's +Y slider axis coincide with that
+        # physical hull-to-pad direction while the prismatic constraint still
+        # locks all three rotational DOF.
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
@@ -2788,6 +2792,8 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegNX>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (0.173648, 0, 0, 0.984808)
+        # Same body-side half-turn as the +X leg; the sign of localRot0 carries
+        # the mirrored rake, not a different rotational freedom.
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0

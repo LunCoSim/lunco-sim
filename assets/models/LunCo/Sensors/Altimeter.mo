@@ -39,11 +39,6 @@ model Altimeter
   FilteredDerivative range_filter(
     time_constant_s = range_filter_time_constant_s);
 
-  Real q_norm;
-  Real q_w;
-  Real q_x;
-  Real q_y;
-  Real q_z;
   Real ray_direction_norm;
   Real ray_direction_normalized_x;
   Real ray_direction_normalized_y;
@@ -53,20 +48,12 @@ model Altimeter
   Real projected_range_m;
   Real vertical_validity;
   Real range_validity;
+  FrameVectorTransform ray_transform;
 
 equation
   // The raw ray is authored in the altimeter frame. Its attitude is supplied
   // by the IMU connection on the vehicle, so a tilted ray is converted into
   // vertical clearance without introducing a world-coordinate dependency.
-  q_norm = sqrt(max(1.0e-12,
-    attitude_quat_w * attitude_quat_w
-      + attitude_quat_x * attitude_quat_x
-      + attitude_quat_y * attitude_quat_y
-      + attitude_quat_z * attitude_quat_z));
-  q_w = attitude_quat_w / q_norm;
-  q_x = attitude_quat_x / q_norm;
-  q_y = attitude_quat_y / q_norm;
-  q_z = attitude_quat_z / q_norm;
   ray_direction_norm = sqrt(max(1.0e-12,
     ray_direction_local_x * ray_direction_local_x
       + ray_direction_local_y * ray_direction_local_y
@@ -74,18 +61,16 @@ equation
   ray_direction_normalized_x = ray_direction_local_x / ray_direction_norm;
   ray_direction_normalized_y = ray_direction_local_y / ray_direction_norm;
   ray_direction_normalized_z = ray_direction_local_z / ray_direction_norm;
-  ray_direction_nav_x =
-    (1.0 - 2.0 * (q_y * q_y + q_z * q_z)) * ray_direction_normalized_x
-      + 2.0 * (q_x * q_y + q_w * q_z) * ray_direction_normalized_y
-      + 2.0 * (q_x * q_z - q_w * q_y) * ray_direction_normalized_z;
-  ray_direction_nav_y =
-    2.0 * (q_x * q_y - q_w * q_z) * ray_direction_normalized_x
-      + (1.0 - 2.0 * (q_x * q_x + q_z * q_z)) * ray_direction_normalized_y
-      + 2.0 * (q_y * q_z + q_w * q_x) * ray_direction_normalized_z;
-  ray_direction_nav_z =
-    2.0 * (q_x * q_z + q_w * q_y) * ray_direction_normalized_x
-      + 2.0 * (q_y * q_z - q_w * q_x) * ray_direction_normalized_y
-      + (1.0 - 2.0 * (q_x * q_x + q_y * q_y)) * ray_direction_normalized_z;
+  ray_transform.quaternion_w = attitude_quat_w;
+  ray_transform.quaternion_x = attitude_quat_x;
+  ray_transform.quaternion_y = attitude_quat_y;
+  ray_transform.quaternion_z = attitude_quat_z;
+  ray_transform.vector_x = ray_direction_normalized_x;
+  ray_transform.vector_y = ray_direction_normalized_y;
+  ray_transform.vector_z = ray_direction_normalized_z;
+  ray_direction_nav_x = ray_transform.world_frame_x;
+  ray_direction_nav_y = ray_transform.world_frame_y;
+  ray_direction_nav_z = ray_transform.world_frame_z;
   vertical_projection = max(0.0, -ray_direction_nav_y);
   // Keep the sensor contract continuous for fixed-step participants. A ray
   // validity transition is a measurement confidence change, not a discrete

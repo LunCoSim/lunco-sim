@@ -24,28 +24,23 @@ model AttitudeReference
   output Real estimated_up_y "Estimated world-up direction in body Y";
   output Real estimated_up_z "Estimated world-up direction in body Z";
 
-  Real q_norm;
-  Real q_w;
-  Real q_x;
-  Real q_y;
-  Real q_z;
+  FrameVectorTransform up_transform(
+    quaternion_epsilon = quaternion_epsilon);
 
 equation
-  q_norm = sqrt(max(quaternion_epsilon,
-    attitude_quat_w * attitude_quat_w
-      + attitude_quat_x * attitude_quat_x
-      + attitude_quat_y * attitude_quat_y
-      + attitude_quat_z * attitude_quat_z));
-  q_w = attitude_quat_w / q_norm;
-  q_x = attitude_quat_x / q_norm;
-  q_y = attitude_quat_y / q_norm;
-  q_z = attitude_quat_z / q_norm;
-
   // World/navigation +Y expressed in the body frame (the transpose of the
-  // body-to-navigation quaternion rotation).
-  estimated_up_x = 2.0 * (q_x * q_y + q_w * q_z);
-  estimated_up_y = 1.0 - 2.0 * (q_x * q_x + q_z * q_z);
-  estimated_up_z = 2.0 * (q_y * q_z - q_w * q_x);
+  // body-to-navigation quaternion rotation). The shared transform owns the
+  // normalization and transpose used here and by every other consumer.
+  up_transform.quaternion_w = attitude_quat_w;
+  up_transform.quaternion_x = attitude_quat_x;
+  up_transform.quaternion_y = attitude_quat_y;
+  up_transform.quaternion_z = attitude_quat_z;
+  up_transform.vector_x = 0.0;
+  up_transform.vector_y = 1.0;
+  up_transform.vector_z = 0.0;
+  estimated_up_x = up_transform.body_frame_x;
+  estimated_up_y = up_transform.body_frame_y;
+  estimated_up_z = up_transform.body_frame_z;
   // With body +Y as the engine axis, a positive body-X rotation moves the
   // thrust vector toward +Z.  The restoring error therefore has the same
   // sign as the measured world-up component in body Z: the hold law applies

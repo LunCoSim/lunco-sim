@@ -2817,7 +2817,12 @@ impl Plugin for SandboxCorePlugin {
         // same bus so the offline recorder cannot start on a black sky.
         #[cfg(feature = "ui")]
         app.add_systems(
-            Update,
+            // Run after Update has applied USD prim spawns and the DomePlugin's
+            // projection pass.  The recorder consumes this status in Update on
+            // the following frame; keeping the publication at the end of the
+            // visualisation cycle closes the window where meshes existed but a
+            // newly-instantiated textured DomeLight had not yet been reported.
+            PostUpdate,
             report_dome_environment_status
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
@@ -3296,14 +3301,17 @@ fn report_modelica_status(
     const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
 
     let pending = pending_sources.iter().count();
+    // `SimStatus::Compiling` also covers a successfully compiled model whose
+    // initial algebraic snapshot has not received its first solver tick yet.
+    // Offline recording freezes the simulation while it waits for this visual
+    // status, so treating that state as source compilation deadlocks the gate:
+    // the first tick that would make the participant Running can never happen.
+    // The authoritative source lifecycle is the Modelica model itself; the
+    // solver's first-step hold remains owned by the readiness subsystem.
     let compiling = models
         .iter()
         .filter(|(model, component)| {
-            model.is_compiling
-                || !model.is_compiled
-                || component.is_none()
-                || component
-                    .is_some_and(|sim| matches!(&sim.status, lunco_cosim::SimStatus::Compiling))
+            model.is_compiling || !model.is_compiled || component.is_none()
         })
         .count();
 

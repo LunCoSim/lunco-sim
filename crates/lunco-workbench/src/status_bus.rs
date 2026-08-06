@@ -261,6 +261,11 @@ pub const MODELICA_SOURCE: &str = "modelica";
 /// participants, so editor transitions cannot clear or replace scene status.
 pub const MODELICA_EDITOR_SOURCE: &str = "modelica-editor";
 
+/// Runtime-authored HTML surfaces that are part of the recorded presentation.
+/// The offline recorder waits for this source so a required HUD cannot appear
+/// one render frame after the shot's first frame.
+pub const RUNTIME_UI_SOURCE: &str = "runtime-ui";
+
 /// Workbench-wide status bus. Insert via [`StatusBusPlugin`].
 ///
 /// Carries two flavours of state — discrete history events (info / warn /

@@ -62,6 +62,7 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
         bevy_flair::FlairPlugin,
         runtime_exposure::RuntimeUiManifestPlugin,
     ))
+    .init_resource::<runtime_exposure::RuntimeUiRenderState>()
     .init_resource::<runtime_exposure::RuntimeUiGates>()
     .add_systems(Startup, runtime_exposure::load_runtime_ui_manifest)
     .add_systems(
@@ -88,11 +89,17 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
     )
     .add_systems(
         PostUpdate,
-        runtime_exposure::apply_runtime_ui_placement_after_style
-            .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
-            .after(bevy::ui::UiSystems::Propagate)
-            .before(bevy::ui::UiSystems::Content),
+        (
+            runtime_exposure::apply_runtime_ui_placement_after_style
+                .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+                .after(bevy::ui::UiSystems::Propagate)
+                .before(bevy::ui::UiSystems::Content),
+            runtime_exposure::report_runtime_ui_readiness
+                .after(runtime_exposure::apply_runtime_ui_placement_after_style)
+                .after(bevy::ui::UiSystems::PostLayout),
+        ),
     );
+    runtime_exposure::install_runtime_ui_render_readiness(app);
 }
 
 impl Plugin for SandboxUiPlugin {

@@ -828,8 +828,6 @@ fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: 
         output_dir: dir,
         fps: cmd.fps.max(1),
         requested_at: web_time::Instant::now(),
-        ready_streak: 0,
-        ready_since: None,
         last_blocker: None,
     });
 }
@@ -850,9 +848,10 @@ fn activate_recording(
     state.output_dir = dir;
     state.fps = pending.fps;
     state.is_waiting_for_frame = false;
-    // Enter the cycle on the "advance" phase so the very first captured frame is
-    // rendered from a clock that has taken exactly one step, like every frame after it.
-    state.frame_just_captured = true;
+    // The presentation gate has already acknowledged a rendered UI frame. Capture
+    // that state first; subsequent deliveries set this latch and advance virtual
+    // time by exactly one frame before requesting the next capture.
+    state.frame_just_captured = false;
 
     // Video mode needs a runnable `ffmpeg`. Probe NOW, not at the first frame:
     // a missing encoder must demote the recording to a PNG sequence with a loud
@@ -990,13 +989,8 @@ fn on_stop_offline_recording(
 struct PendingShotStart {
     output_dir: std::path::PathBuf,
     fps: u32,
-    /// When the request arrived — drives both the settle timing and the timeout.
+    /// When the request arrived — drives the hard timeout only.
     requested_at: web_time::Instant,
-    /// Consecutive frames for which every readiness clause held. See
-    /// [`SETTLE_FRAMES`].
-    ready_streak: u32,
-    /// When the current ready streak began. See [`SETTLE_PERIOD`].
-    ready_since: Option<web_time::Instant>,
     /// The most recent reason readiness was refused, kept for the start/timeout
     /// log line. Without it a timeout could only say "not ready", which is exactly
     /// the diagnosis a human needs and cannot reconstruct after the fact.
@@ -1012,37 +1006,7 @@ struct PendingShotStart {
 /// gets an empty episode with no explanation, which is strictly worse than a
 /// slightly-early first frame plus a loud `warn!`. The campaign scripts have their
 /// own outer timeout; this sits comfortably inside it.
-const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// Consecutive ready frames required before the shot starts.
-///
-/// One frame is enough to prove the condition, but not to have *drawn* it. Bevy
-/// queues a render pipeline the first time a material/mesh combination is actually
-/// visible and compiles it on a later frame; a pipeline still compiling draws
-/// nothing (or draws with a fallback). `PipelineCache` — the only authority on
-/// "nothing left to compile" — lives in the render world, where no main-world
-/// system can observe it, so there is no honest signal to wait on and these extra
-/// frames are the substitute.
-///
-/// 5 = one frame to prove readiness + four to let the render world queue and
-/// retire the pipelines for whatever became visible on that frame. The cost is
-/// bounded and tiny (5 real frames, well under 100 ms) against the failure it
-/// guards: a bad opening frame costs a ~10 minute re-record of the whole episode.
-const SETTLE_FRAMES: u32 = 5;
-
-/// Minimum wall-clock time every clause must hold before the shot starts.
-///
-/// The companion to [`SETTLE_FRAMES`], covering the same pipeline-warm-up hazard on
-/// the other axis. Shader compilation happens off the main thread on a wall-clock
-/// schedule, so a frame COUNT is the wrong unit for it on its own: once recording
-/// is armed the present mode is uncapped and five frames can elapse in ~20 ms,
-/// which is not enough for a compile to retire. This floor makes the window mean
-/// "quiet for a while" rather than "quiet for a few frames on a machine that
-/// happens to render fast".
-///
-/// 500 ms is invisible against a ~10 minute episode (6 shots ⇒ 3 s total), so it is
-/// priced well below the failure it guards.
-const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500);
+const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// [`StatusBus`](crate::status_bus::StatusBus) sources whose in-flight work makes the
 /// scene un-presentable, for clause (3) of [`scene_visuals_ready`].
@@ -1068,6 +1032,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
     crate::status_bus::SCENE_SOURCE,
     crate::status_bus::DOME_SOURCE,
     crate::status_bus::MODELICA_SOURCE,
+    crate::status_bus::RUNTIME_UI_SOURCE,
 ];
 
 /// **The one definition of "this scene is presentable".** Returns `None` when the
@@ -1150,9 +1115,10 @@ fn scene_visuals_ready(
     None
 }
 
-/// Start an armed recording once [`scene_visuals_ready`] clears it for
-/// [`SETTLE_FRAMES`] consecutive frames — or once [`READY_TIMEOUT`] expires,
-/// whichever comes first.
+/// Start an armed recording as soon as [`scene_visuals_ready`] clears it. The
+/// readiness publishers own the lifecycle transitions; this system only
+/// consumes their aggregate state. [`READY_TIMEOUT`] is the sole escape hatch
+/// for a genuinely broken scene.
 ///
 /// Timing out records anyway, loudly. See [`READY_TIMEOUT`] for why silently never
 /// recording is the worse failure.
@@ -1171,44 +1137,21 @@ fn start_recording_when_scene_ready(
     let Some(mut pending) = pending else { return };
 
     let blocker = scene_visuals_ready(&meshes, &asset_server, bus.as_deref());
-    match &blocker {
-        Some(reason) => {
-            // Any refusal restarts the streak: the settle window must be
-            // CONSECUTIVE, otherwise a texture that pops in late could land inside
-            // the window and still be missing from frame 0.
-            pending.ready_streak = 0;
-            pending.ready_since = None;
+    let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
+    if let Some(reason) = blocker {
+        if !timed_out {
             if pending.last_blocker.as_deref() != Some(reason.as_str()) {
                 pending.last_blocker = Some(reason.clone());
                 debug!("[offline-record] waiting for scene visuals — {reason}");
             }
+            return;
         }
-        None => {
-            pending.ready_streak += 1;
-            pending
-                .ready_since
-                .get_or_insert_with(web_time::Instant::now);
-        }
-    }
-
-    // BOTH guards must pass — they cover different hazards (pipeline warm-up vs.
-    // asynchronous spawn lulls). See [`SETTLE_FRAMES`] / [`SETTLE_PERIOD`].
-    let settled = pending.ready_streak >= SETTLE_FRAMES
-        && pending
-            .ready_since
-            .is_some_and(|t| t.elapsed() >= SETTLE_PERIOD);
-    let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
-    if !settled && !timed_out {
-        return;
-    }
-
-    if timed_out && blocker.is_some() {
         warn!(
             "[offline-record] scene visuals were still not ready after {:.1}s — recording \
              anyway so the episode is not silently empty. Still waiting on: {}. Expect the \
              opening frames of this shot to show an unfinished scene.",
             pending.requested_at.elapsed().as_secs_f32(),
-            blocker.as_deref().unwrap_or("unknown"),
+            reason,
         );
     }
 

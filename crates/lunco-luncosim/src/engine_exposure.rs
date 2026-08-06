@@ -24,6 +24,8 @@ use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
 use lunco_cosim::{CosimOutputMetadata, SimComponent};
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
+use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
+use std::collections::{BTreeSet, HashMap};
 
 /// Optional progress resources projected into generic runtime surfaces.
 ///
@@ -751,6 +753,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
     rotation: Query<'w, 's, &'static Rotation>,
     orbital_pin: Option<Res<'w, OrbitalViewPin>>,
+    canonical: NonSend<'w, CanonicalStages>,
 }
 
 /// Authoritative inputs for the driven-vessel projection.
@@ -782,6 +785,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
             Option<&'static CosimOutputMetadata>,
         ),
     >,
+    usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
 }
 
 pub(crate) fn publish_exposure(
@@ -843,7 +847,13 @@ pub(crate) fn publish_exposure(
         seminar.last_soc_pct = None;
         ui.visible(false);
         drop(ui);
-        publish_selected_control_exposure(
+        let schema_visible = publish_lunica_schema_exposure(
+            &mut runtime.exposures,
+            &runtime.selected,
+            &queries.usd_paths,
+            &runtime.canonical,
+        );
+        publish_control_exposures(
             &mut runtime.exposures,
             &runtime.selected,
             &queries.name,
@@ -852,6 +862,10 @@ pub(crate) fn publish_exposure(
             &queries.velocity,
             &runtime.angular_velocity,
             &runtime.rotation,
+            &queries.spatial,
+            &queries.usd_paths,
+            &runtime.canonical,
+            schema_visible,
         );
         publish_celestial_capability(
             &mut runtime.exposures,
@@ -946,7 +960,13 @@ pub(crate) fn publish_exposure(
     ui.visible(true);
     publish_vessel_values(&mut ui, &vessel, autopilot);
     drop(ui);
-    publish_selected_control_exposure(
+    let schema_visible = publish_lunica_schema_exposure(
+        &mut runtime.exposures,
+        &runtime.selected,
+        &queries.usd_paths,
+        &runtime.canonical,
+    );
+    publish_control_exposures(
         &mut runtime.exposures,
         &runtime.selected,
         &queries.name,
@@ -955,6 +975,10 @@ pub(crate) fn publish_exposure(
         &queries.velocity,
         &runtime.angular_velocity,
         &runtime.rotation,
+        &queries.spatial,
+        &queries.usd_paths,
+        &runtime.canonical,
+        schema_visible,
     );
     publish_celestial_capability(
         &mut runtime.exposures,
@@ -998,11 +1022,170 @@ fn publish_celestial_capability(
     ui.property("active_body_id", f64::from(active_body.unwrap_or_default()));
 }
 
+/// Publish the authored Lunica boundary graph for a selected schema root.
+///
+/// This is the recorder-safe counterpart of the workbench connection canvas.
+/// It reads the composed stage, honours only typed schemaNode/schemaColumn/
+/// schemaRow properties, and derives the signal list from real USD attribute
+/// connections. The surface is deliberately presentation-only: it cannot
+/// affect simulation state and it does not classify prims from path names.
+fn publish_lunica_schema_exposure(
+    exposures: &mut EngineExposures,
+    selected: &SelectedEntities,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    canonical: &CanonicalStages,
+) -> bool {
+    let mut ui = exposures.writer("lunica-schema");
+    ui.visible(false);
+    ui.property("title", "LUNICA / FLIGHT CONTROL");
+    ui.property("scope", "Select an authored schema root");
+    ui.property("count", "0 authored blocks");
+    ui.property("note", "Typed USD nodes and their authored connections");
+    for column in 0..4 {
+        for row in 0..2 {
+            ui.property(format!("slot_{column}_{row}_title"), "");
+            ui.property(format!("slot_{column}_{row}_role"), "");
+            ui.property(format!("slot_{column}_{row}_visible"), false);
+        }
+    }
+    for index in 0..8 {
+        ui.property(format!("wire_{index}"), "");
+        ui.property(format!("wire_{index}_visible"), false);
+    }
+
+    let Some(root) = selected.primary() else {
+        return false;
+    };
+    let Ok((_, root_path)) = q_paths.get(root) else {
+        return false;
+    };
+    let Some(stage) = canonical.get(root_path.stage_handle.id()) else {
+        return false;
+    };
+    let Ok(root_sdf) = SdfPath::new(&root_path.path) else {
+        return false;
+    };
+    let view = stage.view();
+    if view.scalar::<bool>(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
+        return false;
+    }
+
+    #[derive(Clone)]
+    struct SchemaCard {
+        path: String,
+        title: String,
+        role: String,
+        column: i32,
+        row: i32,
+    }
+
+    let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
+    let mut cards = Vec::new();
+    for path in view.prim_paths() {
+        let path_text = path.to_string();
+        if path_text != root_path.path && !path_text.starts_with(&root_prefix) {
+            continue;
+        }
+        if !view.is_active(&path) || view.scalar::<bool>(&path, "lunco:ui:schemaNode") != Some(true)
+        {
+            continue;
+        }
+        let title = view
+            .text(&path, "ui:displayName")
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or_else(|| {
+                path_text
+                    .rsplit('/')
+                    .next()
+                    .filter(|leaf| !leaf.is_empty())
+                    .unwrap_or("USD block")
+                    .to_owned()
+            });
+        let attrs = view.attr_names(&path);
+        let inputs = attrs
+            .iter()
+            .filter(|name| name.starts_with("inputs:"))
+            .count();
+        let outputs = attrs
+            .iter()
+            .filter(|name| name.starts_with("outputs:"))
+            .count();
+        cards.push(SchemaCard {
+            path: path_text,
+            title,
+            role: format!("{inputs} inputs · {outputs} outputs"),
+            column: view
+                .scalar::<i32>(&path, "lunco:ui:schemaColumn")
+                .unwrap_or(0),
+            row: view.scalar::<i32>(&path, "lunco:ui:schemaRow").unwrap_or(0),
+        });
+    }
+    cards.sort_by_key(|card| (card.column, card.row, card.path.clone()));
+    if cards.is_empty() {
+        return false;
+    }
+
+    let card_names: HashMap<String, String> = cards
+        .iter()
+        .map(|card| (card.path.clone(), card.title.clone()))
+        .collect();
+    for card in &cards {
+        if (0..4).contains(&card.column) && (0..2).contains(&card.row) {
+            ui.property(
+                format!("slot_{}_{}_title", card.column, card.row),
+                card.title.clone(),
+            );
+            ui.property(
+                format!("slot_{}_{}_role", card.column, card.row),
+                card.role.clone(),
+            );
+            ui.property(format!("slot_{}_{}_visible", card.column, card.row), true);
+        }
+    }
+
+    let mut wires = BTreeSet::new();
+    for card in &cards {
+        let Ok(target) = SdfPath::new(&card.path) else {
+            continue;
+        };
+        for attr in view.attr_names(&target) {
+            if !attr.starts_with("inputs:") {
+                continue;
+            }
+            for source in view.connections(&target, &attr) {
+                let Some((source_prim, _)) = source.rsplit_once('.') else {
+                    continue;
+                };
+                let Some(source_name) = card_names.get(source_prim) else {
+                    continue;
+                };
+                wires.insert(format!("{source_name}  →  {}", card.title));
+            }
+        }
+    }
+
+    ui.visible(true);
+    ui.property(
+        "scope",
+        root_path.path.rsplit('/').next().unwrap_or("schema"),
+    );
+    ui.property("count", format!("{} authored blocks", cards.len()));
+    ui.property(
+        "note",
+        "Signals are the live USD connections between these blocks",
+    );
+    for (index, wire) in wires.into_iter().take(8).enumerate() {
+        ui.property(format!("wire_{index}"), wire);
+        ui.property(format!("wire_{index}_visible"), true);
+    }
+    true
+}
+
 /// Publish the selected simulation's control response for authored runtime
 /// surfaces. Selection is the scope; the values are the model's real public
 /// outputs and the actuator network's real valve outputs. Nothing here knows a
 /// film, a lander path, or a widget implementation.
-fn publish_selected_control_exposure(
+fn publish_control_exposures(
     exposures: &mut EngineExposures,
     selected: &SelectedEntities,
     q_name: &Query<&Name>,
@@ -1011,8 +1194,138 @@ fn publish_selected_control_exposure(
     q_vel: &Query<&LinearVelocity>,
     q_angvel: &Query<&AngularVelocity>,
     q_rotation: &Query<&Rotation>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    canonical: &CanonicalStages,
+    _schema_visible: bool,
 ) {
-    let mut ui = exposures.writer("lander-control");
+    let mut roots = authored_control_roots(q_paths, canonical);
+    if roots.is_empty() {
+        roots.push((selected.primary(), 0));
+    }
+    roots.sort_by_key(|(_, column)| *column);
+
+    publish_selected_control_exposure(
+        exposures,
+        "lander-control-0",
+        roots.first().and_then(|(entity, _)| *entity),
+        q_name,
+        q_sim,
+        q_parents,
+        q_vel,
+        q_angvel,
+        q_rotation,
+        q_spatial,
+        q_paths,
+        canonical,
+        false,
+    );
+    publish_selected_control_exposure(
+        exposures,
+        "lander-control-1",
+        roots.get(1).and_then(|(entity, _)| *entity),
+        q_name,
+        q_sim,
+        q_parents,
+        q_vel,
+        q_angvel,
+        q_rotation,
+        q_spatial,
+        q_paths,
+        canonical,
+        false,
+    );
+}
+
+/// Discover the roots that explicitly opt into a compact control card.
+///
+/// The roots are authored USD data, not a list of vehicle paths in Rust.  The
+/// column is likewise an authored presentation hint, so a scene can place a
+/// pair of cards without teaching the engine what a particular film calls its
+/// vehicles.
+fn authored_control_roots(
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    canonical: &CanonicalStages,
+) -> Vec<(Option<Entity>, i32)> {
+    let mut roots = Vec::new();
+    for (entity, prim_path) in q_paths.iter() {
+        let Some(stage) = canonical.get(prim_path.stage_handle.id()) else {
+            continue;
+        };
+        let Ok(path) = SdfPath::new(&prim_path.path) else {
+            continue;
+        };
+        let view = stage.view();
+        if view.scalar::<bool>(&path, "lunco:ui:controlHud") != Some(true) {
+            continue;
+        }
+        let column = view
+            .scalar::<i32>(&path, "lunco:ui:controlHudColumn")
+            .unwrap_or(0);
+        roots.push((Some(entity), column));
+    }
+    roots
+}
+
+/// Resolve the displayed miss distance from the authored target connection and
+/// the live projected transforms.  This keeps the HUD honest even when the
+/// generated GNC model does not expose its internal estimator error channels.
+fn target_offset_from_authored_scene(
+    root: Entity,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    canonical: &CanonicalStages,
+) -> Option<(f32, f32)> {
+    let (_, root_path) = q_paths.get(root).ok()?;
+    let stage = canonical.get(root_path.stage_handle.id())?;
+    let view = stage.view();
+    let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
+
+    // The guidance boundary is selected by its authored schema column. Its
+    // target is then read from the real USD connection, so neither a vehicle
+    // path nor a target name is embedded in the producer.
+    let guidance = view.prim_paths().into_iter().find(|path| {
+        let path_text = path.to_string();
+        path_text.starts_with(&root_prefix)
+            && view.is_active(path)
+            && view.scalar::<bool>(path, "lunco:ui:schemaNode") == Some(true)
+            && view.scalar::<i32>(path, "lunco:ui:schemaColumn") == Some(0)
+    })?;
+    let target_source = view
+        .connections(&guidance, "inputs:target_x")
+        .into_iter()
+        .next()?;
+    let (target_path, _) = target_source.rsplit_once('.')?;
+    let target_entity = q_paths.iter().find_map(|(entity, prim_path)| {
+        (prim_path.stage_handle.id() == root_path.stage_handle.id()
+            && prim_path.path == target_path)
+            .then_some(entity)
+    })?;
+
+    let root_position = q_spatial.get(root).ok()?.1.translation;
+    let target_position = q_spatial.get(target_entity).ok()?.1.translation;
+    Some((
+        root_position.x - target_position.x,
+        root_position.z - target_position.z,
+    ))
+}
+
+fn publish_selected_control_exposure(
+    exposures: &mut EngineExposures,
+    namespace: &str,
+    root: Option<Entity>,
+    q_name: &Query<&Name>,
+    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_parents: &Query<&ChildOf>,
+    q_vel: &Query<&LinearVelocity>,
+    q_angvel: &Query<&AngularVelocity>,
+    q_rotation: &Query<&Rotation>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    canonical: &CanonicalStages,
+    hide_when_schema_visible: bool,
+) {
+    let mut ui = exposures.writer(namespace);
     ui.visible(false);
     ui.property("vehicle", "No simulation selected");
     ui.property("status", "WAITING");
@@ -1021,6 +1334,7 @@ fn publish_selected_control_exposure(
     ui.property("lateral_speed", "—");
     ui.property("vertical_speed", "—");
     ui.property("altitude", "—");
+    ui.property("target_offset", "—");
     ui.property("propellant", "—");
     ui.property("propellant_width", "0%");
     ui.property("roll", "—");
@@ -1035,7 +1349,7 @@ fn publish_selected_control_exposure(
     ui.property("torque_z", "—");
     ui.property("main_engine", "—");
 
-    let Some(root) = selected.primary() else {
+    let Some(root) = root else {
         return;
     };
 
@@ -1091,7 +1405,7 @@ fn publish_selected_control_exposure(
     } else if max_valve > 0.01 {
         ("RCS FIRING", "var(--accent-color)")
     } else if main_activity > 0.01 {
-        ("ENGINE FIRING", "var(--active-text-color)")
+        ("ENGINE FIRING", "var(--warm-color)")
     } else {
         ("ATTITUDE HOLD", "var(--ok-color)")
     };
@@ -1107,11 +1421,16 @@ fn publish_selected_control_exposure(
     });
     let spin = q_angvel.get(root).ok().map(|angular| angular.0.length());
     let altitude = output_alias(&outputs, &["range_m", "altitude_m", "altitude"]);
+    let target_offset = target_offset_from_authored_scene(root, q_spatial, q_paths, canonical)
+        .map_or_else(
+            || "—".to_owned(),
+            |(x, z)| format!("X {x:+.1} · Z {z:+.1} m"),
+        );
     let propellant_mass = output_alias(&outputs, &["propellant_mass", "propellant_mass_kg"]);
     let propellant_fraction =
         output_alias(&outputs, &["propellant_fraction"]).map(|value| value.clamp(0.0, 1.0));
 
-    ui.visible(true);
+    ui.visible(!hide_when_schema_visible);
     ui.property("vehicle", vehicle);
     ui.property("status", status.0);
     ui.property("status_color", status.1);
@@ -1145,6 +1464,7 @@ fn publish_selected_control_exposure(
         "altitude",
         altitude.map_or_else(|| "—".to_owned(), |value| format!("{value:.1} m")),
     );
+    ui.property("target_offset", target_offset);
     ui.property(
         "propellant",
         match (propellant_fraction, propellant_mass) {

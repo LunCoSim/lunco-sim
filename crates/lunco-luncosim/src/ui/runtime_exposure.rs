@@ -7,6 +7,7 @@
 //! derived engine capability.
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::prelude::*;
+use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, PrimaryEguiContext};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
@@ -83,6 +84,10 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
+    /// When true, offline capture waits until this authored surface is mounted,
+    /// styled, positioned, and visible before frame zero is accepted.
+    #[serde(default)]
+    pub required_for_recording: bool,
     #[serde(default)]
     pub bindings: HashMap<String, RuntimeUiBindingDefinition>,
     #[serde(default)]
@@ -297,6 +302,29 @@ pub(crate) struct RuntimeUiManifestState {
     rebuild_pending: bool,
 }
 
+/// Acknowledgement from the render extraction boundary. Main-world layout is
+/// not enough to arm offline capture: the render world must have extracted at
+/// least one visible UI node for every required surface at the current
+/// exposure revision. This is the presentation event the recorder consumes
+/// indirectly through [`StatusBus`].
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub(crate) struct RuntimeUiRenderState {
+    pub extracted_revision: u64,
+    pub extracted_surface_count: u32,
+}
+
+/// Render-world handoff for the presentation acknowledgement. The extraction
+/// phase fills `extracted_revision`; the render schedule promotes it only after
+/// the UI render set has submitted the frame. The next extraction copies that
+/// submitted revision back to the simulation world.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+struct RuntimeUiRenderAck {
+    extracted_revision: u64,
+    extracted_surface_count: u32,
+    submitted_revision: u64,
+    submitted_surface_count: u32,
+}
+
 /// Generic named visibility gates supplied by the host application.
 #[derive(Resource, Debug, Default)]
 pub(crate) struct RuntimeUiGates {
@@ -361,6 +389,7 @@ struct ResolvedRuntimeUiPlacement {
 #[derive(Component, Debug)]
 pub(crate) struct RuntimeUiSurface {
     namespace: String,
+    required_for_recording: bool,
     template: Handle<HtmlTemplate>,
     stylesheet: Handle<StyleSheet>,
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
@@ -368,6 +397,11 @@ pub(crate) struct RuntimeUiSurface {
     gate: Option<String>,
     interactive: bool,
     mounted: bool,
+    /// Set only after the retained tree has a camera target, a computed
+    /// non-zero render target, a computed layout, and the current exposure
+    /// revision projected into HUI. This is a presentation lifecycle state,
+    /// not a frame counter.
+    presentation_ready: bool,
     placement: RuntimeUiPlacement,
     applied_revision: u64,
     applied_placement: Option<ResolvedRuntimeUiPlacement>,
@@ -382,6 +416,7 @@ impl RuntimeUiSurface {
     ) -> Self {
         Self {
             namespace: definition.namespace.clone(),
+            required_for_recording: definition.required_for_recording,
             template,
             stylesheet,
             bindings: definition.bindings.clone(),
@@ -389,12 +424,225 @@ impl RuntimeUiSurface {
             gate: definition.gate.clone(),
             interactive: definition.interactive,
             mounted: false,
+            presentation_ready: false,
             placement: (&definition.placement).into(),
             applied_revision: 0,
             applied_placement: None,
             input_rect: None,
         }
     }
+}
+
+/// Mirror the authored recording contract onto the workbench status bus. This
+/// remains generic: a surface is required only when its namespace has a live
+/// exposure, so unrelated scenes do not wait for a HUD they do not author.
+///
+/// Readiness is evaluated at the end of Bevy's UI lifecycle. The root must have
+/// passed target-camera propagation and layout, and the exposure revision must
+/// have been applied. The recorder can therefore consume one semantic state
+/// transition instead of guessing how many render passes a retained UI needs.
+pub(crate) fn report_runtime_ui_readiness(
+    exposures: Res<EngineExposures>,
+    mut roots: Query<(
+        &mut RuntimeUiSurface,
+        &Visibility,
+        Option<&TemplateProperties>,
+        Option<&UiTargetCamera>,
+        Option<&ComputedUiTargetCamera>,
+        Option<&ComputedUiRenderTargetInfo>,
+        Option<&ComputedNode>,
+    )>,
+    render_state: Option<Res<RuntimeUiRenderState>>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    let Some(mut bus) = bus else { return };
+
+    let mut required = 0usize;
+    let mut ready = 0usize;
+    for (
+        mut surface,
+        visibility,
+        properties,
+        target_camera,
+        computed_camera,
+        render_target,
+        computed_node,
+    ) in &mut roots
+    {
+        let exposure_visible = exposures
+            .surfaces
+            .get(&surface.namespace)
+            .is_some_and(|exposure| exposure.visible);
+        if !surface.required_for_recording || !exposure_visible {
+            surface.presentation_ready = false;
+            continue;
+        }
+        required += 1;
+        let target_ready = target_camera.is_some()
+            && computed_camera.is_some_and(|camera| camera.get().is_some())
+            && render_target.is_some_and(|target| {
+                let size = target.physical_size();
+                size.x > 0 && size.y > 0
+            });
+        let layout_ready = computed_node.is_some_and(|node| {
+            node.size.x.is_finite()
+                && node.size.y.is_finite()
+                && node.size.x > 0.0
+                && node.size.y > 0.0
+        });
+        let surface_ready = surface.mounted
+            && surface.applied_placement.is_some()
+            && matches!(*visibility, Visibility::Visible)
+            && properties.is_some()
+            && surface.applied_revision == exposures.revision
+            && target_ready
+            && layout_ready;
+        if surface_ready {
+            ready += 1;
+        }
+        surface.presentation_ready = surface_ready;
+    }
+
+    let render_ready = required == 0
+        || render_state.is_some_and(|state| {
+            state.extracted_revision == exposures.revision
+                && state.extracted_surface_count == required as u32
+        });
+    if required == 0 || (ready == required && render_ready) {
+        bus.remove_progress(lunco_workbench::status_bus::RUNTIME_UI_SOURCE);
+    } else {
+        let message = if ready < required {
+            format!("mounting recorded UI surfaces {ready}/{required}")
+        } else {
+            "waiting for recorded UI render extraction".to_string()
+        };
+        bus.set_progress(
+            lunco_workbench::status_bus::RUNTIME_UI_SOURCE,
+            message,
+            ready as u64,
+            required as u64,
+        );
+    }
+}
+
+/// Observe the actual Bevy UI extraction boundary. `ExtractedUiNodes` is
+/// populated only after target-camera propagation, layout, HUI/Flair styling,
+/// and the UI extraction systems have all run. A positive acknowledgement here
+/// lets the main-world readiness gate arm capture without a warm-up frame or a
+/// discarded probe.
+fn acknowledge_runtime_ui_render_extraction(
+    mut main_world: ResMut<MainWorld>,
+    extracted_nodes: Res<bevy::ui_render::ExtractedUiNodes>,
+    mut render_ack: ResMut<RuntimeUiRenderAck>,
+) {
+    let visible_namespaces: HashSet<String> = main_world
+        .get_resource::<EngineExposures>()
+        .map(|exposures| {
+            exposures
+                .surfaces
+                .iter()
+                .filter(|(_, exposure)| exposure.visible)
+                .map(|(namespace, _)| namespace.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let required_roots: Vec<Entity> = {
+        let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
+        roots
+            .iter(&main_world)
+            .filter(|(_, surface)| {
+                surface.required_for_recording && visible_namespaces.contains(&surface.namespace)
+            })
+            .map(|(entity, _)| entity)
+            .collect()
+    };
+
+    let presentation_ready_roots = {
+        let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
+        roots
+            .iter(&main_world)
+            .filter(|(_, surface)| {
+                surface.required_for_recording
+                    && visible_namespaces.contains(&surface.namespace)
+                    && surface.presentation_ready
+            })
+            .count()
+    };
+
+    let mut extracted_roots = HashSet::new();
+    let mut parents = main_world.query::<&ChildOf>();
+    for node in &extracted_nodes.uinodes {
+        let mut current = node.main_entity.id();
+        loop {
+            if required_roots.contains(&current) {
+                extracted_roots.insert(current);
+                break;
+            }
+            let Ok(child_of) = parents.get(&main_world, current) else {
+                break;
+            };
+            current = child_of.parent();
+        }
+    }
+
+    let all_extracted = presentation_ready_roots == required_roots.len()
+        && required_roots
+            .iter()
+            .all(|root| extracted_roots.contains(root));
+    render_ack.extracted_revision = if all_extracted {
+        main_world
+            .get_resource::<EngineExposures>()
+            .map_or(0, |exposures| exposures.revision)
+    } else {
+        0
+    };
+    render_ack.extracted_surface_count = if all_extracted {
+        required_roots.len() as u32
+    } else {
+        0
+    };
+}
+
+/// Copy the previous render submission acknowledgement into the simulation
+/// world. This runs in extraction before this frame's UI nodes are built, so a
+/// recorder start can only observe a completed prior presentation.
+fn publish_runtime_ui_render_ack(
+    mut main_world: ResMut<MainWorld>,
+    render_ack: Res<RuntimeUiRenderAck>,
+) {
+    if let Some(mut state) = main_world.get_resource_mut::<RuntimeUiRenderState>() {
+        state.extracted_revision = render_ack.submitted_revision;
+        state.extracted_surface_count = render_ack.submitted_surface_count;
+    }
+}
+
+/// Mark the UI revision submitted once Bevy's render schedule has completed its
+/// render set. This is the handoff that replaces the old warm-up/probe logic.
+fn acknowledge_runtime_ui_render_submission(mut render_ack: ResMut<RuntimeUiRenderAck>) {
+    render_ack.submitted_revision = render_ack.extracted_revision;
+    render_ack.submitted_surface_count = render_ack.extracted_surface_count;
+}
+
+/// Install the cross-world presentation acknowledgement after Bevy has
+/// extracted all authored UI nodes for the current render frame.
+pub(crate) fn install_runtime_ui_render_readiness(app: &mut App) {
+    let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+        return;
+    };
+    render_app.init_resource::<RuntimeUiRenderAck>();
+    render_app.add_systems(
+        ExtractSchedule,
+        publish_runtime_ui_render_ack.before(bevy::ui_render::RenderUiSystems::ExtractCameraViews),
+    );
+    render_app.add_systems(
+        ExtractSchedule,
+        acknowledge_runtime_ui_render_extraction
+            .after(bevy::ui_render::RenderUiSystems::ExtractDebug),
+    );
+    render_app.add_systems(
+        Render,
+        acknowledge_runtime_ui_render_submission.after(RenderSystems::Render),
+    );
 }
 
 /// Load the authored surface manifest. The asset watcher can replace it while

@@ -109,6 +109,7 @@ model PositionPID3D
   Real pitch_command_raw;
   Real roll_command_raw;
   Real tilt_reference_accel;
+  Real thrust_vertical_projection;
   Real pid_y_command;
   Real vertical_limiter_output;
   Real throttle_command_value;
@@ -116,6 +117,7 @@ model PositionPID3D
   Real roll_command_value;
   Real yaw_command_value;
   Real flight_command_gain;
+  LunCo.Sensors.FrameVectorTransform thrust_axis_transform;
 
 equation
   // Sensor -> navigation block.
@@ -191,6 +193,22 @@ equation
   unsaturated_throttle = thrust_accel
     / max(minimum_thrust_accel_mps2, max_thrust_accel);
 
+  // Do not fire a main engine into the horizon while the airframe is recovering
+  // from a large attitude error.  The body +Y axis is the engine axis, so the
+  // measured body-to-navigation quaternion gives its upward component directly.
+  // This is a flight-computer authority limit, not a scene override: at 90 deg
+  // the engine is off, during recovery it ramps with the real thrust-vector
+  // projection, and at an upright attitude the normal throttle command is unchanged.
+  thrust_axis_transform.quaternion_w = imu_attitude_quat_w;
+  thrust_axis_transform.quaternion_x = imu_attitude_quat_x;
+  thrust_axis_transform.quaternion_y = imu_attitude_quat_y;
+  thrust_axis_transform.quaternion_z = imu_attitude_quat_z;
+  thrust_axis_transform.vector_x = 0.0;
+  thrust_axis_transform.vector_y = 1.0;
+  thrust_axis_transform.vector_z = 0.0;
+  thrust_vertical_projection = noEvent(max(0.0, min(1.0,
+    thrust_axis_transform.world_frame_y)));
+
   // Body +Y is the engine axis. Convert the desired world acceleration vector
   // into bounded tilt requests; the airframe's attitude stabilizer closes the
   // angular loop and turns those requests into torque.
@@ -203,6 +221,11 @@ equation
   tilt_reference_accel = max(minimum_vertical_accel_mps2,
     max(g, vertical_limiter_output));
   pitch_command_raw = lateral_accel_z / tilt_reference_accel;
+  // The airframe's body +Y thrust axis moves toward navigation -X for a
+  // positive body-Z attitude request in this convention. Therefore a
+  // negative desired navigation-X acceleration must produce a positive roll
+  // command. This sign is the composed vehicle/actuator frame contract, not a
+  // scene-specific correction.
   roll_command_raw = -lateral_accel_x / tilt_reference_accel;
   // A landed vehicle must not continue steering against its leg constraints.
   // Touchdown is a measured airframe state, not a Rhai timer or a scene-specific
@@ -210,7 +233,7 @@ equation
   // guidance demand fade out as the load settles.
   flight_command_gain = engage * (1.0 - piloted)
     * max(0.0, min(1.0, 1.0 - touchdown));
-  throttle_command_value = flight_command_gain
+  throttle_command_value = flight_command_gain * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));
   pitch_command_value = flight_command_gain
     * max(-1.0, min(1.0, pitch_command_raw));
