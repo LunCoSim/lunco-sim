@@ -21,7 +21,9 @@ use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
 use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
 use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
+use lunco_cosim::{CosimOutputMetadata, SimComponent};
 use lunco_mobility::WheelRaycast;
+use lunco_scene_commands::SelectedEntities;
 
 /// Optional progress resources projected into generic runtime surfaces.
 ///
@@ -54,8 +56,6 @@ pub(crate) struct RuntimeOverlayInputs<'w> {
 const FALLBACK_CAUTION_TILT_DEG: f32 = 20.0;
 /// Fallback red threshold. See [`FALLBACK_CAUTION_TILT_DEG`].
 const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
-
-use lunco_cosim::SimComponent;
 
 /// Information about a driven vessel's energy budget/battery.
 #[derive(Debug, Clone, PartialEq)]
@@ -313,10 +313,10 @@ fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf
 
 fn resolve_energy(
     vessel: Entity,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<EnergyInfo> {
-    for (ent, sim) in q_sim.iter() {
+    for (ent, sim, _) in q_sim.iter() {
         if !is_owned_by_vessel(ent, vessel, q_parents) {
             continue;
         }
@@ -360,10 +360,10 @@ fn capacity_wh(sim: &SimComponent) -> Option<f32> {
 
 fn resolve_thermal(
     vessel: Entity,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<ThermalInfo> {
-    for (ent, sim) in q_sim.iter() {
+    for (ent, sim, _) in q_sim.iter() {
         if !is_owned_by_vessel(ent, vessel, q_parents) {
             continue;
         }
@@ -403,7 +403,7 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     site: Option<&lunco_celestial::GeodeticAnchor>,
     bodies: Option<&lunco_celestial::CelestialBodyRegistry>,
 ) -> Option<DrivenVessel> {
@@ -650,6 +650,7 @@ pub(crate) fn mark_exposure_dirty(
     q_sim: Query<(), Changed<SimComponent>>,
     q_autopilot: Query<(), Changed<Autopilot>>,
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
+    selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
     overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
@@ -663,6 +664,7 @@ pub(crate) fn mark_exposure_dirty(
         || !q_sim.is_empty()
         || !q_autopilot.is_empty()
         || !q_bodies.is_empty()
+        || selected.is_changed()
         || orbital_pin.is_some_and(|pin| pin.is_changed());
 
     let overlay_changed = overlays
@@ -690,6 +692,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     timer: Local<'s, ExposureTimer>,
     refresh: ResMut<'w, ExposureRefresh>,
     exposures: ResMut<'w, EngineExposures>,
+    selected: Res<'w, SelectedEntities>,
     bodies: Query<'w, 's, &'static CelestialBody>,
     orbital_pin: Option<Res<'w, OrbitalViewPin>>,
 }
@@ -707,7 +710,7 @@ pub(crate) fn publish_exposure(
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
-    q_sim: Query<(Entity, &SimComponent)>,
+    q_sim: Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     geo: GeodeticHud,
     mut runtime: ExposureRuntime,
     overlays: RuntimeOverlayInputs,
@@ -740,6 +743,13 @@ pub(crate) fn publish_exposure(
     ) else {
         ui.visible(false);
         drop(ui);
+        publish_selected_control_exposure(
+            &mut runtime.exposures,
+            &runtime.selected,
+            &q_name,
+            &q_sim,
+            &q_parents,
+        );
         publish_celestial_capability(
             &mut runtime.exposures,
             &runtime.bodies,
@@ -756,6 +766,13 @@ pub(crate) fn publish_exposure(
     ui.visible(true);
     publish_vessel_values(&mut ui, &vessel, autopilot);
     drop(ui);
+    publish_selected_control_exposure(
+        &mut runtime.exposures,
+        &runtime.selected,
+        &q_name,
+        &q_sim,
+        &q_parents,
+    );
     publish_celestial_capability(
         &mut runtime.exposures,
         &runtime.bodies,
@@ -796,6 +813,114 @@ fn publish_celestial_capability(
     ui.property("body_moon_present", moon);
     ui.property("body_earth_present", earth);
     ui.property("active_body_id", f64::from(active_body.unwrap_or_default()));
+}
+
+/// Publish the selected simulation's control response for authored runtime
+/// surfaces. Selection is the scope; the values are the model's real public
+/// outputs and the actuator network's real valve outputs. Nothing here knows a
+/// film, a lander path, or a widget implementation.
+fn publish_selected_control_exposure(
+    exposures: &mut EngineExposures,
+    selected: &SelectedEntities,
+    q_name: &Query<&Name>,
+    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_parents: &Query<&ChildOf>,
+) {
+    let mut ui = exposures.writer("lander-control");
+    ui.visible(false);
+    ui.property("vehicle", "No simulation selected");
+    ui.property("status", "WAITING");
+    ui.property("status_color", "var(--muted-color)");
+    ui.property("rcs_activity", "0%");
+    ui.property("rcs_activity_width", "0%");
+    ui.property("torque_x", "—");
+    ui.property("torque_y", "—");
+    ui.property("torque_z", "—");
+    ui.property("throttle", "—");
+
+    let Some(root) = selected.primary() else {
+        return;
+    };
+
+    let mut outputs = std::collections::HashMap::<String, f64>::new();
+    let mut max_valve = 0.0_f64;
+    let mut touchdown = 0.0_f64;
+    for (entity, sim, _) in q_sim.iter() {
+        if !is_owned_by_vessel(entity, root, q_parents) {
+            continue;
+        }
+        for (name, &value) in &sim.outputs {
+            // Prefer the selected prim's own public output when a generated
+            // wrapper also republishes the same name below it.
+            if entity == root || !outputs.contains_key(name) {
+                outputs.insert(name.clone(), value);
+            }
+            if name.ends_with("_valve") {
+                max_valve = max_valve.max(value.clamp(0.0, 1.0));
+            }
+        }
+        if let Some(&value) = sim.outputs.get("touchdown") {
+            touchdown = touchdown.max(value);
+        }
+    }
+
+    let has_control_outputs = outputs.contains_key("torque_x")
+        || outputs.contains_key("torque_y")
+        || outputs.contains_key("torque_z")
+        || outputs.contains_key("throttle")
+        || max_valve > 0.0;
+    if !has_control_outputs {
+        return;
+    }
+
+    let vehicle = q_name
+        .get(root)
+        .map(|name| {
+            name.as_str()
+                .rsplit('/')
+                .next()
+                .unwrap_or("selected")
+                .to_owned()
+        })
+        .unwrap_or_else(|_| "selected".to_owned());
+    let status = if touchdown >= 0.5 {
+        ("TOUCHDOWN", "var(--ok-color)")
+    } else if max_valve > 0.01 {
+        ("RCS FIRING", "var(--accent-color)")
+    } else {
+        ("ATTITUDE HOLD", "var(--ok-color)")
+    };
+
+    ui.visible(true);
+    ui.property("vehicle", vehicle);
+    ui.property("status", status.0);
+    ui.property("status_color", status.1);
+    ui.property("rcs_activity", format!("{:.0}%", max_valve * 100.0));
+    ui.property("rcs_activity_width", format!("{:.1}%", max_valve * 100.0));
+    ui.property(
+        "torque_x",
+        outputs
+            .get("torque_x")
+            .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
+    );
+    ui.property(
+        "torque_y",
+        outputs
+            .get("torque_y")
+            .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
+    );
+    ui.property(
+        "torque_z",
+        outputs
+            .get("torque_z")
+            .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
+    );
+    ui.property(
+        "throttle",
+        outputs
+            .get("throttle")
+            .map_or_else(|| "—".to_owned(), |value| format!("{:.0}%", value * 100.0)),
+    );
 }
 
 fn publish_runtime_overlay_exposures(

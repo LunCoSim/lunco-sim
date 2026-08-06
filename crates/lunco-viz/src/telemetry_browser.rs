@@ -1058,7 +1058,9 @@ impl Panel for TelemetryBrowserPanel {
             return;
         };
         ui.separator();
-        let unit = registry.meta(&sel).and_then(|m| m.unit.clone());
+        let metadata = registry.meta(&sel);
+        let unit = metadata.and_then(|m| m.unit.clone());
+        let description = metadata.and_then(|m| m.description.clone());
         let hist = registry.scalar_history(&sel);
         let latest = hist.and_then(|h| h.samples.back()).copied();
         ui.horizontal(|ui| {
@@ -1088,6 +1090,13 @@ impl Panel for TelemetryBrowserPanel {
                 ui.label(egui::RichText::new(text).monospace().color(subdued));
             });
         });
+        if let Some(description) = description {
+            ui.label(
+                egui::RichText::new(description)
+                    .small()
+                    .color(subdued),
+            );
+        }
 
         // Preview points: re-copied + re-decimated only when the
         // history fingerprint moved (idle sim = fingerprint compare).
@@ -1111,9 +1120,9 @@ impl Panel for TelemetryBrowserPanel {
             if !p.points.is_empty() {
                 let color = crate::signal::color_for_signal(&theme, &sel.path);
                 Plot::new(ui.id().with("tb_preview"))
-                    .height(80.0)
-                    .show_axes([false, false])
-                    .show_grid(false)
+                    .height(120.0)
+                    .show_axes([true, true])
+                    .show_grid(true)
                     .allow_drag(false)
                     .allow_zoom(false)
                     .allow_scroll(false)

@@ -2728,8 +2728,13 @@ def Xform "DescentLander" (
     # FRAMES: a UsdPhysics joint is TWO frames — `physics:localPos0`/`localRot0` on
     # body0 and `localPos1`/`localRot1` on body1 — and `physics:axis` names a
     # cardinal axis OF THOSE FRAMES. Here +Y is the leg axis after the authored
-    # frame rake. A prismatic joint locks all three rotational DOF on the leg;
-    # the foot is a child collider in that same rigid body.
+    # frame rake. The X pair uses a half-turn about Z because its visible legs
+    # rake in the X/Y plane; the Z pair uses the corresponding half-turn about X
+    # because its visible legs rake in the Z/Y plane. Keeping those bases aligned
+    # with the authored leg frames is what makes the slider axis a real geometric
+    # constraint instead of an unrelated force direction. A prismatic joint locks
+    # all three rotational DOF on the leg; the foot is a child collider in that
+    # same rigid body.
     #
     # ANCHORS are deliberately unauthored. The loader derives them from the
     # transform hierarchy, which puts displacement at exactly 0 in the authored
@@ -2785,8 +2790,9 @@ def Xform "DescentLander" (
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegPZ>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0, 0, 0.173648, 0.984808)
-        quatf physics:localRot1 = (0, 0, 0, 1)
+        # Z-leg frame: body0 rake Rx(-20 deg) followed by the body1 half-turn Rx(180 deg).
+        quatf physics:localRot0 = (0.173648, 0.984808, 0, 0)
+        quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
         float lunco:prismaticSuspension:restPosition = 0.0
@@ -2801,8 +2807,9 @@ def Xform "DescentLander" (
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegNZ>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0, 0, -0.173648, 0.984808)
-        quatf physics:localRot1 = (0, 0, 0, 1)
+        # Z-leg frame: body0 rake Rx(+20 deg) followed by the body1 half-turn Rx(180 deg).
+        quatf physics:localRot0 = (-0.173648, 0.984808, 0, 0)
+        quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
         float lunco:prismaticSuspension:restPosition = 0.0

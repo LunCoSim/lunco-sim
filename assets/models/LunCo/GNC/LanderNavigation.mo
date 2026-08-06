@@ -73,19 +73,23 @@ equation
   q_x = imu_attitude_quat_x / q_norm;
   q_y = imu_attitude_quat_y / q_norm;
   q_z = imu_attitude_quat_z / q_norm;
+  // IMUSensor.mo already applies the body-frame (transpose) rotation.  The
+  // estimator must apply its inverse here, not repeat the same matrix.  The
+  // transpose is written explicitly so a 90-degree starting attitude is a
+  // real frame-conversion test rather than an accidental identity case.
   navigation_accel_x =
     (1.0 - 2.0 * (q_y * q_y + q_z * q_z)) * imu_coordinate_accel_local_x
-      + 2.0 * (q_x * q_y + q_w * q_z) * imu_coordinate_accel_local_y
-      + 2.0 * (q_x * q_z - q_w * q_y) * imu_coordinate_accel_local_z
+      + 2.0 * (q_x * q_y - q_w * q_z) * imu_coordinate_accel_local_y
+      + 2.0 * (q_x * q_z + q_w * q_y) * imu_coordinate_accel_local_z
       + gravity_nav_x;
   navigation_accel_y =
-    2.0 * (q_x * q_y - q_w * q_z) * imu_coordinate_accel_local_x
+    2.0 * (q_x * q_y + q_w * q_z) * imu_coordinate_accel_local_x
       + (1.0 - 2.0 * (q_x * q_x + q_z * q_z)) * imu_coordinate_accel_local_y
-      + 2.0 * (q_y * q_z + q_w * q_x) * imu_coordinate_accel_local_z
+      + 2.0 * (q_y * q_z - q_w * q_x) * imu_coordinate_accel_local_z
       + gravity_nav_y;
   navigation_accel_z =
-    2.0 * (q_x * q_z + q_w * q_y) * imu_coordinate_accel_local_x
-      + 2.0 * (q_y * q_z - q_w * q_x) * imu_coordinate_accel_local_y
+    2.0 * (q_x * q_z - q_w * q_y) * imu_coordinate_accel_local_x
+      + 2.0 * (q_y * q_z + q_w * q_x) * imu_coordinate_accel_local_y
       + (1.0 - 2.0 * (q_x * q_x + q_y * q_y)) * imu_coordinate_accel_local_z
       + gravity_nav_z;
 

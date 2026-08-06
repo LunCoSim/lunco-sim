@@ -62,6 +62,10 @@ model Lander
     "Attitude-error gain in angular acceleration units";
   input Real hold_kd = 2.5
     "Body-rate damping gain";
+  input Real attitude_deadband_rad = 0.01
+    "Attitude error below which the stabilizer requests no RCS torque";
+  input Real rate_deadband_rad_s = 0.02
+    "Body-rate below which the stabilizer requests no RCS torque";
 
   // Generic actuator demands. `throttle` is a normalized command for the
   // main-engine valve network. Torque is a body-frame request consumed by the
@@ -87,6 +91,12 @@ model Lander
   Real hold_torque_x;
   Real hold_torque_y;
   Real hold_torque_z;
+  Real hold_error_x;
+  Real hold_error_y;
+  Real hold_error_z;
+  Real hold_rate_x;
+  Real hold_rate_y;
+  Real hold_rate_z;
   Real total_leg_force;
 
   LunCo.Logic.AboveThreshold touchdown_check;
@@ -123,12 +133,30 @@ equation
 
   // Stabilization is expressed entirely in the body frame. The attitude
   // sensor emits the signed local error; the IMU emits local gyro rates.
+  // RCS is a pulse actuator, not a constant trim motor.  The branch-free
+  // dead-zone multiplier keeps small estimator noise from reopening a valve
+  // after touchdown while preserving the signed error outside the dead zone.
+  // `max` is intentional: the Modelica runtime reconstructs continuous
+  // algebraic observables from branch-free expressions.
+  hold_error_x = attitude_error_x * max(0.0,
+    1.0 - attitude_deadband_rad / max(1.0e-9, abs(attitude_error_x)));
+  hold_error_y = attitude_error_y * max(0.0,
+    1.0 - attitude_deadband_rad / max(1.0e-9, abs(attitude_error_y)));
+  hold_error_z = attitude_error_z * max(0.0,
+    1.0 - attitude_deadband_rad / max(1.0e-9, abs(attitude_error_z)));
+  hold_rate_x = gyro_x * max(0.0,
+    1.0 - rate_deadband_rad_s / max(1.0e-9, abs(gyro_x)));
+  hold_rate_y = gyro_y * max(0.0,
+    1.0 - rate_deadband_rad_s / max(1.0e-9, abs(gyro_y)));
+  hold_rate_z = gyro_z * max(0.0,
+    1.0 - rate_deadband_rad_s / max(1.0e-9, abs(gyro_z)));
+
   hold_torque_x = attitude_hold * inertia_xx
-    * (hold_kp * attitude_error_x - hold_kd * gyro_x);
+    * (hold_kp * hold_error_x - hold_kd * hold_rate_x);
   hold_torque_y = attitude_hold * inertia_yy
-    * (hold_kp * attitude_error_y - hold_kd * gyro_y);
+    * (hold_kp * hold_error_y - hold_kd * hold_rate_y);
   hold_torque_z = attitude_hold * inertia_zz
-    * (hold_kp * attitude_error_z - hold_kd * gyro_z);
+    * (hold_kp * hold_error_z - hold_kd * hold_rate_z);
 
   torque_x = command_torque_x + hold_torque_x;
   torque_y = command_torque_y + hold_torque_y;
