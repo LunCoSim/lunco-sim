@@ -109,7 +109,6 @@ model PositionPID3D
   Real pitch_command_raw;
   Real roll_command_raw;
   Real tilt_reference_accel;
-  Real attitude_quat_norm_sq;
   Real thrust_vertical_projection;
   Real pid_y_command;
   Real vertical_limiter_output;
@@ -118,6 +117,7 @@ model PositionPID3D
   Real roll_command_value;
   Real yaw_command_value;
   Real flight_command_gain;
+  LunCo.Sensors.FrameVectorTransform thrust_axis_transform;
 
 equation
   // Sensor -> navigation block.
@@ -199,15 +199,15 @@ equation
   // This is a flight-computer authority limit, not a scene override: at 90 deg
   // the engine is off, during recovery it ramps with the real thrust-vector
   // projection, and at an upright attitude the normal throttle command is unchanged.
-  attitude_quat_norm_sq = max(minimum_positive_mass_kg,
-    imu_attitude_quat_w * imu_attitude_quat_w
-      + imu_attitude_quat_x * imu_attitude_quat_x
-      + imu_attitude_quat_y * imu_attitude_quat_y
-      + imu_attitude_quat_z * imu_attitude_quat_z);
+  thrust_axis_transform.quaternion_w = imu_attitude_quat_w;
+  thrust_axis_transform.quaternion_x = imu_attitude_quat_x;
+  thrust_axis_transform.quaternion_y = imu_attitude_quat_y;
+  thrust_axis_transform.quaternion_z = imu_attitude_quat_z;
+  thrust_axis_transform.vector_x = 0.0;
+  thrust_axis_transform.vector_y = 1.0;
+  thrust_axis_transform.vector_z = 0.0;
   thrust_vertical_projection = noEvent(max(0.0, min(1.0,
-    (1.0 - 2.0 * (imu_attitude_quat_x * imu_attitude_quat_x
-      + imu_attitude_quat_z * imu_attitude_quat_z))
-      / attitude_quat_norm_sq)));
+    thrust_axis_transform.world_frame_y)));
 
   // Body +Y is the engine axis. Convert the desired world acceleration vector
   // into bounded tilt requests; the airframe's attitude stabilizer closes the

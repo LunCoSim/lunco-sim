@@ -51,49 +51,28 @@ model LanderNavigation
     "Vertical velocity propagated while the raw ray is invalid";
   Real vertical_position_value "Conditioned vertical position";
   Real measured_altitude_value "Conditioned altitude telemetry";
-  Real q_norm;
-  Real q_w;
-  Real q_x;
-  Real q_y;
-  Real q_z;
   Real navigation_accel_x;
   Real navigation_accel_y;
   Real navigation_accel_z;
   Real range_confidence;
+  LunCo.Sensors.FrameVectorTransform acceleration_transform;
 
 equation
   // The IMU supplies specific force in the body frame. Rotate it into the
   // navigation frame with the measured attitude, then restore gravity. The
   // controller never integrates a body-local axis as though it were a
   // navigation axis; the frame conversion remains in the Modelica estimator.
-  q_norm = sqrt(max(quaternion_epsilon,
-    imu_attitude_quat_w * imu_attitude_quat_w
-      + imu_attitude_quat_x * imu_attitude_quat_x
-      + imu_attitude_quat_y * imu_attitude_quat_y
-      + imu_attitude_quat_z * imu_attitude_quat_z));
-  q_w = imu_attitude_quat_w / q_norm;
-  q_x = imu_attitude_quat_x / q_norm;
-  q_y = imu_attitude_quat_y / q_norm;
-  q_z = imu_attitude_quat_z / q_norm;
-  // IMUSensor.mo already applies the body-frame (transpose) rotation.  The
-  // estimator must apply its inverse here, not repeat the same matrix.  The
-  // transpose is written explicitly so a 90-degree starting attitude is a
-  // real frame-conversion test rather than an accidental identity case.
-  navigation_accel_x =
-    (1.0 - 2.0 * (q_y * q_y + q_z * q_z)) * imu_coordinate_accel_local_x
-      + 2.0 * (q_x * q_y - q_w * q_z) * imu_coordinate_accel_local_y
-      + 2.0 * (q_x * q_z + q_w * q_y) * imu_coordinate_accel_local_z
-      + gravity_nav_x;
-  navigation_accel_y =
-    2.0 * (q_x * q_y + q_w * q_z) * imu_coordinate_accel_local_x
-      + (1.0 - 2.0 * (q_x * q_x + q_z * q_z)) * imu_coordinate_accel_local_y
-      + 2.0 * (q_y * q_z - q_w * q_x) * imu_coordinate_accel_local_z
-      + gravity_nav_y;
-  navigation_accel_z =
-    2.0 * (q_x * q_z - q_w * q_y) * imu_coordinate_accel_local_x
-      + 2.0 * (q_y * q_z + q_w * q_x) * imu_coordinate_accel_local_y
-      + (1.0 - 2.0 * (q_x * q_x + q_y * q_y)) * imu_coordinate_accel_local_z
-      + gravity_nav_z;
+  acceleration_transform.quaternion_epsilon = quaternion_epsilon;
+  acceleration_transform.quaternion_w = imu_attitude_quat_w;
+  acceleration_transform.quaternion_x = imu_attitude_quat_x;
+  acceleration_transform.quaternion_y = imu_attitude_quat_y;
+  acceleration_transform.quaternion_z = imu_attitude_quat_z;
+  acceleration_transform.vector_x = imu_coordinate_accel_local_x;
+  acceleration_transform.vector_y = imu_coordinate_accel_local_y;
+  acceleration_transform.vector_z = imu_coordinate_accel_local_z;
+  navigation_accel_x = acceleration_transform.world_frame_x + gravity_nav_x;
+  navigation_accel_y = acceleration_transform.world_frame_y + gravity_nav_y;
+  navigation_accel_z = acceleration_transform.world_frame_z + gravity_nav_z;
 
   // Integrate navigation-frame acceleration once for velocity and again for the
   // lateral position estimate. Vertical position is corrected directly by the

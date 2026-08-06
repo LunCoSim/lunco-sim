@@ -65,6 +65,11 @@ fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
     }
     assert!(!source.contains("accel_x_true"));
     assert!(!source.contains("ground-truth"));
+    assert!(
+        source.contains("gyro_transform") && source.contains("body_frame_z"),
+        "IMU must rotate Avian world angular velocity into body-frame gyro rates"
+    );
+    assert!(!source.contains("gyro_body_x"));
     compiles_and_steps("IMUSensor", &source);
 }
 
@@ -95,19 +100,51 @@ fn filtered_derivative_is_a_reusable_stateful_sensor_boundary() {
 fn attitude_reference_uses_imu_measurements_not_body_truth() {
     let source = model("Sensors/AttitudeReference.mo");
     for input in [
-        "specific_force_x",
-        "specific_force_y",
-        "specific_force_z",
-        "gyro_x",
+        "attitude_quat_w",
+        "attitude_quat_x",
+        "attitude_quat_y",
+        "attitude_quat_z",
     ] {
         assert!(
             source.contains(input),
             "attitude reference must consume {input}"
         );
     }
-    assert!(!source.contains("quat_w"));
-    assert!(!source.contains("quat_x"));
-    assert!(!source.contains("quat_y"));
-    assert!(!source.contains("quat_z"));
+    assert!(source.contains("FrameVectorTransform"));
+    assert!(!source.contains("raw_quat"));
     compiles("AttitudeReference", &source);
+}
+
+#[test]
+fn all_runtime_frame_conversions_use_the_shared_transform() {
+    let shared = model("Sensors/FrameVectorTransform.mo");
+    for output in [
+        "world_frame_x",
+        "world_frame_y",
+        "world_frame_z",
+        "body_frame_x",
+        "body_frame_y",
+        "body_frame_z",
+    ] {
+        assert!(shared.contains(output), "shared transform must expose {output}");
+    }
+    compiles_and_steps("FrameVectorTransform", &shared);
+
+    for path in [
+        "Sensors/IMUSensor.mo",
+        "Sensors/Altimeter.mo",
+        "Sensors/AttitudeReference.mo",
+        "GNC/LanderNavigation.mo",
+        "GNC/PositionPID3D.mo",
+    ] {
+        let source = model(path);
+        assert!(
+            source.contains("FrameVectorTransform"),
+            "{path} must use the shared frame conversion"
+        );
+        assert!(
+            !source.contains("1.0 - 2.0 * (q_"),
+            "{path} must not carry a private quaternion rotation matrix"
+        );
+    }
 }

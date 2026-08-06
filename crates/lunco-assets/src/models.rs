@@ -4,6 +4,8 @@
 //! The reusable PositionPID3D/PIDAxis/AccelerationLimiter signal boundaries are
 //! part of that contract; reusable signal blocks publish explicit output aliases
 //! and the guidance exposes the bounded vertical channel.
+//! FrameVectorTransform is the shared quaternion frame-conversion boundary used
+//! by sensors and guidance.
 //!
 //! Why this lives HERE: `lunco-assets` owns every asset interaction. The
 //! bundled models must be present at compile time on EVERY target — wasm has no
