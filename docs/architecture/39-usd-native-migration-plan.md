@@ -208,14 +208,19 @@ domain-op selection + scripted merge-policy hook + machine-unique `AuthorTag` + 
 - **P5.1 — Spike:** author one real `connect()`-based `Electrical.mo` (battery + bus + 2 loads),
   `compile_str` → confirm it steps to correct bus voltage/currents (doc 37 §7, §6 caveat: no test proves
   MSL-electrical numeric sim yet). Decide MSL-import vs self-contained on cold-compile feel.
-- **P5.2 — Netlist-from-USD synthesizer + `SynthesizerRegistry`** (rhai policy + Rust primitives + hooks;
-  doc 37 §3, §8): read the connectable electrical graph → emit one acausal `Electrical.mo` → `compile_str`
-  → `SimulationSession`; boundary ports scalar-wired to other domains. Scaffold-and-own (hand-editable).
-- **P5.3 — Enforce the two-level rule** (doc 37 §1): acausal within a `.mo`, causal across via connections.
-  A `wiring` synthesizer can even emit the cross-domain `SimConnection` boundary.
+- **P5.2 [in place] — Netlist-from-USD synthesizer + `SynthesizerRegistry`** (rhai policy + Rust
+  primitives + hooks; doc 37 §3, §8): `DomainSynthesizer` implementations are selected by the authored
+  `lunco:synthesizer` token, the default acausal network and actuator-wrench implementations are registered,
+  and `register_hook_synthesizer` provides the authored-policy seam. A hook receives Rust-owned composed
+  network facts and returns the generated Modelica source; it never re-reads USD.
+- **P5.3 [in place] — Enforce the two-level rule** (doc 37 §1): acausal within a `.mo`, causal across via
+  connections. The registered acausal synthesizer emits disconnected graph units below one runtime root;
+  the unit boundary does not create a second ECS participant or a second wiring path.
 
-**Phase 5 done when:** a rover's electrical layer is one synthesized, hand-editable `Electrical.mo`
-boundary-wired via connections; the synthesizer is a registered rhai-authored entry with lifecycle hooks.
+**Phase 5 status:** the runtime registry, composed-graph reader, deterministic unit partition, and
+hook-backed authored synthesizer are in place. The remaining P5.1 item is a fresh production numeric
+acceptance of an MSL electrical network and its cold-compile budget; that is validation, not another
+projection architecture.
 
 ---
 

@@ -115,6 +115,6 @@ and a failed source becomes a terminal projection error.
 | B8 | `lunco_hash::fnv1a64` replaces `DefaultHasher`. |
 | C1 | One composed-USD source-reference reader (`lunco_usd_bevy::program`) is used by the projector AND lint facts; the loaded source resolver owns the declared class, with one `lunco_modelica::parse_model_interface` path for extraction. |
 | C2 | Superseded on 2026-08-04: `ProgramGraph` and `partition_network` now belong to the synthesizer. A Scope remains one runtime participant, while disconnected graph units are emitted as explicit composite Modelica child models; the lint rejection was removed. |
-| C3 | Doc 37 §8 now carries a `NOT IMPLEMENTED` status note describing what actually ships. |
+| C3 | **Fixed in source.** `DomainSynthesizer` and `SynthesizerRegistry` are the runtime seam; the default acausal-network and actuator-wrench implementations are registered, scopes select `lunco:synthesizer`, and hook-backed synthesizers can be registered without editing `project_domain_islands`. |
 | C4 | Projected networks carry a `UsdModelicaPortContract` too, so the existing post-compile validator holds a generated wrapper to its authored boundary. |
 | Tests | `tests/domain_projection_reader.rs` covers `read_network` + `emit_modelica` against composed USD fixtures — the layer that had none. |
