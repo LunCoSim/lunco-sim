@@ -19,8 +19,8 @@ The gizmo system uses `transform-gizmo-bevy` which **automatically applies trans
 ```
 Shift+Left-click → Select entity → Add GizmoTarget → Gizmo appears immediately
 Drag gizmo handle → Body made kinematic → gizmo library updates Transform
-                     → GlobalTransform synced (correct mesh rendering)
-Release gizmo handle → Body restored to dynamic → Physics resumes
+                     → InteractionSchedule drives Avian Position/Rotation
+Release gizmo handle → Drive removed, body restored → Physics resumes
 ```
 
 ### Critical: No Manual Transform Application
@@ -28,13 +28,20 @@ Release gizmo handle → Body restored to dynamic → Physics resumes
 The gizmo library modifies `Transform` directly in its `update_gizmos` system. **Never** manually apply `GizmoResult` deltas to `Transform` — this causes double-application and amplified movement.
 
 Our systems only:
-1. **`capture_gizmo_start`** — make body kinematic when drag starts
-2. **`sync_gizmo_transforms`** — update `GlobalTransform` from `Transform` so the mesh renders at the correct position
-3. **`restore_gizmo_dynamic`** — restore dynamic body when drag ends
+1. **`capture_gizmo_start`** — make the body kinematic and install its
+   `lunco_physics::KinematicDrive`.
+2. **`apply_gizmo_proxy_drag`** and **`drive_gizmo_kinematic_pose`** — apply the
+   proxy's render-frame edit and convert it to Avian's global pose in the
+   unpaused interface cadence.
+3. **`restore_gizmo_dynamic`** — remove the drive, restore the original body
+   state, and release the physics hold.
 
-### Why GlobalTransform Must Be Synced
+### Why Render and Physics Poses Are Split
 
-`global_transform_propagation_system` runs in `PostUpdate`, but the gizmo modifies `Transform` in `Last`. Without syncing, `GlobalTransform` is stale and the mesh renders at the old position while the gizmo is at the new position.
+The proxy is render-frame-owned, while the real entity's `Transform` remains
+the scene/render pose. The standard transform propagation pass renders the
+edited pose; Avian pose ownership is kept separately in the drive so physics
+writeback cannot erase an interface edit, including while physics is paused.
 
 ## USD Compound Rigid Bodies
 
@@ -83,7 +90,7 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 | `catalog.rs` | `SpawnCatalog`, `SpawnableEntry`, `SpawnCategory` |
 | `spawn.rs` | Ghost preview, click-to-place system |
 | `selection.rs` | Shift+click selection, `GizmoTarget` management |
-| `gizmo.rs` | Kinematic switching, GlobalTransform sync |
+| `gizmo.rs` | Kinematic-drive lifecycle and proxy editing |
 | `inspector.rs` | EGUI parameter panel |
 | `entity_list.rs` | Clickable list of scene entities |
 | `palette.rs` | Spawn palette UI |
