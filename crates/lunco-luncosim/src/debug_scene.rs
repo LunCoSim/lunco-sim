@@ -587,16 +587,6 @@ pub fn run() -> u8 {
     app.finish();
     app.cleanup();
 
-    // A scene test starts its scenario only after the scene's asynchronous
-    // participants are live. The scripting plugin owns this lifecycle gate;
-    // the runner only sets its explicit test-time policy.
-    if let Some(mut gate) = app
-        .world_mut()
-        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
-    {
-        gate.enabled = false;
-    }
-
     // ── Scene-readiness freeze ────────────────────────────────────────────────
     //
     // The kinematic→dynamic activation gate (`GroundColliderPending`) clears
@@ -710,13 +700,6 @@ pub fn run() -> u8 {
         );
         return 2;
     }
-    if let Some(mut gate) = app
-        .world_mut()
-        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
-    {
-        gate.enabled = true;
-    }
-
     let mut ticks = 0u64;
     let mut early_exit = false;
     let mut sim_seconds = 0.0f64;

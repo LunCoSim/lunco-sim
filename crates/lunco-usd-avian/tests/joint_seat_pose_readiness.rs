@@ -22,16 +22,14 @@
 //!
 //! 2. `PhysicsSchedule` is a SEPARATE schedule, run by avian's
 //!    `run_physics_schedule` from inside `FixedPostUpdate`'s
-//!    `PhysicsSystems::StepSimulation` (`avian3d-0.7.0/src/schedule/mod.rs`).
-//!    A system in `FixedPostUpdate`'s `PhysicsSystems::Prepare` — where the joint
-//!    builder used to live — is therefore ordered before the entire physics
-//!    schedule, so no `.after(...)` written in `FixedPostUpdate` could ever have
-//!    observed a bridge-written `Position`. Cross-schedule ordering is silently a
-//!    no-op, which is why the bug presented as a race that ordering could not fix.
+//!    `PhysicsSystems::StepSimulation` (`avian3d-0.7.0/src/schedule/mod.rs`). A
+//!    readiness hold pauses that nested schedule. The bridge therefore publishes
+//!    the same READ contract in the enclosing schedule as well, where joint
+//!    preparation can resolve authored endpoints without integrating them.
 //!
-//! Both probes below sit at those two slots and record what they see on the first
-//! tick a body exists. The `FixedPostUpdate` probe reproduces the bug; the
-//! `PhysicsSchedule` probe is where `build_usd_physics_joints` now runs.
+//! Both probes below record the first pose they see. Joint preparation uses the
+//! enclosing bridge READ slot; the nested probe proves the two read paths agree
+//! when physics is live.
 
 use avian3d::physics_transform::{PhysicsTransformSystems, Position};
 use avian3d::prelude::*;
@@ -53,10 +51,9 @@ const AUTHORED_Y: f32 = 70.0;
 #[derive(Resource, Default)]
 struct SeenInFixedPostUpdate(Option<DVec3>);
 
-/// First `Position` observed by a probe at the NEW joint-builder slot
-/// (`PhysicsSchedule`, `PhysicsSystems::Prepare`, after the bridge READ pass).
+/// First `Position` observed at the hold-safe joint-preparation slot.
 #[derive(Resource, Default)]
-struct SeenInPhysicsSchedule(Option<DVec3>);
+struct SeenInJointPreparation(Option<DVec3>);
 
 #[derive(Component)]
 struct Probe;
@@ -69,7 +66,7 @@ fn record_old_slot(mut seen: ResMut<SeenInFixedPostUpdate>, q: Query<&Position, 
     }
 }
 
-fn record_new_slot(mut seen: ResMut<SeenInPhysicsSchedule>, q: Query<&Position, With<Probe>>) {
+fn record_joint_slot(mut seen: ResMut<SeenInJointPreparation>, q: Query<&Position, With<Probe>>) {
     if seen.0.is_none() {
         if let Ok(p) = q.single() {
             seen.0 = Some(p.0);
@@ -89,7 +86,7 @@ fn make_app() -> App {
         BigSpacePhysicsBridgePlugin,
     ));
     app.init_resource::<SeenInFixedPostUpdate>()
-        .init_resource::<SeenInPhysicsSchedule>();
+        .init_resource::<SeenInJointPreparation>();
 
     // Probe at the slot the joint builder USED to occupy.
     app.add_systems(
@@ -98,14 +95,13 @@ fn make_app() -> App {
             .in_set(PhysicsSystems::Prepare)
             .after(PhysicsTransformSystems::TransformToPosition),
     );
-    // Probe at the slot the joint builder occupies NOW.
+    // Probe at the hold-safe slot the joint builder occupies now.
     app.add_systems(
-        avian3d::schedule::PhysicsSchedule,
-        record_new_slot
+        FixedPostUpdate,
+        record_joint_slot
             .in_set(PhysicsSystems::Prepare)
-            .after(PhysicsSystems::First)
             .after(PhysicsBridgeSystems::Read)
-            .before(avian3d::schedule::PhysicsStepSystems::First),
+            .before(PhysicsSystems::StepSimulation),
     );
 
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
@@ -171,7 +167,7 @@ fn joint_slot_reads_the_authored_pose_not_the_required_component_default() {
 
     let new_slot = app
         .world()
-        .resource::<SeenInPhysicsSchedule>()
+        .resource::<SeenInJointPreparation>()
         .0
         .expect("the PhysicsSchedule probe must observe the body on the first tick");
     assert!(
@@ -196,6 +192,27 @@ fn joint_slot_reads_the_authored_pose_not_the_required_component_default() {
     //
     // `SeenInFixedPostUpdate` is still populated by the probe, so a debugger can
     // read both slots when diagnosing a seating bug; nothing depends on its value.
+}
+
+#[test]
+fn joint_preparation_reads_authored_pose_while_physics_is_paused() {
+    let mut app = make_app();
+    spawn_scene(&mut app);
+    app.world_mut().resource_mut::<Time<Physics>>().pause();
+
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let observed = app
+        .world()
+        .resource::<SeenInJointPreparation>()
+        .0
+        .expect("joint preparation must run while the nested physics schedule is paused");
+    assert!(
+        (observed.y - AUTHORED_Y as f64).abs() < 1e-6,
+        "hold-safe bridge read must publish the authored pose, got {observed:?}"
+    );
 }
 
 /// The premise of the whole fix, asserted directly: avian's own

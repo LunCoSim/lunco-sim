@@ -54,7 +54,7 @@ The driver most at risk gets the mildest warning.
 Nothing new needs to be declared. The engine loads every input already:
 
 - **μ** — `WheelRaycast::friction_mu` (`lunco-mobility/src/lib.rs:322`), read from
-  `lunco:tire:frictionCoefficient` and composed onto the wheel by its `tire`
+  standard `physics:dynamicFriction` and composed onto the wheel by its `tire`
   variant.
 - **Track width** — the wheel entities' own transforms.
 - **CoM height** — `physics:centerOfMass`, already authored per variant and loaded

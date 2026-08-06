@@ -256,7 +256,14 @@ impl Plugin for LunCoScriptingPlugin {
         python::initialize_python();
 
         #[cfg(any(feature = "rhai", feature = "python"))]
-        app.init_resource::<scenario::ScenarioExecutionGate>();
+        app.init_resource::<scenario::ScenarioExecutionGate>()
+            .init_resource::<scenario::ScenarioReadinessArm>()
+            .add_observer(scenario::close_scenarios_for_scene_transition)
+            .add_observer(scenario::arm_scenarios_after_scene_composition)
+            .add_systems(
+                PreUpdate,
+                scenario::open_scenarios_when_scene_ready.after(lunco_readiness::ReadinessSet),
+            );
 
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);

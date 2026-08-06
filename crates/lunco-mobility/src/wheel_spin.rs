@@ -380,11 +380,9 @@ pub(crate) fn update_wheel_spin(
         // A slip angle is speed-free by construction, so one authored number now
         // means the same grip at every speed.
         //
-        // `V_REF` floors the denominator: at rest the slip angle is undefined
-        // (atan of 0/0) and any nonzero `v_lat` would read as a full 90°. Below
-        // this speed the expression degrades smoothly back to a velocity damper,
-        // which is the correct low-speed limit — a stationary wheel resists being
-        // pushed sideways in proportion to how fast it is being pushed.
+        // The slip-angle reference is kinematic: the larger of hub travel speed
+        // and circumferential wheel speed. A pivot wheel therefore retains a
+        // well-defined angle even while its hub's longitudinal speed is near zero.
         // The stiffness is NORMALISED BY LOAD — side force per radian PER NEWTON of
         // normal force — so one authored number describes the tyre rather than the
         // tyre-on-this-particular-rover. That is the same reason PhysX states its
@@ -396,13 +394,6 @@ pub(crate) fn update_wheel_spin(
         // The linear region ends when `C·N·α` reaches the cone `μ·N`, i.e. at
         // `α_peak = μ / C`, independent of load: at C = 10 a μ = 0.8 regolith tyre
         // develops full side force at 4.6° of slip, which is where a real one does.
-        const V_REF: f64 = 0.5;
-        let f_lat = if on_ground {
-            let slip_angle = (-v_lat / v_long.abs().max(V_REF)).atan();
-            wheel.cornering_stiffness * wheel.last_normal_force * slip_angle
-        } else {
-            0.0
-        };
         // ── THE FRICTION CONE — SCALE THE FORCE, DON'T RE-DERIVE IT ────────────
         //
         // The two components above are the whole tire model: `f_long` from the slip
@@ -420,20 +411,25 @@ pub(crate) fn update_wheel_spin(
         // direction the force pointed under grip and had no say in it under
         // saturation.
         //
-        // Nothing else handled a degeneracy: the ill-conditioned case that direction
-        // had to guard (`s_mag → 0`, a tire filling its cone while barely sliding —
-        // which is exactly the low-speed case) already fell through to this same
-        // scaling. The low-speed conditioning that matters lives where it belongs,
-        // in `V_REF` flooring the slip-angle denominator; `mag > 1e-9` keeps this
-        // divide safe (and covers `μ·N = 0`, where the cone collapses to nothing).
-        let (f_long, f_lat) = {
-            let mag = (f_long * f_long + f_lat * f_lat).sqrt();
-            if mag > mu_n && mag > 1.0e-9 {
-                let s = mu_n / mag;
-                (f_long * s, f_lat * s)
-            } else {
-                (f_long, f_lat)
-            }
+        // The low-speed definition lives in `tire_patch_force`: actual `omega*r`
+        // keeps a rolling/pivoting wheel's angle defined, and `atan2` supplies the
+        // static limit when both longitudinal motions vanish. The authored lower
+        // validation bound prevents a steady-state test curve being extrapolated
+        // below its measured domain; it is evidence metadata, not a fitted switch.
+        let (f_long, f_lat) = if on_ground {
+            crate::tire_patch_force(
+                f_long,
+                v_long
+                    .abs()
+                    .max((wheel.spin_velocity * r).abs())
+                    .max(wheel.min_validated_speed),
+                v_lat,
+                wheel.last_normal_force,
+                friction_mu,
+                wheel.cornering_stiffness,
+            )
+        } else {
+            (0.0, 0.0)
         };
         wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
 
@@ -540,6 +536,7 @@ mod tests {
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
                 cornering_stiffness: 10.0,
+                min_validated_speed: 0.0,
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
             },
@@ -643,6 +640,7 @@ mod tests {
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
                     cornering_stiffness: 10.0,
+                    min_validated_speed: 0.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
                 },

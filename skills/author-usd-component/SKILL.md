@@ -365,8 +365,9 @@ Behaviour trees follow the ordinary `LunCoProgramAPI` rule — a child prim
 exactly as `.rhai` and `.mo` select their engines. Imported BehaviorTree.CPP/Groot/ROS
 `.xml` is also accepted.
 
-Vehicles are a special case with **no fallbacks**: a wheel missing any
-`LunCoWheelAPI` / `LunCoTireAPI` attribute logs an error and **refuses to spawn**.
+Vehicles are a special case with **no fallbacks**: a wheel missing any required
+`LunCoWheelAPI`, `PhysxVehicleTireAPI`, or `PhysicsMaterialAPI` attribute logs an
+error and **refuses to spawn**.
 Compose `components/mobility/wheel.usda` rather than authoring one.
 
 ## Tunable parameters → Inspector sliders

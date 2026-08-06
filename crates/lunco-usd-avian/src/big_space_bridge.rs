@@ -155,6 +155,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             FixedPostUpdate,
             pose_to_position
+                .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
                 .before(PhysicsSystems::StepSimulation),
         );

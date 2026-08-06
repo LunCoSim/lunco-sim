@@ -51,7 +51,7 @@ def Xform "Rover" {
         prepend apiSchemas = [
             "PhysxVehicleWheelAPI", "LunCoWheelAPI",
             "PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI",
-            "PhysxVehicleTireAPI", "LunCoTireAPI",
+            "PhysxVehicleTireAPI", "PhysicsMaterialAPI",
         ]
     ) {
         float physxVehicleWheel:radius = 0.4
@@ -74,9 +74,8 @@ def Xform "Rover" {
         float physxVehicleSuspension:springStrength = 5000.0
         float physxVehicleSuspension:springDamperRate = 600.0
 
-        double lunco:tire:frictionCoefficient = 0.8
-        float physics:dynamicFriction = 1.6
-        float physics:staticFriction = 1.6
+        float physics:dynamicFriction = 0.8
+        float physics:staticFriction = 0.8
 
         double3 lunco:wheel:steerAxis = (0, 1, 0)
         double lunco:wheel:driveDamping = 30.0

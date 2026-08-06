@@ -2539,7 +2539,7 @@ fn setup_physical_wheel(
     // angular inertia and sinks the rover through the terrain.
     let wheel_density = params.wheel_density();
 
-    commands.entity(entity).try_insert((
+    commands.entity(entity).insert((
         PhysicalWheel {
             visual_entity: visual_id,
             wheel_radius: radius,
@@ -2561,29 +2561,13 @@ fn setup_physical_wheel(
         // (see the `wheel_density` note above) — a forced `Mass` desynced them and
         // the rover sank through the terrain.
         avian3d::prelude::ColliderDensity(wheel_density),
-        // THE CONTACT COEFFICIENT IS THE TYRE'S, AND IT IS AUTHORED. This was
-        // `Friction::new(0.9)` — a Rust constant that no tyre asset stated, so
-        // swapping the `tire` variant moved the analytic model's μ and left the
-        // physical wheel sliding on the same surface it always had. The 0.9 is now
-        // `physics:dynamicFriction` on the tyre (`UsdPhysicsMaterialAPI`, core
-        // UsdPhysics), alongside the tyre's own `lunco:tire:frictionCoefficient`.
-        //
-        // TWO friction numbers on one tyre is not a duplication.
-        // `lunco:tire:frictionCoefficient` is the tyre's Coulomb μ and the raycast
-        // model applies it exactly — it saturates its patch force at μ·N. The
-        // physical wheel's cone is negotiated by avian's XPBD contact solver
-        // instead, which under sustained sliding delivers well under nominal:
-        // authoring the honest μ here costs the physical rover ~30% of its terminal
-        // speed against its raycast twin. So the solver gets its own authored
-        // coefficient, related to μ by `2·(μ / 0.55) − ground_μ`, and the gap
-        // between the two is a property of the engine rather than of the rubber.
-        // The sweep it was measured with is recorded in
-        // `components/mobility/tires/regolith.usda`.
-        //
-        // Default combine rule (Average, against the ground material): that is what
-        // the relation above is written against, and `Min` would let the tyre's
-        // number be overridden by any ground softer than it.
-        Friction::new(params.contact_friction),
+        // Jointed wheels use Avian's maintained Coulomb contact solver as their
+        // sole tangential-contact owner. The coefficient is the composed standard
+        // `PhysicsMaterialAPI` dynamic friction authored by the selected tire;
+        // Avian combines it with the ground surface using the standard default
+        // Average rule. There is no second delayed force model and no solver-fit
+        // coefficient.
+        Friction::new(params.friction_mu),
         // BEARING DRAG IS AUTHORED, in the wheel's own units. Was
         // `AngularDamping(0.3)` — again a Rust constant, and again one the raycast
         // wheel does not share: its spin integrator subtracts

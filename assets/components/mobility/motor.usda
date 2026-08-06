@@ -153,24 +153,19 @@ def Xform "Motor" (
     #
     # ── SIZED AGAINST THE FRICTION CONE, NOT AGAINST AMBITION ─────────────────
     #
-    # 1.0, down from 1.5 → `1.0 × 200 × 0.85` = 170 N·m at the axle. A wheel slips
-    # the moment commanded torque passes `μ·N·r`; on the standard 1100 kg
-    # four-wheeler (N ≈ 445 N, r = 0.4) with the regolith tyre's μ = 1.5 that cone
-    # is 267 N·m, so 170 leaves ~36% of margin — enough to absorb the load transfer
-    # that unloads the front axle under acceleration, which is where the last of
-    # the wheelspin lived once μ went up.
-    #
-    # At 1.5 the axle asked for 255 N·m against that same 267 N·m cone: a margin of
-    # 5%, i.e. spin on any launch, any slope and any wheel that momentarily went
-    # light. THE TORQUE ABOVE THE CONE WAS NEVER DOING ANYTHING — traction, not the
-    # motor, sets what a rover can push — so this costs no acceleration it could
-    # actually deliver; it only stops paying for the difference in visible slip.
+    # `1.5 × 200 × 0.85` = 255 N·m at the axle. A wheel slips when commanded torque
+    # passes `μ·N·r`; on the standard 1100 kg four-wheeler (N ≈ 445 N, r = 0.4)
+    # with the regolith tyre's μ = 1.5 that cone is 267 N·m. The motor therefore
+    # remains below the flat-ground traction limit while retaining enough axle
+    # authority to shear soil laterally during a skid-steer pivot. The former
+    # 1.0 N·m winding (170 N·m axle) was below that steering requirement: it could
+    # drive forward, but stalled the yaw moment before the measured tire law did.
     #
     # The `variants/rover_*.usda` tiers override this DOWN (0.4 … 0.9) on purpose:
     # each tier is sized to ~1.5× its own traction cone, so the ladder is a torque
     # ladder (easy 153 › medium 85 › awful 68 N·m at the axle) rather than an
     # over-torqued wall. Untouched here.
-    float lunco:motor:stallTorque = 1.0
+    float lunco:motor:stallTorque = 1.5
     # FLEET SPEED — A PACING OVERRIDE, KEPT INSIDE WHAT THE TYRE CAN DELIVER.
     #
     # 4800 rad/s through the 200:1 gives a 24 rad/s axle — 9.6 m/s of rim ceiling on

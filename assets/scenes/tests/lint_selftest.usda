@@ -309,10 +309,15 @@ def Xform "LintSelftest" (
     }
 
     # A domain network with no components cannot produce any equations.
-    def Scope "EmptyElectrical" (
+    # Negative network fixtures are standard USD guide geometry, not live
+    # compiler scopes. Their collections and connections stay composed for the
+    # linter, while domain projection remains reserved for non-spatial Scope
+    # prims. The healthy control below deliberately remains a Scope.
+    def Xform "EmptyElectrical" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        uniform token purpose = "guide"
         uniform token collection:components:expansionRule = "explicitOnly"
     }
 
@@ -333,10 +338,11 @@ def Xform "LintSelftest" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
         custom token connectors:p
     }
-    def Scope "DisconnectedElectrical" (
+    def Xform "DisconnectedElectrical" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        uniform token purpose = "guide"
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
             </LintSelftest/IslandA>,
@@ -360,10 +366,11 @@ def Xform "LintSelftest" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
         custom token connectors:p
     }
-    def Scope "DanglingElectrical" (
+    def Xform "DanglingElectrical" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        uniform token purpose = "guide"
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [</LintSelftest/DanglingLoad>]
     }
@@ -403,10 +410,11 @@ def Xform "LintSelftest" (
         custom token connectors:p
     }
 
-    def Scope "InvalidProgramNetwork" (
+    def Xform "InvalidProgramNetwork" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        uniform token purpose = "guide"
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
             </LintSelftest/BuiltinInCompilerNetwork>
@@ -425,10 +433,11 @@ def Xform "LintSelftest" (
         ]
     }
 
-    def Scope "MultiSourceNetwork" (
+    def Xform "MultiSourceNetwork" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        uniform token purpose = "guide"
         float inputs:left.connect = </LintSelftest/IslandA.outputs:soc_out>
         float inputs:right.connect = </LintSelftest/IslandA.outputs:soc_out>
         uniform token collection:components:expansionRule = "explicitOnly"

@@ -23,13 +23,8 @@ over "Tire" (
     kind = "component"
 )
 {
-    double lunco:tire:frictionCoefficient = 1.0
-    # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
-    # tyre carries two friction numbers and for the relation that sets this one:
-    # `solver = 2·(μ / 0.55) − 1`. The flat 1.125·μ this replaces delivered an
-    # effective ~0.59 against an authored 1.0 on a physical drivetrain.
-    float physics:dynamicFriction = 2.64
-    float physics:staticFriction = 2.64
+    float physics:dynamicFriction = 1.0
+    float physics:staticFriction = 1.0
 
     # The look states the grip: rounded, flattened lugs under a heavy coat of
     # the hundred klicks that wore them.

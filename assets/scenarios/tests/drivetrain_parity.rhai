@@ -423,17 +423,18 @@ fn on_stop(me) {
 //                           tire slip ramps in over ~1-2 s, a direct body force
 //                           does not. Looser than speed on purpose, and still far
 //                           tighter than any real divergence.
-//   yaw change      +/-35%  Skid-steer yaw comes from lateral friction saturation,
-//                           the most solver-sensitive quantity here. Deliberately
-//                           loose: this check exists to catch a rover that barely
-//                           turns or turns the WRONG WAY, not to pin a yaw rate.
-//                           The SIGN is checked separately and is NOT tolerant.
+//   yaw direction + >5 deg  Skid-steer yaw is tire/soil behaviour, not drivetrain
+//                           parity. The raycast tire projects authored finite
+//                           cornering stiffness; the jointed wheel uses Avian's
+//                           maintained rigid-contact Coulomb solve. Comparing their
+//                           yaw magnitudes would assert that those distinct contact
+//                           models are identical. Direction and minimum authority
+//                           remain strict, independently for both realizations.
 //
 // Each number above IS the constant passed to `t_rel` below. They are a physical
 // argument about two integrators, not a dial: a tolerance changed without the
 // reasoning changing with it turns this file into a record of what the engine
-// happened to do, and the yaw check — the one that guards the 5x defect — is the
-// first thing a uniform tightening silences.
+// happened to do.
 //
 // The ABSOLUTE ceiling is the real anchor. Parity alone is satisfiable by both
 // rovers being wrong together, so both must also land in
@@ -508,7 +509,10 @@ fn verdict(s) {
     f.push(t_range(yspan_rc, 0.0, 0.08, "raycast high-speed chassis bob (m)"));
     f.push(t_range(yspan_ph, 0.0, 0.08, "physical high-speed chassis bob (m)"));
 
-    // Yaw: direction first (intolerant), then magnitude (loose).
+    // Yaw is an independent liveness contract for each contact realization.
+    // Drivetrain parity covers command, torque-speed, acceleration and distance;
+    // it must not claim that a finite-cornering-stiffness ray tire and Avian's
+    // rigid Coulomb contact are the same tire solver.
     if s.yaw_rc == () || s.yaw_ph == () {
         f.push("heading change: MISSING (world_forward returned () for a rover)");
     } else {
@@ -524,14 +528,6 @@ fn verdict(s) {
         m_small += "deg physical=" + r2(s.yaw_ph);
         m_small += "deg, expected > 5deg under steer 0.6)";
         f.push(t_true(s.yaw_rc.abs() > 5.0 && s.yaw_ph.abs() > 5.0, m_small));
-        // 50%, and LUNAR traction is why. Skid-steer yaw comes entirely from
-        // lateral friction saturation, so it is the quantity most sensitive to
-        // how a solver models slip — and at a sixth of Earth's normal load the
-        // two realizations separate further than they do on the ground: measured
-        // 89.7 deg (raycast) against 51.1 deg (joint), 43% apart. The direction
-        // and the "did it turn at all" checks above stay INTOLERANT; this one
-        // bounds how far the two may drift while both still turning the same way.
-        f.push(t_rel(s.yaw_rc, s.yaw_ph, 50.0, "heading change (deg)"));
     }
 
     print("[parity] ── results ────────────────────────────────────────────");

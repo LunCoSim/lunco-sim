@@ -466,7 +466,7 @@ const MAX_SUSPENSION_FORCE_N: f64 = 100_000.0;
 /// with the lean, so decomposing slip/drive in this basis gives the correct
 /// longitudinal/lateral split instead of assuming a flat patch. Falls back to
 /// the raw vectors if the heading is parallel to the normal (degenerate).
-pub(crate) fn contact_plane_basis(
+pub fn contact_plane_basis(
     wheel_forward: DVec3,
     wheel_right: DVec3,
     normal: DVec3,
@@ -480,6 +480,75 @@ pub(crate) fn contact_plane_basis(
         .unwrap_or(wheel_forward);
     let right = forward.cross(n).try_normalize().unwrap_or(wheel_right);
     (forward, right)
+}
+
+/// Resolve a longitudinal tire demand and lateral slip into one Coulomb-limited
+/// contact-patch force.
+///
+/// `cornering_stiffness` is the normalized PhysX value (side force per radian,
+/// per newton of normal load). `rolling_reference_speed` is derived by the wheel
+/// realization as `max(|v_hub,long|, |omega*r|)`: the actual longitudinal motion
+/// available to define a slip angle, including a counter-rotating pivot wheel.
+/// There is no fitted low-speed threshold. If translation and rotation are both
+/// zero while the patch moves sideways, the angle tends to 90 degrees and the
+/// ordinary Coulomb limit supplies static lateral resistance.
+///
+/// The final pair is scaled onto the single Coulomb cone without changing its
+/// direction. Both wheel realizations call this function: raycast wheels apply
+/// its result to the chassis, while jointed wheels apply it at Avian's solved
+/// contact point. On jointed wheels Avian retains the normal constraint but its
+/// scalar tangential friction is disabled, so this remains the only tire model.
+pub fn tire_patch_force(
+    longitudinal_force: f64,
+    rolling_reference_speed: f64,
+    lateral_speed: f64,
+    normal_force: f64,
+    friction_mu: f64,
+    cornering_stiffness: f64,
+) -> (f64, f64) {
+    if normal_force <= 0.0 {
+        return (0.0, 0.0);
+    }
+
+    let lateral_force = if cornering_stiffness > 0.0 {
+        let slip_angle = (-lateral_speed).atan2(rolling_reference_speed.abs());
+        cornering_stiffness * normal_force * slip_angle
+    } else {
+        0.0
+    };
+
+    let cone = friction_mu.max(0.0) * normal_force;
+    let magnitude = longitudinal_force.hypot(lateral_force);
+    if magnitude > cone && magnitude > f64::EPSILON {
+        let scale = cone / magnitude;
+        (longitudinal_force * scale, lateral_force * scale)
+    } else {
+        (longitudinal_force, lateral_force)
+    }
+}
+
+#[cfg(test)]
+mod tire_patch_tests {
+    use super::tire_patch_force;
+
+    #[test]
+    fn rolling_speed_defines_pivot_slip_angle_without_a_threshold() {
+        let (_, lateral) = tire_patch_force(0.0, 2.0, 1.0, 400.0, 10.0, 2.9);
+        let expected = 2.9 * 400.0 * (-0.5_f64).atan();
+        assert!((lateral - expected).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn combined_force_preserves_direction_at_coulomb_limit() {
+        let (long, lateral) = tire_patch_force(600.0, 2.0, -1.0, 200.0, 1.5, 2.9);
+        assert!((long.hypot(lateral) - 300.0).abs() < 1.0e-9);
+        assert!(long > 0.0 && lateral > 0.0);
+    }
+
+    #[test]
+    fn zero_load_has_no_patch_force() {
+        assert_eq!(tire_patch_force(10.0, 1.0, 1.0, 0.0, 1.0, 2.9), (0.0, 0.0));
+    }
 }
 
 /// Suspension normal-force magnitude: spring `k·x` plus damping `c·v`, with the
@@ -548,6 +617,9 @@ pub struct WheelRaycast {
     /// Full side force arrives at `α = μ / cornering_stiffness`, so ~10 puts a
     /// μ = 0.8 tyre at its peak near 4.6° of slip.
     pub cornering_stiffness: f64,
+    /// Lowest speed at which the authored steady-state cornering curve was
+    /// validated. This is an evidence boundary, not a fitted transition.
+    pub min_validated_speed: f64,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
     /// Steering rotation axis in the wheel's local frame
@@ -591,6 +663,7 @@ impl Default for WheelRaycast {
             friction_mu: 0.0,
             slip_stiffness: 0.0,
             cornering_stiffness: 0.0,
+            min_validated_speed: 0.0,
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
             steer_axis: DVec3::Y,

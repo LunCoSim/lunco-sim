@@ -216,7 +216,7 @@ reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realiz
   torque is deleted.
 - **Also read:** `physxVehicleWheel:radius` / `:moi` / `:maxBrakeTorque`,
   `physics:mass`, `physxVehicleEngine:peakTorque`,
-  `physxVehicleTire:longitudinalStiffness`, `lunco:tire:frictionCoefficient`,
+  `physxVehicleTire:longitudinalStiffness`, `physics:dynamicFriction`,
   `lunco:wheel:contactGripStiffness` / `:driveForcePerNormal` / `:driveDamping` /
   `:stallTorqueGain` / `:steerAxis`.
 - **The one non-required number is a derivation, not a default:**
