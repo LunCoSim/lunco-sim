@@ -117,6 +117,7 @@ fn publish_rhai_sources(
     assets: Res<Assets<RhaiSource>>,
     asset_server: Res<AssetServer>,
     sources: Res<lunco_assets::script_source::ScriptSources>,
+    mut registry: ResMut<crate::ScriptRegistry>,
 ) {
     for ev in events.read() {
         let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = ev else {
@@ -139,7 +140,50 @@ fn publish_rhai_sources(
         };
         let canonical = lunco_assets::asset_path::anchor_of(&path);
         debug!("[rhai] script available for import: {canonical}");
-        sources.insert(canonical, src.text.clone());
+        publish_rhai_source(&canonical, &src.text, &sources, &mut registry);
+    }
+}
+
+/// Publish one authoritative asset revision to both consumers of Rhai source.
+///
+/// `ScriptSources` serves synchronous `import` resolution. `ScriptRegistry`
+/// serves already-attached scenario programs. They deliberately share the same
+/// canonical asset identity: when Bevy reports a changed asset, every live
+/// document carrying that identity must advance to those bytes. Advancing the
+/// document generation is the normal scenario invalidation mechanism, so the
+/// lifecycle driver performs the existing `on_stop -> compile -> on_start`
+/// transition and the content-addressed compile cache naturally selects the new
+/// program.
+#[cfg(feature = "rhai")]
+fn publish_rhai_source(
+    canonical: &str,
+    text: &str,
+    sources: &lunco_assets::script_source::ScriptSources,
+    registry: &mut crate::ScriptRegistry,
+) {
+    sources.insert(canonical, text);
+
+    let mut replaced = 0usize;
+    for host in registry.documents.values_mut() {
+        let matches_asset = host.document().asset_id.as_deref() == Some(canonical);
+        if !matches_asset || host.document().source == text {
+            continue;
+        }
+
+        let before = host.generation();
+        // Asset events are the external-source side of the existing document
+        // lifecycle. `reload_base` replaces the clean base and advances its
+        // generation; it is not an editor mutation and therefore does not mint a
+        // second source ownership path or pollute undo history.
+        if lunco_doc::FileBacked::reload_base(host.document_mut(), text)
+            && host.generation() != before
+        {
+            replaced += 1;
+        }
+    }
+
+    if replaced != 0 {
+        info!("[rhai] replaced {replaced} running scenario program(s) from asset {canonical}");
     }
 }
 
@@ -216,5 +260,83 @@ impl Plugin for RhaiSourceAssetPlugin {
                     .chain()
                     .run_if(resource_exists::<lunco_assets::script_source::ScriptSources>),
             );
+    }
+}
+
+#[cfg(all(test, feature = "rhai"))]
+mod tests {
+    use super::*;
+    use crate::doc::{ScriptDocument, ScriptLanguage};
+    use lunco_doc::DocumentId;
+
+    fn document(id: u64, source: &str, asset_id: Option<&str>) -> ScriptDocument {
+        let mut doc = ScriptDocument::new(id, ScriptLanguage::Rhai, source);
+        doc.asset_id = asset_id.map(str::to_owned);
+        doc
+    }
+
+    #[test]
+    fn asset_revision_replaces_every_matching_live_document() {
+        let sources = lunco_assets::script_source::ScriptSources::default();
+        let mut registry = crate::ScriptRegistry::default();
+        registry.insert_document(
+            DocumentId::new(1),
+            document(1, "fn on_start(me) {}", Some("lunco://scenario.rhai")),
+        );
+        registry.insert_document(
+            DocumentId::new(2),
+            document(2, "fn on_start(me) {}", Some("lunco://scenario.rhai")),
+        );
+        registry.insert_document(DocumentId::new(3), document(3, "inline", None));
+        registry.insert_document(
+            DocumentId::new(4),
+            document(4, "other", Some("lunco://other.rhai")),
+        );
+
+        publish_rhai_source(
+            "lunco://scenario.rhai",
+            "fn on_start(me) { print(\"v2\"); }",
+            &sources,
+            &mut registry,
+        );
+
+        assert_eq!(
+            sources.get("lunco://scenario.rhai").as_deref(),
+            Some("fn on_start(me) { print(\"v2\"); }")
+        );
+        for id in [1, 2] {
+            let doc = registry.documents[&DocumentId::new(id)].document();
+            assert_eq!(doc.source, "fn on_start(me) { print(\"v2\"); }");
+            assert_eq!(doc.generation, 1);
+            assert_eq!(doc.last_saved_generation, Some(1));
+        }
+        assert_eq!(
+            registry.documents[&DocumentId::new(3)].document().source,
+            "inline"
+        );
+        assert_eq!(
+            registry.documents[&DocumentId::new(4)].document().source,
+            "other"
+        );
+    }
+
+    #[test]
+    fn identical_asset_revision_does_not_advance_generation() {
+        let source = "fn on_start(me) {}";
+        let sources = lunco_assets::script_source::ScriptSources::default();
+        let mut registry = crate::ScriptRegistry::default();
+        registry.insert_document(
+            DocumentId::new(1),
+            document(1, source, Some("lunco://scenario.rhai")),
+        );
+
+        publish_rhai_source("lunco://scenario.rhai", source, &sources, &mut registry);
+
+        assert_eq!(
+            registry.documents[&DocumentId::new(1)]
+                .document()
+                .generation,
+            0
+        );
     }
 }
