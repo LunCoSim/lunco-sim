@@ -11,7 +11,7 @@ projections of one composed USD design.
 | Mission composition and topology | USD | `inputs:*`, `outputs:*`, `connectors:*`, collection membership, transforms, actuator direction and limits |
 | Sensor frame conversion | USD sensor projection + Modelica sensor component | The control law receives body-local gyro and attitude error, never world-frame pose or wrench |
 | Guidance and control equations | Modelica | `Lander.mo` produces a normalized main-valve request and body-local torque demand; PID tuning is exposed through authored inputs |
-| Propellant hydraulics and engine performance | Modelica | Acausal `LunCo.Propulsion.FluidPort` connections carry pressure and mass flow; tanks, turbopumps, and chamber are reusable package members |
+| Propellant hydraulics and engine performance | Modelica | Acausal `LunCo.Propulsion.FluidPort` connections carry pressure, conserved mass flow, and stream specific enthalpy; tanks, turbopumps, and chamber are reusable package members |
 | Actuator allocation | Generic projection + reusable Modelica allocator | USD actuator geometry is factorized once; `LunCo.Actuation.WrenchAllocator` evaluates normalized valve demands at runtime |
 | Applied force and torque | Avian projection | Each physical actuator applies force at its authored local mount and direction, so adding an actuator requires no vehicle-specific Rust code |
 | Flame and RCS visuals | USD render wiring | Flame throttle/activity is connected to the corresponding Modelica output; no script mirrors actuator state |

@@ -96,12 +96,8 @@
 //       test made: `is_none()` only says the lookup missed, whereas this says
 //       what the miss MEANS, that `apply_drive_mix` coasts rather than falling
 //       back to some other kernel.
-//       This is not a hypothetical. `components/mobility/drive_laws/*.usda`
-//       author `lunco:driveKernel = "external"` — a deliberately unresolvable
-//       name — to stand the built-in mixing down so a Modelica drive law owns
-//       the drive ports alone. If an unknown kernel ever silently fell back to
-//       skid, every Modelica-driven rover would acquire a second writer on its
-//       ports. This leg is the regression net under that mechanism.
+//       An unknown authored hook must remain fail-safe: silently falling back to
+//       skid would turn a misspelled or unavailable program into motion.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -692,9 +688,7 @@ fn verdict(s) {
     m_fs += "' travelled " + r2(s.d_bogus) + "m while held at full throttle for ";
     m_fs += r2(s.bogus_driven_s) + "s. An unresolvable drive kernel must leave the";
     m_fs += " vessel un-actuated (apply_drive_mix coasts) - anything else means an";
-    m_fs += " unknown name now falls back to a real mix, which would put a SECOND";
-    m_fs += " writer on the drive ports of every Modelica drive law";
-    m_fs += " (lunco:driveKernel = 'external').";
+    m_fs += " unknown name now falls back to a real mix instead of remaining safe.";
     f.push(t_true(s.d_bogus.abs() <= FAILSAFE_MAX_M, m_fs));
 
     // ── (2) `skid_reverse_mirrors_forward_at_zero_steer` ───────────────────

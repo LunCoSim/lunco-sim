@@ -405,13 +405,6 @@ impl Plugin for LunCoScriptingPlugin {
             app.add_systems(
                 FixedUpdate,
                 (
-                    // Every newly spawned wheeled control surface gets the same
-                    // host-side Rhai autonomy program. This runs before the normal
-                    // file-loader/attach lifecycle, so external Twin rovers and
-                    // runtime asset instances use the exact same path as authored
-                    // rovers without mutating their source USD.
-                    commands::attach_rover_autonomy_paths
-                        .run_if(scenario::scenario_execution_enabled),
                     // File-referenced scenarios (lunco:scriptPath): load the .rhai
                     // asset and swap the path marker for EmbeddedScenarioSource.
                     // Runs before attach so the loaded source attaches same frame.

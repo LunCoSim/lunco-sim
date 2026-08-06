@@ -837,9 +837,8 @@ fn is_avian_body(reader: &StageView<'_>, path: &SdfPath) -> bool {
 /// under a vehicle is the mount.
 ///
 /// The rule keys off "a named prim that is not a body". It never keys off an
-/// EMPTY rel — UsdPhysics already gives that the meaning "world", and quietly
-/// redefining a spec meaning is how `driveKernel = "external"` became a no-op
-/// nobody noticed. `None` when the path names nothing that is or sits under a
+/// EMPTY rel — UsdPhysics already gives that the meaning "world". `None` when
+/// the path names nothing that is or sits under a
 /// body, which stays an unresolved joint and still warns.
 ///
 /// Resolving here rather than at ECS-match time is deliberate: `read_joint_spec_typed`

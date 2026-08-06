@@ -236,7 +236,7 @@ pub fn linear_kernel(cmd: DriveInputs, mix: &DriveMix) -> Vec<(String, f64)> {
 ///   * the registry resolves kernels by NAME, both halves: `"skid"` drives, and a
 ///     rover authored with an unresolvable `lunco:driveKernel` does NOT move under
 ///     full throttle (the `apply_drive_mix` fail-safe coast that
-///     `components/mobility/drive_laws/*.usda` depend on).
+///     an unavailable authored hook requires).
 ///   * the linear mix projects each entry — in `six_independent_parity.rhai` and
 ///     `ackermann_parity.rhai`, which read `DriveMix.entries` back and pin the
 ///     projection through motion.

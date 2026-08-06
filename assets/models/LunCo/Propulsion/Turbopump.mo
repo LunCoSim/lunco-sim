@@ -31,6 +31,7 @@ model Turbopump
   Real speed(start = 0.0);
   Real inlet_pressure_pa;
   Real availability;
+  Real specific_pump_work_j_kg;
 
 equation
   der(speed) = (max(0.0, min(1.0, valve_opening)) - speed)
@@ -48,9 +49,12 @@ equation
   outlet.mass_flow_kgs = -mass_flow_kgs;
   outlet.pressure_pa = max(inlet_pressure_pa,
     inlet_pressure_pa + (discharge_pressure_pa - nominal_tank_pressure_pa) * activity);
+  specific_pump_work_j_kg = max(0.0, outlet.pressure_pa - inlet_pressure_pa)
+    / max(minimum_efficiency, pump_efficiency * propellant_density_kg_m3);
+  outlet.specific_enthalpy_j_kg = inStream(inlet.specific_enthalpy_j_kg)
+    + specific_pump_work_j_kg;
+  inlet.specific_enthalpy_j_kg = inStream(outlet.specific_enthalpy_j_kg);
   outlet_pressure_pa = outlet.pressure_pa;
   speed_rpm = speed_rpm_max * speed_fraction;
-  shaft_power_w = max(0.0, mass_flow_kgs
-    * max(0.0, outlet_pressure_pa - inlet_pressure_pa)
-    / max(minimum_efficiency, pump_efficiency * propellant_density_kg_m3));
+  shaft_power_w = max(0.0, mass_flow_kgs * specific_pump_work_j_kg);
 end Turbopump;

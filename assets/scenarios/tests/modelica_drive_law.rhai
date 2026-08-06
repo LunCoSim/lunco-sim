@@ -14,10 +14,10 @@
 //
 // ── WHY A CONTROL, AND WHY THIS PARTICULAR MEASUREMENT ──────────────────────
 //
-// "The rover moved" proves nothing here. The drive-law overlay works by setting
-// `lunco:driveKernel = "external"` to stand the built-in mixing down and wiring
-// the model's outputs onto the drive ports. If the program failed to compile, or
-// the kernel stand-down failed, the built-in kernel would drive the rover
+// "The rover moved" proves nothing here. The drive-law overlay wires the model's
+// outputs onto the drive ports; those connected outputs stand the built-in
+// mixing down. If the program failed to compile, or ownership derivation failed,
+// the built-in kernel would drive the rover
 // anyway — it would move, reach the right speed, and look completely healthy.
 // A liveness check cannot tell those apart.
 //

@@ -1,7 +1,7 @@
-// Canonical autonomy envelope for every wheeled rover.
+// Reusable autonomy envelope for an explicitly authored wheeled rover.
 //
-// The runtime attaches this file by the authored throttle/steer/brake + drive
-// actuator surface. The empty patrol is intentional: it installs a real
+// A rover opts in through an authored LunCoProgramAPI source or a RunScenario
+// command. The empty patrol is intentional: it installs a real
 // behaviour-tree-backed autopilot that holds safely until a route is supplied.
 // Alt+LMB on an authored rover edits USD; Alt+LMB on a spawned rover extends the
 // mirrored patrol spec. Both routes therefore drive the same BT/Rust mechanism.

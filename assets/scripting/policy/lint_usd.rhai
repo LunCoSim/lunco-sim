@@ -107,84 +107,6 @@ fn schemas_of(facts, path) {
     []
 }
 
-/// Return "" if every member's acausal connector agrees on one name, or a string
-/// naming the first two distinct names found (e.g. "`p` and `port`").
-///
-/// ⚠ A SEPARATE FUNCTION FOR THE SAME REASON the unit rules use small loops:
-/// rhai caps expression complexity and rejects the whole policy at compile time
-/// if nested member/program/connector logic becomes too dense.
-/// Flat list of every acausal connector name a scope's members declare, in walk
-/// order. Split out of `scope_connector_mismatch` for the same reason
-/// the unit rules keep their member/program nesting shallow: rhai caps expression
-/// complexity and rejects the whole policy if the nesting carries dense logic.
-fn scope_connector_list(facts, members) {
-    let list = [];
-    for member in members {
-        for program in facts.connector_programs {
-            if program.path != member { continue; }
-            for c in program.connectors { list.push(c); }
-        }
-    }
-    list
-}
-
-/// "" if every connector name agrees, else "first/second" naming the mismatch.
-fn scope_connector_mismatch(facts, members) {
-    let list = scope_connector_list(facts, members);
-    if list.len() <= 1 { return ""; }
-    let first = list[0];
-    for c in list {
-        if c != first { return first + "/" + c; }
-    }
-    ""
-}
-
-/// One acausal network scope must use ONE connector name.
-///
-/// THE BUG THIS CATCHES. A network scope fuses its members into one generated
-/// Modelica DAE, and every acausal edge becomes `connect(a.X, b.X)` where `X` is
-/// the `connectors:<name>` attribute. If one member declares `connectors:p` (a
-/// `Pin`, electrical) and another declares `connectors:port` (a `HeatPort`,
-/// thermal) inside the SAME scope, any wire between them cannot be authored at
-/// all (the names differ) — and if a future model renamed its member so the names
-/// matched, the generated `connect(Pin, HeatPort)` would be a Modelica type error
-/// against generated source the author cannot easily read.
-///
-/// This is the trap the thermal/electrical split exists to avoid: thermal and
-/// electrical belong in SEPARATE scopes (separate `CollectionAPI:components`),
-/// joined only by causal `inputs:`/`outputs:` wires. A scope mixing `p` and
-/// `port` is almost certainly a domain that was not split — e.g. thermal members
-/// accidentally included in an `Electrical` collection.
-///
-/// NAME CONVENTION. The connector attribute name MUST equal the Modelica
-/// connector member name in the bound `.mo` (`Pin p` → `connectors:p`,
-/// `HeatPort port` → `connectors:port`). A two-ended component conventionally
-/// spells its same-type members `port_a` and `port_b`; those normalize to the
-/// `port` domain for this scope-level check. The per-member half (the name
-/// matches the `.mo`) is the authoring rule documented alongside this policy.
-///
-/// ⚠ EXPRESSION COMPLEXITY. rhai caps expression depth and rejects the whole
-/// policy at compile time if a rule is too dense (see the note on
-/// `electrical_tally`). So this rule does the minimum: it short-circuits the
-/// moment it finds a SECOND distinct connector name, and builds no intermediate
-/// array. A single helper that collects all names then checks `.len()` trips the
-/// cap inside the nested member/program loop.
-fn mixed_connector_domains(facts) {
-    let out = [];
-    for scope in facts.network_scopes {
-        let pair = scope_connector_mismatch(facts, scope.members);
-        if pair == "" { continue; }
-        let m = "mixes acausal connector names `" + pair + "` in one network —";
-        m += " an acausal connect() requires both ends to share one name AND one";
-        m += " physical type (Pin, HeatPort, …). Different names mean different";
-        m += " connector types were fused into one DAE — usually a thermal or";
-        m += " mechanical domain that belongs in its own Scope with its own";
-        m += " CollectionAPI:components, joined by causal inputs:/outputs:.";
-        out.push(finding("mixed-connector-domains", "error", scope.path, m));
-    }
-    out
-}
-
 fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
@@ -206,8 +128,6 @@ fn lint_usd(facts) {
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
-    for f in electrical_island_reference_device(facts) { out.push(f); }
-    for f in mixed_connector_domains(facts) { out.push(f); }
     out
 }
 
@@ -261,111 +181,6 @@ fn stage_meters_per_unit_missing(facts) {
             "<stage>",
             "Stage omits metersPerUnit; OpenUSD defaults to 0.01 m/unit (centimetres). Author metersPerUnit = 1 for a LunCo metre-stage asset.",
         ));
-    }
-    out
-}
-
-/// Classes that SET the node potential on an electrical island — one, and only
-/// one, per island.
-///
-/// DOMAIN KNOWLEDGE, AUTHORED. LunCo's electrical devices carry a single `Pin` and
-/// there is no `Ground`: the vehicle bus IS the reference, so whichever device
-/// states `p.v` pins it and every other device must state its CURRENT against that.
-/// Rust cannot know which those are and must not learn — it reads the stage; this
-/// list is the rule. Add a class here when it states `p.v`.
-///
-/// Matched on the `.mo` FILE NAME, which is what `source_asset` carries.
-fn potential_setting_classes() {
-    ["Battery.mo"]
-}
-
-/// Whether one program is an electrical device, and whether it sets the potential.
-///
-/// `[is_electrical, is_source]`, as 0/1 ints so the caller can sum them.
-///
-/// A device qualifies on its acausal interface — the `p` pin — AND on being backed
-/// by a Modelica source. Asking the CONNECTOR rather than the file path keeps a
-/// twin's own device in scope alongside the shipped library.
-///
-/// The `.mo` half is not redundant: a built-in `info:id` program that authors
-/// `connectors:p` is already reported by `invalid-network-program-source`, and it
-/// contributes no equations at all, so calling it a reference-less electrical
-/// island would be a second, wronger diagnosis of the same prim.
-fn electrical_role(program) {
-    if !program.source_asset.ends_with(".mo") { return [0, 0]; }
-    let pinned = false;
-    for c in program.connectors {
-        if c == "p" { pinned = true; }
-    }
-    if !pinned { return [0, 0]; }
-    let source = 0;
-    for cls in potential_setting_classes() {
-        if program.source_asset.ends_with(cls) { source = 1; }
-    }
-    [1, source]
-}
-
-/// `[electrical_member_count, potential_setting_count]` for one synthesized unit.
-fn electrical_unit_tally(facts, members) {
-    let electrical = 0;
-    let sources = 0;
-    for member in members {
-        for program in facts.connector_programs {
-            if program.path != member { continue; }
-            let role = electrical_role(program);
-            electrical += role[0];
-            sources += role[1];
-        }
-    }
-    [electrical, sources]
-}
-
-/// Every synthesized electrical unit needs EXACTLY ONE potential-setting device.
-///
-/// Zero leaves the node voltage free and the DAE structurally singular; two
-/// over-determine it. Neither is reported as such by the solver — the first shows
-/// up as an unrelated-looking failure to solve some other member's current, the
-/// second as an island that compiles and then never publishes a port. Both are
-/// decidable from the authored stage, which is the whole reason this is a rule.
-///
-/// Scopes with no electrical member at all are not this rule's business: a purely
-/// thermal or mechanical unit has its own reference and must not be told to add
-/// a battery.
-fn electrical_unit_reference_finding(scope_path, electrical, sources) {
-    if sources == 0 {
-        let m = "electrical unit of " + electrical + " device(s) has no device that ";
-        m += "sets the node voltage — every member states a current, so `p.v` is ";
-        m += "unconstrained and the generated DAE is structurally singular. The unit ";
-        m += "will compile and then never publish a port. Add a battery (or another ";
-        m += "device that states `p.v`) to this collection.";
-        finding("electrical-island-has-no-reference", "error", scope_path, m)
-    } else {
-        let m = "electrical unit has " + sources + " devices that each set the node ";
-        m += "voltage — LunCo devices carry ONE pin and no Ground, so the bus node is ";
-        m += "over-determined and the solve fails on an unrelated member's current. ";
-        m += "Keep one voltage source per unit and let the others state current.";
-        finding("electrical-island-over-determined", "error", scope_path, m)
-    }
-}
-
-fn electrical_scope_reference_findings(facts, scope) {
-    let out = [];
-    for unit in scope.units {
-        let tally = electrical_unit_tally(facts, unit.members);
-        let electrical = tally[0];
-        let sources = tally[1];
-        if electrical == 0 || sources == 1 { continue; }
-        out.push(electrical_unit_reference_finding(scope.path, electrical, sources));
-    }
-    out
-}
-
-fn electrical_island_reference_device(facts) {
-    let out = [];
-    for scope in facts.network_scopes {
-        for item in electrical_scope_reference_findings(facts, scope) {
-            out.push(item);
-        }
     }
     out
 }

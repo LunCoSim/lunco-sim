@@ -181,7 +181,7 @@ impl Plugin for LunCoMobilityPlugin {
         // freshly-loaded vessel is drivable the same tick its binding lands.
         app.add_systems(
             FixedUpdate,
-            (sync_input_ports, apply_drive_mix)
+            (sync_input_ports, apply_vehicle_brake, apply_drive_mix)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -206,7 +206,7 @@ impl Plugin for LunCoMobilityPlugin {
         // it must run regardless of the pause/speed state of the virtual clock.
         app.add_systems(
             lunco_core::RollbackReplay,
-            (sync_input_ports, apply_drive_mix)
+            (sync_input_ports, apply_vehicle_brake, apply_drive_mix)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -250,7 +250,7 @@ fn publish_raycast_support_footprints(
     roots: Query<
         (Entity, &Children),
         (
-            With<DriveMix>,
+            With<ActuatorPorts>,
             Without<lunco_physics::PhysicsSupportFootprint>,
         ),
     >,
@@ -331,7 +331,7 @@ fn publish_raycast_support_footprints(
 /// the solver integrates against.
 pub fn fold_proxy_wheel_mass(
     mut commands: Commands,
-    q_chassis: Query<(Entity, &Children), (With<DriveMix>, Without<ProxyWheelMassFolded>)>,
+    q_chassis: Query<(Entity, &Children), (With<ActuatorPorts>, Without<ProxyWheelMassFolded>)>,
     q_wheels: Query<(&WheelRaycast, &Transform)>,
     mut q_body: Query<(
         &mut Mass,
@@ -673,8 +673,8 @@ fn apply_wheel_suspension(
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_chassis: Query<(Forces, &RigidBody), (With<DriveMix>, lunco_physics::Integrable)>,
-    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<DriveMix>)>,
+    mut q_chassis: Query<(Forces, &RigidBody), (With<ActuatorPorts>, lunco_physics::Integrable)>,
+    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<ActuatorPorts>)>,
 ) {
     for (mut wheel, susp, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = parent.parent();
@@ -795,7 +795,7 @@ fn sync_raycast_wheel_physics_pose(
         (Entity, &mut Position, &mut Rotation, &Transform, &ChildOf),
         With<WheelRaycast>,
     >,
-    q_chassis: Query<(&Position, &Rotation), (With<DriveMix>, Without<WheelRaycast>)>,
+    q_chassis: Query<(&Position, &Rotation), (With<ActuatorPorts>, Without<WheelRaycast>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
@@ -870,7 +870,7 @@ fn apply_wheel_drive(
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut q_chassis: Query<
         (Forces, &RigidBody, Option<&InputPorts>),
-        (With<DriveMix>, lunco_physics::Integrable),
+        (With<ActuatorPorts>, lunco_physics::Integrable),
     >,
 ) {
     for (wheel, susp, wheel_tf, hits, parent) in q_wheels.iter() {
@@ -991,7 +991,7 @@ fn apply_wheel_steering(
         &WheelRaycast,
         Option<&SteerBaseRotation>,
     )>,
-    q_chassis: Query<&RigidBody, With<DriveMix>>,
+    q_chassis: Query<&RigidBody, With<ActuatorPorts>>,
 ) {
     for (entity, mut transform, parent, steer, wheel, base) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
@@ -1364,7 +1364,30 @@ fn sync_input_ports(
     }
 }
 
-// ── Drive mix ─────────────────────────────────────────────────────────────────
+// ── Vehicle brake and drive allocation ───────────────────────────────────────
+
+/// Apply the vessel-wide brake command independently of drive allocation.
+///
+/// Every vehicle control surface has an [`ActuatorPorts`] index, whether its
+/// drive outputs are allocated by an imperative [`DriveMix`] or by authored
+/// co-simulation wiring. Braking is a mechanism shared by both cases: it owns
+/// [`InputPorts::brake_active`] (used by the tire solve) and the discrete
+/// `brake` actuator port. Tying either fact to `DriveMix` would incorrectly
+/// disable brakes—and the mobility chassis itself—when Modelica owns drive
+/// allocation.
+fn apply_vehicle_brake(
+    mut q: Query<(&mut InputPorts, &ActuatorPorts)>,
+    mut q_ports: Query<&mut Port>,
+) {
+    for (mut inputs, actuators) in &mut q {
+        inputs.brake_active = inputs.cmd("brake") > 0.5;
+        if let Some(port_b) = actuators.get("brake") {
+            if let Ok(mut port) = q_ports.get_mut(port_b) {
+                port.value = if inputs.brake_active { 1.0 } else { 0.0 };
+            }
+        }
+    }
+}
 
 /// System allocating each rover's input ports (`throttle`/`steer`/`brake`, read
 /// from [`InputPorts::values`]) to its actuator [`Port`]s (indexed by
@@ -1374,32 +1397,15 @@ fn sync_input_ports(
 /// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
 /// before being written to the port. Runs every fixed tick before wire propagation.
 fn apply_drive_mix(
-    mut q: Query<(Entity, &mut InputPorts, &ActuatorPorts, &DriveMix)>,
+    q: Query<(Entity, &InputPorts, &ActuatorPorts, &DriveMix)>,
     registry: Res<ControlKernelRegistry>,
     mut q_ports: Query<&mut Port>,
     mut unknown: Local<std::collections::HashSet<String>>,
 ) {
-    for (entity, mut inputs, actuators, mix) in q.iter_mut() {
+    for (entity, inputs, actuators, mix) in &q {
         // Read this vehicle's logical command inputs off the command surface.
         let throttle = inputs.cmd("throttle");
         let steer = inputs.cmd("steer");
-        let brake = inputs.cmd("brake");
-        // TWO DIFFERENT `"brake"`s meet here, deliberately in two components:
-        //   - the COMMAND `brake` (`inputs.cmd("brake")`) is analog, in [-1,1];
-        //   - the ACTUATOR `brake` (`actuators.get("brake")`) is a discretized
-        //     1.0/0.0 gate the brake-coefficient ports consume.
-        // Merging them into one map would silently feed the analog command straight
-        // into the actuator register. Keeping them apart is what makes that impossible.
-        //
-        // Brake state (old `on_brake_rover`): engaged above half-scale. Locks the
-        // wheel-spin/friction cone in the physics systems via `brake_active`.
-        inputs.brake_active = brake > 0.5;
-        let brake_port_val = if inputs.brake_active { 1.0 } else { 0.0 };
-        if let Some(port_b) = actuators.get("brake") {
-            if let Ok(mut p) = q_ports.get_mut(port_b) {
-                p.value = brake_port_val;
-            }
-        }
 
         drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, inputs.brake_active, actuators.ports);
 
@@ -1496,7 +1502,7 @@ mod proxy_wheel_mass_tests {
         let chassis = app
             .world_mut()
             .spawn((
-                DriveMix::default(),
+                ActuatorPorts::default(),
                 Mass(1000.0),
                 AngularInertia {
                     principal: Vec3::new(1028.0, 1354.0, 341.0),
@@ -1628,7 +1634,7 @@ mod proxy_wheel_mass_tests {
         app.add_systems(Update, fold_proxy_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((DriveMix::default(), Mass(1000.0)))
+            .spawn((ActuatorPorts::default(), Mass(1000.0)))
             .id();
         app.world_mut().spawn((
             WheelRaycast {
@@ -1654,6 +1660,32 @@ mod force_law_tests {
     //! broken control (the comments name the bug).
     use super::*;
     use bevy::math::{DQuat, DVec3};
+
+    #[test]
+    fn authored_allocator_vehicle_keeps_the_shared_brake_without_drive_mix() {
+        let mut app = App::new();
+        app.add_systems(Update, apply_vehicle_brake);
+
+        let brake_port = app.world_mut().spawn(Port::default()).id();
+        let mut inputs = InputPorts::new(&["throttle", "steer", "brake"]);
+        inputs.values.insert("brake".to_string(), 1.0);
+        let vehicle = app
+            .world_mut()
+            .spawn((
+                inputs,
+                ActuatorPorts::new(std::collections::HashMap::from([(
+                    "brake".to_string(),
+                    brake_port,
+                )])),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get::<InputPorts>(vehicle).unwrap().brake_active);
+        assert_eq!(app.world().get::<Port>(brake_port).unwrap().value, 1.0);
+        assert!(app.world().get::<DriveMix>(vehicle).is_none());
+    }
 
     // ── Single-track lean: contact-plane traction basis ─────────────────────
     #[test]
@@ -2105,7 +2137,7 @@ mod suspension_visuals_tests {
                 ComputedCenterOfMass::default(),
                 VelocityIntegrationData::default(),
                 AccumulatedLocalAcceleration::default(),
-                DriveMix::default(),
+                ActuatorPorts::default(),
             ))
             .id();
 

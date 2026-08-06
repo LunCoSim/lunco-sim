@@ -528,7 +528,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     //    the appliers below mutate the world (same pattern as
     //    `refresh_domes_live`).
     let mut updates: Vec<WheelUpdate> = Vec::new();
-    let mut mixes: Vec<(Entity, lunco_mobility::kernels::DriveMix)> = Vec::new();
+    let mut mixes: Vec<(Entity, Option<lunco_mobility::kernels::DriveMix>)> = Vec::new();
     {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
@@ -567,9 +567,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
         for (e, path) in &vehicles {
             let Ok(sp) = SdfPath::new(path) else { continue };
-            if let Some(mix) = crate::derive_drive_mix(&view, &sp, path) {
-                mixes.push((*e, mix));
-            }
+            mixes.push((*e, crate::derive_drive_mix(&view, &sp, path)));
         }
     }
 
@@ -652,7 +650,13 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
     }
     for (e, mix) in mixes {
-        world.entity_mut(e).insert(mix);
+        if let Some(mix) = mix {
+            world.entity_mut(e).insert(mix);
+        } else {
+            world
+                .entity_mut(e)
+                .remove::<lunco_mobility::kernels::DriveMix>();
+        }
     }
     info!(
         "[wheel resync] stage {:?}: re-derived {} wheel(s), {} vehicle root(s) in place",

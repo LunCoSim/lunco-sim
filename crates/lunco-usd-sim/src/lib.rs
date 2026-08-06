@@ -1967,21 +1967,36 @@ fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bo
 fn read_drive_mix_scope(
     reader: &lunco_usd_bevy::StageView<'_>,
     scope: &SdfPath,
-) -> Vec<lunco_mobility::kernels::MixEntry> {
-    let mut entries: Vec<lunco_mobility::kernels::MixEntry> = reader
-        .children(scope)
+) -> Option<Vec<lunco_mobility::kernels::MixEntry>> {
+    let terms = reader.children(scope);
+    if terms.is_empty() {
+        error!("DriveMix scope {} has no terms", scope.as_str());
+        return None;
+    }
+
+    let mut valid = true;
+    let mut entries: Vec<lunco_mobility::kernels::MixEntry> = terms
         .into_iter()
         .filter_map(|term| {
+            if !reader.has_api_schema(&term, "LunCoDriveMixTermAPI") {
+                error!(
+                    "DriveMix term {} does not apply LunCoDriveMixTermAPI",
+                    term.as_str()
+                );
+                valid = false;
+                return None;
+            }
             let port = term.name()?.to_string();
             let forward = reader.real(&term, "lunco:factor:throttle");
             let steer = reader.real(&term, "lunco:factor:steer");
             let brake = reader.real(&term, "lunco:factor:brake");
             if forward.is_none() && steer.is_none() && brake.is_none() {
-                warn!(
+                error!(
                     "DriveMix term {} declares no `lunco:factor:<throttle|steer|brake>`; \
-                     skipped — the port would never be driven",
+                     the allocation is invalid",
                     term.as_str()
                 );
+                valid = false;
                 return None;
             }
             Some(lunco_mobility::kernels::MixEntry {
@@ -1993,45 +2008,92 @@ fn read_drive_mix_scope(
         })
         .collect();
     entries.sort_by(|a, b| a.port.cmp(&b.port));
-    entries
+    valid.then_some(entries)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DriveOutputOwnership {
+    Imperative,
+    Authored,
+    Partial { connected: Vec<String> },
+}
+
+/// Decide ownership against the exact set of ports the selected allocator
+/// writes. Output names are never classified by spelling: both lists come from
+/// the derived allocator and composed USD connections respectively.
+fn drive_output_ownership(expected: &[String], connected: &[String]) -> DriveOutputOwnership {
+    let mut connected_expected: Vec<String> = expected
+        .iter()
+        .filter(|port| connected.iter().any(|candidate| candidate == *port))
+        .cloned()
+        .collect();
+    connected_expected.sort();
+    connected_expected.dedup();
+
+    if connected_expected.is_empty() {
+        DriveOutputOwnership::Imperative
+    } else if connected_expected.len() == expected.len() {
+        DriveOutputOwnership::Authored
+    } else {
+        DriveOutputOwnership::Partial {
+            connected: connected_expected,
+        }
+    }
 }
 
 /// Derive the vehicle-root `DriveMix` from its authored schema — the kernel is
 /// selected by the differential / steering schema the asset declares (Omniverse
 /// PhysX Vehicle names), an authored `DriveMix` child scope, or a scripted
-/// `lunco:driveKernel` hook. Shared by the spawn path and the live wheel-param
-/// resync so an edited kernel re-derives identically.
+/// `lunco:driveKernel` hook. A connected drive output is already owned by an
+/// authored producer (for example a Modelica drive law), so no imperative mix is
+/// derived for that vehicle. Shared by the spawn path and the live wheel-param
+/// resync so an edited allocation re-derives identically.
 fn derive_drive_mix(
     reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
     prim_path_str: &str,
 ) -> Option<DriveMix> {
-    if let Some(hook_id) = reader.text(sdf_path, "lunco:driveKernel") {
+    let attrs = reader.attr_names(sdf_path);
+    let has_kernel_attr = attrs.iter().any(|attr| attr == "lunco:driveKernel");
+    let has_kernel_api = reader.has_api_schema(sdf_path, "LunCoDriveKernelAPI");
+    if has_kernel_attr && !has_kernel_api {
+        error!(
+            "{} authors lunco:driveKernel without LunCoDriveKernelAPI; allocation disabled",
+            prim_path_str
+        );
+        return None;
+    }
+
+    let scripted_hook = has_kernel_api
+        .then(|| reader.text(sdf_path, "lunco:driveKernel"))
+        .flatten()
+        .filter(|id| !id.is_empty());
+    let mix = if let Some(hook_id) = scripted_hook {
         // Scripted (rhai) kernel: the hook computes the per-port outputs, so it
         // takes precedence over the built-in skid/linear schemas. `apply_drive_mix`
         // falls back to the `lunco_hooks` hook named by `DriveMix.kernel`.
         info!("Scripted drive kernel '{}' for {}", hook_id, prim_path_str);
-        Some(DriveMix::scripted(&hook_id))
+        DriveMix::scripted(&hook_id)
     } else if let Some(scope) = reader
         .children(sdf_path)
         .into_iter()
         .find(|c| c.name() == Some("DriveMix"))
     {
-        let entries = read_drive_mix_scope(reader, &scope);
+        let entries = read_drive_mix_scope(reader, &scope)?;
         info!(
             "Authored linear DriveMix for {} ({} ports)",
             prim_path_str,
             entries.len()
         );
-        Some(DriveMix::linear(entries))
+        DriveMix::linear(entries)
     } else if reader.has_api_schema(sdf_path, "PhysxVehicleTankDifferentialAPI") {
         info!("Tank differential (skid kernel) for {}", prim_path_str);
-        Some(DriveMix::skid("drive_left", "drive_right"))
+        DriveMix::skid("drive_left", "drive_right")
     } else if reader.has_api_schema(sdf_path, "PhysxVehicleAckermannSteeringAPI") {
         // Ackermann: non-differential drive (both sides get throttle) + a
         // dedicated steering port; the front wheels castor (see steering gate).
         info!("Ackermann steering (linear kernel) for {}", prim_path_str);
-        Some(DriveMix::linear(vec![
+        DriveMix::linear(vec![
             lunco_mobility::kernels::MixEntry {
                 port: "drive_left".to_string(),
                 forward: 1.0,
@@ -2050,9 +2112,71 @@ fn derive_drive_mix(
                 steer: 1.0,
                 brake: 0.0,
             },
-        ]))
+        ])
     } else {
-        None
+        return None;
+    };
+
+    // A scripted hook owns an open port set by contract. Explicitly selecting it
+    // is sufficient; exact port derivation is intentionally unavailable.
+    let expected: Vec<String> = if !mix.ports.is_empty() {
+        mix.ports.clone()
+    } else {
+        mix.entries.iter().map(|entry| entry.port.clone()).collect()
+    };
+    if expected.is_empty() {
+        return Some(mix);
+    }
+
+    let connected: Vec<String> = expected
+        .iter()
+        .filter(|port| {
+            !reader
+                .connections(sdf_path, &format!("outputs:{port}"))
+                .is_empty()
+        })
+        .cloned()
+        .collect();
+    match drive_output_ownership(&expected, &connected) {
+        DriveOutputOwnership::Imperative => Some(mix),
+        DriveOutputOwnership::Authored => {
+            info!(
+                "Authored connections own all drive outputs {:?} for {}",
+                expected, prim_path_str
+            );
+            None
+        }
+        DriveOutputOwnership::Partial { connected } => {
+            error!(
+                "{} connects only drive outputs {:?} of expected {:?}; partial allocation ownership is invalid and disabled",
+                prim_path_str, connected, expected
+            );
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod drive_output_ownership_tests {
+    use super::{drive_output_ownership, DriveOutputOwnership};
+
+    #[test]
+    fn ownership_is_derived_from_the_allocator_exact_port_set() {
+        let expected = vec!["left".to_string(), "right".to_string()];
+        assert_eq!(
+            drive_output_ownership(&expected, &[]),
+            DriveOutputOwnership::Imperative
+        );
+        assert_eq!(
+            drive_output_ownership(&expected, &expected),
+            DriveOutputOwnership::Authored
+        );
+        assert_eq!(
+            drive_output_ownership(&expected, &["left".to_string(), "soc".to_string()]),
+            DriveOutputOwnership::Partial {
+                connected: vec!["left".to_string()]
+            }
+        );
     }
 }
 
@@ -2735,7 +2859,7 @@ fn reconstruct_proxy_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<DriveMix>, Without<PhysicalWheel>),
+        (With<lunco_core::ActuatorPorts>, Without<PhysicalWheel>),
     >,
     mut q_wheels: Query<
         (
@@ -2811,7 +2935,7 @@ fn animate_proxy_physical_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        With<DriveMix>,
+        With<lunco_core::ActuatorPorts>,
     >,
     mut q_visual: Query<&mut Transform, Without<PhysicalWheel>>,
     time: Res<Time>,
@@ -3667,7 +3791,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
-                DriveMix::default(),
+                lunco_core::ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -3750,7 +3874,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
-                DriveMix::default(),
+                lunco_core::ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -3824,7 +3948,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::ZERO,
                     ang,
                 },
-                DriveMix::default(),
+                lunco_core::ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

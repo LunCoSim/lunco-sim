@@ -15,6 +15,8 @@ model CombustionChamber
   parameter Real minimum_throat_area_m2 = 1.0e-9;
   parameter Real minimum_mixture_ratio = 1.0e-6;
   parameter Real fuel_energy_j_kg = 4.0e7;
+  parameter Real reverse_flow_specific_enthalpy_j_kg = 0.0
+    "Boundary enthalpy used only if chamber flow reverses";
 
   FluidPort fuel_in "Fuel feed connection";
   FluidPort oxidizer_in "Oxidizer feed connection";
@@ -31,10 +33,18 @@ model CombustionChamber
 
   output Real fuel_flow_kgs "Fuel mass flow read from the feed connector, kg/s";
   output Real oxidizer_flow_kgs "Oxidizer mass flow read from the feed connector, kg/s";
+  output Real fuel_specific_enthalpy_j_kg
+    "Specific enthalpy arriving with the fuel stream, J/kg";
+  output Real oxidizer_specific_enthalpy_j_kg
+    "Specific enthalpy arriving with the oxidizer stream, J/kg";
 
 equation
   fuel_flow_kgs = max(0.0, fuel_in.mass_flow_kgs);
   oxidizer_flow_kgs = max(0.0, oxidizer_in.mass_flow_kgs);
+  fuel_specific_enthalpy_j_kg = inStream(fuel_in.specific_enthalpy_j_kg);
+  oxidizer_specific_enthalpy_j_kg = inStream(oxidizer_in.specific_enthalpy_j_kg);
+  fuel_in.specific_enthalpy_j_kg = reverse_flow_specific_enthalpy_j_kg;
+  oxidizer_in.specific_enthalpy_j_kg = reverse_flow_specific_enthalpy_j_kg;
   propellant_flow = max(0.0, fuel_flow_kgs) + max(0.0, oxidizer_flow_kgs);
   mixture_ratio = max(0.0, oxidizer_flow_kgs)
     / max(minimum_flow_kgs, max(0.0, fuel_flow_kgs));

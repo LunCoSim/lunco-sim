@@ -69,7 +69,7 @@ pub(crate) fn update_wheel_spin(
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        With<crate::kernels::DriveMix>,
+        With<lunco_core::ActuatorPorts>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     // The USD-projected motor target for each raycast wheel. The native readback
@@ -455,12 +455,12 @@ pub(crate) fn update_wheel_spin(
 #[cfg(test)]
 mod tests {
     use super::update_wheel_spin;
-    use crate::kernels::DriveMix;
     use crate::{Suspension, WheelRaycast};
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::{Time, TimePlugin, TimeUpdateStrategy};
+    use lunco_core::ActuatorPorts;
     use std::time::Duration;
 
     /// Put a test app on the SAME clock the product runs on: fixed steps of
@@ -516,7 +516,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
-                DriveMix::default(),
+                ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -615,7 +615,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(DVec3::ZERO),
-                DriveMix::default(),
+                ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

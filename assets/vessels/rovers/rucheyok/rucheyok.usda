@@ -5,12 +5,12 @@
     metersPerUnit = 1
 )
 
-# Rucheyok Lunar Rover
+# Rucheyok four-wheel lunar rover
 # Assembled from reusable component references.
 # Power flows: SolarPanel -> Battery -> Wheels via EPS bus
 
 def Xform "Rucheyok" (
-    doc = "Solar-powered six-wheel lunar rover assembled from referenced wheels, battery, panel, and flight computer."
+    doc = "Solar-powered four-wheel lunar rover assembled from referenced wheels, battery, panel, and flight computer."
     # An ASSEMBLY: a model built out of other models. Its wheels, solar panel and
     # battery are component models that arrive by reference, and USD forbids a
     # `component` from containing them.
@@ -83,9 +83,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.05, 0.05, 0.5)]
 
-        bool physics:rigidBodyEnabled = true
         float physics:mass = 15.0
-        bool physics:collisionEnabled = true
 
         # ONE spec per prim, per layer. This was a sibling `over "SolarPanel"`
         # further down this file, and the `over` won: the composed panel kept
@@ -116,9 +114,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
-        bool physics:rigidBodyEnabled = true
         float physics:mass = 50.0
-        bool physics:collisionEnabled = true
     }
 
     # --- Electrical domain: actual part collection projected into one Modelica DAE ---

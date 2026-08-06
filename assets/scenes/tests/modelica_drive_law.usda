@@ -27,7 +27,7 @@
 # ── THE CONTROL ──────────────────────────────────────────────────────────────
 #
 # `RoverBuiltin` is not decoration. If the Modelica program failed to load, or
-# `lunco:driveKernel = "external"` failed to stand the built-in mixing down, the
+# its connected drive outputs failed to stand the built-in mixing down, the
 # Modelica rover would simply be driven by the built-in kernel — and a test that
 # only asked "did it move?" would pass while proving nothing. The control makes
 # that indistinguishable case detectable, because the two laws differ in a way

@@ -2,8 +2,10 @@
 (
     "Generated schema for luncoSchema"
     """
-    GENERATED — do not edit. Regenerate with `python3 scripts/gen_schema.py`
-    after editing `schema.usda`, which is the authoritative source.
+    GENERATED — do not edit. Regenerate with
+        LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation
+    after editing `schema.usda`, which is the authoritative source
+    (`lunco_usd::schema_gen::generate_schema` is the generator).
 
     This is the file a USD runtime actually registers (via `plugInfo.json`), and
     the file `lunco_usd::schema` parses to answer "what does this property's
