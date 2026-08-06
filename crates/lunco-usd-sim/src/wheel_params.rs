@@ -27,8 +27,7 @@
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
 //! | cornering stiffness, N/rad | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
-//! | Coulomb μ (analytic) | `lunco:tire:frictionCoefficient` | yes |
-//! | contact μ (solver) | `physics:dynamicFriction` | yes |
+//! | Coulomb μ | `physics:dynamicFriction` (`UsdPhysicsMaterialAPI`) | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
 //! | motor damping | `lunco:wheel:driveDamping` | yes |
 //! | suspension | `lunco:suspension:restLength` + `physxVehicleSuspension:springStrength`/`:springDamperRate` | raycast only |
@@ -141,17 +140,12 @@ pub struct WheelParams {
     /// is a legal (if unhelpful) tire — no cornering grip at all — and the place
     /// to state a real value is the tire asset, which every shipped tire does.
     pub cornering_stiffness: f64,
-    /// Coulomb μ from the wheel's TIRE (`lunco:tire:frictionCoefficient`,
-    /// composed through the `tire` variant). The ANALYTIC cone: the raycast
-    /// tyre model saturates its patch force at exactly `friction_mu · N`.
+    /// Lower edge of the tire's measured steady-state cornering-speed envelope.
+    pub min_validated_speed: f64,
+    /// Coulomb μ from the wheel's standard `UsdPhysicsMaterialAPI`, composed
+    /// through the `tire` variant. The raycast law uses it as its Coulomb cone;
+    /// jointed wheels give it directly to Avian's contact solver.
     pub friction_mu: f64,
-    /// Contact μ for the SOLVER (`physics:dynamicFriction`, `UsdPhysicsMaterialAPI`
-    /// on the same tyre). The coefficient the physical wheel's avian contact is
-    /// given so that it reproduces `friction_mu`'s cone — see the sweep recorded
-    /// in `components/mobility/tires/regolith.usda`. A second number because
-    /// avian's XPBD contact friction under sustained sliding delivers well under
-    /// the nominal cone, and the tyre's real μ must not be bent to hide that.
-    pub contact_friction: f64,
     /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
     pub steer_axis: DVec3,
     /// Velocity-tracking aggressiveness, 1/s (`lunco:wheel:driveDamping`).
@@ -213,8 +207,10 @@ impl WheelParams {
         let cornering_stiffness = reader
             .real(wheel, "physxVehicleTire:lateralStiffness")
             .unwrap_or(0.0);
-        let friction_mu = req("lunco:tire:frictionCoefficient");
-        let contact_friction = req("physics:dynamicFriction");
+        let min_validated_speed = reader
+            .real(wheel, "lunco:tire:minValidatedSpeed")
+            .unwrap_or(0.0);
+        let friction_mu = req("physics:dynamicFriction");
         let drive_damping = req("lunco:wheel:driveDamping");
 
         // The ONE non-required number, and it is a DERIVATION, not a default:
@@ -253,8 +249,8 @@ impl WheelParams {
             brake_torque_max,
             slip_stiffness,
             cornering_stiffness,
+            min_validated_speed,
             friction_mu,
-            contact_friction,
             steer_axis,
             drive_damping,
             suspension,
@@ -293,6 +289,7 @@ impl WheelParams {
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
         wheel.cornering_stiffness = self.cornering_stiffness;
+        wheel.min_validated_speed = self.min_validated_speed;
         wheel.brake_torque_max = self.brake_torque_max;
         wheel.steer_axis = self.steer_axis;
     }
@@ -532,7 +529,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     //    the appliers below mutate the world (same pattern as
     //    `refresh_domes_live`).
     let mut updates: Vec<WheelUpdate> = Vec::new();
-    let mut mixes: Vec<(Entity, lunco_mobility::kernels::DriveMix)> = Vec::new();
+    let mut mixes: Vec<(Entity, Option<lunco_mobility::kernels::DriveMix>)> = Vec::new();
     {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
@@ -571,9 +568,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
         for (e, path) in &vehicles {
             let Ok(sp) = SdfPath::new(path) else { continue };
-            if let Some(mix) = crate::derive_drive_mix(&view, &sp, path) {
-                mixes.push((*e, mix));
-            }
+            mixes.push((*e, crate::derive_drive_mix(&view, &sp, path)));
         }
     }
 
@@ -656,7 +651,13 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
     }
     for (e, mix) in mixes {
-        world.entity_mut(e).insert(mix);
+        if let Some(mix) = mix {
+            world.entity_mut(e).insert(mix);
+        } else {
+            world
+                .entity_mut(e)
+                .remove::<lunco_mobility::kernels::DriveMix>();
+        }
     }
     info!(
         "[wheel resync] stage {:?}: re-derived {} wheel(s), {} vehicle root(s) in place",

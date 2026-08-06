@@ -1054,26 +1054,22 @@ class "LunCoTireAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """The tire's grip against the ground. Applied to a tire prim alongside
-    `PhysxVehicleTireAPI`, whose `longitudinalStiffness` carries the rest of the
-    contact model (see `assets/components/mobility/tires/*.usda`, whose `over`
-    composes onto the wheel that references it).
-
-    LunCo extension: PhysX models grip as a ground-material-dependent friction
-    TABLE (`physxVehicleTireFrictionTable`), not a scalar on the tire. LunCo's
-    drive-traction model (`apply_wheel_drive`) is a single Coulomb μ, so the μ is
-    authored here rather than squatting a PhysX name that means something else."""
+    doc = """Evidence envelope for the tire's steady-state force curve. Physical
+    grip remains standard UsdPhysicsMaterialAPI authoring; this API carries only
+    the validation bound that neither UsdPhysics nor PhysxVehicleTireAPI represents."""
 )
 {
-    double lunco:tire:frictionCoefficient (
+    float lunco:tire:minValidatedSpeed = 0.0 (
         customData = {
             double min = 0
-            double max = 2
-            string unit = "μ"
+            double max = 10
+            string unit = "m/s"
         }
-        doc = """Coulomb μ between this tire and the ground — the slip limit is
-        atan(μ). No fallback: a tire that does not say what it grips with is an
-        authoring bug, not a μ of 1.0."""
+        doc = """Lowest longitudinal speed at which the authored steady-state
+        cornering-stiffness curve was validated. Below it, slip-angle evaluation
+        holds the denominator at this evidence boundary instead of extrapolating
+        the curve into its singular zero-speed regime. Zero explicitly means the
+        model is valid to rest."""
     )
 }
 

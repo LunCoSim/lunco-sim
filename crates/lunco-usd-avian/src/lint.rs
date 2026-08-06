@@ -71,18 +71,6 @@ use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
 /// `assets/scripting/policy/lint_usd.rhai`.
 pub const USD_LINT_DOMAIN: &str = "usd";
 
-/// Treat the conventional two-ended `port_a`/`port_b` spelling as one
-/// same-typed domain when producing policy facts. The bound Modelica class
-/// still owns the exact endpoint names; this normalization is only for the
-/// scope-level mixed-domain lint, where electrical `p` must remain distinct
-/// from thermal `port`.
-fn connector_domain_for_lint(name: &str) -> &str {
-    match name {
-        "port_a" | "port_b" => "port",
-        other => other,
-    }
-}
-
 /// The nearest ancestor of `path` that is a body, if any.
 fn host_body(bodies: &HashSet<String>, path: &str) -> Option<String> {
     let mut cur = SdfPath::new(path).ok()?.parent();
@@ -746,10 +734,9 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 let Some(short) = name.strip_prefix("connectors:") else {
                     continue;
                 };
-                let domain = connector_domain_for_lint(short);
-                connectors.push(H::str(domain));
+                connectors.push(H::str(short));
                 if !reader.connections(p, &name).is_empty() {
-                    connected.push(H::str(domain));
+                    connected.push(H::str(short));
                 }
             }
             if !connectors.is_empty() {

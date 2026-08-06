@@ -84,7 +84,7 @@ model Lander
   Real cmd_pitch;
   Real cmd_roll;
   Real cmd_yaw;
-  Real live_authority(start = authority_initial);
+  Real live_authority;
   Real command_torque_x;
   Real command_torque_y;
   Real command_torque_z;
@@ -100,6 +100,12 @@ model Lander
   Real total_leg_force;
 
   LunCo.Logic.AboveThreshold touchdown_check;
+
+initial equation
+  // `authority_initial` is part of the live USD input surface, so it has
+  // continuous variability and cannot legally appear as a variable's `start`
+  // attribute. Sample it in the initialization system instead.
+  live_authority = authority_initial;
 
 equation
   // Keep scene-tunable values live for the runtime Modelica interface.

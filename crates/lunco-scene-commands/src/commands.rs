@@ -1343,7 +1343,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
         name: "friction_mu",
         set: |w, v| w.friction_mu = v,
-        usd_attr: "lunco:tire:frictionCoefficient",
+        usd_attr: "physics:dynamicFriction",
     },
     WheelParam {
         name: "mass",

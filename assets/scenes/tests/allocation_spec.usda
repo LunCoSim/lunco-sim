@@ -28,14 +28,10 @@
 #                 for the steer-priority assertion: the "lazy arc" the skid
 #                 kernel exists to beat. See its prim for the full argument.
 #
-# WHY THE BOGUS ROVER IS WORTH A WHOLE PRIM. The lookup MISS is not an academic
-# case — it is a load-bearing mechanism. `components/mobility/drive_laws/*.usda`
-# deliberately author `lunco:driveKernel = "external"`, a name that resolves to
-# nothing, precisely so the built-in mixing stands down and a Modelica drive law
-# owns the drive ports alone. If an unknown kernel ever started falling back to
-# skid instead of coasting, every Modelica-driven rover would silently acquire a
-# second writer on its ports. So this rig asserts the FAIL-SAFE, not merely the
-# lookup: under full throttle, a rover with an unresolvable kernel does not move.
+# WHY THE BOGUS ROVER IS WORTH A WHOLE PRIM. A misspelled or unavailable
+# scripted kernel must fail safe rather than silently falling back to skid. So
+# this rig asserts the observable result, not merely the lookup: under full
+# throttle, a rover with an unresolvable kernel does not move.
 #
 # The rovers are spread along X (-100, -25, +25) and drive along -Z, so their
 # paths never meet. Geometry, ground, friction and spawn height are copied from
@@ -138,6 +134,7 @@ def Xform "AllocationSpec" (
     # green by making its premise false.
     def Xform "RoverBogus" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend apiSchemas = ["LunCoDriveKernelAPI"]
         variants = {
             string drivetrain = "raycast"
         }
@@ -196,12 +193,16 @@ def Xform "AllocationSpec" (
         # per-port to +-1 (`linear_kernel`).
         def Scope "DriveMix"
         {
-            def Scope "drive_left"
+            def Scope "drive_left" (
+                prepend apiSchemas = ["LunCoDriveMixTermAPI"]
+            )
             {
                 double lunco:factor:throttle = 1.0
                 double lunco:factor:steer = 1.0
             }
-            def Scope "drive_right"
+            def Scope "drive_right" (
+                prepend apiSchemas = ["LunCoDriveMixTermAPI"]
+            )
             {
                 double lunco:factor:throttle = 1.0
                 double lunco:factor:steer = -1.0

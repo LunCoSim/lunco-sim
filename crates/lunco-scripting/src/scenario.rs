@@ -58,9 +58,101 @@ impl Default for ScenarioExecutionGate {
     }
 }
 
+/// A completed scene transaction whose participants have not all been released
+/// by readiness policy yet. This is scene lifecycle state, not a second user
+/// pause control.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScenarioReadinessArm(pub bool);
+
+pub fn close_scenarios_for_scene_transition(
+    _trigger: On<lunco_core::SceneTransitionStarted>,
+    mut gate: ResMut<ScenarioExecutionGate>,
+    mut arm: ResMut<ScenarioReadinessArm>,
+) {
+    gate.enabled = false;
+    arm.0 = false;
+}
+
+pub fn arm_scenarios_after_scene_composition(
+    _trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut arm: ResMut<ScenarioReadinessArm>,
+) {
+    arm.0 = true;
+}
+
+/// Open scenario lifecycle only after the completed scene's readiness policy
+/// releases every participant. Once opened it stays open: a later dynamically
+/// attached participant must not pause an already-running mission script.
+pub fn open_scenarios_when_scene_ready(
+    readiness: Option<Res<lunco_readiness::ReadinessState>>,
+    mut gate: ResMut<ScenarioExecutionGate>,
+    mut arm: ResMut<ScenarioReadinessArm>,
+) {
+    if !arm.0 {
+        return;
+    }
+    let held = readiness
+        .as_deref()
+        .is_some_and(|state| state.world_hold || !state.held_entities.is_empty());
+    if held {
+        return;
+    }
+    gate.enabled = true;
+    arm.0 = false;
+    info!("[scenario] scene participants ready — lifecycle execution enabled");
+}
+
 /// Run condition for scenario lifecycle systems.
 pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
     gate.map_or(true, |gate| gate.enabled)
+}
+
+#[cfg(test)]
+mod readiness_gate_tests {
+    use super::*;
+    use lunco_core::{SceneTransition, SceneTransitionCompleted, SceneTransitionStarted};
+    use lunco_readiness::ReadinessState;
+
+    #[test]
+    fn each_scene_transition_opens_once_after_readiness_clears() {
+        let mut app = App::new();
+        app.init_resource::<ScenarioExecutionGate>()
+            .init_resource::<ScenarioReadinessArm>()
+            .init_resource::<ReadinessState>()
+            .add_observer(close_scenarios_for_scene_transition)
+            .add_observer(arm_scenarios_after_scene_composition)
+            .add_systems(Update, open_scenarios_when_scene_ready);
+
+        app.world_mut().trigger(SceneTransitionStarted {
+            transition: SceneTransition::clear(),
+        });
+        assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
+        assert!(!app.world().resource::<ScenarioReadinessArm>().0);
+
+        app.world_mut().trigger(SceneTransitionCompleted {
+            transition: SceneTransition::clear(),
+        });
+        app.world_mut().resource_mut::<ReadinessState>().world_hold = true;
+        app.update();
+        assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
+        assert!(app.world().resource::<ScenarioReadinessArm>().0);
+
+        app.world_mut().resource_mut::<ReadinessState>().world_hold = false;
+        app.update();
+        assert!(app.world().resource::<ScenarioExecutionGate>().enabled);
+        assert!(!app.world().resource::<ScenarioReadinessArm>().0);
+
+        // A participant arriving after scenario start cannot rewind lifecycle.
+        app.world_mut().resource_mut::<ReadinessState>().world_hold = true;
+        app.update();
+        assert!(app.world().resource::<ScenarioExecutionGate>().enabled);
+
+        // The next authoritative transition closes it again.
+        app.world_mut().trigger(SceneTransitionStarted {
+            transition: SceneTransition::load("next.usda", ""),
+        });
+        assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
+    }
 }
 
 /// The session a scenario acts on behalf of — captured at attach from the wire

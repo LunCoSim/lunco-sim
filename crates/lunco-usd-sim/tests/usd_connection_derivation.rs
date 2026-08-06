@@ -69,17 +69,23 @@ fn rewire_derives_at_load_and_clears() {
     // that triggers the rewire, just like the load-time reconcile spawning them.
     let src = app
         .world_mut()
-        .spawn(UsdPrimPath {
-            stage_handle: handle.clone(),
-            path: "/World/Src".into(),
-        })
+        .spawn((
+            UsdPrimPath {
+                stage_handle: handle.clone(),
+                path: "/World/Src".into(),
+            },
+            lunco_core::PortSurfaceReady,
+        ))
         .id();
     let sink = app
         .world_mut()
-        .spawn(UsdPrimPath {
-            stage_handle: handle.clone(),
-            path: "/World/Sink".into(),
-        })
+        .spawn((
+            UsdPrimPath {
+                stage_handle: handle.clone(),
+                path: "/World/Sink".into(),
+            },
+            lunco_core::PortSurfaceReady,
+        ))
         .id();
 
     app.update(); // rewire runs: Added is non-empty → full rebuild derives the edge
@@ -307,21 +313,16 @@ fn lander_asset_wiring_migrated() {
         ),
         ["/LanderTest/Lander.outputs:velocity_y"]
     );
-    assert_eq!(
-        view.connections(
-            &SdfPath::new("/LanderTest/Lander/AttitudeReference").unwrap(),
-            "inputs:specific_force_y"
-        ),
-        ["/LanderTest/Lander/IMU.outputs:specific_force_y"]
-    );
-    assert!(
-        view.connections(
-            &SdfPath::new("/LanderTest/Lander/AttitudeReference").unwrap(),
-            "inputs:quat_w"
-        )
-        .is_empty(),
-        "attitude estimator must not receive truth quaternion"
-    );
+    let attitude_reference = SdfPath::new("/LanderTest/Lander/AttitudeReference").unwrap();
+    for axis in ["w", "x", "y", "z"] {
+        assert_eq!(
+            view.connections(&attitude_reference, &format!("inputs:attitude_quat_{axis}")),
+            [format!(
+                "/LanderTest/Lander/IMU.outputs:attitude_quat_{axis}"
+            )],
+            "attitude reference must consume the IMU-estimated quaternion"
+        );
+    }
 
     // The scene selects the live landing target and initializes the sensor-only
     // estimator from the authored spawn condition.
@@ -396,14 +397,20 @@ fn rewire_applies_factor_and_offset() {
             .unwrap();
     }
 
-    app.world_mut().spawn(UsdPrimPath {
-        stage_handle: handle.clone(),
-        path: "/World/Src".into(),
-    });
-    app.world_mut().spawn(UsdPrimPath {
-        stage_handle: handle.clone(),
-        path: "/World/Sink".into(),
-    });
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Src".into(),
+        },
+        lunco_core::PortSurfaceReady,
+    ));
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Sink".into(),
+        },
+        lunco_core::PortSurfaceReady,
+    ));
     app.update();
 
     let edges: Vec<SimConnection> = {
@@ -446,14 +453,20 @@ fn rewire_reads_float_authored_transform() {
             .unwrap();
     }
 
-    app.world_mut().spawn(UsdPrimPath {
-        stage_handle: handle.clone(),
-        path: "/World/Src".into(),
-    });
-    app.world_mut().spawn(UsdPrimPath {
-        stage_handle: handle.clone(),
-        path: "/World/Sink".into(),
-    });
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Src".into(),
+        },
+        lunco_core::PortSurfaceReady,
+    ));
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Sink".into(),
+        },
+        lunco_core::PortSurfaceReady,
+    ));
     app.update();
 
     let edges: Vec<SimConnection> = {

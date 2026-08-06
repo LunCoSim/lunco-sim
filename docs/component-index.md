@@ -56,28 +56,67 @@ All physical equations, conservation laws, and component dynamics live in `asset
 
 ## 2. USD Reusable Component Assets (`assets/components/`)
 
-All component assets inside `assets/components/` are **decoupled, generic USD sub-layers** that carry no vehicle-specific hardcoded paths.
+This is the shipped tree. A Modelica class in section 1 is not automatically a
+USD component: it becomes placeable/composable only when a file below projects
+its program, ports, mass/geometry and mounting contract. Do not infer a wrapper
+from the existence of a `.mo` file.
 
 ```
 assets/components/
-├── power/
-│   ├── battery.usda              # Generic Traction & Auxiliary Battery Pack (LunCo.Electrical.Battery)
-│   ├── solar_panel.usda          # Generic Solar Cell Array (LunCo.Electrical.SolarPanel)
-│   └── power_bus.usda            # Generic EPS Power Distribution Unit (LunCo.Electrical.PDU)
-├── mobility/
-│   └── motor.usda                # Generic Hub Drive Motor (LunCo.Electrical.DCMotor)
-├── thermal/
-│   ├── radiator.usda             # Generic Vacuum Radiative Cooling (LunCo.Thermal.Radiator)
-│   └── thermostat_heater.usda    # Generic Survival Heater (LunCo.Thermal.ThermostatHeater)
-├── storage/
-│   ├── cryo_tank.usda            # Generic Propellant Storage Tank (LunCo.Storage.CryoTank)
-│   └── mass_memory.usda          # Generic NVRAM Science Flash Buffer (LunCo.Storage.MassMemory)
+├── avionics/
+│   ├── obc.usda
+│   └── obc_lander.usda
+├── cameras/
+│   ├── lunar_surface_camera.usda
+│   └── rover_front_camera.usda
 ├── comms/
-│   └── transmitter.usda          # Generic RF Telemetry Transmitter (LunCo.Comms.Transmitter)
-├── pointing/
-│   └── reaction_wheel.usda       # Generic Attitude Reaction Wheel (LunCo.Pointing.ReactionWheel)
-├── propulsion/
-│   └── rcs_thruster.usda         # Generic RCS Attitude Pulse Thruster (LunCo.Propulsion.RCSThruster)
-└── gnc/
-    └── powered_descent_guidance.usda # Generic Precision EDL Guidance (LunCo.GNC.PoweredDescentGuidance)
+│   ├── antenna.usda
+│   ├── ground_station.usda
+│   ├── link_beam.usda
+│   ├── radio.usda
+│   └── transmitter_power.usda
+├── environment/
+│   └── probe.usda
+├── gnc/
+│   ├── descent_guidance.usda
+│   ├── landing_target.usda
+│   └── position_pid_guidance.usda
+├── lights/
+│   └── headlight.usda
+├── mobility/
+│   ├── chassis/box_chassis.usda
+│   ├── drive_laws/{modelica_ackermann,modelica_six_independent,modelica_skid}.usda
+│   ├── gearbox.usda
+│   ├── motor.usda
+│   ├── motors/{fast,lunokhod,standard,torque}.usda
+│   ├── physical_drivetrain.usda
+│   ├── suspensions/{rigid,rocker,standard}.usda
+│   ├── tires/{bald,cleated,hard,regolith,worn}.usda
+│   └── wheel.usda
+├── mounting/
+│   └── demo_probe.usda
+├── payload/
+│   └── science_camera.usda
+├── power/
+│   ├── battery.usda
+│   ├── ideal_voltage_source.usda
+│   ├── power_bus.usda
+│   └── solar_panel.usda
+├── terrain/
+│   └── rocker_bogie_articulation_course.usda
+├── thermal/
+│   └── motor_thermal.usda
 ```
+
+`power_bus.usda` is a passive USD bus/membership node; it is not a wrapper for
+`LunCo.Electrical.PDU`. `descent_guidance.usda` is the shipped powered-descent
+guidance overlay; there is no duplicate `powered_descent_guidance.usda` spelling.
+
+The following library models currently have no standalone USD component wrapper:
+`LunCo.Thermal.Radiator`, `LunCo.Thermal.ThermostatHeater`,
+`LunCo.Storage.CryoTank`, `LunCo.Storage.MassMemory`,
+`LunCo.Comms.Transmitter`, `LunCo.Pointing.ReactionWheel`, and
+`LunCo.Propulsion.RCSThruster`. Some are instantiated inside larger authored
+assemblies. They must not be advertised as independently placeable parts until
+their USD mounting, network membership, physics projection and production
+verdicts exist.

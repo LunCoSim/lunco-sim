@@ -100,12 +100,14 @@ pub struct UsdAvianPlugin;
 /// despawned.
 ///
 /// Avian 0.7 removes contacts when ColliderMarker is removed, and removes a
-/// joint from its island when the authoritative joint component is removed. A
+/// joint from its island when it is disabled or its authoritative joint
+/// component is removed. A
 /// raw batch despawn skips those graph transitions long enough for
-/// BodyIslandNode::on_remove to observe stale constraints. Removing the joint
-/// component itself is important: removing `JointDisabled` during despawn is
-/// Avian's supported re-enable transition and would add the joint back after
-/// its bodies are gone.
+/// BodyIslandNode::on_remove to observe stale constraints. Teardown first
+/// disables every joint, then removes its joint component. This deliberately
+/// exercises Avian's supported graph transition once; the subsequent component
+/// removal sees no graph edge, and the eventual `JointDisabled` removal during
+/// despawn cannot re-enable anything because the joint component is already gone.
 fn prepare_scene_physics_teardown(world: &mut World) {
     let joints: Vec<(Entity, ComponentId)> = {
         let mut query = world.query_filtered::<(
@@ -128,12 +130,16 @@ fn prepare_scene_physics_teardown(world: &mut World) {
         query.iter(world).collect()
     };
 
-    // Retire constraints before contacts and bodies. The component-removal
-    // hook is the authoritative Avian graph transition; the order is
-    // intentional: graph removal must happen while both endpoint bodies still
-    // exist. This is an exclusive system so the component observers run before
-    // this schedule returns; deferring removal until the same flush as
-    // recursive despawn is too late for Avian's island bookkeeping.
+    // Retire constraints before contacts and bodies. Disable first so Avian
+    // unlinks each edge while its endpoints and complete island list still
+    // exist. Removing active joint components directly let several removal
+    // observers mutate one island list in the same nested teardown flush; the
+    // landing gear's four prismatic joints exposed the resulting double unlink.
+    for (entity, _) in &joints {
+        if let Ok(mut entity_mut) = world.get_entity_mut(*entity) {
+            entity_mut.insert(JointDisabled);
+        }
+    }
     for (entity, component_id) in joints {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove_by_id(component_id);
@@ -162,8 +168,8 @@ impl Plugin for UsdAvianPlugin {
         //   right after `sync_usd_visuals` translates each prim, so the
         //   stage is loaded and Mesh3d/Transform exist.
         // `build_usd_physics_joints`: stays a per-frame system because
-        //   it's a deferred state-machine waiting on Avian to admit
-        //   both bodies into its island graph (physics-schedule-driven).
+        //   it's a deferred state-machine waiting for both referenced bodies
+        //   and their bridge-seeded poses.
         //   `run_if(any pending)` makes it idle when no joints await.
         // `PhysicsSceneGravity` records which prim set the world's gravity, which
         // is only meaningful while that scene is loaded — carried into the next
@@ -193,19 +199,23 @@ impl Plugin for UsdAvianPlugin {
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
             // The joint builder is preparation, not integration. It runs in the
-            // same nested physics schedule as the bridge's read pass, so it sees
-            // the composed authored pose and seats the bodies before Avian's
-            // first physics step. `attach_joint` parks the constructed
-            // constraint as `PendingJoint`; `JointAttachPlugin` admits it later,
-            // only after Avian has placed both bodies in its island graph.
+            // enclosing fixed schedule after the bridge's hold-safe read pass,
+            // so scene readiness can resolve authored joints even while
+            // `Time<Physics>` is paused. Commands are flushed before Avian's
+            // nested schedule: on the first released physics tick the parked
+            // `PendingJoint` is admitted after solver bodies exist and before
+            // joint preparation/integration.
             .add_systems(
-                avian3d::schedule::PhysicsSchedule,
-                build_usd_physics_joints
-                    .in_set(avian3d::prelude::PhysicsSystems::Prepare)
-                    .after(avian3d::prelude::PhysicsSystems::First)
-                    .after(big_space_bridge::PhysicsBridgeSystems::Read)
-                    .before(avian3d::schedule::PhysicsStepSystems::First)
-                    .run_if(any_with_component::<PendingUsdJoint>),
+                FixedPostUpdate,
+                (
+                    build_usd_physics_joints
+                        .in_set(avian3d::prelude::PhysicsSystems::Prepare)
+                        .after(big_space_bridge::PhysicsBridgeSystems::Read)
+                        .run_if(any_with_component::<PendingUsdJoint>),
+                    bevy::ecs::schedule::ApplyDeferred,
+                )
+                    .chain()
+                    .before(avian3d::prelude::PhysicsSystems::StepSimulation),
             )
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
@@ -837,9 +847,8 @@ fn is_avian_body(reader: &StageView<'_>, path: &SdfPath) -> bool {
 /// under a vehicle is the mount.
 ///
 /// The rule keys off "a named prim that is not a body". It never keys off an
-/// EMPTY rel — UsdPhysics already gives that the meaning "world", and quietly
-/// redefining a spec meaning is how `driveKernel = "external"` became a no-op
-/// nobody noticed. `None` when the path names nothing that is or sits under a
+/// EMPTY rel — UsdPhysics already gives that the meaning "world". `None` when
+/// the path names nothing that is or sits under a
 /// body, which stays an unresolved joint and still warns.
 ///
 /// Resolving here rather than at ECS-match time is deliberate: `read_joint_spec_typed`

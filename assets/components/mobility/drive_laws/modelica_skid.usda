@@ -42,23 +42,16 @@
 # stronger, so a second `info:sourceAsset` here would be silently overridden and
 # the drive law would never bind at all. One prim, one model.
 #
-# ⚠ NOT YET LIVE. `derive_usd_connections` enumerates only `inputs:` attributes
-# (`let Some(sink_conn) = attr.strip_prefix("inputs:") else { continue }`), so
-# `outputs:*.connect` is never read and these forwards do nothing today. The
-# rover still travels 0.00 m. This is the authoring form the engine should
-# honour — it is the only direction that is type-correct, and `skid_rover.usda`'s
-# `Electrical` scope already assumes it — but until the wiring pass reads output
-# connections there is NO way for a replacement producer to supply a vessel's
-# output port, and `driveKernel = "external"` names no provider to ask.
+# `derive_usd_connections` materialises these forwards onto the vessel's actuator
+# ports. The production parity fixture proves the Modelica law owns the command:
+# it retains the authored first-order lag while converging to the built-in
+# kernel's terminal speed.
 def Xform "DriveLaw" (
     kind = "component"
 )
 {
-    # Stand the built-in mixing down. An unresolved scripted kernel is a
-    # DELIBERATE no-op in `apply_drive_mix` (the hook lookup misses and no port
-    # is written) — which is exactly what a program-driven drive law needs:
-    # nothing else may write the drive ports it owns.
-    string lunco:driveKernel = "external"
+    # These connected outputs are the authoritative allocation. Their presence
+    # prevents derivation of a second, imperative DriveMix on the vessel.
     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
 

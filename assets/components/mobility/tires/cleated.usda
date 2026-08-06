@@ -11,7 +11,7 @@
 #
 # It is a `regolith` tire with better bite and nothing else changed: this `over`
 # references `regolith.usda`</Tire> and overrides ONE number. The tread, the shader, the
-# contact stiffness and the `LunCoTireAPI`/`PhysxVehicleTireAPI` application all arrive
+# contact stiffness and the `PhysicsMaterialAPI`/`PhysxVehicleTireAPI` application all arrive
 # through that arc. A tire that differs by a coefficient should say so in a line, not by
 # restating a tread it did not change.
 
@@ -20,16 +20,8 @@ over "Tire" (
     kind = "component"
 )
 {
-    double lunco:tire:frictionCoefficient = 1.8
-    # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
-    # tyre carries two friction numbers and for the relation that sets this one:
-    # `solver = 2·(μ / 0.55) − 1`. The flat 1.125·μ this replaces delivered an
-    # effective ~0.83 against an authored 1.8 — the EASY tier gripped worse than
-    # the default regolith tyre on a physical drivetrain, which is backwards.
-    # 5.55 is an extrapolation of a relation measured at μ = 0.8; of the five
-    # tyres this is the one to re-sweep on `drivetrain_parity` first.
-    float physics:dynamicFriction = 5.55
-    float physics:staticFriction = 5.55
+    float physics:dynamicFriction = 1.8
+    float physics:staticFriction = 1.8
 
     # The look states the grip: fewer, deeper cleats at full relief.
     over "TireLook"

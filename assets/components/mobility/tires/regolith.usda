@@ -27,7 +27,7 @@
 # numbers mean the same thing here as they do in any other PhysX vehicle.
 
 over "Tire" (
-    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI", "PhysicsMaterialAPI"]
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI"]
     kind = "component"
 )
 {
@@ -51,74 +51,33 @@ over "Tire" (
     # vehicle weight spreads to N ≈ 310 N and the cone is 186 N·m. The motor is
     # sized under the SMALLER of the two — see `motor.usda` — so neither spins on
     # flat ground, and grip is what stops it rather than a coincidence.
-    double lunco:tire:frictionCoefficient = 1.5                # tyre↔regolith friction
-    # Cornering stiffness — side force per RADIAN of slip angle, capped at μ·N.
+    # Standard UsdPhysics Coulomb coefficient. The raycast tire law and Avian's
+    # joint-wheel contact solver consume this same authored value.
+    float physics:dynamicFriction = 1.5
+    float physics:staticFriction = 1.5
+    # Normalized cornering stiffness: side force per radian of slip angle, per
+    # newton of wheel load. This is the PhysX attribute's meaning and the runtime
+    # evaluates `F_y = C_alpha * N * alpha`, capped by the tire's Coulomb cone.
     #
-    # A SECOND NUMBER, because they are two mechanisms. The longitudinal term
-    # stands in for rolling resistance and drive slip and must stay soft, or a
-    # rolling wheel is braked by its own grip; lateral slip is pure sliding and a
-    # tire resists it hard. One shared stiffness could only satisfy the softer of
-    # the two, and did — at ~50 N/(m/s) a rover met a two-tonne-metre side load
-    # with tens of newtons, drifted through every turn, and read as ice.
+    # DERIVED FROM MEASUREMENT, not from a rover acceptance threshold. US Army
+    # WES/NASA tests of the 50%-chevron GM Lunar Roving Vehicle wheel in crushed-
+    # basalt lunar-soil simulant measured side-thrust coefficient F_y/N ≈ 0.25
+    # at 5 degrees yaw over 180–370 N wheel loads. Therefore the small-angle
+    # normalized stiffness is:
     #
-    # DERIVED FROM WHERE THE TIRE SATURATES, not fitted. With ~445 N on a wheel
-    # and μ = 0.8 the cone is ~356 N, so 2000 N/(m/s) reaches it at ~0.18 m/s of
-    # lateral slip — about 5° of slip angle at cruise, which is where a lugged
-    # tire on soil lets go. The number this replaced, 100, put saturation at
-    # 3.6 m/s of side-slip: a tire that never in any manoeuvre reached its own
-    # friction limit, and met a hard corner with ~5% of the grip it had.
+    #   C_alpha = (F_y/N) / alpha = 0.25 / radians(5) = 2.86 rad^-1
     #
-    # This is an absolute force coefficient, matching the PhysX vehicle field's
-    # N/rad semantics. The runtime must not multiply it by normal load; load only
-    # limits the resulting force through the Coulomb cone below. Keep the value
-    # deliberately below the longitudinal stiffness: a skid-steer tire must be
-    # able to scrub laterally while still resisting ordinary cornering slip.
-    float physxVehicleTire:lateralStiffness = 12.6
-
-    # --- Contact-solver friction (UsdPhysicsMaterialAPI) ---
-    # THE SAME GRIP, STATED IN THE SOLVER'S UNITS. `lunco:tire:frictionCoefficient`
-    # above is the tyre's real Coulomb μ and the raycast model uses it directly:
-    # it saturates the patch force at exactly μ·N. The PHYSICAL wheel does not get
-    # to do that — its cone is negotiated by avian's XPBD contact solver, which
-    # under sustained sliding delivers well under the nominal cone (measured on
-    # `drivetrain_parity`: a wheel commanded past its traction limit settled at
-    # ~0.45 effective against an authored 0.8, i.e. ~56%). Bending
-    # `lunco:tire:frictionCoefficient` to compensate would be a lie about the tyre
-    # and would silently corrupt the analytic model with it; so the solver gets
-    # its OWN authored coefficient, and the ratio between the two is a property of
-    # the engine, not of the rubber.
+    # rounded to the precision readable from figure 10 of the report:
+    # https://ntrs.nasa.gov/citations/19750021903
     #
-    # It replaces a hard-coded `Friction::new(0.9)` in
-    # `lunco_usd_sim::setup_physical_wheel` — but now authored on the tyre it
-    # belongs to, so re-shoeing a rover moves BOTH coefficients instead of only
-    # the analytic one.
-    #
-    # 4.45 against the tyre's own 1.5, and the gap is arithmetic, not taste. avian
-    # combines this with the ground material (default rule: Average) — against the
-    # standard 1.0 ground that is a nominal 2.73 — and delivers ~55% of it under
-    # sustained sliding, i.e. an effective ~1.5: the tyre's real μ, which is what
-    # the analytic model is using on the other rover.
-    #
-    # THE RELATION, so this number moves when μ does instead of drifting:
-    #   solver = 2·(μ / 0.55) − ground_μ   (ground_μ = 1.0, the standard surface)
-    # which reproduces the measured pair below exactly (μ 0.8 → 1.9) and gives
-    # μ 1.5 → 4.45. The 0.55 is the solver's delivery under sustained sliding and
-    # is the only measured quantity in it; re-sweep `drivetrain_parity` if the
-    # substep count or the avian version changes.
-    #
-    # Swept on `drivetrain_parity` (physical terminal speed against a raycast twin
-    # at the same authored μ = 0.8):
-    #   0.9  → 1.97 m/s vs 2.13 (7.5% short)
-    #   1.9  → 2.16 m/s vs 2.13 (1.4% — the closest measured)
-    # The earlier reading that 1.6 changed nothing was taken while the joint motor
-    # was a 6x velocity source: it was torque-saturated at every sample, so the
-    # rover was sliding on its cone regardless of how big the cone was, and the
-    # sweep could not see friction at all.
-    #
-    # Re-measure if the substep count or the avian version changes — the 55% is a
-    # property of the solver, and it is the only thing this number encodes.
-    float physics:dynamicFriction = 1.90
-    float physics:staticFriction = 1.90
+    # The former 12.6 value asserted saturation near 5 degrees but did not come
+    # from that measured curve; it over-predicted low-angle side thrust by more
+    # than four times and physically locked skid-steer vehicles against pivoting.
+    float physxVehicleTire:lateralStiffness = 2.9
+    # The same report's tests span 1.07–3.05 m/s. This explicitly marks the
+    # lower evidence boundary so the steady-state curve is not extrapolated
+    # into the singular near-zero-speed regime.
+    float lunco:tire:minValidatedSpeed = 1.07
 
     # --- Tread ---
     # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`

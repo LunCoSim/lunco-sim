@@ -11,19 +11,17 @@
 
     CODELESS (`skipCodeGeneration = true`), exactly like Omniverse's PhysxSchema:
     there is no generated C++/Python, only the registered definitions.
-    `lunco_usd::schema_gen::generate_schema` turns this file into
-    `generatedSchema.usda`, which `plugInfo.json` registers and which
-    `lunco_usd::schema` parses at runtime. The generated file is NEVER edited by
-    hand: the `schema_generation` test regenerates it in memory and fails when
-    the checked-in copy is stale.
+    `scripts/gen_schema.py` turns this file into `generatedSchema.usda` and
+    derives the `Types` block in `plugInfo.json`; those are what the runtime
+    registers and parses. The generated files are NEVER edited by hand.
 
     REGENERATE:
-        LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation
+        python3 scripts/gen_schema.py
 
     TODO — GENERATE VOCABULARIES FROM THE ENGINE. Token vocabularies here are
     still hand-copied from Rust (the `UserIntent` alias table in
     `lunco_core::architecture::parse_user_intent` is the clearest case);
-    `schema_gen` keeps the two FILES in sync, not the vocabularies.
+    The generator keeps the two DERIVED FILES in sync, not the vocabularies.
 
     NAMING. Every property lives under the `lunco:` namespace, sub-namespaced by
     concern (`lunco:env:`, `lunco:terrain:`, `lunco:policy:`). Bare names are
@@ -1122,26 +1120,22 @@ class "LunCoTireAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """The tire's grip against the ground. Applied to a tire prim alongside
-    `PhysxVehicleTireAPI`, whose `longitudinalStiffness` carries the rest of the
-    contact model (see `assets/components/mobility/tires/*.usda`, whose `over`
-    composes onto the wheel that references it).
-
-    LunCo extension: PhysX models grip as a ground-material-dependent friction
-    TABLE (`physxVehicleTireFrictionTable`), not a scalar on the tire. LunCo's
-    drive-traction model (`apply_wheel_drive`) is a single Coulomb μ, so the μ is
-    authored here rather than squatting a PhysX name that means something else."""
+    doc = """Evidence envelope for the tire's steady-state force curve. Physical
+    grip remains standard UsdPhysicsMaterialAPI authoring; this API carries only
+    the validation bound that neither UsdPhysics nor PhysxVehicleTireAPI represents."""
 )
 {
-    double lunco:tire:frictionCoefficient (
+    float lunco:tire:minValidatedSpeed = 0.0 (
         customData = {
             double min = 0
-            double max = 2
-            string unit = "μ"
+            double max = 10
+            string unit = "m/s"
         }
-        doc = """Coulomb μ between this tire and the ground — the slip limit is
-        atan(μ). No fallback: a tire that does not say what it grips with is an
-        authoring bug, not a μ of 1.0."""
+        doc = """Lowest longitudinal speed at which the authored steady-state
+        cornering-stiffness curve was validated. Below it, slip-angle evaluation
+        holds the denominator at this evidence boundary instead of extrapolating
+        the curve into its singular zero-speed regime. Zero explicitly means the
+        model is valid to rest."""
     )
 }
 

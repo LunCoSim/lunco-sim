@@ -34,7 +34,7 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 | Part | File | Owns |
 |---|---|---|
 | Wheel hub | `mobility/wheel.usda` | dimensions, mass, drive/brake/spin dynamics — THE default set every wheel composes |
-| Tire | `mobility/tires/*.usda` | grip (`lunco:tire:frictionCoefficient`, `physxVehicleTire:longitudinalStiffness`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
+| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
 | Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from `Electrical` — chosen via the rover's `thermal` variantSet |
@@ -262,14 +262,13 @@ from an exemplar — that is the intended way to extend, not a Rust change.
     SAME `RoverDrivetrain.mo` (the law is per-side; fan-out is wiring, not
     physics) with a bridge writing `drive_w0..w2` = left, `drive_w3..w5` =
     right.
-  In every case `lunco:driveKernel = "external"` stands the built-in mixing
-  down: it is read first in `derive_drive_mix`
-  (`crates/lunco-usd-sim/src/lib.rs`), pre-empting the `DriveMix` scope,
-  `TankDifferentialAPI` and `AckermannSteeringAPI`. Note `"external"` is **not a
-  Rust sentinel** — it is simply a hook name nothing registers, so the mixer
-  finds no hook, writes no ports (fail-safe coast) and warns once. Any
-  unregistered name behaves identically; `"external"` is the agreed spelling.
-  The whole law is USD + `.mo` + `.rhai` — no Rust. Wheels stay
+  Allocation ownership is derived from the selected allocator's complete
+  composed USD output wiring. When every output port the allocator owns has an
+  authored producer, that producer (here the Modelica program) owns allocation
+  and no imperative `DriveMix` is installed. With no such connections the
+  authored built-in allocation applies. A partial set is invalid authoring and
+  fails safe; it never falls through to a second controller. The whole law is
+  USD + `.mo` + `.rhai` — no sentinel hook or type-specific Rust path. Wheels stay
   port-name-agnostic throughout: each listens to its `lunco:drivePort` (or
   the index-parity default, even ⇒ drive_left / odd ⇒ drive_right); a drive
   law is a VEHICLE-level component that writes those ports by name.

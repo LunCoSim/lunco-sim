@@ -256,7 +256,14 @@ impl Plugin for LunCoScriptingPlugin {
         python::initialize_python();
 
         #[cfg(any(feature = "rhai", feature = "python"))]
-        app.init_resource::<scenario::ScenarioExecutionGate>();
+        app.init_resource::<scenario::ScenarioExecutionGate>()
+            .init_resource::<scenario::ScenarioReadinessArm>()
+            .add_observer(scenario::close_scenarios_for_scene_transition)
+            .add_observer(scenario::arm_scenarios_after_scene_composition)
+            .add_systems(
+                PreUpdate,
+                scenario::open_scenarios_when_scene_ready.after(lunco_readiness::ReadinessSet),
+            );
 
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);
@@ -403,9 +410,9 @@ impl Plugin for LunCoScriptingPlugin {
                 world_bridge::drain_world_scripts.run_if(scripts_run_here),
             );
             // Scene projection and scenario attachment belong in Update, after
-            // USD has materialised the prim markers. The implicit autonomy
-            // policy runs after that chain: an authored scene scenario reserves
-            // the control plane before the default rover actor is created.
+            // USD has materialised the prim markers. A rover opts into a policy
+            // through an authored scenario or an explicit RunScenario command;
+            // loading a vehicle must not invent control behavior.
             app.add_systems(
                 Update,
                 (
@@ -417,10 +424,6 @@ impl Plugin for LunCoScriptingPlugin {
                     // EmbeddedScenarioSource (lunco:script on the prim) so scene-
                     // authored scenarios run on spawn.
                     commands::attach_embedded_scenarios,
-                    // A rover with no authored scenario gets the canonical
-                    // host-side autonomy envelope. A scene with any authored
-                    // scenario is left to that program's explicit policy.
-                    commands::attach_rover_autonomy_paths,
                 )
                     .chain()
                     .run_if(scenario::scenario_execution_enabled),

@@ -48,6 +48,7 @@ model GeneratedPropulsion
   output Real thrust_n;
   output Real fuel_mass_kg;
   output Real chamber_pressure_pa;
+  output Real fuel_specific_enthalpy_j_kg;
 
   LunCo.Propulsion.PropellantTank fuel_tank(initial_mass_kg = 1000.0);
   LunCo.Propulsion.PropellantTank oxidizer_tank(initial_mass_kg = 1000.0);
@@ -67,6 +68,7 @@ equation
   thrust_n = chamber.thrust_n;
   fuel_mass_kg = fuel_tank.mass_kg;
   chamber_pressure_pa = chamber.chamber_pressure_pa;
+  fuel_specific_enthalpy_j_kg = chamber.fuel_specific_enthalpy_j_kg;
 end GeneratedPropulsion;
 "#;
 
@@ -85,7 +87,12 @@ end GeneratedPropulsion;
         .keys()
         .map(ToString::to_string)
         .collect();
-    for expected in ["thrust_n", "fuel_mass_kg", "chamber_pressure_pa"] {
+    for expected in [
+        "thrust_n",
+        "fuel_mass_kg",
+        "chamber_pressure_pa",
+        "fuel_specific_enthalpy_j_kg",
+    ] {
         assert!(
             names
                 .iter()

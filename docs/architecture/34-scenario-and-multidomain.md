@@ -110,9 +110,11 @@ This is why the rover's thermal and electrical domains are separate scopes:
   is the only composer. This required a small Rust change (a pass-through
   `SimComponent` for non-program prims that forward `outputs:*.connect`).
 
-The `mixed-connector-domains` lint rule (`assets/scripting/policy/lint_usd.rhai`)
-flags any single scope that mixes acausal connector names — the signature of a
-domain that was not split. See
+Connector domains are not inferred from USD property names. The resolved
+Modelica connector declarations own their types, flow variables and stream
+variables; generated `connect()` equations and the compiler's structural/type
+checks reject incompatible or unbalanced units. This avoids duplicating
+Modelica semantics in a filename list or a type-specific USD capability. See
 `docs/architecture/reviews/2026-07-30-rover-domain-layering.md`.
 
 The one exception is a model that genuinely couples two domains in one DAE

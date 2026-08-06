@@ -28,7 +28,8 @@ Transform (what usdGenSchema does that matters to a codeless consumer):
   - keep everything else verbatim: class prims, `customData` (apiSchemaType,
     UI hints, lunco:unit), attribute types/defaults/variability, docs, comments
 
-Usage:  python3 scripts/gen_schema.py   (from the workspace root)
+Usage:  python3 scripts/gen_schema.py         (rewrite the derived artifacts)
+        python3 scripts/gen_schema.py --check (verify them without writing)
 """
 
 import json
@@ -77,9 +78,8 @@ def schema_types(src: str) -> "OrderedDict[str, dict]":
     return types
 
 
-def write_pluginfo(types: "OrderedDict[str, dict]") -> None:
-    """Replace ONLY the `Types` block, preserving every hand-authored field
-    (Name/Type/Root/ResourcePath/LibraryPath/SdfMetadata) around it."""
+def pluginfo_text(types: "OrderedDict[str, dict]") -> str:
+    """Return plugInfo with only its derived `Types` block replaced."""
     plug = json.loads(PLUGINFO.read_text(encoding="utf-8"))
     plug["Plugins"][0]["Info"]["Types"] = types
     text = json.dumps(plug, indent=4) + "\n"
@@ -87,7 +87,12 @@ def write_pluginfo(types: "OrderedDict[str, dict]") -> None:
     # written — otherwise every regeneration reflows all 23 entries and the
     # real change (a schema added or removed) drowns in formatting churn.
     text = re.sub(r'\[\n\s*("(?:\w+)")\n\s*\]', r"[\1]", text)
-    PLUGINFO.write_text(text, encoding="utf-8")
+    return text
+
+
+def write_pluginfo(types: "OrderedDict[str, dict]") -> None:
+    """Write the derived `Types` block while preserving hand-authored fields."""
+    PLUGINFO.write_text(pluginfo_text(types), encoding="utf-8")
     print(f"wrote {PLUGINFO} ({len(types)} schema classes registered)")
 
 GENERATED_HEADER = '''#usda 1.0
@@ -106,29 +111,57 @@ GENERATED_HEADER = '''#usda 1.0
 '''
 
 
-def main() -> int:
-    src = SRC.read_text(encoding="utf-8")
-
-    # 1. Replace the layer-metadata header (first parenthesised block after
-    #    `#usda 1.0`) with the GENERATED header. The source header carries the
-    #    authoring guide + core subLayers; neither belongs in the registered
-    #    layer.
+def generated_text(src: str) -> str:
+    """Return the registered USDA layer derived from the authored source."""
+    # Replace the layer-metadata header (first parenthesised block after
+    # `#usda 1.0`) with the GENERATED header. The source header carries the
+    # authoring guide + core subLayers; neither belongs in the registered layer.
     m = re.match(r"#usda 1\.0\n\(\n.*?\n\)\n", src, flags=re.DOTALL)
     if not m:
-        print("error: could not find the layer metadata block in schema.usda")
-        return 1
+        raise ValueError("could not find the layer metadata block in schema.usda")
     body = src[m.end():]
 
-    # 2. Drop `inherits = </...>` arcs (with a trailing comma if the metadata
-    #    list continues). Codeless registration reads flat class definitions.
+    # Drop `inherits = </...>` arcs (with a trailing comma if the metadata
+    # list continues). Codeless registration reads flat class definitions.
     body = re.sub(r"[ \t]*(prepend\s+)?inherits\s*=\s*</[^>]*>,?\n", "", body)
+    return GENERATED_HEADER + body
 
-    OUT.write_text(GENERATED_HEADER + body, encoding="utf-8")
+
+def main() -> int:
+    check = len(sys.argv) == 2 and sys.argv[1] == "--check"
+    if len(sys.argv) > 1 and not check:
+        print("usage: python3 scripts/gen_schema.py [--check]", file=sys.stderr)
+        return 2
+
+    src = SRC.read_text(encoding="utf-8")
+    try:
+        generated = generated_text(src)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    types = schema_types(src)
+    expected_pluginfo = pluginfo_text(types)
+
+    if check:
+        actual_generated = OUT.read_text(encoding="utf-8")
+        actual_pluginfo = PLUGINFO.read_text(encoding="utf-8")
+        stale = []
+        if actual_generated != generated:
+            stale.append(str(OUT))
+        if actual_pluginfo != expected_pluginfo:
+            stale.append(str(PLUGINFO))
+        if stale:
+            print("schema artifacts are stale:", file=sys.stderr)
+            for path in stale:
+                print(f"  {path}", file=sys.stderr)
+            print("run `python3 scripts/gen_schema.py` to regenerate", file=sys.stderr)
+            return 1
+        print(f"schema artifacts in sync ({len(types)} schema classes)")
+        return 0
+
+    OUT.write_text(generated, encoding="utf-8")
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes) from {SRC}")
-
-    # 3. Re-derive the plugInfo `Types` registry from the SAME source, so a new
-    #    class is registered the moment it is declared.
-    write_pluginfo(schema_types(src))
+    write_pluginfo(types)
     return 0
 
 

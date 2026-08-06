@@ -82,17 +82,17 @@ def Xform "SixWheelIndependent" (
     # steer sign per bank is still stated in exactly one place per wheel.
     def "DriveMix"
     {
-        def "drive_w0" { double lunco:factor:throttle = 1.0
+        def "drive_w0" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
                          double lunco:factor:steer    = 1.0 }
-        def "drive_w1" { double lunco:factor:throttle = 1.0
+        def "drive_w1" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
                          double lunco:factor:steer    = 1.0 }
-        def "drive_w2" { double lunco:factor:throttle = 1.0
+        def "drive_w2" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
                          double lunco:factor:steer    = 1.0 }
-        def "drive_w3" { double lunco:factor:throttle = 1.0
+        def "drive_w3" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
                          double lunco:factor:steer    = -1.0 }
-        def "drive_w4" { double lunco:factor:throttle = 1.0
+        def "drive_w4" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
                          double lunco:factor:steer    = -1.0 }
-        def "drive_w5" { double lunco:factor:throttle = 1.0
+        def "drive_w5" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
                          double lunco:factor:steer    = -1.0 }
     }
 

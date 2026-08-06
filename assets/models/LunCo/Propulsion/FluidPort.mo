@@ -6,6 +6,8 @@ connector FluidPort
     "Shared line pressure at the connection node";
   flow Real mass_flow_kgs(unit = "kg/s")
     "Mass flow into the connected component";
+  stream Real specific_enthalpy_j_kg(unit = "J/kg")
+    "Specific enthalpy carried by fluid leaving the component";
 
   annotation(
     Icon(coordinateSystem(extent = {{-100, -100}, {100, 100}}), graphics = {

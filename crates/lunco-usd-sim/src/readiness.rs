@@ -7,7 +7,7 @@
 //!
 //! | Wait | Open while | Scope |
 //! |---|---|---|
-//! | [`kinds::SCENE_LOAD`] | the stage is still spawning prims | world |
+//! | [`kinds::SCENE_LOAD`] | the stage or its projected participants are still settling | world |
 //! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | that entity |
 //!
 //! # Why reconcile systems rather than events
@@ -48,21 +48,30 @@ struct ModelCompileWait {
     kind: &'static str,
 }
 
-/// Hold the world while a scene is spawning, and release when it has finished.
+/// Hold the world while a scene and its projected participants are settling.
 ///
-/// Both signals are needed and neither subsumes the other, for the same reason
-/// the status-bar mirror needs both: `SceneLoadInFlight` covers the window
-/// *before any prim entity exists* (which an entity count reads as "nothing to
-/// wait for"), and leftover `UsdAwaitingStage` prims cover deferred instance and
-/// reference spawns that have no `LoadScene` behind them.
+/// The stage signals cover the window before and during prim creation. Once this
+/// scene has opened a wait, the co-simulation binding epoch extends that same
+/// transaction through asynchronous source loading, Modelica compilation,
+/// native joint/wheel admission, and connection settlement. A briefly empty
+/// readiness registry is therefore not interpreted as completion before those
+/// downstream producers have had a chance to declare themselves.
+///
+/// [`lunco_cosim::BindingRevision::sealed`] is the explicit projection boundary:
+/// it is opened by endpoint lifecycle changes and sealed only by
+/// `settle_binding_epoch` after every projected participant is terminal. The
+/// existing scene ticket owns the whole interval; this does not create a second
+/// loading protocol or infer readiness from elapsed frames.
 fn track_scene_load(
     in_flight: Option<Res<SceneLoadInFlight>>,
     awaiting: Query<(), With<UsdAwaitingStage>>,
+    binding: Res<lunco_cosim::BindingRevision>,
     wait: Option<Res<SceneLoadWait>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    let loading = in_flight.is_some() || !awaiting.is_empty();
+    let stage_loading = in_flight.is_some() || !awaiting.is_empty();
+    let loading = scene_still_loading(stage_loading, wait.is_some(), binding.sealed);
     match (loading, wait) {
         (true, None) => {
             let label = in_flight
@@ -77,6 +86,13 @@ fn track_scene_load(
         }
         _ => {}
     }
+}
+
+fn scene_still_loading(stage_loading: bool, wait_open: bool, binding_sealed: bool) -> bool {
+    // `sealed` defaults false before any scene exists. Only an already-open
+    // scene wait may extend itself through the projection epoch, so an empty
+    // application does not manufacture a load transaction.
+    stage_loading || (wait_open && !binding_sealed)
 }
 
 /// Freeze only the Modelica entity whose program has not compiled yet, and
@@ -204,6 +220,21 @@ mod tests {
             modelica_wait_kind(Some(&failed)),
             Some(kinds::PROGRAM_FAILED),
             "a failed model remains a named policy fact"
+        );
+    }
+
+    #[test]
+    fn scene_wait_spans_stage_and_participant_projection_transactions() {
+        assert!(scene_still_loading(true, false, false));
+        assert!(scene_still_loading(true, true, false));
+        assert!(
+            scene_still_loading(false, true, false),
+            "a drained stage is not ready while its binding epoch remains open"
+        );
+        assert!(!scene_still_loading(false, true, true));
+        assert!(
+            !scene_still_loading(false, false, false),
+            "an empty app must not synthesize a scene transaction"
         );
     }
 

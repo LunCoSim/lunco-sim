@@ -1,17 +1,14 @@
-//! The staleness gate for the schema pipeline: `schema.usda` is authored,
-//! `generatedSchema.usda` is generated from it by
-//! [`lunco_usd::schema_gen::generate_schema`], and this test is what keeps the
-//! checked-in copy honest — the runtime registers and parses ONLY the generated
-//! file, so a stale one silently un-declares whatever was added to the source.
+//! The staleness gate for the schema pipeline: `schema.usda` is authored and
+//! `scripts/gen_schema.py` derives `generatedSchema.usda` plus `plugInfo.json`.
+//! This test keeps both checked-in artifacts honest — the runtime registers and
+//! parses ONLY the generated file, so a stale one silently un-declares whatever
+//! was added to the source.
 //!
-//! Regenerate with:
+//! Verify with:
 //!
 //! ```text
-//! LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation
+//! python3 scripts/gen_schema.py --check
 //! ```
-//!
-//! The regen path lives inside this test rather than a `[[bin]]` on purpose: a
-//! bin harness in this workspace poisons the crate's settings (known trap).
 
 use std::path::PathBuf;
 
@@ -21,37 +18,15 @@ fn schema_dir() -> PathBuf {
 
 #[test]
 fn generated_schema_is_in_sync() {
-    // Read from disk, not `include_str!`: the regen arm rewrites the file, and
-    // a compile-time embed would compare against the pre-rewrite bytes.
-    let authored =
-        std::fs::read_to_string(schema_dir().join("schema.usda")).expect("read schema/schema.usda");
-    let checked_in_path = schema_dir().join("generatedSchema.usda");
-    let checked_in =
-        std::fs::read_to_string(&checked_in_path).expect("read schema/generatedSchema.usda");
-
-    let generated = lunco_usd::schema_gen::generate_schema(&authored)
-        .expect("schema.usda must generate (it is the authored source of the registry)");
-
-    if std::env::var_os("LUNCO_REGEN_SCHEMA").is_some() {
-        if generated != checked_in {
-            std::fs::write(&checked_in_path, &generated)
-                .expect("rewrite schema/generatedSchema.usda");
-            eprintln!(
-                "[schema_generation] rewrote {} from schema.usda",
-                checked_in_path.display()
-            );
-        } else {
-            eprintln!("[schema_generation] generatedSchema.usda already in sync");
-        }
-        return;
-    }
-
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let status = std::process::Command::new("python3")
+        .args(["scripts/gen_schema.py", "--check"])
+        .current_dir(workspace)
+        .status()
+        .expect("python3 is required to verify the generated USD schema artifacts");
     assert!(
-        generated == checked_in,
-        "schema/generatedSchema.usda is STALE — it is generated from schema.usda \
-         and never hand-edited. Run:\n\n    \
-         LUNCO_REGEN_SCHEMA=1 cargo test -p lunco-usd --test schema_generation\n\n\
-         and commit the rewritten file."
+        status.success(),
+        "schema artifacts are stale; regenerate them with python3 scripts/gen_schema.py"
     );
 }
 
@@ -63,10 +38,8 @@ fn generated_schema_is_in_sync() {
 /// regenerates.)
 #[test]
 fn every_generated_class_is_in_pluginfo() {
-    let authored =
-        std::fs::read_to_string(schema_dir().join("schema.usda")).expect("read schema/schema.usda");
-    let generated =
-        lunco_usd::schema_gen::generate_schema(&authored).expect("schema.usda must generate");
+    let generated = std::fs::read_to_string(schema_dir().join("generatedSchema.usda"))
+        .expect("read schema/generatedSchema.usda");
     let plug_info = std::fs::read_to_string(schema_dir().join("plugInfo.json"))
         .expect("read schema/plugInfo.json");
 

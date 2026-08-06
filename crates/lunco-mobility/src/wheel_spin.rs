@@ -22,17 +22,6 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
     i * w / dt
 }
 
-/// Return the unsaturated lateral tire force from the authored absolute
-/// cornering stiffness. Normal load belongs to the friction-cone limit, not to
-/// this coefficient; keeping the calculation isolated makes that unit boundary
-/// explicit and testable.
-#[inline]
-fn lateral_tire_force(cornering_stiffness: f64, v_long: f64, v_lat: f64) -> f64 {
-    const V_REF: f64 = 0.5;
-    let slip_angle = (-v_lat / v_long.abs().max(V_REF)).atan();
-    cornering_stiffness * slip_angle
-}
-
 /// Integrates realistic tire spin and drives the visual wheel rotation.
 ///
 /// The spin tracks ground speed when rolling, breaks loose into wheelspin when
@@ -80,7 +69,7 @@ pub(crate) fn update_wheel_spin(
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        With<crate::kernels::DriveMix>,
+        With<lunco_core::ActuatorPorts>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     // The USD-projected motor target for each raycast wheel. The native readback
@@ -374,9 +363,9 @@ pub(crate) fn update_wheel_spin(
         //
         // The attribute is `physxVehicleTire:lateralStiffness` and every text —
         // and PhysX — means CORNERING STIFFNESS by that: side force per RADIAN of
-        // slip angle. The former law computed `-k · v_lat`: force per
-        // metre-per-second of lateral velocity. Those are not the same model and
-        // they do not differ by a constant, because `v_lat = |v| · sin(α)`.
+        // slip angle. This computed `-k · v_lat`: force per metre-per-second of
+        // lateral velocity. Those are not the same model and they do not differ by
+        // a constant, because `v_lat = |v| · sin(α)`.
         //
         // The consequence is that grip vanished with speed. At the same slip angle
         // — the same wheel scrubbing equally badly sideways — a wheel at 0.5 m/s
@@ -391,28 +380,20 @@ pub(crate) fn update_wheel_spin(
         // A slip angle is speed-free by construction, so one authored number now
         // means the same grip at every speed.
         //
-        // `V_REF` floors the denominator: at rest the slip angle is undefined
-        // (atan of 0/0) and any nonzero `v_lat` would read as a full 90°. Below
-        // this speed the expression degrades smoothly back to a velocity damper,
-        // which is the correct low-speed limit — a stationary wheel resists being
-        // pushed sideways in proportion to how fast it is being pushed.
-        // `physxVehicleTire:lateralStiffness` is an absolute cornering stiffness:
-        // force per radian of slip angle. It is already the force coefficient, so
-        // do not multiply it by normal load here. The friction cone below remains
-        // load-dependent and is the only place where `N` belongs. Multiplying the
-        // standard coefficient by `N` a second time made a loaded wheel hundreds
-        // of times stiffer than the authored tire and turned a valid skid pivot
-        // into an immovable scrub.
+        // The slip-angle reference is kinematic: the larger of hub travel speed
+        // and circumferential wheel speed. A pivot wheel therefore retains a
+        // well-defined angle even while its hub's longitudinal speed is near zero.
+        // The stiffness is NORMALISED BY LOAD — side force per radian PER NEWTON of
+        // normal force — so one authored number describes the tyre rather than the
+        // tyre-on-this-particular-rover. That is the same reason PhysX states its
+        // `lateralStiffness` per unit gravity, and it is what the old absolute
+        // value could not do: `tires/regolith.usda` records a fit that worked on
+        // one vehicle and had to be re-fitted for the next.
         //
         // It also puts the saturation point where a tyre spec actually states it.
-        // The linear region ends when `C·α` reaches the cone `μ·N`, i.e. at
-        // `α_peak = μ·N / C`: unlike the old normalized law, the absolute force
-        // coefficient intentionally makes the load part of the saturation point.
-        let f_lat = if on_ground {
-            lateral_tire_force(wheel.cornering_stiffness, v_long, v_lat)
-        } else {
-            0.0
-        };
+        // The linear region ends when `C·N·α` reaches the cone `μ·N`, i.e. at
+        // `α_peak = μ / C`, independent of load: at C = 10 a μ = 0.8 regolith tyre
+        // develops full side force at 4.6° of slip, which is where a real one does.
         // ── THE FRICTION CONE — SCALE THE FORCE, DON'T RE-DERIVE IT ────────────
         //
         // The two components above are the whole tire model: `f_long` from the slip
@@ -430,20 +411,25 @@ pub(crate) fn update_wheel_spin(
         // direction the force pointed under grip and had no say in it under
         // saturation.
         //
-        // Nothing else handled a degeneracy: the ill-conditioned case that direction
-        // had to guard (`s_mag → 0`, a tire filling its cone while barely sliding —
-        // which is exactly the low-speed case) already fell through to this same
-        // scaling. The low-speed conditioning that matters lives where it belongs,
-        // in `V_REF` flooring the slip-angle denominator; `mag > 1e-9` keeps this
-        // divide safe (and covers `μ·N = 0`, where the cone collapses to nothing).
-        let (f_long, f_lat) = {
-            let mag = (f_long * f_long + f_lat * f_lat).sqrt();
-            if mag > mu_n && mag > 1.0e-9 {
-                let s = mu_n / mag;
-                (f_long * s, f_lat * s)
-            } else {
-                (f_long, f_lat)
-            }
+        // The low-speed definition lives in `tire_patch_force`: actual `omega*r`
+        // keeps a rolling/pivoting wheel's angle defined, and `atan2` supplies the
+        // static limit when both longitudinal motions vanish. The authored lower
+        // validation bound prevents a steady-state test curve being extrapolated
+        // below its measured domain; it is evidence metadata, not a fitted switch.
+        let (f_long, f_lat) = if on_ground {
+            crate::tire_patch_force(
+                f_long,
+                v_long
+                    .abs()
+                    .max((wheel.spin_velocity * r).abs())
+                    .max(wheel.min_validated_speed),
+                v_lat,
+                wheel.last_normal_force,
+                friction_mu,
+                wheel.cornering_stiffness,
+            )
+        } else {
+            (0.0, 0.0)
         };
         wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
 
@@ -464,13 +450,13 @@ pub(crate) fn update_wheel_spin(
 
 #[cfg(test)]
 mod tests {
-    use super::{lateral_tire_force, update_wheel_spin};
-    use crate::kernels::DriveMix;
+    use super::update_wheel_spin;
     use crate::{Suspension, WheelRaycast};
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::{Time, TimePlugin, TimeUpdateStrategy};
+    use lunco_core::ActuatorPorts;
     use std::time::Duration;
 
     /// Put a test app on the SAME clock the product runs on: fixed steps of
@@ -526,7 +512,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
-                DriveMix::default(),
+                ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -550,6 +536,7 @@ mod tests {
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
                 cornering_stiffness: 10.0,
+                min_validated_speed: 0.0,
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
             },
@@ -625,7 +612,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(DVec3::ZERO),
-                DriveMix::default(),
+                ActuatorPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -653,6 +640,7 @@ mod tests {
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
                     cornering_stiffness: 10.0,
+                    min_validated_speed: 0.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
                 },
@@ -686,19 +674,6 @@ mod tests {
         assert!(
             w > max_omega * 0.9,
             "…and should actually reach it under full throttle: {w}"
-        );
-    }
-
-    #[test]
-    fn lateral_cornering_stiffness_is_not_scaled_by_normal_load() {
-        // `lateralStiffness` is an absolute N/rad coefficient. The load enters
-        // only through the Coulomb cone in the caller, so the same slip angle
-        // must produce the same unsaturated side force for any supported load.
-        let force = lateral_tire_force(12.6, 2.0, 1.0);
-        let expected = 12.6 * (-0.5_f64.atan());
-        assert!(
-            (force - expected).abs() < 1e-12,
-            "force={force}, expected={expected}"
         );
     }
 

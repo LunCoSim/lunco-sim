@@ -46,7 +46,7 @@ Controlling traction and speed:
     realizations read the same composed wheel parameters, which keeps the
     drivetrain contract in parity. See `assets/scenarios/tests/drivetrain_parity.rhai`.
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
-*   `double lunco:tire:frictionCoefficient`: Coulomb friction coefficient ($\mu$, default `0.8`) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant.
+*   `float physics:dynamicFriction`: standard `UsdPhysicsMaterialAPI` Coulomb coefficient ($\mu$) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant, and consumed by both wheel realizations.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).
 
 ---

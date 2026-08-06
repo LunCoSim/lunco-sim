@@ -40,7 +40,6 @@ pub mod material;
 pub mod registry;
 pub mod runtime_persistence;
 pub mod schema;
-pub mod schema_gen;
 pub mod twin_projection;
 #[cfg(feature = "ui")]
 pub mod ui;

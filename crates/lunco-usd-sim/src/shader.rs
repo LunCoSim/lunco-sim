@@ -325,7 +325,7 @@ fn shader_has_fragment_entry(shader_path: &str) -> bool {
         // Another scheme's root (`twin://…`) — can't inspect it here; don't veto.
         return true;
     };
-    match std::fs::read_to_string(&full) {
+    match lunco_assets::read_asset_file_string(&full) {
         // Check the CODE portion of each line (before any `//`), so an EXAMPLE
         // `@fragment` inside a doc comment — as library shaders like pbr_lit.wgsl
         // carry to show how to import them — isn't mistaken for a real entry point.

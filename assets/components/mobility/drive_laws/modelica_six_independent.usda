@@ -24,17 +24,14 @@
 # `drive_w0..drive_w5` are OUTPUTS of the rover root — the commands each wheel
 # consumes. A drive law replaces their PRODUCER, so these are output-to-output
 # forwards, and the per-side fan-out is exactly that: wiring, not physics, which
-# is why one `RoverDrivetrain` still serves. ⚠ The engine does not yet read
-# `outputs:*.connect` — see the note in `modelica_skid.usda`.
+# is why one `RoverDrivetrain` still serves. The runtime materialises these
+# forwards onto the six authored actuator ports.
 def Xform "DriveLaw" (
     kind = "component"
 )
 {
-    # Stand the built-in mixing down. An unresolved scripted kernel is a
-    # DELIBERATE no-op in `apply_drive_mix` (the hook lookup misses and no port
-    # is written) — which is exactly what a program-driven drive law needs:
-    # nothing else may write the six wheel ports it owns.
-    string lunco:driveKernel = "external"
+    # These connected outputs are the authoritative allocation. Their presence
+    # prevents derivation of a second, imperative DriveMix on the vessel.
     float outputs:drive_w0.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_w1.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_w2.connect = </DriveLaw/Drivetrain.outputs:drive_left>

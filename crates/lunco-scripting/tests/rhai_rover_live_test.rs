@@ -249,9 +249,14 @@ fn setup(source: &str) -> (App, Entity) {
     (app, rover)
 }
 
-/// Run one FixedUpdate, then flush so the dispatcher's queued command-triggers
-/// (SetPorts) actually execute and reach the spies.
+/// Run one production-style simulation frame, then flush so the dispatcher's
+/// queued command-triggers (SetPorts) actually execute and reach the spies.
+/// Scene-authored scenario markers are projected during Update; lifecycle hooks
+/// run during FixedUpdate. Keeping both schedules here exercises the same
+/// ownership boundary as the production app instead of testing an obsolete
+/// fixed-schedule-only attachment path.
 fn tick(app: &mut App) {
+    app.world_mut().run_schedule(Update);
     app.world_mut().run_schedule(FixedUpdate);
     app.world_mut().flush();
 }

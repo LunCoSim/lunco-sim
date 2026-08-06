@@ -245,6 +245,7 @@ impl Default for MotorActuator {
 fn motor_actuator_system(
     q_ports: Query<&Port>,
     q_bodies: Query<(&AngularVelocity, &Rotation)>,
+    q_sleeping: Query<(), With<Sleeping>>,
     q_inputs: Query<&lunco_core::InputPorts>,
     q_child_of: Query<&ChildOf>,
     mut q_joints: Query<(Entity, &MotorActuator, &mut RevoluteJoint)>,
@@ -253,6 +254,7 @@ fn motor_actuator_system(
     // detail.
     q_targets: Query<&MotorReadbackTarget>,
     mut q_readback: Query<&mut MotorReadback>,
+    mut commands: Commands,
 ) {
     // Update the motor operating point. Every early-return branch below
     // reports too — a released motor delivering 0 N·m is a MEASUREMENT, and
@@ -350,6 +352,18 @@ fn motor_actuator_system(
                 measured_omega,
             );
             continue;
+        }
+
+        // Changing an Avian joint motor does not itself wake a sleeping island.
+        // A jointed vehicle commonly reaches that state while held by its brake
+        // during startup; without an explicit wake, the new non-zero command is
+        // written onto a joint the solver has excluded, and the whole drivetrain
+        // remains asleep indefinitely. `WakeBody` is Avian's authoritative island
+        // transition: waking either endpoint wakes every body connected through
+        // this joint/contact island. Queue it only on the sleeping edge so steady
+        // driving adds no per-tick command work.
+        if q_sleeping.contains(joint.body1) || q_sleeping.contains(joint.body2) {
+            commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body1));
         }
 
         // The bodies were read once above for `measured_omega`; a missing body

@@ -8,9 +8,9 @@ within LunCo.Mobility;
 // torque), an Ackermann rover steers with its FRONT KNUCKLES, not a torque
 // differential — so both sides get the SAME lagged throttle and `steer` passes
 // straight through to the steering port. The passthrough matters: the built-in
-// Ackermann linear kernel writes drive_left/drive_right/steering, and the
-// variant's `lunco:driveKernel = "external"` sentinel stands ALL of it down,
-// so this law must feed all three ports or the rover loses steering.
+// Ackermann linear kernel writes drive_left/drive_right/steering. The variant's
+// connected drive outputs make this model the authoritative allocator, so this
+// law must feed all three ports or the rover loses steering.
 //
 // RUMOCA RULES (same as LegStrut.mo): branch-free equations — `der(x) = expr`
 // with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via

@@ -10,7 +10,6 @@
 
 use avian3d::prelude::{AngularVelocity, LinearVelocity, Position, Rotation};
 use bevy::prelude::*;
-use lunco_mobility::kernels::DriveMix;
 use std::io::{BufWriter, Write};
 
 pub(crate) struct JitterProbePlugin;
@@ -37,7 +36,7 @@ type Probed = (
 );
 
 fn sample(
-    q: Query<Probed, With<DriveMix>>,
+    q: Query<Probed, With<lunco_core::ActuatorPorts>>,
     time: Res<Time>,
     mut out: Local<Option<BufWriter<std::fs::File>>>,
     mut frame: Local<u64>,

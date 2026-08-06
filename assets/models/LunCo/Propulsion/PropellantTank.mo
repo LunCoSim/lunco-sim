@@ -11,6 +11,8 @@ model PropellantTank
   parameter Real depleted_mass_kg = 0.5;
   parameter Real minimum_mass_kg = 1.0e-6;
   parameter Real event_transition_width_kg = 0.01;
+  parameter Real liquid_specific_enthalpy_j_kg = 3.0e5
+    "Specific enthalpy of propellant leaving the tank";
 
   FluidPort outlet "Propellant outlet to the feed system";
   output Real mass_kg "Remaining liquid propellant, kg";
@@ -27,6 +29,7 @@ equation
   mass_out_flow_kgs = max(0.0, -outlet.mass_flow_kgs);
   outlet.pressure_pa = nominal_pressure_pa
     + pressure_headroom_pa * max(0.0, min(1.0, mass / max(minimum_mass_kg, initial_mass_kg)));
+  outlet.specific_enthalpy_j_kg = liquid_specific_enthalpy_j_kg;
   pressure_pa = nominal_pressure_pa
     + pressure_headroom_pa * max(0.0, min(1.0, mass / max(minimum_mass_kg, initial_mass_kg)));
   low_fuel = max(0.0, min(1.0,
