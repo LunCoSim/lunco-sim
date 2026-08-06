@@ -2459,6 +2459,41 @@ pub struct FocusEntityById {
     pub distance: f32,
 }
 
+/// Set the render-free runtime focus to the composed USD prim at `path`.
+///
+/// This is separate from the editor's `SelectEntityByPath`: a headless
+/// recorder has no Inspector, gizmo, or picking state to maintain, but
+/// runtime-authored surfaces still need a stable subject for scoped telemetry.
+/// The authored USD path remains stable across entity ids and scene reloads.
+#[Command(default)]
+pub struct FocusEntityByPath {
+    /// Absolute composed USD prim path (for example `/World/Lander`).
+    pub path: String,
+}
+
+#[on_command(FocusEntityByPath)]
+pub fn on_focus_entity_by_path(
+    trigger: On<FocusEntityByPath>,
+    q_paths: Query<(Entity, &UsdPrimPath)>,
+    mut selected: ResMut<crate::SelectedEntities>,
+) {
+    let cmd = trigger.event();
+    let Some(target) = q_paths
+        .iter()
+        .find(|(_, prim)| prim.path == cmd.path)
+        .map(|(entity, _)| entity)
+    else {
+        warn!("FOCUS_ENTITY_BY_PATH: no composed prim at `{}`", cmd.path);
+        return;
+    };
+
+    if selected.entities != [target] {
+        selected.entities.clear();
+        selected.entities.push(target);
+    }
+    info!("FOCUS_ENTITY_BY_PATH: focused `{}` ({target:?})", cmd.path);
+}
+
 /// A focus request recorded by [`on_focus_entity_by_id`] and applied by
 /// [`apply_pending_focus`] at the start of the NEXT frame (`First` schedule).
 ///
@@ -3310,6 +3345,7 @@ register_commands!(
     on_delete_shader,
     on_detach_joint,
     on_focus_entity_by_id,
+    on_focus_entity_by_path,
     on_import_shader,
     on_move_entity_command,
     on_rotate_entity_command,
