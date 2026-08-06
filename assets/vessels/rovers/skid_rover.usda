@@ -230,8 +230,7 @@ def Xform "SkidRover" (
     # --- Motors + reductions -------------------------------------------
     # One motor and one reduction PER DRIVEN WHEEL, each its own part with its own
     # mass, torque curve, efficiency and waste heat. Torque and top speed used to be
-    # authored on the wheel (`physxVehicleEngine:peakTorque` / `:maxRotationSpeed`);
-    # they are the MOTOR's, and what reaches the axle is
+    # authored on the wheel; they are the MOTOR's, and what reaches the axle is
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
     # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
     # noLoadSpeed/ratio = 2400/200 = 12 rad/s — the ONE top-speed number both the

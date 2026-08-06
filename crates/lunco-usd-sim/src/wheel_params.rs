@@ -34,14 +34,12 @@
 //!
 //! ## One no-load speed for both realizations
 //!
-//! `physxVehicleEngine:maxRotationSpeed` is THE no-load axle speed, and both
+//! `lunco:motor:noLoadSpeed` reduced by `lunco:gearbox:ratio` is THE no-load axle speed, and both
 //! kinds obey it: the joint wheel's velocity motor targets it
 //! (`MotorActuator::max_omega`), and the raycast wheel rolls its drive force
 //! off toward it (`lunco_mobility::drive_force_mag`), so both self-limit at
-//! `ω_max · r`. There used to be a second name for the same quantity —
-//! `lunco:wheel:maxDriveOmega`, read only by the joint path — and the two were
-//! authored 60 vs 12, which is why raycast rovers drove ~5× too fast. The
-//! second name is GONE; there is no alias and no fallback.
+//! `ω_max · r`. The former wheel-local speed names are gone; there is no alias
+//! and no fallback.
 //!
 //! ## Strictness
 //!
@@ -93,8 +91,8 @@ pub struct WheelParams {
     /// Wheel width along its authored cylinder axis, m (`physxVehicleWheel:width`).
     /// This standard wheel value drives the collider in both realizations.
     pub width: f64,
-    /// Wheel mass, kg (`physxVehicleWheel:mass`). Same value for both kinds — the old
-    /// raycast-25 / physical-100 Rust fork is gone; feel is authored.
+    /// Wheel mass, kg (`physxVehicleWheel:mass`). The same authored value feeds both
+    /// realizations; any difference in feel must come from the solver, not a Rust fork.
     pub mass: f64,
     /// Explicit axle moment of inertia, kg·m² (`physxVehicleWheel:moi`).
     /// An authored zero means the documented solid-cylinder derivation
@@ -106,11 +104,12 @@ pub struct WheelParams {
     /// wheel. At the shipped reductions it dominates the tire's ½·m·r² —
     /// see [`crate::powertrain::PowertrainParams::reflected_inertia`].
     pub reflected_inertia: f64,
-    /// Engine peak drive torque, N·m (`physxVehicleEngine:peakTorque`).
+    /// Peak axle drive torque, N·m, reduced from the composed motor and gearbox.
     pub peak_torque: f64,
-    /// No-load axle speed, rad/s (`physxVehicleEngine:maxRotationSpeed`). THE
-    /// top-speed parameter for BOTH realizations: the joint motor targets it,
-    /// the raycast drive force rolls off toward it, so both cap at `ω·r`.
+    /// No-load axle speed, rad/s, reduced from the composed motor and gearbox.
+    /// This is the top-speed parameter for BOTH realizations: the joint motor
+    /// targets it, the raycast drive force rolls off toward it, so both cap at
+    /// `ω·r`.
     pub max_rotation_speed: f64,
     /// Bearing + rolling drag, N·m·s (`physxVehicleWheel:dampingRate`). A
     /// physical property of the hub in its own right — REQUIRED, never inferred
@@ -163,11 +162,7 @@ impl WheelParams {
     ///
     /// `powertrain` is the motor (and optional gearbox) that turns this wheel, found
     /// by the caller via `lunco:motor:drivenWheel`. Torque and no-load speed come from
-    /// it, NOT from the wheel: those used to be `physxVehicleEngine:peakTorque` and
-    /// `:maxRotationSpeed` authored on the wheel prim, which is a vehicle-level PhysX
-    /// attribute misapplied to a part — and with no motor to own them, the same
-    /// quantity ended up authored twice under two names and rovers drove 5× too fast in
-    /// one realization. `None` means an undriven wheel (a castor, a trailer wheel):
+    /// it, NOT from the wheel. `None` means an undriven wheel (a castor, a trailer wheel):
     /// zero torque, and legitimate to author.
     pub fn read(
         reader: &lunco_usd_bevy::StageView<'_>,
@@ -191,10 +186,12 @@ impl WheelParams {
         let mass = req("physxVehicleWheel:mass");
         // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
         // therefore no torque — that is a castor, not a wheel with a default torque.
-        // `max(1e-3)` on the speed keeps the raycast rolloff's divisor finite; it is a
-        // numerical guard, not a fallback value.
         let peak_torque = powertrain.map_or(0.0, |p| p.axle_peak_torque());
-        let max_rotation_speed = powertrain.map_or(1e-3, |p| p.axle_no_load_speed().max(1e-3));
+        // An undriven wheel has no motor speed cap. A driven wheel's motor
+        // contract rejects a non-positive no-load speed before it reaches this
+        // reader, so zero here is an honest castor value rather than a numeric
+        // substitute for a malformed powertrain.
+        let max_rotation_speed = powertrain.map_or(0.0, |p| p.axle_no_load_speed());
         let reflected_inertia = powertrain.map_or(0.0, |p| p.reflected_inertia());
         let bearing_damping = req("physxVehicleWheel:dampingRate");
         let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
@@ -443,16 +440,23 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
-    const WHEEL_ONLY_PREFIXES: [&str; 6] = [
+    const WHEEL_ONLY_PREFIXES: [&str; 5] = [
         "lunco:wheel:",
         "lunco:suspension:",
         "lunco:tire:",
-        "physxVehicleEngine:",
         "physxVehicleTire:",
         "physxVehicleSuspension:",
     ];
     if WHEEL_ONLY_PREFIXES.iter().any(|p| attr.starts_with(p)) {
         return true;
+    }
+    // Torque and speed belong to the composed motor/gearbox parts.  A live edit
+    // on either part must re-read every wheel that consumes that powertrain, but
+    // an identically named attribute on an unrelated prim must keep the normal
+    // document refresh path.
+    if attr.starts_with("lunco:motor:") || attr.starts_with("lunco:gearbox:") {
+        return reader.has_api_schema(prim, "LunCoMotorAPI")
+            || reader.has_api_schema(prim, "LunCoGearboxAPI");
     }
     // Vehicle-root knobs: steering lock and drive-kernel selection re-derive in
     // place; a subtree refresh of the whole rover root would tear down live
@@ -554,7 +558,17 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 .wheel_attachment_targets
                 .get(path)
                 .and_then(|s| SdfPath::new(s).ok());
-            let powertrain = crate::powertrain::find_for_wheel(&view, &sp);
+            let powertrain = match crate::powertrain::find_for_wheel(&view, &sp) {
+                Ok(powertrain) => powertrain,
+                Err(missing) => {
+                    warn!(
+                        "[wheel resync] {} names an invalid or under-authored motor; powertrain attributes to restore {:?} — keeping the spawned values",
+                        path,
+                        missing
+                    );
+                    continue;
+                }
+            };
             match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
                 Ok(params) => {
                     let max_steer_angle = crate::steering_vehicle_of(&view, path)
@@ -600,20 +614,31 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
 
         // Physical wheel: body-side numbers…
-        let (old_radius, axis_rot) = match world.get::<crate::PhysicalWheel>(u.entity) {
-            Some(pw) => (pw.wheel_radius, pw.axis_rot),
+        let (old_radius, old_width, axis_rot) = match world.get::<crate::PhysicalWheel>(u.entity) {
+            Some(pw) => (pw.wheel_radius, pw.wheel_width, pw.axis_rot),
             None => continue,
         };
         if let Some(mut pw) = world.get_mut::<crate::PhysicalWheel>(u.entity) {
             pw.wheel_radius = u.params.radius as f32;
+            pw.wheel_width = u.params.width as f32;
         }
         if let Some(mut density) = world.get_mut::<ColliderDensity>(u.entity) {
             density.0 = u.params.wheel_density();
         }
-        // …the collider only when the radius actually moved (a swap mid-contact
-        // can pop the rover; accept as an editing-time artifact, don't pay it
-        // for unrelated edits).
-        if (old_radius as f64 - u.params.radius).abs() > 1e-6 {
+        // Keep the physical wheel's tensor in lock-step with the composed
+        // standard MOI and motor reflected inertia.  Updating only density
+        // would leave an edited `physxVehicleWheel:moi` inert until a scene
+        // reload, while the raycast wheel would apply it immediately.
+        world.entity_mut(u.entity).insert((
+            crate::physical_wheel_angular_inertia(&u.params, axis_rot),
+            avian3d::prelude::NoAutoAngularInertia,
+        ));
+        // …the collider only when radius or width actually moved (a swap
+        // mid-contact can pop the rover; accept as an editing-time artifact,
+        // don't pay it for unrelated edits).
+        if (old_radius as f64 - u.params.radius).abs() > 1e-6
+            || (old_width as f64 - u.params.width).abs() > 1e-6
+        {
             let radius = u.params.radius;
             let cyl = Collider::cylinder(radius, u.params.width);
             let collider = if axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {

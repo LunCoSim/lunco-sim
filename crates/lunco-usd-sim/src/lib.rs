@@ -20,9 +20,9 @@
 //! No custom `lunco:` tokens. Each `PhysxVehicleWheelAPI` wheel becomes:
 //!
 //! - **Joint-based** if any `def PhysicsRevoluteJoint` in the stage targets
-//!   it via `rel physics:body1`. Motor torque comes from the joint's
-//!   `drive:angular:physics:maxForce` (`UsdPhysicsDriveAPI:angular`); the
-//!   constraint is built by `lunco-usd-avian`. The wheel becomes a full
+//!   it via `rel physics:body1`. Motor torque comes from the composed
+//!   `LunCoMotorAPI` + optional `LunCoGearboxAPI` powertrain; the constraint is
+//!   built by `lunco-usd-avian`. The wheel becomes a full
 //!   rigid body with collider and `MotorActuator`.
 //! - **Raycast** otherwise. The wheel entity is split into a physics
 //!   entity (identity rotation, `RayCaster::new(Dir3::NEG_Y)`) plus a
@@ -105,9 +105,9 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// joint), discriminated entirely by **standard OpenUSD authoring**:
 ///
 /// - If any `PhysicsRevoluteJoint` in the stage targets the wheel via its
-///   `physics:body1` rel → joint-based path. Motor torque comes from the
-///   joint's `drive:angular:physics:maxForce` (`UsdPhysicsDriveAPI:angular`).
-///   The joint constraint itself is built by `lunco-usd-avian`.
+///   `physics:body1` rel → joint-based path. Motor torque and speed come from
+///   the composed `LunCoMotorAPI` and optional `LunCoGearboxAPI`; the joint
+///   constraint itself is built by `lunco-usd-avian`.
 /// - Otherwise → raycast path.
 ///
 /// No custom `lunco:` tokens drive this dispatch.
@@ -293,7 +293,7 @@ struct StageJointTopology {
     wheel_attachment_targets: HashMap<String, String>,
     /// Standard attachment index, keyed by the referenced wheel path. The
     /// index is authored on the attachment prim, never inferred from wheel
-    /// order or copied into a wheel-local compatibility attribute.
+    /// order or copied into a wheel-local field.
     wheel_attachment_indices: HashMap<String, i32>,
 }
 
@@ -542,6 +542,9 @@ pub struct PhysicalWheel {
     pub visual_entity: Option<Entity>,
     /// Rolling radius (m); the proxy roll rate is `ω = v_long / r`.
     pub wheel_radius: f32,
+    /// Authored wheel width (m), retained so a live width edit can rebuild the
+    /// collider instead of changing density while leaving the old shape in place.
+    pub wheel_width: f32,
     /// Visual base orientation (the USD cylinder `axis`). The roll axle is
     /// `axis_rot · Y` and the visual base composes as `roll · axis_rot`, exactly
     /// reconstructing the host's `body_spin · axis_rot`.
@@ -610,7 +613,7 @@ pub struct PendingDifferential {
 ///    a scripted rhai kernel — the imperative analog of an Omniverse OmniGraph controller.)
 /// 4. **Detects `PhysxVehicleWheelAPI`** → Sets up wheel based on whether an authored
 ///    `PhysicsRevoluteJoint` targets the wheel:
-///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`)
+///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`; torque/speed come from the composed motor/gearbox)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
 /// Run condition: true when any `UsdPrimPath` entity still lacks
 /// `UsdSimProcessed`. Lets `process_usd_sim_prims` stay dormant after
@@ -1738,7 +1741,18 @@ fn process_usd_sim_prim_read(
             &prim_path.path,
             &topology.wheel_attachment_targets,
         );
-        let powertrain = powertrain::find_binding_for_wheel(reader, &sdf_path);
+        let powertrain = match powertrain::find_binding_for_wheel(reader, &sdf_path) {
+            Ok(binding) => binding,
+            Err(missing) => {
+                error!(
+                    "USD wheel {} names an invalid or under-authored motor; powertrain attributes to restore {:?} — refusing to spawn",
+                    sdf_path.as_str(),
+                    missing
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
         let motor_entity = powertrain.as_ref().and_then(|binding| {
             all_prims
                 .iter()
@@ -2480,7 +2494,7 @@ fn physical_suspension_visuals(
 ///
 /// The joint is spawned **synchronously** from the authored USD attributes
 /// (`physics:axis`, `physics:localPos0/1`) alongside the wheel's rigid-body
-/// init; drive authority comes from the engine `peakTorque`. Doing it lazily — letting
+/// init; drive authority comes from the composed motor/gearbox. Doing it lazily — letting
 /// `lunco-usd-avian::build_usd_physics_joints` do it on a later frame —
 /// raced narrow-phase contacts: the wheel's collider would meet the chassis
 /// at the joint anchor before `JointCollisionDisabled` was in place,
@@ -2506,13 +2520,13 @@ fn setup_physical_wheel(
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
 
-    // `params.peak_torque` (N·m at full throttle) is the engine's `peakTorque`,
-    // the SAME drive authority the raycast wheel uses — NOT the joint's
+    // `params.peak_torque` (N·m at full throttle) is the composed motor/gearbox
+    // axle torque, the SAME drive authority the raycast wheel uses — NOT the joint's
     // `drive:angular:physics:maxForce`. That joint attribute is a PhysX
     // joint-drive *saturation* limit (authored at 12000 in the demo scenes);
     // feeding it straight into the motor made the rover apply ~30× its lunar
     // weight in traction at full throttle and wheelie/launch on every forward
-    // input. Using the engine peakTorque keeps joint and raycast rovers
+    // input. Using the motor/gearbox reduction keeps joint and raycast rovers
     // consistent. See `project_physical_rover_suspension`.
 
     // The wheel body keeps **identity rotation**. The cylinder's
@@ -2585,6 +2599,7 @@ fn setup_physical_wheel(
         PhysicalWheel {
             visual_entity: visual_id,
             wheel_radius: radius,
+            wheel_width: params.width as f32,
             axis_rot: wheel_axis_rot,
             spin_angle: 0.0,
             // Authored wheel offset in the chassis frame (the wheel is a child of the
@@ -2598,10 +2613,9 @@ fn setup_physical_wheel(
         RigidBody::Kinematic,
         ShouldBeDynamic,
         collider,
-        // Heavier wheels (100 kg default vs the raycast 25) damp the joint↔solver
-        // impulse echo. Set via density so mass AND angular inertia stay consistent
-        // (see the `wheel_density` note above) — a forced `Mass` desynced them and
-        // the rover sank through the terrain.
+        // The authored wheel mass is applied through density so mass AND angular
+        // inertia stay consistent (see the `wheel_density` note above). A forced
+        // `Mass` desynced them and the rover sank through the terrain.
         avian3d::prelude::ColliderDensity(wheel_density),
         // Jointed wheels use Avian's maintained Coulomb contact solver as their
         // sole tangential-contact owner. The coefficient is the composed standard
@@ -2616,8 +2630,9 @@ fn setup_physical_wheel(
         // `physxVehicleWheel:dampingRate · ω` (N·m·s, 0.45) from the axle torque.
         // avian's `AngularDamping` is not a torque coefficient but a per-second
         // decay applied to ω, i.e. τ ≈ d·I·ω, so the authored N·m·s converts as
-        // `d = dampingRate / I_axle` — 0.45/2.0 = 0.225 for the shipped wheel. One
-        // authored number, two realizations, each in its own units.
+        // `d = dampingRate / I_axle`; the live authored inertia includes any
+        // reflected rotor term. One authored number, two realizations, each in
+        // its own units.
         //
         // `LinearDamping(0.1)` is GONE with no replacement. A wheel hinged to the
         // chassis travels at the chassis's speed, so a linear damper on it was a
@@ -2640,32 +2655,17 @@ fn setup_physical_wheel(
         wheel_tf,
     ));
 
-    // Drivetrain rotor inertia reflected to the axle (`J·ratio²`) — the raycast
-    // twin adds it inside `WheelRaycast::axle_inertia`, so the physical wheel
-    // must carry it too or the realizations spin up at different rates. The
-    // collider-density path can't express it (density scales mass and inertia
-    // together; the reflected term is spin-only), so it is stamped as an
-    // explicit `AngularInertia` whose tire term reproduces the cylinder's own
-    // tensor: about the cylinder axis ½·m·r², transverse m·(3r² + h²)/12 with
-    // h = r/2, in the compound's rotated frame. Same explicit-override pattern
-    // as the chassis proxy-wheel fold in `lunco-mobility`.
-    if params.reflected_inertia > 0.0 {
-        let m = params.mass;
-        let r = params.radius;
-        let i_axle = 0.5 * m * r * r;
-        let i_perp = m * (3.0 * r * r + (r * 0.5) * (r * 0.5)) / 12.0;
-        commands.entity(entity).try_insert((
-            avian3d::prelude::AngularInertia {
-                principal: bevy::math::Vec3::new(
-                    i_perp as f32,
-                    (i_axle + params.reflected_inertia) as f32,
-                    i_perp as f32,
-                ),
-                local_frame: wheel_axis_rot,
-            },
-            avian3d::prelude::NoAutoAngularInertia,
-        ));
-    }
+    // The authored wheel MOI and the motor's reflected rotor inertia are the
+    // rotational contract for BOTH realizations.  Collider density derives the
+    // physical mass, but it cannot express either an authored non-solid-cylinder
+    // MOI or a spin-only reflected rotor term.  Stamp the complete tensor even
+    // when the reflected term is zero; otherwise undriven wheels silently use a
+    // collider-derived inertia and diverge from the same wheel on the raycast
+    // path.  The transverse terms remain the geometric cylinder tensor.
+    commands.entity(entity).try_insert((
+        physical_wheel_angular_inertia(params, wheel_axis_rot),
+        avian3d::prelude::NoAutoAngularInertia,
+    ));
 
     // Spawn the avian joint. Anchors + axis are derived from the wheel's
     // own transform (which mirrors the USD `physics:localPos0` and
@@ -2814,6 +2814,27 @@ fn setup_physical_wheel(
     // and read back here as `chassis = child_of.parent()`. It is the ONE canonical link:
     // transform propagation, despawn cascade, AND parent lookup (the proxy systems below
     // read `ChildOf` to find the chassis). No separate ownership relationship is needed.
+}
+
+/// Build the physical wheel's authored inertia tensor in the entity's local
+/// frame.  `WheelParams::axle_inertia` is the corresponding scalar used by the
+/// raycast integrator; keeping this conversion here makes the two realizations
+/// consume the same authored MOI and reflected motor inertia.
+pub(crate) fn physical_wheel_angular_inertia(
+    params: &WheelParams,
+    wheel_axis_rot: Quat,
+) -> avian3d::prelude::AngularInertia {
+    let m = params.mass;
+    let r = params.radius;
+    let i_perp = m * (3.0 * r * r + (params.width * params.width)) / 12.0;
+    avian3d::prelude::AngularInertia {
+        principal: bevy::math::Vec3::new(
+            i_perp as f32,
+            params.axle_inertia() as f32,
+            i_perp as f32,
+        ),
+        local_frame: wheel_axis_rot,
+    }
 }
 
 /// Client-only: place a remote rover's wheels by **reconstructing** them from the
@@ -3820,6 +3841,7 @@ mod proxy_wheel_tests {
             PhysicalWheel {
                 visual_entity: Some(visual),
                 wheel_radius: 0.5,
+                wheel_width: 0.3,
                 axis_rot: Quat::IDENTITY,
                 spin_angle: 0.0,
                 mount_local: Vec3::ZERO,
@@ -3903,6 +3925,7 @@ mod proxy_wheel_tests {
             PhysicalWheel {
                 visual_entity: Some(visual),
                 wheel_radius: 0.5,
+                wheel_width: 0.3,
                 axis_rot: Quat::IDENTITY,
                 spin_angle: 0.0,
                 mount_local: Vec3::ZERO,
@@ -3977,6 +4000,7 @@ mod proxy_wheel_tests {
             PhysicalWheel {
                 visual_entity: Some(visual),
                 wheel_radius: 0.5,
+                wheel_width: 0.3,
                 axis_rot: Quat::IDENTITY,
                 spin_angle: 0.0,
                 mount_local,

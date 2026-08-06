@@ -7,11 +7,13 @@
 // asserts the contracts that the two realizations actually share.
 //
 // WHAT IT GUARDS. Raycast and joint wheels are two REALIZATIONS of ONE parameter
-// set. They diverged once: the no-load axle speed was authored under two names
-// (60 vs 12 rad/s) AND the raycast drive force had no torque-speed term at all,
-// so a raycast rover ran ~5x faster than a joint rover built from the same file.
-// Both now read the single authored `physxVehicleEngine:maxRotationSpeed`
-// (12.0 rad/s, `components/mobility/wheel.usda`): the joint motor targets it,
+// set. The parity invariant is structural: both realizations read the same
+// authored motor/gearbox reduction, and the raycast drive force includes the
+// same torque-speed term as the joint actuator. Both therefore cap at the same
+// axle speed for a rover built from the same file.
+// Both read the single authored motor/gearbox reduction
+// (`lunco:motor:noLoadSpeed` / `lunco:gearbox:ratio`, yielding 12.0 rad/s at the
+// axle): the joint motor targets it,
 // the raycast drive force rolls off toward it. With r = 0.4 m both must cap at
 //
 //     v_max = omega_max * r = 12.0 * 0.4 = 4.8 m/s
@@ -141,8 +143,8 @@ fn on_start(me) {
     this.plateau_s = 3.0;   // trailing window of the drive phase averaged as v_terminal
     this.sample_s = 0.5;    // log cadence
 
-    // The authored contract under test. omega_max is
-    // `physxVehicleEngine:maxRotationSpeed` in components/mobility/wheel.usda.
+    // The authored contract under test. omega_max is the axle reduction of the
+    // motor/gearbox pair composed by the shared rover.
     this.omega_max = 12.0;
     this.wheel_r = 0.4;
     this.v_ceiling = 4.8;   // omega_max * wheel_r

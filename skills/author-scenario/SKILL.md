@@ -390,11 +390,10 @@ A scenario can also be a **regression test**. `assets/scenarios/tests/drivetrain
 their shape when you need a scenario that ASSERTS rather than merely acts.
 
 **What it guards.** Raycast and joint wheels are two realizations of ONE
-parameter set. They once diverged: the no-load axle speed was authored under two
-names (60 vs 12 rad/s) AND the raycast drive force had no torque–speed term, so
-raycast rovers ran ~5× faster than joint rovers built from the same asset. Both
-now read the single authored `physxVehicleEngine:maxRotationSpeed` (12 rad/s, in
-`components/mobility/wheel.usda`), so both cap at `ω_max·r = 12 × 0.4 = 4.8 m/s`.
+parameter set. They once diverged because the raycast force had no torque–speed
+term, so raycast rovers ran faster than joint rovers built from the same asset.
+Both now read the composed motor/gearbox reduction (12 rad/s at the shipped
+axle), so both cap at `ω_max·r = 12 × 0.4 = 4.8 m/s`.
 The scene instances `skid_rover.usda` **twice**, differing in exactly one
 opinion — `variants = { string drivetrain = "raycast" | "physical" }` — and the
 scenario drives BOTH from ONE tick loop, so they see identical commands on

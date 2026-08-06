@@ -40,12 +40,11 @@ Even for joint-based physical rovers, the suspension settings are read from stan
 
 ### 4. Drivetrain & Motor Actuation (Authored per Wheel)
 Controlling traction and speed:
-*   `float physxVehicleEngine:peakTorque`: Maximum motor torque (default `300.0` N·m). High torque allows climbing steep slopes but can cause wheelspin.
-*   `float physxVehicleEngine:maxRotationSpeed`: No-load axle angular velocity.
-    The Perseverance-class rocker-bogie authors a 0.525 m wheel and its
-    speed/torque curve in the motor and gearbox parts; both physical and raycast
-    realizations read the same composed wheel parameters, which keeps the
-    drivetrain contract in parity. See `assets/scenarios/tests/drivetrain_parity.rhai`.
+*   `float lunco:motor:stallTorque` and `float lunco:motor:noLoadSpeed`: Motor-shaft
+    torque curve. The optional `lunco:gearbox:ratio`, `:efficiency`, and
+    `:maxOutputTorque` reduce it to the axle. These values live on the motor and
+    gearbox parts, not on a wheel, so both physical and raycast realizations consume
+    one drivetrain contract. See `assets/scenarios/tests/drivetrain_parity.rhai`.
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
 *   `float physics:dynamicFriction`: standard `UsdPhysicsMaterialAPI` Coulomb coefficient ($\mu$) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant, and consumed by both wheel realizations.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).

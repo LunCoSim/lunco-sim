@@ -30,14 +30,11 @@
 # The drive torque comes from the rover's drivetrain, not from a program of the wheel's
 # own — a wheel is a part, not an actor.
 #
-# TORQUE AND SPEED ARE NOT HERE ANY MORE. They belong to the MOTOR
+# TORQUE AND SPEED ARE NOT HERE. They belong to the MOTOR
 # (`lunco://components/mobility/motor.usda`, `LunCoMotorAPI`) and the reduction between
-# it and this hub (`lunco://components/mobility/gearbox.usda`). They used to be authored
-# on this prim as `physxVehicleEngine:peakTorque` and `physxVehicleEngine:maxRotationSpeed`
-# — vehicle-level PhysX attributes misapplied to a part, which is how one physical
-# quantity came to be authored twice under two names. A wheel is a hub: radius, mass,
-# moment of inertia, bearing drag, brake authority and a contact patch. What turns it is
-# a different part.
+# it and this hub (`lunco://components/mobility/gearbox.usda`). A wheel is a hub:
+# radius, mass, moment of inertia, bearing drag, brake authority and a contact patch.
+# What turns it is a different part.
 #
 # The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`), so they
 # mean the same thing here as in any other PhysX vehicle, and
@@ -115,17 +112,10 @@ def Cylinder "Wheel" (
     # Steering is NOT here: the max steer angle is a property of the VEHICLE's steering
     # system, not of a wheel (a skid rover's wheels do not steer at all). It is
     # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
-    # THREE KNOBS THAT USED TO LIVE HERE ARE GONE, and the reason is the same for
-    # all three: they were calibrations against a model that no longer exists.
-    #
-    #   `contactGripStiffness` — read into the component and consumed by nothing.
-    #   `driveForcePerNormal`  — the raycast chassis force used to be
-    #                            `throttle · N · this`, paired with a drag term
-    #                            that resisted the FULL travel speed. Two fudges
-    #                            fitted to cancel: the tire force is now the real
-    #                            contact slip `k·(ω·r − v)` out of the spin solve
-    #                            (`lunco_mobility::update_wheel_spin`), so there is
-    #                            nothing left for a traction multiplier to correct.
+    # Former calibration knobs are intentionally absent. The tire force is the
+    # real contact slip `k·(ω·r − v)` out of the spin solve
+    # (`lunco_mobility::update_wheel_spin`), so a second traction multiplier or
+    # travel-speed drag would be a duplicate model rather than a wheel property.
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
     # Joint-wheel (rigid-axle) drive tuning. The axle's free-spin cap is NOT here and
     # not on this prim at all: it is the motor's `lunco:motor:noLoadSpeed` divided by

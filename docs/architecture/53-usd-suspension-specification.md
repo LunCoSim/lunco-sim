@@ -172,7 +172,7 @@ attachment schema permits the direct self-composition. A separate attachment pri
 may instead author the standard `wheel` and `suspension` relationships; neither
 case requires a LunCo-specific index or a Rust-side topology guess.
 
-**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` + `PhysxVehicleEngineAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. `apiSchemas` is a list-op and composes across reference arcs, so all rover wheels get their schemas from the component files. A rover authors values and connections, never a private index or fallback rule.
+**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. Motor and gearbox torque/speed live on their own `LunCoMotorAPI`/`LunCoGearboxAPI` parts. `apiSchemas` is a list-op and composes across reference arcs, so all rover wheels get their schemas from the component files. A rover authors values and connections, never a private index or fallback rule.
 
 ---
 

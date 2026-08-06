@@ -12,14 +12,10 @@
 //!
 //! ## Why this exists at all
 //!
-//! `physxVehicleEngine:peakTorque` and `:maxRotationSpeed` used to be authored **on
-//! the wheel**. That is a PhysX schema misuse — those are vehicle-level attributes —
-//! but the real cost was conceptual: with no motor to own them, the same physical
-//! quantity got authored twice under two names (`maxRotationSpeed` = 60 for the
-//! raycast path, `lunco:wheel:maxDriveOmega` = 12 for the joint path) and rovers drove
-//! 5× too fast in one realization. One part owning one number is what stops that
-//! recurring, and it is why parity is now structural rather than two values a human
-//! keeps equal.
+//! The former wheel-local speed and torque fields duplicated one physical quantity
+//! across the two realizations. One motor/gearbox chain now owns the curve, and one
+//! wheel reader reduces it to axle torque, speed, and reflected inertia. Parity is
+//! therefore structural rather than two values a human has to keep equal.
 //!
 //! ## The reduction, and why a linear curve is exact
 //!
@@ -136,6 +132,49 @@ pub fn read_powertrain(
         None => (1.0, 1.0, f64::INFINITY),
     };
 
+    // Schema slider hints are authoring guidance, not runtime validation. Reject
+    // non-finite or physically meaningless authored values here; otherwise a
+    // malformed driven wheel could become a zero-torque wheel or inject NaNs into
+    // the fixed-step actuator path. An absent field is already in `missing`, so
+    // avoid reporting the same name twice.
+    let invalid = |missing: &mut Vec<&'static str>, name: &'static str, ok: bool| {
+        if !ok && !missing.contains(&name) {
+            missing.push(name);
+        }
+    };
+    invalid(
+        &mut missing,
+        "lunco:motor:stallTorque",
+        stall_torque.is_finite() && stall_torque >= 0.0,
+    );
+    invalid(
+        &mut missing,
+        "lunco:motor:noLoadSpeed",
+        no_load_speed.is_finite() && no_load_speed > 0.0,
+    );
+    invalid(
+        &mut missing,
+        "lunco:motor:rotorInertia",
+        rotor_inertia.is_finite() && rotor_inertia >= 0.0,
+    );
+    if gearbox.is_some() {
+        invalid(
+            &mut missing,
+            "lunco:gearbox:ratio",
+            ratio.is_finite() && ratio > 0.0,
+        );
+        invalid(
+            &mut missing,
+            "lunco:gearbox:efficiency",
+            efficiency.is_finite() && (0.0..=1.0).contains(&efficiency),
+        );
+        invalid(
+            &mut missing,
+            "lunco:gearbox:maxOutputTorque",
+            max_output_torque.is_finite() && max_output_torque >= 0.0,
+        );
+    }
+
     if !missing.is_empty() {
         return Err(missing);
     }
@@ -152,8 +191,10 @@ pub fn read_powertrain(
 /// The powertrain driving `wheel`, discovered by searching the wheel's vessel for a
 /// motor that names it.
 ///
-/// Returns `None` for an undriven wheel — a castor or a trailer wheel is a legitimate
-/// thing to author, and it is not an error.
+/// Returns `Ok(None)` for an undriven wheel — a castor or a trailer wheel is a
+/// legitimate thing to author, and it is not an error. A motor that names the
+/// wheel but is under-authored returns `Err`, so it cannot silently become an
+/// undriven wheel.
 ///
 /// The search ascends from the wheel to its vessel root and scans that subtree, rather
 /// than looking at siblings: on a rocker-bogie the motors are children of the ARM
@@ -162,8 +203,8 @@ pub fn read_powertrain(
 pub fn find_for_wheel(
     reader: &lunco_usd_bevy::StageView<'_>,
     wheel: &SdfPath,
-) -> Option<PowertrainParams> {
-    find_binding_for_wheel(reader, wheel).map(|binding| binding.params)
+) -> Result<Option<PowertrainParams>, Vec<&'static str>> {
+    find_binding_for_wheel(reader, wheel).map(|binding| binding.map(|binding| binding.params))
 }
 
 /// Resolve the composed motor that drives `wheel` and its immutable parameters.
@@ -172,15 +213,20 @@ pub fn find_for_wheel(
 pub fn find_binding_for_wheel(
     reader: &lunco_usd_bevy::StageView<'_>,
     wheel: &SdfPath,
-) -> Option<PowertrainBinding> {
-    let root = vessel_root(wheel)?;
+) -> Result<Option<PowertrainBinding>, Vec<&'static str>> {
+    let Some(root) = vessel_root(wheel) else {
+        return Ok(None);
+    };
     let mut motors = Vec::new();
     collect_by_api(reader, &root, "LunCoMotorAPI", &mut motors);
 
     let want = wheel.as_str();
-    let motor = motors
+    let Some(motor) = motors
         .iter()
-        .find(|m| reader.rel_target(m, "lunco:motor:drivenWheel").as_deref() == Some(want))?;
+        .find(|m| reader.rel_target(m, "lunco:motor:drivenWheel").as_deref() == Some(want))
+    else {
+        return Ok(None);
+    };
 
     // The gearbox is whichever one takes its torque FROM this motor. Derived from the
     // connection, not from a naming convention — `Gearbox_FL` next to `Motor_FL` is a
@@ -197,19 +243,11 @@ pub fn find_binding_for_wheel(
     });
 
     match read_powertrain(reader, motor, gearbox) {
-        Ok(params) => Some(PowertrainBinding {
+        Ok(params) => Ok(Some(PowertrainBinding {
             motor: motor.clone(),
             params,
-        }),
-        Err(missing) => {
-            bevy::log::error!(
-                "motor {} is missing required attributes {:?} — the wheel it drives \
-                 will have no torque. They are authored in components/mobility/motor.usda.",
-                motor.as_str(),
-                missing
-            );
-            None
-        }
+        })),
+        Err(missing) => Err(missing),
     }
 }
 

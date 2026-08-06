@@ -339,13 +339,13 @@ pub(crate) fn update_wheel_spin(
         //
         // The chassis force used to be computed independently, in
         // `apply_wheel_drive`, from quantities the axle never saw: a drive term
-        // `throttle · N · driveForcePerNormal` and a drag term proportional to the
-        // FULL travel speed. Neither is a contact force. A tire transmits torque by
+        // a throttle-scaled normal force and a drag term proportional to the FULL
+        // travel speed. Neither is a contact force. A tire transmits torque by
         // SLIPPING — the patch force is `k · (ω·r − v)` — so a model that reads
         // travel speed as slip is claiming a rolling wheel is sliding at road
         // speed, and has to be given a drive coefficient large enough to overcome
-        // its own invented drag. That is exactly what the authored pair 2.0 / 50
-        // was: two fudges calibrated to cancel.
+        // its own invented drag. That was a pair of calibration fudges, not a tire
+        // property.
         //
         // They cancelled ONLY at the parameters they were fitted at. Change μ, or
         // the tire, or the mass, and the cancellation drifts, and every knob

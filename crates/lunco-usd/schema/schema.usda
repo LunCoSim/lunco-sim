@@ -963,9 +963,8 @@ class "LunCoMotorAPI" (
         }
         doc = """Shaft speed at zero torque, at full demand — the low end of the linear
         curve, and the motor's top speed. SHAFT speed: divide by the gearbox ratio for
-        the axle's no-load speed. This is the ONE no-load speed in the drivetrain; it
-        replaces the `physxVehicleEngine:maxRotationSpeed` that used to be authored on
-        the wheel, which was a vehicle-level PhysX attribute misapplied to a part."""
+        the axle's no-load speed. This is the one no-load speed in the drivetrain;
+        it is reduced from the motor shaft speed by the gearbox ratio."""
     )
     float lunco:motor:continuousTorque (
         customData = {

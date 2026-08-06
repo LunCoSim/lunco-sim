@@ -254,7 +254,8 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
             // powertrain exactly as the loader does before reading. A driven wheel
             // with no motor would read zero torque, which the `peak_torque > 0`
             // assertion below then catches.
-            let powertrain = lunco_usd_sim::powertrain::find_for_wheel(&view, &p);
+            let powertrain = lunco_usd_sim::powertrain::find_for_wheel(&view, &p)
+                .expect("shipped rover powertrain attributes");
             // The shipped component uses the standard direct-composition form:
             // the attachment, wheel, and suspension APIs arrive on this same
             // composed prim. A relationship-form asset is resolved by the
@@ -306,16 +307,19 @@ fn wheel_resync_claims_are_prim_scoped() {
     let wheel = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
     let chassis = SdfPath::new("/SkidRover/Chassis").unwrap();
     let root = SdfPath::new("/SkidRover").unwrap();
+    let motor = SdfPath::new("/SkidRover/Motor_FL").unwrap();
 
     assert!(claims_edit(&view, &wheel, "physxVehicleWheel:mass"));
     assert!(!claims_edit(&view, &chassis, "physics:mass"));
     assert!(claims_edit(&view, &wheel, "lunco:wheel:driveDamping"));
-    assert!(claims_edit(
+    assert!(!claims_edit(
         &view,
         &wheel,
         "physxVehicleEngine:maxRotationSpeed"
     ));
-    assert!(claims_edit(&view, &wheel, "physxVehicleEngine:peakTorque"));
+    assert!(!claims_edit(&view, &wheel, "physxVehicleEngine:peakTorque"));
+    assert!(claims_edit(&view, &motor, "lunco:motor:noLoadSpeed"));
+    assert!(claims_edit(&view, &motor, "lunco:motor:stallTorque"));
     assert!(claims_edit(
         &view,
         &wheel,

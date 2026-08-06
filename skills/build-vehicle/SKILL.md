@@ -102,14 +102,15 @@ Both wheel kinds read the SAME attributes through ONE strict reader
   component that authors (or omits) the joints.
 
 **One no-load speed, so both realizations top out together.**
-`physxVehicleEngine:maxRotationSpeed` is THE axle free-spin speed and both kinds
-obey it: the physical wheel's velocity motor targets it (`MotorActuator.max_omega`),
-and the raycast wheel's drive force now carries a **torque–speed rolloff**
+The motor's `lunco:motor:noLoadSpeed` reduced by the composed gearbox's
+`lunco:gearbox:ratio` is the axle free-spin speed and both kinds obey it: the
+physical wheel's velocity motor targets it (`MotorActuator.max_omega`), and the
+raycast wheel's drive force carries a **torque–speed rolloff**
 (`drive_force_mag`, `crates/lunco-mobility/src/lib.rs:261`):
 
 ```
-F = throttle · N · driveForcePerNormal · clamp(1 − ω/ω_max, 0, 1)
-ω = (forward_speed / radius) · sign(throttle)
+F_long = clamp(k_slip · (ω · radius − v_forward), −μN, +μN)
+ω̇ = (τ_motor + τ_brake − F_long · radius − c_bearing · ω) / I
 ```
 
 so its force falls to zero at the same `ω_max · r`. Top speed is therefore
@@ -121,10 +122,8 @@ converted to an equivalent axle rate and signed by the throttle**, not the
 wheel's measured spin; and the factor is `clamp(…, 0, 1)`, not `max(0, …)` — the
 upper clamp is what stops a reversing wheel receiving *more* than stall force.
 
-There is NO `lunco:wheel:maxDriveOmega`. It used to be a second name for this
-same quantity, read only by the physical path, and the two were authored 60 vs
-12 — which is why raycast rovers drove ~5× too fast. It is deleted, with no
-alias and no shim. Change the top speed in ONE place.
+The wheel has no speed or torque alias: change the motor/gearbox reduction in ONE
+place and both realizations consume it.
 
 The rolloff is signed: it only bites when the throttle pushes the way the wheel
 is already rolling, so braking and reversing keep full force authority.
@@ -133,8 +132,8 @@ is already rolling, so braking and reversing keep full force authority.
 refuses to spawn and the error names ALL missing attrs. That now includes
 `physxVehicleWheel:dampingRate` (bearing + rolling drag): it is a physical
 property of the hub, so it is authored, never inferred from the drive torque —
-the old `peakTorque / maxRotationSpeed` fallback is gone. The ONE number still
-not authored per wheel is `physxVehicleWheel:moi`, and only because 0 means
+  the old derived drive fallback is gone. The ONE number still not authored per
+wheel is `physxVehicleWheel:moi`, and only because 0 means
 "solid cylinder" and it is DERIVED as ½·m·r² from the authored mass and radius.
 You never author them
 per vehicle — composing `wheel.usda` + a tire + (for raycast) a suspension is
@@ -155,8 +154,8 @@ The drill also requires the rover to already be the primary selection.
 Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
 respawn**: `wheel_params::claims_edit` recognises the attribute (any
 `lunco:wheel:` / `lunco:suspension:` / `lunco:tire:` / `physxVehicle*:` prefix,
-plus `lunco:driveKernel`, `lunco:factor:*` on a `DriveMix` term prim, and
-`physics:mass` on a wheel prim)
+plus `lunco:motor:*` / `lunco:gearbox:*` on their applied API prims,
+`lunco:driveKernel`, and `lunco:factor:*` on a `DriveMix` term prim)
 and `resync_wheels_for_stage` updates the live components — same entities, joints
 untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
 next document change would overwrite you.
@@ -245,7 +244,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
 - `drivetrain` = **raycast | physical** — how wheels are realized physically.
   Authored on `skid_rover` and `ackermann_rover`.
   Switching it changes fidelity and cost, NOT how fast the rover goes: both
-  realizations self-limit at `physxVehicleEngine:maxRotationSpeed · radius`
+  realizations self-limit at the motor/gearbox axle no-load speed · radius
   (see *Wheel physics* above).
 - `tire` (per wheel) = **regolith | hard | cleated | worn | bald** — grip+look.
 - `driveLaw` = **builtin | modelica** — how throttle/steer become drive port
@@ -373,8 +372,9 @@ design.
 
 ## Anti-patterns
 
-- ❌ Authoring `physxVehicleEngine:*`/`lunco:wheel:*` values per vehicle —
-  tune the component, or the specific wheel that genuinely differs.
+- ❌ Duplicating motor/gearbox torque or speed on a wheel — tune the composed
+  motor and gearbox parts; wheel-local `lunco:` fields are only for wheel
+  mechanics such as steering axis and drive damping.
 - ❌ Restating component defaults in the assembly (radius 0.4, axis "X",
   displayColor) — delete; composition provides them.
 - ❌ A variant that inlines prims instead of referencing a component.
@@ -389,8 +389,8 @@ design.
   the vehicle body; do not re-author its hinge in the rover file.
 - ❌ Expecting plain Shift+click to drill into a wheel — it is the multi-select
   toggle and clears the drill target. Alt+Shift+click drills.
-- ❌ Adding a second name for a quantity that already exists (the
-  `maxDriveOmega` mistake) — one attribute, one reader, one place to change it.
+- ❌ Adding a second name for a quantity that already exists — one authoritative
+  motor/gearbox reduction, one reader, one place to change it.
 - ❌ Overriding a shader `inputs:` to repaint a rover — author
   `primvars:displayColor`; `rover_hull.wgsl` consumes it via `//!@engine
   display_color` ([`use-asset-library`](../use-asset-library/SKILL.md#add-a-shader-wgsl)).

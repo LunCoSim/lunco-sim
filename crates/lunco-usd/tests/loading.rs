@@ -71,11 +71,6 @@ def Xform "Rover" {
         # drivetrain set — these previously fell back to Rust constants and are
         # now part of the contract this fixture pins.
         float physxVehicleWheel:mass = 25.0
-        float physxVehicleEngine:peakTorque = 300.0
-        # The ONE no-load axle speed, obeyed by BOTH wheel realizations (the
-        # joint motor targets it; the raycast drive force rolls off toward it).
-        # There is no `lunco:wheel:maxDriveOmega` any more.
-        float physxVehicleEngine:maxRotationSpeed = 12.0
         float physxVehicleWheel:width = 0.3
         float physxVehicleWheel:moi = 2.0
         float physxVehicleWheel:dampingRate = 0.45
