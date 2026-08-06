@@ -129,11 +129,12 @@ def Xform "LintSelftest" (
         }
     }
 
-    # A joint naming a plain prim that applies no `PhysicsRigidBodyAPI` and is
-    # not standalone collision geometry. It remains a lint finding without
-    # leaving the runtime with a permanently pending physics joint.
-    def Xform "NotABody"
+    # A joint naming a prim that applies no `PhysicsRigidBodyAPI`.
+    def Cube "NotABody" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
     {
+        double size = 0.5
         double3 xformOp:translate = (5.0, 0.25, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

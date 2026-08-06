@@ -743,6 +743,11 @@ fn default_plugins_with_profile(
     let group = DefaultPlugins
         .set(AssetPlugin {
             file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
+            // File watching is an interactive authoring capability. Headless
+            // and offscreen runs must be deterministic and must not allocate
+            // OS watcher resources; scene tests and render capture use the
+            // explicit API/recording paths instead.
+            watch_for_changes_override: Some(!headless && !offscreen),
             // Don't probe for `.meta` sidecars: we ship none, so every asset
             // load would otherwise fire a failed `<asset>.meta` fetch.
             meta_check: AssetMetaCheck::Never,

@@ -158,7 +158,13 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
 
 /// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then each cache root
 /// in [`cache_roots`](crate::cache_roots) order.
+///
+/// Only the authored `assets/` tree is watched. Cache roots are read-only
+/// materialized artifacts and can contain tens of thousands of directories;
+/// recursively registering an OS watch for them is both unnecessary for live
+/// authoring and can exhaust the process' watch quota before the app starts.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
+    let watch_root = assets_dir.to_string_lossy().into_owned();
     let mut roots = vec![assets_dir.to_string_lossy().into_owned()];
     roots.extend(
         crate::cache_roots()
@@ -176,35 +182,23 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
         }) as Box<dyn ErasedAssetReader>
     })
     .with_watcher(move |sender| {
-        let watchers: Vec<Box<dyn AssetWatcher>> = roots
-            .iter()
-            .filter_map(|root| {
-                // Cache roots are optional. Bevy's default watcher warns and
-                // returns `None` for an absent root; filtering that expected
-                // state keeps startup clean without changing read priority.
-                if !Path::new(root).exists() {
-                    return None;
-                }
-                let mut build =
-                    AssetSource::get_default_watcher(root.clone(), Duration::from_millis(300));
-                build(sender.clone())
-            })
-            .collect();
-        (!watchers.is_empty()).then(|| {
-            Box::new(FallbackWatcher {
-                _watchers: watchers,
-            }) as Box<dyn AssetWatcher>
-        })
+        if !Path::new(&watch_root).exists() {
+            return None;
+        }
+        let mut build =
+            AssetSource::get_default_watcher(watch_root.clone(), Duration::from_millis(300));
+        build(sender)
+            .map(|watcher| Box::new(FallbackWatcher { _watcher: watcher }) as Box<dyn AssetWatcher>)
     })
 }
 
-/// Keeps every platform watcher backing the fallback reader alive.
+/// Keeps the authored-tree watcher backing the fallback reader alive.
 ///
-/// All roots feed the one `lunco://` source-event channel. The reader's existing
-/// priority still decides which bytes win, so a lower-priority cache change can
-/// only request a reload; it cannot override an authored asset.
+/// The reader's existing priority still decides which bytes win, so a cache
+/// artifact can never override an authored asset. Cache population is handled
+/// by the asset/download boundary; it is not an authoring edit stream.
 struct FallbackWatcher {
-    _watchers: Vec<Box<dyn AssetWatcher>>,
+    _watcher: Box<dyn AssetWatcher>,
 }
 
 impl AssetWatcher for FallbackWatcher {}
