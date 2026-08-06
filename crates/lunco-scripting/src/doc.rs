@@ -204,10 +204,20 @@ impl lunco_doc::FileBacked for ScriptDocument {
 
     fn reload_base(&mut self, source: &str) -> bool {
         if self.source == source {
+            // The external source and resident document agree. Re-baseline the
+            // watermark even when no content mutation was necessary.
+            self.mark_saved();
             return true;
         }
-        // Through the op, so generation/undo/journal stay coherent.
-        let _ = Document::apply(self, ScriptOp::SetSource(source.to_string()));
+
+        // This is an authoritative external-source refresh, not a user edit.
+        // Replace the base directly so a read-only bundled document can still
+        // follow its asset, and so external file changes do not become undoable
+        // editor operations. Generation remains the one invalidation signal for
+        // every downstream consumer, including the scenario lifecycle driver.
+        self.source.clear();
+        self.source.push_str(source);
+        self.generation += 1;
         self.mark_saved();
         // Always `true`: a script with a syntax error is still a script you must
         // be able to open and fix. Compilation reports the error later.
@@ -342,6 +352,18 @@ mod tests {
         // Source unchanged, generation not bumped.
         assert_eq!(doc.source, "x");
         assert_eq!(doc.generation, 0);
+    }
+
+    #[test]
+    fn external_reload_replaces_a_readonly_base_without_becoming_an_edit() {
+        let mut doc = ScriptDocument::new(2, ScriptLanguage::Rhai, "v1");
+        doc.set_origin(DocumentOrigin::readonly_file("/libs/formation.rhai"));
+
+        assert!(lunco_doc::FileBacked::reload_base(&mut doc, "v2"));
+        assert_eq!(doc.source, "v2");
+        assert_eq!(doc.generation, 1);
+        assert_eq!(doc.last_saved_generation, Some(1));
+        assert!(!doc.is_dirty());
     }
 
     #[test]
