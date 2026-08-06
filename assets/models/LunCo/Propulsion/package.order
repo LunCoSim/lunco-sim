@@ -3,6 +3,7 @@ PlumePhotometry
 FluidPort
 RCSThruster
 RCSJet
+RCSFlowAggregator
 PropellantTank
 Turbopump
 CombustionChamber

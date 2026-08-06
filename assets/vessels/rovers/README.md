@@ -2,7 +2,7 @@
 
 This directory contains the USD definitions for all surface rovers in LunCoSim. Since LunCoSim follows **Article X of the Project Constitution (The Tunability Mandate)**, all vehicle masses, joints, motor torques, and suspension settings are driven directly by attributes authored in these USD files rather than being hardcoded in Rust.
 
-**One parameter set, two wheel kinds.** Raycast and physical (joint) wheels read the SAME attributes through one strict reader (`lunco-usd-sim/src/wheel_params.rs`); only force generation differs. Every drivetrain/tire attribute is **required** — a wheel missing any refuses to spawn and the error names all of them. The defaults live in `components/mobility/wheel.usda` (+ tires/suspensions), which every wheel composes; a rover authors only its own decisions (pose, `lunco:wheel:index`, port overrides, variants). The composed completeness is pinned by `crates/lunco-usd/tests/mobility_composition.rs`.
+**One parameter set, two wheel kinds.** Raycast and physical (joint) wheels read the SAME attributes through one strict reader (`lunco-usd-sim/src/wheel_params.rs`); only force generation differs. Every drivetrain/tire attribute is **required** — a wheel missing any refuses to spawn and the error names all of them. The defaults live in `components/mobility/wheel.usda` (+ tires/suspensions), which every wheel composes; a rover authors only its own decisions (pose, standard `physxVehicleWheelAttachment:index`, explicit drive/steer connections, variants). The composed completeness is pinned by `crates/lunco-usd/tests/mobility_composition.rs`.
 
 **Live tuning.** All wheel params carry schema-level slider hints: select a rover, Shift+click a wheel to drill into it, and edit in the Inspector's 🎚 Parameters section. Edits flow `ApplyUsdOp → document → in-place resync` (entities and joints survive). See `skills/build-vehicle/SKILL.md` for the full assembly recipe.
 
@@ -20,7 +20,8 @@ These live on the root vehicle or link `Xform` prims:
         approximately `1,025.0` kg.
     *   *Rockers:* Default is `50.0` kg.
     *   *Bogies:* Default is `30.0` kg.
-    *   *Wheels:* Default is `25.0` kg.
+*   `float physxVehicleWheel:mass`: Standard PhysX wheel mass, default `25.0` kg;
+    shared by raycast and physical realizations.
 *   `float3 physics:diagonalInertia`: Rotational inertia components $(I_{xx}, I_{yy}, I_{zz})$ about the principal axes. Exposing these ensures correct rotational acceleration and stability during steering.
 
 ### 2. Rocker-Bogie Differential Coupling
@@ -39,12 +40,11 @@ Even for joint-based physical rovers, the suspension settings are read from stan
 
 ### 4. Drivetrain & Motor Actuation (Authored per Wheel)
 Controlling traction and speed:
-*   `float physxVehicleEngine:peakTorque`: Maximum motor torque (default `300.0` N·m). High torque allows climbing steep slopes but can cause wheelspin.
-*   `float physxVehicleEngine:maxRotationSpeed`: No-load axle angular velocity.
-    The Perseverance-class rocker-bogie authors a 0.525 m wheel and its
-    speed/torque curve in the motor and gearbox parts; both physical and raycast
-    realizations read the same composed wheel parameters, which keeps the
-    drivetrain contract in parity. See `assets/scenarios/tests/drivetrain_parity.rhai`.
+*   `float lunco:motor:stallTorque` and `float lunco:motor:noLoadSpeed`: Motor-shaft
+    torque curve. The optional `lunco:gearbox:ratio`, `:efficiency`, and
+    `:maxOutputTorque` reduce it to the axle. These values live on the motor and
+    gearbox parts, not on a wheel, so both physical and raycast realizations consume
+    one drivetrain contract. See `assets/scenarios/tests/drivetrain_parity.rhai`.
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
 *   `float physics:dynamicFriction`: standard `UsdPhysicsMaterialAPI` Coulomb coefficient ($\mu$) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant, and consumed by both wheel realizations.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).

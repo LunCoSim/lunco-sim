@@ -1321,11 +1321,6 @@ pub(crate) struct WheelParam {
 /// tune round-trips through the runtime layer on reload.
 pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
-        name: "drive_torque",
-        set: |w, v| w.drive_torque_max = v,
-        usd_attr: "physxVehicleEngine:peakTorque",
-    },
-    WheelParam {
         name: "brake_torque",
         set: |w, v| w.brake_torque_max = v,
         usd_attr: "physxVehicleWheel:maxBrakeTorque",
@@ -1348,7 +1343,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
         name: "mass",
         set: |w, v| w.mass = v,
-        usd_attr: "physics:mass",
+        usd_attr: "physxVehicleWheel:mass",
     },
     WheelParam {
         name: "moi",
@@ -1969,10 +1964,13 @@ pub fn clear_kinematic_pulse_velocity(
 ///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` toggles `Visibility`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-///   `drive_torque`, `brake_torque`, `slip_stiffness`, `bearing_damping`,
-///   `friction_mu`, `mass`, `moi`, `wheel_radius`, `rest_length`, `spring_k`,
-///   `damping_c` → set that `f64` field on the wheel's `WheelRaycast` live.
-///   Each wheel is its own entity, so this gives independent per-wheel control.
+///   `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
+///   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
+///   `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
+///   so this gives independent per-wheel control. Motor torque and no-load speed
+///   are owned by the composed `LunCoMotorAPI` prim; edit its
+///   `lunco:motor:stallTorque` / `lunco:motor:noLoadSpeed` attributes instead of
+///   addressing a removed wheel-local drive parameter.
 #[Command(default)]
 pub struct SetObjectProperty {
     /// API-stable global entity ID (the `api_id` from `ListEntities`), same
@@ -3805,6 +3803,7 @@ mod tests {
         }
         assert!(wheel_param("not_a_wheel_field").is_none());
         for obsolete in [
+            "drive_torque",
             "drive_torque_max",
             "brake_torque_max",
             "damping_rate",

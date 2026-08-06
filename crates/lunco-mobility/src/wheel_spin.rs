@@ -32,7 +32,7 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// balance `I·ω̇ = τ_drive + τ_brake − τ_traction − τ_bearing`. Every coefficient
 /// is read from the USD wheel component (mass, friction, motor curve) — see
 /// `setup_raycast_wheel` — so the spin you see is grounded in the authored data:
-/// - `I = ½·m·r²` — solid-disk inertia from USD `physics:mass` and radius.
+/// - `I = ½·m·r²` — solid-disk inertia from USD `physxVehicleWheel:mass` and radius.
 /// - `τ_drive = throttle · drive_torque_max` — actuator torque (signed for
 ///   reverse); `drive_torque_max` comes from the motor power / no-load speed.
 /// - **Grounded**: the contact slip `(ω·r − v)` is resisted by tire grip with a
@@ -339,13 +339,13 @@ pub(crate) fn update_wheel_spin(
         //
         // The chassis force used to be computed independently, in
         // `apply_wheel_drive`, from quantities the axle never saw: a drive term
-        // `throttle · N · driveForcePerNormal` and a drag term proportional to the
-        // FULL travel speed. Neither is a contact force. A tire transmits torque by
+        // a throttle-scaled normal force and a drag term proportional to the FULL
+        // travel speed. Neither is a contact force. A tire transmits torque by
         // SLIPPING — the patch force is `k · (ω·r − v)` — so a model that reads
         // travel speed as slip is claiming a rolling wheel is sliding at road
         // speed, and has to be given a drive coefficient large enough to overcome
-        // its own invented drag. That is exactly what the authored pair 2.0 / 50
-        // was: two fudges calibrated to cancel.
+        // its own invented drag. That was a pair of calibration fudges, not a tire
+        // property.
         //
         // They cancelled ONLY at the parameters they were fitted at. Change μ, or
         // the tire, or the mass, and the cancellation drifts, and every knob

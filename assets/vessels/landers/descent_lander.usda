@@ -98,6 +98,13 @@ def Xform "DescentLander" (
         float outputs:propellant_used.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_used_kg>
         float outputs:low_fuel.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:low_fuel>
         float outputs:depleted.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:depleted>
+        float outputs:vehicle_mass_kg.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_mass_kg>
+        float outputs:vehicle_inertia_xx_kg_m2.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_inertia_xx_kg_m2>
+        float outputs:vehicle_inertia_yy_kg_m2.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_inertia_yy_kg_m2>
+        float outputs:vehicle_inertia_zz_kg_m2.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_inertia_zz_kg_m2>
+        float outputs:vehicle_com_x_m.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_com_x_m>
+        float outputs:vehicle_com_y_m.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_com_y_m>
+        float outputs:vehicle_com_z_m.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_com_z_m>
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
             </DescentLander/MainPropulsion/FuelTank>,
@@ -122,6 +129,7 @@ def Xform "DescentLander" (
             float inputs:depleted_mass_kg = 0.5
             float inputs:minimum_mass_kg = 0.000001
             float inputs:event_transition_width_kg = 0.01
+            float inputs:auxiliary_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:fuel_mass_flow_kgs>
             custom token connectors:outlet.connect = </DescentLander/MainPropulsion/FuelPump.connectors:inlet>
             float outputs:mass_kg
             float outputs:pressure_pa
@@ -143,6 +151,7 @@ def Xform "DescentLander" (
             float inputs:depleted_mass_kg = 0.5
             float inputs:minimum_mass_kg = 0.000001
             float inputs:event_transition_width_kg = 0.01
+            float inputs:auxiliary_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:oxidizer_mass_flow_kgs>
             custom token connectors:outlet.connect = </DescentLander/MainPropulsion/OxidizerPump.connectors:inlet>
             float outputs:mass_kg
             float outputs:pressure_pa
@@ -257,11 +266,24 @@ def Xform "DescentLander" (
             float inputs:event_transition_width_kg = 0.01
             float inputs:fuel_mass_kg.connect = </DescentLander/MainPropulsion/FuelTank.outputs:mass_kg>
             float inputs:oxidizer_mass_kg.connect = </DescentLander/MainPropulsion/OxidizerTank.outputs:mass_kg>
+            float inputs:dry_mass_kg = 2000.0
+            float inputs:dry_inertia_xx_kg_m2 = 4625.0
+            float inputs:dry_inertia_yy_kg_m2 = 6250.0
+            float inputs:dry_inertia_zz_kg_m2 = 4625.0
+            float inputs:fuel_position_y_m = 0.8
+            float inputs:oxidizer_position_y_m = -0.8
             float outputs:propellant_mass_kg
             float outputs:propellant_used_kg
             float outputs:propellant_fraction
             float outputs:low_fuel
             float outputs:depleted
+            float outputs:vehicle_mass_kg
+            float outputs:vehicle_inertia_xx_kg_m2
+            float outputs:vehicle_inertia_yy_kg_m2
+            float outputs:vehicle_inertia_zz_kg_m2
+            float outputs:vehicle_com_x_m
+            float outputs:vehicle_com_y_m
+            float outputs:vehicle_com_z_m
         }
     }
 
@@ -273,55 +295,43 @@ def Xform "DescentLander" (
         string ui:displayName = "RCS allocator"
         custom int lunco:ui:schemaColumn = 2
         custom int lunco:ui:schemaRow = 0
+        # The allocator is derived from the authored force-actuator geometry
+        # below.  The selected synthesizer is explicit so a future projection
+        # cannot silently reinterpret this scope as an acausal component graph.
+        uniform token lunco:synthesizer = "actuator-wrench"
         float inputs:desired_torque_x.connect = </DescentLander.outputs:torque_x>
         float inputs:desired_torque_y.connect = </DescentLander.outputs:torque_y>
         float inputs:desired_torque_z.connect = </DescentLander.outputs:torque_z>
 
-        # The allocator is an ordinary typed Modelica component in this
-        # collection.  Its class comes from the component's source asset; the
-        # surrounding Scope is classified from CollectionAPI and the composed
-        # connection graph, so no runtime selection token is exposed here.
-        float outputs:pitch_pos_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_pos_a_valve>
-        float outputs:pitch_pos_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_pos_b_valve>
-        float outputs:pitch_neg_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_neg_a_valve>
-        float outputs:pitch_neg_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_neg_b_valve>
-        float outputs:roll_pos_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_pos_a_valve>
-        float outputs:roll_pos_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_pos_b_valve>
-        float outputs:roll_neg_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_neg_a_valve>
-        float outputs:roll_neg_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_neg_b_valve>
-        float outputs:yaw_pos_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_pos_a_valve>
-        float outputs:yaw_pos_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_pos_b_valve>
-        float outputs:yaw_neg_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_neg_a_valve>
-        float outputs:yaw_neg_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_neg_b_valve>
-
-        def Scope "Allocator" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
-        {
-            uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:sourceAsset = @lunco://models/LunCo/Actuation/RcsValveAllocator.mo@
-            uniform bool lunco:program:realtimeSafe = true
-            float inputs:desired_torque_x.connect = </DescentLander/AttitudeActuation.inputs:desired_torque_x>
-            float inputs:desired_torque_y.connect = </DescentLander/AttitudeActuation.inputs:desired_torque_y>
-            float inputs:desired_torque_z.connect = </DescentLander/AttitudeActuation.inputs:desired_torque_z>
-            float inputs:max_torque_nm = 6000.0
-            float outputs:pitch_pos_a_valve
-            float outputs:pitch_pos_b_valve
-            float outputs:pitch_neg_a_valve
-            float outputs:pitch_neg_b_valve
-            float outputs:roll_pos_a_valve
-            float outputs:roll_pos_b_valve
-            float outputs:roll_neg_a_valve
-            float outputs:roll_neg_b_valve
-            float outputs:yaw_pos_a_valve
-            float outputs:yaw_pos_b_valve
-            float outputs:yaw_neg_a_valve
-            float outputs:yaw_neg_b_valve
-        }
+        # The generated allocator owns these boundary outputs. Their names must
+        # match the commandOutput authored on each force actuator exactly.
+        float outputs:pitch_pos_a_valve
+        float outputs:pitch_pos_b_valve
+        float outputs:pitch_neg_a_valve
+        float outputs:pitch_neg_b_valve
+        float outputs:roll_pos_a_valve
+        float outputs:roll_pos_b_valve
+        float outputs:roll_neg_a_valve
+        float outputs:roll_neg_b_valve
+        float outputs:yaw_pos_a_valve
+        float outputs:yaw_pos_b_valve
+        float outputs:yaw_neg_a_valve
+        float outputs:yaw_neg_b_valve
 
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
-            </DescentLander/AttitudeActuation/Allocator>,
+            </DescentLander/RcsPitchPos>,
+            </DescentLander/RcsPitchNeg>,
+            </DescentLander/RcsRollPos>,
+            </DescentLander/RcsRollNeg>,
+            </DescentLander/RcsYawPos>,
+            </DescentLander/RcsYawNeg>,
+            </DescentLander/RcsPitchPosB>,
+            </DescentLander/RcsPitchNegB>,
+            </DescentLander/RcsRollPosB>,
+            </DescentLander/RcsRollNegB>,
+            </DescentLander/RcsYawPosB>,
+            </DescentLander/RcsYawNegB>,
         ]
     }
 
@@ -374,6 +384,9 @@ def Xform "DescentLander" (
         float outputs:yaw_neg_a_activity.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:activity>
         float outputs:yaw_neg_b_thrust_n.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:thrust_n>
         float outputs:yaw_neg_b_activity.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:activity>
+        float outputs:mass_flow_kgs.connect = </DescentLander/AttitudePropulsion/RcsFlowAggregator.outputs:total_flow_kgs>
+        float outputs:fuel_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion/RcsFlowAggregator.outputs:fuel_flow_kgs>
+        float outputs:oxidizer_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion/RcsFlowAggregator.outputs:oxidizer_flow_kgs>
 
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
@@ -389,6 +402,7 @@ def Xform "DescentLander" (
             </DescentLander/AttitudePropulsion/RcsYawPosBModel>,
             </DescentLander/AttitudePropulsion/RcsYawNegModel>,
             </DescentLander/AttitudePropulsion/RcsYawNegBModel>,
+            </DescentLander/AttitudePropulsion/RcsFlowAggregator>,
         ]
 
         def Scope "RcsPitchPosModel" (
@@ -691,6 +705,30 @@ def Xform "DescentLander" (
             float outputs:light_intensity
             float outputs:light_radius
         }
+        def Scope "RcsFlowAggregator" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSFlowAggregator.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:oxidizer_to_fuel_ratio = 2.6
+            float inputs:flow_1.connect = </DescentLander/AttitudePropulsion/RcsPitchPosModel.outputs:mass_flow_kgs>
+            float inputs:flow_2.connect = </DescentLander/AttitudePropulsion/RcsPitchPosBModel.outputs:mass_flow_kgs>
+            float inputs:flow_3.connect = </DescentLander/AttitudePropulsion/RcsPitchNegModel.outputs:mass_flow_kgs>
+            float inputs:flow_4.connect = </DescentLander/AttitudePropulsion/RcsPitchNegBModel.outputs:mass_flow_kgs>
+            float inputs:flow_5.connect = </DescentLander/AttitudePropulsion/RcsRollPosModel.outputs:mass_flow_kgs>
+            float inputs:flow_6.connect = </DescentLander/AttitudePropulsion/RcsRollPosBModel.outputs:mass_flow_kgs>
+            float inputs:flow_7.connect = </DescentLander/AttitudePropulsion/RcsRollNegModel.outputs:mass_flow_kgs>
+            float inputs:flow_8.connect = </DescentLander/AttitudePropulsion/RcsRollNegBModel.outputs:mass_flow_kgs>
+            float inputs:flow_9.connect = </DescentLander/AttitudePropulsion/RcsYawPosModel.outputs:mass_flow_kgs>
+            float inputs:flow_10.connect = </DescentLander/AttitudePropulsion/RcsYawPosBModel.outputs:mass_flow_kgs>
+            float inputs:flow_11.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:mass_flow_kgs>
+            float inputs:flow_12.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:mass_flow_kgs>
+            float outputs:total_flow_kgs
+            float outputs:fuel_flow_kgs
+            float outputs:oxidizer_flow_kgs
+        }
     }
 
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
@@ -940,28 +978,29 @@ def Xform "DescentLander" (
     uniform bool lunco:spawnable = true
 
     bool physics:rigidBodyEnabled = true
-    float physics:mass = 2000.0
+    # The initial dry hull plus the two 1000 kg propellant tanks. The authored
+    # values are the startup state; the connected PropellantStatus network takes
+    # ownership once it steps and writes the live mass properties through the
+    # same Avian ports.
+    float physics:mass = 4000.0
 
-    # Principal inertia, in the body frame, for the 2000 kg vehicle above.
+    # Principal inertia, in the body frame, for the 4000 kg startup vehicle above.
     #
     # This MUST be authored whenever `physics:mass` is. Authoring mass alone
     # overrides the mass and NOTHING else: Avian keeps the angular inertia it
     # derived from the collider geometry at default density, which for this hull
     # is a ~69 kg body. The vehicle then had a lander's mass and a toolbox's
-    # rotational inertia — measured `inertia_xx` was 159 kg m^2 against the 4625
-    # the geometry implies, i.e. ~29x too easy to spin. Every disturbance torque
-    # (and the weld to the rover is a large one, acting through a 1.5 m lever)
-    # produced ~29x the angular acceleration it should, which is what threw the
-    # stack to 25 rad/s within half a second of the descent starting. No
-    # stabiliser with sane authority can hold a vehicle whose inertia is a
-    # thirtieth of its geometry.
+    # rotational inertia. The startup tensor below includes the two 1000 kg tank
+    # point masses; the connected Modelica network recomputes it as propellant
+    # burns. No stabiliser should ever compensate for a stale collider tensor.
     #
-    # Values are the solid cylinder of the `Hull` collider (r = 2.5, h = 3.0):
-    #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 2000*(18.75 + 9)/12 = 4625
-    #   I_yy        = m*r^2/2           = 2000*3.125          = 6250
-    # I_xx = I_zz because the hull is axisymmetric about +Y — the runtime's
-    # 159/229 asymmetry was itself a sign the tensor did not come from this mass.
-    float3 physics:diagonalInertia = (4625.0, 6250.0, 4625.0)
+    # The dry hull is a solid cylinder (r = 2.5, h = 3.0):
+    #   I_xx = I_zz = 2000*(3r^2 + h^2)/12 = 4625
+    #   I_yy        = 2000*r^2/2           = 6250
+    # Each 1000 kg tank is 0.8 m from the dry COM along Y, adding 640 to Ixx/Izz;
+    # hence the startup values 5905, 6250, 5905. The tensor remains axisymmetric.
+    float3 physics:diagonalInertia = (5905.0, 6250.0, 5905.0)
+    float3 physics:centerOfMass = (0.0, 0.0, 0.0)
 
     # Vacuum: no aerodynamic drag. Linear damping is a tiny numerical settle only;
     # there is deliberately NO angular damping — angular momentum is conserved, so
@@ -995,9 +1034,20 @@ def Xform "DescentLander" (
     float inputs:command_upper_bound = 1.0
     float inputs:touchdown_force_threshold_n = 250.0
     float inputs:touchdown_transition_width_n = 100.0
-    float inputs:inertia_xx.connect = </DescentLander.outputs:inertia_xx>
-    float inputs:inertia_yy.connect = </DescentLander.outputs:inertia_yy>
-    float inputs:inertia_zz.connect = </DescentLander.outputs:inertia_zz>
+    # The generated mass-properties network drives the native Avian ports from
+    # one live source. The controller receives an explicitly separate set of
+    # `controller_inertia_*` inputs below; this keeps the physical port names
+    # owned by Avian rather than letting the Modelica map shadow them.
+    float inputs:mass.connect = </DescentLander/MainPropulsion.outputs:vehicle_mass_kg>
+    float inputs:inertia_xx.connect = </DescentLander/MainPropulsion.outputs:vehicle_inertia_xx_kg_m2>
+    float inputs:inertia_yy.connect = </DescentLander/MainPropulsion.outputs:vehicle_inertia_yy_kg_m2>
+    float inputs:inertia_zz.connect = </DescentLander/MainPropulsion.outputs:vehicle_inertia_zz_kg_m2>
+    float inputs:com_x.connect = </DescentLander/MainPropulsion.outputs:vehicle_com_x_m>
+    float inputs:com_y.connect = </DescentLander/MainPropulsion.outputs:vehicle_com_y_m>
+    float inputs:com_z.connect = </DescentLander/MainPropulsion.outputs:vehicle_com_z_m>
+    float inputs:controller_inertia_xx.connect = </DescentLander/MainPropulsion.outputs:vehicle_inertia_xx_kg_m2>
+    float inputs:controller_inertia_yy.connect = </DescentLander/MainPropulsion.outputs:vehicle_inertia_yy_kg_m2>
+    float inputs:controller_inertia_zz.connect = </DescentLander/MainPropulsion.outputs:vehicle_inertia_zz_kg_m2>
     float inputs:piloted.connect = </DescentLander.outputs:piloted>
     float inputs:gyro_x.connect = </DescentLander/IMU.outputs:gyro_x>
     float inputs:gyro_y.connect = </DescentLander/IMU.outputs:gyro_y>

@@ -22,10 +22,13 @@ model Lander
     "Total leg load at the centre of the touchdown transition (N)";
   input Real touchdown_transition_width_n = 100.0
     "Width of the touchdown load transition (N)";
-  // Body-local inertia, supplied by the rigid-body description.
-  input Real inertia_xx = 6250.0;
-  input Real inertia_yy = 6250.0;
-  input Real inertia_zz = 6250.0;
+  // The rigid-body mass/COM/inertia names belong exclusively to the Avian endpoint on
+  // the owning USD prim. Controller gains use a deliberately distinct input
+  // surface so one connection cannot be claimed by the Modelica map backend
+  // and accidentally prevent Avian from receiving live mass properties.
+  input Real controller_inertia_xx = 6250.0;
+  input Real controller_inertia_yy = 6250.0;
+  input Real controller_inertia_zz = 6250.0;
 
   // Authority and command sources.
   input Real piloted = 0.0;
@@ -154,7 +157,7 @@ equation
   desired_tilt_x = cmd_pitch * command_tilt_limit_rad;
   desired_tilt_z = cmd_roll * command_tilt_limit_rad;
   command_torque_x = 0.0;
-  command_torque_y = cmd_yaw * inertia_yy * live_authority;
+  command_torque_y = cmd_yaw * controller_inertia_yy * live_authority;
   command_torque_z = 0.0;
 
   // Stabilization is expressed entirely in the body frame. The attitude
@@ -179,11 +182,11 @@ equation
   hold_rate_z = gyro_z * noEvent(max(0.0,
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
-  hold_torque_x = attitude_hold * inertia_xx
+  hold_torque_x = attitude_hold * controller_inertia_xx
     * (hold_kp * hold_error_x - hold_kd * hold_rate_x);
-  hold_torque_y = attitude_hold * inertia_yy
+  hold_torque_y = attitude_hold * controller_inertia_yy
     * (hold_kp * hold_error_y - hold_kd * hold_rate_y);
-  hold_torque_z = attitude_hold * inertia_zz
+  hold_torque_z = attitude_hold * controller_inertia_zz
     * (hold_kp * hold_error_z - hold_kd * hold_rate_z);
 
   torque_x = command_torque_x + hold_torque_x;

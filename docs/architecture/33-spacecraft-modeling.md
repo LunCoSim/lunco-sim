@@ -124,21 +124,20 @@ The wheel→actuator **wiring topology** was hardcoded in two Rust spots: the po
 now USD-authorable:
 - **Per-wheel binding** — a USD **connection** on the wheel prim,
   `float inputs:drive.connect = </Rover.outputs:drive_left>` (and
-  `inputs:steer.connect`), names the FSW port it wires to, overriding index
-  parity. The reader resolves the connection and takes the target property name
+  `inputs:steer.connect`), names the FSW port it wires to. The reader resolves
+  the connection and takes the target property name
   minus its `outputs:` prefix as the port name. Because a connection is
   PCP-resolved and path-translated through reference arcs, a wheel arriving on a
   `references` arc binds to its own instance's port rather than to whatever prim
   shares a name; it is also typed, carries `customData` UI hints, and is visible
   in usdview. So a 6-wheel rover, per-wheel independent drive, or a non-2×N
-  layout is declared in USD, not coded. Wheels with no connection keep the
-  documented parity default (even→`drive_left`, odd→`drive_right`,
-  front→`steering`), so the 4-wheel base rovers are unchanged.
-- **Extensible port set** — each extra port is a real attribute on the rover
-  root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers ports by
-  scanning the vessel prim's authored `outputs:` attributes and spawns a named
-  `Port` per port beyond the canonical four, which wheels connect to and a
-  connection/rhai/Modelica mix drives.
+  layout is declared in USD, not coded. A wheel without the required drive
+  connection is rejected as incomplete; there is no parity or front-wheel
+  fallback.
+- **Extensible port set** — each port is a real numeric attribute on the rover
+  root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers the complete
+  authored set and spawns a named `Port` for each one; no canonical Rust port
+  vocabulary is required.
 - **Proof:** `assets/vessels/rovers/six_wheel_rover.usda` — a self-contained
   6-wheel skid rover whose three-per-side wheels bind explicitly via
   `inputs:drive.connect`; also authors G2 inertia/COM.
@@ -206,19 +205,19 @@ reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realiz
   under-authored wheel FAILS instead of quietly inheriting a number nobody wrote.
   There are no wheel defaults in Rust — `WheelRaycast::default()` is all zeros and
   exists only as the struct-update base the reader immediately overwrites.
-- **One no-load speed for both realizations.** `physxVehicleEngine:maxRotationSpeed`
-  (12 rad/s) is THE top-speed parameter. The joint wheel's velocity motor targets
-  it; the raycast wheel's drive force rolls off linearly toward it
+- **One no-load speed for both realizations.** The motor's
+  `lunco:motor:noLoadSpeed` divided by the gearbox's `lunco:gearbox:ratio`
+  (12 rad/s at the shipped axle) is THE top-speed parameter. The joint wheel's
+  velocity motor targets it; the raycast wheel's drive force rolls off linearly toward it
   (`drive_force_mag`), so **both cap at `ω_max · r`**. The old
-  `lunco:wheel:maxDriveOmega` is deleted — there is one name for this.
+  wheel-local speed attributes are deleted — there is one motor/gearbox reduction.
 - **`physxVehicleWheel:dampingRate` is required.** Bearing/rolling drag is a
   physical property of the hub in its own right; the old derivation from the drive
   torque is deleted.
-- **Also read:** `physxVehicleWheel:radius` / `:moi` / `:maxBrakeTorque`,
-  `physics:mass`, `physxVehicleEngine:peakTorque`,
+- **Also read:** `physxVehicleWheel:radius` / `:width` / `:mass` / `:moi` /
+  `:maxBrakeTorque`, the composed motor/gearbox torque reduction,
   `physxVehicleTire:longitudinalStiffness`, `physics:dynamicFriction`,
-  `lunco:wheel:contactGripStiffness` / `:driveForcePerNormal` / `:driveDamping` /
-  `:stallTorqueGain` / `:steerAxis`.
+  `lunco:wheel:driveDamping` / `:steerAxis`.
 - **The one non-required number is a derivation, not a default:**
   `physxVehicleWheel:moi` unauthored (or 0) means "solid cylinder", i.e. `½·m·r²`
   computed downstream from the authored mass and radius. Nothing is invented.
@@ -226,11 +225,11 @@ reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realiz
   numerical guard-rail (caps a deeply-compressed strut / velocity-spike impulse),
   not a feel knob — documented as such.
 - **`drive:angular:physics:maxForce` is still NOT honored**, on purpose: the demo
-  scenes author it at 12000, which fed straight into the motor made the rover
+  scenes author it at 12000, which fed straight into the motor and made the rover
   apply ~30× its lunar weight and wheelie on every input (see
-  `project_physical_rover_suspension`). The engine `peakTorque × stallTorqueGain`
-  is the canonical drive authority and is now itself USD-tunable, which is the
-  right way to raise drive force without the regression.
+  `project_physical_rover_suspension`). The composed motor stall torque, gearbox
+  ratio/efficiency, and gearbox output limit are the canonical drive authority;
+  tune those authored parts instead of a joint saturation limit.
 
 ### G9 — Generic joint actuation + USD drive schema  **[DONE]**
 Joint **motor drive** used to be revolute-only: a revolute joint auto-exposed an

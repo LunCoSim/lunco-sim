@@ -92,6 +92,8 @@ def Xform "RockerBogie" (
     # `six_wheel_rover.usda` has always carried.
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
+    float outputs:steering = 0.0
+    float outputs:brake = 0.0
 
     # --- Telemetry: the vehicle's own ground speed ---
     # `speed` is a PHYSICS port (the magnitude of this body's linear velocity, from
@@ -394,13 +396,14 @@ def Xform "RockerBogie" (
             float physxVehicleWheel:maxBrakeTorque = 100.0
             # An aluminium spun wheel with a flexure sidewall, not the 25 kg
             # placeholder `wheel.usda` ships as its catalogue default.
-            float physics:mass = 12.0
+            float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (-0.3, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             # --- WHEEL DYNAMICS CONFIGURATION ---
-            int lunco:wheel:index = 0
+            int physxVehicleWheelAttachment:index = 0
+            float inputs:drive.connect = </RockerBogie.outputs:drive_left>
         }
 
         # Motor + reduction for the front-left wheel. A CHILD OF THE ROCKER, not of
@@ -410,8 +413,8 @@ def Xform "RockerBogie" (
         #
         #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
         # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =
-        # 2400/200 = 12 rad/s. Wheel index 0 is even ⇒ `drive_left`, the same
-        # index-parity channel the wheel itself binds.
+        # 2400/200 = 12 rad/s. The wheel's authored `inputs:drive` connection
+        # selects the `drive_left` channel explicitly.
         def Xform "Motor_FL" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
@@ -551,12 +554,13 @@ def Xform "RockerBogie" (
             double height = 0.18
             float physxVehicleWheel:radius = 0.2625
             float physxVehicleWheel:maxBrakeTorque = 100.0
-            float physics:mass = 12.0
+            float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (0.3, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int lunco:wheel:index = 1
+            int physxVehicleWheelAttachment:index = 1
+            float inputs:drive.connect = </RockerBogie.outputs:drive_right>
         }
 
         # Wheel index 1 is odd ⇒ `drive_right`. Mirror of the left rocker.
@@ -691,12 +695,13 @@ def Xform "RockerBogie" (
             double height = 0.18
             float physxVehicleWheel:radius = 0.2625
             float physxVehicleWheel:maxBrakeTorque = 100.0
-            float physics:mass = 12.0
+            float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (-0.3, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int lunco:wheel:index = 2
+            int physxVehicleWheelAttachment:index = 2
+            float inputs:drive.connect = </RockerBogie.outputs:drive_left>
         }
 
         # Rear Left Wheel
@@ -712,12 +717,13 @@ def Xform "RockerBogie" (
             double height = 0.18
             float physxVehicleWheel:radius = 0.2625
             float physxVehicleWheel:maxBrakeTorque = 100.0
-            float physics:mass = 12.0
+            float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (-0.3, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int lunco:wheel:index = 4
+            int physxVehicleWheelAttachment:index = 4
+            float inputs:drive.connect = </RockerBogie.outputs:drive_left>
         }
 
         # Two motors on this bogie — indices 2 and 4, both even ⇒ `drive_left`.
@@ -863,12 +869,13 @@ def Xform "RockerBogie" (
             double height = 0.18
             float physxVehicleWheel:radius = 0.2625
             float physxVehicleWheel:maxBrakeTorque = 100.0
-            float physics:mass = 12.0
+            float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (0.3, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int lunco:wheel:index = 3
+            int physxVehicleWheelAttachment:index = 3
+            float inputs:drive.connect = </RockerBogie.outputs:drive_right>
         }
 
         # Rear Right Wheel
@@ -884,12 +891,13 @@ def Xform "RockerBogie" (
             double height = 0.18
             float physxVehicleWheel:radius = 0.2625
             float physxVehicleWheel:maxBrakeTorque = 100.0
-            float physics:mass = 12.0
+            float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (0.3, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int lunco:wheel:index = 5
+            int physxVehicleWheelAttachment:index = 5
+            float inputs:drive.connect = </RockerBogie.outputs:drive_right>
         }
 
         # Indices 3 and 5, both odd ⇒ `drive_right`. Mirror of the left bogie.
@@ -1099,10 +1107,8 @@ def Xform "RockerBogie" (
     #       ]
     #   ) {}
     #
-    # The wheels here author no `inputs:drive` connection, so they use the index-parity
-    # default (even 0/2/4 = FL/ML/RL ⇒ drive_left, odd 1/3/5 = FR/MR/RR ⇒
-    # drive_right) — the two drive-bank ports the vehicle exposes alongside
-    # `steering` and `brake`.
+    # Each wheel authors its `inputs:drive` connection to one of the two drive-bank
+    # ports. The channel assignment is USD topology, not an index heuristic.
 
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery

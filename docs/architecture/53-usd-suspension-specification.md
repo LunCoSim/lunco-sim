@@ -120,7 +120,6 @@ Three concepts the PhysX vehicle schema does not model live in `luncoSchema` (`c
 | API | Property | Applied to | Why it is not PhysX |
 | --- | --- | --- | --- |
 | `LunCoSuspensionAPI` | `float lunco:suspension:restLength` | suspension prim, beside `PhysxVehicleSuspensionAPI` | PhysX has no `restLength` (`travelDistance` + `sprungMass` instead) |
-| `LunCoWheelAPI` | `int lunco:wheel:index` | wheel prim, beside `PhysxVehicleWheelAPI` | PhysX's `index` lives on the WheelAttachment prim, which flat composition lacks |
 | `LunCoSuspensionVisualAPI` | `uniform token lunco:suspensionVisual:role` | a strut's moving visual parts | the PhysX vehicle schema is physics-only |
 
 `restLength` is `float` to match the `physxVehicleSuspension:*` attrs it sits beside — and the `travelDistance` it stands in for.
@@ -148,7 +147,10 @@ def Xform "WheelAttachment_FL" (
 
 ## 2. Our Current Rovers Analysis
 
-Our existing rover assets (`ackermann_rover.usda`, `six_wheel_independent.usda`, `rocker_bogie.usda`) utilize a **compact flat composition** where the `PhysxVehicleWheelAPI` and `PhysxVehicleSuspensionAPI` are referenced directly into a single cylinder prim representing the wheel:
+Our rover assets use the compact composition supported by the standard schemas: the
+wheel prim carries `PhysxVehicleWheelAttachmentAPI`, `PhysxVehicleWheelAPI`, and
+`PhysxVehicleSuspensionAPI` through the component references. The attachment index
+and each causal drive/steer connection are authored on the wheel prim:
 
 ```usd
 # From ackermann_rover.usda
@@ -159,14 +161,18 @@ def Cylinder "Wheel_FL" (
     ]
 )
 {
-    int lunco:wheel:index = 0            # this wheel's own values, and nothing else
+    int physxVehicleWheelAttachment:index = 0
     float physxVehicleWheel:radius = 0.4
+    float inputs:drive.connect = </Rover.outputs:drive_left>
 }
 ```
 
-In this simplified composition, the wheel and suspension properties live on the same Prim, so their relationship is implicit.
+When wheel and suspension properties are composed onto the same prim, the standard
+attachment schema permits the direct self-composition. A separate attachment prim
+may instead author the standard `wheel` and `suspension` relationships; neither
+case requires a LunCo-specific index or a Rust-side topology guess.
 
-**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAPI` + `PhysxVehicleEngineAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. `apiSchemas` is a list-op and composes across reference arcs, so all 30 wheels across the seven rovers get their schemas from two files. A rover authors values, never schemas — re-shodding a wheel or retuning a spring is still one line in one place.
+**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. Motor and gearbox torque/speed live on their own `LunCoMotorAPI`/`LunCoGearboxAPI` parts. `apiSchemas` is a list-op and composes across reference arcs, so all rover wheels get their schemas from the component files. A rover authors values and connections, never a private index or fallback rule.
 
 ---
 

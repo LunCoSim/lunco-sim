@@ -287,7 +287,7 @@ fn publish_raycast_support_footprints(
 /// The same `skid_rover.usda` composed with `drivetrain = physical` masses 1100 kg
 /// (chassis 1000 + four 25 kg wheel bodies avian integrates in their own right),
 /// and with `drivetrain = raycast` massed 1000 kg — the proxy wheels are kinematic,
-/// so avian never saw their authored `physics:mass` at all. One variant switch
+/// so avian never saw their authored `physxVehicleWheel:mass` at all. One variant switch
 /// silently changed the vehicle by 10%, which no variant is allowed to do.
 ///
 /// That 10% is directly a speed error: `physxRigidBody:linearDamping` drags `c·m·v`,
@@ -594,7 +594,8 @@ pub struct WheelRaycast {
     /// is why a geared rover spins up slowly instead of snapping to speed.
     /// `0` = undriven wheel (castor) or no drivetrain authored.
     pub reflected_inertia: f64,
-    /// (USD `physxVehicleEngine:peakTorque`, required).
+    /// (derived from the composed motor's `lunco:motor:stallTorque` and optional
+    /// gearbox, required for a driven wheel).
     pub drive_torque_max: f64,
     /// the hub in its own right — never inferred from the drive torque.
     pub bearing_damping: f64,

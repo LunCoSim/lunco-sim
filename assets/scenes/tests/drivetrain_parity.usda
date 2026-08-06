@@ -15,12 +15,12 @@
 # the drivetrain realization and nothing else.
 #
 # WHY THIS SCENE EXISTS. Raycast and joint wheels are two REALIZATIONS of ONE
-# parameter set. They diverged once: the no-load axle speed was authored under
-# two different names (60 vs 12 rad/s) AND the raycast drive force carried no
-# torque-speed term at all, so raycast rovers drove ~5x faster than joint rovers
-# built from the same file. Both now read the single authored
-# `physxVehicleEngine:maxRotationSpeed` (12.0 rad/s, in
-# `components/mobility/wheel.usda`): the joint motor targets it, the raycast
+# parameter set. The parity invariant is structural: both realizations read the
+# same authored motor/gearbox reduction and the raycast drive force includes the
+# same torque-speed term as the joint actuator, so both cap at the same axle speed.
+# Both read the single authored motor/gearbox reduction
+# (`lunco:motor:noLoadSpeed` / `lunco:gearbox:ratio`, yielding
+# 12.0 rad/s at the axle): the joint motor targets it, the raycast
 # drive force rolls off toward it. With r = 0.4 m both cap at
 # omega_max * r = 12 * 0.4 = 4.8 m/s.
 #

@@ -14,6 +14,8 @@ model PropellantTank
   parameter Real liquid_specific_enthalpy_j_kg = 3.0e5
     "Specific enthalpy of propellant leaving the tank";
 
+  input Real auxiliary_mass_flow_kgs = 0.0
+    "Additional demand from a parallel propulsion circuit";
   FluidPort outlet "Propellant outlet to the feed system";
   output Real mass_kg "Remaining liquid propellant, kg";
   output Real pressure_pa "Approximate tank outlet pressure, Pa";
@@ -24,7 +26,7 @@ model PropellantTank
   Real mass(start = initial_mass_kg);
 
 equation
-  der(mass) = outlet.mass_flow_kgs;
+  der(mass) = outlet.mass_flow_kgs - max(0.0, auxiliary_mass_flow_kgs);
   mass_kg = max(0.0, mass);
   mass_out_flow_kgs = max(0.0, -outlet.mass_flow_kgs);
   outlet.pressure_pa = nominal_pressure_pa

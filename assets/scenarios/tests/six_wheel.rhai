@@ -9,7 +9,7 @@
 //     float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
 //
 // — and nothing anywhere assuming four wheels or deriving a side from an index.
-// The failure this guards is a loader that falls back to INDEX PARITY when the
+// The failure this guards is a loader that falls back to an index-derived split when the
 // layout is not 2×2: with six wheels, even/odd alternates down each bank instead
 // of splitting left from right, so both banks receive the same average command.
 // Such a rover still spawns, still drives forward, still looks right — and cannot
@@ -128,8 +128,8 @@ fn on_tick(me) {
 //                     straight" perfectly.
 //   went straight     both banks got the same command, so the six wheels did not
 //                     fight each other.
-//   +steer yaws RIGHT the assertion that index parity cannot pass. Wired by
-//                     parity the banks receive equal commands and the rover keeps
+//   +steer yaws RIGHT the assertion that index-derived wiring cannot pass. If
+//                     ignored, the explicit bindings give both banks equal commands and the rover keeps
 //                     going straight; wired by the AUTHORED left/right binding it
 //                     turns, and the sign says the bands are the right way round.
 fn verdict(s) {
@@ -149,7 +149,7 @@ fn verdict(s) {
 
     f.push(t_true(s.yaw_steer > 10.0,
         "with steer +0.6 the rover yawed " + r2(s.yaw_steer) + " deg, and it must " +
-        "turn RIGHT by a clear margin. Near zero is what INDEX PARITY wiring " +
+        "turn RIGHT by a clear margin. Near zero is what index-derived wiring " +
         "produces on a six-wheel layout: both banks get the same average command " +
         "and the rover can only go straight. Negative means the banks are swapped."));
 

@@ -158,6 +158,43 @@ fn declared_interface(
     (inputs, outputs)
 }
 
+/// A prim that is both a Modelica program and a rigid body has one authored
+/// `inputs:*` namespace, but the standard Avian mass/force ports are physical
+/// sinks, not Modelica solver inputs. Keep those names out of the map-backed
+/// Modelica interface so the Avian backend remains the single writer. A
+/// controller that needs a physical value uses an explicitly distinct input
+/// (for example `controller_inertia_xx`) and a second USD connection to the
+/// same source; there is no backend-precedence alias.
+fn strip_rigid_body_inputs(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    sdf_path: &SdfPath,
+    inputs: &mut HashMap<String, f64>,
+) {
+    if !reader.has_api_schema(sdf_path, "PhysicsRigidBodyAPI") {
+        return;
+    }
+    for name in [
+        "force_x",
+        "force_y",
+        "force_z",
+        "force_local_x",
+        "force_local_y",
+        "force_local_z",
+        "torque_x",
+        "torque_y",
+        "torque_z",
+        "mass",
+        "inertia_xx",
+        "inertia_yy",
+        "inertia_zz",
+        "com_x",
+        "com_y",
+        "com_z",
+    ] {
+        inputs.remove(name);
+    }
+}
+
 /// Publish the complete runtime interface of an environment probe.
 ///
 /// `LunCoEnvironmentProbeAPI` declares these outputs on the schema class. The
@@ -731,7 +768,8 @@ fn process_usd_cosim_prim_read(
     // `dispatch_loaded_{modelica,python}_sources` flips the status live once the
     // source has loaded/compiled; until then `can_step()` holds a `Compiling`
     // component.
-    let (inputs, outputs) = declared_interface(reader, sdf_path);
+    let (mut inputs, outputs) = declared_interface(reader, sdf_path);
+    strip_rigid_body_inputs(reader, sdf_path, &mut inputs);
     let model_name = match (&modelica_path, &python_path) {
         (Some(path), _) => {
             commands
@@ -1726,9 +1764,9 @@ const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
     // `MotorActuator`, never through this port.
     ("torque", "LunCoGearboxAPI"),
     // `Wheel.inputs:drive` / `inputs:steer`. Read by `connected_port` in
-    // `crate::lib`, which resolves the connection to the FSW port NAME the wheel
-    // should subscribe to (`PendingWheelWiring::drive_port_name`). The value then
-    // flows through the port registry, not along this edge.
+    // `crate::lib`, which resolves the authored connection to the FSW port NAME
+    // the wheel subscribes to (`PendingWheelWiring`). The value then flows
+    // through the port registry, not along this structural edge.
     ("drive", "LunCoWheelAPI"),
     ("steer", "LunCoWheelAPI"),
 ];
@@ -3954,6 +3992,33 @@ mod tests {
             Some("earth_mount_z".to_owned())
         );
         assert_eq!(declared_port_name("physics:mass", "inputs:"), None);
+    }
+
+    #[test]
+    fn rigid_body_modelica_interface_leaves_physical_ports_to_avian() {
+        let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/vessels/landers/descent_lander.usda");
+        let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose lander asset");
+        let view = lunco_usd_bevy::StageView::new(&stage);
+        let root = SdfPath::new("/DescentLander").unwrap();
+        let (mut inputs, _) = declared_interface(&view, &root);
+        strip_rigid_body_inputs(&view, &root, &mut inputs);
+
+        for physical in [
+            "mass",
+            "inertia_xx",
+            "inertia_yy",
+            "inertia_zz",
+            "com_x",
+            "com_y",
+            "com_z",
+        ] {
+            assert!(
+                !inputs.contains_key(physical),
+                "{physical} is a rigid-body sink and must not shadow Avian"
+            );
+        }
+        assert!(inputs.contains_key("controller_inertia_xx"));
     }
 
     #[test]

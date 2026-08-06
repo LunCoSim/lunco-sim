@@ -734,8 +734,8 @@ class "LunCoCameraAPI" (
 #
 # They are deliberately not one `LunCoMobilityAPI`: an applied API schema's
 # properties join the definition of every prim it is applied to, so a bundle
-# would declare `lunco:wheel:index` (with a fallback) on a suspension prim and a
-# `restLength` on a spring visual. Applied schemas are the unit of application,
+# would declare wheel identity on a suspension prim and a `restLength` on a spring
+# visual. Applied schemas are the unit of application,
 # not a namespace — see `PhysxVehicleWheelAPI` / `…SuspensionAPI` /
 # `…WheelAttachmentAPI`, which split along exactly these lines.
 
@@ -825,15 +825,6 @@ class "LunCoWheelAPI" (
     unauthored knob was indistinguishable from a deliberate one."""
 )
 {
-    int lunco:wheel:index (
-        doc = """Logical wheel index on the vehicle, used for drive/steer wiring
-        parity. LunCo extension: PhysX's `physxVehicleWheelAttachment:index` lives
-        on the WheelAttachment prim, which LunCo's flat composition doesn't author
-        — the wheel prim composes wheel + suspension directly — so the index lives
-        here rather than squatting a non-existent `physxVehicleWheel:index`.
-        Authored per wheel by the rover; everything else here comes from
-        `wheel.usda`."""
-    )
     double3 lunco:wheel:steerAxis (
         doc = """Steering-head axis, wheel-local. `(0, 1, 0)` is a vertical yaw
         axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
@@ -908,9 +899,8 @@ class "LunCoMotorAPI" (
         }
         doc = """Shaft speed at zero torque, at full demand — the low end of the linear
         curve, and the motor's top speed. SHAFT speed: divide by the gearbox ratio for
-        the axle's no-load speed. This is the ONE no-load speed in the drivetrain; it
-        replaces the `physxVehicleEngine:maxRotationSpeed` that used to be authored on
-        the wheel, which was a vehicle-level PhysX attribute misapplied to a part."""
+        the axle's no-load speed. This is the one no-load speed in the drivetrain;
+        it is reduced from the motor shaft speed by the gearbox ratio."""
     )
     float lunco:motor:continuousTorque (
         customData = {

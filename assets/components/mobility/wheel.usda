@@ -20,7 +20,7 @@
 #       double radius = 0.4
 #       double height = 0.3
 #       float physxVehicleWheel:radius = 0.4
-#       int lunco:wheel:index = 0
+#       int physxVehicleWheelAttachment:index = 0
 #       double3 xformOp:translate = (0.8, -0.2, 1.0)
 #   }
 #
@@ -30,14 +30,11 @@
 # The drive torque comes from the rover's drivetrain, not from a program of the wheel's
 # own — a wheel is a part, not an actor.
 #
-# TORQUE AND SPEED ARE NOT HERE ANY MORE. They belong to the MOTOR
+# TORQUE AND SPEED ARE NOT HERE. They belong to the MOTOR
 # (`lunco://components/mobility/motor.usda`, `LunCoMotorAPI`) and the reduction between
-# it and this hub (`lunco://components/mobility/gearbox.usda`). They used to be authored
-# on this prim as `physxVehicleEngine:peakTorque` and `physxVehicleEngine:maxRotationSpeed`
-# — vehicle-level PhysX attributes misapplied to a part, which is how one physical
-# quantity came to be authored twice under two names. A wheel is a hub: radius, mass,
-# moment of inertia, bearing drag, brake authority and a contact patch. What turns it is
-# a different part.
+# it and this hub (`lunco://components/mobility/gearbox.usda`). A wheel is a hub:
+# radius, mass, moment of inertia, bearing drag, brake authority and a contact patch.
+# What turns it is a different part.
 #
 # The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`), so they
 # mean the same thing here as in any other PhysX vehicle, and
@@ -48,8 +45,9 @@ def Cylinder "Wheel" (
     kind = "component"
     # Applied HERE, once: every wheel on every rover composes this prim, so the
     # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
-    # A rover authors only its own values — index, radius — never the schemas.
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
+    # A rover authors only its own values — attachment index, radius, and any
+    # per-vehicle overrides — never the schemas.
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
     prepend variantSets = ["tire"]
     variants = {
         string tire = "regolith"
@@ -70,12 +68,10 @@ def Cylinder "Wheel" (
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true
-    # The slider hint is authored HERE, per-asset: `physics:mass` is core
-    # UsdPhysics, and the vendored core schema is never stamped with LunCo
-    # opinions (unlike our own physxSchema reconstruction, which carries hints
-    # at schema level). One wheel mass for BOTH wheel kinds — the old
-    # raycast-25/physical-100 Rust fork is gone.
-    float physics:mass = 25.0 (
+    # Standard PhysX wheel mass is the single source for both wheel
+    # realizations; the old raycast/physical Rust fork is gone. The rigid-wheel
+    # projection uses the same value to derive collider density and inertia.
+    float physxVehicleWheel:mass = 25.0 (
         customData = {
             double min = 1
             double max = 500
@@ -88,10 +84,13 @@ def Cylinder "Wheel" (
     # The spin integrator (lunco_mobility::update_wheel_spin) reads these so the
     # visible rotation is grounded in authored data:
     #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
-    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). τ_drive arrives
+    # with I = physxVehicleWheel:moi (or the documented solid-cylinder derivation
+    # from physxVehicleWheel:mass + radius). τ_drive arrives
     # from the motor + gearbox driving this hub's joint; bearing drag is the wheel's own
     # authored physical property (dampingRate), never inferred from the drive torque.
     float physxVehicleWheel:radius = 0.4
+    float physxVehicleWheel:width = 0.3
+    float physxVehicleWheel:moi = 2.0
     # Axle bearing + rolling drag, N·m·s (τ_drag = this · ω). Sized from what the
     # hardware actually loses, not from the drive torque: a sealed, dry-lubricated
     # lunar wheel bearing plus regolith rolling resistance costs on the order of a
@@ -113,17 +112,10 @@ def Cylinder "Wheel" (
     # Steering is NOT here: the max steer angle is a property of the VEHICLE's steering
     # system, not of a wheel (a skid rover's wheels do not steer at all). It is
     # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
-    # THREE KNOBS THAT USED TO LIVE HERE ARE GONE, and the reason is the same for
-    # all three: they were calibrations against a model that no longer exists.
-    #
-    #   `contactGripStiffness` — read into the component and consumed by nothing.
-    #   `driveForcePerNormal`  — the raycast chassis force used to be
-    #                            `throttle · N · this`, paired with a drag term
-    #                            that resisted the FULL travel speed. Two fudges
-    #                            fitted to cancel: the tire force is now the real
-    #                            contact slip `k·(ω·r − v)` out of the spin solve
-    #                            (`lunco_mobility::update_wheel_spin`), so there is
-    #                            nothing left for a traction multiplier to correct.
+    # Former calibration knobs are intentionally absent. The tire force is the
+    # real contact slip `k·(ω·r − v)` out of the spin solve
+    # (`lunco_mobility::update_wheel_spin`), so a second traction multiplier or
+    # travel-speed drag would be a duplicate model rather than a wheel property.
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
     # Joint-wheel (rigid-axle) drive tuning. The axle's free-spin cap is NOT here and
     # not on this prim at all: it is the motor's `lunco:motor:noLoadSpeed` divided by
