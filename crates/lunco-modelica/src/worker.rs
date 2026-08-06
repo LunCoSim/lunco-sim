@@ -3143,11 +3143,31 @@ pub fn handle_modelica_responses(
             continue;
         }
 
+        let lifecycle_result = result.is_new_model || result.is_parameter_update || result.is_reset;
         if let Ok(mut model) = q_models.get_mut(result.entity) {
             // ALWAYS check session ID before resetting is_stepping
             // Stale results must NOT reset the flag.
             if result.session_id < model.session_id {
+                if lifecycle_result {
+                    warn!(
+                        "[Modelica] ignoring stale lifecycle result for `{}`: result session {} < model session {}",
+                        model.model_name, result.session_id, model.session_id
+                    );
+                }
                 continue;
+            }
+
+            if lifecycle_result {
+                info!(
+                    "[Modelica] applying lifecycle result for `{}`: result session {} model session {} new={} update={} reset={} error={}",
+                    model.model_name,
+                    result.session_id,
+                    model.session_id,
+                    result.is_new_model,
+                    result.is_parameter_update,
+                    result.is_reset,
+                    result.error.is_some()
+                );
             }
 
             model.is_stepping = false;
@@ -3329,6 +3349,15 @@ pub fn handle_modelica_responses(
                 model.current_time = 0.0;
                 model.target_time = 0.0;
                 model.last_step_time = 0.0;
+
+                info!(
+                    "[Modelica] lifecycle state for `{}`: compiled={} compiling={} stepping={} paused={}",
+                    model.model_name,
+                    model.is_compiled,
+                    model.is_compiling,
+                    model.is_stepping,
+                    model.paused
+                );
             } else if result.is_parameter_update {
                 model.current_time = 0.0;
                 model.target_time = 0.0;
@@ -3386,6 +3415,15 @@ pub fn handle_modelica_responses(
                     is_parameter_update: result.is_parameter_update,
                 });
             }
+        } else if lifecycle_result {
+            warn!(
+                "[Modelica] dropped lifecycle result for missing entity {:?}: session {} new={} update={} reset={}",
+                result.entity,
+                result.session_id,
+                result.is_new_model,
+                result.is_parameter_update,
+                result.is_reset
+            );
         }
     }
 

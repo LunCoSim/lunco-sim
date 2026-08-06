@@ -235,9 +235,13 @@ equation
     * max(0.0, min(1.0, 1.0 - touchdown));
   throttle_command_value = flight_command_gain * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));
-  pitch_command_value = flight_command_gain
+  // Do not ask a sideways vehicle to steer its descent vector while the
+  // attitude loop is still recovering. The measured +Y thrust projection is
+  // the reusable authority boundary: at ninety degrees the lateral request is
+  // zero, and it fades in continuously as the engine becomes useful again.
+  pitch_command_value = flight_command_gain * thrust_vertical_projection
     * max(-1.0, min(1.0, pitch_command_raw));
-  roll_command_value = flight_command_gain
+  roll_command_value = flight_command_gain * thrust_vertical_projection
     * max(-1.0, min(1.0, roll_command_raw));
   yaw_command_value = 0.0;
   throttle_cmd = throttle_command_value;

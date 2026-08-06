@@ -55,14 +55,14 @@ model LanderNavigation
   Real navigation_accel_y;
   Real navigation_accel_z;
   Real range_confidence;
-  LunCo.Sensors.FrameVectorTransform acceleration_transform;
+  LunCo.Sensors.FrameVectorTransform acceleration_transform(
+    quaternion_epsilon = quaternion_epsilon);
 
 equation
   // The IMU supplies specific force in the body frame. Rotate it into the
   // navigation frame with the measured attitude, then restore gravity. The
   // controller never integrates a body-local axis as though it were a
   // navigation axis; the frame conversion remains in the Modelica estimator.
-  acceleration_transform.quaternion_epsilon = quaternion_epsilon;
   acceleration_transform.quaternion_w = imu_attitude_quat_w;
   acceleration_transform.quaternion_x = imu_attitude_quat_x;
   acceleration_transform.quaternion_y = imu_attitude_quat_y;

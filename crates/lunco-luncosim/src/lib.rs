@@ -3274,10 +3274,7 @@ fn report_scene_spawn_status(
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
     models: Query<
-        (
-            &lunco_modelica::ModelicaModel,
-            Option<&lunco_cosim::SimComponent>,
-        ),
+        &lunco_modelica::ModelicaModel,
         With<lunco_usd_sim::cosim::UsdSourcedCosim>,
     >,
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
@@ -3286,8 +3283,8 @@ fn report_modelica_status(
     const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
 
     let pending = pending_sources.iter().count();
-    // `SimStatus::Compiling` also covers a successfully compiled model whose
-    // initial algebraic snapshot has not received its first solver tick yet.
+    // A successfully compiled model whose initial algebraic snapshot has not
+    // received its first solver tick is deliberately NOT included here.
     // Offline recording freezes the simulation while it waits for this visual
     // status, so treating that state as source compilation deadlocks the gate:
     // the first tick that would make the participant Running can never happen.
@@ -3295,7 +3292,7 @@ fn report_modelica_status(
     // solver's first-step hold remains owned by the readiness subsystem.
     let compiling = models
         .iter()
-        .filter(|(model, component)| model.is_compiling || !model.is_compiled || component.is_none())
+        .filter(|model| model.is_compiling || !model.is_compiled)
         .count();
 
     if pending > 0 {
