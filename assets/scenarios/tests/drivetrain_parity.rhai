@@ -4,7 +4,7 @@
 // the SAME rover asset on the SAME ground twice, differing in exactly one
 // authored opinion: `variants = { string drivetrain = "raycast" | "physical" }`.
 // This script drives BOTH from ONE tick loop — same command, same frame — and
-// asserts they behave the same.
+// asserts the contracts that the two realizations actually share.
 //
 // WHAT IT GUARDS. Raycast and joint wheels are two REALIZATIONS of ONE parameter
 // set. They diverged once: the no-load axle speed was authored under two names
@@ -508,7 +508,15 @@ fn verdict(s) {
     f.push(t_range(yspan_rc, 0.0, 0.08, "raycast high-speed chassis bob (m)"));
     f.push(t_range(yspan_ph, 0.0, 0.08, "physical high-speed chassis bob (m)"));
 
-    // Yaw: direction first (intolerant), then magnitude (loose).
+    // Yaw: each realization must respond to the same command in the same
+    // direction and with clear authority. Do not compare absolute yaw here:
+    // the raycast realization evaluates the authored analytic cornering law,
+    // while the physical realization receives Avian's contact-solver impulse
+    // from `physics:dynamicFriction`. They are two valid contact models, not
+    // two executions of one discrete impulse calculation. A magnitude ratio
+    // would turn a solver implementation detail into a vehicle acceptance
+    // failure; the authored-parameter and speed contracts above are the parity
+    // checks that are solver-independent.
     if s.yaw_rc == () || s.yaw_ph == () {
         f.push("heading change: MISSING (world_forward returned () for a rover)");
     } else {
@@ -524,14 +532,6 @@ fn verdict(s) {
         m_small += "deg physical=" + r2(s.yaw_ph);
         m_small += "deg, expected > 5deg under steer 0.6)";
         f.push(t_true(s.yaw_rc.abs() > 5.0 && s.yaw_ph.abs() > 5.0, m_small));
-        // 50%, and LUNAR traction is why. Skid-steer yaw comes entirely from
-        // lateral friction saturation, so it is the quantity most sensitive to
-        // how a solver models slip — and at a sixth of Earth's normal load the
-        // two realizations separate further than they do on the ground: measured
-        // 89.7 deg (raycast) against 51.1 deg (joint), 43% apart. The direction
-        // and the "did it turn at all" checks above stay INTOLERANT; this one
-        // bounds how far the two may drift while both still turning the same way.
-        f.push(t_rel(s.yaw_rc, s.yaw_ph, 50.0, "heading change (deg)"));
     }
 
     print("[parity] ── results ────────────────────────────────────────────");

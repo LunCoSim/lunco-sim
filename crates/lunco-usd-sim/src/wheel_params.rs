@@ -12,8 +12,8 @@
 //! ## Attribute provenance
 //!
 //! PhysX-compatible names are used where NVIDIA's vehicle schema models the
-//! concept (we adopt NAMES, not PhysX runtime semantics — see
-//! `core/physxSchema.usda`); `lunco:` names cover LunCo-only concepts:
+//! concept; the runtime owns the realization-specific integration law — see
+//! `core/physxSchema.usda`. `lunco:` names cover LunCo-only concepts:
 //!
 //! | Param | Attribute | Required |
 //! |---|---|---|
@@ -123,13 +123,17 @@ pub struct WheelParams {
     /// Tire longitudinal stiffness (`physxVehicleTire:longitudinalStiffness`).
     pub slip_stiffness: f64,
     /// Tire CORNERING stiffness (`physxVehicleTire:lateralStiffness`) — side
-    /// force per RADIAN of slip angle, before the Coulomb cone.
+    /// force per RADIAN of slip angle, before the Coulomb cone. This coefficient
+    /// is consumed by the analytic raycast realization. Physical wheel contacts
+    /// are solved by Avian from `contact_friction`; that solver has no equivalent
+    /// authored cornering-stiffness input, so its lateral response is not
+    /// expected to match the raycast yaw magnitude tick-for-tick.
     ///
     /// Read on the schema's own terms: "cornering stiffness" means N/rad in PhysX
-    /// and in every vehicle-dynamics text. This used to be consumed as N per m/s
-    /// of lateral velocity, which made grip vanish at low speed and is what
-    /// `drivetrain_parity` was measuring when it swept 53° raycast against 12°
-    /// jointed.
+    /// and in vehicle-dynamics texts. The parity scene checks that both
+    /// realizations turn correctly and share the authored vehicle/motor contract;
+    /// it does not pretend that their different contact solvers have identical
+    /// lateral impulse magnitudes.
     ///
     /// The PhysX schema's own companion to `longitudinalStiffness`, and read on
     /// the schema's terms: it declares a `0.0` fallback, so an unauthored tire

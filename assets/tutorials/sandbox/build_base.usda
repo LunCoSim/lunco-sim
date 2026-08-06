@@ -16,7 +16,7 @@
 # — it advances on REAL spawns (an entity of each kind appearing in the world),
 # never on a timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
 #
-#   sandbox --scene tutorials/sandbox/build_base.usda
+#   target/debug/luncosim --scene tutorials/sandbox/build_base.usda
 # or start it from the 🎓 Tutorials panel.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place. The models

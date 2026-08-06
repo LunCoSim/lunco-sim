@@ -14,7 +14,7 @@
 # event; arrival is the flag's `enter:waypoint` trigger-zone event — never a
 # scripted timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
 #
-#   sandbox --scene tutorials/first_drive/first_drive.usda
+#   target/debug/luncosim --scene tutorials/sandbox/first_drive.usda
 # or start it from the Tutorials panel.
 
 def Xform "FirstDrive" (

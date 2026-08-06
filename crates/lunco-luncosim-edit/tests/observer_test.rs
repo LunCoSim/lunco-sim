@@ -123,7 +123,7 @@ fn marker_sensor_enter_marks_the_waypoint_reached_without_deleting_it() {
         ))
         .id();
 
-    // The marker's visible Sphere is also the Sensor — arrival is this marker
+    // The marker's ground-anchored Trigger is the Sensor — arrival is this marker
     // reporting an entrant, not a distance the editor measured itself.
     let marker_sensor = app
         .world_mut()

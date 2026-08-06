@@ -7,14 +7,10 @@
 //   /SolarDomainNestedRef/Direct       + solar, scene → base        (one arc)
 //   /SolarDomainNestedRef/Nested       + solar, scene → profile → base (two arcs)
 //
-// WHAT IS READ. The generated island's ports, off the `Electrical` scope. They
-// are named by INSTANCE, not by the network's authored `outputs:` — a member's
-// variable surfaces as `<mangled member prim path>.<var>`, e.g.
-//
-//     SolarDomainNestedRef_x2f_BatteryOnly_x2f_Battery.soc_out
-//
-// (`get(elec, "soc")` reads nothing, whatever `outputs:soc` says on the prim.)
-// An island that never steps publishes no port at all, so absence is the signal.
+// WHAT IS READ. The generated island's ports, off the `Electrical` scope.
+// Authored boundary outputs keep names such as `soc` and `solar_power`; a
+// member-owned causal output uses the explicit `__member_` alias. An island
+// that never steps publishes no port at all, so absence is the signal.
 //
 // WHAT THIS RIG ESTABLISHED, in the order the layers came off:
 //
@@ -46,13 +42,15 @@
 //
 // Verdict: emit("SOLAR_DOMAIN_NESTED_REF", "PASS"|"FAIL").
 
-/// A member variable's port name on the island that owns it.
+/// A generated island output name.
 ///
-/// `rover` is the rover prim's name and `member` its path BELOW the rover, with
-/// each `/` written `_x2f_` — the mangling the port publisher applies to the
-/// member's full prim path.
+/// Network boundary outputs retain their authored names. Causal outputs that
+/// remain member-owned use the synthesizer's explicit `__member_` alias over
+/// the full USD path; a raw `Member.field` spelling is not a runtime contract.
 fn port_name(rover, member, field) {
-    "SolarDomainNestedRef_x2f_" + rover + "_x2f_" + member + "." + field
+    if member == "Battery" && field == "soc_out" { return "soc"; }
+    if member == "SolarPanel" && field == "power_out" { return "solar_power"; }
+    "__member_SolarDomainNestedRef_x2f_" + rover + "_x2f_" + member + "_" + field
 }
 
 /// Whether an island is stepping — i.e. publishing the member port at all.

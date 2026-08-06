@@ -55,16 +55,6 @@ fn on_start(me) {
     this.phase = "settle";
     this.engaged = false;
 
-    // Both rovers carry the Comms/EarthTracker, whose `earth_mount_*` wires
-    // never land in this scene — it has no celestial content, so no Earth
-    // direction exists to publish and the antenna holds its authored pose (by
-    // design, `lunco-environment/src/earth.rs`). Declare them as expected
-    // faults so the never-landed gate doesn't mask the verdict. See
-    // `expect_fault` in auto_tests.rhai.
-    expect_fault("earth_mount_x");
-    expect_fault("earth_mount_y");
-    expect_fault("earth_mount_z");
-
     this.idle = find_or_none("/AutopilotHoldTest/Idle");
     this.routed = find_or_none("/AutopilotHoldTest/Routed");
 

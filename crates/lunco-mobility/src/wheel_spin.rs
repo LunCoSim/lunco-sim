@@ -22,6 +22,17 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
     i * w / dt
 }
 
+/// Return the unsaturated lateral tire force from the authored absolute
+/// cornering stiffness. Normal load belongs to the friction-cone limit, not to
+/// this coefficient; keeping the calculation isolated makes that unit boundary
+/// explicit and testable.
+#[inline]
+fn lateral_tire_force(cornering_stiffness: f64, v_long: f64, v_lat: f64) -> f64 {
+    const V_REF: f64 = 0.5;
+    let slip_angle = (-v_lat / v_long.abs().max(V_REF)).atan();
+    cornering_stiffness * slip_angle
+}
+
 /// Integrates realistic tire spin and drives the visual wheel rotation.
 ///
 /// The spin tracks ground speed when rolling, breaks loose into wheelspin when
@@ -363,9 +374,9 @@ pub(crate) fn update_wheel_spin(
         //
         // The attribute is `physxVehicleTire:lateralStiffness` and every text —
         // and PhysX — means CORNERING STIFFNESS by that: side force per RADIAN of
-        // slip angle. This computed `-k · v_lat`: force per metre-per-second of
-        // lateral velocity. Those are not the same model and they do not differ by
-        // a constant, because `v_lat = |v| · sin(α)`.
+        // slip angle. The former law computed `-k · v_lat`: force per
+        // metre-per-second of lateral velocity. Those are not the same model and
+        // they do not differ by a constant, because `v_lat = |v| · sin(α)`.
         //
         // The consequence is that grip vanished with speed. At the same slip angle
         // — the same wheel scrubbing equally badly sideways — a wheel at 0.5 m/s
@@ -385,21 +396,20 @@ pub(crate) fn update_wheel_spin(
         // this speed the expression degrades smoothly back to a velocity damper,
         // which is the correct low-speed limit — a stationary wheel resists being
         // pushed sideways in proportion to how fast it is being pushed.
-        // The stiffness is NORMALISED BY LOAD — side force per radian PER NEWTON of
-        // normal force — so one authored number describes the tyre rather than the
-        // tyre-on-this-particular-rover. That is the same reason PhysX states its
-        // `lateralStiffness` per unit gravity, and it is what the old absolute
-        // value could not do: `tires/regolith.usda` records a fit that worked on
-        // one vehicle and had to be re-fitted for the next.
+        // `physxVehicleTire:lateralStiffness` is an absolute cornering stiffness:
+        // force per radian of slip angle. It is already the force coefficient, so
+        // do not multiply it by normal load here. The friction cone below remains
+        // load-dependent and is the only place where `N` belongs. Multiplying the
+        // standard coefficient by `N` a second time made a loaded wheel hundreds
+        // of times stiffer than the authored tire and turned a valid skid pivot
+        // into an immovable scrub.
         //
         // It also puts the saturation point where a tyre spec actually states it.
-        // The linear region ends when `C·N·α` reaches the cone `μ·N`, i.e. at
-        // `α_peak = μ / C`, independent of load: at C = 10 a μ = 0.8 regolith tyre
-        // develops full side force at 4.6° of slip, which is where a real one does.
-        const V_REF: f64 = 0.5;
+        // The linear region ends when `C·α` reaches the cone `μ·N`, i.e. at
+        // `α_peak = μ·N / C`: unlike the old normalized law, the absolute force
+        // coefficient intentionally makes the load part of the saturation point.
         let f_lat = if on_ground {
-            let slip_angle = (-v_lat / v_long.abs().max(V_REF)).atan();
-            wheel.cornering_stiffness * wheel.last_normal_force * slip_angle
+            lateral_tire_force(wheel.cornering_stiffness, v_long, v_lat)
         } else {
             0.0
         };
@@ -454,7 +464,7 @@ pub(crate) fn update_wheel_spin(
 
 #[cfg(test)]
 mod tests {
-    use super::update_wheel_spin;
+    use super::{lateral_tire_force, update_wheel_spin};
     use crate::kernels::DriveMix;
     use crate::{Suspension, WheelRaycast};
     use avian3d::prelude::*;
@@ -676,6 +686,19 @@ mod tests {
         assert!(
             w > max_omega * 0.9,
             "…and should actually reach it under full throttle: {w}"
+        );
+    }
+
+    #[test]
+    fn lateral_cornering_stiffness_is_not_scaled_by_normal_load() {
+        // `lateralStiffness` is an absolute N/rad coefficient. The load enters
+        // only through the Coulomb cone in the caller, so the same slip angle
+        // must produce the same unsaturated side force for any supported load.
+        let force = lateral_tire_force(12.6, 2.0, 1.0);
+        let expected = 12.6 * (-0.5_f64.atan());
+        assert!(
+            (force - expected).abs() < 1e-12,
+            "force={force}, expected={expected}"
         );
     }
 

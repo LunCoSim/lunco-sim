@@ -18,11 +18,11 @@
 #   1. flat launch / settling pad;
 #   2. a row of low, rounded cylinder ridges (rolling compliance);
 #   3. staggered cubes of increasing height (clearance and rocker travel);
-#   4. increasing 6, 12, 18 degree, then 40% (21.8 degree) ramps
+#   4. increasing 6, 12, 18 degree, then 40% (21.8 degree) graded berms
 #      (traction, torque, stability);
 #   5. flat exits between grades (recovery and terminal speed).
 #
-# Run: sandbox --scene scenes/tests/rover_comparison.usda
+# Run: target/debug/luncosim test --scene scenes/tests/rover_comparison.usda
 
 def Xform "RoverComparison" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
@@ -75,10 +75,11 @@ def Xform "RoverComparison" (
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         # The plate must CONTAIN the course. The rovers start at z = +32 and the
-        # last station is the 40% ramp, centred at z = -46 and 5 m long, so the
-        # sequence runs to z = -48.5 with a run-out beyond it. At the previous
-        # 90 m the plate ended at z = -45: the final ramp stood off the edge and a
-        # rover that reached it drove into empty space and fell out of the world.
+        # last station is the 40% berm, centred at z = -46 and 10 m long, so the
+        # sequence runs to z = -51 with a real flat run-out beyond it. At the
+        # previous 90 m the plate ended at z = -45: the final ramp stood off the
+        # edge and a rover that reached it drove into empty space and fell out of
+        # the world.
         double3 xformOp:scale = (40, 1, 120)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.24, 0.22, 0.19)]
@@ -206,141 +207,155 @@ def Xform "RoverComparison" (
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
 
-        # Increasing grades turn the field into a capability envelope instead of
+        # Increasing graded berms turn the field into a capability envelope instead of
         # a single pass/fail hill: 6 deg checks rolling resistance, 12 deg checks
         # the normal traverse grade, and 18 deg approaches the medium tier's
-        # traction limit.  The final 40% grade (21.8 degrees) establishes the
-        # high-grade envelope. Flat gaps make each response observable.
-        def Cube "Ramp6_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        # traction limit. The final 40% grade (21.8 degrees) establishes the
+        # high-grade envelope. Each berm has a closed rise/crest/fall profile, so
+        # its descending side returns the rover to the ground without a geometric
+        # drop at the far edge.
+        def Mesh "Ramp6_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (-10, 0.35, -8)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (6, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.42, -2), (3, 0.42, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (-10, 0, -8)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp6_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp6_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (0, 0.35, -8)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (6, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.42, -2), (3, 0.42, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (0, 0, -8)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp6_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp6_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (10, 0.35, -8)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (6, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.42, -2), (3, 0.42, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (10, 0, -8)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp12_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp12_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (-10, 0.62, -20)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (12, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.85, -2), (3, 0.85, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (-10, 0, -20)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp12_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp12_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (0, 0.62, -20)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (12, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.85, -2), (3, 0.85, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (0, 0, -20)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp12_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp12_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (10, 0.62, -20)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (12, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.85, -2), (3, 0.85, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (10, 0, -20)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp18_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp18_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (-10, 0.92, -32)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (18, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.30, -2), (3, 1.30, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (-10, 0, -32)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp18_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp18_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (0, 0.92, -32)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (18, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.30, -2), (3, 1.30, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (0, 0, -32)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp18_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp18_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (10, 0.92, -32)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (18, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.30, -2), (3, 1.30, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (10, 0, -32)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp40Pct_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp40Pct_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (-10, 1.0, -46)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (21.8014, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.6, -2), (3, 1.6, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (-10, 0, -46)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp40Pct_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp40Pct_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (0, 1.0, -46)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (21.8014, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.6, -2), (3, 1.6, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (0, 0, -46)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "Ramp40Pct_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Mesh "Ramp40Pct_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
         {
-            double size = 1.0
-            double3 xformOp:translate = (10, 1.0, -46)
-            double3 xformOp:scale = (3.0, 0.25, 5.0)
-            double3 xformOp:rotateXYZ = (21.8014, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.6, -2), (3, 1.6, -2), (-3, 0, -6), (3, 0, -6)]
+            int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
+            int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
+            uniform token subdivisionScheme = "none"
+            uniform token physics:approximation = "none"
+            double3 xformOp:translate = (10, 0, -46)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
-            bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
     }
@@ -378,4 +393,3 @@ def Xform "RoverComparison" (
         }
     }
 }
-

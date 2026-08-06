@@ -55,6 +55,14 @@ fn load_through_bevy(file: &str, prim_path: &str) -> App {
     // No GPU here: mark headless so sim builds physics without waiting on a
     // render-only material (the `--no-ui` server stand-in).
     app.insert_resource(NoRenderVisuals);
+    // These are production prerequisites of `UsdSimPlugin`.  The full binary
+    // installs them through `ModelicaPlugin`; this focused pipeline test does
+    // not boot the editor/worker stack, so initialize the same authoritative
+    // resources explicitly rather than letting the first composed Modelica
+    // prim panic on a missing resource.
+    app.init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>();
+    app.init_resource::<lunco_modelica::state::GeneratedModelicaSources>();
+    app.init_resource::<lunco_cosim::BindingRevision>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, &Path::new("../../assets/").join(file));
@@ -186,8 +194,9 @@ fn comms_mast_is_a_link_node_at_dish_height() {
 fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
     let mut app = load_through_bevy("scenes/tests/comms_wall.usda", "/CommsWallTest");
 
-    // The rover's antenna and the mast's antenna are both endpoints, with distinct
-    // roles — so `can_reach(rover, "base")` has something to resolve.
+    // The rover's antenna and the two mast antennas are both endpoints, with
+    // distinct roles — this scene deliberately overrides the shared mast's
+    // default `base` role to the `relay` role used by its link policy.
     let mut q = app.world_mut().query::<(&LinkNode, &Name)>();
     let mut classes: Vec<String> = q
         .iter(app.world())
@@ -197,12 +206,12 @@ fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
     assert_eq!(
         classes,
         vec![
-            "base".to_string(),
-            "base_clear".to_string(),
+            "relay".to_string(),
+            "relay".to_string(),
             "rover".to_string()
         ],
         "the scene must author the two endpoints the lesson talks about, plus the \
-         CONTROL mast (`base_clear`) whose sight-line misses the wall — without it \
+         CONTROL mast (`relay`) whose sight-line misses the wall — without it \
          'the link is down' is equally true of a kernel that connects nothing"
     );
 

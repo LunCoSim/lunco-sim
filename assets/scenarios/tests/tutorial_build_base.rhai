@@ -20,14 +20,6 @@ fn on_start(me) {
 fn on_event(me, evt) {
     if evt.name == "cmd:SpawnEntity" {
         this.spawn_count += 1;
-    } else if evt.name == "OBJECTIVE_COMPLETE" && evt.value == "comms" {
-        // The lesson creates the Comms Mast after this observer starts. Its
-        // local EarthTracker wires are intentionally unlanded in this
-        // non-celestial fixture, so register the expected faults when that
-        // authored object is actually spawned.
-        expect_fault("earth_mount_x");
-        expect_fault("earth_mount_y");
-        expect_fault("earth_mount_z");
     } else if evt.name == "MISSION_FAILED" {
         if !this.done { this.done = true; verdict(false, "the built-in base-building mission failed"); }
     } else if evt.name == "MISSION_COMPLETE" && !this.done {

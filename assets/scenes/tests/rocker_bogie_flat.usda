@@ -12,6 +12,18 @@ def Xform "RockerBogieFlat" (
     kind = "assembly"
 )
 {
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rocker-bogie-flat-drive"
+
+        def Scope "Drive" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie_drive.rhai@
+        }
+    }
+
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)

@@ -11,7 +11,7 @@
 # meeting the real borderline wall. A finish flag at the top of the ramp gives S1
 # its arrival objective. The medium rover spawns at the SW corner.
 #
-#   sandbox --scene tutorials/basic/driving_basics.usda
+#   target/debug/luncosim --scene tutorials/basic/driving_basics.usda
 def Xform "DrivingBasics" (
     kind = "assembly"
     doc = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
@@ -56,15 +56,17 @@ def Xform "DrivingBasics" (
     }
 
     # A gentle ~12° ramp (a long wedge) to introduce climbing + wheel slip before
-    # the real slopes. 30 m long, tilted about X, its low lip flush with the plot.
+    # the real slopes. The route runs along +X, so the ramp's long axis and slope
+    # are authored along X; rotating the old wide slab around X made its
+    # transverse edge an uncrossable wall.
     def Cube "Ramp" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (25.0, 2.9, 0.0)
-        double3 xformOp:rotateXYZ = (12.0, 0.0, 0.0)
-        double3 xformOp:scale = (14.0, 0.6, 30.0)
+        double3 xformOp:rotateXYZ = (0.0, 0.0, 12.0)
+        double3 xformOp:scale = (30.0, 0.6, 14.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.40, 0.36, 0.33)]
         bool physics:collisionEnabled = true

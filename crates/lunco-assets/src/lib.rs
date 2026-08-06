@@ -304,10 +304,24 @@ pub fn engine_manifest_text(group: &str) -> Option<String> {
 /// same `lunco://` identity; otherwise `cargo run` and an extracted package
 /// resolve different asset sets. It is deliberately a *read* root only — engine
 /// downloads still write to [`cache_dir`], the user-selected/shared cache.
+///
+/// A checkout may itself be one directory below the workspace that owns the
+/// shared `.cache` (the normal layout for sibling git worktrees). The production
+/// executable is launched directly in that case, so Cargo's
+/// `.cargo/config.toml` environment injection is not present. Discover the
+/// adjacent workspace cache as well; otherwise `cargo run` and the exact same
+/// `target/debug/luncosim` resolve different asset sets.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn development_cache_dir() -> Option<PathBuf> {
-    let candidate = assets_dir_abs().parent()?.join(".cache");
-    candidate.is_dir().then_some(candidate)
+    let assets_dir = assets_dir_abs();
+    let worktree = assets_dir.parent()?;
+    let local = worktree.join(".cache");
+    if local.is_dir() {
+        return Some(local);
+    }
+
+    let adjacent = worktree.parent()?.join(".cache");
+    adjacent.is_dir().then_some(adjacent)
 }
 
 #[cfg(target_arch = "wasm32")]

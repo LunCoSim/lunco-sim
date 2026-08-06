@@ -12,7 +12,7 @@
 //! sensors): mark a prim [`SolarTracked`] (or give it an anchor/orbit) and its
 //! solar pose follows from placement — no domain concept here.
 
-use bevy::math::DVec3;
+use bevy::math::{DMat3, DQuat, DVec3};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -93,6 +93,10 @@ impl Horizon {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SolarFramePose {
     pub pos: DVec3,
+    /// Local scene axes expressed in the solar frame. This is needed by
+    /// authored geometry consumers (for example link occluders), whose box
+    /// orientation must be tested in the same frame as `pos`.
+    pub rotation: DQuat,
     pub local: DVec3,
     pub horizon: Horizon,
 }
@@ -102,6 +106,12 @@ impl SolarFramePose {
     pub fn body(&self) -> i32 {
         self.horizon.body()
     }
+}
+
+/// Rotation that maps the scene's ENU axes (East=+X, Up=+Y, North=−Z) into the
+/// frame coordinates represented by `frame`.
+fn tangent_rotation(frame: &crate::geo::LocalTangentFrame) -> DQuat {
+    DQuat::from_mat3(&DMat3::from_cols(frame.east, frame.up, -frame.north))
 }
 
 #[derive(Clone, Copy)]
@@ -261,7 +271,7 @@ pub fn update_solar_poses(
         // is the normal shape for a ground station: the link feed is several
         // prims below the station's GeodeticAnchor.
         let placement = nearest_placement(entity, &q_parents, &q_anchor, &q_orbit, &q_libration);
-        let (pos, horizon) = if let Some(placement) = placement {
+        let (pos, rotation, horizon) = if let Some(placement) = placement {
             match placement {
                 Placement::Geodetic {
                     entity: anchor_entity,
@@ -278,11 +288,18 @@ pub fn update_solar_poses(
                     else {
                         continue;
                     };
+                    let Some((_, entity_rotation)) =
+                        lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                    else {
+                        continue;
+                    };
                     let frame = solar_tangent_frame(desc, &anchor.geodetic, center, jd);
                     let pos = frame.to_frame(offset);
+                    let rotation = tangent_rotation(&frame) * entity_rotation.0;
                     let up = (pos - center).normalize_or_zero();
                     (
                         pos,
+                        rotation,
                         Horizon::Surface {
                             body: anchor.body,
                             up,
@@ -304,8 +321,14 @@ pub fn update_solar_poses(
                     else {
                         continue;
                     };
+                    let Some((_, entity_rotation)) =
+                        lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                    else {
+                        continue;
+                    };
                     (
                         center + orbit.elements.position_bevy_m(desc.gm, jd) + offset,
+                        entity_rotation.0,
                         Horizon::Free { body: orbit.body },
                     )
                 }
@@ -323,8 +346,14 @@ pub fn update_solar_poses(
                     else {
                         continue;
                     };
+                    let Some((_, entity_rotation)) =
+                        lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                    else {
+                        continue;
+                    };
                     (
                         pos.raw() + offset,
+                        entity_rotation.0,
                         Horizon::Free {
                             body: anchor.secondary,
                         },
@@ -333,16 +362,15 @@ pub fn update_solar_poses(
             }
         } else if let Some((site_body, frame)) = &site {
             // Scene-local: the position is wherever the transform hierarchy puts it.
-            let Ok((cell, tf)) = q_spatial.get(entity) else {
+            let Some((world_position, world_rotation)) =
+                lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+            else {
                 continue;
             };
-            let cell = cell.copied().unwrap_or_default();
-            let local = lunco_core::coords::world_position_seeded(
-                entity, &cell, tf, &q_parents, &q_grids, &q_spatial,
-            );
-            let pos = frame.to_frame(local.0);
+            let pos = frame.to_frame(world_position.0);
             (
                 pos,
+                tangent_rotation(frame) * world_rotation.0,
                 Horizon::Surface {
                     body: *site_body,
                     up: frame.up,
@@ -355,6 +383,7 @@ pub fn update_solar_poses(
         let local = site.as_ref().map(|(_, f)| f.from_frame(pos)).unwrap_or(pos);
         let pose = SolarFramePose {
             pos,
+            rotation,
             local,
             horizon,
         };

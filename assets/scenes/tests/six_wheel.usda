@@ -10,7 +10,7 @@
 # (`inputs:drive.connect`) spawns and wires through the unified path — i.e. a "dynamic
 # vehicle" is a USD file, not a Rust struct.
 #
-#   sandbox --scene scenes/tests/six_wheel.usda
+#   target/debug/luncosim test --scene scenes/tests/six_wheel.usda
 #
 # Verify: 6 wheels spawn; the server logs "Wired wheel .../Wheel_L* drive to FSW
 # port drive_left" and ".../Wheel_R* drive to FSW port drive_right" (the authored

@@ -4,9 +4,17 @@
 // above directly. query() reaches the spatial providers (avian-backed Raycast /
 // GroundHeight live in lunco-mobility; Nearest / EntitiesInRadius in lunco-api).
 
-/// Linear velocity [vx,vy,vz] of an entity (Avian `LinearVelocity`), or () if
-/// the entity has no velocity component.
-fn velocity(id) { get(id, "LinearVelocity") }
+/// Linear velocity [vx,vy,vz] of an entity, or () if the entity has no dynamic
+/// rigid-body velocity. Rigid-body state is exposed by the canonical co-sim
+/// port registry as three scalar ports; there is no reflected `LinearVelocity`
+/// field in that public scripting surface.
+fn velocity(id) {
+    let x = get(id, "velocity_x");
+    let y = get(id, "velocity_y");
+    let z = get(id, "velocity_z");
+    if x == () || y == () || z == () { return (); }
+    [x, y, z]
+}
 
 /// Speed in m/s (0.0 if no velocity).
 fn speed(id) { let v = velocity(id); if v == () { 0.0 } else { vlen(v) } }
@@ -149,4 +157,3 @@ fn entered_zone(evt, name) { evt.name == "enter:" + name }
 /// True if `evt` is an EXIT pulse for trigger zone `name` (`evt.value` = the gid
 /// that left).
 fn exited_zone(evt, name) { evt.name == "exit:" + name }
-

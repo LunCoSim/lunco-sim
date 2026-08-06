@@ -1577,14 +1577,18 @@ fn modelica_models_terminal<'a>(
     })
 }
 
-/// Native physics endpoints must be admitted before a dynamic body is allowed
-/// to integrate. Modelica compilation is entity-scoped and therefore does not
-/// hold the whole world, but a pending joint/wheel/reference endpoint is a
-/// world-level safety condition: otherwise the body can fall or drift before
-/// its constraint exists and Avian later seats it with a large violation.
-/// The sole USD-side transition from a loading projection epoch to a bindable
-/// one.  Failed models are terminal: readiness policy decides whether to hold
+/// Reconcile the USD projection epoch with the native binding transaction.
+/// Failed models are terminal: readiness policy decides whether to hold
 /// physics, while the binder must be allowed to record the failed endpoint.
+///
+/// Native endpoint admission is deliberately *not* a world-level readiness
+/// hold. `PendingUsdJoint`, `PendingWheelWiring`, and `PendingDifferential` are
+/// local activation gates: the affected bodies remain kinematic until their
+/// endpoint is ready. Their preparation and admission systems run inside
+/// Avian's nested `PhysicsSchedule`, so globally pausing that schedule while
+/// waiting for those markers would deadlock the markers forever. A deferred
+/// USD stage is different: its projection can still add arbitrary bodies and
+/// connections, so it retains the world hold until the stage is available.
 fn settle_binding_epoch(
     awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
@@ -1637,9 +1641,11 @@ fn settle_binding_epoch(
     // Modelica compilation has its own per-entity readiness tickets. Do not
     // turn the binding epoch into a world hold while one of those models is
     // cold-compiling; otherwise the world ticket waits on the same compiler
-    // and defeats entity-scoped readiness. The world ticket is only for native
-    // endpoint settlement after every Modelica participant is terminal.
-    let hold_binding_epoch = !settled && models_terminal && !connections.is_empty();
+    // and defeats entity-scoped readiness. Native endpoint markers are also
+    // local gates (see the function contract above), so only a deferred stage
+    // warrants pausing the whole world here.
+    let hold_binding_epoch =
+        !settled && models_terminal && !connections.is_empty() && !awaiting.is_empty();
     match (hold_binding_epoch, wait) {
         (true, None) => {
             let ticket = readiness.begin(

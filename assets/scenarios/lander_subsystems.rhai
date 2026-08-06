@@ -14,21 +14,29 @@
 //     in Rust), not a flag — nothing here touches it.
 //
 // This script only ORCHESTRATES via events: it latches touchdown for the mission to
-// react to, and reacts to the native Modelica fuel `when` events.
+// react to, commands the authored guidance program to stand down, and reacts to the
+// native Modelica fuel events.
 
 fn on_event(me, evt) {
     if evt.name == "lander_touchdown" {
-        print("[Lander] Touchdown - settled on legs.");
+        if this.touchdown_latched == true { return; }
+        let gnc = -1;
+        let lander_name = name(me);
+        if lander_name != () {
+            gnc = find(lander_name + "/GNC");
+        }
+        if gnc < 0 {
+            print("[Lander] touchdown transition failed: guidance program is missing");
+            return;
+        }
+        if !set(gnc, "engage", 0.0) {
+            print("[Lander] touchdown transition failed: GNC engage port is not writable");
+            return;
+        }
+        this.touchdown_latched = true;
+        print("[Lander] Touchdown - guidance disengaged; holding landed state.");
         return;
     }
-    // AUTHORITY is now a first-class WIRED signal: the vessel's `piloted` port
-    // (1 when ANY session — a user or an autopilot — possesses it, derived from the
-    // possession registry in Rust) is wired straight to the internal GNC model,
-    // which yields on it. No script toggle here — the internal controller reads
-    // possession status directly through the wire.
-
-    // Fuel events — threshold crossings on the model's `m_prop` port, declared as
-    // Connected `LunCoEvent` prims on the lander (`LowFuel`, `Depleted`).
     if evt.name == "lander_low_fuel" {
         notify_kind("Lander low on fuel.", "warn");
         print("[Lander] LOW FUEL.");

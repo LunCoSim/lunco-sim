@@ -18,7 +18,7 @@
 # The geometry cannot drift between the two scenes, because there is only one
 # copy of it. The difference is one `over` in the other file, and nothing here.
 #
-# Loaded by `sandbox --scene scenes/tests/filtered_pairs_unfiltered.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/filtered_pairs_unfiltered.usda`.
 
 def Xform "SandboxScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>

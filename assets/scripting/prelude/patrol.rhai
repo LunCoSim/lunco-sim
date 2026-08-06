@@ -11,7 +11,9 @@
 // position OR a map `#{pos:[x,y,z], dwell:f64, on_arrival:[...]}` carrying
 // per-waypoint dwell and arrival actions (e.g. `[take_photo()]` from
 // `science.rhai` — the declarative home for "fire a tool at a waypoint", no
-// tree composition). `speed`/`radius`/`dwell` default to 0.6 / 3.0 / 0.0.
+// tree composition). The helper canonicalizes bare positions to the current
+// `PatrolWaypoint` map shape before crossing the typed command boundary.
+// `speed`/`radius`/`dwell` default to 0.6 / 3.0 / 0.0.
 //
 //   engage_patrol(rover, [[10,0,0], [10,0,10], [0,0,10]], 0.5, 2.0, 1.0)
 //   patrol(rover, points)               // set behaviour on an engaged vessel
@@ -26,9 +28,17 @@ const PATROL_DWELL  = 0.0;
 
 /// Build a `BehaviorSpec::Patrol` map from `points`.
 fn __patrol_spec(points, speed, radius, dwell) {
+    let waypoints = [];
+    for point in points {
+        if type_of(point) == "array" {
+            waypoints.push(#{ pos: point });
+        } else {
+            waypoints.push(point);
+        }
+    }
     #{
         kind: "patrol",
-        waypoints: points,
+        waypoints: waypoints,
         speed: speed,
         radius: radius,
         dwell: dwell,

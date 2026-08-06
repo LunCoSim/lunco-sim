@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 #
-# run_scene_tests.sh — build the headless scene-test runner ONCE, then run every
-# scene test and report a summary table.
+# run_scene_tests.sh — build the production luncosim runner ONCE, then run every
+# authored scene test: deterministic headless Rhai tests plus the GPU-backed
+# render tests declared with lunco:notHeadlessTestable.
 #
-# Each scene is an authored USD file whose attached rhai scenario ends in
-# `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
+# Each headless scene is an authored USD file whose attached Rhai scenario ends
+# in `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
 # deterministically (manual clock, no window, no GPU, no realtime pacing) and
-# exits 0 = PASS, 1 = FAIL, 2 = no verdict. This script aggregates those.
+# exits 0 = PASS, 1 = FAIL, 2 = no verdict. Render-only scenes run through
+# `scripts/run_render_scene_tests.sh` using the same production binary in
+# GPU-full offscreen mode.
 #
 #   ./scripts/run_scene_tests.sh              # all scenes
 #   ./scripts/run_scene_tests.sh drivetrain   # only scenes matching a substring
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
 #
 # Exits non-zero if ANY scene fails, produces no verdict, or hangs past
-# SCENE_TIMEOUT (default 420s) IN THE GATE PASS.
+# SCENE_TIMEOUT (default 420s) IN THE GATE PASS.  SCENE_MAX_TICKS is the
+# simulated-time liveness bound passed to every production scene run; it is
+# deliberately independent of the wall-clock timeout because a valid tutorial
+# route can need more than the binary's small interactive default.
 #
 # ── The gate pass vs the --stress pass ──────────────────────────────────────
 #
@@ -54,6 +60,7 @@ STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
 # it; a scene slow enough to trip it is a finding either way. Override for a
 # slower machine with `SCENE_TIMEOUT=900 ./scripts/run_scene_tests.sh`.
 SCENE_TIMEOUT="${SCENE_TIMEOUT:-420}"
+SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
 
 # ── The scene list ──────────────────────────────────────────────────────────
 #
@@ -72,9 +79,8 @@ SCENE_TIMEOUT="${SCENE_TIMEOUT:-420}"
 # caught by `lunco-scene-commands`'s `every_test_scene_carries_a_scenario`, which
 # fails naming it. The two halves together leave nowhere for a silent test to sit.
 # A scene that CANNOT return a headless verdict says so in itself, with a reason
-# (`lunco:notHeadlessTestable` — the render checks, which need a GPU). That one
-# fact is read here AND by `every_test_scene_carries_a_scenario`; a second
-# exception list in either place would disagree with the first the day it changed.
+# (`lunco:notHeadlessTestable` — the render checks, which need a GPU). Those
+# scenes are not omitted: the GPU pass below discovers the same marker.
 mapfile -t SCENES < <(
     grep -L "lunco:notHeadlessTestable" assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
 )
@@ -86,8 +92,7 @@ mapfile -t SKIPPED < <(
     grep -l "lunco:notHeadlessTestable" assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
 )
 for s in "${SKIPPED[@]}"; do
-    # Named, never silent: a skipped scene the reader cannot see reads as a pass.
-    echo "==> SKIP $(basename "$s" .usda) — declares lunco:notHeadlessTestable"
+    echo "==> QUEUE $(basename "$s" .usda) — GPU render assertion"
 done
 
 # Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
@@ -124,7 +129,7 @@ fi
 # target-dir lock and serialise anyway, so the scene runs are sequential too.
 BIN="target/debug/luncosim"
 echo "==> building luncosim test runner (one cargo invocation, -j 4)"
-if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 8; then
+if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
     echo "BUILD FAILED — no scenes run" >&2
     exit 2
 fi
@@ -161,7 +166,8 @@ for scene in "${SCENES[@]}"; do
     # The flags are PASSED EXPLICITLY even though they are the binary's defaults:
     # the gate's determinism must not silently change if a default ever moves.
     timeout --kill-after=10 "$SCENE_TIMEOUT" \
-        "$BIN" test --scene "$scene" --threads 1 --jitter 0 >"$log" 2>&1
+        "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
+        --threads 1 --jitter 0 >"$log" 2>&1
     code=$?
 
     # The one-line summary `luncosim test` prints last; falls back to the exit code.
@@ -186,6 +192,19 @@ for scene in "${SCENES[@]}"; do
         tail -20 "$log" | sed 's/^/    | /'
     fi
 done
+
+# ── GPU render pass ─────────────────────────────────────────────────────────
+# The two render-only scenes are a separate acceptance class because their
+# assertions are pixels and render diagnostics, not physics telemetry. The
+# helper still uses this already-built production binary and exits non-zero on
+# missing assets, wrong pixels, pipeline warnings, hangs, or incomplete frames.
+if [[ -z "$FILTER" || "hdri shader_fallback" == *"$FILTER"* ]]; then
+    echo
+    echo "==> GPU render pass (production offscreen renderer)"
+    if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_scene_tests.sh" "$FILTER"; then
+        overall=1
+    fi
+fi
 
 # ── Summary table ───────────────────────────────────────────────────────────
 echo
@@ -215,7 +234,7 @@ if [[ $STRESS -eq 1 ]]; then
         echo "==> $name (stress)"
 
         timeout --kill-after=10 "$SCENE_TIMEOUT" \
-            "$BIN" test --scene "$scene" \
+            "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
             --threads "$STRESS_THREADS" \
             --jitter "$STRESS_JITTER" \
             --seed "$STRESS_SEED" >"$log" 2>&1

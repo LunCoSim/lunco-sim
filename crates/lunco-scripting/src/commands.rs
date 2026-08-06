@@ -340,8 +340,30 @@ pub fn attach_rover_autonomy_paths(
             Without<lunco_core::EmbeddedScenarioSource>,
         ),
     >,
+    authored_scenarios: Query<
+        (),
+        Or<(
+            With<lunco_core::EmbeddedScenarioPath>,
+            With<lunco_core::EmbeddedScenarioSource>,
+            With<crate::SceneOwnedScript>,
+        )>,
+    >,
     mut commands: Commands,
 ) {
+    // An authored Rhai program is the scene's control policy. The implicit
+    // autonomy envelope is only the default for a scene with no authored
+    // scenario at all. Letting both writers exist was not benign: the
+    // autopilot's empty patrol emitted a braking SetPorts every fixed tick and
+    // raced a test/tutorial's explicit drive() writes, leaving every rover
+    // stationary while both paths appeared healthy in the log.
+    //
+    // The path/source markers are present before the file is resolved; the
+    // scene-owned marker covers an already-attached inline/file scenario. The
+    // query is intentionally scene-wide because a harness commonly owns its
+    // scenario on a Scope while driving rover descendants by gid.
+    if !authored_scenarios.is_empty() {
+        return;
+    }
     for (entity, inputs, actuators) in q.iter() {
         if !has_rover_control_surface(inputs, actuators) {
             continue;

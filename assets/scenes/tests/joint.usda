@@ -17,7 +17,7 @@
 # CubeA via the gizmo (or call the `MoveEntity` API) and CubeB
 # follows rigidly.
 #
-# Loaded by `sandbox --scene scenes/tests/joint.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/joint.usda`.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (

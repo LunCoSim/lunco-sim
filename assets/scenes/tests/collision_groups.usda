@@ -24,7 +24,7 @@
 # `PhysicsCollisionGroup` applies in the schema — the same collection construct
 # material binding and light linking use, not a bespoke token.
 #
-# Loaded by `sandbox --scene scenes/tests/collision_groups.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/collision_groups.usda`.
 
 def Xform "SandboxScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>

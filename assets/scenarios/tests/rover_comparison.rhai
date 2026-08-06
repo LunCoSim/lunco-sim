@@ -47,14 +47,20 @@
 // sequence is behind the rover. The END of the course is not a constant here: it
 // is derived from the stations the scene actually carries, so re-cutting the
 // course moves the finish line with it.
-const COURSE_RUNOUT_M = 6.0;
+const COURSE_RUNOUT_M = 10.0;
+
+// The generic patrol radius is intentionally broad for interactive navigation.
+// This acceptance course needs the rover to clear its last 5 m berm and enter
+// the authored flat run-out before braking, so the course owns a tighter arrival
+// contract rather than inheriting the interactive default.
+const COURSE_ARRIVAL_RADIUS_M = 0.75;
 
 // `engage_patrol`'s `speed` is a THROTTLE FRACTION, not a velocity — the
 // autopilot scales it by its own approach law (`throttle = speed * f(heading)`).
-// 0.6 is the prelude default and a controlled traverse pace: enough to climb the
+// 0.3 is a deliberately conservative traverse pace: enough to climb the
 // authored grades, far from the full-throttle charge that turns a suspension
 // comparison into a rollover comparison.
-const TRAVERSE_THROTTLE = 0.6;
+const TRAVERSE_THROTTLE = 0.3;
 
 // A lane is 20 m from its neighbours; this claims obstacles for the lane whose
 // rover is nearest without ever reaching the next one.
@@ -66,7 +72,7 @@ fn on_start(me) {
     this.settle_s = 4.0;
     // Long enough for the slowest tier to traverse the ~90 m course at
     // TRAVERSE_THROTTLE, with margin for the obstacles. Headless tests run uncapped.
-    this.run_s = 96.0;
+    this.run_s = 120.0;
     this.next_sample = 0.0;
 
     // ── Subjects are DISCOVERED, not hardcoded ───────────────────────────────
@@ -141,7 +147,6 @@ fn on_start(me) {
     print("[rover-comparison] course: " + this.stations.len() +
           " obstacle prim(s) across the lanes, discovered from the scene");
     print("[rover-comparison] identical lanes at x = -10 / 0 / +10; all tiers launch together");
-    this.next_settle = 0.0;
     this.phase = "settle";
 }
 
@@ -151,21 +156,6 @@ fn on_tick(me) {
 
     if this.phase == "settle" {
         for rover in this.rovers { brake(rover); }
-        // TEMP DIAG: settle sampler — remove after nondeterminism hunt.
-        if this.t >= this.next_settle && this.t < this.settle_s {
-            let line = "[rc-settle] t=" + r4(this.t);
-            for i in 0..this.n {
-                let at = world_pos(this.rovers[i]);
-                if at == () {
-                    line += "  " + this.names[i] + " p=()";
-                } else {
-                    line += "  " + this.names[i] + " p=" + r6(at[0]) + "," + r6(at[1]) +
-                        "," + r6(at[2]) + " tilt=" + r6(tilt_deg(this.rovers[i]).abs());
-                }
-            }
-            print(line);
-            this.next_settle = this.t + 0.0167;
-        }
         if this.t >= this.settle_s {
             for i in 0..this.n {
                 let rover = this.rovers[i];
@@ -189,7 +179,7 @@ fn on_tick(me) {
                 }
                 let end_z = last_z - COURSE_RUNOUT_M;
                 let goal = [at[0], at[1], end_z];
-                engage_patrol(rover, [goal], TRAVERSE_THROTTLE, (), ());
+                engage_patrol(rover, [goal], TRAVERSE_THROTTLE, COURSE_ARRIVAL_RADIUS_M, ());
                 print("[rover-comparison] " + this.names[i] + " lane x=" + r2(at[0]) +
                       "  " + mine.len() + " station(s)  -> z=" + r2(end_z));
             }
@@ -231,24 +221,9 @@ fn on_tick(me) {
                 " b=" + r2(get(this.rovers[i], "brake")) +
                 " dl=" + r2(get(this.rovers[i], "drive_left")) +
                 " dr=" + r2(get(this.rovers[i], "drive_right"));
-            // TEMP DIAG: micro-pose for Easy — remove after nondeterminism hunt.
-            if i == 0 {
-                let e = world_pos(this.rovers[i]);
-                line += "  E6=" + r6(e[0]) + "," + r6(e[1]) + "," + r6(e[2]);
-            }
         }
         print(line);
         this.next_sample = this.t + 2.0;
-    }
-    // TEMP DIAG: per-tick full-precision probe around the divergence window.
-    if this.t >= 78.0 && this.t <= 85.0 {
-        let e = world_pos(this.rovers[0]);
-        let line = "[rc-probe] t=" + this.t;
-        line += "  Easy x=" + e[0] + " y=" + e[1] + " z=" + e[2];
-        line += " tilt=" + tilt_deg(this.rovers[0]).abs();
-        line += " th=" + get(this.rovers[0], "throttle");
-        line += " s=" + get(this.rovers[0], "steer");
-        print(line);
     }
 
     if this.t >= this.settle_s + this.run_s {

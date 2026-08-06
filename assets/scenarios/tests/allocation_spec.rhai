@@ -3,7 +3,7 @@
 // TEST-ONLY. Runs against `scenes/tests/allocation_spec.usda`, which that
 // scene attaches itself — loading the scene runs the spec:
 //
-//     sandbox --scene scenes/tests/allocation_spec.usda
+//     target/debug/luncosim test --scene scenes/tests/allocation_spec.usda
 //
 // That rig carries TWO skid rovers differing in exactly one authored opinion,
 // the name of their drive kernel: `RoverSkid` (stock, kernel `"skid"`, on which

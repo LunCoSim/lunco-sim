@@ -11,7 +11,7 @@
 #
 # Read live:  ListPorts -> the Box entity exposes accel_*, range, contact,
 #   contact_force alongside its rigid-body ports.
-# Loaded by `sandbox --scene scenes/tests/sensor.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/sensor.usda`.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (

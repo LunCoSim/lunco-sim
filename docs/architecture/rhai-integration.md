@@ -395,9 +395,9 @@ policy out of the Rust engine core:
 1. **Sequencing** — `seq`/`par_*`/`repeat`/`wait_*` are data nodes executed by the
    behavior kernel; Rhai authors the policy and callbacks.
 2. **Events and Sensors** — `TelemetryEvent` reaches `on_event`; Avian overlap
-   Sensors publish waypoint arrivals. A waypoint's visible sphere and Sensor are
-   one USD primitive with one standard `radius`; mission scripts do not scale
-   markers or poll a duplicate arrival tolerance.
+   Sensors publish waypoint arrivals. A waypoint authors a visible dome and a
+   ground-anchored invisible trigger, both using the same standard USD `radius`;
+   mission scripts do not scale markers or poll a duplicate arrival tolerance.
 3. **Behavior Trees** — BT.CPP v4 XML owns route topology and the native behavior
    kernel executes it; USD owns waypoint identity and geometry.
 4. **Objectives** — declarative Rhai objectives consume real event/state predicates

@@ -62,7 +62,7 @@
 # is caught by the same logic that a two-lane rig would use, without
 # manufacturing a fake twin.
 #
-#     sandbox --scene scenes/tests/six_independent_parity.usda
+#     target/debug/luncosim test --scene scenes/tests/six_independent_parity.usda
 #
 # The rover drives along -Z (its forward axis) from z = +120, with 500 x 500 m
 # of ground under it — enough that a full-lock steer leg cannot run off the pad.

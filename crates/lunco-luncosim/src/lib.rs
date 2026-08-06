@@ -2368,47 +2368,15 @@ impl Plugin for SandboxCorePlugin {
             }
             if let Some(dir) = record_dir {
                 let path = std::path::PathBuf::from(dir);
-                // A video destination (`out.mp4`) needs its PARENT, not itself,
-                // to exist as a directory — see `output_is_video`.
-                let dir_to_create = if lunco_workbench::screenshot::output_is_video(&path) {
-                    path.parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_default()
-                } else {
-                    path.clone()
-                };
-                if let Err(e) = (!dir_to_create.as_os_str().is_empty())
-                    .then(|| std::fs::create_dir_all(&dir_to_create))
-                    .unwrap_or(Ok(()))
-                {
-                    error!(
-                        "[offline-record] CLI failed to create output directory {}: {e}",
-                        dir_to_create.display()
-                    );
-                } else {
-                    info!(
-                        "[offline-record] CLI mode armed: recording to {} at {} FPS",
-                        path.display(),
-                        record_fps
-                    );
-                    // Video destination => stream into ffmpeg; the recorder
-                    // demotes to a PNG sequence if ffmpeg is missing (spawn
-                    // failure aborts loudly at the first frame).
-                    let video = lunco_workbench::screenshot::output_is_video(&path);
-                    app.insert_resource(lunco_workbench::screenshot::OfflineRecordingState {
-                        active: true,
-                        frame_index: 0,
-                        output_dir: path,
-                        fps: record_fps.max(1),
-                        is_waiting_for_frame: false,
-                        // Enter on the "advance" phase, matching `StartOfflineRecording`.
-                        frame_just_captured: true,
-                        // CLI-armed recording starts before `WinitSettings` exists to
-                        // override; `StartOfflineRecording` is what forces Continuous.
-                        prev_present_mode: None,
-                        video,
-                    });
-                }
+                // Route CLI recording through the same command boundary as API
+                // and Rhai requests. Inserting OfflineRecordingState directly
+                // would skip screenshot.rs's visual readiness gate and could
+                // capture a half-loaded scene (notably before an HDRI cubemap
+                // projection completes).
+                app.insert_resource(lunco_workbench::screenshot::OfflineRecordingRequest {
+                    output_dir: path,
+                    fps: record_fps.max(1),
+                });
             }
         }
 
@@ -2838,6 +2806,17 @@ impl Plugin for SandboxCorePlugin {
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
 
+        // A textured DomeLight has a second asynchronous visual phase after
+        // the USD prim itself spawns: its equirectangular image is projected
+        // into the cubemap consumed by Skybox/IBL. Mirror that phase onto the
+        // same bus so the offline recorder cannot start on a black sky.
+        #[cfg(feature = "ui")]
+        app.add_systems(
+            Update,
+            report_dome_environment_status
+                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+        );
+
         // Modelica participant readiness → status bus. The screenshot gate must
         // not start a take while a USD-defined visual participant is still
         // loading or compiling: its authored output (the lander's plume
@@ -3262,6 +3241,33 @@ fn report_scene_spawn_status(
         bus.set_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
     } else if pending > 0 {
         bus.set_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
+    } else {
+        bus.remove_progress(SOURCE);
+    }
+}
+
+/// Mirror the asynchronous textured-DomeLight projection into the workbench
+/// status bus. A missing source image remains pending here and therefore causes
+/// the recorder to hit its loud readiness timeout instead of accepting a black
+/// environment as a valid render.
+#[cfg(feature = "ui")]
+fn report_dome_environment_status(
+    domes: Query<(
+        &lunco_usd_bevy::dome::UsdDomeEnvironment,
+        Option<&lunco_usd_bevy::dome::DomeCubemap>,
+        Option<&lunco_usd_bevy::dome::DomeProjection>,
+    )>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    let Some(mut bus) = bus else { return };
+    const SOURCE: &str = lunco_workbench::status_bus::DOME_SOURCE;
+    let pending = domes.iter().any(|(_, cubemap, projection)| {
+        projection.is_some()
+            || cubemap.is_none()
+            || cubemap.is_some_and(|cubemap| cubemap.0 == Handle::default())
+    });
+    if pending {
+        bus.set_progress(SOURCE, "projecting textured DomeLight", 0, 0);
     } else {
         bus.remove_progress(SOURCE);
     }

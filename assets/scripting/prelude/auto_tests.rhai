@@ -125,6 +125,14 @@ fn expect_fault(port) {
     emit("EXPECT_FAULT", port);
 }
 
+/// Declare the terminal runtime fault a negative production fixture must
+/// reproduce. Unlike a dangling-wire expectation this is checked against the
+/// structured `RuntimeFaults` boundary by `luncosim test`, so a fixture cannot
+/// pass from a log line or from merely keeping the process alive.
+fn expect_runtime_fault(kind) {
+    emit("EXPECT_RUNTIME_FAULT", kind);
+}
+
 /// Print the failures, print the greppable verdict line, emit it on `channel`,
 /// and raise a toast. Call ONCE, last. Returns true on pass.
 ///

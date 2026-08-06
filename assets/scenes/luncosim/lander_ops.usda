@@ -32,7 +32,7 @@
 #   P           — pause/unpause simulation
 #   Backspace   — release possession
 #
-#   sandbox --scene scenes/luncosim/lander_ops.usda
+#   target/debug/luncosim --scene scenes/luncosim/lander_ops.usda
 
 def Xform "LanderTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
@@ -214,9 +214,10 @@ def Xform "LanderTest" (
 
     # ── Rover drive-to waypoints ────────────────────────────────────────────
     # Three translucent glowing markers (the same reusable marker asset) forming a
-    # course. Each visible Sphere is also an overlap-only Sensor; the runtime emits
-    # `waypoint.reached` and `rover_surface_ops.rhai` translates those authoritative
-    # events for anything downstream (the tutorial) to wait on.
+    # course. Each marker has a visible dome and a ground-anchored overlap-only
+    # Trigger; the runtime emits `waypoint.reached` and `rover_surface_ops.rhai`
+    # translates those authoritative events for anything downstream (the tutorial)
+    # to wait on.
     def Xform "RoverTarget1" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )

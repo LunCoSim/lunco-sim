@@ -17,7 +17,7 @@
 //
 //   the geodetic node's radius   the body's surface        placement resolved
 //   the Kepler node's radius     its semi-major axis       placement resolved
-//   every lunar<->Earth edge     330,000-410,000 km        the Moon's true orbital
+//   every Earth<->Moon-surface edge 330,000-410,000 km     the Moon's true orbital
 //                                                          band (perigee 356,500,
 //                                                          apogee 406,700)
 //   every edge's light time      range / c                 derived, not invented
@@ -90,6 +90,7 @@ fn on_tick(me) {
     let short = find("/LinkTest/ShortRangeSat");
     let companion = find("/LinkTest/ShortRangeCompanion");
     let earths = link_ids(g, "earth");
+    let lunar_surface = link_ids(g, "base");
 
     // Did each placement RESOLVE? Measured against the body it was placed on, not
     // against who it can see: an unresolved placement leaves its node at the solar
@@ -110,14 +111,21 @@ fn on_tick(me) {
         if r > short_max { short_max = r; }
     }
 
-    // Cross-body edges: one end an Earth complex, the other not. Their length IS
-    // the Earth-Moon distance, whatever the epoch.
+    // Cross-body Earth↔Moon-surface edges. L1/L2/L4 relays are intentionally
+    // between the Earth and Moon and therefore have shorter/longer relay hops;
+    // including them here would measure relay geometry while claiming to test
+    // the Earth-Moon orbital band. The `base` class pins the actual lunar body
+    // endpoint authored for this assertion.
     let cross = [];
     let lt_err = 0.0;
     for e in g.edges {
         let a_earth = e.a in earths;
+        let a_surface = e.a in lunar_surface;
         let b_earth = e.b in earths;
-        if a_earth != b_earth { cross.push(e.range_m); }
+        let b_surface = e.b in lunar_surface;
+        if (a_earth && b_surface) || (b_earth && a_surface) {
+            cross.push(e.range_m);
+        }
         // Light time against range/c, worst case over EVERY edge.
         if e.range_m > 0.0 {
             let rel = ((e.light_time_s - e.range_m / C_M_S) / (e.range_m / C_M_S)).abs();
@@ -196,9 +204,8 @@ fn any_edge(g, a, ids) {
 //                     placement resolved rather than leaving it at the origin.
 //   Kepler radius     the lunar relay sits at its authored 6540 km semi-major
 //                     axis, so the orbital placement resolved too.
-//   cross-body range  330,000-410,000 km, the Moon's true orbital band. A node
-//                     stranded at the origin cannot produce it, and neither can a
-//                     scripted distance.
+//   cross-body range  330,000-410,000 km, the Moon's true orbital band, for the
+//                     Earth↔surface edge only. Relay hops are separate geometry.
 //   light time        range / c, to 1%. Cheap, and it catches a light time that
 //                     is a constant rather than a derivation.
 //   short-range sat   links to its 456 km companion, never to Earth, and holds no

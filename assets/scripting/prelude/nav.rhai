@@ -27,8 +27,9 @@ fn steer_to(entity, target) {
 }
 
 /// Drive `entity` toward world point `target` at `speed`. Returns true once
-/// within `radius` (and brakes). Eases the throttle down while poorly aligned so
-/// the rover PIVOTS toward the goal instead of arcing wide past it. The core
+/// within `radius` (and brakes). Eases the throttle down while poorly aligned
+/// and while approaching the acceptance radius, so the rover can turn into a
+/// waypoint and settle instead of carrying full speed through it. The core
 /// per-tick navigation primitive. (Named `nav_to`, not `goto` — reserved word.)
 fn nav_to(entity, target, speed, radius) {
     if arrived(entity, target, radius) {
@@ -40,8 +41,19 @@ fn nav_to(entity, target, speed, radius) {
     let f = world_forward(entity);
     let fwd = speed;
     if p != () && f != () {
-        let dot = vdot(vnorm(f), vnorm(vsub(target, p)));
-        fwd = speed * clamp(0.25 + 0.75 * dot, 0.25, 1.0);
+        let to = vsub(target, p);
+        let distance_to_target = vlen(to);
+        let dot = vdot(vnorm(f), vnorm(to));
+        // A target behind the rover requires a true skid pivot.  Any forward
+        // command in that state makes the vehicle trace a large arc and can
+        // permanently miss a finite waypoint radius.
+        let alignment = if dot < 0.0 { 0.0 } else { clamp(0.25 + 0.75 * dot, 0.25, 1.0) };
+        // The approach factor is a semantic part of navigation: the requested
+        // acceptance radius is where the vehicle must stop, not merely where a
+        // fast vehicle is allowed to pass. Two radii provide a smooth braking
+        // distance while retaining a small positive command for final steering.
+        let approach = clamp((distance_to_target - radius) / (radius * 2.0), 0.15, 1.0);
+        fwd = speed * alignment * approach;
     }
     drive(entity, fwd, steer);
     false

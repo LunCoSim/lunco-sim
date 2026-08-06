@@ -10,7 +10,7 @@
 # differential should drive the right rocker to pitch the opposite way, holding
 # `HingeL.angle + HingeR.angle ≈ 0` while the chassis stays near level.
 #
-#   sandbox --scene scenes/tests/rocker_bogie.usda
+#   target/debug/luncosim test --scene scenes/tests/rocker_bogie.usda
 #
 # Verify (HTTP API): GetPort on `/RockerBogieTest/Rover/HingeL` and `.../HingeR`
 # `angle` — opposite signs, near-zero sum; server logs "Resolved rocker-bogie

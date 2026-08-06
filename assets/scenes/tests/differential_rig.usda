@@ -6,7 +6,7 @@
 )
 
 # G5 isolated differential test — coupling ON. See differential_rig.usda.
-#   sandbox --scene scenes/tests/differential_rig.usda
+#   target/debug/luncosim test --scene scenes/tests/differential_rig.usda
 # Verify (ListPorts): HingeR.angle ≈ −HingeL.angle (rocker B mirrors A).
 
 def Xform "DiffRigTest" (

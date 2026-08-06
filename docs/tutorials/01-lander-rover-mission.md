@@ -1016,8 +1016,8 @@ or give each waypoint a time limit and fail the mission if it's missed.
   hysteresis in Modelica, then connect its 0/1 output to `LunCoEvent` (Step 6).
 - A waypoint never reaches? Check that the referenced marker has its standard
   `radius`, `PhysicsCollisionAPI`, `physics:collisionEnabled = true`, and
-  `lunco:triggerZone = "waypoint"`; the same sphere supplies the visual and Sensor
-  footprint (Step 8).
+  `lunco:triggerZone = "waypoint"`; the invisible ground-anchored `Trigger` sphere
+  supplies the Sensor footprint while the lifted `Dome` remains visual (Step 8).
 - Possessed the vehicle, and only Space does anything? Your model has no `pitch` /
   `roll` / `yaw` inputs, so the `Controls` profile is writing ports nobody reads.
   Ports bind by NAME — a typo is silence, not an error.

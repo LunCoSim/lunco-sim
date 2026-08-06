@@ -69,7 +69,11 @@ fn task(me) {
         #{ wait: 0.5 },
         // Roll onto the flat first, then climb to the finish flag.
         #{ move_to: [-15.0, 0.0, 0.0], speed: 0.6, radius: 6.0, subject: r },
-        #{ move_to_entity: "/DrivingBasics/Flag", speed: 0.6, radius: 5.0, subject: r },
+        // The waypoint sensor's authored sphere is 2.5 m in radius and its
+        // origin is the ground contact point. Stop inside that real trigger,
+        // not five metres away from it where the medium rover's body may never
+        // overlap the sensor.
+        #{ move_to_entity: "/DrivingBasics/Flag", speed: 0.6, radius: 1.5, subject: r },
         #{ brake: true, secs: 2.0, subject: r },
     ];
     seq(compile_timeline(drive))

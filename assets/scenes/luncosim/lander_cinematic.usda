@@ -28,7 +28,7 @@
 # declarative `seq([...])` task: cut to a `def Camera`, `wait`, cut again,
 # `wait_for("lander_touchdown")`, then chase the rover through the course.
 #
-#   sandbox --scene scenes/luncosim/lander_cinematic.usda
+#   target/debug/luncosim --api 4101 --scene scenes/luncosim/lander_cinematic.usda
 
 over "LanderTest" (
     doc = "A scripted lunar-descent cut-scene: cinematic cameras crane and chase as the lander performs a powered descent, touches down, and a rover runs the survey course."

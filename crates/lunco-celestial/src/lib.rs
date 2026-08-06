@@ -217,7 +217,7 @@ impl Plugin for CelestialPlugin {
         // exclusive version, needed to call the TerrainRaycast provider with
         // `&mut World`, inserted a sync point that interleaved with the
         // twin/terrain despawns and tripped avian's island bookkeeping.)
-        app.add_systems(Update, link::update_links);
+        app.add_systems(Update, link::update_links.after(pose::update_solar_poses));
         app.add_systems(Update, wifi::update_wifi_links.after(link::update_links));
         // Expose the working peer's range + verdict as PORTS, so an authored RF model
         // (`assets/models/CommsLink.mo`) can turn metres into bits/s off an ordinary

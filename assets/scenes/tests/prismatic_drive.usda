@@ -26,7 +26,7 @@
 #         SetPort {api_id:<Lift>, name:"displacement", value:-0.5}  -> Platform rises to -0.5 m
 #         GetPort {api_id:<Lift>, name:"displacement"}              -> measured offset (m)
 #
-# Loaded by `sandbox --scene scenes/tests/prismatic_drive.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/prismatic_drive.usda`.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (

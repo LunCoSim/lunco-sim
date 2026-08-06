@@ -249,6 +249,11 @@ def Xform "Motor" (
     # thermal model or a radiator consumes; nothing in the physics step reads it.
     float outputs:heat
 
+    # Electrical power drawn by the solved motor model. This is an authored
+    # observable of the DCMotor facet, so generated electrical islands expose it
+    # through their canonical member-output boundary alongside `heat`.
+    float outputs:electrical_power
+
     # --- Telemetry ---
     # Drive command as a RETAINED channel, so "was this motor actually being
     # told to pull?" needs no per-vessel authoring: every rover referencing this
@@ -270,7 +275,7 @@ def Xform "Motor" (
     #
     # `Parameter` is a Component — ONE channel per prim — so this names the one
     # quantity worth a mnemonic and a unit. Everything else the model exposes
-    # (`heat`, and every INTERNAL Modelica variable) is published wholesale under
+    # (`heat`, `electrical_power`, and every INTERNAL Modelica variable) is published wholesale under
     # the `sim.` namespace by `lunco_cosim::telemetry`, which is why there is no
     # temptation here to invent a channel prim per variable.
     #

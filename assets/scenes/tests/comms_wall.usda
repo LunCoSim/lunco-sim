@@ -72,14 +72,23 @@ def Xform "CommsWallTest" (
         rel material:binding:physics = </CommsWallTest/PhysicsMaterials/Friction_1_0>
     }
 
-    # The base station. Its link node is the `Antenna` child at dish height
-    # (class = "base"); see structures/comms_mast.usda.
+    # The relay station. Its link node is the `Antenna` child at dish height.
+    # The direct-link policy admits rover↔relay and rover↔earth; a lunar `base`
+    # is intentionally not part of that Earth-link policy, so this isolated
+    # occlusion fixture authors the role it actually exercises.
     def Xform "Mast" (
         prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
     )
     {
         double3 xformOp:translate = (0, 0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Antenna"
+        {
+            over "YawHead" { over "DishGimbal" { over "DishHead" { over "LinkAperture" {
+                string lunco:link:class = "relay"
+            } } } }
+        }
     }
 
     # The wall — 8 m wide, 12 m tall, centred between the two nodes and straddling
@@ -119,7 +128,8 @@ def Xform "CommsWallTest" (
     # Rover (0, 20) to here (12, -20) crosses the wall's plane at x = 6, and the
     # wall spans x = -4..4 — so this line misses it by 2 m. The baseline is 41.8 m
     # against the blocked one's 40 m, near enough that RANGE cannot be what
-    # separates the two verdicts. Class `base_clear`, so a script can address it.
+    # separates the two verdicts. The relay role makes the control endpoint
+    # eligible under the direct-link policy.
     def Xform "MastClear" (
         prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
     )
@@ -130,7 +140,7 @@ def Xform "CommsWallTest" (
         over "Antenna"
         {
             over "YawHead" { over "DishGimbal" { over "DishHead" { over "LinkAperture" {
-                string lunco:link:class = "base_clear"
+                string lunco:link:class = "relay"
             } } } }
         }
     }

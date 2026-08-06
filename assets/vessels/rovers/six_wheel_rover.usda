@@ -347,8 +347,8 @@ def Xform "SixWheelRover" (
                 prepend apiSchemas = ["CollectionAPI:components"]
             )
             {
-                float inputs:drive_left.connect = </SixWheelRover/outputs:drive_left>
-                float inputs:drive_right.connect = </SixWheelRover/outputs:drive_right>
+                float inputs:drive_left.connect = </SixWheelRover.outputs:drive_left>
+                float inputs:drive_right.connect = </SixWheelRover.outputs:drive_right>
                 float outputs:soc.connect = </SixWheelRover/Battery.outputs:soc_out>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.

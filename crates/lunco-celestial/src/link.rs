@@ -343,7 +343,7 @@ pub(crate) fn update_links(
         Option<&lunco_core::GlobalEntityId>,
     )>,
     q_terrain: Query<(Entity, &DemHeightField)>,
-    q_occluders: Query<(Entity, &LinkOccluder)>,
+    q_occluders: Query<(&LinkOccluder, &SolarFramePose, &Transform)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -425,13 +425,11 @@ pub(crate) fn update_links(
     // snapshot discipline. Usually a handful of prims, often none.
     let occluders: Vec<(DVec3, DQuat, DVec3)> = q_occluders
         .iter()
-        .filter_map(|(e, occ)| {
-            let (p, r) = world_pose(e, &q_parents, &q_grids, &q_spatial)?;
-            let (_, tf) = q_spatial.get(e).ok()?;
+        .map(|(occ, pose, tf)| {
             let (center_local, half) = occ.box_for(tf.scale);
-            // `world_pose` composes translation+rotation only, so the extent's own
-            // (scaled) centre offset is placed by the prim's rotation here.
-            Some((p.0 + r.0 * center_local, r.0, half))
+            // The pose is already in the solar frame used by link endpoints;
+            // using raw grid transforms here would compare unlike coordinates.
+            (pose.pos + pose.rotation * center_local, pose.rotation, half)
         })
         .collect();
 
@@ -487,10 +485,8 @@ pub(crate) fn update_links(
             // the hook reads the first cause, not every cause.
             let occluder_blocked = cheap_ok
                 && !terrain_blocked
-                // `world_pose` above produces grid-absolute coordinates, which
-                // match `SolarFramePose::pos`. `local` is intentionally only
-                // for the site-local DEM oracle; mixing it here made authored
-                // occluders miss every link away from the floating origin.
+                // Occluders and endpoints are both solar-frame poses. Their
+                // local scene positions are reserved for the DEM oracle.
                 && occluder_blocks(a.pose.pos, b.pose.pos, &occluders);
             let builtin = cheap_ok && !terrain_blocked && !occluder_blocked;
 
@@ -1106,6 +1102,7 @@ mod tests {
                 },
                 SolarFramePose {
                     pos,
+                    rotation: DQuat::IDENTITY,
                     local: pos,
                     horizon: crate::pose::Horizon::Surface {
                         body: 301,
@@ -1481,6 +1478,7 @@ mod tests {
                 },
                 SolarFramePose {
                     pos: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
                     local: DVec3::ZERO,
                     horizon: crate::pose::Horizon::Surface {
                         body: 301,
@@ -1558,6 +1556,7 @@ mod tests {
             },
             SolarFramePose {
                 pos: DVec3::new(10.0, 0.0, 0.0),
+                rotation: DQuat::IDENTITY,
                 local: DVec3::new(10.0, 0.0, 0.0),
                 horizon: crate::pose::Horizon::Surface {
                     body: 301,
@@ -1584,16 +1583,34 @@ mod tests {
 
     /// Spawn a box occluder with explicit local half-extents (an authored UsdGeom
     /// `extent`) at `at`, unscaled.
+    fn test_pose(transform: &Transform) -> SolarFramePose {
+        let pos = transform.translation.as_dvec3();
+        let q = transform.rotation;
+        SolarFramePose {
+            pos,
+            rotation: DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64),
+            local: pos,
+            horizon: crate::pose::Horizon::Surface {
+                body: 301,
+                up: DVec3::Y,
+            },
+        }
+    }
+
+    fn test_occluder(world: &mut World, occluder: LinkOccluder, transform: Transform) -> Entity {
+        let pose = test_pose(&transform);
+        world.spawn((occluder, transform, pose)).id()
+    }
+
     fn occluder(world: &mut World, at: DVec3, half: DVec3) -> Entity {
-        world
-            .spawn((
-                LinkOccluder {
-                    half_extents: half,
-                    center: DVec3::ZERO,
-                },
-                Transform::from_translation(at.as_vec3()),
-            ))
-            .id()
+        test_occluder(
+            world,
+            LinkOccluder {
+                half_extents: half,
+                center: DVec3::ZERO,
+            },
+            Transform::from_translation(at.as_vec3()),
+        )
     }
 
     #[test]
@@ -1658,14 +1675,15 @@ mod tests {
         let a = node(&mut world, "rover", DVec3::ZERO, 1.0e12);
         node(&mut world, "station", DVec3::new(20.0, 0.0, 0.0), 1.0e12);
         // Default (unit cube) scaled 2×10×10 ⇒ half-extents 1×5×5 — blocks, as above.
-        world.spawn((
+        test_occluder(
+            &mut world,
             LinkOccluder::default(),
             Transform {
                 translation: Vec3::new(10.0, 0.0, 0.0),
                 scale: Vec3::new(2.0, 10.0, 10.0),
                 ..default()
             },
-        ));
+        );
 
         world.run_system_once(update_links).unwrap();
 
@@ -1686,13 +1704,14 @@ mod tests {
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
-        world.spawn((
+        test_occluder(
+            &mut world,
             LinkOccluder {
                 half_extents: DVec3::new(1.0, 2.0, 5.0),
                 center: DVec3::new(0.0, 30.0, 0.0),
             },
             Transform::from_translation(Vec3::new(10.0, 0.0, 0.0)),
-        ));
+        );
         world.run_system_once(update_links).unwrap();
         assert!(
             world.get::<LinkState>(a).unwrap().peers[0].connected,
@@ -1703,13 +1722,14 @@ mod tests {
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
-        world.spawn((
+        test_occluder(
+            &mut world,
             LinkOccluder {
                 half_extents: DVec3::new(1.0, 2.0, 5.0),
                 center: DVec3::ZERO,
             },
             Transform::from_translation(Vec3::new(10.0, 0.0, 0.0)),
-        ));
+        );
         world.run_system_once(update_links).unwrap();
         assert!(
             !world.get::<LinkState>(a).unwrap().peers[0].connected,
@@ -1731,7 +1751,8 @@ mod tests {
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
-        world.spawn((
+        test_occluder(
+            &mut world,
             LinkOccluder {
                 half_extents: thin,
                 center: DVec3::ZERO,
@@ -1740,7 +1761,7 @@ mod tests {
                 translation: center.as_vec3(),
                 ..default()
             },
-        ));
+        );
         world.run_system_once(update_links).unwrap();
         assert!(
             !world.get::<LinkState>(a).unwrap().peers[0].connected,
@@ -1753,7 +1774,8 @@ mod tests {
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
-        world.spawn((
+        test_occluder(
+            &mut world,
             LinkOccluder {
                 half_extents: thin,
                 center: DVec3::ZERO,
@@ -1763,7 +1785,7 @@ mod tests {
                 rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
                 ..default()
             },
-        ));
+        );
         world.run_system_once(update_links).unwrap();
         assert!(
             !world.get::<LinkState>(a).unwrap().peers[0].connected,
@@ -1776,7 +1798,8 @@ mod tests {
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
-        world.spawn((
+        test_occluder(
+            &mut world,
             LinkOccluder {
                 half_extents: thin,
                 center: DVec3::ZERO,
@@ -1786,7 +1809,7 @@ mod tests {
                 rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
                 ..default()
             },
-        ));
+        );
         world.run_system_once(update_links).unwrap();
         assert!(
             world.get::<LinkState>(a).unwrap().peers[0].connected,

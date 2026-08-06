@@ -18,7 +18,7 @@
 # rather than guessing from how far something moved.
 #
 # Read live:  ListPorts -> Rig/Pad exposes `contact` and `contact_force`.
-# Loaded by `sandbox --scene scenes/tests/filtered_pairs.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/filtered_pairs.usda`.
 
 def Xform "SandboxScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>

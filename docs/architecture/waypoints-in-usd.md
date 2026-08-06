@@ -65,12 +65,18 @@ The engine that runs it comes from the source's extension, so nothing about the 
 needs a binding of its own — and deleting the prim deletes the mission, which is exactly
 what a patrol should be.
 
-Two things are deliberately shared rather than duplicated:
+The marker has one authored USD identity and one runtime arrival path:
 
-- **The marker is one USD shape** — `assets/vessels/markers/waypoint.usda` authors
-  one `UsdGeomSphere` named `Dome`. Its standard USD `radius` is the only waypoint
-  size input. The same composed sphere is rendered and projected as the overlap-only
-  Avian `Sensor`; there is no invisible `Zone` with a second radius.
+- **The marker has separate visual and event geometry** —
+  `assets/vessels/markers/waypoint.usda` authors a visible `UsdGeomSphere` named
+  `Dome` and an invisible ground-anchored `UsdGeomSphere` named `Trigger`.
+  Both use explicit standard USD `radius` values: the dome radius controls the
+  visual annotation and the trigger radius controls the interaction volume.
+  Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
+  are separate authored geometry contracts because the dome is lifted for
+  presentation while the trigger is anchored to the terrain.
+  This keeps the visible dome lifted above terrain while the overlap volume
+  remains useful on slopes.
 - **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
   vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with the marker
   path. The route UI uses that set for visited appearance; an autopilot cursor may
@@ -83,26 +89,29 @@ meshes or poll a duplicate distance tolerance.
 `BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
 metadata" as an intended channel.
 
-### One authored marker, one radius, one arrival path
+### One authored marker, explicit visual and interaction geometry
 
 The reusable marker follows the standard-schema boundary:
 
 ```usda
-def Sphere "Dome" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+def Sphere "Dome"
 {
     double radius = 2.5
     double3 xformOp:translate = (0, 2.5, 0)
-    bool physics:collisionEnabled = true
+}
+def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+{
+    double radius = 2.5
     custom string lunco:triggerZone = "waypoint"
 }
 ```
 
 `lunco:triggerZone` is the mission meaning that USD does not define; `radius`,
 transform, visibility, material, and collision are standard USD/UsdPhysics data.
-`lunco-usd-bevy::read_shape_dims` is the shared shape projection used by both the
-visual mesh and the Avian collider, so changing `radius` changes both together.
-The sensor is non-solid and remains visibly present after arrival; the live route
-projection tints only entries in `ReachedWaypoints` gray.
+`lunco-usd-bevy::read_shape_dims` projects both spheres from their authored
+radius, while only `Trigger` is projected into the Avian overlap sensor. The
+visual dome remains present after arrival; the live route projection tints only
+entries in `ReachedWaypoints` gray.
 
 ### Waypoints are not children of the vessel
 

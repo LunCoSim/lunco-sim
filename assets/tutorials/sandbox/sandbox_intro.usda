@@ -11,7 +11,7 @@
 # this scene is just a light backdrop so the viewport step has something to show.
 # On completion it chains to First Drive via lunco:nextScene.
 #
-#   sandbox --scene tutorials/sandbox_intro/sandbox_intro.usda
+#   target/debug/luncosim --scene tutorials/sandbox/sandbox_intro.usda
 # or start it from the Tutorials panel.
 
 def Xform "SandboxIntro" (

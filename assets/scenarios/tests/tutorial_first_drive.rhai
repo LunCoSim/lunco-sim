@@ -7,12 +7,6 @@
 //! the built-in lesson was broken.
 
 fn on_start(me) {
-    // The lesson world is intentionally a local driving plot, not a celestial
-    // site. Its optional Earth-tracker wires are therefore expected to remain
-    // unlanded; the drive/control verdict below is still required.
-    expect_fault("earth_mount_x");
-    expect_fault("earth_mount_y");
-    expect_fault("earth_mount_z");
     this.possess_count = 0;
     this.port_writes = 0;
     this.verdict_done = false;

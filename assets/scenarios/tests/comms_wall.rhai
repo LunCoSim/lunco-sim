@@ -10,8 +10,8 @@
 //
 // The scene is built so occlusion is the ONLY variable:
 //
-//   Mast       z = -20, x =  0   sight-line crosses the wall     -> must be DOWN
-//   MastClear  z = -20, x = +12  sight-line misses it by 2 m     -> must be UP
+//   Relay      z = -20, x =  0   sight-line crosses the wall     -> must be DOWN
+//   RelayClear z = -20, x = +12  sight-line misses it by 2 m     -> must be UP
 //   Rover      z = +20
 //
 // 40 m against 41.8 m. The BLOCKED link is the SHORTER one, so a range-only
@@ -90,7 +90,7 @@ fn verdict(s) {
 
     f.push(t_true(s.n_nodes >= 3,
         "the link graph carries " + s.n_nodes + " node(s); this scene authors " +
-        "three (rover, base, base_clear) and a missing one cannot be occluded"));
+        "three (rover, relay, relay-clear) and a missing one cannot be occluded"));
 
     f.push(t_true(s.n_peers > 0,
         "the rover has no direct peers at all, so 'the blocked mast is not among " +
@@ -110,7 +110,7 @@ fn verdict(s) {
 
     print("[wall] ── results ──────────────────────────────────────────");
     print("[wall]   nodes            " + s.n_nodes + "  rover peers " + s.n_peers);
-    print("[wall]   direct -> base   " + s.blocked + "  (40.0 m, wall on the line — must be false)");
+    print("[wall]   direct -> relay   " + s.blocked + "  (40.0 m, wall on the line — must be false)");
     print("[wall]   direct -> clear  " + s.clear + "  (41.8 m, nothing on the line — must be true)");
 
     report_verdict(f, "COMMS WALL", "COMMS_WALL");

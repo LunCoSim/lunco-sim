@@ -42,7 +42,7 @@
 # `scenarios/tests/ackermann_parity.rhai` (attached below) drives both from ONE tick
 # loop and fails LOUDLY if they diverge. Run:
 #
-#     sandbox --scene scenes/tests/ackermann_parity.usda
+#     target/debug/luncosim test --scene scenes/tests/ackermann_parity.usda
 #
 # The rovers are 50 m apart in X and drive along -Z (their forward axis: the
 # headlights sit at z = -1.75), so their paths never intersect even while they

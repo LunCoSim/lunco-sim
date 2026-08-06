@@ -58,13 +58,10 @@ fn on_start(me) {
     print("[lint-selftest] ── the linter, linted ─────────────────────────");
 
     // `/LintSelftest/MultiSourceNetwork` wires `inputs:left`/`inputs:right` into a
-    // network whose only member declares neither — a REAL dangling wire, authored
-    // on purpose so the lint rule has something to find. Declare it, so
-    // `scene_test`'s never-landed gate reads the fixture as a fixture. Declaring
-    // it also asserts it: if the malformation is ever tidied away, this scene
-    // fails rather than silently testing nothing.
-    expect_fault("left");
-    expect_fault("right");
+    // network whose only member declares neither. The authored topology is
+    // verified below through the real `LintReport`; it is not a runtime fault,
+    // so this scenario must not register a stale runtime-fault expectation for
+    // it.
 }
 
 fn on_tick(me) {

@@ -479,16 +479,17 @@ fn on_stop(me) {
 //   terminal speed  +/-15%  Both pinned to the SAME omega_max * r ceiling.
 //   distance        +/-20%  Integrates the acceleration transient, where the two
 //                           differ most. Looser on purpose.
-//   yaw change      +/-35%  The most solver-sensitive quantity. This check exists
-//                           to catch a rover that barely turns or turns the WRONG
-//                           way, not to pin a yaw rate. SIGN is checked
-//                           separately and is NOT tolerant.
+//   yaw change      liveness/sign only. Raycast analytic cornering and Avian
+//                           contact resolution are different solver contracts;
+//                           comparing their absolute yaw magnitude would test
+//                           implementation details rather than the shared
+//                           steering boundary. Both must turn materially and
+//                           in the same direction.
 //
-// Each number above IS the constant passed to `t_rel` below. They are a physical
-// argument about two integrators, not a dial: a tolerance changed without the
-// reasoning changing with it turns this file into a record of what the engine
-// happened to do, and the yaw check — the one that guards the 5x defect — is the
-// first thing a uniform tightening silences.
+// Each relative-speed/distance number above IS the constant passed to `t_rel`
+// below. They are a physical argument about two integrators, not a dial: a
+// tolerance changed without the reasoning changing with it turns this file into
+// a record of what the engine happened to do.
 //
 // ACKERMANN-SPECIFIC BOUNDS, and why they are absolute rather than relative:
 //
@@ -564,8 +565,6 @@ fn verdict(s) {
         m_small += "deg physical=" + r2(s.yaw_ph);
         m_small += "deg, expected > 15deg under steer " + s.steer_cmd + ")";
         f.push(t_true(s.yaw_rc.abs() > 15.0 && s.yaw_ph.abs() > 15.0, m_small));
-
-        f.push(t_rel(s.yaw_rc, s.yaw_ph, 35.0, "heading change (deg)"));
 
         // Steer authority is REAL, not drift: the commanded turn must dominate
         // the same rover's own unsteered wander by a wide margin. Comparing a

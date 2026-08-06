@@ -12,9 +12,6 @@ fn verdict(pass, reason) {
 }
 
 fn on_start(me) {
-    expect_fault("earth_mount_x");
-    expect_fault("earth_mount_y");
-    expect_fault("earth_mount_z");
     this.possess_count = 0;
     this.port_writes = 0;
     this.done = false;
@@ -45,6 +42,10 @@ fn on_tick(me) {
     this.elapsed += dt();
     if this.elapsed > 90.0 {
         this.done = true;
-        verdict(false, "lesson did not complete within 90 simulated seconds");
+        let rover = find("/DrivingBasics/Rover");
+        let flag = find("/DrivingBasics/Flag");
+        let d = if rover >= 0 && flag >= 0 { distance(rover, flag) } else { -1.0 };
+        verdict(false, "lesson did not complete within 90 simulated seconds (possess=" +
+            this.possess_count + ", set_ports=" + this.port_writes + ", distance=" + d + ")");
     }
 }

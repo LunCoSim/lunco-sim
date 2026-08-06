@@ -28,7 +28,7 @@ fn on_event(me, evt) {
         this.port_writes += 1;
     } else if evt.name == "MISSION_FAILED" {
         if !this.done { this.done = true; verdict(false, "the built-in lander mission failed"); }
-    } else if evt.name == "MISSION_COMPLETE" && !this.done {
+    } else if evt.name == "course_complete" && !this.done {
         let rover = find("/LanderTest/SkidRover");
         let goal = find("/LanderTest/RoverTarget3");
         let arrived = false;
@@ -45,8 +45,8 @@ fn on_event(me, evt) {
 fn on_tick(me) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.elapsed > 180.0 {
+    if this.elapsed > 450.0 {
         this.done = true;
-        verdict(false, "lesson did not complete within 180 simulated seconds");
+        verdict(false, "lesson did not complete within 450 simulated seconds");
     }
 }

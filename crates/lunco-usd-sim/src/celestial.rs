@@ -414,9 +414,13 @@ pub fn insert_celestial_comms_components(
         .scalar::<bool>(sdf_path, "lunco:occluder")
         .unwrap_or(false)
     {
-        commands
-            .entity(entity)
-            .try_insert(read_occluder_box(reader, sdf_path));
+        commands.entity(entity).try_insert((
+            read_occluder_box(reader, sdf_path),
+            // LinkOccluder is tested against LinkNode::SolarFramePose. The
+            // marker makes that frame an explicit projection contract for
+            // every authored blocker, including a scene-local wall.
+            lunco_celestial::pose::SolarTracked,
+        ));
     }
 }
 

@@ -52,7 +52,7 @@ over "Tire" (
     # sized under the SMALLER of the two — see `motor.usda` — so neither spins on
     # flat ground, and grip is what stops it rather than a coincidence.
     double lunco:tire:frictionCoefficient = 1.5                # tyre↔regolith friction
-    # Cornering stiffness — side force per m/s of LATERAL slip, capped at μ·N.
+    # Cornering stiffness — side force per RADIAN of slip angle, capped at μ·N.
     #
     # A SECOND NUMBER, because they are two mechanisms. The longitudinal term
     # stands in for rolling resistance and drive slip and must stay soft, or a
@@ -68,18 +68,11 @@ over "Tire" (
     # 3.6 m/s of side-slip: a tire that never in any manoeuvre reached its own
     # friction limit, and met a hard corner with ~5% of the grip it had.
     #
-    # It read as parity only because it was fitted while the joint rover's motor
-    # was a 6x velocity source (`lunco:wheel:stallTorqueGain`, since removed).
-    # That saturated BOTH realizations' friction cones at all times, so the
-    # LINEAR region — the only place this number does anything — was never
-    # entered by either. Putting the joint motor back on its authored torque
-    # curve dropped both into it, and they disagreed on sight:
-    # `drivetrain_parity` swept 52° raycast against 9° physical.
-    #
-    # Values this stiff used to be unstable (an explicit damper this hard
-    # oscillates), which is what drove the original fit downwards. It no longer
-    # can: `lunco_mobility::update_wheel_spin` bounds the lateral force by the
-    # impulse that exactly arrests the slip, so the term cannot overshoot.
+    # This is an absolute force coefficient, matching the PhysX vehicle field's
+    # N/rad semantics. The runtime must not multiply it by normal load; load only
+    # limits the resulting force through the Coulomb cone below. Keep the value
+    # deliberately below the longitudinal stiffness: a skid-steer tire must be
+    # able to scrub laterally while still resisting ordinary cornering slip.
     float physxVehicleTire:lateralStiffness = 12.6
 
     # --- Contact-solver friction (UsdPhysicsMaterialAPI) ---

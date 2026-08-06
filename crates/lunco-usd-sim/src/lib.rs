@@ -3303,7 +3303,10 @@ fn activate_dynamic_bodies(
         (Entity, &UsdPrimPath, Option<&AuthoredInitialVelocity>),
         With<ShouldBeDynamic>,
     >,
-    q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
+    q_pending_joints: Query<
+        (&UsdPrimPath, &lunco_usd_avian::PendingUsdJoint),
+        With<lunco_usd_avian::PendingUsdJoint>,
+    >,
     q_pending_admissions: Query<&PendingJointAdmission>,
     q_joint_states: Query<(
         &UsdPrimPath,
@@ -3325,9 +3328,10 @@ fn activate_dynamic_bodies(
 ) {
     let mut promoted = false;
     for (entity, path, authored_velocity) in q_kinematic.iter() {
-        let has_pending_joint = q_pending_joints
-            .iter()
-            .any(|j_path| j_path.stage_handle == path.stage_handle);
+        let has_pending_joint = q_pending_joints.iter().any(|(joint_path, pending)| {
+            joint_path.stage_handle == path.stage_handle
+                && (pending.body0_path == path.path || pending.body1_path == path.path)
+        });
         let has_pending_admission = q_pending_admissions
             .iter()
             .any(|pending| pending.body0 == entity || pending.body1 == entity);

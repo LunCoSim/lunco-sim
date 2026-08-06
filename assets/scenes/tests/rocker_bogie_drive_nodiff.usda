@@ -12,6 +12,18 @@ def Xform "RockerBogieDrive" (
     kind = "assembly"
 )
 {
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rocker-bogie-drive-nodiff"
+
+        def Scope "Drive" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie_drive.rhai@
+        }
+    }
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )

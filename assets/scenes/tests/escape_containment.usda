@@ -15,6 +15,18 @@ def Xform "EscapeContainmentTest" (
     doc = "Negative fixture: a dynamic body begins outside the static world bounds."
 )
 {
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "escape-containment"
+
+        def Scope "EscapeContainment" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/escape_containment.rhai@
+        }
+    }
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )

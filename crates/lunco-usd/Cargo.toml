@@ -68,6 +68,7 @@ lunco-render = { path = "../lunco-render" }
 # is `SimConnection` — owned by `lunco-cosim`. Dev-only: the library itself does
 # not wire actuators, it authors the USD they are built from.
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-modelica = { path = "../lunco-modelica" }
 lunco-mobility = { path = "../lunco-mobility" }
 # Wheels author `primvars:materialType = "shader"`, so the headless
 # entity-pipeline tests must register `Assets<ShaderMaterial>` or

@@ -1054,10 +1054,14 @@ def Xform "DescentLander" (
     # commanded reaction. The spring force remains available on each joint for
     # strut-load visualization; the controller reads the actual pad/terrain
     # contact force from the collider that carries the load.
-    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
+    # Avian owns each compound collider on its rigid-body prim. The pad is the
+    # authored contact shape, but its runtime endpoint is the leg body that
+    # carries that shape; reading the child path would address only a transform
+    # prim and silently produce no contact port.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
 
     # ── Propellant events ────────────────────────────────────────────────────
     # Conditions are equations in Lander.mo. These prims only bind the model's

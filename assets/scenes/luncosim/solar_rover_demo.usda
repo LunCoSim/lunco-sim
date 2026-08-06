@@ -22,11 +22,27 @@ def Xform "SolarRoverTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Solar-powered rover co-simulation scene. The rover drives Waypoints, drains its battery, then stops to track the sun and charge."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
 
     uniform bool lunco:spawnable = false
+
+    # A solar-tracking scene needs an authored local celestial frame and a
+    # reproducible epoch. Without these two inputs the environment provider has
+    # no finite Earth/Sun direction, so the tracker correctly stays at its
+    # authored pose and the electrical panel receives no sunlight.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.3
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
@@ -66,6 +82,7 @@ def Xform "SolarRoverTest" (
     {
         double3 xformOp:rotateXYZ = (-30.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        float inputs:shadow:distance = 3000.0
 
         # USD connection: SunOrbit Modelica output -> Sun light input
         float inputs:sun_azimuth.connect = </SolarRoverTest/SunOrbit.outputs:sun_azimuth>
@@ -201,6 +218,7 @@ def Xform "SolarRoverTest" (
             float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_y>
             float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_z>
             float outputs:solar_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:power_out>
+            float outputs:solar_incidence.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:cos_incidence>
             prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
         }
 

@@ -1001,6 +1001,7 @@ url = "https://example.invalid/source.jpg"
 dest = "textures/earthlike_source.jpg"
 
 [earthlike.process]
+kind = "texture"
 target_resolution = [4, 2]
 output = "textures/earthlike.png"
 "#;

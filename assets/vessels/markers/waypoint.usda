@@ -6,9 +6,9 @@
 )
 
 # Reusable mission waypoint marker — a translucent glowing DOME a vehicle is
-# meant to drive to. It NEVER collides as a solid body: the visible dome is also
-# an overlap-only avian Sensor (non-solid). Arrival is an EVENT
-# (`enter:waypoint`) reacted to in rhai, not a per-tick distance poll.
+# meant to drive to, plus a ground-anchored overlap volume. Neither is a solid
+# body. Arrival is an EVENT (`enter:waypoint`) reacted to in rhai, not a per-tick
+# distance poll.
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`. Transparency
 # uses the standard `primvars:displayOpacity` (folded into base-color alpha +
@@ -51,18 +51,18 @@ def Xform "WaypointMarker" (
         }
     }
 
-    # Translucent emissive dome and overlap Sensor. This is deliberately one
-    # Sphere: its standard USD radius is the single waypoint-size input used by
-    # both the rendered marker and the Avian collider projection.
+    # Translucent emissive dome. It is visual-only; the trigger volume below is
+    # ground-anchored so a vehicle approaching a marker on a slope can enter the
+    # waypoint without having to overlap the top of a dome floating one radius
+    # above the terrain.
     def Sphere "Dome" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         custom string lunco:interaction:left = "pass_through"
         custom string lunco:interaction:right = "context"
         double radius = 2.5
-        # The marker origin is the terrain contact point. Lift the sphere centre
-        # by one radius so the complete visible dome is above the surface.
+        # The marker origin is the terrain contact point. Lift the visible sphere
+        # centre by one radius so the complete dome is above the surface.
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
@@ -73,10 +73,20 @@ def Xform "WaypointMarker" (
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow.
         bool primvars:doNotCastShadows = true
+    }
+
+    # The trigger is deliberately a separate, invisible geometry prim. Its
+    # centre is the marker's authored terrain anchor. The trigger radius is an
+    # explicit standard geometry value because the runtime shape projection
+    # reads geometry dimensions as authored defaults; USD attribute connections
+    # describe dataflow and are not geometry-dimension values.
+    def Sphere "Trigger" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 2.5
+        token visibility = "invisible"
         bool physics:collisionEnabled = true
-        # The visible sphere itself is the non-solid arrival sensor. Its
-        # authored radius above therefore defines both the visual footprint
-        # and the arrival tolerance, with no second size variable to drift.
         custom string lunco:triggerZone = "waypoint"
     }
 }

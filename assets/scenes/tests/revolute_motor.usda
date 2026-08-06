@@ -19,7 +19,7 @@
 # name:"angle", value:1.2}` should drive `apply_joint_drives` →
 # motor.target_position, and the Arm should yaw to ~1.2 rad about Y.
 #
-# Loaded by `sandbox --scene scenes/tests/revolute_motor.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/revolute_motor.usda`.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (

@@ -402,34 +402,34 @@ impl Plugin for LunCoScriptingPlugin {
                 Update,
                 world_bridge::drain_world_scripts.run_if(scripts_run_here),
             );
+            // Scene projection and scenario attachment belong in Update, after
+            // USD has materialised the prim markers. The implicit autonomy
+            // policy runs after that chain: an authored scene scenario reserves
+            // the control plane before the default rover actor is created.
             app.add_systems(
-                FixedUpdate,
+                Update,
                 (
-                    // Every newly spawned wheeled control surface gets the same
-                    // host-side Rhai autonomy program. This runs before the normal
-                    // file-loader/attach lifecycle, so external Twin rovers and
-                    // runtime asset instances use the exact same path as authored
-                    // rovers without mutating their source USD.
-                    commands::attach_rover_autonomy_paths
-                        .run_if(scenario::scenario_execution_enabled),
                     // File-referenced scenarios (lunco:scriptPath): load the .rhai
                     // asset and swap the path marker for EmbeddedScenarioSource.
                     // Runs before attach so the loaded source attaches same frame.
-                    commands::resolve_embedded_scenario_paths
-                        .run_if(scenario::scenario_execution_enabled),
+                    commands::resolve_embedded_scenario_paths,
                     // USD-embedded scenarios: attach any the loader stamped with
                     // EmbeddedScenarioSource (lunco:script on the prim) so scene-
                     // authored scenarios run on spawn.
-                    commands::attach_embedded_scenarios
-                        .run_if(scenario::scenario_execution_enabled),
-                    // Persistent per-entity scenario lifecycle (neutral driver,
-                    // rhai backend). Runs on EVERY peer now: the driver gates each
-                    // entity by its `ScriptScope` (host-only by default), and a
-                    // client-scoped scenario's `cmd()`s are restricted to the
-                    // client-local surface — so a predicting client runs only
-                    // presentation/HUD scripts, never authoritative sim mutation.
-                    world_bridge::tick_rhai_scenarios.run_if(scenario::scenario_execution_enabled),
-                ),
+                    commands::attach_embedded_scenarios,
+                    // A rover with no authored scenario gets the canonical
+                    // host-side autonomy envelope. A scene with any authored
+                    // scenario is left to that program's explicit policy.
+                    commands::attach_rover_autonomy_paths,
+                )
+                    .chain()
+                    .run_if(scenario::scenario_execution_enabled),
+            );
+            app.add_systems(
+                FixedUpdate,
+                // Scenario execution stays fixed-step so control writes retain
+                // deterministic physics timing.
+                world_bridge::tick_rhai_scenarios.run_if(scenario::scenario_execution_enabled),
             );
         }
 

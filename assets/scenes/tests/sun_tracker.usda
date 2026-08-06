@@ -20,7 +20,7 @@
 #   - `GetPort {api_id:<Hinge>, name:"angle"}` → measured angle tracks `yaw`.
 #   - `SetEnvironmentLight {"sun_yaw":<rad>}` → the panel re-aims to face it.
 #
-#   sandbox --scene scenes/tests/sun_tracker.usda
+#   target/debug/luncosim test --scene scenes/tests/sun_tracker.usda
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SunTrackerTest" (

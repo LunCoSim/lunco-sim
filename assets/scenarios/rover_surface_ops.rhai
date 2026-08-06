@@ -17,9 +17,9 @@
 // `rover_deployed`, the tutorial turns the rest into a student checklist. Neither
 // reaches into this script's state, and this script knows about neither.
 
-// The marker's visible Sphere is also its overlap Sensor. The runtime emits
-// `waypoint.reached` with the composed marker path as its value; mission policy
-// translates that event into the named course events.
+// The marker's invisible ground-anchored Trigger is its overlap Sensor. The
+// runtime emits `waypoint.reached` with the composed marker path as its value;
+// mission policy translates that event into the named course events.
 fn on_event(me, evt) {
     let rover = find("/LanderTest/SkidRover");
     if evt.name != "waypoint.reached" || evt.source != rover { return; }

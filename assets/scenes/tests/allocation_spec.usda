@@ -42,7 +42,7 @@
 # `drivetrain_parity.usda` — a rig whose numbers are already known-good — so the
 # only new variable in this scene is the kernel name.
 #
-#     sandbox --scene scenes/tests/allocation_spec.usda
+#     target/debug/luncosim test --scene scenes/tests/allocation_spec.usda
 
 def Xform "AllocationSpec" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>

@@ -30,16 +30,6 @@ fn on_start(me) {
     this.sample_s = 0.5;
     this.next_sample = 0.0;
 
-    // The rover's Comms/EarthTracker carries three `earth_mount_*` wires that
-    // never land in this scene — it has no celestial content, so no Earth
-    // direction exists to publish and the antenna holds its authored pose (by
-    // design, `lunco-environment/src/earth.rs`). Declare them as expected
-    // faults so the never-landed gate doesn't mask the physics verdict. See
-    // `expect_fault` in auto_tests.rhai.
-    expect_fault("earth_mount_x");
-    expect_fault("earth_mount_y");
-    expect_fault("earth_mount_z");
-
     this.rover = find("/WheelieCheck/Rover");
     this.bl = find("/WheelieCheck/Rover/BogieHingeL");
     this.br = find("/WheelieCheck/Rover/BogieHingeR");

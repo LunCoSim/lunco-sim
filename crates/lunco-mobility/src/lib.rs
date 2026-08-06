@@ -538,15 +538,14 @@ pub struct WheelRaycast {
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
     /// like ice.
-    /// Tire CORNERING stiffness, NORMALISED BY LOAD: side force per radian of
-    /// slip angle per newton of normal force (dimensionless, per rad).
+    /// Tire CORNERING stiffness: side force per radian of slip angle (N/rad).
     ///
     /// NOT force per m/s of lateral velocity — that was the old model, and the
     /// rename is deliberate: the units changed, so a value carried across without
     /// thought fails to compile instead of being silently wrong by ~100×.
     ///
-    /// Full side force arrives at `α = μ / cornering_stiffness`, so ~10 puts a
-    /// μ = 0.8 tyre at its peak near 4.6° of slip.
+    /// The force is clamped with the load-dependent Coulomb cone after the
+    /// cornering law is evaluated.
     pub cornering_stiffness: f64,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,

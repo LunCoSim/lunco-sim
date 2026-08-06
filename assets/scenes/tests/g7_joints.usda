@@ -13,7 +13,7 @@
 #     under gravity but is held at ≤2 m from the anchor.
 # Expect server log: "Built USD joint PhysicsSphericalJoint ..." and
 #   "Built USD joint PhysicsDistanceJoint ..." with NO "Unsupported" warning.
-# Loaded by `sandbox --scene scenes/tests/g7_joints.usda`.
+# Loaded by `target/debug/luncosim test --scene scenes/tests/g7_joints.usda`.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place (even here,
 # where the rig is authored in-file rather than referenced from part models).

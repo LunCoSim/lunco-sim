@@ -94,6 +94,7 @@ impl Plugin for ScreenshotPlugin {
             // `drive_offline_clock`, which only acts once `state.active` is set —
             // so the shot begins on the same frame it was cleared to begin.
             .add_systems(Update, start_recording_when_scene_ready)
+            .add_systems(Startup, arm_cli_recording)
             // One-shot contracts: `--record-frames <n>` bounds the take, and
             // `--offscreen` exits the process once the take is on disk.
             .add_systems(
@@ -127,6 +128,19 @@ impl Plugin for ScreenshotPlugin {
         // leaf or a rhai `photo()`, neither holding an HTTP response open).
         register_all_commands(app);
     }
+}
+
+/// Convert the composition root's one-shot CLI request into the ordinary
+/// recording command. Keeping this at the command boundary means API, Rhai, and
+/// CLI recordings share directory validation, readiness, clock ownership, and
+/// teardown semantics.
+fn arm_cli_recording(request: Option<Res<OfflineRecordingRequest>>, mut commands: Commands) {
+    let Some(request) = request else { return };
+    commands.trigger(StartOfflineRecording {
+        output_dir: request.output_dir.to_string_lossy().into_owned(),
+        fps: request.fps.max(1),
+    });
+    commands.remove_resource::<OfflineRecordingRequest>();
 }
 
 /// What an in-flight capture should do when it lands. A component ON the `Screenshot`
@@ -571,6 +585,20 @@ pub struct StartOfflineRecording {
     /// Target folder. Empty => 'recorded_frames' in the current working dir.
     pub output_dir: String,
     /// Video target FPS (default: 60).
+    pub fps: u32,
+}
+
+/// Startup request used by one-shot CLI modes.
+///
+/// The application composition root can insert this before the screenshot
+/// plugin is built. The plugin turns it into the same
+/// [`StartOfflineRecording`] command used by the API and scenarios, so CLI
+/// captures cannot bypass the scene-visual readiness gate.
+#[derive(Resource, Debug, Clone)]
+pub struct OfflineRecordingRequest {
+    /// Target folder or video path.
+    pub output_dir: std::path::PathBuf,
+    /// Output frame rate.
     pub fps: u32,
 }
 
@@ -1038,6 +1066,7 @@ const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500)
 const VISUAL_BUSY_SOURCES: &[&str] = &[
     crate::status_bus::TERRAIN_SOURCE,
     crate::status_bus::SCENE_SOURCE,
+    crate::status_bus::DOME_SOURCE,
     crate::status_bus::MODELICA_SOURCE,
 ];
 

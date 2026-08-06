@@ -415,6 +415,10 @@ EXIT CODES:
 #[derive(Resource, Default)]
 struct ExpectedFaults(std::collections::BTreeSet<String>);
 
+/// Runtime-fault kinds a negative scene explicitly asserts.
+#[derive(Resource, Default)]
+struct ExpectedRuntimeFaults(std::collections::BTreeSet<String>);
+
 /// `expect_fault(port)` in rhai lands here.
 fn catch_expected_fault(trigger: On<TelemetryEvent>, mut expected: ResMut<ExpectedFaults>) {
     let evt = trigger.event();
@@ -425,6 +429,21 @@ fn catch_expected_fault(trigger: On<TelemetryEvent>, mut expected: ResMut<Expect
         return;
     };
     expected.0.insert(port.clone());
+}
+
+/// `expect_runtime_fault(kind)` in rhai lands here.
+fn catch_expected_runtime_fault(
+    trigger: On<TelemetryEvent>,
+    mut expected: ResMut<ExpectedRuntimeFaults>,
+) {
+    let evt = trigger.event();
+    if evt.name != "EXPECT_RUNTIME_FAULT" {
+        return;
+    }
+    let TelemetryValue::String(kind) = &evt.data else {
+        return;
+    };
+    expected.0.insert(kind.clone());
 }
 
 fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
@@ -468,26 +487,52 @@ fn modelica_sources_terminal(world: &mut World) -> bool {
         .all(|model| !model.is_compiling && (model.is_compiled || model.last_error.is_some()))
 }
 
-/// True once Modelica has produced its first live sample and all authored USD
-/// joints have crossed both deferred admission stages.
+/// True once every Modelica participant has either produced its first live
+/// sample or reached a terminal error, and all authored USD joints have crossed
+/// both deferred admission stages.
+///
+/// A terminal Modelica error is not an initialized solver and must keep physics
+/// fail-closed in the normal application. The scene-test runner still advances
+/// a fixture containing deliberate invalid programs so its scenario can issue
+/// the real lint/failure verdict; any non-terminal compile or admission wait
+/// continues to block the runner.
 fn participants_ready(world: &mut World) -> bool {
     let models_ready = {
         let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
         q.iter(world).all(|model| {
-            model.last_error.is_none()
-                && model.is_compiled
-                && !model.paused
-                && model.current_time > 0.0
-                && !model.variables.is_empty()
+            model.last_error.is_some()
+                || (model.last_error.is_none()
+                    && model.is_compiled
+                    && !model.paused
+                    && model.current_time > 0.0
+                    && !model.variables.is_empty())
         })
     };
     if !models_ready {
         return false;
     }
 
+    let has_terminal_model_error = {
+        let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
+        q.iter(world).any(|model| model.last_error.is_some())
+    };
+    let only_terminal_model_failures = has_terminal_model_error
+        && world
+            .get_resource::<lunco_readiness::ReadinessRegistry>()
+            .is_some_and(|registry| {
+                registry
+                    .pending()
+                    .next()
+                    .is_some_and(|first| first.kind == lunco_readiness::kinds::PROGRAM_FAILED)
+                    && registry
+                        .pending()
+                        .all(|item| item.kind == lunco_readiness::kinds::PROGRAM_FAILED)
+            });
     if world
         .get_resource::<lunco_readiness::ReadinessState>()
-        .is_some_and(|state| state.world_hold || !state.held_entities.is_empty())
+        .is_some_and(|state| {
+            (state.world_hold && !only_terminal_model_failures) || !state.held_entities.is_empty()
+        })
     {
         return false;
     }
@@ -501,6 +546,123 @@ fn participants_ready(world: &mut World) -> bool {
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
     )>>();
     q_pending.iter(world).next().is_none()
+}
+
+/// Explain a bounded readiness failure with the live state that kept the gate
+/// closed. A silent no-verdict is not actionable: the scene runner must name
+/// the model, terminal error, pause state, and readiness hold that blocked the
+/// scenario so the owning subsystem can be fixed.
+fn log_participant_readiness_blockers(world: &mut World) {
+    let mut models = world.query_filtered::<
+        (
+            Entity,
+            &ModelicaModel,
+            Option<&lunco_cosim::SimComponent>,
+        ),
+        With<UsdSourcedCosim>,
+    >();
+    for (entity, model, component) in models.iter(world) {
+        let status = component
+            .map(|component| format!("{:?}", component.status))
+            .unwrap_or_else(|| "no SimComponent".into());
+        warn!(
+            "[test] participant blocker entity={entity:?} model={} compiled={} compiling={} paused={} current_time={:.6} variables={} status={} error={}",
+            model.model_name,
+            model.is_compiled,
+            model.is_compiling,
+            model.paused,
+            model.current_time,
+            model.variables.len(),
+            status,
+            model.last_error.as_deref().unwrap_or("none"),
+        );
+    }
+    if let Some(state) = world.get_resource::<lunco_readiness::ReadinessState>() {
+        warn!(
+            "[test] readiness blocker world_hold={} held_entities={:?}",
+            state.world_hold, state.held_entities
+        );
+    }
+    if let Some(registry) = world.get_resource::<lunco_readiness::ReadinessRegistry>() {
+        for item in registry.pending() {
+            warn!(
+                "[test] readiness pending kind={} subject={:?} label={} elapsed_ticks={} action={:?}",
+                item.kind, item.subject, item.label, item.elapsed_ticks, item.action
+            );
+        }
+    }
+    let mut pending_joints = world
+        .query_filtered::<(Entity, Option<&lunco_usd_bevy::UsdPrimPath>), Or<(
+            With<lunco_usd_avian::PendingUsdJoint>,
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+        )>>();
+    for (entity, path) in pending_joints.iter(world) {
+        warn!(
+            "[test] pending joint entity={entity:?} path={}",
+            path.map(|path| path.path.as_str())
+                .unwrap_or("<no USD path>"),
+        );
+    }
+    let mut pending_usd = world.query_filtered::<
+        (Entity, &lunco_usd_avian::PendingUsdJoint),
+        With<lunco_usd_avian::PendingUsdJoint>,
+    >();
+    let describe_target = |path: &str| {
+        let found = world.iter_entities().find(|entity| {
+            entity
+                .get::<lunco_usd_bevy::UsdPrimPath>()
+                .is_some_and(|value| value.path == path)
+        });
+        let Some(entity) = found else {
+            return format!("{path}:<missing>");
+        };
+        format!(
+            "{path}:{:?}(position={},disabled={},shadow_seeded={})",
+            entity.id(),
+            entity.get::<avian3d::prelude::Position>().is_some(),
+            entity
+                .get::<avian3d::prelude::RigidBodyDisabled>()
+                .is_some(),
+            entity
+                .get::<lunco_usd_avian::big_space_bridge::BridgeShadow>()
+                .is_some_and(|shadow| shadow.is_seeded()),
+        )
+    };
+    for (entity, pending) in pending_usd.iter(world) {
+        warn!(
+            "[test] unresolved USD joint entity={entity:?} type={} body0={} body1={}",
+            pending.joint_type,
+            describe_target(&pending.body0_path),
+            describe_target(&pending.body1_path),
+        );
+    }
+    let mut pending_admissions = world.query_filtered::<
+        (Entity, &lunco_usd_avian::PendingJointAdmission),
+        With<lunco_usd_avian::PendingJointAdmission>,
+    >();
+    for (entity, pending) in pending_admissions.iter(world) {
+        let describe_body = |body: Entity| {
+            format!(
+                "{body:?}(rb={:?},island={},disabled={})",
+                world.get::<avian3d::prelude::RigidBody>(body),
+                world
+                    .get::<avian3d::dynamics::solver::islands::BodyIslandNode>(body)
+                    .is_some(),
+                world
+                    .get::<avian3d::prelude::RigidBodyDisabled>(body)
+                    .is_some(),
+            )
+        };
+        warn!(
+            "[test] joint admission entity={entity:?} body0={} body1={}",
+            describe_body(pending.body0),
+            describe_body(pending.body1),
+        );
+    }
 }
 
 pub fn run() -> u8 {
@@ -583,6 +745,8 @@ pub fn run() -> u8 {
     app.add_observer(catch_verdict);
     app.init_resource::<ExpectedFaults>();
     app.add_observer(catch_expected_fault);
+    app.init_resource::<ExpectedRuntimeFaults>();
+    app.add_observer(catch_expected_runtime_fault);
 
     app.finish();
     app.cleanup();
@@ -595,6 +759,18 @@ pub fn run() -> u8 {
         .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
     {
         gate.enabled = false;
+    }
+    // A scene test is allowed to contain deliberate negative Modelica fixtures
+    // (the linter self-test does). Use the readiness system's explicit policy
+    // input for that test contract; otherwise a terminal compile error correctly
+    // holds the production world and also prevents the fixture's Rhai verdict
+    // from ever running. This changes no production policy and does not bypass
+    // active compilation or unresolved physics admission.
+    if let Some(mut settings) = app
+        .world_mut()
+        .get_resource_mut::<lunco_readiness::ReadinessSettings>()
+    {
+        settings.ignore_failed_models = true;
     }
 
     // ── Scene-readiness freeze ────────────────────────────────────────────────
@@ -703,6 +879,7 @@ pub fn run() -> u8 {
     let participants_are_ready = participants_ready(app.world_mut());
     println!("[test] participant-readiness warmup held {participant_waits} updates");
     if !participants_are_ready {
+        log_participant_readiness_blockers(app.world_mut());
         println!(
             "luncosim test NO-VERDICT  scene={}  — participant readiness did not complete \
              before the bounded warmup",
@@ -731,6 +908,19 @@ pub fn run() -> u8 {
         app.update();
         ticks += 1;
         sim_seconds += step.as_secs_f64();
+
+        // A declared negative fixture reaches its terminal boundary instead of
+        // emitting an ordinary scenario verdict. Stop at that boundary so the
+        // test proves the fault is raised and the process remains rebootable;
+        // it does not burn the remaining max-ticks against a held simulation.
+        if app
+            .world()
+            .get_resource::<lunco_core::RuntimeFaults>()
+            .is_some_and(|faults| faults.active())
+            && !app.world().resource::<ExpectedRuntimeFaults>().0.is_empty()
+        {
+            break;
+        }
 
         #[cfg(feature = "ui")]
         if ticks == 10 {
@@ -826,11 +1016,19 @@ pub fn run() -> u8 {
     // runtime fault. This is a separate causal boundary from wiring: a
     // rejected client-prediction loop, non-finite force, or escaped body must
     // be reported as that fault, not disguised as a dangling connection.
+    let expected_runtime = app.world().resource::<ExpectedRuntimeFaults>().0.clone();
     if let Some(fault) = app
         .world()
         .get_resource::<lunco_core::RuntimeFaults>()
         .and_then(|faults| faults.first.as_ref())
     {
+        if expected_runtime.contains(fault.kind) {
+            println!(
+                "luncosim test PASS  scene={}  expected terminal runtime fault kind={} subject={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+                cli.scene, fault.kind, fault.subject
+            );
+            return 0;
+        }
         println!(
             "luncosim test FAIL  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
             cli.scene
@@ -838,6 +1036,18 @@ pub fn run() -> u8 {
         println!(
             "  terminal runtime fault kind={} subject={} detail={}",
             fault.kind, fault.subject, fault.detail
+        );
+        return 1;
+    }
+
+    if !expected_runtime.is_empty() {
+        println!(
+            "luncosim test FAIL  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            cli.scene
+        );
+        println!(
+            "  the scenario declared expect_runtime_fault({}) but no terminal runtime fault was raised",
+            expected_runtime.iter().cloned().collect::<Vec<_>>().join(", ")
         );
         return 1;
     }
