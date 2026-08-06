@@ -52,9 +52,10 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::{ChildOf, Entity, Event, Name, On};
+use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
@@ -68,6 +69,35 @@ use crate::{LINE_PLOT_KIND, VIZ_PANEL_KIND};
 /// Panel id — new id, not the deleted stub's `"telemetry"`, so stale
 /// saved layouts referencing the tombstone don't resurrect over us.
 pub const TELEMETRY_BROWSER_PANEL_ID: PanelId = PanelId("telemetry_browser");
+
+/// Runtime-authored view intent for the telemetry browser.
+///
+/// The browser remains the owner of its egui-local state; commands publish a
+/// typed request here and the panel consumes it on its next render. This keeps
+/// HTTP/Rhai automation independent of a concrete dock layout or panel object.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct TelemetryBrowserView {
+    pub filter: String,
+    pub signal: String,
+}
+
+#[Command(default)]
+pub struct SetTelemetryBrowserView {
+    pub filter: String,
+    pub signal: String,
+}
+
+#[on_command(SetTelemetryBrowserView)]
+fn on_set_telemetry_browser_view(
+    trigger: On<SetTelemetryBrowserView>,
+    mut view: ResMut<TelemetryBrowserView>,
+) {
+    let request = trigger.event();
+    view.filter = request.filter.clone();
+    view.signal = request.signal.clone();
+}
+
+register_commands!(on_set_telemetry_browser_view);
 
 /// Insert a newly configured visualization after the browser has finished
 /// painting. The panel emits the domain operation; the observer owns the
@@ -377,6 +407,17 @@ fn build_tree(
                 }
             }
         }
+        // `group_path` is an authored ownership path. Once its shared USD prefix
+        // has been removed, the remaining component names are presentation
+        // structure, not new USD prims. Keep that distinction explicit so a
+        // generated solver wrapper cannot reappear as a second authored branch.
+        if group_path.is_some_and(|path| path.trim_start().starts_with('/')) {
+            for (id, _) in &mut structure {
+                if let Some(segment) = id.rsplit('/').next().filter(|s| !s.is_empty()) {
+                    *id = format!("signal-structure:{segment}");
+                }
+            }
+        }
         // A resolved group path means the projection supplied an authored
         // ownership target. Replace the runtime wrapper leaf regardless of
         // whether that projection entity currently has a USD path component.
@@ -466,6 +507,13 @@ fn signal_structure(path: &str) -> Vec<(String, String)> {
         .filter(|segment| !segment.is_empty())
         .map(str::to_owned)
         .collect();
+    // A scalar channel with a flat name belongs directly to its owning entity.
+    // Only a dotted/slashed namespace contributes a structural grouping node;
+    // making every bare channel a one-child tree creates presentation noise and
+    // hides the entity's actual ownership boundary.
+    if segments.len() == 1 && !segments[0].contains('.') {
+        return Vec::new();
+    }
     if let Some(last) = segments.last_mut() {
         if let Some((component, _value)) = last.rsplit_once('.') {
             *last = component.to_owned();
@@ -839,6 +887,19 @@ impl Panel for TelemetryBrowserPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        if let Some(view) = ctx.resource::<TelemetryBrowserView>().cloned() {
+            if self.filter != view.filter {
+                self.filter = view.filter;
+            }
+            if !view.signal.is_empty()
+                && self
+                    .selected
+                    .as_ref()
+                    .is_none_or(|selected| selected.path != view.signal)
+            {
+                self.selected = None;
+            }
+        }
         let Some(theme) = ctx.resource::<lunco_theme::Theme>().cloned() else {
             ui.label("Theme not installed.");
             return;
@@ -891,6 +952,16 @@ impl Panel for TelemetryBrowserPanel {
             ui.label(egui::RichText::new("SignalRegistry not installed.").color(subdued));
             return;
         };
+
+        if let Some(view) = ctx.resource::<TelemetryBrowserView>().cloned() {
+            if !view.signal.is_empty() {
+                self.selected = registry
+                    .iter_scalar()
+                    .map(|(signal, _)| signal)
+                    .find(|signal| signal.path == view.signal)
+                    .cloned();
+            }
+        }
 
         // ── Change-driven catalog rebuild ────────────────────────
         // Two independent invalidators: the channel SET (a sim started, a vessel
@@ -993,7 +1064,9 @@ impl Panel for TelemetryBrowserPanel {
             return;
         };
         ui.separator();
-        let unit = registry.meta(&sel).and_then(|m| m.unit.clone());
+        let metadata = registry.meta(&sel);
+        let unit = metadata.and_then(|m| m.unit.clone());
+        let description = metadata.and_then(|m| m.description.clone());
         let hist = registry.scalar_history(&sel);
         let latest = hist.and_then(|h| h.samples.back()).copied();
         ui.horizontal(|ui| {
@@ -1023,6 +1096,9 @@ impl Panel for TelemetryBrowserPanel {
                 ui.label(egui::RichText::new(text).monospace().color(subdued));
             });
         });
+        if let Some(description) = description {
+            ui.label(egui::RichText::new(description).small().color(subdued));
+        }
 
         // Preview points: re-copied + re-decimated only when the
         // history fingerprint moved (idle sim = fingerprint compare).
@@ -1046,9 +1122,9 @@ impl Panel for TelemetryBrowserPanel {
             if !p.points.is_empty() {
                 let color = crate::signal::color_for_signal(&theme, &sel.path);
                 Plot::new(ui.id().with("tb_preview"))
-                    .height(80.0)
-                    .show_axes([false, false])
-                    .show_grid(false)
+                    .height(120.0)
+                    .show_axes([true, true])
+                    .show_grid(true)
                     .allow_drag(false)
                     .allow_zoom(false)
                     .allow_scroll(false)

@@ -159,17 +159,23 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         a * mat.flicker_scale + globals.time * mat.flicker_speed
     ));
     let shimmer = 1.0 - clamp(mat.flicker, 0.0, 1.0) * 0.45 * (1.0 - n);
-    let core_mix = clamp(0.65 + 0.25 * shimmer + 0.1 * axial, 0.0, 1.0);
+    // Keep the temperature structure visible in the envelope itself. The inner
+    // core cone adds the hottest layer, but the outer volume must still read as
+    // a flame when transparent-surface ordering places that layer behind it.
+    // Cone-local x/z are radius-normalised by the authored unit cone.
+    let radial = clamp(length(vec2<f32>(p.x, p.z)), 0.0, 1.0);
+    let centre_hot = 1.0 - smoothstep(0.12, 0.78, radial);
+    let core_mix = clamp(0.32 + 0.52 * centre_hot + 0.1 * axial + 0.06 * shimmer, 0.0, 1.0);
     let tint = mix(mat.edge_color, mat.core_color, core_mix);
     let width_response = 0.35 + 0.65 * wid;
     let radiance = (0.8 + 1.5 * cutoff) * shimmer * width_response;
     let alpha = clamp(cutoff * (0.55 + 0.35 * shimmer), 0.0, 1.0);
     let emissive = tint * mat.density * radiance;
 
-    // The gprim's authored `lunco:surface:additive` selects Bevy's premultiplied
-    // additive pipeline, so return both radiance and coverage. Alpha is not an
-    // opaque cutout here: it weights the emitted RGB while the additive blend
-    // keeps the terrain and vehicle behind the exhaust visible. The physical
-    // light remains a separate SphereLight driven by Modelica photometry.
+    // The gprim's authored sub-1 `displayOpacity` selects Bevy's translucent
+    // pipeline, so return both radiance and coverage. Alpha is not an opaque
+    // cutout here: it weights the emitted RGB while the blend keeps the terrain
+    // and vehicle behind the exhaust visible. The physical light remains a
+    // separate SphereLight driven by Modelica photometry.
     return vec4<f32>(emissive, alpha);
 }

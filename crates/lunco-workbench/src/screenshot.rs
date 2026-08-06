@@ -87,6 +87,7 @@ impl Plugin for ScreenshotPlugin {
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core::KeepAwake>()
             .init_resource::<OfflineRecordingState>()
+            .init_resource::<OfflineVideoSettings>()
             .init_resource::<OfflineVideoSink>()
             .add_observer(deliver_offline_frame)
             // The readiness gate. `Update` (not `Last`): it must run before
@@ -516,6 +517,54 @@ pub struct OfflineRecordingState {
     pub video: bool,
 }
 
+/// H.264 preset for direct-to-video capture.
+///
+/// Offline takes are intermediate footage: the marketing pipeline encodes the
+/// assembled master again, so spending the capture interval on compression is
+/// pure wall-clock cost. The preset changes compression effort, not pixels or
+/// the CRF quality target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OfflineVideoPreset {
+    /// Highest-throughput intermediate capture; the final master is encoded later.
+    #[default]
+    Ultrafast,
+    /// Faster-than-default archival intermediate with more compact output.
+    Veryfast,
+    /// Quality-oriented archival intermediate; slower capture.
+    Medium,
+}
+
+impl OfflineVideoPreset {
+    /// Name accepted by ffmpeg's libx264 encoder.
+    pub fn ffmpeg_name(self) -> &'static str {
+        match self {
+            Self::Ultrafast => "ultrafast",
+            Self::Veryfast => "veryfast",
+            Self::Medium => "medium",
+        }
+    }
+
+    /// Parse the public CLI spelling.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "ultrafast" => Ok(Self::Ultrafast),
+            "veryfast" => Ok(Self::Veryfast),
+            "medium" => Ok(Self::Medium),
+            _ => Err(format!(
+                "invalid record preset `{value}`; expected `ultrafast`, `veryfast`, or `medium`"
+            )),
+        }
+    }
+}
+
+/// Process-wide encoder policy. The scene and shot sequencer do not own
+/// compression settings; the recording application does.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct OfflineVideoSettings {
+    /// H.264 compression-effort preset for direct video takes.
+    pub preset: OfflineVideoPreset,
+}
+
 /// Command to start frame-by-frame recording.
 #[Command(default)]
 pub struct StartOfflineRecording {
@@ -647,7 +696,13 @@ struct VideoSink {
 #[cfg(not(target_arch = "wasm32"))]
 impl VideoSink {
     /// Spawn `ffmpeg` encoding raw RGBA frames from stdin into `path`.
-    fn spawn(path: &std::path::Path, width: u32, height: u32, fps: u32) -> std::io::Result<Self> {
+    fn spawn(
+        path: &std::path::Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        preset: OfflineVideoPreset,
+    ) -> std::io::Result<Self> {
         let mut child = std::process::Command::new("ffmpeg")
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
@@ -656,7 +711,14 @@ impl VideoSink {
             .arg("-r")
             .arg(fps.to_string())
             .args(["-i", "-"])
-            .args(["-c:v", "libx264", "-preset", "medium", "-crf", "16"])
+            .args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                preset.ffmpeg_name(),
+                "-crf",
+                "16",
+            ])
             // yuv420p for player compatibility; the crop keeps odd window
             // dimensions legal for it (4:2:0 needs even width/height).
             .args(["-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2"])
@@ -1242,6 +1304,7 @@ fn deliver_offline_frame(
     mut keep_awake: ResMut<lunco_core::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut video_sink: ResMut<OfflineVideoSink>,
+    video_settings: Res<OfflineVideoSettings>,
     mut commands: Commands,
 ) {
     if !state.active || !state.is_waiting_for_frame {
@@ -1279,12 +1342,19 @@ fn deliver_offline_frame(
         let (width, height) = rgba.dimensions();
         if video_sink.sink.is_none() {
             // First frame: only now are the real capture dimensions known.
-            match VideoSink::spawn(&state.output_dir, width, height, state.fps.max(1)) {
+            match VideoSink::spawn(
+                &state.output_dir,
+                width,
+                height,
+                state.fps.max(1),
+                video_settings.preset,
+            ) {
                 Ok(sink) => {
                     info!(
-                        "[offline-record] streaming {width}x{height} @ {} FPS into {} via ffmpeg",
+                        "[offline-record] streaming {width}x{height} @ {} FPS into {} via ffmpeg (preset {})",
                         state.fps.max(1),
-                        state.output_dir.display()
+                        state.output_dir.display(),
+                        video_settings.preset.ffmpeg_name(),
                     );
                     video_sink.sink = Some(sink);
                 }

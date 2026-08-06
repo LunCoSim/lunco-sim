@@ -44,7 +44,7 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   // (values above 1 are the whole point of an emissive), so this is a relative
   // radiance, not a 0..1 colour. KEEP IT AS `plume.wgsl`'s `core_color`:
   // (6.0, 3.5, 0.9) gives 0.2126*6.0 + 0.7152*3.5 + 0.0722*0.9 = 3.844.
-  input Real luminance = 3.844 "Rec.709 luma of the plume's emissive colour";
+  input Real luminance = 12.903 "Rec.709 luma of the plume's emissive colour";
 
   // The ONE authored photometric constant: luminous exitance per unit emissive
   // radiance, in lm/m^2. It is the unit conversion between "how bright the shader
@@ -88,8 +88,9 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   Real visual_t "Shader-matched visible throttle response";
 equation
   t = min(1.0, max(0.0, throttle));
-  visual_t = if t <= 0.0 then 0.0
-    else t ^ max(0.1, min(1.0, throttle_exponent));
+  // Keep the photometric path event-free: zero throttle naturally evaluates to
+  // zero for the bounded positive exponent, so no relational branch is needed.
+  visual_t = max(0.0, t) ^ max(0.1, min(1.0, throttle_exponent));
 
   // The same shape law the shader draws, so the light cannot describe a plume
   // other than the one on screen.

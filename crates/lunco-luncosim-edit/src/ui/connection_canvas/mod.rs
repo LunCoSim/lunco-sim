@@ -10,9 +10,10 @@
 //!
 //! ```text
 //!   CanonicalStage (composed USD)
-//!         │  collect_graph()          (read: prims + inputs:*.connect + joints)
+//!         │  collect_graph()          (read complete authored topology)
 //!         ▼
 //!   Vec<PrimNode> + Vec<Wire>
+//!         │  project_schema()         (explicit authored schema view)
 //!         │  build_scene()            (pure: relevance filter + layering)
 //!         ▼
 //!   lunco_canvas::Scene → Canvas → egui
@@ -46,7 +47,8 @@ use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
 use projection::{
-    build_scene, collect_graph, UsdPrimNodeData, UsdWireData, WireKind, EDGE_KIND, NODE_KIND,
+    build_scene, collect_graph, project_schema, UsdPrimNodeData, UsdWireData, WireKind, EDGE_KIND,
+    NODE_KIND,
 };
 
 pub const USD_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canvas");
@@ -97,8 +99,15 @@ pub struct UsdCanvasState {
 
 impl Default for UsdCanvasState {
     fn default() -> Self {
+        let mut canvas = Canvas::new(build_registry());
+        // USD scenes can contain many composed participants.  The generic
+        // canvas minimum (0.25) is intentionally comfortable for hand-built
+        // diagrams, but it prevents a composed flight stack from ever fitting
+        // in one frame.  The connection view owns this scale policy because
+        // it knows the scene is a document-sized graph, not a small sketch.
+        canvas.viewport.config.zoom_min = 0.04;
         Self {
-            canvas: Canvas::new(build_registry()),
+            canvas,
             stage_id: None,
             doc: None,
             topo_hash: 0,
@@ -115,9 +124,14 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
     let mut keys: Vec<String> = Vec::with_capacity(nodes.len() + wires.len());
     for n in nodes {
         keys.push(format!(
-            "N|{}|{}|{}|{}",
+            "N|{}|{}|{}|{}|{}|{:?}|{:?}|{}|{}",
             n.path,
             n.is_body,
+            n.schema_root,
+            n.schema_node,
+            n.display_name.as_deref().unwrap_or_default(),
+            n.schema_column,
+            n.schema_row,
             n.inputs.join(","),
             n.outputs.join(",")
         ));
@@ -182,13 +196,16 @@ pub fn produce_usd_canvas(
         .collect();
     let view = cs.view();
     let (nodes, wires) = collect_graph(&view, &prim_paths);
+    // The Schema perspective is an explicit authored boundary projection. The
+    // collector above remains complete so the same USD topology stays
+    // available to simulation, diagnostics, and future full-graph views.
+    let (nodes, wires) = project_schema(nodes, wires);
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
         return;
     }
 
-    let first_for_stage = !state.built || state.stage_id != Some(stage_id);
     let scene = build_scene(nodes, wires);
     let bounds = scene.bounds();
     bevy::log::debug!(
@@ -212,10 +229,15 @@ pub fn produce_usd_canvas(
         viewport_state.as_deref(),
     );
 
-    // Request a frame-to-fit the first time a stage is shown. The actual fit
-    // runs in the panel's next render, which alone knows the real widget size
-    // (`F` re-fits precisely anytime thereafter).
-    if first_for_stage && bounds.is_some() {
+    // Request a frame-to-fit after every topology rebuild.  Composed scenes
+    // can acquire late Modelica participants while their programs compile;
+    // fitting only the first snapshot leaves the subsequently-added graph
+    // outside the viewport.  The actual fit runs in the panel's next render,
+    // which alone knows the real widget size (`F` re-fits precisely anytime
+    // thereafter).  Structural rebuilds are the one case where restoring the
+    // complete authored graph is more important than preserving a transient
+    // pan position.
+    if bounds.is_some() {
         state.needs_fit = true;
     }
 }
@@ -419,6 +441,13 @@ impl Panel for UsdCanvasPanel {
                 state.needs_fit = false;
             }
 
+            ui.horizontal(|ui| {
+                ui.small("Signals flow toward the arrowhead");
+                ui.separator();
+                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_input, "input");
+                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
+                ui.small("Names come from the USD port contract");
+            });
             let (_resp, events) = state.canvas.ui(ui);
             if events.is_empty() {
                 return;

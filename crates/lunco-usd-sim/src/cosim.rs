@@ -1744,6 +1744,12 @@ pub fn rewire_usd_connections(
         Or<(
             Added<UsdPrimPath>,
             Added<ModelicaModel>,
+            // Generated networks publish their actual port surface one
+            // deferred step after `ModelicaModel` is installed. Re-run the
+            // derived USD wiring when that endpoint contract arrives; without
+            // this transition a boundary wire can be permanently absent while
+            // diagnostics quite correctly report no broken edge.
+            Added<SimComponent>,
             Added<lunco_core::GlobalEntityId>,
             Added<lunco_core::PortSurfaceReady>,
         )>,
@@ -2760,6 +2766,43 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             .query_filtered::<(), With<SimConnection>>()
             .iter(world)
             .count();
+        // `connection_count` alone cannot distinguish a correctly derived wire
+        // from a wire that is still pending or bound to the wrong endpoint. Keep
+        // the complete, generic edge inventory behind the same read-only API so
+        // callers can diagnose authored USD topology without log scraping or
+        // campaign-specific probes.
+        let connection_specs = world
+            .query_filtered::<(
+                Entity,
+                &SimConnection,
+                Option<&lunco_cosim::ConnectionBinding>,
+                Has<lunco_cosim::BoundConnection>,
+            ), With<SimConnection>>()
+            .iter(world)
+            .map(|(edge, spec, binding, bound)| {
+                let endpoint = |entity: Entity| {
+                    serde_json::json!({
+                        "entity": entity.to_bits(),
+                        "name": world.get::<Name>(entity).map(|name| name.as_str()),
+                        "usd_path": world
+                            .get::<UsdPrimPath>(entity)
+                            .map(|path| path.path.as_str()),
+                    })
+                };
+                serde_json::json!({
+                    "edge": edge.to_bits(),
+                    "source": endpoint(spec.start_element),
+                    "source_port": spec.start_connector,
+                    "source_is_input": spec.start_is_input,
+                    "sink": endpoint(spec.end_element),
+                    "sink_port": spec.end_connector,
+                    "scale": spec.scale,
+                    "offset": spec.offset,
+                    "binding": binding.map(|value| format!("{value:?}")),
+                    "bound": bound,
+                })
+            })
+            .collect::<Vec<_>>();
         let pending_avian_joints = serde_json::json!({
             "revolute": world
                 .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>>()
@@ -2852,6 +2895,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             "wait_open": wait_open,
             "dirty": dirty,
             "connection_count": connection_count,
+            "connections": connection_specs,
             "pending_avian_joints": pending_avian_joints,
             "admitted_avian_joints": admitted_avian_joints,
             "physics_paused": physics_paused,
@@ -3648,11 +3692,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<BindingModelStatuses>()
         .init_resource::<PythonUnavailablePrograms>()
         .init_resource::<crate::domain_projection::MemberClasses>()
-        .init_resource::<crate::domain_projection::ProjectionDirty>()
-        // The open synthesizer registry (doc 37 §8): the acausal-network
-        // synthesizer registers itself as the default; another domain is a
-        // `register()` from any plugin, not an edit here.
-        .init_resource::<crate::domain_projection::SynthesizerRegistry>();
+        .init_resource::<crate::domain_projection::ProjectionDirty>();
     app.add_observer(request_binding_epoch::<UsdPrimPath>)
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
         .add_observer(request_binding_epoch::<ModelicaModel>)

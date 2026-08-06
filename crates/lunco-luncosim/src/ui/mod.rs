@@ -104,6 +104,11 @@ impl Plugin for SandboxUiPlugin {
         // so scene selection / possession / spawn-placement run as click observers.
         .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin);
+        if args.iter().any(|arg| arg == "--windowed-ui") {
+            app.insert_resource(lunco_workbench::OfflineRecordingPresentation {
+                retain_workbench_chrome: true,
+            });
+        }
         lunco_workbench::install_render_recovery_teardown(
             app,
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,

@@ -1,6 +1,31 @@
 {
   "surfaces": [
     {
+      "id": "control-response",
+      "template": "ui/control_response.html",
+      "stylesheet": "ui/control_response.css",
+      "namespace": "lander-control",
+      "bindings": {
+        "vehicle": { "source": "vehicle" },
+        "status": { "source": "status" },
+        "status_color": { "source": "status_color" },
+        "rcs_activity": { "source": "rcs_activity" },
+        "rcs_activity_width": { "source": "rcs_activity_width" },
+        "torque_x": { "source": "torque_x" },
+        "torque_y": { "source": "torque_y" },
+        "torque_z": { "source": "torque_z" },
+        "throttle": { "source": "throttle" }
+      },
+      "visible_in_perspective": "rover_build",
+      "placement": {
+        "mode": "window",
+        "anchor": "top_right",
+        "offset": [-24.0, 72.0],
+        "width": 430.0,
+        "height": 310.0
+      }
+    },
+    {
       "id": "rover-hud",
       "template": "ui/rover_hud.html",
       "stylesheet": "ui/rover_hud.css",

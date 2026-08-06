@@ -36,6 +36,7 @@ pub const PORT_NAME: &str = "value";
 /// Avian's components are foreign types, so they are exposed by these closures
 /// rather than `#[derive]`. Most ports are a one-line field read; the few
 /// derived/semantic ones (joint twist, motor target) are named functions.
+#[derive(Clone, Copy)]
 pub struct AvianPort {
     /// Port name (e.g. `"position_y"`, `"force_y"`, `"angle"`).
     pub name: &'static str,
@@ -75,6 +76,7 @@ pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian::TORQUE_ACTUATOR_GROUP,
     crate::avian::COLLIDER_CONTACT_GROUP,
     crate::joint::REVOLUTE_JOINT_GROUP,
+    crate::joint::PASSIVE_PRISMATIC_SUSPENSION_GROUP,
     crate::joint::PRISMATIC_JOINT_GROUP,
     crate::avian_queries::RAYCAST_GROUP,
 ];

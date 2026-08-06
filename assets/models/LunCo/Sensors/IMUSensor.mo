@@ -177,8 +177,11 @@ equation
   attitude_quat_x = raw_quat_x / sqrt(q_norm_sq);
   attitude_quat_y = raw_quat_y / sqrt(q_norm_sq);
   attitude_quat_z = raw_quat_z / sqrt(q_norm_sq);
-  sensor_health = if raw_quat_w * raw_quat_w + raw_quat_x * raw_quat_x
-      + raw_quat_y * raw_quat_y + raw_quat_z * raw_quat_z
-      > quaternion_epsilon then 1.0 else 0.0;
+  // A normalized quaternion is valid when its squared norm is above the
+  // authored floor. Express that as a bounded confidence ramp so the sensor
+  // remains event-free under fixed-step integration.
+  sensor_health = max(0.0, min(1.0,
+    (q_norm_sq - quaternion_epsilon)
+      / max(quaternion_epsilon, 1.0e-12)));
   attitude_quat_valid = sensor_health;
 end IMUSensor;

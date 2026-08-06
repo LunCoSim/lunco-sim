@@ -10,13 +10,13 @@ This document specifies the canonical USD/Omniverse representation for vehicle w
 
 The repo has two, and they are not interchangeable. Pick by what the spring carries.
 
-| | **Raycast vehicle suspension** | **Joint drive spring** |
+| | **Raycast vehicle suspension** | **Passive prismatic suspension** |
 | --- | --- | --- |
 | Use for | **wheels** on a wheeled vehicle | **struts and legs** — landing gear, dampers, deployables |
-| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `UsdPhysicsDriveAPI:linear` applied to a `PhysicsPrismaticJoint` |
-| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `drive:linear:physics:stiffness` / `:damping` / `:targetPosition` / `:maxForce`, with `:type = "force"` |
+| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `LunCoPrismaticSuspensionAPI` applied to a `PhysicsPrismaticJoint` |
+| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `lunco:prismaticSuspension:restPosition` / `:stiffness` / `:damping` / `:maxForce` |
 | Ground contact | a **ray** from the attachment finds the ground; no wheel collider carries the load | ordinary rigid-body **contacts** between the foot/pad collider and the ground |
-| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | avian's solver, as `MotorModel::ForceBased` — the same law `UsdPhysicsDriveAPI` defines, so the SI numbers pass through untouched |
+| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | generic `lunco-cosim` passive-prismatic system, applying equal/opposite anchor forces before Avian solves the step |
 | Stroke and reaction read from | the `WheelRaycast` / `Suspension` components | the joint's own cosim ports, `displacement` (m, signed) and `force` (N) — `lunco-cosim`'s `JOINT_DISPLACEMENT_PORT` / `JOINT_FORCE_PORT` |
 
 Both are legitimate; neither substitutes for the other. A raycast wheel has no
@@ -24,12 +24,15 @@ prismatic joint and its suspension force never appears as a joint reaction, so a
 strut's load cannot be read that way. Conversely a wheel driven by a prismatic
 drive loses the raycast model's ground-following behaviour.
 
-Sections 1–5 below specify the **raycast** mechanism. The joint-drive mechanism is
-a plain `PhysicsPrismaticJoint`: `physics:lowerLimit` / `:upperLimit` bound the
-stroke, `physics:localRot0` carries a non-cardinal axis (`physics:axis` names only
-cardinals), and anchors are left unauthored so the loader derives them from the
-transform hierarchy — which puts `displacement` at exactly 0 in the authored rest
-pose, and therefore `force` at exactly 0 until something compresses the strut.
+Sections 1–5 below specify the **raycast** mechanism. The passive joint mechanism
+is a plain `PhysicsPrismaticJoint` plus the explicit `LunCoPrismaticSuspensionAPI`:
+`physics:lowerLimit` / `:upperLimit` bound the stroke, `physics:localRot0` carries
+a non-cardinal axis (`physics:axis` names only cardinals), and anchors are left
+unauthored so the loader derives them from the transform hierarchy — which puts
+`displacement` at exactly 0 in the authored rest pose. The generic backend applies
+the spring only for negative displacement (compression), so it cannot pull a leg
+back out during rebound. Active mechanisms should use `UsdPhysicsDriveAPI:linear`
+and the commandable prismatic port instead.
 `assets/vessels/landers/descent_lander.usda`'s `Leg*_Spring` prims are the worked
 example. Anything downstream that needs the load — a strut's glow, a touchdown
 check — reads that `force` port, never a second copy of the spring law.

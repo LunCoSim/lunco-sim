@@ -228,10 +228,7 @@ impl CompiledWiring {
         self.detect_algebraic_loops(world);
     }
 
-    /// M6 — algebraic-loop detection over the wire graph (nodes = participant
-    /// entities, one edge per wire), treating every participant as direct
-    /// feedthrough — conservative: the substrate has no causality metadata yet,
-    /// so any cycle MAY be an algebraic loop.
+    /// Find force-producing feedback SCCs over the explicit causal wire graph.
     ///
     /// The master is single-pass Jacobi with ZOH inputs: each feedthrough hop on
     /// a cycle costs one fixed step of delay, and nothing iterates the loop to

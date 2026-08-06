@@ -109,6 +109,10 @@ fn shot(spec) {
     let overlay = spec.overlay == true;
     let begin   = spec.begin;
     let frame   = spec.frame;
+    // The task leaf receives its host gid as `m`, not a mutable leaf blackboard.
+    // Keep this cursor in the closure environment: Rhai closures share captured
+    // locals, and the cursor is scoped to this shot invocation.
+    let last_captured_frame = -1;
 
     seq([
         // Open. `once` completes on its first tick, so this runs exactly once.
@@ -121,15 +125,22 @@ fn shot(spec) {
         // Run. `act` fires every tick while the leaf is live; `done` ends it.
         //
         // Timing is the RECORDER's `frame_index`, never a tick counter — several
-        // fixed ticks elapse per captured frame, so counting ticks would end every
-        // shot early and desync the voiceover (see `prelude/recording.rhai`).
+        // fixed/render ticks can elapse per captured frame, so counting ticks would
+        // end every shot early and desync the voiceover (see
+        // `prelude/recording.rhai`). The callback is also edge-triggered on that
+        // index: a capture may take several engine ticks, and advancing physics on
+        // every one of those ticks would silently apply the same commanded step
+        // repeatedly. The recorder's frame index is the shared clock boundary.
         // `shot_frame()` reads -1 until the recorder is actually capturing, which is
         // why the per-frame callback is gated on `f >= 0` rather than assuming the
         // `StartOfflineRecording` above has already landed.
         #{
             act: |m| {
                 let f = shot_frame();
-                if f >= 0 && frame != () { frame.call(m, f); }
+                if f >= 0 && frame != () && (last_captured_frame < 0 || last_captured_frame != f) {
+                    last_captured_frame = f;
+                    frame.call(m, f);
+                }
             },
             done: |m| shot_frame() >= frames - 1,
         },

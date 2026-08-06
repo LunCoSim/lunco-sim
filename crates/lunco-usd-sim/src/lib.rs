@@ -70,8 +70,8 @@ use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{
-    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, SimConnection,
-    TorqueActuator,
+    avian_queries::RaycastObservation, joint::PassivePrismaticSuspension, ports::PORT_NAME,
+    ForceActuator, SimConnection, TorqueActuator,
 };
 use lunco_hardware::{MotorActuator, MotorReadback, MotorReadbackTarget, SteeringActuator};
 use lunco_materials::ShaderLook;
@@ -956,6 +956,56 @@ fn collect_behavior_sources(
     }
 }
 
+/// Project the explicitly classified passive prismatic suspension API onto its
+/// generic co-simulation physics component. A bilateral `PhysicsDriveAPI` is
+/// intentionally not inferred here: elevators and actuators are also
+/// prismatic joints, and only the applied suspension API means "compression
+/// only".
+fn passive_prismatic_suspension_from_usd(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Option<PassivePrismaticSuspension> {
+    if !reader.has_api_schema(prim, "LunCoPrismaticSuspensionAPI") {
+        return None;
+    }
+    if reader.type_name(prim).as_deref() != Some("PhysicsPrismaticJoint") {
+        warn!(
+            "USD prim {} applies LunCoPrismaticSuspensionAPI but is not a PhysicsPrismaticJoint",
+            prim.as_str()
+        );
+        return None;
+    }
+
+    let rest_position = reader
+        .real_f32(prim, "lunco:prismaticSuspension:restPosition")
+        .unwrap_or(0.0) as f64;
+    let spring_k = reader.real_f32(prim, "lunco:prismaticSuspension:stiffness")? as f64;
+    let damping_c = reader.real_f32(prim, "lunco:prismaticSuspension:damping")? as f64;
+    let max_force = reader
+        .real_f32(prim, "lunco:prismaticSuspension:maxForce")
+        .unwrap_or(f32::INFINITY) as f64;
+    if !spring_k.is_finite()
+        || spring_k <= 0.0
+        || !damping_c.is_finite()
+        || damping_c < 0.0
+        || !rest_position.is_finite()
+        || (!max_force.is_finite() && max_force != f64::INFINITY)
+        || max_force <= 0.0
+    {
+        warn!(
+            "USD passive suspension {} has invalid parameters: rest={} m, k={} N/m, c={} N*s/m, max={} N",
+            prim.as_str(), rest_position, spring_k, damping_c, max_force
+        );
+        return None;
+    }
+    Some(PassivePrismaticSuspension {
+        rest_position,
+        spring_k,
+        damping_c,
+        max_force,
+    })
+}
+
 fn process_usd_sim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -977,6 +1027,13 @@ fn process_usd_sim_prim_read(
     mut commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
+
+    // A passive landing suspension is a physical capability claimed by an
+    // applied USD API on the joint. It is not inferred from a prim name,
+    // damping values, or the fact that the joint happens to be prismatic.
+    if let Some(suspension) = passive_prismatic_suspension_from_usd(reader, &sdf_path) {
+        commands.entity(entity).try_insert(suspension);
+    }
 
     // --- Network replication policy, derived from USD ---
     // Structure from the joint graph (Pass 1) + `lunco:net:*` overrides. Stamps

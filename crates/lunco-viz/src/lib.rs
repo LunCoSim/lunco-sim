@@ -46,7 +46,8 @@ pub use signal::{
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{
     bind_dropped_channel, drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest,
-    TelemetryBrowserPanel, TELEMETRY_BROWSER_PANEL_ID,
+    SetTelemetryBrowserView, TelemetryBrowserPanel, TelemetryBrowserView,
+    TELEMETRY_BROWSER_PANEL_ID,
 };
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};
@@ -91,6 +92,7 @@ impl Plugin for LuncoVizPlugin {
             DEFAULT_SIGNAL_HISTORY,
         ))
         .init_resource::<VisualizationRegistry>()
+        .init_resource::<telemetry_browser::TelemetryBrowserView>()
         .init_resource::<VizKindCatalog>()
         .init_resource::<VizFitRequests>()
         .register_visualization::<LinePlot>()
@@ -104,6 +106,7 @@ impl Plugin for LuncoVizPlugin {
         // Reconcile after the scene has had a chance to publish replacement
         // content IDs, before the next UI frame reads the config.
         .add_systems(Update, reconcile_persisted_plot_bindings);
+        telemetry_browser::register_all_commands(app);
     }
 }
 

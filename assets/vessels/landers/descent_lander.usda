@@ -68,6 +68,12 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
+    # Typed Lunica presentation contract: this assembly and its four top-level
+    # flight networks are the authored schema surface.  The connection canvas
+    # uses this property when present, so internal Modelica implementation
+    # prims do not collapse the complete system into an unreadable cloud.
+    custom bool lunco:ui:schemaNode = false
+
     # The body model publishes demands; these scopes choose the physical
     # actuation topology. The generated Modelica wrapper is rebuilt from the
     # actuator prims and their authored transforms whenever this composition
@@ -76,6 +82,10 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        custom bool lunco:ui:schemaNode = true
+        string ui:displayName = "Main engine"
+        custom int lunco:ui:schemaColumn = 2
+        custom int lunco:ui:schemaRow = 1
         # The engine is a generated Modelica network. Every connection below
         # is USD topology; the reusable component files own only equations.
         float inputs:valve_opening.connect = </DescentLander.outputs:throttle>
@@ -256,38 +266,59 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
-        uniform token lunco:synthesizer = "actuator-wrench"
+        custom bool lunco:ui:schemaNode = true
+        string ui:displayName = "RCS allocator"
+        custom int lunco:ui:schemaColumn = 2
+        custom int lunco:ui:schemaRow = 0
         float inputs:desired_torque_x.connect = </DescentLander.outputs:torque_x>
         float inputs:desired_torque_y.connect = </DescentLander.outputs:torque_y>
         float inputs:desired_torque_z.connect = </DescentLander.outputs:torque_z>
 
-        float outputs:pitch_pos_a_valve
-        float outputs:pitch_pos_b_valve
-        float outputs:pitch_neg_a_valve
-        float outputs:pitch_neg_b_valve
-        float outputs:roll_pos_a_valve
-        float outputs:roll_pos_b_valve
-        float outputs:roll_neg_a_valve
-        float outputs:roll_neg_b_valve
-        float outputs:yaw_pos_a_valve
-        float outputs:yaw_pos_b_valve
-        float outputs:yaw_neg_a_valve
-        float outputs:yaw_neg_b_valve
+        # The allocator is an ordinary typed Modelica component in this
+        # collection.  Its class comes from the component's source asset; the
+        # surrounding Scope is classified from CollectionAPI and the composed
+        # connection graph, so no runtime selection token is exposed here.
+        float outputs:pitch_pos_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_pos_a_valve>
+        float outputs:pitch_pos_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_pos_b_valve>
+        float outputs:pitch_neg_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_neg_a_valve>
+        float outputs:pitch_neg_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:pitch_neg_b_valve>
+        float outputs:roll_pos_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_pos_a_valve>
+        float outputs:roll_pos_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_pos_b_valve>
+        float outputs:roll_neg_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_neg_a_valve>
+        float outputs:roll_neg_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:roll_neg_b_valve>
+        float outputs:yaw_pos_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_pos_a_valve>
+        float outputs:yaw_pos_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_pos_b_valve>
+        float outputs:yaw_neg_a_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_neg_a_valve>
+        float outputs:yaw_neg_b_valve.connect = </DescentLander/AttitudeActuation/Allocator.outputs:yaw_neg_b_valve>
+
+        def Scope "Allocator" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Actuation/RcsValveAllocator.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:desired_torque_x.connect = </DescentLander/AttitudeActuation.inputs:desired_torque_x>
+            float inputs:desired_torque_y.connect = </DescentLander/AttitudeActuation.inputs:desired_torque_y>
+            float inputs:desired_torque_z.connect = </DescentLander/AttitudeActuation.inputs:desired_torque_z>
+            float inputs:max_torque_nm = 6000.0
+            float outputs:pitch_pos_a_valve
+            float outputs:pitch_pos_b_valve
+            float outputs:pitch_neg_a_valve
+            float outputs:pitch_neg_b_valve
+            float outputs:roll_pos_a_valve
+            float outputs:roll_pos_b_valve
+            float outputs:roll_neg_a_valve
+            float outputs:roll_neg_b_valve
+            float outputs:yaw_pos_a_valve
+            float outputs:yaw_pos_b_valve
+            float outputs:yaw_neg_a_valve
+            float outputs:yaw_neg_b_valve
+        }
 
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
-            </DescentLander/RcsPitchPos>,
-            </DescentLander/RcsPitchPosB>,
-            </DescentLander/RcsPitchNeg>,
-            </DescentLander/RcsPitchNegB>,
-            </DescentLander/RcsRollPos>,
-            </DescentLander/RcsRollPosB>,
-            </DescentLander/RcsRollNeg>,
-            </DescentLander/RcsRollNegB>,
-            </DescentLander/RcsYawPos>,
-            </DescentLander/RcsYawPosB>,
-            </DescentLander/RcsYawNeg>,
-            </DescentLander/RcsYawNegB>,
+            </DescentLander/AttitudeActuation/Allocator>,
         ]
     }
 
@@ -299,6 +330,10 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        custom bool lunco:ui:schemaNode = true
+        string ui:displayName = "RCS jets"
+        custom int lunco:ui:schemaColumn = 3
+        custom int lunco:ui:schemaRow = 0
         float inputs:pitch_pos_a_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_pos_a_valve>
         float inputs:pitch_pos_b_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_pos_b_valve>
         float inputs:pitch_neg_a_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_neg_a_valve>
@@ -360,7 +395,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -385,7 +420,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -410,7 +445,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -435,7 +470,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -460,7 +495,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -485,7 +520,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -510,7 +545,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -535,7 +570,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -560,7 +595,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -585,7 +620,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -610,7 +645,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -635,7 +670,7 @@ def Xform "DescentLander" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/RCSJet.mo@
             uniform bool lunco:program:realtimeSafe = true
-            float inputs:f_nom_n = 2500.0
+            float inputs:f_nom_n = 1250.0
             float inputs:isp_sec = 220.0
             float inputs:g0 = 9.80665
             float inputs:plume_width_m = 0.18
@@ -688,14 +723,12 @@ def Xform "DescentLander" (
             }
         }
 
-        # PLUME CHEMISTRY — LOX/RP-1 (kerosene). The two emissives below say so:
-        # a yellow-white core, `FlameCore_Mat` (6.0, 3.5, 0.9), inside an orange
-        # shroud, `Flame_Mat` (3.0, 1.0, 0.12). That is the signature of a SOOTY,
-        # carbon-rich hydrocarbon flame — incandescent carbon particulate
-        # radiating as a roughly 2300 K grey body. Hypergolics (Aerozine-50/N2O4,
-        # as on the Apollo LM) and LOX/LH2 both burn far cleaner and nearly
-        # invisibly, and would want a pale blue at a small fraction of this
-        # radiance.
+        # PLUME CHEMISTRY — LOX/RP-1 (kerosene). The outer gas is amber, while
+        # the hottest centre is close to white. That separation matters in the
+        # film: the envelope shows the expanding exhaust and the core shows
+        # where the temperature is highest. A clean LOX/LH2 plume would be
+        # paler and less amber; this is the authored visual model for this
+        # kerosene-fuelled lander.
         #
         # Both are `lunco://shaders/plume.wgsl`, named for the `wgsl` render
         # context exactly as the surfaces above are named for
@@ -719,8 +752,8 @@ def Xform "DescentLander" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
-                color3f inputs:core_color = (3.0, 1.0, 0.12)
-                color3f inputs:edge_color = (1.2, 0.35, 0.05)
+                color3f inputs:core_color = (9.0, 11.0, 8.0)
+                color3f inputs:edge_color = (3.0, 0.35, 0.015)
                 # DECLARED so the wire is legal: the authoring pass intersects a
                 # gprim's connected `inputs:` with the parameters its bound shader
                 # declares, and a name the shader does not declare is refused.
@@ -732,7 +765,7 @@ def Xform "DescentLander" (
                 float inputs:flicker_speed = 6.0
                 float inputs:flicker_scale = 7.0
                 float inputs:width_idle = 0.28
-                float inputs:density = 9.0
+                float inputs:density = 8.0
                 float inputs:steps = 24.0
                 token outputs:surface
             }
@@ -746,8 +779,8 @@ def Xform "DescentLander" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
-                color3f inputs:core_color = (6.0, 3.5, 0.9)
-                color3f inputs:edge_color = (3.0, 1.2, 0.2)
+                color3f inputs:core_color = (28.0, 30.0, 24.0)
+                color3f inputs:edge_color = (10.0, 5.0, 0.25)
                 float inputs:throttle = 0
                 float inputs:throttle_exponent = 0.35
                 # Shallower than the shroud's: the core is the denser, steadier
@@ -756,7 +789,7 @@ def Xform "DescentLander" (
                 float inputs:flicker_speed = 4.0
                 float inputs:flicker_scale = 6.0
                 float inputs:width_idle = 0.22
-                float inputs:density = 16.0
+                float inputs:density = 20.0
                 float inputs:steps = 24.0
                 token outputs:surface
             }
@@ -939,6 +972,7 @@ def Xform "DescentLander" (
     # control profile writes `external_throttle` / `pitch` / `roll` / `yaw` into them
     # when a session possesses this prim.
     uniform asset info:sourceAsset = @lunco://models/Lander.mo@
+    uniform bool lunco:program:realtimeSafe = true
 
     # This Modelica plant is authoritative co-simulation. It does not claim
     # client prediction: rumoca's adaptive solver is not a fixed-step
@@ -989,16 +1023,20 @@ def Xform "DescentLander" (
     # so it cannot land anything by itself and does not make the vehicle a mission.
     # A scene that wants the raw unaugmented airframe overrides this to 0.
     float inputs:attitude_hold = 1.0
-    # Controller gains are scene inputs so two instances can be compared with
-    # different tuning while sharing this reusable airframe.
-    float inputs:hold_kp = 2.0 (
+    # The vehicle's stability-augmentation profile belongs to the reusable
+    # airframe, not to a recording scene.  The gains are dimensionally angular
+    # acceleration per radian and angular-rate damping, and are selected for a
+    # well-damped response with the authored inertia and RCS authority.
+    # A mission may still command attitude through the normal ports, but it does
+    # not silently replace the vehicle's physical stabilizer.
+    float inputs:hold_kp = 4.0 (
         customData = {
             double min = 0.0
             double max = 12.0
             string unit = "rad/s2"
         }
     )
-    float inputs:hold_kd = 2.5 (
+    float inputs:hold_kd = 6.0 (
         customData = {
             double min = 0.0
             double max = 12.0
@@ -1059,9 +1097,11 @@ def Xform "DescentLander" (
     }
 
     # ── Physics + visible hull ───────────────────────────────────────────────
-    # The body's mass and shape. The root is an `Xform` — a vehicle, not a cylinder —
-    # so the hull is an ordinary child gprim that both renders and collides, and the
-    # compound body is hull + 4 footpads. Gold multi-layer-insulation (MLI) foil: a
+    # The body's mass and visible shape. The root is an `Xform` — a vehicle, not a
+    # cylinder — so the hull is an ordinary child gprim. The landing gear is the
+    # sole ground-contact path: the hull must remain clear while the four sprung
+    # pads take the load and expose their prismatic stroke. Gold multi-layer-
+    # insulation (MLI) foil: a
     # warm metallic `displayColor`, not wrapped in solar cells. The array lives on the
     # deployed side wings, so the body reads as a spacecraft hull, not a battery barrel.
     def Cylinder "Hull" (
@@ -1072,7 +1112,11 @@ def Xform "DescentLander" (
         double radius = 2.5
         double height = 3.0
         color3f[] primvars:displayColor = [(0.78, 0.62, 0.27)]
-        bool physics:collisionEnabled = true
+        # Do not let the hull short-circuit the landing gear. Its bottom is 1.5 m
+        # below the body origin, while the footpads are deliberately much lower;
+        # enabling this collider makes the vehicle settle on its belly before a
+        # pad can touch, leaving every spring at zero stroke.
+        bool physics:collisionEnabled = false
     }
 
     # ── Onboard sensors (reusable library primitives, referenced) ──
@@ -1313,9 +1357,11 @@ def Xform "DescentLander" (
         }
     }
 
-    # Engine exhaust plume — TWO translucent emissive cones (apex DOWN, below the
-    # nozzle). The outer is a soft orange halo; the inner "...Core" is a slimmer,
-    # hotter yellow-white tongue.
+    # Engine exhaust plume — TWO bounded emissive cones (apex DOWN, below the
+    # nozzle). The outer is a restrained orange shroud; the inner "...Core" is a
+    # shorter, hotter yellow-white tongue. Their envelopes stop above the ground
+    # on a landed vehicle; the live throttle still controls density and length
+    # inside those bounds.
     #
     # EACH CONE IS A FIXED BOUNDING VOLUME, authored at the plume's full-throttle
     # extent and never transformed again. `lunco://shaders/plume.wgsl` draws the
@@ -1328,20 +1374,24 @@ def Xform "DescentLander" (
     #
     # `scale` IS the calibration: (radius, length, radius) in metres, and
     # `translate` places the cone's centre so its base sits at the nozzle exit
-    # (y = -2.7) and its apex reaches `length` below that — hence -2.7 - length/2.
+    # (y = -2.7). The short bounding volumes keep low-altitude exhaust from
+    # intersecting the regolith and reading as a detached translucent dome.
     def Cone "Flame"
     {
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, -4.5, 0)
+        double3 xformOp:translate = (0, -3.38, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        double3 xformOp:scale = (1.05, 3.6, 1.05)
+        double3 xformOp:scale = (0.55, 1.38, 0.55)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/Flame_Mat>
-        float[] primvars:displayOpacity = [0.4]
+        float[] primvars:displayOpacity = [0.42]
         uniform bool doubleSided = true
-        bool lunco:surface:additive = true
+        # Use the authored opacity as a real translucent plume volume. Additive
+        # blending made the cone write a solid brown silhouette and discarded
+        # the alpha returned by plume.wgsl.
+        bool lunco:surface:additive = false
         bool physics:collisionEnabled = false
         # Exhaust is light being EMITTED, not matter blocking it. Translucency alone
         # does not say this: a blended surface still rasterises opaquely into the
@@ -1359,13 +1409,15 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, -3.95, 0)
+        double3 xformOp:translate = (0, -3.12, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        double3 xformOp:scale = (0.5, 2.5, 0.5)
+        double3 xformOp:scale = (0.27, 1.10, 0.27)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/FlameCore_Mat>
-        float[] primvars:displayOpacity = [0.85]
+        float[] primvars:displayOpacity = [0.90]
         uniform bool doubleSided = true
+        # Additive is reserved for the hot inner core; the outer envelope stays
+        # alpha-blended so the ground remains visible through the exhaust.
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
@@ -1391,17 +1443,17 @@ def Xform "DescentLander" (
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
             float inputs:throttle.connect = </DescentLander.outputs:throttle>
-            float inputs:w_max = 0.5
-            float inputs:l_max = 2.5
+            float inputs:w_max = 0.27
+            float inputs:l_max = 0.92
             float inputs:width_idle = 0.28
             float inputs:throttle_exponent = 0.35
-            # Rec.709 luma of `FlameCore_Mat`'s `core_color` (6.0, 3.5, 0.9):
-            # 0.2126*6.0 + 0.7152*3.5 + 0.0722*0.9 = 3.844. Retint the plume and
+            # Rec.709 luma of `FlameCore_Mat`'s `core_color` (28.0, 30.0, 24.0):
+            # 0.2126*28.0 + 0.7152*30.0 + 0.0722*24.0 = 29.142. Retint the plume and
             # this must be re-derived — see the note on the material.
-            float inputs:luminance = 3.844
+            float inputs:luminance = 29.142
             # The ONE authored photometric constant: lm/m^2 per unit emissive
             # radiance. Everything that VARIES is derived in the model.
-            float inputs:exitance = 44200
+            float inputs:exitance = 180000
             float inputs:r_idle = 0.06
             float inputs:r_gain = 0.6
         }
@@ -1436,7 +1488,7 @@ def Xform "DescentLander" (
         # the first tick. Zero is the only safe starting point.
         #
         # COLOUR IS AUTHORED, and this is the one place the plume's chroma is
-        # restated. `inputs:color` is `FlameCore_Mat`'s `core_color` (6.0, 3.5, 0.9)
+        # restated. `inputs:color` is `FlameCore_Mat`'s `core_color` (28.0, 30.0, 24.0)
         # divided by its peak channel, because magnitude is already carried by
         # `intensity` and applying it twice would square it. It cannot be wired: a
         # shader parameter is deliberately not readable as a connection source,
@@ -1457,7 +1509,7 @@ def Xform "DescentLander" (
             # ground with nothing meaningful to occlude.
             bool inputs:shadow:enable = false
             float inputs:radius = 0.06
-            color3f inputs:color = (1.0, 0.5833, 0.15)
+            color3f inputs:color = (0.9333, 1.0, 0.8)
             # Schema-declared (LunCoLightAPI), so no `custom` — that qualifier is
             # for attributes no schema defines.
             float lunco:light:range = 25.0
@@ -1680,7 +1732,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "pitch_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
@@ -1730,7 +1782,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "pitch_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
@@ -1780,7 +1832,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "roll_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
@@ -1830,7 +1882,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "roll_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
@@ -1880,7 +1932,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, -1)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
@@ -1930,7 +1982,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, -1)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_activity>
@@ -1985,7 +2037,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "pitch_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
@@ -2035,7 +2087,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "pitch_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
@@ -2085,7 +2137,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "roll_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
@@ -2135,7 +2187,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "roll_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
@@ -2185,7 +2237,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, 1)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
@@ -2235,7 +2287,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 0, 1)
-        custom double lunco:forceActuator:maxForce = 2500.0
+        custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_activity>
@@ -2270,52 +2322,39 @@ def Xform "DescentLander" (
     }
 
     # ── Landing legs with footpads ──
-    # Each leg is its OWN rigid body, sprung against the hull by a
+    # Each leg is its OWN rigid body, sprung against the hull by a raked
     # `PhysicsPrismaticJoint` (`Leg*_Spring` below), and it is an Xform FRAME
-    # rather than a piece of geometry: the strut mesh and the footpad are both
-    # children, placed by how far down the leg they sit. The scale that shapes the
-    # strut lives on the strut, not on the body, so the frame stays usable.
+    # rather than a piece of geometry: the strut mesh is its child, while the
+    # footpad is a child collider of that body. The scale that shapes the strut
+    # lives on the strut, not on the body, so the frame stays usable.
     #
-    # That is what keeps the leg's invariants checkable. A part placed in world
-    # coordinates restates geometry the leg already fixed, and the two copies
-    # drift silently — which is how the pad came to clear the strut's corner by
-    # 6.6 mm. Placed in the leg's frame, "the foot sits below the strut's tip" is
-    # something a reader can see and a linter can compute.
-    # Both struts and pads carry colliders, so a tipped-over lander catches on its
-    # legs instead of the struts clipping through terrain (and a rover cannot drive
-    # through a leg).
+    # That is what keeps the leg's invariants checkable. The foot's world
+    # placement and the leg's world placement are each authored once; the
+    # the child transform expresses the pad's fixed offset from the leg frame.
+    # The pads are the landing interface. The strut shafts remain visible but do
+    # not collide with terrain: a shaft corner touching first creates a lateral
+    # impulse at the end of a long lever arm and defeats the prismatic suspension.
     #
     # THE PAD IS A DISH HUNG BELOW THE STRUT'S TIP, not a wafer centred on it, and
     # that is a load-path requirement rather than a styling one. The footpad has to
     # be the leg's ONLY ground contact by a margin no solver tolerance and no small
     # rotation can close.
     #
-    # The strut is a box raked 25°, so its bottom corner reaches 0.075*sin 25 =
-    # 0.032 m below its tip. Centre a 0.08 m pad on that tip and its contact face
-    # sits 0.040 m down — SIX MILLIMETRES clear of the corner, on an eleven-metre
-    # vehicle. Touchdown tips the leg a fraction of a degree, the corner takes the
-    # ground, and that rigid contact LATCHES: the vehicle stands on its shins. The
-    # struts then read 0 N at 0 stroke while carrying a lander, and the gear settles
-    # by bending the prismatic's angular lock ~2° instead of sliding along it. It
-    # presents as a sign error in the joint — as though the spring were being loaded
-    # the wrong way — and it is nothing of the kind.
-    #
-    # The loop is self-reinforcing, which is why half-measures fail: a deeper pad
-    # centred on the tip needs a LARGER leg rotation to reach the ground, and that
-    # rotation brings the corner down faster than the pad drops.
-    #
-    # h = 0.30 with the centre 0.15 m down-axis puts the pad's top face at the
-    # strut's tip and its contact face 0.267 m below the corner. `landing_legs_test`
-    # asserts the consequences — compression NEGATIVE, and the angular lock still
-    # holding at rest — because a gear that settles by bending looks landed.
+    # The slider frames are raked 20 degrees away from the centreline. Each leg
+    # still has exactly one DOF: translation along its own axis. The joint frame
+    # carries that rake; it is not a hidden revolute or a free visual rotation.
+    # Each foot is a collider in the leg's compound rigid body. Its inverse-rake
+    # child rotation keeps the pad level, so it cannot rotate independently of
+    # the strut. The prismatic joint is the only moving joint in the mechanism.
     #
     # The SPRING is the joint's own linear drive — `drive:linear:physics:stiffness`
     # and `:damping`, in SI, integrated by avian. Rust owns the dynamics; there is
     # no equation and no script in the loop. Two layers remain:
-    #   the joint            — the spring: k = 4000 N/m, c = 2200 N·s/m, stroke
+    #   the joint            — the spring: k = 4000 N/m, c = 3600 N·s/m, stroke
     #                          -0.8..0 m (negative IS compression, see the axis
     #                          note below). Static settle = 500 kg · 1.62 / 4000
-    #                          = -0.20 m per leg (a quarter of the vehicle each).
+    #                          = -0.20 m per leg (a quarter of the vehicle each),
+    #                          large enough to read in a landing close-up.
     #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
     #                          compression reads as a mechanism.
     #
@@ -2329,36 +2368,35 @@ def Xform "DescentLander" (
     )
     {
         # THE LEG'S OWN FRAME, and the reason this prim is an Xform and not the
-        # strut itself: origin AT the hull anchor, local -Y straight down the
+        # strut itself: origin AT the hull anchor, local -Y along the raked
         # strut. Every part of the leg is then placed by how far down the leg it
         # sits, in one frame, next to each other — so the relationship BETWEEN
         # them is authored, not re-derived as a second set of world coordinates
         # that can drift from the first.
         #
-        # That drift is not hypothetical. With the strut and the pad both placed
-        # absolutely, the pad's clearance over the strut's rotated corner was
-        # 6.6 mm on an eleven-metre vehicle — nothing said so, because nothing
-        # related the two numbers. Here the strut ends at local y = -7.05 and the
-        # pad's top face is AT that tip, which a reader can check by looking.
+        # The child pad is placed at the strut tip in the leg frame. Its local
+        # inverse-rake rotation keeps the pad level while the parent leg
+        # translates through the suspension joint; there is no separate foot
+        # body to spin or drift.
         #
         # The body carries NO scale. A prim that is both the rigid body and the
         # mesh has to, and then no child can be placed in its frame without being
         # crushed by it — which is exactly why the pad used to be a sibling in
         # hull coordinates. Splitting the mesh into `Strut` frees the frame.
         double3 xformOp:translate = (2.519, 1.388, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        # Twenty degrees outward in +X. The body itself never rotates after
+        # spawn; the prismatic joint locks this orientation to the hull.
+        double3 xformOp:rotateXYZ = (0, 0, 20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Mass and inertia of the STRUT ITSELF — the slender r = 0.075, h = 7.05
-        # cylinder below, not the vehicle share it carries. That share arrives through
-        # the joint, which is where a sprung leg's load belongs.
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 30*(0.017 + 49.70)/12 = 124.3
-        #   I_yy        = m*r^2/2            = 30*0.005625/2       =   0.084
-        # Authored together, always: mass alone overrides the mass and nothing
-        # else, leaving avian the inertia it derived at default density (see the
-        # hull's note above).
-        float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
+        # Mass properties cover the complete moving leg assembly: 30 kg strut
+        # plus 10 kg pad. The centre of mass is measured from this frame's hull
+        # anchor, and the inertia is about that centre of mass (not about the
+        # anchor). This keeps the off-axis pad contact from making the leg spin
+        # like a massless lever.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (225.9, 0.662, 225.9)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2382,7 +2420,7 @@ def Xform "DescentLander" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
             rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-            bool physics:collisionEnabled = true
+            bool physics:collisionEnabled = false
 
         # THE GLOW, wired straight from the physics that causes it, and carried on
         # the prim that owns the material — see `lunco-render-bevy/shader_ports`.
@@ -2405,95 +2443,82 @@ def Xform "DescentLander" (
         }
 
         def Cylinder "PadPX" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            # The pad is its own body, gimballed to the strut by PadPX_Gimbal, and a
-            # CHILD of the leg so its place is stated once: 0.15 m below the strut's
-            # tip, in the leg's frame. Move the strut and the foot follows.
-            #
-            # `xformOp:rotateXYZ` cancels the leg's rake so the pad hangs FLAT. It is
-            # the leg's own angle negated, in the leg's own frame, which is a
-            # relationship a reader can verify — unlike a world-space orientation
-            # that happens to come out level.
-            #
-            # Cylinder r = 0.4, h = 0.30, m = 10:
-            #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
-            #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
-            float physics:mass = 10.0
-            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
-
+            # Child collider, not another rigid body: the prismatic leg supplies
+            # the only suspension DOF. Inverse rake keeps this pad horizontal.
             uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.3
+            double radius = 0.34
+            double height = 0.16
             double3 xformOp:translate = (0, -7.2, 0)
-            double3 xformOp:rotateXYZ = (0, 0, -25.0)
+            double3 xformOp:rotateXYZ = (0, 0, -20)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = true
         }
+
     }
 
     # Shock-absorber PISTON sleeves — one per leg, hung from the strut's HULL
-    # anchor and reaching 2.6 m DOWN the strut axis. The sleeve does not move;
+    # anchor and reaching 3.2 m DOWN the raked strut axis. The sleeve does not move;
     # on touchdown the leg's prismatic joint slides the whole strut up its own
     # axis into the sleeve — the compression reads as a mechanism, not as a
-    # scale trick. Wider than the strut (r 0.12 over the 0.15 cube) so the
+    # scale trick. Wider than the strut (r 0.22 over the 0.075 shaft) so the
     # overlap hides the strut's sliding end. Visual only, and part of the HULL,
     # so it stays put while the strut telescopes through it.
     #
     # A USD `Cylinder` is CENTRED on its origin, so "hangs from the anchor"
-    # puts the origin a HALF-LENGTH (1.3 m) DOWN-axis from the anchor, not at
+    # puts the origin a HALF-LENGTH (1.6 m) DOWN-axis from the anchor, not at
     # it. The deck's underside is y = 1.475 (top face 1.625, radius 2.6), and
     # every sleeve top must stay below that underside or it surfaces through
     # the gold MLI as a grey nub. The struts' own top corner reaches y = 1.419,
     # clear of it.
     #
-    # Anchor is the strut's top-centre, (2.519, 1.388) in the leg's own plane.
-    # centre = anchor − 1.3·û, û = (−sin 25°, cos 25°) the foot→hull axis. That
-    # puts the top end exactly AT the anchor, 0.087 m below the deck.
+    # The sleeve centre is 1.6 m below each anchor, putting its top end exactly
+    # at the leg anchor and its centre 0.087 m below the deck.
     def Cylinder "PistonPX"
     {
         uniform token axis = "Y"
-        double radius = 0.12
-        double height = 2.6
-        double3 xformOp:translate = (3.069, 0.210, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        double radius = 0.22
+        double height = 3.2
+        double3 xformOp:translate = (3.067, -0.116, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        color3f[] primvars:displayColor = [(0.72, 0.75, 0.80)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PistonNX"
     {
         uniform token axis = "Y"
-        double radius = 0.12
-        double height = 2.6
-        double3 xformOp:translate = (-3.069, 0.210, 0)
-        double3 xformOp:rotateXYZ = (0, 0, -25.0)
+        double radius = 0.22
+        double height = 3.2
+        double3 xformOp:translate = (-3.067, -0.116, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        color3f[] primvars:displayColor = [(0.72, 0.75, 0.80)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PistonPZ"
     {
         uniform token axis = "Y"
-        double radius = 0.12
-        double height = 2.6
-        double3 xformOp:translate = (0, 0.210, 3.069)
-        double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+        double radius = 0.22
+        double height = 3.2
+        double3 xformOp:translate = (0, -0.116, 3.067)
+        double3 xformOp:rotateXYZ = (-20, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        color3f[] primvars:displayColor = [(0.72, 0.75, 0.80)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PistonNZ"
     {
         uniform token axis = "Y"
-        double radius = 0.12
-        double height = 2.6
-        double3 xformOp:translate = (0, 0.210, -3.069)
-        double3 xformOp:rotateXYZ = (25.0, 0, 0)
+        double radius = 0.22
+        double height = 3.2
+        double3 xformOp:translate = (0, -0.116, -3.067)
+        double3 xformOp:rotateXYZ = (20, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        color3f[] primvars:displayColor = [(0.72, 0.75, 0.80)]
         bool physics:collisionEnabled = false
     }
 
@@ -2504,12 +2529,13 @@ def Xform "DescentLander" (
     {
         # Frame and construction: see LegPX.
         double3 xformOp:translate = (-2.519, 1.388, 0)
-        double3 xformOp:rotateXYZ = (0, 0, -25.0)
+        double3 xformOp:rotateXYZ = (0, 0, -20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Strut mass/inertia — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
+        # Complete leg-assembly mass properties — see LegPX for the derivation.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (225.9, 0.662, 225.9)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2533,7 +2559,7 @@ def Xform "DescentLander" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
             rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-            bool physics:collisionEnabled = true
+            bool physics:collisionEnabled = false
 
             # see LegPX for the sign and the rating.
             float inputs:load_frac.connect = </DescentLander/LegNX_Spring.outputs:force>
@@ -2541,22 +2567,19 @@ def Xform "DescentLander" (
         }
 
         def Cylinder "PadNX" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            # Foot: see PadPX.
-            float physics:mass = 10.0
-            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
-
             uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.3
+            double radius = 0.34
+            double height = 0.16
             double3 xformOp:translate = (0, -7.2, 0)
-            double3 xformOp:rotateXYZ = (0, 0, 25.0)
+            double3 xformOp:rotateXYZ = (0, 0, 20)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = true
         }
+
     }
 
     def Xform "LegPZ"
@@ -2566,12 +2589,13 @@ def Xform "DescentLander" (
     {
         # Frame and construction: see LegPX.
         double3 xformOp:translate = (0, 1.388, 2.519)
-        double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+        double3 xformOp:rotateXYZ = (-20, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Strut mass/inertia — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
+        # Complete leg-assembly mass properties — see LegPX for the derivation.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (225.9, 0.662, 225.9)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2595,7 +2619,7 @@ def Xform "DescentLander" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
             rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-            bool physics:collisionEnabled = true
+            bool physics:collisionEnabled = false
 
             # see LegPX for the sign and the rating.
             float inputs:load_frac.connect = </DescentLander/LegPZ_Spring.outputs:force>
@@ -2603,22 +2627,19 @@ def Xform "DescentLander" (
         }
 
         def Cylinder "PadPZ" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            # Foot: see PadPX.
-            float physics:mass = 10.0
-            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
-
             uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.3
+            double radius = 0.34
+            double height = 0.16
             double3 xformOp:translate = (0, -7.2, 0)
-            double3 xformOp:rotateXYZ = (25.0, 0, 0)
+            double3 xformOp:rotateXYZ = (20, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = true
         }
+
     }
 
     def Xform "LegNZ"
@@ -2628,12 +2649,13 @@ def Xform "DescentLander" (
     {
         # Frame and construction: see LegPX.
         double3 xformOp:translate = (0, 1.388, -2.519)
-        double3 xformOp:rotateXYZ = (25.0, 0, 0)
+        double3 xformOp:rotateXYZ = (20, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Strut mass/inertia — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
+        # Complete leg-assembly mass properties — see LegPX for the derivation.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (225.9, 0.662, 225.9)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2657,7 +2679,7 @@ def Xform "DescentLander" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
             rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-            bool physics:collisionEnabled = true
+            bool physics:collisionEnabled = false
 
             # see LegPX for the sign and the rating.
             float inputs:load_frac.connect = </DescentLander/LegNZ_Spring.outputs:force>
@@ -2665,69 +2687,54 @@ def Xform "DescentLander" (
         }
 
         def Cylinder "PadNZ" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            # Foot: see PadPX.
-            float physics:mass = 10.0
-            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
-
             uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.3
+            double radius = 0.34
+            double height = 0.16
             double3 xformOp:translate = (0, -7.2, 0)
-            double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+            double3 xformOp:rotateXYZ = (-20, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = true
         }
+
     }
 
     # ── Landing-gear suspension ──
     #
-    # THE SPRING IS HERE, and only here. `drive:linear:physics:stiffness` and
-    # `:damping` are the shock absorber, in SI, integrated by avian's solver as
-    # `MotorModel::ForceBased` — the same law UsdPhysicsDriveAPI defines, so the
-    # numbers pass through untouched. No `der()` restates it in Modelica and no
-    # script animates it: a second spelling of one spring would put two writers on
-    # one fact, and which one wins would become a function of load order.
+    # THE SUSPENSION IS HERE, and only here. This API is a passive, compression-only
+    # law owned by the generic physics backend. Unlike a bilateral drive, it never
+    # pulls the leg back out of the sleeve after contact. The prismatic joint still
+    # supplies the geometric constraint and locks the leg's rotation.
     #
-    # `physics:type = "force"` is authored rather than left to the schema fallback:
-    # it is what makes 4000 mean 4000 N/m instead of 4000 N/kg/m, and a reader
-    # should not have to know a default to know what the strut is.
+    # No `der()` restates this law in Modelica and no script animates it: a second
+    # spelling of one spring would put two writers on one fact, and which one wins
+    # would become a function of load order.
     #
     # Tuning, per leg (a quarter of the 2000 kg vehicle, so m_eff = 500 kg):
     #   k = 4000 N/m   → static settle = m_eff*g/k = 500*1.62/4000 = 0.20 m
-    #   c = 2200 N·s/m → zeta = c/(2*sqrt(k*m_eff)) = 0.78: one visible
-    #                    overshoot on a hard arrival, then it stops. Not ringing.
-    # SIGN, and it is the physically natural one: a spring's reaction is POSITIVE
-    # when the spring is COMPRESSED. The drive law is
-    # `force = stiffness * (targetPosition - displacement)`, so with
-    # `targetPosition = 0` the force is always opposite in sign to the
-    # displacement. Compression must therefore read NEGATIVE displacement, which
-    # fixes the axis: it points hull→foot, the direction the strut EXTENDS.
+    #   c = 3600 N·s/m → zeta ≈ 1.27: the leg visibly contracts and settles
+    #                    without a long post-landing bounce.
+    # SIGN, and it is the physically natural one: a suspension reaction is POSITIVE
+    # when the spring is COMPRESSED. Compression therefore reads as NEGATIVE
+    # displacement along the hull→foot axis, the direction the strut EXTENDS.
     # Stroke runs -0.8 m (fully compressed) to 0 (fully extended, the rest pose
-    # the geometry is authored in), well inside the 2.6 m piston sleeve, so the
+    # the geometry is authored in), well inside the 3.2 m piston sleeve, so the
     # strut never bottoms out visually. Everything downstream — the `force` port,
     # the glow — then reads positive under load with no sign fixups anywhere.
     #
     # FRAMES: a UsdPhysics joint is TWO frames — `physics:localPos0`/`localRot0` on
     # body0 and `localPos1`/`localRot1` on body1 — and `physics:axis` names a
-    # cardinal axis OF THOSE FRAMES, which is the whole vocabulary it has. These
-    # legs are raked 25° off vertical, so the rake lives in the frames.
-    #
-    # `localRot0` takes the hull's +Y onto the leg's hull→foot axis: each leg's own
-    # `xformOp:rotateXYZ` composed with a 180° flip about that leg's rake axis (Z
-    # for the ±X legs, X for the ±Z legs), which negates where +Y lands. For LegPX
-    # the visual rake is +25° about Z, so the frame's rotation is 25° + 180° = 205°
-    # about Z, and +Y maps to (0.42262, -0.90631, 0): outward and DOWN, along the
-    # strut toward the pad. Half-angle 102.5°: cos = -0.216440, sin = 0.976296.
-    # Quaternions are (w, x, y, z).
-    #
-    # `localRot1` is that same 180° flip and nothing else, because the leg BODY
-    # already carries the 25° as its `xformOp:rotateXYZ`. A prismatic joint locks
-    # all three rotational DOF — it holds `rot0·localRot0 == rot1·localRot1` — so
-    # both frames must land on the same orientation in the rest pose.
+    # cardinal axis OF THOSE FRAMES. Here +Y is the leg axis after the authored
+    # frame rake. The X pair uses a half-turn about Z because its visible legs
+    # rake in the X/Y plane; the Z pair uses the corresponding half-turn about X
+    # because its visible legs rake in the Z/Y plane. Keeping those bases aligned
+    # with the authored leg frames is what makes the slider axis a real geometric
+    # constraint instead of an unrelated force direction. A prismatic joint locks
+    # all three rotational DOF on the leg; the foot is a child collider in that
+    # same rigid body.
     #
     # ANCHORS are deliberately unauthored. The loader derives them from the
     # transform hierarchy, which puts displacement at exactly 0 in the authored
@@ -2736,148 +2743,79 @@ def Xform "DescentLander" (
     # would be restating the geometry a second time, giving it a second place to
     # drift from the airframe.
     #
-    # Each pad is a body of its own, CHILD of its leg and jointed to it, so it
-    # rides down with the strut and its placement is stated in the leg's frame.
-    # Nesting a body is only wrong when nothing joints it (see the linter's
-    # `nested-body-no-joint`); nesting-plus-joint is how this engine mounts a
-    # wheel, and it is how a foot belongs on a leg.
+    # Each leg is a prismatic body: it cannot rotate independently of the hull.
+    # The foot is a child collider on that same body, so it has no independent
+    # rotational DOF; the only suspension travel is the prismatic stroke above.
     #
-    # The pad is GIMBALLED, not welded — a `PhysicsSphericalJoint` about the
-    # strut's foot, which is what a landing footpad is: it has to meet whatever
-    # slope it lands on while the strut points where the airframe points.
-    #
-    # THE BALL SITS AT THE PAD'S CENTRE OF MASS, and that coincidence is the
-    # design — do not "improve" it. The anchor is derived, so it lands on this
-    # prim's origin, which for a uniform cylinder is also its centre of mass. The
-    # strut's load therefore passes exactly through the pivot and can exert NO
-    # torque on the foot, however hard the leg pushes or however raked it is.
-    #
-    # Offsetting the mass from the ball is the tempting mistake, because a real
-    # dish does carry its material low. Move it 0.08 m and the strut's ~700 N gains
-    # a lever on the foot: 0.08*700*sin25 = 23.7 N m of tilting against 0.44 N m of
-    # gravity righting, 53:1. The pad then rides its 30 deg cone stop.
-    #
-    # With the ball on the centre of mass and the strut a CYLINDER rather than a
-    # scaled box, the pads settle flat — measured 0.1 deg on level ground and
-    # steady. A wandering foot is not what a centre-gimballed pad does; it is what
-    # a strut with a corner does to the foot it scuffs.
-    #
-    # It is also what makes the gear a MECHANISM rather than a structure. Four
-    # raked sliders whose pads are rigidly welded, closed through four ground
-    # contacts, is over-constrained — 10 DOF against 12 constraints — so the
-    # truss carries the vehicle and the springs never see it. Freeing the pads'
-    # rotation lets the gear articulate, and the strut's own spring takes the
-    # load it was sized for.
-    #
-    # `localRot0` puts the cone's centre on the FLAT pose: 25° back about the
-    # leg's rake axis, so a level landing sits mid-travel instead of hard against
-    # one side of the cone. Half-angle 12.5°: cos = 0.976296, sin = 0.216440.
+    # The spring's force and the strut/pad contact force remain separate facts.
+    # The former drives the load glow; the latter feeds touchdown guidance from
+    # the collider that actually meets the terrain.
 
     def PhysicsPrismaticJoint "LegPX_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegPX>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (-0.216440, 0, 0, 0.976296)
+        quatf physics:localRot0 = (-0.173648, 0, 0, 0.984808)
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 2200.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 20000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 4000.0
+        float lunco:prismaticSuspension:damping = 3600.0
+        float lunco:prismaticSuspension:maxForce = 30000.0
     }
-    def PhysicsSphericalJoint "PadPX_Gimbal"
-    {
-        quatf physics:localRot0 = (0.976296, 0, 0, -0.216440)
-        uniform token physics:axis = "Y"
-        float physics:coneAngle0Limit = 30.0
-        float physics:coneAngle1Limit = 30.0
-        rel physics:body0 = </DescentLander/LegPX>
-        rel physics:body1 = </DescentLander/LegPX/PadPX>
-    }
-
     def PhysicsPrismaticJoint "LegNX_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegNX>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0.216440, 0, 0, 0.976296)
+        quatf physics:localRot0 = (0.173648, 0, 0, 0.984808)
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 2200.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 20000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 4000.0
+        float lunco:prismaticSuspension:damping = 3600.0
+        float lunco:prismaticSuspension:maxForce = 30000.0
     }
-    def PhysicsSphericalJoint "PadNX_Gimbal"
-    {
-        quatf physics:localRot0 = (0.976296, 0, 0, 0.216440)
-        uniform token physics:axis = "Y"
-        float physics:coneAngle0Limit = 30.0
-        float physics:coneAngle1Limit = 30.0
-        rel physics:body0 = </DescentLander/LegNX>
-        rel physics:body1 = </DescentLander/LegNX/PadNX>
-    }
-
     def PhysicsPrismaticJoint "LegPZ_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegPZ>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0.216440, 0.976296, 0, 0)
+        # Z-leg frame: body0 rake Rx(-20 deg) followed by the body1 half-turn Rx(180 deg).
+        quatf physics:localRot0 = (0.173648, 0.984808, 0, 0)
         quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 2200.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 20000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 4000.0
+        float lunco:prismaticSuspension:damping = 3600.0
+        float lunco:prismaticSuspension:maxForce = 30000.0
     }
-    def PhysicsSphericalJoint "PadPZ_Gimbal"
-    {
-        quatf physics:localRot0 = (0.976296, 0.216440, 0, 0)
-        uniform token physics:axis = "Y"
-        float physics:coneAngle0Limit = 30.0
-        float physics:coneAngle1Limit = 30.0
-        rel physics:body0 = </DescentLander/LegPZ>
-        rel physics:body1 = </DescentLander/LegPZ/PadPZ>
-    }
-
     def PhysicsPrismaticJoint "LegNZ_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegNZ>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (-0.216440, 0.976296, 0, 0)
+        # Z-leg frame: body0 rake Rx(+20 deg) followed by the body1 half-turn Rx(180 deg).
+        quatf physics:localRot0 = (-0.173648, 0.984808, 0, 0)
         quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 2200.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 20000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 4000.0
+        float lunco:prismaticSuspension:damping = 3600.0
+        float lunco:prismaticSuspension:maxForce = 30000.0
     }
-    def PhysicsSphericalJoint "PadNZ_Gimbal"
-    {
-        quatf physics:localRot0 = (0.976296, -0.216440, 0, 0)
-        uniform token physics:axis = "Y"
-        float physics:coneAngle0Limit = 30.0
-        float physics:coneAngle1Limit = 30.0
-        rel physics:body0 = </DescentLander/LegNZ>
-        rel physics:body1 = </DescentLander/LegNZ/PadNZ>
-    }
+
 }

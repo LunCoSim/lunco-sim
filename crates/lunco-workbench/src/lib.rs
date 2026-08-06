@@ -628,6 +628,18 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
 /// migrating from `bevy_workbench` don't have to remember to add it).
 pub struct WorkbenchPlugin;
 
+/// Presentation policy for the offline recorder.
+///
+/// Headless/offscreen film capture leaves the workbench chrome out of the
+/// render target. A native `--windowed-ui` capture explicitly opts into the
+/// composed application surface so authored schema and telemetry shots record
+/// the same panels a user sees.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct OfflineRecordingPresentation {
+    /// Keep the title bar, dock, and workbench panels in a native UI capture.
+    pub retain_workbench_chrome: bool,
+}
+
 impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
         // Survive transient GPU validation errors (e.g. the Windows
@@ -771,6 +783,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(perspective_help::PerspectiveHelpPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<OfflineRecordingPresentation>()
             .init_resource::<PendingTabRequests>()
             .init_resource::<PendingLayoutRequests>()
             .init_resource::<PendingPanelFocus>()
@@ -3030,6 +3043,9 @@ fn render_layout(
     if world
         .get_resource::<screenshot::OfflineRecordingState>()
         .is_some_and(|r| r.active)
+        && !world
+            .get_resource::<OfflineRecordingPresentation>()
+            .is_some_and(|p| p.retain_workbench_chrome)
     {
         return;
     }

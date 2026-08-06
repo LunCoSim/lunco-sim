@@ -2,18 +2,21 @@
 //! **joint** half of the avian backend; [`crate::avian`] is the body half).
 //!
 //! Each single-DOF joint exposes one port in **both** directions, named for its
-//! DOF — `angle` (revolute, rad) or `displacement` (prismatic, m):
+//! DOF — `angle` (revolute, rad) or `displacement` (prismatic, m). A passive
+//! prismatic suspension is intentionally output-only: its stroke is a physical
+//! result, not an actuator command.
 //!
 //! | Joint     | Port           | `In` (commanded → motor) | `Out` (measured)        |
 //! |-----------|----------------|--------------------------|-------------------------|
 //! | revolute  | `angle`        | target angle (rad)       | current twist (rad)     |
-//! | prismatic | `displacement` | target offset (m)        | current slider offset(m)|
+//! | prismatic actuator | `displacement` | target offset (m)        | current slider offset(m)|
+//! | passive suspension | `displacement` | —                       | current slider offset(m)|
 //!
 //! A prismatic joint additionally exposes two `Out`-only measurements: `velocity`
-//! (m/s), the rate it is sliding at, and `force` (N), the axial force its own
-//! motor is developing. A physical part reads the latter to know how hard it is
-//! working — a landing-leg strut's load is that number, and a shader takes its
-//! glow straight off it.
+//! (m/s), the rate it is sliding at, and `force` (N), the axial reaction reported
+//! by the authored actuator or passive suspension. A physical part reads the
+//! latter to know its load — a landing-leg strut's load is that number, and a
+//! shader takes its glow straight off it.
 //!
 //! ## USD / Omniverse mapping
 //!
@@ -44,8 +47,8 @@
 //! motor) is left entirely alone, so the two never fight over `joint.motor`.
 
 use avian3d::prelude::{
-    AngularVelocity, LinearVelocity, Mass, MotorModel, Position, PrismaticJoint, RevoluteJoint,
-    Rotation,
+    AngularVelocity, Forces, LinearVelocity, Mass, MotorModel, Position, PrismaticJoint,
+    ReadRigidBodyForces, RevoluteJoint, Rotation, WriteRigidBodyForces,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -64,15 +67,41 @@ pub const JOINT_DISPLACEMENT_PORT: &str = "displacement";
 /// Mirrors `PhysxJointStateAPI:linear physics:velocity`.
 pub const JOINT_VELOCITY_PORT: &str = "velocity";
 
-/// The port name a prismatic joint exposes for the axial force (N) its own motor
-/// is developing. `Out` only — the force is a *result* of the motor's law and the
-/// joint's realized state, so there is nothing to command.
+/// The port name a prismatic joint exposes for its axial reaction force (N).
+/// `Out` only — the force is a *result* of the authored load law and the joint's
+/// realized state, so there is nothing to command.
 ///
 /// Unlike `displacement`/`velocity` this is a LunCo name, not a standard one:
 /// `PhysxJointStateAPI` stops at position and velocity, and no UsdPhysics schema
 /// spells joint-force readback. Ports are not USD schemas, so a plain name is
 /// right here — inventing a `lunco:*` USD attribute to match would not be.
 pub const JOINT_FORCE_PORT: &str = "force";
+
+/// A passive, compression-only suspension attached to a prismatic joint.
+///
+/// This is deliberately separate from Avian's `LinearMotor`. A motor is a
+/// bilateral position controller: after a landing compression it applies a
+/// force that pulls the leg back toward its target. A landing strut is not an
+/// elevator motor. It supports load while compressed, damps closing/rebound
+/// motion, and goes slack when it reaches its authored rest position.
+///
+/// USD projection creates this component only for a prim applying
+/// `LunCoPrismaticSuspensionAPI`; there is no name-based or scene-specific
+/// classification here. The prismatic joint remains responsible for its
+/// geometric constraints and rotational lock. This component supplies only the
+/// passive axial load.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Debug)]
+pub struct PassivePrismaticSuspension {
+    /// Zero-load joint displacement (m), using the joint's signed axis.
+    pub rest_position: f64,
+    /// Compression stiffness (N/m).
+    pub spring_k: f64,
+    /// Compression/rebound damping coefficient (N·s/m).
+    pub damping_c: f64,
+    /// Upper bound on the compressive reaction force (N).
+    pub max_force: f64,
+}
 
 /// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
 /// Generous so the joint holds its target against gravity for the structures we
@@ -152,13 +181,45 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) -> bool {
     true
 }
 
-/// The prismatic-joint port group: measured `displacement` out, commanded
-/// `displacement` in. Gated on [`PrismaticJoint`] presence. Mirror of
-/// [`REVOLUTE_JOINT_GROUP`] for the one translational DOF — drives a landing-gear
-/// strut, an elevator/piston, or any USD `PhysicsPrismaticJoint` from a wire,
-/// the API, rhai, or Modelica.
+const PRISMATIC_STATE_PORTS: &[AvianPort] = &[
+    AvianPort {
+        name: JOINT_DISPLACEMENT_PORT,
+        dir: PortDirection::Out,
+        read: Some(read_measured_displacement),
+        write: None,
+    },
+    AvianPort {
+        name: JOINT_VELOCITY_PORT,
+        dir: PortDirection::Out,
+        read: Some(read_measured_slide_rate),
+        write: None,
+    },
+    AvianPort {
+        name: JOINT_FORCE_PORT,
+        dir: PortDirection::Out,
+        read: Some(joint_reaction_force),
+        write: None,
+    },
+];
+
+/// The output-only port group for an explicitly authored passive suspension.
+/// A `LunCoPrismaticSuspensionAPI` is a load-bearing physical element, not a
+/// commandable motor, so no displacement input is exposed for wires to drive.
+pub const PASSIVE_PRISMATIC_SUSPENSION_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| {
+        w.get::<PrismaticJoint>(e).is_some() && w.get::<PassivePrismaticSuspension>(e).is_some()
+    },
+    ports: PRISMATIC_STATE_PORTS,
+};
+
+/// The commandable prismatic-joint port group: measured `displacement` out,
+/// commanded `displacement` in. Gated on a [`PrismaticJoint`] that is not
+/// classified as a passive suspension. This is the generic actuator path for
+/// elevators, pistons, and other authored bilateral drives.
 pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
-    present: |w, e| w.get::<PrismaticJoint>(e).is_some(),
+    present: |w, e| {
+        w.get::<PrismaticJoint>(e).is_some() && w.get::<PassivePrismaticSuspension>(e).is_none()
+    },
     ports: &[
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
@@ -172,18 +233,8 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| w.get::<PrismaticJoint>(e).map(|j| j.motor.target_position)),
             write: Some(write_motor_displacement),
         },
-        AvianPort {
-            name: JOINT_VELOCITY_PORT,
-            dir: PortDirection::Out,
-            read: Some(read_measured_slide_rate),
-            write: None,
-        },
-        AvianPort {
-            name: JOINT_FORCE_PORT,
-            dir: PortDirection::Out,
-            read: Some(joint_motor_force),
-            write: None,
-        },
+        PRISMATIC_STATE_PORTS[1],
+        PRISMATIC_STATE_PORTS[2],
     ],
 };
 
@@ -248,7 +299,9 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
     Some((v2 - v1).dot(axis))
 }
 
-/// Axial force (N) the prismatic joint's **own motor** is developing.
+/// Axial reaction force (N) developed by the prismatic joint's authored load
+/// law: a bilateral motor for an actuator, or a compression-only suspension for
+/// a passive landing strut.
 ///
 /// This is the physical RESULT the strut publishes — the spring's own reaction,
 /// zero until the joint actually leaves its rest offset — not a driving term
@@ -281,8 +334,22 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
 ///
 /// One computation, both consumers: the `force` port and anything else that wants
 /// the strut's load call this, so they cannot drift apart.
-pub fn joint_motor_force(world: &World, entity: Entity) -> Option<f64> {
+pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
+    if let Some(suspension) = world.get::<PassivePrismaticSuspension>(entity) {
+        let displacement = read_measured_displacement(world, entity)?;
+        let slide_rate = read_measured_slide_rate(world, entity)?;
+        return Some(passive_prismatic_force(
+            suspension.rest_position - displacement,
+            -slide_rate,
+            suspension.spring_k,
+            suspension.damping_c,
+            suspension.max_force,
+        ));
+    }
     let j = world.get::<PrismaticJoint>(entity)?;
+    if !j.motor.enabled {
+        return None;
+    }
     let (stiffness, damping) = match j.motor.motor_model {
         MotorModel::ForceBased { stiffness, damping } => (stiffness, damping),
         MotorModel::SpringDamper {
@@ -315,6 +382,13 @@ pub fn joint_motor_force(world: &World, entity: Entity) -> Option<f64> {
 /// via position control — same enable-on-write, finite-guard, and default-fill
 /// contract as [`write_motor_angle`].
 fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bool {
+    // A passive suspension has an output displacement, but it is not a
+    // commandable actuator. Enabling Avian's bilateral motor here would make a
+    // wire fight the one-sided suspension law and reintroduce the rebound force
+    // this component explicitly excludes.
+    if world.get::<PassivePrismaticSuspension>(entity).is_some() {
+        return true;
+    }
     let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
         return false;
     };
@@ -329,6 +403,91 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bo
         j.motor.max_force = JOINT_MOTOR_MAX_FORCE;
     }
     true
+}
+
+/// Compression-only landing-strut force law.
+///
+/// `compression_rate` is positive while the strut is closing. The damping
+/// contribution is bounded by the spring reaction, so a hard impact cannot
+/// create a large force spike and a rebound cannot turn the passive strut into
+/// a tensile actuator. The result is therefore always finite and non-negative.
+pub fn passive_prismatic_force(
+    compression: f64,
+    compression_rate: f64,
+    spring_k: f64,
+    damping_c: f64,
+    max_force: f64,
+) -> f64 {
+    if !compression.is_finite()
+        || !compression_rate.is_finite()
+        || !spring_k.is_finite()
+        || !damping_c.is_finite()
+        || compression <= 0.0
+        || spring_k <= 0.0
+    {
+        return 0.0;
+    }
+    let spring = compression * spring_k;
+    let damping = (compression_rate * damping_c).clamp(-spring, spring);
+    let force = (spring + damping).clamp(0.0, f64::MAX);
+    if max_force.is_finite() && max_force > 0.0 {
+        force.min(max_force)
+    } else {
+        force
+    }
+}
+
+/// Apply all authored passive prismatic suspensions once per fixed tick.
+///
+/// The force is applied at the two joint anchors, so a raked leg transmits the
+/// correct moment into the hull while the joint's own solver keeps the bodies
+/// aligned and rotation-locked. This is the generic physics realization of
+/// `LunCoPrismaticSuspensionAPI`; it is not a lander special case.
+pub fn apply_passive_prismatic_suspension(
+    q_joints: Query<(&PrismaticJoint, &PassivePrismaticSuspension)>,
+    mut q_bodies: Query<Forces, lunco_physics::Integrable>,
+) {
+    for (joint, suspension) in q_joints.iter() {
+        let Ok([mut body1, mut body2]) = q_bodies.get_many_mut([joint.body1, joint.body2]) else {
+            continue;
+        };
+
+        let position1 = body1.position().0;
+        let rotation1 = body1.rotation().0;
+        let position2 = body2.position().0;
+        let rotation2 = body2.rotation().0;
+        let axis_local = joint
+            .local_slider_axis1()
+            .unwrap_or(joint.slider_axis)
+            .normalize_or_zero();
+        let axis_world = (rotation1 * axis_local).normalize_or_zero();
+        if axis_world == DVec3::ZERO {
+            continue;
+        }
+
+        let anchor1 = position1 + rotation1 * joint.local_anchor1().unwrap_or(DVec3::ZERO);
+        let anchor2 = position2 + rotation2 * joint.local_anchor2().unwrap_or(DVec3::ZERO);
+        let displacement = (anchor2 - anchor1).dot(axis_world);
+        let velocity1 = body1.velocity_at_point(anchor1);
+        let velocity2 = body2.velocity_at_point(anchor2);
+        let slide_rate = (velocity2 - velocity1).dot(axis_world);
+        let force = passive_prismatic_force(
+            suspension.rest_position - displacement,
+            -slide_rate,
+            suspension.spring_k,
+            suspension.damping_c,
+            suspension.max_force,
+        );
+        if force <= 0.0 {
+            continue;
+        }
+
+        // body1 is the hull/frame and body2 is the moving leg. Compression
+        // pushes the frame opposite the slider axis and the leg along it.
+        let force_vector = -axis_world * force;
+        body1.apply_force_at_point(force_vector, anchor1);
+        body2.apply_force_at_point(-force_vector, anchor2);
+    }
 }
 
 /// Signed displacement (m) of `body2` relative to `body1` along `axis_world`,
@@ -426,6 +585,24 @@ mod tests {
 
     /// Static deflection the spring must settle to: `m*g/k`.
     const STATIC_DEFLECTION: f64 = SPRUNG_MASS * MOON_G / SPRING_K;
+
+    #[test]
+    fn passive_suspension_is_compression_only_and_damps_rebound() {
+        let spring = passive_prismatic_force(0.20, 0.0, 4000.0, 3600.0, 30_000.0);
+        assert!((spring - 800.0).abs() < 1e-9);
+        assert_eq!(
+            passive_prismatic_force(0.0, 10.0, 4000.0, 3600.0, 30_000.0),
+            0.0,
+            "an extended landing leg must not pull itself out"
+        );
+        let rebound = passive_prismatic_force(0.20, -10.0, 4000.0, 3600.0, 30_000.0);
+        assert_eq!(rebound, 0.0, "fast rebound cannot create tensile force");
+        let closing = passive_prismatic_force(0.20, 10.0, 4000.0, 3600.0, 30_000.0);
+        assert_eq!(
+            closing, 1600.0,
+            "closing damping is bounded to one spring load"
+        );
+    }
 
     /// A leg hung under a fixed hull by a prismatic joint whose drive is the
     /// authored spring, stepped `steps` fixed ticks under `gravity`.
@@ -561,7 +738,7 @@ mod tests {
     #[test]
     fn force_port_reads_the_spring_reaction() {
         let (loaded, joint) = sprung_leg(MOON_G, 600);
-        let f = joint_motor_force(loaded.world(), joint).expect("force port");
+        let f = joint_reaction_force(loaded.world(), joint).expect("force port");
         // At rest under gravity the spring carries the whole hung weight.
         let expected = SPRUNG_MASS * MOON_G;
         assert!(
@@ -576,7 +753,7 @@ mod tests {
         // Same joint, no gravity: nothing displaces it, so there is nothing to
         // report. A non-zero reading here is a spring publishing an input.
         let (unloaded, joint) = sprung_leg(0.0, 60);
-        let f0 = joint_motor_force(unloaded.world(), joint).expect("force port");
+        let f0 = joint_reaction_force(unloaded.world(), joint).expect("force port");
         assert!(
             f0.abs() < 1.0,
             "unloaded strut should read ~0 N, got {f0} N"
@@ -601,7 +778,7 @@ mod tests {
                 .motor_model,
             MotorModel::SpringDamper { .. }
         ));
-        let f = joint_motor_force(app.world(), joint).expect("force port reads a spring-damper");
+        let f = joint_reaction_force(app.world(), joint).expect("force port reads a spring-damper");
         let expected = SPRUNG_MASS * MOON_G;
         assert!(
             (f - expected).abs() < 0.15 * expected,
@@ -625,7 +802,7 @@ mod tests {
             stiffness: SPRING_K,
             damping: SPRING_C,
         };
-        assert!(joint_motor_force(app.world(), joint).is_none());
+        assert!(joint_reaction_force(app.world(), joint).is_none());
     }
 
     #[test]

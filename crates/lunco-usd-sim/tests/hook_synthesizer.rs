@@ -14,8 +14,6 @@ use lunco_usd_sim::domain_projection::{
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
-/// A whole synthesizer, authored. It receives the composed network as a map and
-/// returns Modelica text — no USD reading, no Rust.
 const POLICY: &str = r#"
 fn emit(net) {
     let src = "model " + net.model_name + "\n";
@@ -23,9 +21,6 @@ fn emit(net) {
         src += "  input Real " + name + ";\n";
     }
     for c in net.components {
-        // The POLICY decides what a part becomes: here every member is emitted
-        // as its declared class, but a fidelity switch or a substitution table
-        // would live exactly here.
         src += "  " + c.class + " " + c.instance + ";\n";
     }
     src += "equation\n";
@@ -92,8 +87,6 @@ fn a_rhai_policy_can_be_the_synthesizer() {
         synthesized.source
     );
     assert!(synthesized.source.contains("input Real drive_left;"));
-    // The BOUNDARY is still Rust's answer: it is what the runtime holds the
-    // compiled model to, so a policy cannot silence its own contract check.
     assert!(synthesized.inputs.contains("drive_left"));
     assert!(synthesized.outputs.contains("soc"));
 }
@@ -138,8 +131,6 @@ fn facts_describe_the_whole_graph() {
     let lunco_hooks::HookValue::Array(components) = components else {
         panic!("components is an array");
     };
-    // A policy must be able to answer "what is wired to what" WITHOUT reading
-    // USD itself — a second reader is a second definition of the network.
     let battery = components
         .iter()
         .find(|c| c.get("path").and_then(|v| v.as_str()) == Some("/Rig/Battery"))

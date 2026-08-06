@@ -57,9 +57,13 @@ impl FixedStepSession {
             ));
         }
 
+        let lower_started = web_time::Instant::now();
         let model = rumoca_sim::lower_for_simulation_with_overrides(dae, &options)?;
+        let lower_elapsed = lower_started.elapsed();
         reject_unsupported_constructs(&model)?;
+        let runtime_started = web_time::Instant::now();
         let runtime = SolveRuntime::new(&model)?;
+        let runtime_elapsed = runtime_started.elapsed();
         let state_count = model.state_scalar_count();
         if model.initial_y.len() < state_count {
             return Err(SimulationDiagnosticError::Solver(format!(
@@ -68,6 +72,13 @@ impl FixedStepSession {
                 state_count,
             )));
         }
+        log::info!(
+            "[fixed-rk4] prepared solve runtime: lower={lower_elapsed:?} runtime={runtime_elapsed:?} \
+             states={} solver_slots={} algebraic_slots={}",
+            state_count,
+            model.solver_scalar_count(),
+            model.solver_scalar_count().saturating_sub(state_count),
+        );
         let initial_state = model.initial_y[..state_count].to_vec();
 
         Ok(Self {

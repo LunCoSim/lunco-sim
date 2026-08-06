@@ -1,0 +1,56 @@
+<template>
+  <property name="vehicle">No simulation selected</property>
+  <property name="status">WAITING</property>
+  <property name="status_color">var(--muted-color)</property>
+  <property name="rcs_activity">0%</property>
+  <property name="rcs_activity_width">0%</property>
+  <property name="torque_x">—</property>
+  <property name="torque_y">—</property>
+  <property name="torque_z">—</property>
+  <property name="throttle">—</property>
+
+  <node id="control-response-root">
+    <node id="control-response-heading">
+      <node>
+        <text id="control-response-kicker">CONTROL RESPONSE</text>
+        <text id="control-response-vehicle">{vehicle}</text>
+      </node>
+      <text id="control-response-status">{status}</text>
+    </node>
+
+    <text id="control-response-explanation">
+      IMU measures tilt and spin. GNC asks for a correction. The RCS allocator opens the valve pair that creates it.
+    </text>
+
+    <node id="control-response-activity">
+      <node id="control-response-activity-heading">
+        <text>RCS ACTIVITY</text>
+        <text id="control-response-activity-value">{rcs_activity}</text>
+      </node>
+      <node id="control-response-activity-track">
+        <node id="control-response-activity-fill" />
+      </node>
+    </node>
+
+    <node id="control-response-grid">
+      <node id="control-response-torque-x">
+        <text id="control-response-torque-x-label">PITCH TORQUE</text>
+        <text id="control-response-torque-x-value">{torque_x}</text>
+      </node>
+      <node id="control-response-torque-y">
+        <text id="control-response-torque-y-label">YAW TORQUE</text>
+        <text id="control-response-torque-y-value">{torque_y}</text>
+      </node>
+      <node id="control-response-torque-z">
+        <text id="control-response-torque-z-label">ROLL TORQUE</text>
+        <text id="control-response-torque-z-value">{torque_z}</text>
+      </node>
+      <node id="control-response-throttle">
+        <text id="control-response-throttle-label">MAIN ENGINE</text>
+        <text id="control-response-throttle-value">{throttle}</text>
+      </node>
+    </node>
+
+    <text id="control-response-footer">REAL OUTPUTS · REAL VALVES · NO SCRIPTED FLAME</text>
+  </node>
+</template>

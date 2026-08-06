@@ -242,4 +242,21 @@ end PriorAllocator;
         "positive valve was remapped: {pos}"
     );
     assert!(neg.abs() < 1.0e-9, "negative valve was remapped: {neg}");
+
+    let plume_intensity = stepper
+        .get("RcsRollPosModel.light_intensity")
+        .expect("positive RCS plume intensity is observable")
+        .expect("positive RCS plume intensity has a value");
+    let plume_radius = stepper
+        .get("RcsRollPosModel.light_radius")
+        .expect("positive RCS plume radius is observable")
+        .expect("positive RCS plume radius has a value");
+    assert!(
+        plume_intensity.is_finite() && plume_intensity > 0.0,
+        "positive valve must drive a visible plume light: {plume_intensity}"
+    );
+    assert!(
+        plume_radius > 0.06,
+        "positive valve must expand the plume source radius: {plume_radius}"
+    );
 }

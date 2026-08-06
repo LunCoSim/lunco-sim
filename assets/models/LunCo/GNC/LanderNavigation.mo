@@ -57,6 +57,7 @@ model LanderNavigation
   Real navigation_accel_x;
   Real navigation_accel_y;
   Real navigation_accel_z;
+  Real range_confidence;
 
 equation
   // The IMU supplies specific force in the body frame. Rotate it into the
@@ -72,19 +73,23 @@ equation
   q_x = imu_attitude_quat_x / q_norm;
   q_y = imu_attitude_quat_y / q_norm;
   q_z = imu_attitude_quat_z / q_norm;
+  // IMUSensor.mo already applies the body-frame (transpose) rotation.  The
+  // estimator must apply its inverse here, not repeat the same matrix.  The
+  // transpose is written explicitly so a 90-degree starting attitude is a
+  // real frame-conversion test rather than an accidental identity case.
   navigation_accel_x =
     (1.0 - 2.0 * (q_y * q_y + q_z * q_z)) * imu_coordinate_accel_local_x
-      + 2.0 * (q_x * q_y + q_w * q_z) * imu_coordinate_accel_local_y
-      + 2.0 * (q_x * q_z - q_w * q_y) * imu_coordinate_accel_local_z
+      + 2.0 * (q_x * q_y - q_w * q_z) * imu_coordinate_accel_local_y
+      + 2.0 * (q_x * q_z + q_w * q_y) * imu_coordinate_accel_local_z
       + gravity_nav_x;
   navigation_accel_y =
-    2.0 * (q_x * q_y - q_w * q_z) * imu_coordinate_accel_local_x
+    2.0 * (q_x * q_y + q_w * q_z) * imu_coordinate_accel_local_x
       + (1.0 - 2.0 * (q_x * q_x + q_z * q_z)) * imu_coordinate_accel_local_y
-      + 2.0 * (q_y * q_z + q_w * q_x) * imu_coordinate_accel_local_z
+      + 2.0 * (q_y * q_z - q_w * q_x) * imu_coordinate_accel_local_z
       + gravity_nav_y;
   navigation_accel_z =
-    2.0 * (q_x * q_z + q_w * q_y) * imu_coordinate_accel_local_x
-      + 2.0 * (q_y * q_z - q_w * q_x) * imu_coordinate_accel_local_y
+    2.0 * (q_x * q_z - q_w * q_y) * imu_coordinate_accel_local_x
+      + 2.0 * (q_y * q_z + q_w * q_x) * imu_coordinate_accel_local_y
       + (1.0 - 2.0 * (q_x * q_x + q_y * q_y)) * imu_coordinate_accel_local_z
       + gravity_nav_z;
 
@@ -98,10 +103,10 @@ equation
   // range-rate when the ray is valid. This is a continuous complementary
   // estimator: it remains sensor-only while avoiding an algebraic switch in the
   // PID feedback path.
+  range_confidence = max(0.0, min(1.0, altimeter_valid));
   der(nav_vel_y) = navigation_accel_y
-    + (if altimeter_valid > 0.5 then
-      vertical_velocity_correction_gain * (altimeter_range_rate - nav_vel_y)
-      else 0.0);
+    + range_confidence * vertical_velocity_correction_gain
+      * (altimeter_range_rate - nav_vel_y);
   // With a downward ray over the landing surface, range and world +Y have the
   // same sign: a climbing vehicle increases the measured distance, while a
   // descending vehicle decreases it. Do not negate this measurement or the
@@ -109,11 +114,11 @@ equation
   der(nav_vel_z) = navigation_accel_z;
 
   der(nav_pos_y_integrated) = nav_vel_y;
-  vertical_position_value = if altimeter_valid > 0.5
-    then altimeter_range + altimeter_mount_offset
-    else nav_pos_y_integrated;
+  vertical_position_value = range_confidence
+    * (altimeter_range + altimeter_mount_offset)
+    + (1.0 - range_confidence) * nav_pos_y_integrated;
   nav_pos_y = vertical_position_value;
-  measured_altitude_value = if altimeter_valid > 0.5 then altimeter_range else 0.0;
+  measured_altitude_value = range_confidence * altimeter_range;
   measured_altitude = measured_altitude_value;
 
 initial equation

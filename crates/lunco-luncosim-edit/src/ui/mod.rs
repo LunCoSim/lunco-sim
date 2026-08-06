@@ -303,6 +303,22 @@ impl Plugin for SandboxEditUiPlugin {
                     has_tour: false,
                 },
             )
+            .register_perspective(SchemaPerspective)
+            .register_perspective_help(
+                PerspectiveId("lunica_schema"),
+                lunco_workbench::PerspectiveHelp {
+                    title: "🔗 Lunica Schema",
+                    description: "Full-window view of the composed USD connection graph. Nodes and wires are derived from the live stage's typed properties and authored connections.",
+                    shortcuts: vec![
+                        HelpShortcut { keys: "F", description: "Fit the complete graph" },
+                    ],
+                    mouse: vec![
+                        HelpMouse { interaction: "Pan / zoom", description: "Navigate the graph canvas" },
+                        HelpMouse { interaction: "Drag a node", description: "Inspect or reposition a graph node" },
+                    ],
+                    has_tour: false,
+                },
+            )
             .register_perspective(BuildPerspective)
             .register_perspective_help(
                 PerspectiveId("rover_build"),
@@ -703,6 +719,36 @@ impl Perspective for ViewPerspective {
         layout.set_right_inspector(None);
         layout.set_bottom(None);
         layout.set_center(vec![]);
+    }
+}
+
+/// Full-window Lunica schema mode — the live composed USD connection graph.
+///
+/// This is a real workbench perspective rather than a runtime panel insertion
+/// into View. View deliberately has no egui centre so the Bevy camera receives
+/// direct pointer input; inserting a canvas there leaves the dock parked and
+/// produces a blank presentation surface. Giving the canvas its own centre
+/// slot makes the authored `ActivatePerspective` command deterministic and
+/// lets the canvas fit the complete graph to its actual widget rectangle.
+pub struct SchemaPerspective;
+
+impl Perspective for SchemaPerspective {
+    fn id(&self) -> PerspectiveId {
+        PerspectiveId("lunica_schema")
+    }
+    fn title(&self) -> String {
+        "🔗 Lunica Schema".into()
+    }
+    fn restores_cached_layout(&self) -> bool {
+        false
+    }
+    fn apply(&self, layout: &mut WorkbenchLayout) {
+        layout.set_activity_bar(false);
+        layout.set_side_browser(None);
+        layout.set_right_inspector(None);
+        layout.set_bottom(None);
+        layout.set_center(vec![connection_canvas::USD_CANVAS_PANEL_ID]);
+        layout.set_active_center_panel(connection_canvas::USD_CANVAS_PANEL_ID);
     }
 }
 
