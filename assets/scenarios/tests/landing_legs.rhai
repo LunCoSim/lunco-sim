@@ -1,19 +1,21 @@
 // ── Landing-gear test — the sprung legs take the vehicle's weight ───────────
 //
 // TEST-ONLY. Runs against `scenes/tests/landing_legs.usda`: one airframe,
-// four vertical prismatic legs with fixed flat footpads, flat ground, 3 m drop. No
+// four raked prismatic legs with fixed child footpads, flat ground, 3 m drop. No
 // guidance, no rover, no mission — so anything this test sees is the LEG
 // MECHANISM and nothing else.
 //
-// WHAT IT GUARDS. Each landing leg has one vertical prismatic degree of freedom.
-// Both halves of each `UsdPhysicsJoint` frame (`physics:localRot0` on the hull,
+// WHAT IT GUARDS. Each landing leg has one prismatic degree of freedom along its
+// authored rake.
+// Both halves of each prismatic joint frame (`physics:localRot0` on the hull,
 // `localRot1` on the leg) use the same 180° basis, so travel points hull→ground
-// while the rotational lock keeps the leg and its child pad level. The pad is a
-// child collider, not a second free rigid body.
+// while the rotational lock keeps the leg straight. Each pad is a child collider
+// of that leg body, so it has no independent foot rotational DOF.
 //
 // So the assertions are about the vehicle STILL BEING A VEHICLE after the drop:
-// bodies at finite, bounded positions, the hull level and at rest, and all four
-// struts sharing the load. A silent frame regression fails every one of them.
+// bodies at finite, bounded positions, the hull level and at rest, all four
+// struts sharing the load, and the fixed foot mounts keeping every pad level. A
+// silent frame regression fails every one of them.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -51,7 +53,7 @@ fn ys(ids) {
 
 fn on_start(me) {
     this.t = 0.0;
-    this.settle_s = 6.0;    // drop (~0.8 s) + stroke + ring-down
+    this.settle_s = 6.0;    // drop + stroke + ring-down
     this.sample_s = 0.5;
     this.next_sample = 0.0;
 
@@ -112,10 +114,13 @@ fn strut_strokes(springs) {
 /// joint is supposed to hold rigid, and the spring never feels the landing. That
 /// is invisible in position, height and tilt: the vehicle looks perfectly landed.
 fn frame_errors(hull, legs) {
-    // `localRot0 * physics:axis`, per leg: all four physical slider axes are -Y
-    // in the HULL frame. `localRot1` uses the same 180° basis on every leg.
-    let a0 = [[0.0, -1.0, 0.0], [0.0, -1.0, 0.0],
-              [0.0, -1.0, 0.0], [0.0, -1.0, 0.0]];
+    // `localRot0 * physics:axis`, per leg: the four slider axes are raked 20°
+    // outward in the HULL frame. `localRot1` uses the same 180° sign basis on
+    // every leg, so +Y in the body frame points from hull toward the foot.
+    let s = 0.34202014;
+    let c = 0.93969262;
+    let a0 = [[s, -c, 0.0], [-s, -c, 0.0],
+              [0.0, -c, s], [0.0, -c, -s]];
     let a1 = [0.0, -1.0, 0.0];
     let out = [];
     for i in 0..legs.len() {
@@ -125,9 +130,8 @@ fn frame_errors(hull, legs) {
     out
 }
 
-/// Each footpad's tilt from level, in degrees. Pads are fixed child colliders of
-/// the vertical leg bodies, so a non-zero result reports a broken rigid child
-/// transform rather than intentional articulation.
+/// Each footpad's tilt from level, in degrees. A fixed foot mount should keep
+/// this at the solver's small numerical residual, not allow a contact gimbal.
 fn pad_tilts(pads) {
     let out = [];
     for i in pads { out.push(r2(tilt_deg(i))); }
@@ -265,7 +269,7 @@ fn verdict(s) {
     //
     // SHARING IS JUDGED ON STROKE, NOT ON `force`, and that is not a softer test —
     // it is the right instrument. The load a spring carries is `k*x`. The port
-    // reports the whole drive law, `k*x + c*v`, and with c = 2200 N·s/m a few tenths
+    // reports the whole drive law, `k*x + c*v`, and with c = 3600 N·s/m a few tenths
     // of a m/s of contact jitter swings it by ±600 N against a ~280 N carried load.
     // Comparing legs on that compares rate noise. Stroke is the state, is what the
     // load actually is, and still fails hard for a leg carrying nothing — a dead
@@ -296,14 +300,14 @@ fn verdict(s) {
     // assertions above already test the half that carries the information.
     // Asserting an angle here would be asserting the load, in the wrong units.
 
-    // The footpads are fixed child colliders, not independent gimbals. Their
-    // orientation must remain level while the leg body contracts vertically;
-    // otherwise the child transform is rotating freely and the contact geometry
-    // is no longer the authored four-foot landing interface.
+    // The footpads are child colliders in the prismatic bodies. The zero-
+    // compliance angular lock leaves a small finite-iteration XPBD residual at
+    // the contact impulse; 0.75° is the measured upper bound for that solver
+    // residual, while a freely rotating foot quickly exceeds it.
     for i in 0..4 {
         let a = s.pad_tilt[i];
         if a >= 0.0 {
-            f.push(t_range(a, 0.0, 0.5,
+            f.push(t_range(a, 0.0, 0.75,
                 "pad " + names[i] + " tilt (deg) — fixed child pad rotated"));
         }
     }

@@ -28,7 +28,7 @@ imply forty times that) has no equation to catch the contradiction; nobody reads
 number, so nothing objects. Moving the value into a model turns a silent lie into a
 checkable claim. That is the whole reason the split exists — not tidiness.
 
-## 2. USD assembles components; the synthesizer projects a composite model
+## 2. USD assembles components; the runtime projects a composite model
 
 Each physical component applies `LunCoProgramAPI` and names its reusable Modelica class.
 Compiler-network members explicitly author
@@ -39,10 +39,10 @@ Its causal boundary uses `inputs:`/`outputs:`; its acausal Modelica connector me
 `connectors:`. Ordinary USD property connections author topology. There is no electrical
 USD schema and no exposed `Pin` prim. An ordinary network `Scope` applies the standard
 multiple-apply `CollectionAPI:components`; that collection is the explicit working set
-for one projected Modelica root model. The selected synthesizer builds a deterministic
-program graph from that working set, partitions connected subgraphs into named
-composite units, and emits those units below the root. The Scope remains one runtime
-participant with one public boundary; generated child models are not extra ECS
+for one projected Modelica root model. The built-in network projector derives a
+deterministic program graph from that working set, partitions connected subgraphs into
+named composite units, and emits those units below the root. The Scope remains one
+runtime participant with one public boundary; generated child models are not extra ECS
 entities or an alternate wiring path.
 
 A circuit is not directional. It is acausal, and Modelica exists precisely to express
@@ -63,18 +63,17 @@ the wrapper's equations already do. A facet that declares `connectors:*` and bel
 collection cannot be solved at all (its pins only mean something inside a `connect()` set)
 and says so at load rather than sitting inert.
 
-**Which synthesizer runs is authored.** `uniform token lunco:synthesizer` on the network
-scope names one from the open `SynthesizerRegistry`
-(`lunco_usd_sim::domain_projection`); absent means `"acausal-network"`, the built-in that
-this section describes. A new physical domain — thermal, harness, comms-link — is a
-`DomainSynthesizer` impl plus a `register()` call from any plugin: no enum, no edit to the
-projector. (The synthesizer body is Rust today; moving the netlist-mapping POLICY into rhai
-needs an emit surface that does not exist yet.)
+**The network boundary is derived from typed USD structure.** The presence of
+`CollectionAPI:components` identifies the Scope as a Modelica network. Its composed
+`connectors:*`, `inputs:` and `outputs:` properties supply the complete topology; there
+is no `lunco:synthesizer` selector and no Rhai hook that can emit an arbitrary replacement
+model. A different physical domain needs its own typed USD contract and runtime projector,
+so a string property cannot silently change the equations being simulated.
 
 At runtime `lunco-usd-sim` asks OpenUSD to compute the collection's included prims, then
 projects every included Modelica program facet into one generated composite Modelica
 root. Acausal facets contribute `connect()` equations; causal-only blocks participate
-through their `inputs:`/`outputs:` connections. The synthesizer's connected units
+through their `inputs:`/`outputs:` connections. The projector's connected units
 preserve independent equation subgraphs and route their public inputs/outputs through
 the root. The generated source exists only at runtime; USD remains the authored source
 of assembly truth and Modelica remains the equation language.
@@ -114,7 +113,7 @@ network proxy hierarchy. Independent units share the root's stable path namespac
 generated instances remain unique even when the same component appears more than once.
 
 The projector rejects a connector targeting a component outside the collection, but a
-scope containing multiple disconnected units is valid: the synthesizer owns that graph
+scope containing multiple disconnected units is valid: the projector owns that graph
 partition and emits a composite model. Electrical reference checks are evaluated per
 generated unit, so two independent buses do not get falsely diagnosed as one
 over-determined bus. USD multi-target connections remain multi-way Modelica `connect()` equations;

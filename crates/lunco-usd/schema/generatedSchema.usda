@@ -769,6 +769,47 @@ class "LunCoSuspensionAPI" (
     )
 }
 
+class "LunCoPrismaticSuspensionAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A passive, compression-only suspension on a PhysicsPrismaticJoint.
+    This API is intentionally distinct from UsdPhysicsDriveAPI: a drive is a
+    bilateral actuator that seeks a target, while a landing strut supports load
+    only while compressed and goes slack at its rest position. The prismatic
+    joint still owns travel limits and the rotational lock; this API owns only
+    the passive axial load law."""
+)
+{
+    float lunco:prismaticSuspension:restPosition = 0.0 (
+        doc = """Zero-load displacement in the joint's signed slider coordinate,
+        metres. The default is the authored joint-frame coincidence."""
+    )
+    float lunco:prismaticSuspension:stiffness (
+        customData = {
+            double min = 0
+            double max = 100000
+            string unit = "N/m"
+        }
+        doc = "Compression spring stiffness. Required; no implicit physical spring is invented when it is absent."
+    )
+    float lunco:prismaticSuspension:damping (
+        customData = {
+            double min = 0
+            double max = 20000
+            string unit = "N*s/m"
+        }
+        doc = "Compression/rebound damping coefficient. Required; its reaction is bounded by the spring load."
+    )
+    float lunco:prismaticSuspension:maxForce = inf (
+        customData = {
+            double min = 0
+            string unit = "N"
+        }
+        doc = "Maximum compressive reaction. The force never becomes tensile."
+    )
+}
+
 class "LunCoWheelAPI" (
     customData = {
         token apiSchemaType = "singleApply"

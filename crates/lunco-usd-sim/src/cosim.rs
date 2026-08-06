@@ -3713,11 +3713,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<BindingModelStatuses>()
         .init_resource::<PythonUnavailablePrograms>()
         .init_resource::<crate::domain_projection::MemberClasses>()
-        .init_resource::<crate::domain_projection::ProjectionDirty>()
-        // The open synthesizer registry (doc 37 §8): the acausal-network
-        // synthesizer registers itself as the default; another domain is a
-        // `register()` from any plugin, not an edit here.
-        .init_resource::<crate::domain_projection::SynthesizerRegistry>();
+        .init_resource::<crate::domain_projection::ProjectionDirty>();
     app.add_observer(request_binding_epoch::<UsdPrimPath>)
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
         .add_observer(request_binding_epoch::<ModelicaModel>)

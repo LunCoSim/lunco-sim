@@ -27,6 +27,7 @@ def Xform "PositionPIDGuidance"
     )
     {
         custom bool lunco:ui:schemaNode = true
+        string ui:displayName = "Guidance computer"
         custom int lunco:ui:schemaColumn = 0
         custom int lunco:ui:schemaRow = 0
         uniform asset info:sourceAsset = @lunco://models/LunCo/GNC/PositionPID3D.mo@

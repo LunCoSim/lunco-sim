@@ -10,9 +10,10 @@
 //!
 //! ```text
 //!   CanonicalStage (composed USD)
-//!         │  collect_graph()          (read: prims + inputs:*.connect + joints)
+//!         │  collect_graph()          (read complete authored topology)
 //!         ▼
 //!   Vec<PrimNode> + Vec<Wire>
+//!         │  project_schema()         (explicit authored schema view)
 //!         │  build_scene()            (pure: relevance filter + layering)
 //!         ▼
 //!   lunco_canvas::Scene → Canvas → egui
@@ -46,7 +47,8 @@ use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
 use projection::{
-    build_scene, collect_graph, UsdPrimNodeData, UsdWireData, WireKind, EDGE_KIND, NODE_KIND,
+    build_scene, collect_graph, project_schema, UsdPrimNodeData, UsdWireData, WireKind, EDGE_KIND,
+    NODE_KIND,
 };
 
 pub const USD_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canvas");
@@ -122,9 +124,12 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
     let mut keys: Vec<String> = Vec::with_capacity(nodes.len() + wires.len());
     for n in nodes {
         keys.push(format!(
-            "N|{}|{}|{:?}|{:?}|{}|{}",
+            "N|{}|{}|{}|{}|{}|{:?}|{:?}|{}|{}",
             n.path,
             n.is_body,
+            n.schema_root,
+            n.schema_node,
+            n.display_name.as_deref().unwrap_or_default(),
             n.schema_column,
             n.schema_row,
             n.inputs.join(","),
@@ -191,6 +196,10 @@ pub fn produce_usd_canvas(
         .collect();
     let view = cs.view();
     let (nodes, wires) = collect_graph(&view, &prim_paths);
+    // The Schema perspective is an explicit authored boundary projection. The
+    // collector above remains complete so the same USD topology stays
+    // available to simulation, diagnostics, and future full-graph views.
+    let (nodes, wires) = project_schema(nodes, wires);
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
@@ -432,6 +441,13 @@ impl Panel for UsdCanvasPanel {
                 state.needs_fit = false;
             }
 
+            ui.horizontal(|ui| {
+                ui.small("Signals flow toward the arrowhead");
+                ui.separator();
+                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_input, "input");
+                ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
+                ui.small("Names come from the USD port contract");
+            });
             let (_resp, events) = state.canvas.ui(ui);
             if events.is_empty() {
                 return;

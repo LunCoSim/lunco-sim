@@ -31,27 +31,32 @@ model RCSJet
   output Real light_intensity "RCS plume luminous power (lm)";
   output Real light_radius "RCS plume source radius (m)";
 
+  // The nozzle remains a reusable physical Modelica component. Photometry is
+  // also an equation, but it has no state or acausal connector of its own: it
+  // only derives render-facing values from this jet's valve opening. Keeping
+  // those equations at this leaf avoids creating twelve nested algebraic
+  // solver blocks for one RCS bank while preserving the exact USD outputs.
   RCSThruster thruster(
     f_nom_n = f_nom_n,
     isp_sec = isp_sec,
     g0 = g0,
     minimum_isp_g0 = minimum_isp_g0);
-  PlumePhotometry photometry(
-    w_max = plume_width_m,
-    l_max = plume_length_m,
-    luminance = plume_luminance,
-    exitance = plume_exitance);
+
+  constant Real pi = 3.141592653589793;
+  Real visual_t "Shader-matched visible throttle response";
+  Real plume_width "Plume base radius at this throttle (m)";
+  Real plume_length "Plume length at this throttle (m)";
+  Real plume_area "Lateral surface of the plume cone (m2)";
 
 equation
   thruster.valve_opening = valve_opening;
   thrust_n = thruster.thrust_n;
   mass_flow_kgs = thruster.mass_flow_kgs;
   activity = max(0.0, min(1.0, valve_opening));
-  photometry.throttle = activity;
-  photometry.width_idle = plume_width_idle;
-  photometry.throttle_exponent = plume_throttle_exponent;
-  photometry.r_idle = plume_radius_idle;
-  photometry.r_gain = plume_radius_gain;
-  light_intensity = photometry.visual_intensity;
-  light_radius = photometry.visual_radius;
+  visual_t = max(0.0, activity) ^ max(0.1, min(1.0, plume_throttle_exponent));
+  plume_width = (plume_width_idle + (1.0 - plume_width_idle) * visual_t) * plume_width_m;
+  plume_length = visual_t * plume_length_m;
+  plume_area = pi * plume_width * sqrt(plume_width ^ 2 + plume_length ^ 2);
+  light_intensity = visual_t * plume_exitance * plume_luminance * plume_area;
+  light_radius = plume_radius_idle + visual_t * plume_radius_gain;
 end RCSJet;

@@ -467,6 +467,53 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
     h.finish()
 }
 
+/// Stable key for a compiled DAE that can be shared by multiple scene
+/// participants.  The document URI is intentionally absent: it identifies
+/// the authoring document, not the Modelica equations.  Two USD instances
+/// with the same model name, assembled source, and library generation have
+/// the same compile artifact; their parameter bindings and live steppers are
+/// still created independently below.
+fn shared_compile_hash(model_name: &str, unit: &CompileUnit, library_gen: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    model_name.hash(&mut h);
+    unit.source.hash(&mut h);
+    for (uri, text) in &unit.extras {
+        uri.hash(&mut h);
+        text.hash(&mut h);
+    }
+    library_gen.hash(&mut h);
+    h.finish()
+}
+
+/// Compile once per assembled Modelica unit, even when several USD instances
+/// request the same source in the same scene.  The returned DAE is cloned
+/// cheaply (rumoca stores the large graph behind an `Arc`); parameter
+/// overrides and solver selection remain per-instance operations.
+fn compile_shared(
+    artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    compiler: &mut ModelicaCompiler,
+    model_name: &str,
+    unit: &CompileUnit,
+    doc_uri: &str,
+    library_gen: u64,
+) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+    let key = shared_compile_hash(model_name, unit, library_gen);
+    if let Some(compiled) = artifacts.get(&key) {
+        log::debug!("[worker] shared Modelica artifact hit for `{model_name}` (key={key})");
+        return Ok(compiled.clone());
+    }
+    let outcome = if unit.extras.is_empty() {
+        compiler.compile_str(model_name, &unit.source, doc_uri)
+    } else {
+        compiler.compile_str_multi(model_name, &unit.source, doc_uri, &unit.extras)
+    };
+    if let Ok(compiled) = &outcome {
+        artifacts.insert(key, compiled.clone());
+    }
+    outcome
+}
+
 /// Whether a cached artifact built at (`cached_hash`, `cached_gen`) may be
 /// reused for the unit currently hashing to `hash` under `library_gen`.
 /// Factored out of [`rebuild_from_cache`] so the invalidation rule is
@@ -500,6 +547,7 @@ struct CacheRebuild {
 /// Returns `None` when the entity has no cached model at all.
 fn rebuild_from_cache(
     cached_models: &mut HashMap<Entity, CachedModel>,
+    artifacts: &mut HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
     compiler: &mut Option<ModelicaCompiler>,
     entity: Entity,
     library_gen: u64,
@@ -540,11 +588,14 @@ fn rebuild_from_cache(
         });
     }
     let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-    let outcome = if unit.extras.is_empty() {
-        compiler.compile_str(&model_name, &unit.source, &doc_uri)
-    } else {
-        compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
-    };
+    let outcome = compile_shared(
+        artifacts,
+        compiler,
+        &model_name,
+        &unit,
+        &doc_uri,
+        library_gen,
+    );
     let outcome = outcome.and_then(|mut comp_res| {
         apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides).map(|()| comp_res)
     });
@@ -1247,6 +1298,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     // Compiled-artifact cache per entity (M3) — Reset and Step auto-init
     // rebuild steppers from `CachedModel::compiled` without recompiling.
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
+    // Cross-entity cache: identical Modelica source gets one rumoca DAE even
+    // when USD instantiates it more than once. Parameters and steppers remain
+    // per entity, so this changes startup cost without coupling simulations.
+    let mut compiled_artifacts: HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>> =
+        HashMap::default();
     // Lock-free publish stream per entity (Phase A of the multi-sim
     // refactor — see `sim_stream.rs`). The UI side holds a clone of
     // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
@@ -1317,6 +1373,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         // cached source set (and refreshes the cache).
                         if let Some(rb) = rebuild_from_cache(
                             &mut cached_models,
+                            &mut compiled_artifacts,
                             &mut compiler,
                             entity,
                             library_gen,
@@ -1422,7 +1479,14 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         unit.merge_library_defaults(compiler.library_input_defaults());
-                        match compiler.compile_str(&model_name, &unit.source, &doc_uri) {
+                        match compile_shared(
+                            &mut compiled_artifacts,
+                            compiler,
+                            &model_name,
+                            &unit,
+                            &doc_uri,
+                            library_gen,
+                        ) {
                             Ok(comp_res) => match build_stepper(
                                 &comp_res,
                                 profile_for(entity, &realtime_models),
@@ -1555,16 +1619,14 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             unit.source.len(),
                         );
                         let t_compile = web_time::Instant::now();
-                        let _compile_outcome = if unit.extras.is_empty() {
-                            compiler.compile_str(&model_name, &unit.source, &doc_uri)
-                        } else {
-                            compiler.compile_str_multi(
-                                &model_name,
-                                &unit.source,
-                                &doc_uri,
-                                &unit.extras,
-                            )
-                        };
+                        let _compile_outcome = compile_shared(
+                            &mut compiled_artifacts,
+                            compiler,
+                            &model_name,
+                            &unit,
+                            &doc_uri,
+                            library_gen,
+                        );
                         bevy::log::debug!(
                             "[worker] compile_str returned for `{}` in {:.2}s ({})",
                             model_name,
@@ -1727,6 +1789,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             if cached_name_matches {
                                 if let Some(rb) = rebuild_from_cache(
                                     &mut cached_models,
+                                    &mut compiled_artifacts,
                                     &mut compiler,
                                     entity,
                                     library_gen,
@@ -1877,6 +1940,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         // resolves to — invalidate all cached compiled
                         // artifacts (next Reset / auto-init recompiles).
                         library_gen += 1;
+                        compiled_artifacts.clear();
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         let t0 = web_time::Instant::now();
                         let report = match payload {
@@ -2069,6 +2133,7 @@ pub struct InlineWorkerInner {
     steppers: HashMap<Entity, (u64, String, LiveStepper)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
+    compiled_artifacts: HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
     compiler: Option<ModelicaCompiler>,
     /// Models that declared the realtime promise — the same per-entity fact the
     /// native worker keeps, so wasm resolves the same solver for the same model.
@@ -2109,6 +2174,7 @@ impl InlineWorker {
     /// global MSL source.
     pub(crate) fn reset_compiler(&mut self) {
         self.inner.compiler = None;
+        self.inner.compiled_artifacts.clear();
         // The fresh compiler will see the just-landed MSL bundle — anything
         // compiled against the old (possibly MSL-less) session is stale.
         self.inner.library_gen += 1;
@@ -2187,6 +2253,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 if cached_name_matches {
                     if let Some(rb) = rebuild_from_cache(
                         &mut w.cached_models,
+                        &mut w.compiled_artifacts,
                         &mut w.compiler,
                         entity,
                         w.library_gen,
@@ -2310,11 +2377,14 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             unit.merge_library_defaults(compiler.library_input_defaults());
-            let compile_outcome = if unit.extras.is_empty() {
-                compiler.compile_str(&model_name, &unit.source, &doc_uri)
-            } else {
-                compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
-            };
+            let compile_outcome = compile_shared(
+                &mut w.compiled_artifacts,
+                compiler,
+                &model_name,
+                &unit,
+                &doc_uri,
+                w.library_gen,
+            );
             match compile_outcome {
                 Ok(mut comp_res) => {
                     let stepper_result =
@@ -2426,9 +2496,13 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
             // M3: rebuild from the cached compiled artifact — instant unless a
             // LoadSourceRoot / compiler reset invalidated it.
-            if let Some(rb) =
-                rebuild_from_cache(&mut w.cached_models, &mut w.compiler, entity, w.library_gen)
-            {
+            if let Some(rb) = rebuild_from_cache(
+                &mut w.cached_models,
+                &mut w.compiled_artifacts,
+                &mut w.compiler,
+                entity,
+                w.library_gen,
+            ) {
                 match rb.outcome {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) =
@@ -2522,7 +2596,14 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             unit.merge_library_defaults(compiler.library_input_defaults());
-            match compiler.compile_str(&model_name, &unit.source, &doc_uri) {
+            match compile_shared(
+                &mut w.compiled_artifacts,
+                compiler,
+                &model_name,
+                &unit,
+                &doc_uri,
+                w.library_gen,
+            ) {
                 Ok(comp_res) => {
                     match build_stepper(&comp_res, profile_for(entity, &w.realtime_models)) {
                         Ok(mut stepper) => {
@@ -2619,6 +2700,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             // library into its session. Idempotent.
             // M3: invalidate cached compiled artifacts (see native arm).
             w.library_gen += 1;
+            w.compiled_artifacts.clear();
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let t0 = web_time::Instant::now();
             let report = match payload {
@@ -3660,6 +3742,11 @@ mod artifact_cache_tests {
         compile_unit_hash(model, uri, &unit)
     }
 
+    fn shared_hash_of(model: &str, source: &str, extras: Vec<(String, String)>) -> u64 {
+        let unit = assemble_compile_unit(source, extras);
+        shared_compile_hash(model, &unit, 4)
+    }
+
     /// The hash keys the whole assembled CompileUnit: primary source, extras,
     /// model name, and session URI each independently invalidate.
     #[test]
@@ -3696,6 +3783,24 @@ mod artifact_cache_tests {
         assert!(
             !artifact_still_valid(7, 3, 7, 4),
             "a source root loaded since"
+        );
+    }
+
+    /// The cross-entity cache deliberately ignores document identity: the
+    /// equations, not the USD instance URI, determine the compiled DAE.
+    #[test]
+    fn shared_hash_is_instance_independent() {
+        assert_eq!(
+            shared_hash_of("M", "model M end M;", Vec::new()),
+            shared_hash_of("M", "model M end M;", Vec::new())
+        );
+        assert_ne!(
+            shared_hash_of("M", "model M end M;", Vec::new()),
+            shared_hash_of("M2", "model M end M;", Vec::new())
+        );
+        assert_ne!(
+            shared_hash_of("M", "model M end M;", Vec::new()),
+            shared_hash_of("M", "model M Real x; end M;", Vec::new())
         );
     }
 }

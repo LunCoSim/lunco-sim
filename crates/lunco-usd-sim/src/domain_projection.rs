@@ -72,8 +72,8 @@ pub struct GeneratedModelicaSource {
     /// example a light or a telemetry adapter) read a member output without
     /// creating a second solver for that member.
     pub member_output_aliases: Vec<(String, String, String)>,
-    /// Deterministic composite units selected by the synthesizer.
-    pub units: Vec<SynthesisUnit>,
+    /// Deterministic composite units emitted by the network projector.
+    pub units: Vec<CompositeUnit>,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -120,13 +120,13 @@ pub struct DomainNetwork {
 /// One deterministic Modelica composite unit inside a network Scope.
 ///
 /// A unit is a connected component of the composed program graph. It is not a
-/// second ECS participant: the selected synthesizer emits the units below one
+/// second ECS participant: the network projector emits the units below one
 /// generated root model, so the Scope keeps one public boundary and one
 /// runtime lifecycle while independent acausal subgraphs remain explicit in
 /// the generated Modelica. This is the same composite-model shape used by
 /// SSP/FMI toolchains.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SynthesisUnit {
+pub struct CompositeUnit {
     /// Stable generated Modelica class name for the composite unit.
     pub name: String,
     /// Composed USD members absorbed into the unit.
@@ -147,15 +147,15 @@ pub struct DomainProjectionError {
 }
 
 // A `Scope` is ONE runtime compilation unit: one generated root model on one
-// entity carrying one `ModelicaModel`. The synthesizer may partition the
-// composed graph into several Modelica composite units, but it owns that
-// topology operation and emits the units under the root. The runtime therefore
-// never invents entities or a second definition of graph connectivity.
+// entity carrying one `ModelicaModel`. The network projector partitions the
+// composed graph into Modelica composite units and emits them under the root.
+// The runtime therefore never invents entities or a second definition of graph
+// connectivity.
 
-/// What a synthesizer hands back: the generated root, its public contract, and
-/// the explicit composite units inside it.
+/// What the built-in network projector produces: the generated root, its public
+/// contract, and the explicit composite units inside it.
 #[derive(Clone, Debug, Default)]
-pub struct SynthesisPlan {
+struct NetworkProjectionPlan {
     /// The Modelica source to compile.
     pub source: String,
     /// Public causal inputs of the generated model.
@@ -167,347 +167,53 @@ pub struct SynthesisPlan {
     /// `(prim, source asset, class)` per member — attribution + class audit.
     pub members: Vec<(String, String, String)>,
     /// Connected composite units emitted below the root model.
-    pub units: Vec<SynthesisUnit>,
+    units: Vec<CompositeUnit>,
 }
 
-/// One way of turning a composed USD scope into ONE Modelica compilation unit.
+/// The internal projection boundary for a composed component network.
 ///
-/// The seam doc 37 §8 asks for. What ships is the acausal-network synthesizer
-/// below; a `thermal`, `harness` or `comms-link` synthesizer is a registration,
-/// not an edit to [`project_domain_islands`]. A scope selects one with
-/// `uniform token lunco:synthesizer`; absent means the default.
-///
-/// Not yet rhai-authored: a rhai body would need an emit surface of its own
-/// (`ApplyModelicaOp`-style verbs) before policy could live outside Rust. The
-/// registry is what makes that a later addition rather than a rewrite.
-pub trait DomainSynthesizer: Send + Sync + 'static {
-    /// Registry key, and the token a scope names.
-    fn name(&self) -> &'static str;
-    /// Turn one composed scope into a compilation unit.
-    fn synthesize(
+/// This is deliberately not a USD-selectable or script-selectable extension
+/// point. The type of the authored collection (`CollectionAPI:components`)
+/// determines that the built-in acausal network projection applies. Adding a
+/// different physical domain requires a typed USD contract and a corresponding
+/// runtime implementation; it must not be smuggled in through a free-form
+/// string or a hook that can emit arbitrary Modelica.
+trait DomainProjector {
+    fn project(
         &self,
         view: &lunco_usd_bevy::StageView<'_>,
         root: &SdfPath,
         model_name: &str,
-        ctx: &SynthContext<'_>,
-    ) -> Result<SynthOutcome, Vec<DomainProjectionError>>;
+        ctx: &NetworkProjectionContext<'_>,
+    ) -> Result<NetworkProjectionOutcome, Vec<DomainProjectionError>>;
 }
 
-/// What a synthesizer concluded about a scope.
+/// What the network projector concluded about a scope.
 #[derive(Debug)]
-pub enum SynthOutcome {
-    /// Not a scope this synthesizer compiles (or nothing solvable is in it).
+enum NetworkProjectionOutcome {
+    /// The scope does not contain a solvable component collection.
     NotMine,
     /// Cannot be decided yet — a member's source has not loaded, so the class it
     /// declares is not knowable. The projection simply waits and is re-triggered
     /// when the source lands.
     Pending,
-    Ready(SynthesisPlan),
+    Ready(NetworkProjectionPlan),
 }
 
-/// Read-only facts a synthesizer may need beyond the stage itself.
-pub struct SynthContext<'a> {
+/// Read-only facts the network projector needs beyond the stage itself.
+struct NetworkProjectionContext<'a> {
     /// Class-per-source-asset, as declared BY THE FILE. See [`MemberClasses`].
     pub classes: &'a MemberClasses,
 }
 
-/// The synthesizer a scope names with `lunco:synthesizer`, or the default.
-pub const DEFAULT_SYNTHESIZER: &str = "acausal-network";
-
-/// Open registry of synthesizers, by name. No enum: a new domain is a
-/// registration from any plugin.
-#[derive(Resource)]
-pub struct SynthesizerRegistry(
-    std::collections::BTreeMap<String, std::sync::Arc<dyn DomainSynthesizer>>,
-);
-
-impl Default for SynthesizerRegistry {
-    fn default() -> Self {
-        let mut registry = Self(Default::default());
-        registry.register(AcausalNetworkSynthesizer);
-        registry
-    }
-}
-
-impl SynthesizerRegistry {
-    pub fn register(&mut self, synthesizer: impl DomainSynthesizer) {
-        self.0.insert(
-            synthesizer.name().to_string(),
-            std::sync::Arc::new(synthesizer),
-        );
-    }
-    pub fn get(&self, name: &str) -> Option<&std::sync::Arc<dyn DomainSynthesizer>> {
-        self.0.get(name)
-    }
-    pub fn names(&self) -> Vec<&str> {
-        self.0.keys().map(String::as_str).collect()
-    }
-}
-
-/// A synthesizer whose EMIT policy is authored, not compiled in.
-///
-/// The house split, applied to synthesis: **facts in Rust, rules in rhai.** The
-/// composed graph is read here — membership, connectors, causal edges, the
-/// boundary, the class each member's file declares — and handed to a hook as a
-/// map. What that graph becomes in Modelica is the hook's business: which MSL
-/// class stands in for a part, whether a fuse is inserted, whether a low-fidelity
-/// variant omits parasitic resistance. None of that is a Rust concern, and none
-/// of it should require a rebuild to change.
-///
-/// The hook receives one argument — [`network_facts`] — and returns a map with
-/// a required `source` key (room for a policy to report its own diagnostics
-/// later). A single result shape keeps the extension boundary typed and avoids
-/// a compatibility branch between authored emitters.
-///
-/// Registered through [`register_hook_synthesizer`]; the hook id is by convention
-/// `synth.<name>`, reached exactly like `lint.usd`.
-pub struct HookSynthesizer {
-    name: &'static str,
-    hook_id: String,
-}
-
-impl DomainSynthesizer for HookSynthesizer {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-    fn synthesize(
-        &self,
-        view: &lunco_usd_bevy::StageView<'_>,
-        root: &SdfPath,
-        model_name: &str,
-        ctx: &SynthContext<'_>,
-    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
-        // The READER is not the policy's business — a rhai body that had to
-        // re-walk USD would be a second, divergent definition of what a network
-        // is, which is the exact failure the one-reader rule exists to prevent.
-        let Some(network) = read_network(view, root, ctx.classes)? else {
-            return Ok(SynthOutcome::NotMine);
-        };
-        if network.pending_sources {
-            return Ok(SynthOutcome::Pending);
-        }
-        let facts = network_facts(&network, model_name);
-        let result = lunco_hooks::invoke(&self.hook_id, &[facts]).ok_or_else(|| {
-            vec![DomainProjectionError {
-                path: network.root.clone(),
-                message: format!(
-                    "synthesizer `{}` is selected but its hook `{}` is not registered",
-                    self.name, self.hook_id
-                ),
-            }]
-        })?;
-        let value = result.map_err(|error| {
-            vec![DomainProjectionError {
-                path: network.root.clone(),
-                message: format!("synthesizer `{}` failed: {}", self.name, error.0),
-            }]
-        })?;
-        let lunco_hooks::HookValue::Map(map) = &value else {
-            return Err(vec![DomainProjectionError {
-                path: network.root.clone(),
-                message: format!(
-                    "synthesizer `{}` must return a map with a Modelica `source` key",
-                    self.name
-                ),
-            }]);
-        };
-        let Some(source) = map
-            .iter()
-            .find_map(|(key, value)| (key == "source").then(|| value.as_str()))
-            .flatten()
-        else {
-            return Err(vec![DomainProjectionError {
-                path: network.root.clone(),
-                message: format!(
-                    "synthesizer `{}` returned a map with no string `source` key",
-                    self.name
-                ),
-            }]);
-        };
-        Ok(SynthOutcome::Ready(SynthesisPlan {
-            source: source.to_string(),
-            // The BOUNDARY and unit partition stay Rust's answer even when the
-            // emitter body is authored: they are the runtime contract and the
-            // topology facts supplied to the policy.
-            inputs: network.inputs.clone(),
-            outputs: network.outputs.keys().cloned().collect(),
-            component_paths: network
-                .components
-                .iter()
-                .map(|component| component.path.clone())
-                .collect(),
-            members: network
-                .components
-                .iter()
-                .map(|component| {
-                    (
-                        component.path.clone(),
-                        component.source_asset.clone(),
-                        component.model_class.clone(),
-                    )
-                })
-                .collect(),
-            units: partition_network(&network),
-        }))
-    }
-}
-
-/// Register an authored synthesizer under `name`, backed by hook `synth.<name>`.
-///
-/// The hook itself is registered by whatever compiled it — `lunco_hooks_rhai::register_rhai_hook`
-/// for a rhai policy — so this crate needs no scripting dependency and any
-/// language that implements [`lunco_hooks::ScriptHook`] can author one.
-pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &'static str) {
-    registry.register(HookSynthesizer {
-        name,
-        hook_id: format!("synth.{name}"),
-    });
-}
-
-/// The composed network, as a map an authored policy can read.
-///
-/// Deliberately the WHOLE graph, flat and self-describing: instance name, class,
-/// constants, acausal edges, causal edges, and the wrapper boundary. A policy
-/// that needs something not in here is a reason to extend this function — not a
-/// reason for the policy to go read USD itself.
-pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::HookValue {
-    use lunco_hooks::HookValue as H;
-    let components: Vec<H> = network
-        .components
-        .iter()
-        .map(|component| {
-            H::map([
-                ("path", H::str(component.path.clone())),
-                (
-                    "instance",
-                    H::str(instance_identifier(&network.root, &component.path)),
-                ),
-                ("class", H::str(component.model_class.clone())),
-                ("source_asset", H::str(component.source_asset.clone())),
-                (
-                    "constants",
-                    H::Map(
-                        component
-                            .constants
-                            .iter()
-                            .map(|(name, value)| (name.clone(), H::Float(*value)))
-                            .collect(),
-                    ),
-                ),
-                (
-                    "connectors",
-                    H::Map(
-                        component
-                            .connectors
-                            .iter()
-                            .map(|(name, targets)| {
-                                (
-                                    name.clone(),
-                                    H::Array(targets.iter().cloned().map(H::str).collect()),
-                                )
-                            })
-                            .collect(),
-                    ),
-                ),
-                (
-                    "declared_connectors",
-                    H::Array(
-                        component
-                            .declared_connectors
-                            .iter()
-                            .cloned()
-                            .map(H::str)
-                            .collect(),
-                    ),
-                ),
-                (
-                    "inputs",
-                    H::Map(
-                        component
-                            .inputs
-                            .iter()
-                            .map(|(name, target)| (name.clone(), H::str(target.clone())))
-                            .collect(),
-                    ),
-                ),
-                (
-                    "declared_outputs",
-                    H::Array(
-                        component
-                            .declared_outputs
-                            .iter()
-                            .cloned()
-                            .map(H::str)
-                            .collect(),
-                    ),
-                ),
-            ])
-        })
-        .collect();
-    H::map([
-        ("model_name", H::str(model_name.to_string())),
-        ("root", H::str(network.root.clone())),
-        ("components", H::Array(components)),
-        (
-            "inputs",
-            H::Array(network.inputs.iter().cloned().map(H::str).collect()),
-        ),
-        (
-            "input_sources",
-            H::Map(
-                network
-                    .input_sources
-                    .iter()
-                    .map(|(name, source)| (name.clone(), H::str(source.clone())))
-                    .collect(),
-            ),
-        ),
-        (
-            "outputs",
-            H::Map(
-                network
-                    .outputs
-                    .iter()
-                    .map(|(name, target)| (name.clone(), H::str(target.clone())))
-                    .collect(),
-            ),
-        ),
-        (
-            "units",
-            H::Array(
-                partition_network(network)
-                    .into_iter()
-                    .map(|unit| {
-                        H::map([
-                            ("name", H::str(unit.name)),
-                            (
-                                "components",
-                                H::Array(unit.component_paths.into_iter().map(H::str).collect()),
-                            ),
-                            (
-                                "inputs",
-                                H::Array(unit.inputs.into_iter().map(H::str).collect()),
-                            ),
-                            (
-                                "outputs",
-                                H::Array(unit.outputs.into_iter().map(H::str).collect()),
-                            ),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
-    ])
-}
-
-/// Partition a composed network once, at the synthesizer boundary.
+/// Partition a composed network at the generated-model boundary.
 ///
 /// Acausal connector edges and internal causal output-to-input edges both keep
 /// components in one composite unit. Boundary connections do not: they are
 /// the public FMI/SSP-style interface of the unit's containing Scope. The
 /// returned order and generated names are stable across runs and independent
 /// of USD collection ordering.
-pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
+pub fn partition_network(network: &DomainNetwork) -> Vec<CompositeUnit> {
     let paths: BTreeSet<String> = network
         .components
         .iter()
@@ -570,7 +276,7 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
             debug_assert!(component_paths
                 .iter()
                 .all(|path| component_by_path.contains_key(path.as_str())));
-            SynthesisUnit {
+            CompositeUnit {
                 name,
                 component_paths,
                 inputs,
@@ -593,28 +299,25 @@ fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<
         })
 }
 
-/// The built-in: a `CollectionAPI:components` scope of Modelica program facets
-/// wired by `connectors:*` (acausal) and `inputs:`/`outputs:` (causal) becomes
-/// one DAE. This is the electrical/thermal/hydraulic shape — every physical
-/// domain whose parts share a potential/flow pair.
-pub struct AcausalNetworkSynthesizer;
+/// The built-in projection: a `CollectionAPI:components` scope of Modelica
+/// program facets wired by `connectors:*` (acausal) and `inputs:`/`outputs:`
+/// (causal) becomes one DAE. The collection API is the domain boundary; no
+/// free-form USD selector can replace it.
+struct AcausalNetworkProjector;
 
-impl DomainSynthesizer for AcausalNetworkSynthesizer {
-    fn name(&self) -> &'static str {
-        DEFAULT_SYNTHESIZER
-    }
-    fn synthesize(
+impl DomainProjector for AcausalNetworkProjector {
+    fn project(
         &self,
         view: &lunco_usd_bevy::StageView<'_>,
         root: &SdfPath,
         model_name: &str,
-        ctx: &SynthContext<'_>,
-    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        ctx: &NetworkProjectionContext<'_>,
+    ) -> Result<NetworkProjectionOutcome, Vec<DomainProjectionError>> {
         let Some(network) = read_network(view, root, ctx.classes)? else {
-            return Ok(SynthOutcome::NotMine);
+            return Ok(NetworkProjectionOutcome::NotMine);
         };
         if network.pending_sources {
-            return Ok(SynthOutcome::Pending);
+            return Ok(NetworkProjectionOutcome::Pending);
         }
         let member_outputs = generated_member_outputs(&network, Some(ctx.classes));
         let outputs = network
@@ -623,7 +326,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
             .cloned()
             .chain(member_outputs.iter().map(|(_, _, alias)| alias.clone()))
             .collect();
-        Ok(SynthOutcome::Ready(SynthesisPlan {
+        Ok(NetworkProjectionOutcome::Ready(NetworkProjectionPlan {
             source: emit_modelica_with_classes(&network, model_name, Some(ctx.classes)),
             inputs: network.inputs.clone(),
             outputs,
@@ -751,7 +454,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
 
 /// Emit one deterministic composite Modelica wrapper for a composed network
 /// Scope. The wrapper is the runtime participant; its generated child models
-/// are the synthesizer-owned connected units.
+/// are the projector-owned connected units.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
     emit_modelica_with_classes(network, model_name, None)
 }
@@ -1064,7 +767,6 @@ pub fn project_domain_islands(
     // returned `Pending` have to be re-asked, and no prim spawned or changed.
     mut projection_dirty: ResMut<ProjectionDirty>,
     classes: Res<MemberClasses>,
-    registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
@@ -1108,78 +810,67 @@ pub fn project_domain_islands(
         if view.type_name(&root_path).as_deref() != Some("Scope") {
             continue;
         }
-        // WHICH synthesizer turns this scope into a model is authored, not
-        // hardcoded: `lunco:synthesizer` names one from the open registry, and
-        // absent means the acausal-network default. An unknown name is an
-        // authoring error, not a silent fallback to some other domain's rules.
-        let requested = view
-            .text(&root_path, "lunco:synthesizer")
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string());
-        let Some(synthesizer) = registry.get(&requested).cloned() else {
-            let known = registry.names().join(", ");
-            error!(
-                "[domain-projection] `{}` names synthesizer `{requested}`, which is not \
-                 registered (known: {known}) — the scope is not projected.",
-                prim.path
-            );
-            continue;
-        };
+        // The authored `CollectionAPI:components` contract determines that
+        // this Scope is a Modelica network. Its composed connectors and causal
+        // properties are the topology; the built-in projector is the only
+        // emitter. There is intentionally no `lunco:synthesizer` token or Rhai
+        // hook here: a free-form selector cannot change the simulation model.
         let model_name = network_model_name(&prim.path, instance_id);
-        let ctx = SynthContext { classes: &classes };
-        let synthesized = match synthesizer.synthesize(&view, &root_path, &model_name, &ctx) {
-            Ok(network) => network,
-            Err(errors) => {
-                let message = errors
-                    .iter()
-                    .map(|error| format!("{}: {}", error.path, error.message))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                let fingerprint = source_fingerprint(&format!("projection-error:{message}"));
-                if previous.is_some_and(|state| state.fingerprint == fingerprint) {
+        let ctx = NetworkProjectionContext { classes: &classes };
+        let synthesized =
+            match AcausalNetworkProjector.project(&view, &root_path, &model_name, &ctx) {
+                Ok(network) => network,
+                Err(errors) => {
+                    let message = errors
+                        .iter()
+                        .map(|error| format!("{}: {}", error.path, error.message))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    let fingerprint = source_fingerprint(&format!("projection-error:{message}"));
+                    if previous.is_some_and(|state| state.fingerprint == fingerprint) {
+                        continue;
+                    }
+                    notices.write(ModelicaNotice {
+                        level: NoticeLevel::Error,
+                        text: format!("[{model_name}] Projection error: {message}"),
+                    });
+                    error!("[domain-projection] `{}` rejected: {message}", prim.path);
+                    retire_sim_interface(&mut commands, entity);
+                    // A rejected projection has no interface to hold anyone to; the
+                    // rejection itself is the error the user must act on.
+                    commands.entity(entity).remove::<UsdModelicaPortContract>();
+                    commands.entity(entity).try_insert((
+                        ModelicaModel {
+                            model_name: model_name.clone(),
+                            session_id: installed_model.map_or(1, |model| model.session_id + 1),
+                            is_stepping: false,
+                            is_compiling: false,
+                            last_error: Some(message),
+                            ..default()
+                        },
+                        UsdSourcedCosim,
+                        DomainProjectionState { fingerprint },
+                        GeneratedModelicaSource {
+                            network_root: prim.path.clone(),
+                            doc_uri: format!("generated://{model_name}.mo"),
+                            source: String::new(),
+                            component_paths: Vec::new(),
+                            members: Vec::new(),
+                            member_groups: Vec::new(),
+                            output_groups: Vec::new(),
+                            member_output_aliases: Vec::new(),
+                            units: Vec::new(),
+                        },
+                    ));
                     continue;
                 }
-                notices.write(ModelicaNotice {
-                    level: NoticeLevel::Error,
-                    text: format!("[{model_name}] Projection error: {message}"),
-                });
-                error!("[domain-projection] `{}` rejected: {message}", prim.path);
-                retire_sim_interface(&mut commands, entity);
-                // A rejected projection has no interface to hold anyone to; the
-                // rejection itself is the error the user must act on.
-                commands.entity(entity).remove::<UsdModelicaPortContract>();
-                commands.entity(entity).try_insert((
-                    ModelicaModel {
-                        model_name: model_name.clone(),
-                        session_id: installed_model.map_or(1, |model| model.session_id + 1),
-                        is_stepping: false,
-                        is_compiling: false,
-                        last_error: Some(message),
-                        ..default()
-                    },
-                    UsdSourcedCosim,
-                    DomainProjectionState { fingerprint },
-                    GeneratedModelicaSource {
-                        network_root: prim.path.clone(),
-                        doc_uri: format!("generated://{model_name}.mo"),
-                        source: String::new(),
-                        component_paths: Vec::new(),
-                        members: Vec::new(),
-                        member_groups: Vec::new(),
-                        output_groups: Vec::new(),
-                        member_output_aliases: Vec::new(),
-                        units: Vec::new(),
-                    },
-                ));
-                continue;
-            }
-        };
+            };
         // Waiting on a member's declared class: no verdict, no state written, so
         // the next trigger asks again.
-        if matches!(synthesized, SynthOutcome::Pending) {
+        if matches!(synthesized, NetworkProjectionOutcome::Pending) {
             continue;
         }
-        let SynthOutcome::Ready(synthesized) = synthesized else {
+        let NetworkProjectionOutcome::Ready(synthesized) = synthesized else {
             if previous.is_some() {
                 // The authored collection ceased to describe a compilable
                 // network. Retire its runtime projection in the same update;
@@ -1237,7 +928,8 @@ pub fn project_domain_islands(
             realtime_safe: false,
         });
         info!(
-            "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
+            "[domain-projection] compiling `{}` from {} component(s) via built-in \
+             `acausal-network` projection as \
              generated://{}.mo",
             prim.path, component_count, model_name
         );
@@ -2033,7 +1725,7 @@ fn wrapper_output_groups(view: &impl UsdRead, root: &str) -> Vec<(String, String
 }
 
 /// Resolve the generated wrapper names for member outputs that are actually
-/// declared by the composed USD and exposed by the selected synthesizer.
+/// declared by the composed USD and exposed by the network projector.
 ///
 /// The source path remains USD-authored; only the runtime solver address is
 /// translated. Keeping this as data on the generated document avoids a model- or
@@ -2155,12 +1847,12 @@ impl MemberClasses {
 #[derive(Resource, Default)]
 pub struct ProjectionDirty(pub bool);
 
-/// Resolve every member source's DECLARED class before synthesis.
+/// Resolve every member source's DECLARED class before projection.
 ///
 /// Scans the stage for component collections, loads each member's
 /// `info:sourceAsset` once, and reads `within` + the class the file declares.
 /// Until a member has a verdict its network does not project at all
-/// ([`SynthOutcome::Pending`]) — synthesizing before the source settles would
+/// ([`NetworkProjectionOutcome::Pending`]) — projecting before the source settles would
 /// produce a generated model with an unknown member class and an unattributed
 /// compiler failure.
 ///
@@ -2393,7 +2085,7 @@ mod tests {
     }
 
     #[test]
-    fn synthesizer_partitions_disconnected_graph_into_composite_units() {
+    fn projector_partitions_disconnected_graph_into_composite_units() {
         let mut left = component("/Thermal/Left/Mass", None);
         left.inputs
             .insert("heat_w".into(), "/Thermal.inputs:left_heat".into());

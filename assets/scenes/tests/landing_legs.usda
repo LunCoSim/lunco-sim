@@ -10,7 +10,7 @@
 # No guidance, no rover, no mission — a lander dropped from 3 m so the legs take
 # the vehicle's weight within the first second and the run is over in two. What
 # it pins down is the LEG MECHANISM: that the raked prismatic joints and the pad
-# welds start satisfied, that the struts stroke and settle instead of diverging,
+# child-pad colliders start satisfied, that the struts stroke and settle instead of diverging,
 # and that the hull ends the drop level and at ride height.
 #
 #   scene_test --scene scenes/tests/landing_legs.usda --max-ticks 240
@@ -64,8 +64,8 @@ def Xform "LandingLegsTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # The airframe arc ONLY — no guidance component. The pads sit at y = -5.0 in
-    # the vehicle's own frame, so a hull at y = 8.0 holds them 3 m off the ground.
+    # The airframe arc ONLY — no guidance component. The pads sit at about
+    # y = -5.3 in the vehicle frame, so a hull at y = 8.0 gives a 3 m drop.
     def "Lander" (
         prepend references = @lunco://vessels/landers/descent_lander.usda@</DescentLander>
     )

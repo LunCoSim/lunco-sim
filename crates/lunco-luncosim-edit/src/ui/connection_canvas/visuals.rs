@@ -48,30 +48,31 @@ impl NodeVisual for UsdPrimNodeVisual {
             egui::StrokeKind::Outside,
         );
 
-        // Titles — leaf name (bold-ish) over the type name. Hidden when the node
-        // is too small on screen (zoomed out) to keep the canvas legible.
+        // Titles live in a fixed header. Placing them at the card midpoint made
+        // a tall multi-port node draw its title over the authored port names.
+        // The header stays clear regardless of how many ports the contract has.
         if rect.height() > 22.0 {
             painter.text(
-                egui::pos2(rect.center().x, rect.min.y + rect.height() * 0.38),
-                egui::Align2::CENTER_CENTER,
+                egui::pos2(rect.center().x, rect.min.y + 12.0),
+                egui::Align2::CENTER_TOP,
                 &node.label,
-                egui::FontId::proportional((rect.height() * 0.22).clamp(9.0, 15.0)),
+                egui::FontId::proportional(13.0),
                 t.text,
             );
             if !self.type_name.is_empty() && rect.height() > 40.0 {
                 painter.text(
-                    egui::pos2(rect.center().x, rect.min.y + rect.height() * 0.68),
-                    egui::Align2::CENTER_CENTER,
+                    egui::pos2(rect.center().x, rect.min.y + 29.0),
+                    egui::Align2::CENTER_TOP,
                     &self.type_name,
-                    egui::FontId::proportional((rect.height() * 0.16).clamp(8.0, 11.0)),
+                    egui::FontId::proportional(10.0),
                     t.text_subdued,
                 );
             }
         }
 
-        // Ports — a coloured dot per connector. Joint anchors (`~`-prefixed)
-        // carry the physics wires but aren't drawn (they'd clutter the card
-        // centre and aren't user-connectable).
+        // Ports — a coloured dot and the authored connector name. The name is
+        // the USD `inputs:`/`outputs:` leaf, so the picture explains the real
+        // signal contract instead of asking the viewer to decode dots.
         let zoom = ctx.viewport.zoom;
         let r = (4.0 * zoom).clamp(2.5, 6.0);
         for port in &node.ports {
@@ -94,6 +95,20 @@ impl NodeVisual for UsdPrimNodeVisual {
                 r,
                 egui::Stroke::new(1.0, t.port_outline),
             );
+            if zoom >= 0.32 {
+                let (anchor, offset) = if port.kind.as_str() == "input" {
+                    (egui::Align2::LEFT_CENTER, egui::vec2(9.0, 0.0))
+                } else {
+                    (egui::Align2::RIGHT_CENTER, egui::vec2(-9.0, 0.0))
+                };
+                painter.text(
+                    egui::pos2(p.x + offset.x, p.y + offset.y),
+                    anchor,
+                    port.id.as_str(),
+                    egui::FontId::proportional(9.0_f32.max((10.0 * zoom).min(12.0))),
+                    t.text_subdued,
+                );
+            }
         }
     }
 
@@ -102,7 +117,7 @@ impl NodeVisual for UsdPrimNodeVisual {
     }
 }
 
-/// Straight wire visual for a `"usd.wire"` edge, coloured by wire kind.
+/// Orthogonal wire visual for a `"usd.wire"` edge, coloured by wire kind.
 pub(crate) struct UsdWireVisual {
     pub kind: WireKind,
 }
@@ -113,7 +128,7 @@ impl EdgeVisual for UsdWireVisual {
         ctx: &mut DrawCtx,
         from_screen: Pos,
         to_screen: Pos,
-        _waypoints_screen: &[Pos],
+        waypoints_screen: &[Pos],
         selected: bool,
     ) {
         let theme = lunco_theme::active(ctx.ui.ctx());
@@ -130,12 +145,22 @@ impl EdgeVisual for UsdWireVisual {
             base
         };
         let width = if selected { 2.5 } else { 1.6 };
-        let a = egui::pos2(from_screen.x, from_screen.y);
-        let b = egui::pos2(to_screen.x, to_screen.y);
+        let mut points = Vec::with_capacity(waypoints_screen.len() + 2);
+        points.push(egui::pos2(from_screen.x, from_screen.y));
+        points.extend(
+            waypoints_screen
+                .iter()
+                .map(|point| egui::pos2(point.x, point.y)),
+        );
+        points.push(egui::pos2(to_screen.x, to_screen.y));
         let painter = ctx.ui.painter();
-        painter.line_segment([a, b], egui::Stroke::new(width, col));
+        for segment in points.windows(2) {
+            painter.line_segment([segment[0], segment[1]], egui::Stroke::new(width, col));
+        }
 
         // Arrowhead at the sink so signal direction reads at a glance.
+        let a = points[points.len() - 2];
+        let b = points[points.len() - 1];
         let dir = b - a;
         let len = dir.length();
         if len > 1.0 {

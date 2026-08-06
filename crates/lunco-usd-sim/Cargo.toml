@@ -38,11 +38,6 @@ lunco-controller = { path = "../lunco-controller" }
 # lunco-autopilot stays USD-free and just compiles what it is handed.
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-cosim = { path = "../lunco-cosim" }
-# The hook substrate: a synthesizer's EMIT policy may be authored in rhai
-# (`assets/scripting/policy/synth_<name>.rhai`), reached the same way the lint
-# rules are. Runtime-agnostic and wasm-clean — the rhai binding lives in
-# `lunco-hooks-rhai`, which this crate does not need to name.
-lunco-hooks = { path = "../lunco-hooks" }
 # The workspace hashing substrate — the generated-model fingerprint that decides
 # whether a live edit recompiles (`domain_projection`).
 lunco-hash = { path = "../lunco-hash" }
@@ -68,9 +63,3 @@ python = ["lunco-scripting/python"]
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-# The rhai binding for the hook substrate — used only to prove an AUTHORED
-# synthesizer works end to end (`tests/hook_synthesizer.rs`). The crate itself
-# stays language-agnostic: it knows hooks, not rhai.
-lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
