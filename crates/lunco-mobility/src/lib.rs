@@ -163,7 +163,6 @@ impl Plugin for LunCoMobilityPlugin {
                         lunco_physics::physics_is_live,
                     ),
             );
-
         // Own the control-allocation kernel registry here (the plugin that runs
         // `apply_drive_mix`), seeded with the built-in `skid`/`linear` kernels —
         // so any app running the drive systems has it, without depending on the
@@ -524,6 +523,55 @@ pub fn tire_patch_force(
         (longitudinal_force * scale, lateral_force * scale)
     } else {
         (longitudinal_force, lateral_force)
+    }
+}
+
+/// Advance the analytic raycast longitudinal tire/axle solve by one fixed step.
+///
+/// The return value is `(new_axle_speed, longitudinal_patch_force)`.  Both the
+/// raycast wheel's spin and patch-force calculations use this exact relationship.
+/// A physical wheel delegates tangential contact to Avian's maintained manifold
+/// solver; it consumes the same authored radius, inertia, friction coefficient,
+/// and motor curve but does not duplicate this solver or inherit its constants.
+pub fn longitudinal_tire_step(
+    axle_speed: f64,
+    hub_speed: f64,
+    radius: f64,
+    inertia: f64,
+    slip_stiffness: f64,
+    bearing_damping: f64,
+    drive_torque: f64,
+    brake_torque: f64,
+    normal_force: f64,
+    friction_mu: f64,
+    dt: f64,
+) -> (f64, f64) {
+    if dt <= 0.0 || inertia <= 0.0 || radius <= 0.0 {
+        return (axle_speed, 0.0);
+    }
+    if normal_force < 1.0 {
+        let speed = axle_speed
+            + dt * (drive_torque + brake_torque - bearing_damping * axle_speed) / inertia;
+        return (speed, 0.0);
+    }
+
+    let denom = inertia / dt + slip_stiffness * radius * radius + bearing_damping;
+    let w_grip = (inertia / dt * axle_speed
+        + drive_torque
+        + brake_torque
+        + slip_stiffness * radius * hub_speed)
+        / denom.max(1.0e-12);
+    let f_slip = slip_stiffness * (w_grip * radius - hub_speed);
+    let mu_n = friction_mu.max(0.0) * normal_force;
+    if f_slip.abs() <= mu_n {
+        (w_grip, f_slip)
+    } else {
+        let slip_sign = (axle_speed * radius - hub_speed).signum();
+        let traction_torque = slip_sign * mu_n * radius;
+        let speed = axle_speed
+            + dt * (drive_torque + brake_torque - traction_torque - bearing_damping * axle_speed)
+                / inertia;
+        (speed, traction_torque / radius)
     }
 }
 
