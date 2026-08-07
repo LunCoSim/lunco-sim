@@ -9,8 +9,6 @@ model Altimeter
 
   parameter Real range_filter_time_constant_s = 0.02
     "Range-rate differentiator time constant (s)";
-  parameter Real initial_range_m = 0.0
-    "Initial valid range used to initialize the range-rate state (m)";
   parameter Real ray_direction_local_x = 0.0
     "Authored ray direction in the sensor frame, X";
   parameter Real ray_direction_local_y = -1.0
@@ -39,8 +37,7 @@ model Altimeter
   output Real ray_direction_nav_y "Measured ray direction in navigation Y";
 
   FilteredDerivative range_filter(
-    time_constant_s = range_filter_time_constant_s,
-    initial_value = initial_range_m);
+    time_constant_s = range_filter_time_constant_s);
 
   Real ray_direction_norm;
   Real ray_direction_normalized_x;

@@ -2042,6 +2042,91 @@ const JOINT_RESOLVE_WARN_TICKS: u32 = 600;
 /// late (streamed content), so resolution never stops — it just stops being hot.
 const JOINT_RESOLVE_RETRY_INTERVAL: u32 = 60;
 
+/// Return body1's velocity after seating a joint without asking the solver to
+/// remove an authored constraint violation on its first step.
+///
+/// A fixed joint has no free relative velocity. A prismatic joint has exactly
+/// one: translation along its slider axis. Its angular velocity and the two
+/// transverse components of the anchor velocity are still constrained. This
+/// is the velocity equivalent of seating the joint's position and orientation
+/// above; treating a prismatic body as a zero-velocity child is not a neutral
+/// initial condition, it is an impulse request at the joint anchor.
+fn seated_body1_velocity(
+    body0_position: DVec3,
+    body1_position: DVec3,
+    anchor_world: DVec3,
+    body0_linear: DVec3,
+    body0_angular: DVec3,
+    body1_linear: DVec3,
+    body1_angular: DVec3,
+    free_axis_world: Option<DVec3>,
+    preserve_free_rate: bool,
+) -> (DVec3, DVec3) {
+    let body0_anchor_offset = anchor_world - body0_position;
+    let body1_anchor_offset = anchor_world - body1_position;
+    let body0_anchor_velocity = body0_linear + body0_angular.cross(body0_anchor_offset);
+    let free_rate = free_axis_world
+        .filter(|_| preserve_free_rate)
+        .map(|axis| {
+            let body1_anchor_velocity = body1_linear + body1_angular.cross(body1_anchor_offset);
+            (body1_anchor_velocity - body0_anchor_velocity).dot(axis)
+        })
+        .unwrap_or(0.0);
+    let target_angular = body0_angular;
+    let target_anchor_velocity = free_axis_world
+        .map(|axis| body0_anchor_velocity + axis * free_rate)
+        .unwrap_or(body0_anchor_velocity);
+    let target_linear = target_anchor_velocity - target_angular.cross(body1_anchor_offset);
+    (target_linear, target_angular)
+}
+
+#[cfg(test)]
+mod joint_velocity_tests {
+    use super::seated_body1_velocity;
+    use bevy::math::DVec3;
+
+    #[test]
+    fn prismatic_child_inherits_parent_motion_but_keeps_slider_rate_free() {
+        let parent_velocity = DVec3::new(0.6, -0.25, 0.3);
+        let slider_axis = DVec3::new(0.34202014, -0.93969262, 0.0);
+        let (linear, angular) = seated_body1_velocity(
+            DVec3::ZERO,
+            DVec3::new(2.5, -4.0, 0.0),
+            DVec3::new(2.5, 0.0, 0.0),
+            parent_velocity,
+            DVec3::ZERO,
+            DVec3::ZERO,
+            DVec3::ZERO,
+            Some(slider_axis),
+            false,
+        );
+
+        assert!((linear - parent_velocity).length() < 1.0e-6);
+        assert_eq!(angular, DVec3::ZERO);
+    }
+
+    #[test]
+    fn prismatic_child_preserves_only_an_authored_slider_rate() {
+        let parent_velocity = DVec3::new(0.6, -0.25, 0.3);
+        let slider_axis = DVec3::new(0.34202014, -0.93969262, 0.0);
+        let child_velocity = parent_velocity + slider_axis * 1.75;
+        let (linear, angular) = seated_body1_velocity(
+            DVec3::ZERO,
+            DVec3::new(2.5, -4.0, 0.0),
+            DVec3::new(2.5, 0.0, 0.0),
+            parent_velocity,
+            DVec3::ZERO,
+            child_velocity,
+            DVec3::ZERO,
+            Some(slider_axis),
+            true,
+        );
+
+        assert!((linear - child_velocity).length() < 1.0e-6);
+        assert_eq!(angular, DVec3::ZERO);
+    }
+}
+
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
@@ -2067,6 +2152,7 @@ fn build_usd_physics_joints(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
+    q_authored_velocity: Query<&AuthoredInitialVelocity>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
@@ -2185,12 +2271,14 @@ fn build_usd_physics_joints(
         //
         // Seating covers POSITION, ORIENTATION and VELOCITY, because a constraint
         // is violated in all three and the solver resolves each one impulsively.
-        // Position alone is not enough: two bodies welded at a common anchor but
-        // carrying different velocities must have that difference nulled in a
-        // single step, and the resulting impulse acts at the anchor's lever arm
-        // from each centre of mass — i.e. it arrives as a torque and the pair
-        // tumbles. Seating position and then handing the solver a 7 m/s velocity
-        // discontinuity trades an explosion for a slower explosion.
+        // Position alone is not enough: two constrained bodies carrying
+        // incompatible velocities must have the LOCKED part of that difference
+        // nulled before the first solver step. The resulting impulse acts at the
+        // anchor's lever arm from each centre of mass — i.e. it arrives as a
+        // torque and the pair tumbles. A prismatic keeps one translational DOF
+        // free, but it still locks orientation and the two transverse anchor
+        // velocities, so handing the solver a release-state discontinuity there
+        // is still an impulse request.
         //
         // Orientation is seated for the joint types that lock ALL THREE rotational
         // DOF: `PhysicsFixedJoint` and `PhysicsPrismaticJoint`. Both hold
@@ -2199,8 +2287,8 @@ fn build_usd_physics_joints(
         // spherical joint leaves rotational DOF free by design — forcing agreement
         // there would destroy authored state (a revolute joint's whole purpose is
         // that the bodies' orientations differ), so those are REPORTED and left to
-        // the solver. Velocity is seated for a weld only, where the pair moves as
-        // one rigid body; a slider is free to translate along its axis.
+        // the solver. Velocity is projected for both locked joint types: a weld
+        // has no free relative motion, while a slider retains only its axial rate.
         //
         // The measure is against the joint FRAMES, not the raw body rotations,
         // which is what makes a raked mechanism checkable: a landing leg whose
@@ -2235,6 +2323,7 @@ fn build_usd_physics_joints(
             let anchor0_world = p0 + r0 * pending.local_pos0;
             let anchor1_world = p1 + r1_seated * pending.local_pos1;
             let delta = anchor0_world - anchor1_world;
+            let p1_seated = p1 + delta;
 
             // Sub-millimetre / sub-milliradian slack is just float noise from the
             // USD→physics transform chain; correcting it would fight the solver
@@ -2287,23 +2376,58 @@ fn build_usd_physics_joints(
                     }
                 }
 
-                // Match body1's motion to body0's rigid motion about the seated
-                // pose. `v = v0 + ω0 × r` is the velocity of the point of body0
-                // that body1's centre now coincides with — the only assignment
-                // consistent with a weld.
-                if rigid {
-                    let motion0 = q_vel.get(b0).ok().map(|(l, a)| (l.0, a.0));
-                    if let Some((lin0, ang0)) = motion0 {
-                        let p1_seated = p1 + delta;
-                        let target_lin = lin0 + ang0.cross(p1_seated - p0);
+            }
+
+            // Seat velocity for every joint that locks orientation. Fixed
+            // joints have no free relative velocity; prismatic joints retain
+            // only the authored/realized rate along their slider axis. A child
+            // without an authored initial velocity is part of the parent's
+            // initial rigid motion, so its free slider rate starts at zero
+            // rather than inheriting Avian's required-component default.
+            if locks_rotation {
+                let authored0 = q_authored_velocity.get(b0).ok().copied();
+                let authored1 = q_authored_velocity.get(b1).ok().copied();
+                let motion0 = q_vel.get(b0).ok().map(|(l, a)| {
+                    (
+                        authored0.and_then(|v| v.linear).unwrap_or(l.0),
+                        authored0.and_then(|v| v.angular).unwrap_or(a.0),
+                    )
+                });
+                let motion1 = q_vel.get(b1).ok().map(|(l, a)| {
+                    (
+                        authored1.and_then(|v| v.linear).unwrap_or(l.0),
+                        authored1.and_then(|v| v.angular).unwrap_or(a.0),
+                    )
+                });
+                if let (Some((lin0, ang0)), Some((lin1, ang1))) = (motion0, motion1) {
+                    let free_axis_world = (!rigid).then(|| {
+                        (r0 * pending.local_rot0 * pending.axis).normalize()
+                    });
+                    let (target_lin, target_ang) = seated_body1_velocity(
+                        p0.0,
+                        p1_seated.0,
+                        anchor0_world.0,
+                        lin0,
+                        ang0,
+                        lin1,
+                        ang1,
+                        free_axis_world,
+                        authored1.is_some(),
+                    );
+                    if (lin1 - target_lin).length() > JOINT_SEAT_EPS
+                        || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS
+                    {
                         if let Ok((mut lin1, mut ang1)) = q_vel.get_mut(b1) {
-                            if (lin1.0 - target_lin).length() > JOINT_SEAT_EPS
-                                || (ang1.0 - ang0).length() > JOINT_SEAT_ANGLE_EPS
-                            {
-                                lin1.0 = target_lin;
-                                ang1.0 = ang0;
-                            }
+                            lin1.0 = target_lin;
+                            ang1.0 = target_ang;
                         }
+                        // The authored child velocity has now been projected
+                        // through its joint contract. Do not let dynamic
+                        // admission reapply the unconstrained value on the
+                        // next Update boundary.
+                        commands
+                            .entity(b1)
+                            .try_remove::<AuthoredInitialVelocity>();
                     }
                 }
             }
