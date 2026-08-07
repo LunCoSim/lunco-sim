@@ -263,40 +263,27 @@ pub(crate) fn update_wheel_spin(
         let tau_drive = if braking { 0.0 } else { tau_drive };
 
         let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
-        let mut w = wheel.spin_velocity;
-        let mu_n = friction_mu * wheel.last_normal_force;
-        // Longitudinal tire force, filled by whichever branch below resolves ω so
-        // the axle and the chassis are answered by ONE number. See the block after
-        // the solve for why that mattered.
-        let mut f_long = 0.0;
-
-        if on_ground {
-            // Implicit grip solve assuming traction is unsaturated. Stiff term
-            // k_slip is handled implicitly so ω snaps to ~v/r without exploding.
-            let denom = inertia / dt + k_slip * r * r + c_bearing;
-            let w_grip = (inertia / dt * w + tau_drive + tau_brake + k_slip * r * v_long) / denom;
-            let f_slip = k_slip * (w_grip * r - v_long);
-
-            if f_slip.abs() <= mu_n {
-                // Tire grips: rolls at ground speed plus a tiny steady slip. The
-                // force the ground feels is that steady slip times the stiffness —
-                // small at cruise, which is the whole point (see below).
-                w = w_grip;
-                f_long = f_slip;
+        // This is the canonical analytic raycast solve. The physical realization
+        // has a different contact owner (Avian's manifold solver), so parity is
+        // enforced through authored inputs and observable response contracts,
+        // not by copying Avian internals into this fixed-step model.
+        let (w, f_long) = crate::longitudinal_tire_step(
+            wheel.spin_velocity,
+            v_long,
+            r,
+            inertia,
+            k_slip,
+            c_bearing,
+            tau_drive,
+            tau_brake,
+            if on_ground {
+                wheel.last_normal_force
             } else {
-                // Traction broken: kinetic friction saturates at μ·N and opposes
-                // the slip direction. Integrate explicitly — the stiff term is
-                // gone, so ω runs away from v/r (wheelspin under drive, or a
-                // locked skid when the brake torque wins).
-                let slip_sign = (w * r - v_long).signum();
-                let tau_traction = slip_sign * mu_n * r;
-                w += dt * (tau_drive + tau_brake - tau_traction - c_bearing * w) / inertia;
-                f_long = tau_traction / r;
-            }
-        } else {
-            // Airborne: free spin under drive (and any brake) torque vs bearing drag.
-            w += dt * (tau_drive + tau_brake - c_bearing * w) / inertia;
-        }
+                0.0
+            },
+            friction_mu,
+            dt,
+        );
 
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
@@ -311,7 +298,7 @@ pub(crate) fn update_wheel_spin(
                         .unwrap_or((DVec3::ZERO, DVec3::ZERO));
                     bevy::log::info!(
                         "[drive-diag] update_wheel_spin: wheel={:?} port={} w={:.3} tau={:.1} f_long={:.1} muN={:.1} chassis_v=({:.3},{:.3},{:.3}) yaw_rate={:.4}",
-                        entity, dbgport.value, w, tau_drive, f_long, mu_n, vlin.x, vlin.y, vlin.z, vang.y
+                        entity, dbgport.value, w, tau_drive, f_long, friction_mu * wheel.last_normal_force, vlin.x, vlin.y, vlin.z, vang.y
                     );
                 }
             }
@@ -329,9 +316,11 @@ pub(crate) fn update_wheel_spin(
         // traction and bearing drag are the ground and the bearing, not the
         // machine.
         if let Ok(target) = q_targets.get(entity) {
-            if let Ok(mut r) = q_readback.get_mut(target.0) {
-                r.torque = tau_drive + tau_brake;
-                r.axle_speed = w;
+            for &motor in &target.0 {
+                if let Ok(mut r) = q_readback.get_mut(motor) {
+                    r.torque = tau_drive + tau_brake;
+                    r.axle_speed = w;
+                }
             }
         }
 

@@ -425,11 +425,11 @@ fn on_stop(me) {
 //                           tire slip ramps in over ~1-2 s, a direct body force
 //                           does not. Looser than speed on purpose, and still far
 //                           tighter than any real divergence.
-//   yaw change      +/-35%  Skid-steer yaw comes from lateral friction saturation,
-//                           the most solver-sensitive quantity here. Deliberately
-//                           loose: this check exists to catch a rover that barely
-//                           turns or turns the WRONG WAY, not to pin a yaw rate.
-//                           The SIGN is checked separately and is NOT tolerant.
+//   yaw response              Both realizations must turn in the same direction
+//                           and exceed the minimum authored-command response.
+//                           Absolute yaw magnitude is solver-dependent: the
+//                           raycast spring/contact sample and Avian's manifold
+//                           solver are different numerical realizations.
 //
 // Each number above IS the constant passed to `t_rel` below. They are a physical
 // argument about two integrators, not a dial: a tolerance changed without the
@@ -511,14 +511,9 @@ fn verdict(s) {
     f.push(t_range(yspan_ph, 0.0, 0.08, "physical high-speed chassis bob (m)"));
 
     // Yaw: each realization must respond to the same command in the same
-    // direction and with clear authority. Do not compare absolute yaw here:
-    // the raycast realization evaluates the authored analytic cornering law,
-    // while the physical realization receives Avian's contact-solver impulse
-    // from `physics:dynamicFriction`. They are two valid contact models, not
-    // two executions of one discrete impulse calculation. A magnitude ratio
-    // would turn a solver implementation detail into a vehicle acceptance
-    // failure; the authored-parameter and speed contracts above are the parity
-    // checks that are solver-independent.
+    // direction and with clear authority. Absolute magnitude remains a
+    // solver-specific observable, so this acceptance checks the shared command
+    // contract (sign + non-zero response), not a fitted yaw coefficient.
     if s.yaw_rc == () || s.yaw_ph == () {
         f.push("heading change: MISSING (world_forward returned () for a rover)");
     } else {

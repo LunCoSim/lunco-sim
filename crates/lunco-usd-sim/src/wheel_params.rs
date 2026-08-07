@@ -91,6 +91,10 @@ pub struct WheelParams {
     /// Wheel width along its authored cylinder axis, m (`physxVehicleWheel:width`).
     /// This standard wheel value drives the collider in both realizations.
     pub width: f64,
+    /// Authored cylinder/axle axis (`axis` token).  Avian's primitive cylinder
+    /// uses local +Y, so the physical projection rotates that primitive onto this
+    /// authored axis and the revolute joint uses the same vector.
+    pub axle_axis: DVec3,
     /// Wheel mass, kg (`physxVehicleWheel:mass`). The same authored value feeds both
     /// realizations; any difference in feel must come from the solver, not a Rust fork.
     pub mass: f64,
@@ -120,17 +124,15 @@ pub struct WheelParams {
     /// Tire longitudinal stiffness (`physxVehicleTire:longitudinalStiffness`).
     pub slip_stiffness: f64,
     /// Tire CORNERING stiffness (`physxVehicleTire:lateralStiffness`) — side
-    /// force per RADIAN of slip angle, before the Coulomb cone. This coefficient
-    /// is consumed by the analytic raycast realization. Physical wheel contacts
-    /// are solved by Avian from `contact_friction`; that solver has no equivalent
-    /// authored cornering-stiffness input, so its lateral response is not
-    /// expected to match the raycast yaw magnitude tick-for-tick.
+    /// force per RADIAN of slip angle, before the Coulomb cone. This is
+    /// consumed by the raycast tire model; a jointed wheel gets lateral force
+    /// from Avian's contact solver instead.
     ///
     /// Read on the schema's own terms: "cornering stiffness" means N/rad in PhysX
     /// and in vehicle-dynamics texts. The parity scene checks that both
-    /// realizations turn correctly and share the authored vehicle/motor contract;
-    /// it does not pretend that their different contact solvers have identical
-    /// lateral impulse magnitudes.
+    /// realizations turn correctly and share the authored vehicle/motor contract.
+    /// Exact yaw magnitudes are solver-specific unless both paths use the same
+    /// contact model.
     ///
     /// The PhysX schema's own companion to `longitudinalStiffness`, and read on
     /// the schema's terms: it declares a `0.0` fallback, so an unauthored tire
@@ -141,8 +143,8 @@ pub struct WheelParams {
     /// Lower edge of the tire's measured steady-state cornering-speed envelope.
     pub min_validated_speed: f64,
     /// Coulomb μ from the wheel's standard `UsdPhysicsMaterialAPI`, composed
-    /// through the `tire` variant. The raycast law uses it as its Coulomb cone;
-    /// jointed wheels give it directly to Avian's contact solver.
+    /// through the `tire` variant. Raycast uses it as its analytic friction
+    /// cone; the physical wheel passes it to Avian's contact friction.
     pub friction_mu: f64,
     /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
     pub steer_axis: DVec3,
@@ -171,6 +173,15 @@ impl WheelParams {
         powertrain: Option<&crate::powertrain::PowertrainParams>,
     ) -> Result<WheelParams, Vec<&'static str>> {
         let mut missing: Vec<&'static str> = Vec::new();
+        let axle_axis = match reader.text(wheel, "axis").as_deref() {
+            Some("X") => DVec3::X,
+            Some("Y") => DVec3::Y,
+            Some("Z") => DVec3::Z,
+            _ => {
+                missing.push("axis");
+                DVec3::X
+            }
+        };
         let mut req = |name: &'static str| -> f64 {
             match reader.real(wheel, name) {
                 Some(v) => v,
@@ -251,6 +262,7 @@ impl WheelParams {
         Ok(WheelParams {
             radius,
             width,
+            axle_axis,
             mass,
             moment_of_inertia,
             reflected_inertia,
@@ -675,6 +687,8 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
         if let Some(mut motor) = world.get_mut::<MotorActuator>(je) {
             motor.max_omega = u.params.max_rotation_speed;
+            motor.peak_torque = u.params.peak_torque;
+            motor.brake_torque = u.params.brake_torque_max;
         }
         if let (Some(lock), Some(mut steer)) =
             (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))

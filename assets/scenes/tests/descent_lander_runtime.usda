@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "LanderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production descent/landing/deployment acceptance.  The referenced scene is
+# the same lander_ops mission used by the application; this layer only adds a
+# verdict observer, so it cannot accidentally test a simplified fixture.
+def Xform "LanderTest" (
+    prepend references = @lunco://scenes/luncosim/lander_ops.usda@</LanderTest>
+)
+{
+    custom string lunco:scenario = "descent-lander-runtime-acceptance"
+
+    def Scope "TestHost"
+    {
+        def Scope "Acceptance" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/descent_lander_runtime.rhai@
+        }
+    }
+}

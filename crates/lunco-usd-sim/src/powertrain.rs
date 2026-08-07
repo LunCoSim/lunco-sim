@@ -34,6 +34,49 @@
 
 use lunco_usd_bevy::{SdfPath, UsdRead};
 
+/// A topology error that makes a wheel's drivetrain unsafe to project.
+///
+/// A wheel may have several motors, but only when they are an explicitly
+/// compatible parallel group: every motor must receive the wheel's one drive
+/// command, every motor must have at most one reduction stage, and every
+/// reduced shaft must have the same no-load speed.  The runtime then sums the
+/// independent axle torque and reflected inertia contributions.  Anything else
+/// is ambiguous, so the wheel is rejected instead of depending on traversal
+/// order.
+#[derive(Clone, Debug)]
+pub enum PowertrainError {
+    InvalidMotor {
+        motor: SdfPath,
+        attributes: Vec<&'static str>,
+    },
+    MissingDriveSource {
+        wheel: SdfPath,
+    },
+    MotorDemandMismatch {
+        wheel: SdfPath,
+        motor: SdfPath,
+        source: Option<String>,
+        expected: String,
+    },
+    AmbiguousConnection {
+        prim: SdfPath,
+        attribute: String,
+        sources: Vec<String>,
+    },
+    MultipleDrivenWheels {
+        motor: SdfPath,
+        wheels: Vec<SdfPath>,
+    },
+    MultipleGearboxes {
+        motor: SdfPath,
+        gearboxes: Vec<SdfPath>,
+    },
+    IncompatibleNoLoadSpeeds {
+        wheel: SdfPath,
+        speeds: Vec<(SdfPath, f64)>,
+    },
+}
+
 /// A wheel's motor + reduction, read from the parts that compose onto the vessel.
 #[derive(Clone, Copy, Debug)]
 pub struct PowertrainParams {
@@ -58,7 +101,9 @@ pub struct PowertrainParams {
 /// readback to the actual motor entity without re-scanning the vessel.
 #[derive(Clone, Debug)]
 pub struct PowertrainBinding {
-    pub motor: SdfPath,
+    /// Every authored motor in the compatible parallel group.  A wheel with
+    /// one motor is simply a one-element group; there is no first-match rule.
+    pub motors: Vec<SdfPath>,
     pub params: PowertrainParams,
 }
 
@@ -203,17 +248,19 @@ pub fn read_powertrain(
 pub fn find_for_wheel(
     reader: &lunco_usd_bevy::StageView<'_>,
     wheel: &SdfPath,
-) -> Result<Option<PowertrainParams>, Vec<&'static str>> {
+) -> Result<Option<PowertrainParams>, PowertrainError> {
     find_binding_for_wheel(reader, wheel).map(|binding| binding.map(|binding| binding.params))
 }
 
-/// Resolve the composed motor that drives `wheel` and its immutable parameters.
-/// The relationship is the sole identity source; the motor and wheel need not be
-/// siblings, and their display names play no part in the resolution.
+/// Resolve every composed motor that drives `wheel` and its immutable parameters.
+/// The relationship is the sole identity source; the motors and wheel need not be
+/// siblings, and their display names play no part in the resolution. A compatible
+/// group is reduced to one equivalent axle model; an incompatible group is an
+/// authoring error rather than a first-match choice.
 pub fn find_binding_for_wheel(
     reader: &lunco_usd_bevy::StageView<'_>,
     wheel: &SdfPath,
-) -> Result<Option<PowertrainBinding>, Vec<&'static str>> {
+) -> Result<Option<PowertrainBinding>, PowertrainError> {
     let Some(root) = vessel_root(wheel) else {
         return Ok(None);
     };
@@ -221,33 +268,119 @@ pub fn find_binding_for_wheel(
     collect_by_api(reader, &root, "LunCoMotorAPI", &mut motors);
 
     let want = wheel.as_str();
-    let Some(motor) = motors
-        .iter()
-        .find(|m| reader.rel_target(m, "lunco:motor:drivenWheel").as_deref() == Some(want))
-    else {
+    let mut matched = Vec::new();
+    for motor in motors {
+        let wheels = reader.rel_targets(&motor, "lunco:motor:drivenWheel");
+        if wheels.len() > 1 {
+            return Err(PowertrainError::MultipleDrivenWheels { motor, wheels });
+        }
+        if wheels.first().map(SdfPath::as_str) == Some(want) {
+            matched.push(motor);
+        }
+    }
+    let motors = matched;
+    if motors.is_empty() {
         return Ok(None);
-    };
+    }
+
+    // Parallel motors are a real drivetrain arrangement, but the current wheel
+    // projection has one command surface.  Require every source to be exactly
+    // the wheel's authored drive connection, so two independent commands can
+    // never be silently merged into one scalar actuator.
+    let expected = one_connection(reader, wheel, "inputs:drive")?.ok_or_else(|| {
+        PowertrainError::MissingDriveSource {
+            wheel: wheel.clone(),
+        }
+    })?;
 
     // The gearbox is whichever one takes its torque FROM this motor. Derived from the
     // connection, not from a naming convention — `Gearbox_FL` next to `Motor_FL` is a
     // readability nicety, never the binding.
     let mut boxes = Vec::new();
     collect_by_api(reader, &root, "LunCoGearboxAPI", &mut boxes);
-    let motor_out = format!("{}.outputs:torque", motor.as_str());
-    let gearbox = boxes.iter().find(|g| {
-        reader
-            .connection_source(g, "inputs:torque")
-            .as_deref()
-            .map(|t| t == motor_out)
-            .unwrap_or(false)
-    });
+    let mut sources = Vec::with_capacity(motors.len());
+    for motor in &motors {
+        let source = one_connection(reader, motor, "inputs:demand")?;
+        if source.as_deref() != Some(expected.as_str()) {
+            return Err(PowertrainError::MotorDemandMismatch {
+                wheel: wheel.clone(),
+                motor: motor.clone(),
+                source,
+                expected: expected.clone(),
+            });
+        }
 
-    match read_powertrain(reader, motor, gearbox) {
-        Ok(params) => Ok(Some(PowertrainBinding {
-            motor: motor.clone(),
-            params,
-        })),
-        Err(missing) => Err(missing),
+        let motor_out = format!("{}.outputs:torque", motor.as_str());
+        let mut attached = Vec::new();
+        for gearbox in &boxes {
+            let Some(source) = one_connection(reader, gearbox, "inputs:torque")? else {
+                continue;
+            };
+            if source == motor_out {
+                attached.push(gearbox.clone());
+            }
+        }
+        if attached.len() > 1 {
+            return Err(PowertrainError::MultipleGearboxes {
+                motor: motor.clone(),
+                gearboxes: attached,
+            });
+        }
+        let params = read_powertrain(reader, motor, attached.first()).map_err(|attributes| {
+            PowertrainError::InvalidMotor {
+                motor: motor.clone(),
+                attributes,
+            }
+        })?;
+        sources.push((motor.clone(), params));
+    }
+
+    let speeds: Vec<(SdfPath, f64)> = sources
+        .iter()
+        .map(|(motor, params)| (motor.clone(), params.axle_no_load_speed()))
+        .collect();
+    let reference = speeds[0].1;
+    // This is a dimensional/numerical comparison tolerance, not a dynamics
+    // tuning knob: values that differ beyond floating-point authoring noise
+    // describe different matched-load operating points and cannot be summed
+    // into one linear torque-speed curve.
+    let compatible = |speed: f64| (speed - reference).abs() <= 1.0e-9 * reference.abs().max(1.0);
+    if speeds.iter().any(|(_, speed)| !compatible(*speed)) {
+        return Err(PowertrainError::IncompatibleNoLoadSpeeds {
+            wheel: wheel.clone(),
+            speeds,
+        });
+    }
+
+    let params = PowertrainParams::parallel(
+        &sources
+            .iter()
+            .map(|(_, params)| *params)
+            .collect::<Vec<_>>(),
+    );
+    Ok(Some(PowertrainBinding {
+        motors: sources.into_iter().map(|(motor, _)| motor).collect(),
+        params,
+    }))
+}
+
+impl PowertrainParams {
+    /// Reduce matched motors in parallel to the equivalent axle model consumed
+    /// by the two wheel realizations.  Torque and rotor inertia add; the common
+    /// reduced no-load speed remains the speed of each source.  This is the
+    /// exact sum of independent linear DC motor curves under one shared demand,
+    /// not a fitted multiplier.
+    fn parallel(sources: &[Self]) -> Self {
+        debug_assert!(!sources.is_empty());
+        let speed = sources.first().map(Self::axle_no_load_speed).unwrap_or(0.0);
+        Self {
+            stall_torque: sources.iter().map(Self::axle_peak_torque).sum(),
+            no_load_speed: speed,
+            rotor_inertia: sources.iter().map(Self::reflected_inertia).sum(),
+            ratio: 1.0,
+            efficiency: 1.0,
+            max_output_torque: f64::INFINITY,
+        }
     }
 }
 
@@ -271,5 +404,106 @@ fn collect_by_api(
             out.push(child.clone());
         }
         collect_by_api(reader, &child, api, out);
+    }
+}
+
+/// Read a single-producer connection without silently selecting the first item
+/// from a USD fan-in list. Motors, gearboxes, and a wheel's command endpoint are
+/// one-to-one topology edges; a multi-source list is an authoring error.
+fn one_connection(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    attribute: &str,
+) -> Result<Option<String>, PowertrainError> {
+    let sources = reader.connections(prim, attribute);
+    match sources.len() {
+        0 => Ok(None),
+        1 => Ok(sources.into_iter().next()),
+        _ => Err(PowertrainError::AmbiguousConnection {
+            prim: prim.clone(),
+            attribute: attribute.to_string(),
+            sources,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_binding_for_wheel, PowertrainError, PowertrainParams};
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    fn source(stall: f64, speed: f64, rotor: f64, ratio: f64, efficiency: f64) -> PowertrainParams {
+        PowertrainParams {
+            stall_torque: stall,
+            no_load_speed: speed,
+            rotor_inertia: rotor,
+            ratio,
+            efficiency,
+            max_output_torque: f64::INFINITY,
+        }
+    }
+
+    #[test]
+    fn matched_parallel_motors_sum_axle_torque_and_reflected_inertia() {
+        let a = source(1.0, 2400.0, 0.001, 200.0, 0.85);
+        let b = source(0.5, 2400.0, 0.002, 200.0, 0.85);
+        let group = PowertrainParams::parallel(&[a, b]);
+
+        assert!((group.axle_peak_torque() - 255.0).abs() < 1.0e-9);
+        assert!((group.axle_no_load_speed() - 12.0).abs() < 1.0e-9);
+        assert!((group.reflected_inertia() - 120.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn parallel_reduction_preserves_the_linear_torque_speed_curve() {
+        let a = source(1.0, 2400.0, 0.001, 200.0, 0.85);
+        let b = source(0.5, 2400.0, 0.002, 200.0, 0.85);
+        let group = PowertrainParams::parallel(&[a, b]);
+        let expected = a.axle_peak_torque() + b.axle_peak_torque();
+
+        assert!((group.axle_peak_torque() * 0.5 - expected * 0.5).abs() < 1.0e-9);
+        assert_eq!(group.ratio, 1.0);
+        assert_eq!(group.efficiency, 1.0);
+    }
+
+    #[test]
+    fn rejects_a_second_motor_with_a_different_command_source() {
+        // Two motors on one wheel are valid only as a parallel group sharing
+        // one authored drive demand. The resolver must reject the ambiguous
+        // topology instead of depending on traversal order.
+        const SCENE: &str = r#"#usda 1.0
+def Xform "Rover" {
+    def Xform "DriveA" { float outputs:throttle = 0.0 }
+    def Xform "DriveB" { float outputs:throttle = 0.0 }
+    def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {
+        float inputs:drive.connect = </Rover/DriveA.outputs:throttle>
+    }
+    def Xform "MotorA" (prepend apiSchemas = ["LunCoMotorAPI"]) {
+        rel lunco:motor:drivenWheel = </Rover/Wheel>
+        float inputs:demand.connect = </Rover/DriveA.outputs:throttle>
+        float lunco:motor:stallTorque = 1.0
+        float lunco:motor:noLoadSpeed = 2400.0
+        float lunco:motor:rotorInertia = 0.001
+    }
+    def Xform "MotorB" (prepend apiSchemas = ["LunCoMotorAPI"]) {
+        rel lunco:motor:drivenWheel = </Rover/Wheel>
+        float inputs:demand.connect = </Rover/DriveB.outputs:throttle>
+        float lunco:motor:stallTorque = 1.0
+        float lunco:motor:noLoadSpeed = 2400.0
+        float lunco:motor:rotorInertia = 0.001
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("parallel.usda", SCENE))
+            .expect("parallel-motor fixture composes");
+        let wheel = SdfPath::new("/Rover/Wheel").unwrap();
+        let result = find_binding_for_wheel(&stage.view(), &wheel);
+        match result {
+            Err(PowertrainError::MotorDemandMismatch { motor, .. }) => {
+                assert_eq!(motor.as_str(), "/Rover/MotorB");
+            }
+            other => panic!("expected demand-source rejection, got {other:?}"),
+        }
     }
 }

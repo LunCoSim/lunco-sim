@@ -27,10 +27,12 @@ use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
 /// # Why it lands on the MOTOR, not on the synthesized joint or wheel
 ///
 /// The joint is synthesized and therefore has no USD identity. The wheel is a
-/// physical contact part, but the value is the operating point of the motor that
-/// drives it. `MotorReadbackTarget` is projected once from the composed
-/// `lunco:motor:drivenWheel` relationship, so both Avian and raycast realizations
-/// update the authored motor entity without a name convention or telemetry relay.
+/// physical contact part, but the value is the operating point of the motor group
+/// that drives it. `MotorReadbackTarget` is projected once from the composed
+/// `lunco:motor:drivenWheel` relationships, so both Avian and raycast realizations
+/// update every authored motor entity without a name convention or telemetry relay.
+/// A matched parallel group receives the aggregate axle operating point on each
+/// member; the wheel has one physical axle and one contact operating point.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component, Default, Debug)]
 pub struct MotorReadback {
@@ -42,12 +44,12 @@ pub struct MotorReadback {
     pub axle_speed: f64,
 }
 
-/// The authored motor entity that presents a wheel/joint's native drivetrain
+/// The authored motor entities that present a wheel/joint's native drivetrain
 /// readback. This is a topology binding, resolved once during USD projection;
-/// fixed-step physics only follows the entity handle.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
+/// fixed-step physics only follows the entity handles.
+#[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Debug)]
-pub struct MotorReadbackTarget(pub Entity);
+pub struct MotorReadbackTarget(pub Vec<Entity>);
 
 /// The port names [`MotorReadback`] publishes, in `list` order.
 const READBACK_PORTS: [&str; 2] = ["torque", "axle_speed"];
@@ -268,9 +270,11 @@ fn motor_actuator_system(
         let Ok(target) = targets.get(joint) else {
             return;
         };
-        if let Ok(mut r) = q.get_mut(target.0) {
-            r.torque = torque;
-            r.axle_speed = omega;
+        for &entity in &target.0 {
+            if let Ok(mut r) = q.get_mut(entity) {
+                r.torque = torque;
+                r.axle_speed = omega;
+            }
         }
     };
     for (joint_entity, motor, mut joint) in q_joints.iter_mut() {
