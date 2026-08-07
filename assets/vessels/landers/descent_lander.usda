@@ -1139,8 +1139,12 @@ def Xform "DescentLander" (
 
     def LunCoEvent "Touchdown"
     {
+        # Touchdown is a mission transition, not a recurring contact-state
+        # notification. The continuous load signal may chatter as the legs
+        # settle, so the event remains disarmed after its first rising edge.
         float inputs:trigger.connect = </DescentLander.outputs:touchdown>
         uniform token lunco:event:name = "lander_touchdown"
+        uniform bool lunco:event:latched = true
     }
 
     # ── Onboard supervisor ───────────────────────────────────────────────────

@@ -594,6 +594,9 @@ fn process_usd_cosim_prim_read(
                     .as_deref()
                     .unwrap_or("info"),
             ),
+            latched: reader
+                .scalar::<bool>(sdf_path, "lunco:event:latched")
+                .unwrap_or(false),
             armed: true,
         });
         return;
@@ -1456,6 +1459,7 @@ pub struct EventBinding {
     output: String,
     name: String,
     severity: lunco_core::Severity,
+    latched: bool,
     armed: bool,
 }
 
@@ -1469,13 +1473,13 @@ fn parse_event_severity(value: &str) -> lunco_core::Severity {
     }
 }
 
-fn event_rising_edge(armed: &mut bool, value: f64) -> bool {
+fn event_rising_edge(armed: &mut bool, latched: bool, value: f64) -> bool {
     let active = value >= 0.5;
     if active && *armed {
         *armed = false;
         true
     } else {
-        if !active {
+        if !active && !latched {
             *armed = true;
         }
         false
@@ -1523,7 +1527,8 @@ pub fn fire_connected_events(
         else {
             continue;
         };
-        if event_rising_edge(&mut binding.armed, value) {
+        let latched = binding.latched;
+        if event_rising_edge(&mut binding.armed, latched, value) {
             commands.trigger(lunco_core::TelemetryEvent {
                 name: binding.name.clone(),
                 source,
@@ -4224,13 +4229,22 @@ mod tests {
     }
 
     #[test]
-    fn connected_event_fires_once_per_rising_edge_and_rearms() {
+    fn connected_event_fires_once_per_rising_edge_and_rearms_by_default() {
         let mut armed = true;
-        assert!(!event_rising_edge(&mut armed, 0.0));
-        assert!(event_rising_edge(&mut armed, 0.5));
-        assert!(!event_rising_edge(&mut armed, 1.0));
-        assert!(!event_rising_edge(&mut armed, 0.49));
-        assert!(event_rising_edge(&mut armed, 1.0));
+        assert!(!event_rising_edge(&mut armed, false, 0.0));
+        assert!(event_rising_edge(&mut armed, false, 0.5));
+        assert!(!event_rising_edge(&mut armed, false, 1.0));
+        assert!(!event_rising_edge(&mut armed, false, 0.49));
+        assert!(event_rising_edge(&mut armed, false, 1.0));
+    }
+
+    #[test]
+    fn latched_event_ignores_contact_chatter_after_first_rising_edge() {
+        let mut armed = true;
+        assert!(!event_rising_edge(&mut armed, true, 0.0));
+        assert!(event_rising_edge(&mut armed, true, 0.5));
+        assert!(!event_rising_edge(&mut armed, true, 0.49));
+        assert!(!event_rising_edge(&mut armed, true, 1.0));
     }
 
     #[test]

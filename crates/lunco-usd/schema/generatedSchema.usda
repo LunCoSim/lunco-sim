@@ -679,6 +679,9 @@ class LunCoEvent "LunCoEvent" (
         allowedTokens = ["debug", "info", "warning", "error", "critical"]
         doc = "Telemetry severity."
     )
+    uniform bool lunco:event:latched = false (
+        doc = "When true, emit once on the first rising edge and do not re-arm until the scene reloads."
+    )
 }
 
 class "LunCoAvatarAPI" (
