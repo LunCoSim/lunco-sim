@@ -436,7 +436,7 @@ pub(crate) fn process_usd_cosim_prims(
             continue;
         }
         let members = members_by_stage.entry(id).or_insert_with(|| {
-            lunco_usd_bevy::program::network_member_paths(&view)
+            lunco_usd_bevy::program::modelica_network_member_paths(&view)
                 .into_iter()
                 .collect()
         });
@@ -1983,7 +1983,7 @@ pub fn rewire_usd_connections(
         // wire both drove it.
         let members = members_by_stage
             .entry(id)
-            .or_insert_with(|| lunco_usd_bevy::program::network_member_paths(&view));
+            .or_insert_with(|| lunco_usd_bevy::program::modelica_network_member_paths(&view));
         if members.contains(&prim_path.path) {
             continue;
         }

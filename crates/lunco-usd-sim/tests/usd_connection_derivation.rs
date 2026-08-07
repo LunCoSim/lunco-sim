@@ -371,6 +371,10 @@ fn lander_asset_wiring_migrated() {
         view.connections(&gnc, "inputs:target_y"),
         ["/LanderTest/LandingTarget.outputs:position_y"]
     );
+    assert_eq!(
+        view.connections(&gnc, "inputs:command_tilt_limit_rad"),
+        ["/LanderTest/Lander.inputs:command_tilt_limit_rad"]
+    );
     assert!(
         view.connections(&gnc, "inputs:initial_vel_y").is_empty(),
         "initial estimator conditions must not be a live body-state feedback edge"
@@ -402,6 +406,24 @@ fn lander_actuator_projection_uses_all_authored_force_geometry() {
     assert_eq!(plan.outputs.len(), 12);
     assert!(plan.source.contains("LunCo.Actuation.WrenchAllocator"));
     assert!(!plan.source.contains("RcsValveAllocator"));
+}
+
+#[test]
+fn actuator_collection_keeps_physical_force_wires_outside_modelica_membership() {
+    let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/vessels/landers/descent_lander.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose descent_lander.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+    let members = lunco_usd_bevy::program::modelica_network_member_paths(&view);
+
+    assert!(
+        members.contains("/DescentLander/AttitudePropulsion/RcsPitchPosModel"),
+        "the Modelica RCS engine must remain owned by its generated solver"
+    );
+    assert!(
+        !members.contains("/DescentLander/RcsPitchPos"),
+        "the physical nozzle must remain a live Avian actuator so its force wire is materialised"
+    );
 }
 
 /// The airframe ALONE has no autopilot — nothing wires `guidance_throttle`, so it is

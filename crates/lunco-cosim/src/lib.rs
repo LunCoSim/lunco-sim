@@ -183,6 +183,12 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
             .add_observer(endpoint_pending_on_add::<lunco_core::PortSurfacePending>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
+            // USD actuator prims are projected after the authored wiring pass
+            // has started. Their generic scalar port surface is not present
+            // until these components arrive, so admission must publish the
+            // same lifecycle fact as every other deferred endpoint.
+            .add_observer(endpoint_ready_on_add::<ForceActuator>)
+            .add_observer(endpoint_ready_on_add::<TorqueActuator>)
             .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
@@ -206,9 +212,10 @@ impl Plugin for CoSimPlugin {
             ports::register_builtin_port_backends(&mut registry);
         }
 
-        // No per-kind observers: avian rigid bodies and joints are detected by
-        // component presence through the `AVIAN` spec table (backend in this
-        // crate, `crates/lunco-cosim`; original design in git history).
+        // Avian state ports are detected by component presence through the
+        // `AVIAN` spec table. Actuator components additionally publish the
+        // generic endpoint lifecycle above because USD wiring can be derived
+        // before their deferred projection has installed the component.
 
         // CoSim runs in FixedUpdate (before Avian's FixedPostUpdate physics step).
         // Order: propagate wires first, then apply forces to Position.
@@ -434,6 +441,46 @@ mod binding_lifecycle_tests {
         app.update();
         app.update();
 
+        assert!(app.world().get::<BoundConnection>(edge).is_some());
+    }
+
+    #[test]
+    fn admitted_force_actuator_rebinds_waiting_command_edge() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let mut controller = SimComponent::default();
+        controller.outputs.insert("thrust".into(), 0.0);
+        let controller = app.world_mut().spawn(controller).id();
+        let actuator = app.world_mut().spawn_empty().id();
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: controller,
+                start_connector: "thrust".into(),
+                start_is_input: false,
+                end_element: actuator,
+                end_connector: "force_command".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+
+        app.update();
+        assert!(app.world().get::<BoundConnection>(edge).is_none());
+
+        app.world_mut().entity_mut(actuator).insert(ForceActuator {
+            local_position: Vec3::ZERO,
+            direction_local: Vec3::Y,
+            max_force_n: 100.0,
+        });
+        app.update();
+        app.update();
+
+        assert!(app
+            .world()
+            .get::<lunco_core::PortSurfaceReady>(actuator)
+            .is_some());
         assert!(app.world().get::<BoundConnection>(edge).is_some());
     }
 

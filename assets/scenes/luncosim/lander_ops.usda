@@ -178,6 +178,7 @@ def Xform "LanderTest" (
             float inputs:target_x.connect = </LanderTest/LandingTarget.outputs:position_x>
             float inputs:target_y.connect = </LanderTest/LandingTarget.outputs:position_y>
             float inputs:target_z.connect = </LanderTest/LandingTarget.outputs:position_z>
+            float inputs:command_tilt_limit_rad.connect = </LanderTest/Lander.inputs:command_tilt_limit_rad>
         }
     }
 

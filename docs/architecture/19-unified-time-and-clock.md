@@ -86,7 +86,7 @@ single highest-value gap for a *lunar* sim.
 ### 1e. avian / Bevy time wiring
 
 - avian `PhysicsPlugins::default()` (with `PhysicsInterpolationPlugin::interpolate_all()`,
-  `SubstepCount(12)`) steps in `FixedPostUpdate`; pause = pause `Time<Virtual>`.
+  `SubstepCount(16)`) steps in `FixedPostUpdate`; pause = pause `Time<Virtual>`.
 - `Time<Real>` is **unused** anywhere in `crates/`.
 - `Time<Virtual>` is capped (`set_max_delta(33ms)`); `relative_speed` is set in exactly one
   place (`luncosim/src/main.rs` slow-mo toggle) and **never** from warp.

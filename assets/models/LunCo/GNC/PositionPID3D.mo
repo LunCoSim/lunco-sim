@@ -41,6 +41,8 @@ model PositionPID3D
   input Real target_vel_x = 0.0 "Landing target velocity X (m/s)";
   input Real target_vel_y = 0.0 "Landing target velocity Y (m/s)";
   input Real target_vel_z = 0.0 "Landing target velocity Z (m/s)";
+  input Real command_tilt_limit_rad = 0.35
+    "Airframe maximum component tilt used to bound the requested thrust vector (rad)";
 
   // Live tuning inputs. These are inputs, not parameters, so USD Inspector edits
   // change the controller state without replacing the Modelica component.
@@ -109,6 +111,11 @@ model PositionPID3D
   Real pitch_command_raw;
   Real roll_command_raw;
   Real tilt_reference_accel;
+  Real lateral_accel_magnitude;
+  Real available_lateral_accel;
+  Real lateral_scale;
+  Real bounded_lateral_accel_x;
+  Real bounded_lateral_accel_z;
   Real thrust_vertical_projection;
   Real pid_y_command;
   Real vertical_limiter_output;
@@ -187,9 +194,9 @@ equation
   vertical_limiter.lower_limit = 0.0;
   vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;
-  thrust_accel = sqrt(lateral_accel_x * lateral_accel_x
+  thrust_accel = sqrt(bounded_lateral_accel_x * bounded_lateral_accel_x
     + vertical_limiter_output * vertical_limiter_output
-    + lateral_accel_z * lateral_accel_z);
+    + bounded_lateral_accel_z * bounded_lateral_accel_z);
   unsaturated_throttle = thrust_accel
     / max(minimum_thrust_accel_mps2, max_thrust_accel);
 
@@ -209,24 +216,33 @@ equation
   thrust_vertical_projection = noEvent(max(0.0, min(1.0,
     thrust_axis_transform.world_frame_y)));
 
-  // Body +Y is the engine axis. Convert the desired world acceleration vector
-  // into bounded tilt requests; the airframe's attitude stabilizer closes the
-  // angular loop and turns those requests into torque.
-  // A free-falling vehicle can still need a bounded lateral correction. Using
-  // `vertical_limiter_output` alone makes that case divide by zero and turn a
-  // small position error into a saturated ninety-degree attitude request. The
-  // local gravity magnitude is the physical reference for a lateral tilt when
-  // vertical thrust demand is below hover; it keeps the command a real thrust
-  // vector without inventing a world-frame quantity.
-  tilt_reference_accel = max(minimum_vertical_accel_mps2,
-    max(g, vertical_limiter_output));
-  pitch_command_raw = lateral_accel_z / tilt_reference_accel;
+  // Body +Y is the engine axis. A requested lateral acceleration is physically
+  // achievable only when the available vertical thrust can support the
+  // airframe's authored tilt limit. The previous boundary divided by `g` even
+  // when vertical thrust demand was zero, then asked the airframe for lateral
+  // thrust it could only realize as an upward-limited attitude. That converted
+  // a descent into an unintended climb and eventually invalidated the altimeter.
+  // Bound the VECTOR before converting it to the normalized component-angle
+  // command, so the generated thrust and the commanded attitude describe the
+  // same physical wrench.
+  tilt_reference_accel = max(minimum_vertical_accel_mps2, vertical_limiter_output);
+  lateral_accel_magnitude = sqrt(
+    lateral_accel_x * lateral_accel_x + lateral_accel_z * lateral_accel_z);
+  available_lateral_accel = max(0.0, vertical_limiter_output)
+    * tan(max(1.0e-9, command_tilt_limit_rad));
+  lateral_scale = min(1.0, available_lateral_accel
+    / max(minimum_vertical_accel_mps2, lateral_accel_magnitude));
+  bounded_lateral_accel_x = lateral_accel_x * lateral_scale;
+  bounded_lateral_accel_z = lateral_accel_z * lateral_scale;
+  pitch_command_raw = atan2(bounded_lateral_accel_z, tilt_reference_accel)
+    / max(1.0e-9, command_tilt_limit_rad);
   // The airframe's body +Y thrust axis moves toward navigation -X for a
   // positive body-Z attitude request in this convention. Therefore a
   // negative desired navigation-X acceleration must produce a positive roll
   // command. This sign is the composed vehicle/actuator frame contract, not a
   // scene-specific correction.
-  roll_command_raw = -lateral_accel_x / tilt_reference_accel;
+  roll_command_raw = -atan2(bounded_lateral_accel_x, tilt_reference_accel)
+    / max(1.0e-9, command_tilt_limit_rad);
   // A landed vehicle must not continue steering against its leg constraints.
   // Touchdown is a measured airframe state, not a Rhai timer or a scene-specific
   // controller branch. The continuous touchdown signal lets the guidance

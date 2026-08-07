@@ -2471,17 +2471,18 @@ impl Plugin for SandboxCorePlugin {
             // writer actually moved it. Must be added AFTER PhysicsPlugins
             // (it overrides PhysicsTransformConfig).
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
-            // 12 solver substeps (avian default 6): joint-based rovers buzz the
-            // chassis under drive torque at 6 substeps. Quantified in the headless
+            // 16 solver substeps (avian default 6): the raked prismatic landing
+            // joints and joint-based rovers need the higher fixed-step resolution
+            // to converge their hard angular constraints under contact load.
+            // Quantified in the headless
             // `rover_jitter` probe. See `project_physical_rover_suspension`.
             //
-            // WEB: 8 substeps — the single wasm thread runs the whole solver inline,
-            // so 12 substeps is a third of the physics budget per frame. 8 keeps the
-            // physical (joint) rover acceptably calm while giving the browser back
-            // frame time; native/server stay at 12 for full fidelity + peer
-            // determinism (networked play is native/server-authoritative).
+            // WEB: 10 substeps — the single wasm thread runs the whole solver inline,
+            // so the browser uses a smaller, measured budget while retaining the
+            // hard-joint convergence needed by the authored mechanisms. Native and
+            // server builds use 16 for full fidelity and peer determinism.
             .insert_resource(avian3d::prelude::SubstepCount(
-                if cfg!(target_arch = "wasm32") { 8 } else { 12 },
+                if cfg!(target_arch = "wasm32") { 10 } else { 16 },
             ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)

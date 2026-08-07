@@ -9,7 +9,7 @@
 # A small, safe practice plot: flat regolith to learn throttle/steer/brake, plus
 # one gentle ramp so the student feels wheel slip and the climb before ever
 # meeting the real borderline wall. A finish flag at the top of the ramp gives S1
-# its arrival objective. The medium rover spawns at the SW corner.
+# its arrival objective. The medium rover spawns at the SW corner facing the +X route.
 #
 #   target/debug/luncosim --scene tutorials/basic/driving_basics.usda
 def Xform "DrivingBasics" (
@@ -18,6 +18,16 @@ def Xform "DrivingBasics" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
+
+    # The tutorial is a standalone local lunar stage, so it owns its gravity
+    # instead of relying on a referenced surface scene to provide a default.
+    # Without this authored PhysicsScene the physical rover has no normal load
+    # and its wheel motors cannot generate traction on the practice ground.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is
@@ -80,7 +90,8 @@ def Xform "DrivingBasics" (
     )
     {
         double3 xformOp:translate = (-35.0, 1.0, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 xformOp:rotateXYZ = (0.0, -90.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
 
     # Finish flag at the top of the ramp — S1's arrival target. Shared asset via

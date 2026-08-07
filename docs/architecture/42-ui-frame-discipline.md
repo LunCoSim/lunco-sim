@@ -132,7 +132,7 @@ Three regressions/assumptions keep recurring; prefer the by-design fix:
   `run_if(Without<Marker>)` system — the latter re-scans the whole scene every
   frame if any code path forgets to insert the marker. If you must poll, mark
   **every** examined entity, including on `else { continue }` exits.
-- **Do not blame diagnostics plugins for physics solver spikes.** Spikes (e.g., ~30 ms) during physics steps are not caused by logging or profiling plugins like `PhysicsTotalDiagnosticsPlugin`, whose overhead is microscopic (measured in microseconds). The cost is driven by the physics solver configuration itself (e.g., `SubstepCount(12)` × solver iterations). Gating or removing the diagnostics plugin merely hides the measurement without resolving the actual cost.
+- **Do not blame diagnostics plugins for physics solver spikes.** Spikes (e.g., ~30 ms) during physics steps are not caused by logging or profiling plugins like `PhysicsTotalDiagnosticsPlugin`, whose overhead is microscopic (measured in microseconds). The cost is driven by the physics solver configuration itself (e.g., `SubstepCount(16)` × solver iterations). Gating or removing the diagnostics plugin merely hides the measurement without resolving the actual cost.
 
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.

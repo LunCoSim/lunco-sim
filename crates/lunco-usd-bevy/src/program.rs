@@ -91,15 +91,23 @@ pub fn is_domain_network_root(view: &StageView<'_>, prim: &SdfPath) -> bool {
     view.any_attr_with_prefix(prim, "collection:components:")
 }
 
-/// Every prim on the stage that belongs to SOME component collection.
+/// Every Modelica program prim on the stage that belongs to SOME component
+/// collection.
 ///
-/// A member is compiled as part of its network's generated model, so no other
-/// pass may give it a solver of its own. Membership — not "does it declare an
-/// acausal connector" — is what makes that true: a causal-only member (a
-/// controller, a PDU) is just as much part of the generated DAE, and gating on
-/// connectors handed it a second, independent solver whose outputs then fed the
-/// wire fabric.
-pub fn network_member_paths(view: &StageView<'_>) -> HashSet<String> {
+/// A Modelica program member is compiled as part of its network's generated
+/// model, so no other pass may give it a solver of its own. Membership — not
+/// "does it declare an acausal connector" — is what makes that true: a
+/// causal-only member (a controller, a PDU) is just as much part of the
+/// generated DAE, and gating on connectors handed it a second, independent
+/// solver whose outputs then fed the wire fabric.
+///
+/// A collection may also contain physical prims consumed by a different
+/// synthesizer. For example, the actuator-wrench network owns USD force
+/// actuators as geometry, while those actuators still need their authored
+/// scalar input wires materialised by the cosim projection. `LunCoProgramAPI`
+/// is the authoritative boundary between a Modelica member and such a
+/// physical participant; collection membership alone is not.
+pub fn modelica_network_member_paths(view: &StageView<'_>) -> HashSet<String> {
     let mut members = HashSet::new();
     for prim in view.prim_paths() {
         if !is_domain_network_root(view, &prim) {
@@ -108,7 +116,12 @@ pub fn network_member_paths(view: &StageView<'_>) -> HashSet<String> {
         let Ok(paths) = view.collection_members(&prim, "components") else {
             continue;
         };
-        members.extend(paths.into_iter().map(|path| path.to_string()));
+        members.extend(
+            paths
+                .into_iter()
+                .filter(|path| view.has_api_schema(path, "LunCoProgramAPI"))
+                .map(|path| path.to_string()),
+        );
     }
     members
 }

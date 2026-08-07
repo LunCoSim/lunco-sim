@@ -89,6 +89,13 @@ def Xform "DescentLander" (
         # The engine is a generated Modelica network. Every connection below
         # is USD topology; the reusable component files own only equations.
         float inputs:valve_opening.connect = </DescentLander.outputs:throttle>
+        # RCS consumption crosses from the separately solved attitude network
+        # through explicit network boundary ports. A component-to-component
+        # edge across CollectionAPI scopes is not part of either generated DAE;
+        # making the boundary explicit preserves the two solver islands while
+        # keeping the causal flow authored and inspectable.
+        float inputs:rcs_fuel_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:fuel_mass_flow_kgs>
+        float inputs:rcs_oxidizer_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:oxidizer_mass_flow_kgs>
         float outputs:thrust_n.connect = </DescentLander/MainPropulsion/MainChamber.outputs:thrust_n>
         float outputs:activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
         float outputs:engine_activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
@@ -129,7 +136,7 @@ def Xform "DescentLander" (
             float inputs:depleted_mass_kg = 0.5
             float inputs:minimum_mass_kg = 0.000001
             float inputs:event_transition_width_kg = 0.01
-            float inputs:auxiliary_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:fuel_mass_flow_kgs>
+            float inputs:auxiliary_mass_flow_kgs.connect = </DescentLander/MainPropulsion.inputs:rcs_fuel_mass_flow_kgs>
             custom token connectors:outlet.connect = </DescentLander/MainPropulsion/FuelPump.connectors:inlet>
             float outputs:mass_kg
             float outputs:pressure_pa
@@ -151,7 +158,7 @@ def Xform "DescentLander" (
             float inputs:depleted_mass_kg = 0.5
             float inputs:minimum_mass_kg = 0.000001
             float inputs:event_transition_width_kg = 0.01
-            float inputs:auxiliary_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:oxidizer_mass_flow_kgs>
+            float inputs:auxiliary_mass_flow_kgs.connect = </DescentLander/MainPropulsion.inputs:rcs_oxidizer_mass_flow_kgs>
             custom token connectors:outlet.connect = </DescentLander/MainPropulsion/OxidizerPump.connectors:inlet>
             float outputs:mass_kg
             float outputs:pressure_pa
@@ -1067,6 +1074,7 @@ def Xform "DescentLander" (
     # rate holds (momentum conserved — the USD-composed RCS network stops it). Kept low so a
     # tap is a gentle nudge, not a violent tumble.
     float inputs:ang_authority = 0.6
+    float inputs:command_tilt_limit_rad = 0.35
 
     # RCS stability augmentation ON. A powered-descent lander has attitude control
     # authority; a vehicle that cannot hold its own attitude is not a lander, it is a

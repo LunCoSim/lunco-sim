@@ -2710,7 +2710,7 @@ fn setup_physical_wheel(
     // the chassis weight — it rings the pitch/roll mode down for 15-20 s after
     // the scene's 5 m spawn drop, can't be damped harder (high damping_ratio
     // diverges), and its effective tuning shifts with substep count. The fix for
-    // *vertical* travel is therefore the rigid axle below + `SubstepCount(12)` at
+    // *vertical* travel is therefore the rigid axle below + `SubstepCount(16)` at
     // the app; joint rovers are rigid-axle. See `project_physical_rover_suspension`.
     //
     // Steering is a yaw of the front wheel about the vertical. A physical
@@ -2731,7 +2731,7 @@ fn setup_physical_wheel(
     //
     // (A spring suspension was also rejected — avian's joint SpringDamper is
     // fragile bearing the chassis weight; the fix for vertical travel is the rigid
-    // axle + `SubstepCount(12)`. See `project_physical_rover_suspension`.)
+    // axle + `SubstepCount(16)`. See `project_physical_rover_suspension`.)
 
     // Axle drive — THE one drive-motor definition lives in
     // `WheelParams::drive_motor`. The motor's torque cap is re-derived every tick

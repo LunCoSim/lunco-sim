@@ -18,6 +18,14 @@ def Xform "SlopeTest" (
 )
 {
 
+    # This lesson is a standalone local lunar stage. Author the gravity that
+    # loads the rover's tyres and makes the slope/tip-over experiment physical.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is
     # how UsdPhysics (and Omniverse) actually spell a surface.
@@ -76,7 +84,8 @@ def Xform "SlopeTest" (
     )
     {
         double3 xformOp:translate = (-18.0, 1.0, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 xformOp:rotateXYZ = (0.0, -90.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
 
     # Marker at the top of the grade — the climb goal. Its origin is the

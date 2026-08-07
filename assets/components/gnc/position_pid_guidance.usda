@@ -77,6 +77,13 @@ def Xform "PositionPIDGuidance"
         float inputs:target_vel_y = 0.0
         float inputs:target_vel_z = 0.0
 
+        # Shared with the airframe's Lander command contract. The mission wires
+        # this input from the vessel's live `inputs:command_tilt_limit_rad` so
+        # guidance and physical actuation cannot silently use different limits.
+        float inputs:command_tilt_limit_rad = 0.35 (
+            customData = { double min = 0.000001 double max = 1.570796 string unit = "rad" }
+        )
+
         # PID gains are live inputs, with Inspector ranges authored at the
         # consumer boundary.  Changing them does not rebuild or replace the
         # Modelica component.

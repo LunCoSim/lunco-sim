@@ -105,7 +105,7 @@ and a failed source becomes a terminal projection error.
 
 | # | What changed |
 |---|---|
-| B1 | `process_usd_cosim_prims` now skips a prim because a component collection OWNS it (`lunco_usd_bevy::program::network_member_paths`), not because it declares a connector. A causal-only member no longer gets a second solver. |
+| B1 | `process_usd_cosim_prims` now skips a prim because the composed Modelica boundary marks it as a generated-network member (`lunco_usd_bevy::program::modelica_network_member_paths`), not because it declares a connector. A causal-only member no longer gets a second solver, while physical actuator participants remain eligible for their authored force wires. |
 | B2 | The converse is now loud: a prim with `connectors:*` that no network owns warns, naming the prim and the fix, instead of silently never simulating. |
 | B3 | `retain_connected_acausal_components` returns what it omitted; `read_network` drops the boundary outputs published through omitted parts (with a warning) instead of rejecting the whole island. Covered by `tests/domain_projection_reader.rs`. |
 | B4 | `GeneratedModelicaSource` API query — lists every projected network or returns one by `network_root`, with the exact compiled text, its `generated://` URI and last error. |
