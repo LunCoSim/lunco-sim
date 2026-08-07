@@ -48,5 +48,6 @@ fn lander_composes_touchdown_from_the_shared_threshold_check() {
     )
     .unwrap();
     assert!(source.contains("LunCo.Logic.AboveThreshold touchdown_check"));
-    assert!(source.contains("touchdown = touchdown_check.active;"));
+    assert!(source.contains("settled_touchdown_target = touchdown_check.active"));
+    assert!(source.contains("navigation_velocity_x"));
 }

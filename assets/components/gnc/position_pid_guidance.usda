@@ -122,6 +122,12 @@ def Xform "PositionPIDGuidance"
         float inputs:max_vertical_accel = 8.0 (
             customData = { double min = 0.1 double max = 30.0 string unit = "m/s2" }
         )
+        float inputs:descent_speed_limit_mps = 4.0 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "m/s" }
+        )
+        float inputs:descent_braking_accel_mps2 = 3.0 (
+            customData = { double min = 0.0 double max = 30.0 string unit = "m/s2" }
+        )
         float inputs:g = 1.62 (
             customData = { double min = 0.0 double max = 20.0 string unit = "m/s2" }
         )

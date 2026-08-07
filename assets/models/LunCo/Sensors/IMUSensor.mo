@@ -25,6 +25,18 @@ model IMUSensor
     "Accelerometer differentiator time constant (s)";
   parameter Real angular_accel_filter_time_constant_s = 0.02
     "Angular accelerometer differentiator time constant (s)";
+  parameter Real initial_velocity_x = 0.0
+    "Release velocity used to initialize the accelerometer state, X (m/s)";
+  parameter Real initial_velocity_y = 0.0
+    "Release velocity used to initialize the accelerometer state, Y (m/s)";
+  parameter Real initial_velocity_z = 0.0
+    "Release velocity used to initialize the accelerometer state, Z (m/s)";
+  parameter Real initial_angvel_x = 0.0
+    "Release angular velocity used to initialize the gyro state, X (rad/s)";
+  parameter Real initial_angvel_y = 0.0
+    "Release angular velocity used to initialize the gyro state, Y (rad/s)";
+  parameter Real initial_angvel_z = 0.0
+    "Release angular velocity used to initialize the gyro state, Z (rad/s)";
 
   // Primitive Avian outputs.  These are deliberately named raw_* so a model
   // review can see that no semantic sensor value is entering the conversion.
@@ -86,17 +98,23 @@ model IMUSensor
   FrameVectorTransform gyro_transform(
     quaternion_epsilon = quaternion_epsilon);
   FilteredDerivative velocity_filter_x(
-    time_constant_s = accel_filter_time_constant_s);
+    time_constant_s = accel_filter_time_constant_s,
+    initial_value = initial_velocity_x);
   FilteredDerivative velocity_filter_y(
-    time_constant_s = accel_filter_time_constant_s);
+    time_constant_s = accel_filter_time_constant_s,
+    initial_value = initial_velocity_y);
   FilteredDerivative velocity_filter_z(
-    time_constant_s = accel_filter_time_constant_s);
+    time_constant_s = accel_filter_time_constant_s,
+    initial_value = initial_velocity_z);
   FilteredDerivative angular_velocity_filter_x(
-    time_constant_s = angular_accel_filter_time_constant_s);
+    time_constant_s = angular_accel_filter_time_constant_s,
+    initial_value = initial_angvel_x);
   FilteredDerivative angular_velocity_filter_y(
-    time_constant_s = angular_accel_filter_time_constant_s);
+    time_constant_s = angular_accel_filter_time_constant_s,
+    initial_value = initial_angvel_y);
   FilteredDerivative angular_velocity_filter_z(
-    time_constant_s = angular_accel_filter_time_constant_s);
+    time_constant_s = angular_accel_filter_time_constant_s,
+    initial_value = initial_angvel_z);
 
 equation
 

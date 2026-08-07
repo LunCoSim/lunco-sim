@@ -64,7 +64,13 @@ fn position_pid3d_compiles_with_live_actuator_outputs() {
         .keys()
         .map(ToString::to_string)
         .collect();
-    for expected in ["throttle_cmd", "pitch_cmd", "roll_cmd", "yaw_cmd"] {
+    for expected in [
+        "throttle_cmd",
+        "pitch_cmd",
+        "roll_cmd",
+        "yaw_cmd",
+        "descent_rate_command",
+    ] {
         assert!(
             outputs
                 .iter()

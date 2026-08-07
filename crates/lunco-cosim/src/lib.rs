@@ -183,6 +183,12 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
             .add_observer(endpoint_pending_on_add::<lunco_core::PortSurfacePending>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
+            // Force and torque actuators are native scalar port endpoints too.
+            // They are authored on USD prims without a SimComponent, so they
+            // must enter the same readiness transaction as rigid bodies and
+            // joints before USD connection derivation can admit their wires.
+            .add_observer(endpoint_ready_on_add::<ForceActuator>)
+            .add_observer(endpoint_ready_on_add::<TorqueActuator>)
             .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
@@ -492,6 +498,31 @@ mod binding_lifecycle_tests {
             app.world().get::<EndpointLifecycle>(entity),
             Some(&EndpointLifecycle::Ready)
         );
+    }
+
+    #[test]
+    fn native_actuator_port_enters_the_generic_endpoint_lifecycle() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn(ForceActuator {
+                local_position: Vec3::ZERO,
+                direction_local: Vec3::Y,
+                max_force_n: 1.0,
+            })
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<EndpointLifecycle>(entity),
+            Some(&EndpointLifecycle::Ready)
+        );
+        assert!(app
+            .world()
+            .get::<lunco_core::PortSurfaceReady>(entity)
+            .is_some());
     }
 }
 

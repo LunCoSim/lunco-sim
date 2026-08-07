@@ -92,6 +92,7 @@ fn altimeter_converts_a_raw_ray_observation_without_a_fallback() {
 fn filtered_derivative_is_a_reusable_stateful_sensor_boundary() {
     let source = model("Sensors/FilteredDerivative.mo");
     assert!(source.contains("der(state)"));
+    assert!(source.contains("initial_value"));
     assert!(!source.contains("der(u)"));
     compiles_and_steps("FilteredDerivative", &source);
 }
@@ -104,6 +105,8 @@ fn attitude_reference_uses_imu_measurements_not_body_truth() {
         "attitude_quat_x",
         "attitude_quat_y",
         "attitude_quat_z",
+        "desired_tilt_x",
+        "desired_tilt_z",
     ] {
         assert!(
             source.contains(input),
@@ -111,6 +114,7 @@ fn attitude_reference_uses_imu_measurements_not_body_truth() {
         );
     }
     assert!(source.contains("FrameVectorTransform"));
+    assert!(source.contains("target_transform"));
     assert!(!source.contains("raw_quat"));
     compiles("AttitudeReference", &source);
 }

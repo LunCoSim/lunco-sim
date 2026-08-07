@@ -26,6 +26,8 @@ model LanderNavigation
   input Real gravity_nav_y = -1.62 "Gravity in the navigation Y axis (m/s²)";
   input Real gravity_nav_z = 0.0 "Gravity in the navigation Z axis (m/s²)";
   parameter Real quaternion_epsilon = 1.0e-12 "Quaternion normalization floor";
+  parameter Real range_rate_acquisition_time_constant_s = 0.25
+    "Time for a newly valid altimeter rate to enter the estimator (s)";
 
   parameter Real initial_pos_x = 0.0 "Mission-initialized X position (m)";
   parameter Real initial_pos_y = 0.0 "Mission-initialized Y position (m)";
@@ -55,6 +57,8 @@ model LanderNavigation
   Real navigation_accel_y;
   Real navigation_accel_z;
   Real range_confidence;
+  Real range_rate_confidence(start = 0.0)
+    "Confidence ramp for the first valid range-rate measurement";
   LunCo.Sensors.FrameVectorTransform acceleration_transform(
     quaternion_epsilon = quaternion_epsilon);
 
@@ -87,9 +91,16 @@ equation
   // a transient IMU integration state for a measured descent rate while the
   // ray is valid.
   range_confidence = max(0.0, min(1.0, altimeter_valid));
+  // A ray can become valid after several invalid samples when the vehicle is
+  // recovering from a large tilt. The first valid distance is a measurement
+  // acquisition step, not a physical vehicle-speed impulse. Ramp only the
+  // range-rate contribution while retaining the IMU-propagated state during
+  // acquisition; this is the same estimator boundary for every vehicle.
+  der(range_rate_confidence) = (range_confidence - range_rate_confidence)
+    / max(1.0e-6, range_rate_acquisition_time_constant_s);
   der(nav_vel_y_integrated) = navigation_accel_y;
-  nav_vel_y = range_confidence * altimeter_range_rate
-    + (1.0 - range_confidence) * nav_vel_y_integrated;
+  nav_vel_y = range_rate_confidence * altimeter_range_rate
+    + (1.0 - range_rate_confidence) * nav_vel_y_integrated;
   // With a downward ray over the landing surface, range and world +Y have the
   // same sign: a climbing vehicle increases the measured distance, while a
   // descending vehicle decreases it. Do not negate this measurement or the
@@ -107,6 +118,7 @@ equation
 initial equation
   nav_pos_x = initial_pos_x;
   nav_pos_y_integrated = initial_pos_y;
+  range_rate_confidence = 0.0;
   nav_pos_z = initial_pos_z;
   nav_vel_x = initial_vel_x;
   nav_vel_y_integrated = initial_vel_y;

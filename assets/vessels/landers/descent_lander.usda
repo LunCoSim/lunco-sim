@@ -1005,6 +1005,7 @@ def Xform "DescentLander" (
     float inputs:attitude_error_x.connect = </DescentLander/AttitudeReference.outputs:error_x>
     float inputs:attitude_error_y.connect = </DescentLander/AttitudeReference.outputs:error_y>
     float inputs:attitude_error_z.connect = </DescentLander/AttitudeReference.outputs:error_z>
+    float inputs:upright_axis_y.connect = </DescentLander/AttitudeReference.outputs:estimated_up_y>
 
     # `guidance_throttle` and the `guidance_pitch/roll/yaw` attitude wires are
     # deliberately NOT connected. Unwired, they are 0, and the lander commands nothing
@@ -1057,6 +1058,13 @@ def Xform "DescentLander" (
     float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
     float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
     float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
+    float inputs:leg_contact_px.connect = </DescentLander/LegPX.outputs:contact>
+    float inputs:leg_contact_nx.connect = </DescentLander/LegNX.outputs:contact>
+    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ.outputs:contact>
+    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ.outputs:contact>
+    float inputs:navigation_velocity_x.connect = </DescentLander.outputs:velocity_x>
+    float inputs:navigation_velocity_y.connect = </DescentLander.outputs:velocity_y>
+    float inputs:navigation_velocity_z.connect = </DescentLander.outputs:velocity_z>
 
     # ── Propellant events ────────────────────────────────────────────────────
     # Conditions are equations in Lander.mo. These prims only bind the model's
@@ -1189,9 +1197,14 @@ def Xform "DescentLander" (
         float inputs:attitude_quat_x.connect = </DescentLander/IMU.outputs:attitude_quat_x>
         float inputs:attitude_quat_y.connect = </DescentLander/IMU.outputs:attitude_quat_y>
         float inputs:attitude_quat_z.connect = </DescentLander/IMU.outputs:attitude_quat_z>
+        float inputs:desired_tilt_x.connect = </DescentLander.outputs:desired_tilt_x>
+        float inputs:desired_tilt_z.connect = </DescentLander.outputs:desired_tilt_z>
         float outputs:error_x
         float outputs:error_y
         float outputs:error_z
+        float outputs:estimated_up_x
+        float outputs:estimated_up_y
+        float outputs:estimated_up_z
     }
 
     # ── Visual-only structure ──
@@ -2771,6 +2784,9 @@ def Xform "DescentLander" (
         # half-turn makes the joint's +Y slider axis coincide with that
         # physical hull-to-pad direction while the prismatic constraint still
         # locks all three rotational DOF.
+        # The leg body is authored along local -Y. A half-turn about Z makes
+        # the joint frame's +Y axis follow that physical hull-to-pad direction
+        # instead of asking the constraint to pull the X leg through the hull.
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
@@ -2789,6 +2805,9 @@ def Xform "DescentLander" (
         quatf physics:localRot0 = (0.173648, 0, 0, 0.984808)
         # Same body-side half-turn as the +X leg; the sign of localRot0 carries
         # the mirrored rake, not a different rotational freedom.
+        # Mirror of the +X frame: the body-side half-turn keeps the slider on
+        # the authored local -Y strut axis while the mirrored rake is carried
+        # by localRot0.
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
