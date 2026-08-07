@@ -40,6 +40,11 @@ fn lander_owns_touchdown_continuity_and_controller_inertia_inputs() {
     assert!(source.contains("input Real controller_inertia_xx"));
     assert!(source.contains("input Real controller_inertia_yy"));
     assert!(source.contains("input Real controller_inertia_zz"));
-    assert!(source.contains("touchdown = 0.5 + 0.5 * touchdown_error"));
+    assert!(source.contains("output Real desired_tilt_x"));
+    assert!(source.contains("output Real desired_tilt_z"));
+    assert!(source.contains("output Real landing_contact"));
+    assert!(source.contains("touchdown_ground_speed_mps = 0.5"));
+    assert!(source.contains("settled_touchdown_target = touchdown_load_gate"));
+    assert!(source.contains("navigation_velocity_x"));
     assert!(!source.contains("AboveThreshold"));
 }

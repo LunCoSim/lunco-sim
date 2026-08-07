@@ -146,6 +146,11 @@ def Xform "LanderTest" (
             # Modelica `GNC` prim; the composed root is a visual/component
             # namespace, not a runtime scalar owner.
             float inputs:touchdown.connect = </LanderTest/Lander.outputs:touchdown>
+            # Contact is an earlier physical authority boundary than settled
+            # touchdown: once all upright pads carry load, the GNC must stop
+            # steering against the legs while its low-speed touchdown filter
+            # finishes and emits the mission event.
+            float inputs:landing_contact.connect = </LanderTest/Lander.outputs:landing_contact>
 
             # The estimator starts from these mission-authored initial conditions;
             # after initialization it propagates from IMU and altimeter telemetry.
@@ -179,6 +184,29 @@ def Xform "LanderTest" (
             float inputs:target_y.connect = </LanderTest/LandingTarget.outputs:position_y>
             float inputs:target_z.connect = </LanderTest/LandingTarget.outputs:position_z>
             float inputs:command_tilt_limit_rad.connect = </LanderTest/Lander.inputs:command_tilt_limit_rad>
+        }
+
+        # The IMU differentiators are physical sensor states. Initialize them
+        # from the same authored release condition as the navigation estimator
+        # so the first derivative sample is not interpreted as an acceleration
+        # impulse.
+        over "IMU"
+        {
+            float inputs:initial_velocity_x = -5.0
+            float inputs:initial_velocity_y = 0.0
+            float inputs:initial_velocity_z = -5.0
+        }
+
+        # The downward ray starts at the nozzle bottom (COM y=60 minus the
+        # authored 3.3 m mount offset) above the y=0 pad. Its filter must begin
+        # at that measured range for the first range-rate sample to describe
+        # motion rather than filter acquisition.
+        over "Altimeter"
+        {
+            over "Model"
+            {
+                float inputs:initial_range_m = 56.7
+            }
         }
     }
 

@@ -39,6 +39,46 @@ fn compiles_and_steps(name: &str, source: &str) {
 }
 
 #[test]
+fn modelica_parameter_overrides_seed_initial_equation_state() {
+    let source = model("Sensors/FilteredDerivative.mo");
+    let mut compiler = ModelicaCompiler::new();
+    let dae = compiler
+        .compile_str(
+            "FilteredDerivative",
+            &source,
+            "lunco://models/LunCo/Sensors/FilteredDerivative.mo",
+        )
+        .expect("filtered derivative must compile");
+    let mut stepper = rumoca_sim::SimulationSession::new(
+        &dae.dae,
+        rumoca_sim::SimOptions {
+            t_end: 1.0,
+            param_overrides: vec![("initial_value".into(), -5.0)],
+            ..Default::default()
+        },
+    )
+    .expect("parameter override must produce a live stepper");
+
+    let initial_state = stepper
+        .get("state")
+        .expect("reading initial state must succeed")
+        .expect("filtered derivative state must be visible");
+    assert_eq!(initial_state, -5.0);
+
+    stepper
+        .set_input("u", -5.0)
+        .expect("filtered derivative input must be writable");
+    stepper
+        .step(1.0 / 60.0)
+        .expect("overridden model must advance without an initialization impulse");
+    let derivative = stepper
+        .get("y")
+        .expect("reading derivative must succeed")
+        .expect("filtered derivative output must be visible");
+    assert!(derivative.abs() < 1.0e-10, "derivative={derivative}");
+}
+
+#[test]
 fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
     let source = model("Sensors/IMUSensor.mo");
     for input in [
@@ -92,6 +132,7 @@ fn altimeter_converts_a_raw_ray_observation_without_a_fallback() {
 fn filtered_derivative_is_a_reusable_stateful_sensor_boundary() {
     let source = model("Sensors/FilteredDerivative.mo");
     assert!(source.contains("der(state)"));
+    assert!(source.contains("initial_value"));
     assert!(!source.contains("der(u)"));
     compiles_and_steps("FilteredDerivative", &source);
 }
@@ -104,6 +145,8 @@ fn attitude_reference_uses_imu_measurements_not_body_truth() {
         "attitude_quat_x",
         "attitude_quat_y",
         "attitude_quat_z",
+        "desired_tilt_x",
+        "desired_tilt_z",
     ] {
         assert!(
             source.contains(input),
@@ -111,6 +154,7 @@ fn attitude_reference_uses_imu_measurements_not_body_truth() {
         );
     }
     assert!(source.contains("FrameVectorTransform"));
+    assert!(source.contains("target_transform"));
     assert!(!source.contains("raw_quat"));
     compiles("AttitudeReference", &source);
 }

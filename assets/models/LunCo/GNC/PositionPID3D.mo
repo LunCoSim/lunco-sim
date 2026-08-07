@@ -60,6 +60,10 @@ model PositionPID3D
   input Real anti_windup_gain = 1.0 "PID anti-windup back-calculation";
   input Real max_lateral_accel = 4.0 "Maximum lateral acceleration (m/s²)";
   input Real max_vertical_accel = 8.0 "Maximum vertical correction (m/s²)";
+  input Real descent_speed_limit_mps = 4.0
+    "Maximum commanded descent speed above the landing target (m/s)";
+  input Real descent_braking_accel_mps2 = 3.0
+    "Acceleration used by the stopping-distance descent schedule (m/s²)";
   input Real g = 1.62 "Local gravity (m/s²)";
   input Real max_thrust = 60000.0 "Maximum engine thrust (N)";
   input Real vehicle_mass = 2000.0 "Vehicle mass (kg)";
@@ -75,6 +79,8 @@ model PositionPID3D
   input Real engage = 1.0 "1 while this mission guidance is active";
   input Real touchdown = 0.0
     "Touchdown state; guidance is removed as the vehicle settles on its legs";
+  input Real landing_contact = 0.0
+    "Physical four-leg contact; remove flight authority before settled touchdown";
   output Real vertical_accel(unit = "m/s2") = vertical_limiter_output
     "Gravity-compensated Y acceleration";
   output Real throttle_cmd "Main-engine command, 0..1";
@@ -90,6 +96,8 @@ model PositionPID3D
   output Real position_error_x(unit = "m") "X position error";
   output Real position_error_y(unit = "m") "Y position error";
   output Real position_error_z(unit = "m") "Z position error";
+  output Real descent_rate_command(unit = "m/s")
+    "Sensor-driven descent-rate setpoint from stopping distance";
 
   // The component instances are intentional: the Modelica diagram shows the
   // sensor icon, guidance icon, and three Logic PID icons as a real scheme.
@@ -118,6 +126,8 @@ model PositionPID3D
   Real bounded_lateral_accel_z;
   Real thrust_vertical_projection;
   Real pid_y_command;
+  Real altitude_above_target;
+  Real descent_rate_schedule_magnitude;
   Real vertical_limiter_output;
   Real throttle_command_value;
   Real pitch_command_value;
@@ -159,7 +169,20 @@ equation
 
   pid_y.setpoint = target_y;
   pid_y.measurement = navigation.nav_pos_y;
-  pid_y.setpoint_rate = target_vel_y;
+  // Schedule the vertical rate from the measured navigation altitude.  A
+  // position-only loop would coast until the target is already below the
+  // vehicle, then discover its descent speed too late to brake.  The square
+  // root is the physical stopping-distance law v = sqrt(2 a h): it permits a
+  // bounded descent high above the pad and automatically reduces the commanded
+  // rate as the remaining altitude disappears.  This is a reusable flight-law
+  // boundary, not a scene timer or a per-episode target override.
+  altitude_above_target = max(0.0, navigation.nav_pos_y - target_y);
+  descent_rate_schedule_magnitude = min(
+    max(0.0, descent_speed_limit_mps),
+    sqrt(2.0 * max(0.0, descent_braking_accel_mps2)
+      * altitude_above_target));
+  descent_rate_command = target_vel_y - descent_rate_schedule_magnitude;
+  pid_y.setpoint_rate = descent_rate_command;
   pid_y.measurement_rate = navigation.nav_vel_y;
   pid_y.kp = kp_y;
   pid_y.ki = ki_y;
@@ -248,16 +271,17 @@ equation
   // controller branch. The continuous touchdown signal lets the guidance
   // demand fade out as the load settles.
   flight_command_gain = engage * (1.0 - piloted)
-    * max(0.0, min(1.0, 1.0 - touchdown));
+    * max(0.0, min(1.0, 1.0 - max(touchdown, landing_contact)));
   throttle_command_value = flight_command_gain * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));
-  // Do not ask a sideways vehicle to steer its descent vector while the
-  // attitude loop is still recovering. The measured +Y thrust projection is
-  // the reusable authority boundary: at ninety degrees the lateral request is
-  // zero, and it fades in continuously as the engine becomes useful again.
-  pitch_command_value = flight_command_gain * thrust_vertical_projection
+  // Throttle is gated by the measured +Y thrust projection because a sideways
+  // engine cannot provide useful upward force. Attitude commands are not gated:
+  // the RCS must pre-align the thrust vector while the vehicle is recovering,
+  // otherwise the first horizontal correction can only start after the vehicle
+  // has already spent its descent margin.
+  pitch_command_value = flight_command_gain
     * max(-1.0, min(1.0, pitch_command_raw));
-  roll_command_value = flight_command_gain * thrust_vertical_projection
+  roll_command_value = flight_command_gain
     * max(-1.0, min(1.0, roll_command_raw));
   yaw_command_value = 0.0;
   throttle_cmd = throttle_command_value;

@@ -340,6 +340,10 @@ fn lander_asset_wiring_migrated() {
         ["/LanderTest/Lander/Altimeter/Model.outputs:range_rate_mps"]
     );
     assert_eq!(
+        view.connections(&gnc, "inputs:landing_contact"),
+        ["/LanderTest/Lander.outputs:landing_contact"]
+    );
+    assert_eq!(
         view.connections(&gnc, "inputs:imu_coordinate_accel_local_y"),
         ["/LanderTest/Lander/IMU.outputs:coordinate_accel_local_y"]
     );
@@ -376,11 +380,39 @@ fn lander_asset_wiring_migrated() {
         ["/LanderTest/Lander.inputs:command_tilt_limit_rad"]
     );
     assert!(
+        view.connections(&lander, "inputs:inertia_xx").is_empty()
+            && view.connections(&lander, "inputs:inertia_yy").is_empty()
+            && view.connections(&lander, "inputs:inertia_zz").is_empty(),
+        "the removed physical inertia spellings must not remain as writes to the Modelica controller"
+    );
+    assert!(
         view.connections(&gnc, "inputs:initial_vel_y").is_empty(),
         "initial estimator conditions must not be a live body-state feedback edge"
     );
     assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_x"), Some(-5.0));
     assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_z"), Some(-5.0));
+    assert_eq!(
+        view.value::<f32>(&lander, "inputs:touchdown_ground_speed_mps"),
+        Some(0.5)
+    );
+    let imu = SdfPath::new("/LanderTest/Lander/IMU").unwrap();
+    assert_eq!(
+        view.value::<f32>(&imu, "inputs:initial_velocity_x"),
+        Some(-5.0)
+    );
+    assert_eq!(
+        view.value::<f32>(&imu, "inputs:initial_velocity_y"),
+        Some(0.0)
+    );
+    assert_eq!(
+        view.value::<f32>(&imu, "inputs:initial_velocity_z"),
+        Some(-5.0)
+    );
+    let altimeter = SdfPath::new("/LanderTest/Lander/Altimeter/Model").unwrap();
+    assert_eq!(
+        view.value::<f32>(&altimeter, "inputs:initial_range_m"),
+        Some(56.7)
+    );
 }
 
 #[test]

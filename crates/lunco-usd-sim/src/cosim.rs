@@ -3808,12 +3808,11 @@ pub(crate) fn install(app: &mut App) {
             // composed stage is available. This is independent of co-sim model
             // discovery so physical/avian and Modelica channels use one sampler.
             project_usd_telemetry,
-            // Source-load drain runs every Update; cheap when no
-            // `PendingModelicaSource` / `PendingPythonSource` entities
-            // exist. Splitting it from `process_usd_cosim_prims` is
-            // intentional — the source asset may take multiple frames
-            // to load (network on wasm, async I/O on native).
-            dispatch_loaded_modelica_sources,
+            // Python source-load drain runs every Update; cheap when no
+            // `PendingPythonSource` entities exist. Splitting it from
+            // `process_usd_cosim_prims` is intentional — the source asset may
+            // take multiple frames to load (network on wasm, async I/O on
+            // native).
             dispatch_loaded_python_sources,
             // Reads the class each member's `.mo` declares, so the projector
             // below instantiates what the file says rather than what its path
@@ -3876,6 +3875,22 @@ pub(crate) fn install(app: &mut App) {
         Update,
         seed_usd_input_defaults
             .after(wrap_modelica_into_simcomponent)
+            .in_set(CosimUpdateSet::Wiring),
+    );
+    // Modelica compilation consumes compile-time parameter overrides from the
+    // composed USD `inputs:` surface. It therefore belongs after the wiring
+    // projection, not alongside source discovery in `Scene`: on a fast local
+    // asset load, dispatching earlier compiled with the Modelica declaration's
+    // zero default before `UsdInputDefaults` existed on the entity. The model
+    // then had a truthful-looking solver but the wrong initial state, and no
+    // later runtime input could repair a compile-time initialization value.
+    //
+    // Python has no compile-time parameter phase and remains in `Scene`; its
+    // loaded source only installs the already-published generic interface.
+    app.add_systems(
+        Update,
+        dispatch_loaded_modelica_sources
+            .after(bevy::ecs::schedule::ApplyDeferred)
             .in_set(CosimUpdateSet::Wiring),
     );
     // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after

@@ -62,6 +62,28 @@ model Lander
   input Real leg_force_nx = 0.0 "Native contact load on the -X leg (N)";
   input Real leg_force_pz = 0.0 "Native contact load on the +Z leg (N)";
   input Real leg_force_nz = 0.0 "Native contact load on the -Z leg (N)";
+  input Real leg_contact_px = 0.0 "Native contact state on the +X leg";
+  input Real leg_contact_nx = 0.0 "Native contact state on the -X leg";
+  input Real leg_contact_pz = 0.0 "Native contact state on the +Z leg";
+  input Real leg_contact_nz = 0.0 "Native contact state on the -Z leg";
+  input Real upright_axis_y = 1.0
+    "Measured body-frame component of navigation up (1 when upright)";
+
+  // Avian publishes rigid-body velocity in the canonical navigation frame.
+  // These signals decide whether contact has actually settled; they are not a
+  // second navigation estimate and do not replace the sensor-driven GNC state.
+  input Real navigation_velocity_x = 0.0
+    "Measured navigation-frame X velocity (m/s)";
+  input Real navigation_velocity_y = 0.0
+    "Measured navigation-frame vertical velocity (m/s)";
+  input Real navigation_velocity_z = 0.0
+    "Measured navigation-frame Z velocity (m/s)";
+  input Real touchdown_ground_speed_mps = 0.5
+    "Ground speed below which contact may become settled touchdown (m/s)";
+  input Real touchdown_descent_speed_mps = 0.15
+    "Vertical speed below which contact may become settled touchdown (m/s)";
+  input Real touchdown_settle_tau_s = 0.35
+    "Time constant for the contact-to-settled touchdown transition (s)";
 
   input Real attitude_hold = 0.0
     "Enable local attitude stabilization";
@@ -81,7 +103,13 @@ model Lander
   output Real torque_x "Requested body torque about X (N.m)";
   output Real torque_y "Requested body torque about Y (N.m)";
   output Real torque_z "Requested body torque about Z (N.m)";
+  output Real landing_contact
+    "Physical four-leg contact while the airframe remains upright";
   output Real touchdown "Touchdown signal from local landing loads";
+  output Real desired_tilt_x
+    "Requested thrust tilt toward navigation +Z (rad)";
+  output Real desired_tilt_z
+    "Requested thrust tilt toward navigation -X (rad)";
 
   Real filter_throttle(start = 0.0);
   Real filter_pitch(start = 0.0);
@@ -95,8 +123,6 @@ model Lander
   Real command_torque_x;
   Real command_torque_y;
   Real command_torque_z;
-  Real desired_tilt_x;
-  Real desired_tilt_z;
   Real hold_torque_x;
   Real hold_torque_y;
   Real hold_torque_z;
@@ -107,13 +133,18 @@ model Lander
   Real hold_rate_y;
   Real hold_rate_z;
   Real total_leg_force;
-
-  // A smooth contact transition keeps the touchdown signal compatible with
-  // the fixed-step flight solver.  Contact force itself is already a native
-  // non-negative Avian magnitude, so no branch or event-producing clamp is
-  // needed at this boundary.
+  Real all_legs_contact;
+  Real upright_contact_gate;
+  Real attitude_authority;
   Real touchdown_error;
   Real touchdown_width;
+  Real touchdown_load_gate;
+  Real ground_speed;
+  Real descent_speed;
+  Real ground_speed_gate;
+  Real descent_speed_gate;
+  Real settled_touchdown_target;
+  Real settled_touchdown_state(start = 0.0);
 
 initial equation
   // `authority_initial` is part of the live USD input surface, so it has
@@ -160,21 +191,22 @@ equation
   command_torque_y = cmd_yaw * controller_inertia_yy * live_authority;
   command_torque_z = 0.0;
 
-  // Stabilization is expressed entirely in the body frame. The attitude
-  // sensor emits the signed local error; the IMU emits local gyro rates.
+  // Stabilization is expressed entirely in the body frame. AttitudeReference
+  // converts the commanded navigation-frame thrust direction through the IMU
+  // quaternion and emits the signed local error; the IMU emits local gyro rates.
   // RCS is a pulse actuator, not a constant trim motor.  The branch-free
   // dead-zone multiplier keeps small estimator noise from reopening a valve
   // after touchdown while preserving the signed error outside the dead zone.
   // `max` is intentional: the Modelica runtime reconstructs continuous
   // algebraic observables from branch-free expressions.
-  hold_error_x = (attitude_error_x + desired_tilt_x) * noEvent(max(0.0,
+  hold_error_x = attitude_error_x * noEvent(max(0.0,
     1.0 - attitude_deadband_rad
-      / noEvent(max(1.0e-9, abs(attitude_error_x + desired_tilt_x)))));
+      / noEvent(max(1.0e-9, abs(attitude_error_x)))));
   hold_error_y = attitude_error_y * noEvent(max(0.0,
     1.0 - attitude_deadband_rad / noEvent(max(1.0e-9, abs(attitude_error_y)))));
-  hold_error_z = (attitude_error_z + desired_tilt_z) * noEvent(max(0.0,
+  hold_error_z = attitude_error_z * noEvent(max(0.0,
     1.0 - attitude_deadband_rad
-      / noEvent(max(1.0e-9, abs(attitude_error_z + desired_tilt_z)))));
+      / noEvent(max(1.0e-9, abs(attitude_error_z)))));
   hold_rate_x = gyro_x * noEvent(max(0.0,
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_x)))));
   hold_rate_y = gyro_y * noEvent(max(0.0,
@@ -182,11 +214,15 @@ equation
   hold_rate_z = gyro_z * noEvent(max(0.0,
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
-  hold_torque_x = attitude_hold * controller_inertia_xx
+  // Once the physical touchdown state is settled, the legs—not a continuously
+  // firing RCS—hold the vehicle. The transition is continuous because
+  // `touchdown` is the filtered native-contact state below.
+  attitude_authority = attitude_hold * max(0.0, min(1.0, 1.0 - touchdown));
+  hold_torque_x = attitude_authority * controller_inertia_xx
     * (hold_kp * hold_error_x - hold_kd * hold_rate_x);
-  hold_torque_y = attitude_hold * controller_inertia_yy
+  hold_torque_y = attitude_authority * controller_inertia_yy
     * (hold_kp * hold_error_y - hold_kd * hold_rate_y);
-  hold_torque_z = attitude_hold * controller_inertia_zz
+  hold_torque_z = attitude_authority * controller_inertia_zz
     * (hold_kp * hold_error_z - hold_kd * hold_rate_z);
 
   torque_x = command_torque_x + hold_torque_x;
@@ -194,10 +230,51 @@ equation
   torque_z = command_torque_z + hold_torque_z;
 
   total_leg_force = leg_force_px + leg_force_nx + leg_force_pz + leg_force_nz;
+  // A pad can touch while the hull still has lateral or downward speed. Keep
+  // contact separate from settled touchdown so GNC finishes braking before it
+  // removes flight authority. Requiring all four native pad contacts and a
+  // measured upright body prevents a one-leg or upside-down collision from
+  // being reported as a successful landing. These are measured physical
+  // signals, not a Rhai timer or a scene-specific landing branch.
   touchdown_error = total_leg_force - touchdown_force_threshold_n;
   touchdown_width = sqrt(
     touchdown_transition_width_n * touchdown_transition_width_n + 1.0e-12);
-  touchdown = 0.5 + 0.5 * touchdown_error
+  touchdown_load_gate = 0.5 + 0.5 * touchdown_error
     / sqrt(touchdown_error * touchdown_error
       + touchdown_width * touchdown_width);
+  ground_speed = sqrt(
+    navigation_velocity_x * navigation_velocity_x
+      + navigation_velocity_z * navigation_velocity_z);
+  descent_speed = abs(navigation_velocity_y);
+  ground_speed_gate = max(0.0, min(1.0,
+    1.0 - ground_speed
+      / max(1.0e-9, touchdown_ground_speed_mps)));
+  descent_speed_gate = max(0.0, min(1.0,
+    1.0 - descent_speed
+      / max(1.0e-9, touchdown_descent_speed_mps)));
+  all_legs_contact = max(0.0, min(1.0, leg_contact_px))
+    * max(0.0, min(1.0, leg_contact_nx))
+    * max(0.0, min(1.0, leg_contact_pz))
+    * max(0.0, min(1.0, leg_contact_nz));
+  // The up-axis reading comes from the IMU quaternion through the shared
+  // AttitudeReference transform. Allow a small contact lean, but reject a
+  // side-lying body (body-frame up component <= 0.2).
+  upright_contact_gate = max(0.0, min(1.0,
+    (upright_axis_y - 0.2) / 0.6));
+  settled_touchdown_target = touchdown_load_gate
+    * all_legs_contact
+    * upright_contact_gate
+    * ground_speed_gate * descent_speed_gate;
+  // Contact and settled touchdown are different physical states. Contact is
+  // the authority boundary: once every pad is carrying an upright airframe,
+  // flight guidance must stop fighting the leg constraints even if the
+  // navigation estimate still contains pre-contact inertial drift. The
+  // low-speed filter below remains the mission's settled-touchdown event.
+  landing_contact = touchdown_load_gate
+    * all_legs_contact
+    * upright_contact_gate;
+  der(settled_touchdown_state) = (settled_touchdown_target
+    - settled_touchdown_state)
+    / max(minimum_time_constant_s, touchdown_settle_tau_s);
+  touchdown = max(0.0, min(1.0, settled_touchdown_state));
 end Lander;

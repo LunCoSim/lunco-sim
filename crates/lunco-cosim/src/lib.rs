@@ -183,10 +183,11 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
             .add_observer(endpoint_pending_on_add::<lunco_core::PortSurfacePending>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
-            // USD actuator prims are projected after the authored wiring pass
-            // has started. Their generic scalar port surface is not present
-            // until these components arrive, so admission must publish the
-            // same lifecycle fact as every other deferred endpoint.
+            // Force and torque actuators are native scalar port endpoints too.
+            // USD projects them after the authored wiring pass has started and
+            // they are authored without a SimComponent, so admission must
+            // publish the same lifecycle fact as rigid bodies and joints before
+            // connection derivation can admit their wires.
             .add_observer(endpoint_ready_on_add::<ForceActuator>)
             .add_observer(endpoint_ready_on_add::<TorqueActuator>)
             .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
@@ -539,6 +540,31 @@ mod binding_lifecycle_tests {
             app.world().get::<EndpointLifecycle>(entity),
             Some(&EndpointLifecycle::Ready)
         );
+    }
+
+    #[test]
+    fn native_actuator_port_enters_the_generic_endpoint_lifecycle() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn(ForceActuator {
+                local_position: Vec3::ZERO,
+                direction_local: Vec3::Y,
+                max_force_n: 1.0,
+            })
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<EndpointLifecycle>(entity),
+            Some(&EndpointLifecycle::Ready)
+        );
+        assert!(app
+            .world()
+            .get::<lunco_core::PortSurfaceReady>(entity)
+            .is_some());
     }
 }
 

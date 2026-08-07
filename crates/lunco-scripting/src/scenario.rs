@@ -37,9 +37,11 @@ use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::{ScriptLanguage, ScriptedModel};
 use crate::ScriptRegistry;
 
-/// Controls whether persistent scenario programs are allowed to attach and
-/// execute their lifecycle hooks.
+/// Controls whether persistent scenario programs are allowed to execute their
+/// lifecycle hooks.
 ///
+/// Authored programs attach during scene composition even while this gate is
+/// closed, so their event subscriptions exist before the first physics tick.
 /// The normal runtime leaves this enabled. Headless scene runners may disable
 /// it while an authored scene's asynchronous participants are being compiled
 /// and admitted, so `on_start` cannot begin measuring scenario time against a

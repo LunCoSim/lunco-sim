@@ -8,7 +8,7 @@
 //! | Wait | Open while | Scope |
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage or its projected participants are still settling | world |
-//! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | that entity |
+//! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | its owning physical subtree |
 //!
 //! # Why reconcile systems rather than events
 //!
@@ -37,7 +37,7 @@ struct SceneLoadWait {
     ticket: ReadinessTicket,
 }
 
-/// The open per-entity compile wait for this entity's Modelica model.
+/// The open compile wait for this entity's Modelica model.
 ///
 /// On the entity rather than in a side table so it dies with the entity; the
 /// registry drops waits whose subject was despawned, so a scene reload
@@ -46,6 +46,10 @@ struct SceneLoadWait {
 struct ModelCompileWait {
     ticket: ReadinessTicket,
     kind: &'static str,
+    /// The physical owner held while the program is unavailable.  Modelica
+    /// programs are commonly authored below a rigid body, so the program
+    /// entity itself is not the thing whose initial state must remain fixed.
+    owner: Entity,
 }
 
 /// Hold the world while a scene and its projected participants are settling.
@@ -95,8 +99,9 @@ fn scene_still_loading(stage_loading: bool, wait_open: bool, binding_sealed: boo
     stage_loading || (wait_open && !binding_sealed)
 }
 
-/// Freeze only the Modelica entity whose program has not compiled yet, and
-/// release its wait the moment that program is runnable (or terminally failed).
+/// Freeze the physical owner of a Modelica entity whose program has not compiled
+/// yet, and release its wait the moment that program is runnable (or terminally
+/// failed).
 ///
 /// This is the descent-lander race, closed: the entity exists and has mass and a
 /// collider long before the model that is supposed to fly it has been through the
@@ -109,43 +114,81 @@ fn scene_still_loading(stage_loading: bool, wait_open: bool, binding_sealed: boo
 /// for the visual gate. Waiting on the component status would therefore make
 /// the recorder wait on the event that the recorder itself must initiate.
 ///
-/// The wait is deliberately attached to the Modelica entity rather than the
-/// world. A cold compiler must not stop unrelated rovers, terrain streaming, or
-/// already-ready physics. The scene-load wait and terrain readiness hold still
-/// protect the world while its bodies and colliders are arriving; this wait
-/// only prevents the not-yet-projected participant from being treated as ready.
+/// The wait is deliberately attached to the owning physical subtree rather than
+/// the whole world. A cold compiler must not stop unrelated rovers, terrain
+/// streaming, or already-ready physics. The owner is derived from the authored
+/// entity hierarchy and the runtime rigid-body schema; there is no vehicle-name
+/// or program-name special case. A standalone program with no rigid-body
+/// ancestor holds its own entity, preserving the original participant scope.
 fn track_model_compiles(
     models: Query<(Entity, &ModelicaModel, Option<&SimComponent>), With<UsdSourcedCosim>>,
     waits: Query<(Entity, &ModelCompileWait)>,
+    parents: Query<&ChildOf>,
+    rigid_bodies: Query<(), With<avian3d::prelude::RigidBody>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
     for (entity, model, component) in &models {
         let kind = modelica_wait_kind(model, component);
         let wait = waits.get(entity).ok();
+        let owner = owning_physics_entity(entity, &parents, &rigid_bodies);
         match (kind, wait) {
             (Some(kind), None) => {
                 let ticket =
-                    registry.begin(Subject::Entity(entity), kind, model.model_name.clone());
+                    registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
                 commands
                     .entity(entity)
-                    .try_insert(ModelCompileWait { ticket, kind });
+                    .try_insert(ModelCompileWait {
+                        ticket,
+                        kind,
+                        owner,
+                    });
             }
             (None, Some((_, wait))) => {
                 registry.finish(wait.ticket);
                 commands.entity(entity).try_remove::<ModelCompileWait>();
             }
-            (Some(kind), Some((_, wait))) if kind != wait.kind => {
+            (Some(kind), Some((_, wait))) if kind != wait.kind || owner != wait.owner => {
                 registry.finish(wait.ticket);
                 let ticket =
-                    registry.begin(Subject::Entity(entity), kind, model.model_name.clone());
+                    registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
                 commands
                     .entity(entity)
-                    .try_insert(ModelCompileWait { ticket, kind });
+                    .try_insert(ModelCompileWait {
+                        ticket,
+                        kind,
+                        owner,
+                    });
             }
             _ => {}
         }
     }
+}
+
+/// Find the physical entity that owns a USD-authored program.
+///
+/// USD program prims are ordinary children of the object they control. The
+/// first ancestor carrying `PhysicsRigidBodyAPI` is therefore the authoritative
+/// readiness boundary: freezing its subtree also freezes jointed child bodies
+/// and colliders, while leaving unrelated scene objects live. This follows the
+/// composed hierarchy and schema components rather than guessing from a path or
+/// a model name.
+fn owning_physics_entity(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    rigid_bodies: &Query<(), With<avian3d::prelude::RigidBody>>,
+) -> Entity {
+    let mut current = entity;
+    for _ in 0..64 {
+        if rigid_bodies.contains(current) {
+            return current;
+        }
+        let Ok(child_of) = parents.get(current) else {
+            break;
+        };
+        current = child_of.parent();
+    }
+    entity
 }
 
 /// Whether the simulation must remain frozen for this model's compiler.
@@ -290,5 +333,33 @@ mod tests {
             .expect("a compiling model must be tracked");
         assert_eq!(item.subject, Subject::Entity(entity));
         assert_eq!(item.kind, kinds::PROGRAM_COMPILE);
+    }
+
+    #[test]
+    fn model_compile_wait_targets_the_authored_rigid_body_owner() {
+        let mut app = App::new();
+        app.init_resource::<ReadinessRegistry>()
+            .add_systems(Update, track_model_compiles);
+
+        let body = app
+            .world_mut()
+            .spawn(avian3d::prelude::RigidBody::Dynamic)
+            .id();
+        app.world_mut().spawn((
+            ChildOf(body),
+            UsdSourcedCosim,
+            ModelicaModel::default(),
+        ));
+
+        app.update();
+
+        let item = app
+            .world()
+            .resource::<ReadinessRegistry>()
+            .pending()
+            .next()
+            .expect("the child model must be tracked");
+        assert_eq!(item.subject, Subject::Entity(body));
+        assert_eq!(item.action, lunco_readiness::Action::HoldEntity);
     }
 }

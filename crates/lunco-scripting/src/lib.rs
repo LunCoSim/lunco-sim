@@ -413,6 +413,13 @@ impl Plugin for LunCoScriptingPlugin {
             // USD has materialised the prim markers. A rover opts into a policy
             // through an authored scenario or an explicit RunScenario command;
             // loading a vehicle must not invent control behavior.
+            //
+            // Attachment is independent of ScenarioExecutionGate: the gate
+            // holds lifecycle hooks, not scene composition. Attaching authored
+            // programs while readiness is closed makes their event
+            // subscriptions live before the first physics tick, so startup
+            // events cannot be lost. Their on_start/on_tick/on_event hooks
+            // remain gated by the FixedUpdate driver below.
             app.add_systems(
                 Update,
                 (
@@ -425,8 +432,7 @@ impl Plugin for LunCoScriptingPlugin {
                     // authored scenarios run on spawn.
                     commands::attach_embedded_scenarios,
                 )
-                    .chain()
-                    .run_if(scenario::scenario_execution_enabled),
+                    .chain(),
             );
             app.add_systems(
                 FixedUpdate,

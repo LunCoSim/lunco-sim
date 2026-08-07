@@ -13,6 +13,8 @@ model FilteredDerivative
 
   parameter Real time_constant_s = 0.02
     "Measurement differentiator time constant (s)";
+  parameter Real initial_value = 0.0
+    "Initial measured value used to start the differentiator state";
 
   input Real u = 0.0 "Measured signal";
   output Real y "Filtered derivative of the measured signal";
@@ -24,5 +26,5 @@ equation
   y = (u - state) / time_constant_s;
 
 initial equation
-  state = u;
+  state = initial_value;
 end FilteredDerivative;

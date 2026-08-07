@@ -8,7 +8,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -21,7 +21,6 @@ use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
 use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
-use lunco_experiments::{ParamPath, ParamValue};
 use lunco_signal::{SimSnapshot, SimStream};
 
 /// Solver options for the **LIVE** (co-simulated) path.
@@ -107,37 +106,18 @@ fn profile_for(
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
+    parameter_overrides: &[(String, f64)],
 ) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
-    let (spec, opts) = live_stepper_options(profile).map_err(|e| {
+    let (spec, mut opts) = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
+    // Parameter overrides must enter Rumoca's lowering boundary. That is where
+    // parameter dependents and initial-equation states are recomputed. Mutating
+    // `Dae.variables.parameters[*].start` after compilation leaves the already
+    // compiled initialization vector stale, which turns authored release values
+    // into a physically plausible but wrong startup impulse.
+    opts.param_overrides = parameter_overrides.to_vec();
     crate::simulation_session::live(&comp_res.dae, &spec, opts)
-}
-
-/// Apply the instance's USD parameter values to a freshly compiled DAE before
-/// constructing its live stepper.
-///
-/// Modelica parameters are not runtime inputs. Passing them only through the
-/// ECS `SimComponent` metadata leaves the worker's compiled DAE at source
-/// defaults, which is especially dangerous for initial conditions: the model
-/// remains solvable while its estimator starts from a different mission state.
-/// The experiment runner already owns the canonical DAE-level binding operation;
-/// this live path uses that same operation and keeps the bound DAE in its cache.
-fn apply_compile_parameter_overrides(
-    comp_res: &mut rumoca_compile::compile::DaeCompilationResult,
-    overrides: &[(String, f64)],
-) -> Result<(), String> {
-    if overrides.is_empty() {
-        return Ok(());
-    }
-    let bindings: BTreeMap<ParamPath, ParamValue> = overrides
-        .iter()
-        .map(|(name, value)| (ParamPath(name.clone()), ParamValue::Real(*value)))
-        .collect();
-    crate::experiments_runner::apply_value_bindings_to_dae(
-        std::sync::Arc::make_mut(&mut comp_res.dae),
-        &bindings,
-    )
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -214,8 +194,8 @@ pub enum ModelicaCommand {
         /// package) resolve. Empty when only one doc is open.
         extra_sources: Vec<(String, String)>,
         /// USD-authored values for Modelica parameters. Parameters are
-        /// compile-time values, so the worker applies these to the compiled
-        /// DAE before building the live stepper.
+        /// compile-time values, so the worker passes these to Rumoca's
+        /// simulation lowering before building the live stepper.
         #[serde(default)]
         parameter_overrides: Vec<(String, f64)>,
         /// Lock-free snapshot handle the worker publishes into after
@@ -527,6 +507,9 @@ fn artifact_still_valid(cached_hash: u64, cached_gen: u64, hash: u64, library_ge
 struct CacheRebuild {
     model_name: String,
     doc_uri: String,
+    /// The instance values that must be supplied to Rumoca when the cached DAE
+    /// is lowered into a fresh live stepper.
+    parameter_overrides: Vec<(String, f64)>,
     /// Assembled from the cached source set — carries the `input_defaults`
     /// to re-seed and the stripped primary for error diagnostics.
     unit: CompileUnit,
@@ -582,6 +565,7 @@ fn rebuild_from_cache(
         return Some(CacheRebuild {
             model_name,
             doc_uri,
+            parameter_overrides,
             unit,
             outcome: Ok(compiled),
             reused: true,
@@ -596,9 +580,6 @@ fn rebuild_from_cache(
         &doc_uri,
         library_gen,
     );
-    let outcome = outcome.and_then(|mut comp_res| {
-        apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides).map(|()| comp_res)
-    });
     if let Ok(comp_res) = &outcome {
         if let Some(c) = cached_models.get_mut(&entity) {
             c.compiled = comp_res.clone();
@@ -609,6 +590,7 @@ fn rebuild_from_cache(
     Some(CacheRebuild {
         model_name,
         doc_uri,
+        parameter_overrides,
         unit,
         outcome,
         reused: false,
@@ -1383,6 +1365,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     match build_stepper(
                                         &comp_res,
                                         profile_for(entity, &realtime_models),
+                                        &rb.parameter_overrides,
                                     ) {
                                         Ok(mut stepper) => {
                                             apply_input_defaults_validated(
@@ -1490,6 +1473,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             Ok(comp_res) => match build_stepper(
                                 &comp_res,
                                 profile_for(entity, &realtime_models),
+                                &[],
                             ) {
                                 Ok(mut stepper) => {
                                     apply_input_defaults_validated(
@@ -1638,19 +1622,12 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             },
                         );
                         match _compile_outcome {
-                            Ok(mut comp_res) => {
-                                let stepper_result = apply_compile_parameter_overrides(
-                                    &mut comp_res,
+                            Ok(comp_res) => {
+                                let stepper_result = build_stepper(
+                                    &comp_res,
+                                    profile_for(entity, &realtime_models),
                                     &parameter_overrides,
-                                )
-                                .map_err(|e| {
-                                    rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                                        "parameter binding failed: {e}"
-                                    ))
-                                })
-                                .and_then(|()| {
-                                    build_stepper(&comp_res, profile_for(entity, &realtime_models))
-                                });
+                                );
                                 match stepper_result {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
@@ -1798,6 +1775,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         Ok(comp_res) => match build_stepper(
                                             &comp_res,
                                             profile_for(entity, &realtime_models),
+                                            &rb.parameter_overrides,
                                         ) {
                                             Ok(mut s) => {
                                                 apply_input_defaults_validated(
@@ -2253,9 +2231,11 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         w.library_gen,
                     ) {
                         if let Ok(comp_res) = rb.outcome {
-                            if let Ok(mut s) =
-                                build_stepper(&comp_res, profile_for(entity, &w.realtime_models))
-                            {
+                            if let Ok(mut s) = build_stepper(
+                                &comp_res,
+                                profile_for(entity, &w.realtime_models),
+                                &rb.parameter_overrides,
+                            ) {
                                 apply_input_defaults_validated(
                                     &mut s,
                                     &rb.unit.input_defaults,
@@ -2385,17 +2365,12 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 w.library_gen,
             );
             match compile_outcome {
-                Ok(mut comp_res) => {
-                    let stepper_result =
-                        apply_compile_parameter_overrides(&mut comp_res, &parameter_overrides)
-                            .map_err(|e| {
-                                rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                                    "parameter binding failed: {e}"
-                                ))
-                            })
-                            .and_then(|()| {
-                                build_stepper(&comp_res, profile_for(entity, &w.realtime_models))
-                            });
+                Ok(comp_res) => {
+                    let stepper_result = build_stepper(
+                        &comp_res,
+                        profile_for(entity, &w.realtime_models),
+                        &parameter_overrides,
+                    );
                     match stepper_result {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(
@@ -2504,9 +2479,11 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             ) {
                 match rb.outcome {
                     Ok(comp_res) => {
-                        if let Ok(mut stepper) =
-                            build_stepper(&comp_res, profile_for(entity, &w.realtime_models))
-                        {
+                        if let Ok(mut stepper) = build_stepper(
+                            &comp_res,
+                            profile_for(entity, &w.realtime_models),
+                            &rb.parameter_overrides,
+                        ) {
                             apply_input_defaults_validated(
                                 &mut stepper,
                                 &rb.unit.input_defaults,
@@ -2607,7 +2584,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 w.library_gen,
             ) {
                 Ok(comp_res) => {
-                    match build_stepper(&comp_res, profile_for(entity, &w.realtime_models)) {
+                    match build_stepper(&comp_res, profile_for(entity, &w.realtime_models), &[]) {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(
                                 &mut stepper,
