@@ -3483,6 +3483,7 @@ fn activate_dynamic_bodies(
     )>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     topology_index: Res<JointTopologyIndex>,
+    mut binding_epoch: ResMut<crate::cosim::BindingEpochDirty>,
     // Physical wheels arm their joint-connected assembly for one-time
     // drop-onto-terrain placement. Free dynamic bodies (balloons, etc.) must
     // not be pinned to the ground. Probe-based models publish their own
@@ -3575,6 +3576,11 @@ fn activate_dynamic_bodies(
         }
     }
     if promoted {
+        // Promotion publishes the authored physical initial condition through
+        // deferred component insertion. Reopen the co-sim binding epoch so the
+        // next sealed pass seeds every already-valid sensor/actuator wire from
+        // that finalized state rather than retaining its pre-admission zero.
+        binding_epoch.0 = true;
         // Two Update passes: this one spans deferred insertion of Dynamic, the
         // next lets the terrain ring observe that inserted body before its
         // dedicated hold becomes the only gate.

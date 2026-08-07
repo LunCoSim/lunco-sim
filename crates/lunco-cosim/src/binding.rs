@@ -33,11 +33,19 @@ pub enum ConnectionBinding {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct BoundConnection;
 
+/// Records the sealed binding epoch in which a connection received its initial
+/// source sample.  The marker is runtime state, not authored topology: when a
+/// scene epoch reopens, every existing edge becomes eligible for one fresh
+/// handoff after the epoch settles.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct InitialSampledEpoch(u64);
+
 /// A monotonic, event-driven request to reconsider connection specifications.
 #[derive(Resource, Debug, Default)]
 pub struct BindingRevision {
     revision: u64,
     consumed: u64,
+    epoch: u64,
     /// `true` only after the scene/instance projection epoch has settled.
     pub sealed: bool,
 }
@@ -50,12 +58,22 @@ impl BindingRevision {
         self.consumed != self.revision
     }
     pub fn open_epoch(&mut self) {
-        self.sealed = false;
+        if self.sealed {
+            self.epoch = self.epoch.wrapping_add(1);
+            self.sealed = false;
+        }
         self.request();
     }
     pub fn seal_epoch(&mut self) {
+        if !self.sealed {
+            self.epoch = self.epoch.wrapping_add(1);
+        }
         self.sealed = true;
         self.request();
+    }
+
+    fn epoch(&self) -> u64 {
+        self.epoch
     }
     fn take_request(&mut self) -> bool {
         if self.consumed == self.revision {
@@ -76,6 +94,33 @@ pub fn request_binding(mut revision: ResMut<BindingRevision>) {
     revision.request();
 }
 
+/// Copy the source's current sample into a target when a connection first
+/// becomes live.
+///
+/// Binding happens in `PostUpdate`, before the first fixed-step exchange.  A
+/// connection is therefore more than a topology fact at that boundary: it is
+/// also the initial value handoff.  Without this transaction, a newly spawned
+/// physical endpoint can expose its real velocity/attitude while a Modelica
+/// sensor still sees the default value in its input map for one solver step.
+/// The resulting differentiator spike is a real control input, not a harmless
+/// startup transient.
+///
+/// A missing source sample is deliberately a no-op.  Declared output ports are
+/// allowed to bind before their first sample; normal propagation will deliver
+/// the first value when the producer publishes it.
+fn seed_bound_connection(world: &mut World, registry: &PortRegistry, spec: &SimConnection) -> bool {
+    let source = if spec.start_is_input {
+        registry.read_input_port(world, spec.start_element, &spec.start_connector)
+    } else {
+        registry.read_output_port(world, spec.start_element, &spec.start_connector)
+    };
+    let Some(source) = source else {
+        return false;
+    };
+    let value = source * spec.scale + spec.offset;
+    registry.write_port(world, spec.end_element, &spec.end_connector, value)
+}
+
 /// Every producer, including tests and runtime-created wheel edges, enters the
 /// same pending state. There is no direct active-wire construction path.
 pub fn on_add_connection(
@@ -88,7 +133,8 @@ pub fn on_add_connection(
         .try_insert(ConnectionBinding::Pending);
     commands
         .entity(trigger.entity)
-        .try_remove::<BoundConnection>();
+        .try_remove::<BoundConnection>()
+        .try_remove::<InitialSampledEpoch>();
     revision.request();
 }
 
@@ -103,7 +149,10 @@ pub fn bind_connections(world: &mut World) {
     if !should_bind {
         return;
     }
-    let sealed = world.resource::<BindingRevision>().sealed;
+    let (sealed, epoch) = {
+        let revision = world.resource::<BindingRevision>();
+        (revision.sealed, revision.epoch())
+    };
     let registry = world.resource::<PortRegistry>().clone();
     let specs: Vec<(Entity, SimConnection)> = world
         .query::<(Entity, &SimConnection)>()
@@ -172,6 +221,11 @@ pub fn bind_connections(world: &mut World) {
             world
                 .entity_mut(edge)
                 .insert((ConnectionBinding::Bound, BoundConnection));
+            if world.get::<InitialSampledEpoch>(edge).copied() != Some(InitialSampledEpoch(epoch))
+                && seed_bound_connection(world, &registry, &spec)
+            {
+                world.entity_mut(edge).insert(InitialSampledEpoch(epoch));
+            }
             continue;
         }
         // A declared async participant remains pending even when the current USD
@@ -264,7 +318,7 @@ mod tests {
                 offset: 0.0,
             })
             .id();
-        world.resource_mut::<BindingRevision>().request();
+        world.resource_mut::<BindingRevision>().seal_epoch();
         world.run_system_once(bind_connections).unwrap();
         assert!(world.get::<BoundConnection>(edge).is_some());
     }
@@ -290,7 +344,7 @@ mod tests {
             Some(&ConnectionBinding::Failed)
         );
         assert_eq!(world.resource::<CosimDiagnostics>().faults.len(), 1);
-        world.resource_mut::<BindingRevision>().request();
+        world.resource_mut::<BindingRevision>().seal_epoch();
         world.run_system_once(bind_connections).unwrap();
         assert_eq!(world.resource::<CosimDiagnostics>().faults.len(), 1);
     }
@@ -373,6 +427,130 @@ mod tests {
                 .resource::<PortRegistry>()
                 .read_output_port(&world, source, "earth_mount_x"),
             None
+        );
+    }
+
+    #[test]
+    fn newly_bound_connection_seeds_live_source_with_affine_transform() {
+        let (mut world, source, target) = world_with_ports("target");
+        world
+            .get_mut::<InputPorts>(source)
+            .expect("source input surface")
+            .values
+            .insert("source".into(), 3.5);
+        let edge = world
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "source".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "target".into(),
+                scale: 2.0,
+                offset: -1.0,
+            })
+            .id();
+
+        world.resource_mut::<BindingRevision>().seal_epoch();
+        world.run_system_once(bind_connections).unwrap();
+
+        assert!(world.get::<BoundConnection>(edge).is_some());
+        assert_eq!(
+            world
+                .resource::<PortRegistry>()
+                .read_input_port(&world, target, "target"),
+            Some(6.0)
+        );
+    }
+
+    #[test]
+    fn early_binding_waits_for_sealed_epoch_before_initial_sample() {
+        let (mut world, source, target) = world_with_ports("target");
+        world
+            .get_mut::<InputPorts>(source)
+            .expect("source input surface")
+            .values
+            .insert("source".into(), 1.0);
+        let edge = world
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "source".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "target".into(),
+                ..default()
+            })
+            .id();
+
+        // Topology may resolve while the USD projection epoch is still open.
+        world.resource_mut::<BindingRevision>().request();
+        world.run_system_once(bind_connections).unwrap();
+        assert!(world.get::<BoundConnection>(edge).is_some());
+        assert_eq!(
+            world
+                .resource::<PortRegistry>()
+                .read_input_port(&world, target, "target"),
+            Some(1.0)
+        );
+
+        // The physical projector has now published the finalized source state.
+        world
+            .get_mut::<InputPorts>(source)
+            .expect("source input surface")
+            .values
+            .insert("source".into(), 7.0);
+        world.resource_mut::<BindingRevision>().seal_epoch();
+        world.run_system_once(bind_connections).unwrap();
+
+        assert_eq!(
+            world
+                .resource::<PortRegistry>()
+                .read_input_port(&world, target, "target"),
+            Some(7.0)
+        );
+        assert_eq!(
+            world.get::<InitialSampledEpoch>(edge),
+            Some(&InitialSampledEpoch(1))
+        );
+    }
+
+    #[test]
+    fn an_already_bound_connection_is_not_reseeded_on_unrelated_revision() {
+        let (mut world, source, target) = world_with_ports("target");
+        world
+            .get_mut::<InputPorts>(source)
+            .expect("source input surface")
+            .values
+            .insert("source".into(), 2.0);
+        let edge = world
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "source".into(),
+                start_is_input: true,
+                end_element: target,
+                end_connector: "target".into(),
+                ..default()
+            })
+            .id();
+
+        world.resource_mut::<BindingRevision>().seal_epoch();
+        world.run_system_once(bind_connections).unwrap();
+        let registry = world.resource::<PortRegistry>().clone();
+        registry.write_port(&mut world, target, "target", 9.0);
+
+        world
+            .get_mut::<InputPorts>(source)
+            .expect("source input surface")
+            .values
+            .insert("source".into(), 4.0);
+        world.resource_mut::<BindingRevision>().request();
+        world.run_system_once(bind_connections).unwrap();
+
+        assert!(world.get::<BoundConnection>(edge).is_some());
+        assert_eq!(
+            world
+                .resource::<PortRegistry>()
+                .read_input_port(&world, target, "target"),
+            Some(9.0)
         );
     }
 

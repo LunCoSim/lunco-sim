@@ -3792,6 +3792,13 @@ pub(crate) fn install(app: &mut App) {
         Update,
         settle_binding_epoch
             .after(CosimUpdateSet::Projection)
+            // Dynamic bodies are held kinematic while USD joints and the
+            // authored initial velocity are admitted.  The sealed epoch is
+            // the initial-sample boundary, so it must be decided after that
+            // admission system has published the final physics state; otherwise
+            // an already-valid Avian wire can capture zero velocity/identity
+            // attitude and never revisit the handoff.
+            .after(crate::UsdSimSet::ActivateDynamicBodies)
             .before(CosimUpdateSet::Wiring)
             .run_if(|dirty: Res<BindingEpochDirty>| dirty.0),
     );

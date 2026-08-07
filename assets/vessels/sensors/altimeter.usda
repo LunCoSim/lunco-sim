@@ -59,9 +59,9 @@ def Xform "Altimeter" (
         float inputs:attitude_quat_y = 0.0
         float inputs:attitude_quat_z = 0.0
         # The differentiator bandwidth is authored with the reusable sensor so
-        # each vehicle can choose its measurement dynamics in USD.
+        # each vehicle can choose its measurement dynamics in USD. Its state
+        # starts from the first live range sample.
         float inputs:range_filter_time_constant_s = 0.02
-        float inputs:initial_range_m = 0.0
         float outputs:range_m
         float outputs:range_rate_mps
         float outputs:range_valid
