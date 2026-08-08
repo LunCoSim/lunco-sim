@@ -18,6 +18,100 @@ use openusd::sdf::Data;
 use openusd::usd::Stage;
 use openusd::usda;
 
+/// Maximum nesting accepted by the USDA front-end before handing the source to
+/// openusd's recursive parser.  A malformed or hostile layer must fail as data;
+/// it must never be able to consume the process stack.
+pub const MAX_USDA_NESTING: usize = 128;
+
+/// Validate delimiter nesting without invoking the recursive USDA parser.
+///
+/// USDA uses braces for prim/variant bodies, brackets for arrays and
+/// parentheses for metadata.  Delimiters inside comments, strings, and asset
+/// path literals are data, not structure, so they are skipped.  This is a
+/// deliberately small preflight rather than a second parser: syntax remains
+/// owned by openusd, while the resource bound is enforced at our asset edge.
+pub fn validate_usda_nesting(text: &str) -> Result<()> {
+    let bytes = text.as_bytes();
+    let mut stack = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'#' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'"' => {
+                let triple = bytes.get(i..i + 3) == Some(b"\"\"\"");
+                let terminator = if triple {
+                    b"\"\"\"".as_slice()
+                } else {
+                    b"\"".as_slice()
+                };
+                i += terminator.len();
+                while i < bytes.len() {
+                    if !triple && bytes[i] == b'\\' {
+                        i = (i + 2).min(bytes.len());
+                    } else if bytes.get(i..i + terminator.len()) == Some(terminator) {
+                        i += terminator.len();
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'@' => {
+                // Asset literals are delimited by the next unescaped `@`.
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i = (i + 2).min(bytes.len());
+                    } else if bytes[i] == b'@' {
+                        i += 1;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            open @ (b'{' | b'[' | b'(') => {
+                stack.push(open);
+                if stack.len() > MAX_USDA_NESTING {
+                    anyhow::bail!(
+                        "USDA nesting exceeds the safety limit of {} levels",
+                        MAX_USDA_NESTING
+                    );
+                }
+                i += 1;
+            }
+            close @ (b'}' | b']' | b')') => {
+                let expected = match close {
+                    b'}' => b'{',
+                    b']' => b'[',
+                    b')' => b'(',
+                    _ => unreachable!(),
+                };
+                if stack.pop() != Some(expected) {
+                    anyhow::bail!("unbalanced USDA delimiter");
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if !stack.is_empty() {
+        anyhow::bail!("unclosed USDA delimiter");
+    }
+    Ok(())
+}
+
+/// Parse one USDA layer after applying the stack-safety preflight.
+pub fn parse_usda(text: &str) -> Result<Data> {
+    validate_usda_nesting(text)?;
+    usda::parse(text).map_err(|e| anyhow!("USD parse error: {e}"))
+}
+
 pub use resolver::{canonicalize_at, is_binary_asset, LuncoUsdResolver, SharedLayerBytes};
 
 /// True when `path` is a USD layer that can declare further asset dependencies.
@@ -37,7 +131,7 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// This is USD interpretation only. Traversal and storage access remain in
 /// `lunco-assets`.
 pub fn layer_dependency_arcs(text: &str) -> Option<Vec<String>> {
-    let data = usda::parse(text).ok()?;
+    let data = parse_usda(text).ok()?;
     Some(
         data.composition_asset_dependencies()
             .into_iter()
@@ -129,15 +223,7 @@ pub fn compose_file_to_stage_with_roots(
 /// asset identity space. Fetch adapters use this; they do not parse arcs.
 pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-    let mut parser = usda::parser::Parser::new(text);
-    let specs = parser.parse().map_err(|e| {
-        let highlight = parser
-            .last_error_highlight()
-            .map(|h| format!("\n{}", h.render()))
-            .unwrap_or_default();
-        anyhow!("USD parse error in {id}: {e}{highlight}")
-    })?;
-    let data = Data::from_specs(specs);
+    let data = parse_usda(text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
     let anchor = ResolvedPath::new(id);
     Ok(data
         .composition_asset_dependencies()
@@ -145,4 +231,36 @@ pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
         .filter(|arc| !is_binary_asset(arc))
         .map(|arc| canonicalize_at(&arc, Some(&anchor)))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_deep_nesting_before_recursive_parser() {
+        let mut source = String::from("#usda 1.0\n");
+        for depth in 0..=MAX_USDA_NESTING {
+            source.push_str(&format!("def Xform \"P{depth}\" {{\n"));
+        }
+        for _ in 0..=MAX_USDA_NESTING {
+            source.push_str("}\n");
+        }
+        let error = parse_usda(&source).expect_err("deep USDA must be rejected");
+        assert!(error.to_string().contains("nesting exceeds"));
+    }
+
+    #[test]
+    fn delimiters_in_comments_strings_and_assets_are_not_structure() {
+        let source = r#"#usda 1.0
+# { [ ( } ] )
+def Xform "World"
+{
+    custom string note = "{ [ ( } ] )"
+    custom asset source = @asset/{nested}/mesh.usd@
+}
+"#;
+        validate_usda_nesting(source).expect("quoted and commented delimiters are data");
+        parse_usda(source).expect("valid USDA remains parseable");
+    }
 }

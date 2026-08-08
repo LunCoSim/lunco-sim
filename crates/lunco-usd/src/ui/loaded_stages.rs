@@ -34,6 +34,7 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::UsdData;
+use lunco_usd_compose::parse_usda;
 
 use crate::document::UsdDocument;
 use lunco_doc_bevy::DocumentRegistry;
@@ -245,7 +246,7 @@ impl WorkspaceStage {
         if self.parsed.as_ref().map(|p| p.generation) == Some(generation) {
             return;
         }
-        match openusd::usda::parse(source) {
+        match parse_usda(source) {
             Ok(data) => {
                 self.parsed = Some(ParsedStage {
                     generation,

@@ -377,6 +377,9 @@ mod runtime_safety_tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
+    #[derive(Resource, Debug, PartialEq, Eq)]
+    struct LoadedScene(&'static str);
+
     #[test]
     fn scene_teardown_clears_only_scene_terminal_safety_state() {
         let mut world = World::new();
@@ -395,6 +398,50 @@ mod runtime_safety_tests {
         let holds = world.resource::<lunco_physics::PhysicsHolds>();
         assert!(!holds.holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
         assert!(holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
+    }
+
+    #[test]
+    fn fault_then_scene_reload_can_admit_a_replacement_runtime() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::RuntimeFaults>();
+        app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.insert_resource(LoadedScene("escape-containment"));
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            reset_scene_runtime_safety,
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .raise("physics-body-escaped", None, "escapee", "out of bounds");
+        app.world_mut()
+            .resource_mut::<lunco_physics::PhysicsHolds>()
+            .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+
+        // This is the same lifecycle edge used by LoadScene/ClearScene. The
+        // replacement is deliberately admitted only after the edge, proving a
+        // terminal fault is scoped to the outgoing scene rather than latched in
+        // the process.
+        lunco_usd_bevy::scene_lifecycle::run_scene_teardown(app.world_mut());
+        assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
+        assert!(!app
+            .world()
+            .resource::<lunco_physics::PhysicsHolds>()
+            .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+
+        app.insert_resource(LoadedScene("replacement"));
+        assert_eq!(
+            app.world().resource::<LoadedScene>(),
+            &LoadedScene("replacement")
+        );
+        // A later scene can still raise its own fault and be torn down again;
+        // the first scene's record is not reused as a process-wide lock.
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .raise("physics-body-escaped", None, "replacement", "out of bounds");
+        assert!(app.world().resource::<lunco_core::RuntimeFaults>().active());
+        lunco_usd_bevy::scene_lifecycle::run_scene_teardown(app.world_mut());
+        assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
     }
 }
 
@@ -3688,6 +3735,7 @@ mod dynamic_activation_tests {
         app.init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<crate::cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
@@ -3753,6 +3801,7 @@ mod dynamic_activation_tests {
         app.init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<crate::cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();

@@ -21,6 +21,7 @@ use std::io::{self, Cursor};
 use std::rc::Rc;
 use std::time::SystemTime;
 
+use crate::validate_usda_nesting;
 use openusd::ar::{self, Asset, ResolvedPath};
 
 use lunco_assets::asset_path::{canonicalize, canonicalize_root};
@@ -154,11 +155,18 @@ impl ar::Resolver for LuncoUsdResolver {
         if key == BINARY_STUB_ID {
             return Ok(Box::new(Cursor::new(EMPTY_USDA.to_vec())));
         }
-        self.bytes
+        let bytes = self
+            .bytes
             .borrow()
             .get(key)
-            .map(|b| Box::new(Cursor::new(b.clone())) as Box<dyn Asset>)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.to_string()))
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.to_string()))?;
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            validate_usda_nesting(text).map_err(|error| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("{key}: {error}"))
+            })?;
+        }
+        Ok(Box::new(Cursor::new(bytes)))
     }
 
     /// Override the one fs-touching default (`fs::metadata`) so composition is

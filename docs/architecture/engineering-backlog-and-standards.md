@@ -152,28 +152,22 @@ spot-checked. Findings are fixed in the fork
 
 **Scope:** medium; mostly harness work, then a burn-down of findings.
 
-### USDA nesting depth is unguarded in the fork
+### Resolved: USDA nesting is bounded at the engine asset boundary
 
-**What:** Bound recursion depth in the fork's USDA text parser.
+**Resolution:** Every engine-owned USDA entry point now performs a delimiter
+depth preflight before invoking openusd's recursive text parser. The shared
+composition resolver rejects more than 128 structural levels as invalid asset
+data, so untrusted Twin content cannot consume the process stack. Comments,
+strings, and asset literals are skipped by the preflight and ordinary syntax
+continues to be validated by openusd.
 
-**Why:** The USDC/USDZ readers were hardened — allocations grow with the bytes
-actually delivered, decompression is bounded by LZ4's maximum expansion, table
-indices resolve through checked accessors, and dictionary decode carries a depth
-guard. The USDA text parser did not get its guard: `parse_block` is re-entered by
-every nested construct, so a deeply nested file recurses until the stack
-overflows. A stack overflow ABORTS — it is not an `Err` any caller can catch — so
-no error handling above it can contain the failure.
+**Why:** openusd's USDA parser is recursive, so a stack bound must be enforced
+before untrusted text reaches it. The preflight is intentionally structural and
+small; the parser remains the authority for USDA syntax and diagnostics.
 
-An attempt was reverted rather than shipped: a limit of 256 still overflowed a
-2 MiB test thread before the guard could fire, which means the ceiling has to be
-chosen against the smallest stack the library runs on (test threads and wasm,
-not the 8 MiB main thread), and the test has to run somewhere with a known stack
-to prove the guard rather than the platform.
-
-**Scope:** small, in `../openusd` (`src/usda/parser.rs`). The single choke point
-is `parse_block`; a depth counter there covers the whole mutually-recursive
-family. Low urgency while only local, authored files are parsed — it matters when
-untrusted `.usda` can reach the parser.
+**Scope:** closed for production engine paths. Direct third-party uses of the
+upstream parser remain responsible for their own resource policy; LunCoSim's
+asset, composition, authoring, and browser paths all use the bounded entry point.
 
 ### Resolved: time-sampled values are unit-converted
 
@@ -186,22 +180,17 @@ the tests as the regression gate when adding new sampled attribute roles.
 **Scope:** closed. No compatibility path or alternate authoring mechanism is
 required.
 
-### `!resetXformStack!` detaches to the stage root, not to the world
+### Resolved: `!resetXformStack!` keeps the mount but drops the USD ancestor stack
 
-**What:** Let a `!resetXformStack!` prim ignore the stage root's own authored
-xform, as strict USD does.
+**Resolution:** A reset prim is reparented to its stage-root entity, preserving
+the twin/grid mount frame, and its local matrix is re-expressed in that root's
+frame. This removes the stage root's authored transform as well as every
+intermediate USD ancestor, matching `UsdGeomXformable`'s strict world-stack
+semantics without making the prim grid-direct.
 
-**Why:** The detachment itself landed — such a prim now reparents onto the
-topmost prim of its own stage instead of hanging under its authored parent. It
-anchors to the stage-root ENTITY rather than to nothing, deliberately: detaching
-to nothing would drop the twin's mount placement and teleport the prim out of
-the scene it belongs to, and a prim that is never grid-direct is an anchoring
-contract avian depends on. The residual is that if the stage root itself authors
-an xform, that one transform still applies where USD would drop it.
-
-**Scope:** medium, and it is not really a USD problem — it needs the twin's
-mount placement separated from the root prim's authored xform, so that
-"detached" can mean the mount without meaning the authored value.
+**Evidence:** The USD-Bevy regression test authors a translated stage root and a
+reset descendant and asserts the descendant's corrected local transform. The
+same path remains idempotent when ancestry materialises asynchronously.
 
 ## 6. Architecture debt
 

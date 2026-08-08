@@ -506,7 +506,6 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     // observe the fully materialised scene in PostUpdate, after scene-load
     // commands apply but before the render sub-app extracts lights.
     app.add_systems(PostUpdate, apply_integrated_shadow_budget);
-    app.add_systems(Update, escalate_render_recovery);
 
     let shadow_budget = ShadowBudgetHandle::default();
     app.insert_resource(shadow_budget.clone());
@@ -1076,6 +1075,7 @@ pub(crate) fn reset_render_recovery(
     health: Res<RenderHealthHandle>,
     mut ladder: ResMut<Ladder>,
     mut budget: ResMut<ShadowBudgetState>,
+    mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
 ) {
     if health.0.device_lost() {
@@ -1084,6 +1084,10 @@ pub(crate) fn reset_render_recovery(
     health.0.reset_for_scene();
     *ladder = Ladder::default();
     budget.light_count = None;
+    // The render schedule is gated by this extracted state, not by camera
+    // activation.  Clearing only the ladder would leave a successfully
+    // reloaded scene permanently headless after the previous scene gave up.
+    presentation.stopped = false;
     commands.remove_resource::<RenderWarning>();
     commands.remove_resource::<RenderGaveUp>();
 }
@@ -1284,6 +1288,48 @@ mod windows_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct SubmittedFrames(u32);
+
+    fn submit_frame(mut submitted: ResMut<SubmittedFrames>) {
+        submitted.0 += 1;
+    }
+
+    #[test]
+    fn terminal_presentation_gate_stops_submission_and_reload_rearms_it() {
+        let mut schedule = Schedule::new(Render);
+        schedule.configure_sets(RenderSystems::Render.run_if(presentation_is_active));
+        schedule.add_systems(submit_frame.in_set(RenderSystems::Render));
+        let mut world = World::new();
+        world.init_resource::<SubmittedFrames>();
+        world.insert_resource(PresentationState::default());
+
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<SubmittedFrames>().0, 1);
+        world.resource_mut::<PresentationState>().stopped = true;
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<SubmittedFrames>().0, 1);
+
+        let health = Arc::new(RenderHealth::default());
+        health.presentation_stopped.store(true, Ordering::Relaxed);
+        world.insert_resource(RenderHealthHandle(health.clone()));
+        world.init_resource::<Ladder>();
+        world.init_resource::<ShadowBudgetState>();
+        world.insert_resource(RenderGaveUp {
+            reason: "test fault".into(),
+        });
+        world.insert_resource(RenderWarning {
+            message: "test warning".into(),
+        });
+        let mut reset = Schedule::new(Update);
+        reset.add_systems(reset_render_recovery);
+        reset.run(&mut world);
+        assert!(!world.resource::<PresentationState>().stopped);
+        assert!(!health.presentation_stopped.load(Ordering::Relaxed));
+        assert!(world.get_resource::<RenderGaveUp>().is_none());
+        assert!(world.get_resource::<RenderWarning>().is_none());
+    }
 
     /// The original reason this module exists: a one-frame depth/color size skew
     /// during a window resize. Presentation must survive it — the run of failing

@@ -12,7 +12,7 @@
 //! all — composition is NOT flattened in, so the data still round-trips
 //! losslessly with external USD tools). To apply an edit we:
 //!
-//!   1. Serialize the current data back to USDA text and re-open it as the root
+//!   1. Copy the current [`sdf::Data`] directly into a writable in-memory root
 //!      layer of a transient [`Stage`] through a stub resolver (every external
 //!      arc resolves to an empty layer — we never traverse the composition, so
 //!      missing referenced files don't matter).
@@ -27,31 +27,30 @@
 //! `sdf::Data` in and out is the Send-safe handoff the rest of the stack uses.
 
 use anyhow::{anyhow, Result};
+use lunco_usd_compose::parse_usda;
 use openusd::ar::{self, ResolvedPath};
-use openusd::sdf::{self, Path as SdfPath, SpecData, Value};
+use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecData, Value};
 use openusd::usd::Stage;
 use openusd::usda;
 
-/// Synthetic identifier for a document's in-memory root layer. Ends in `.usda`
-/// so openusd parses it as text.
+/// Synthetic tag for a document's in-memory root layer. The `.usda` suffix
+/// keeps diagnostics and any authored relative arcs in the textual USD domain.
 const DOC_ROOT_ID: &str = "lunco://__lunco_document_root__.usda";
 
 const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
 
-/// Resolver that serves the document's root layer from memory and routes every
-/// other arc (sublayers, references, payloads) to an empty stub. The document
-/// authoring path never traverses the composed stage — it only reads back the
-/// root layer's own specs — so stubbing external arcs is lossless: the root's
-/// authored `references`/`payload`/`subLayers` opinions survive in
-/// [`extract_root_layer_data`]; only their *resolution* is skipped.
-struct DocResolver {
-    root_bytes: Vec<u8>,
-}
+/// Resolver that routes every external arc (sublayers, references, payloads)
+/// to an empty stub. The document authoring path never traverses the composed
+/// stage — it only reads back the root layer's own specs — so stubbing external
+/// arcs is lossless: the root's authored `references`/`payload`/`subLayers`
+/// opinions survive in [`extract_root_layer_data`]; only their resolution is
+/// skipped.
+struct DocResolver;
 
 impl ar::Resolver for DocResolver {
     fn create_identifier(&self, asset_path: &str, _anchor: Option<&ResolvedPath>) -> String {
-        // Every non-root arc collapses to the same stub id; the root keeps its
-        // own. No anchoring needed — stub bytes are identical everywhere.
+        // Keep each authored arc's identifier stable for composition diagnostics;
+        // every identifier opens the same empty stub below.
         asset_path.to_string()
     }
 
@@ -64,12 +63,8 @@ impl ar::Resolver for DocResolver {
     }
 
     fn open_asset(&self, resolved_path: &ResolvedPath) -> std::io::Result<Box<dyn ar::Asset>> {
-        let key = resolved_path.to_str().unwrap_or_default();
-        if key == DOC_ROOT_ID {
-            Ok(Box::new(std::io::Cursor::new(self.root_bytes.clone())))
-        } else {
-            Ok(Box::new(std::io::Cursor::new(EMPTY_USDA.to_vec())))
-        }
+        let _ = resolved_path;
+        Ok(Box::new(std::io::Cursor::new(EMPTY_USDA.to_vec())))
     }
 
     fn get_modification_timestamp(
@@ -81,8 +76,9 @@ impl ar::Resolver for DocResolver {
     }
 }
 
-/// Serialize `data` to USDA text. The canonical round-trip used both for
-/// authoring (re-open as a stage) and for saving the document to disk.
+/// Serialize `data` to USDA text for persistence, export, and explicit source
+/// replacement. Normal path-addressed edits use [`open_doc_stage`] directly
+/// and do not pass through this formatter.
 pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
     usda::TextWriter::write_to_string(data).map_err(|e| anyhow!("serialize layer to USDA: {e}"))
 }
@@ -91,15 +87,7 @@ pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
 /// Inverse of [`data_to_usda`]; used to load a document and to apply a
 /// full-source replacement.
 pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
-    let mut parser = usda::parser::Parser::new(text);
-    let specs = parser.parse().map_err(|e| {
-        let where_ = parser
-            .last_error_highlight()
-            .map(|highlight| format!("\n{}", highlight.render()))
-            .unwrap_or_default();
-        anyhow!("USD parse error: {e}{where_}")
-    })?;
-    Ok(sdf::Data::from_specs(specs))
+    parse_usda(text).map_err(|e| anyhow!("{e}"))
 }
 
 /// Open `data` as the root layer of a transient, writable [`Stage`]. Authoring
@@ -107,25 +95,43 @@ pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
 /// target the root layer by default, so callers author directly on the returned
 /// stage and then pass it to [`extract_root_layer_data`].
 ///
-/// `Stage` is `!Send`; keep it on the stack of one synchronous edit.
-///
-/// TODO(backlog): this serializes `data` to USDA text and reparses it, so EVERY
-/// edit pays a full round-trip of the whole document — a gizmo drag pays it once
-/// per frame. `sdf::Layer::new(identifier, Box<dyn AbstractData>)` already exists
-/// in the fork (it backs `new_in_memory`) but is `pub(crate)`; exposing it plus a
-/// `StageBuilder` entry taking a prepared root layer would let this wrap `data`
-/// directly, with no text and no reparse. See "`UsdDocument` stores `sdf::Data`"
-/// in docs/architecture/engineering-backlog-and-standards.md, which also records
-/// why holding a live `Stage` instead is a separate, larger decision.
+/// `Stage` is `!Send`; keep it on the stack of one synchronous edit. The root
+/// layer is populated through the public SDF authoring interface, so an edit
+/// never serializes or reparses the whole document.
 pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
-    let text = data_to_usda(data)?;
-    let resolver = DocResolver {
-        root_bytes: text.into_bytes(),
-    };
-    Stage::builder()
-        .resolver(resolver)
-        .open(DOC_ROOT_ID)
-        .map_err(|e| anyhow!("open document stage: {e}"))
+    let stage = Stage::builder()
+        .resolver(DocResolver)
+        .in_memory(DOC_ROOT_ID)
+        .map_err(|e| anyhow!("create document stage: {e}"))?;
+    let root_id = stage.root_layer().identifier().to_owned();
+    let source = data.clone();
+    let mut root = stage
+        .layer_mut(&root_id)
+        .ok_or_else(|| anyhow!("document stage has no root layer"))?;
+    root.edit(|edit| {
+        let existing = edit.data().spec_paths();
+        for path in existing {
+            edit.data_mut().erase_spec(&path);
+        }
+        let target = edit.data_mut();
+        for path in source.spec_paths() {
+            let ty = source.spec_type(&path).expect("Data spec path has a type");
+            target.create_spec(path.clone(), ty);
+            if let Some(fields) = source.list_fields(&path) {
+                for field in fields {
+                    let value = source
+                        .get_field(&path, &field)
+                        .expect("eager Data field read")
+                        .into_owned();
+                    target.set_field(&path, &field, value);
+                }
+            }
+        }
+        Ok(())
+    })
+    .map_err(|e| anyhow!("copy document root layer: {e}"))?;
+    drop(root);
+    Ok(stage)
 }
 
 /// Extract the **root layer's** authored specs from `stage` as a fresh

@@ -36,6 +36,7 @@
 
 use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
+use lunco_usd_compose::parse_usda;
 // Appearance **intent**, not a material: this crate must never name
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
 // `lunco-render-bevy` observes these and binds the real material.
@@ -2424,7 +2425,7 @@ impl DefaultPrim {
     /// Parse `text` and locate its `defaultPrim`. `None` when the text doesn't
     /// parse or the stage declares no `defaultPrim`.
     pub fn parse(text: &str) -> Option<Self> {
-        let data = openusd::usda::parse(text).ok()?;
+        let data = parse_usda(text).ok()?;
         // `defaultPrim` is stage metadata on the pseudo-root, authored as a Token.
         let name = data
             .field(&SdfPath::abs_root(), "defaultPrim")?
@@ -3531,6 +3532,13 @@ const RESET_XFORM_STACK: &str = "!resetXformStack!";
 /// mid-load half-built ancestry, and either way is not worth spinning on.
 const MAX_USD_ANCESTRY_DEPTH: usize = 64;
 
+/// Internal lifecycle marker for the one-time ECS re-expression performed by
+/// [`detach_reset_xform_stack_prims`]. A reset prim may already be directly
+/// under the stage root, so parent equality alone cannot distinguish "already
+/// corrected" from "still carrying the root's authored transform".
+#[derive(Component)]
+struct ResetXformStackApplied;
+
 /// True iff the prim's `xformOpOrder` **begins** with `!resetXformStack!`.
 ///
 /// Position matters: UsdGeomXformable gives the sentinel meaning only as the
@@ -3559,19 +3567,22 @@ fn prim_resets_xform_stack(reader: &StageView<'_>, path: &SdfPath) -> bool {
 /// is everything USD-authored between the prim and that root, which is the whole
 /// of the ancestor chain the stage itself defines.
 ///
-/// Idempotent: after the reparent the walk finds the same anchor and the parent
-/// already matches, so the system settles to a no-op. Re-running is also how a
-/// prim spawned before its ancestry finished materialising gets fixed later.
-pub fn detach_reset_xform_stack_prims(
+/// Idempotent: the applied marker prevents re-expressing the local matrix on
+/// every frame, while a prim spawned before its ancestry finished materialising
+/// remains unmarked and gets fixed when the root appears.
+fn detach_reset_xform_stack_prims(
     mut commands: Commands,
-    q_reset: Query<(Entity, &UsdPrimPath, &ChildOf), With<UsdResetXformStack>>,
-    q_prims: Query<(&UsdPrimPath, Option<&ChildOf>)>,
+    q_reset: Query<
+        (Entity, &UsdPrimPath, &ChildOf, &Transform),
+        (With<UsdResetXformStack>, Without<ResetXformStackApplied>),
+    >,
+    q_prims: Query<(&UsdPrimPath, Option<&ChildOf>, &Transform)>,
 ) {
-    for (entity, prim, child_of) in q_reset.iter() {
+    for (entity, prim, child_of, local) in q_reset.iter() {
         let mut anchor = None;
         let mut node = child_of.parent();
         for _ in 0..MAX_USD_ANCESTRY_DEPTH {
-            let Ok((ancestor, ancestor_parent)) = q_prims.get(node) else {
+            let Ok((ancestor, ancestor_parent, _)) = q_prims.get(node) else {
                 // Above the stage's own prims — the grid/mount anchor. Whatever
                 // we found last is the stage root.
                 break;
@@ -3592,15 +3603,120 @@ pub fn detach_reset_xform_stack_prims(
             // ⇒ nothing of the stage's chain is being applied. Nothing to drop.
             continue;
         };
-        if anchor == child_of.parent() {
+        let Ok((_, _, stage_root_local)) = q_prims.get(anchor) else {
             continue;
-        }
+        };
+        // The stage root entity carries the authored transform of the root
+        // prim.  Reparenting below it would therefore still apply that
+        // transform, even though USD's reset sentinel drops *the entire* USD
+        // ancestor stack.  Keep the entity under the stage root (so its mount
+        // and big-space frame remain intact), but express this prim's local
+        // matrix in the root entity's frame.
+        let root_inverse = stage_root_local.to_matrix().inverse();
+        let reset_local = Transform::from_matrix(root_inverse * local.to_matrix());
         info!(
             "[usd-bevy] {} opens with {RESET_XFORM_STACK} — detaching from its USD ancestry \
              onto the stage world frame ({anchor:?})",
             prim.path
         );
-        commands.entity(entity).insert(ChildOf(anchor));
+        commands
+            .entity(entity)
+            .insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
+    }
+}
+
+#[cfg(test)]
+mod reset_xform_stack_tests {
+    use super::*;
+
+    #[test]
+    fn reset_ignores_stage_root_authored_transform_but_keeps_mount() {
+        let mut app = App::new();
+        app.add_systems(Update, detach_reset_xform_stack_prims);
+
+        let mount = app.world_mut().spawn((Transform::default(),)).id();
+        let stage = Handle::<UsdStageAsset>::default();
+        let root = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Root".into(),
+                },
+                Transform::from_xyz(10.0, 0.0, 0.0),
+                ChildOf(mount),
+            ))
+            .id();
+        let parent = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Root/Parent".into(),
+                },
+                Transform::from_xyz(20.0, 0.0, 0.0),
+                ChildOf(root),
+            ))
+            .id();
+        let reset = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/Root/Parent/Reset".into(),
+                },
+                Transform::from_xyz(3.0, 0.0, 0.0),
+                UsdResetXformStack,
+                ChildOf(parent),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(app.world().get::<ChildOf>(reset).unwrap().parent(), root);
+        let local = app.world().get::<Transform>(reset).unwrap();
+        assert!((local.translation.x + 7.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn reset_corrects_a_direct_stage_root_child_once() {
+        let mut app = App::new();
+        app.add_systems(Update, detach_reset_xform_stack_prims);
+
+        let mount = app.world_mut().spawn((Transform::default(),)).id();
+        let stage = Handle::<UsdStageAsset>::default();
+        let root = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Root".into(),
+                },
+                Transform::from_xyz(10.0, 0.0, 0.0),
+                ChildOf(mount),
+            ))
+            .id();
+        let reset = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/Root/Reset".into(),
+                },
+                Transform::from_xyz(3.0, 0.0, 0.0),
+                UsdResetXformStack,
+                ChildOf(root),
+            ))
+            .id();
+
+        app.update();
+        let first = app.world().get::<Transform>(reset).unwrap().translation.x;
+        assert!((first + 7.0).abs() < 1e-5);
+        assert!(app.world().get::<ResetXformStackApplied>(reset).is_some());
+
+        app.update();
+        let second = app.world().get::<Transform>(reset).unwrap().translation.x;
+        assert!((second - first).abs() < 1e-5);
     }
 }
 
