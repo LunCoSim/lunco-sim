@@ -1489,7 +1489,7 @@ def Xform "DescentLander" (
 
         # The plume's ONE live input. It reaches the WGSL uniform through the same
         # port graph a thruster force uses — no resolver, no per-frame script.
-        float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:activity>
+        float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:engine_activity>
     }
     def Cone "FlameCore"
     {
@@ -1509,7 +1509,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
 
-        float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:activity>
+        float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:engine_activity>
 
         # WHAT THE PLUME IS WORTH AS A LIGHT — an equation, so it is in Modelica.
         #
@@ -1529,7 +1529,7 @@ def Xform "DescentLander" (
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
-            float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:activity>
+            float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:engine_activity>
             float inputs:w_max = 0.27
             float inputs:l_max = 0.92
             float inputs:width_idle = 0.28

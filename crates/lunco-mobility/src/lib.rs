@@ -3,18 +3,19 @@
 //! This crate implements the core physics models for planetary rovers and
 //! surface exploration vehicles.
 //!
-//! ## The "Why": Raycast-Based Ground Interaction
+//! ## Ground interaction realizations
 //! Traditional mesh-to-mesh collision for wheels is computationally expensive
-//! and prone to "snagging" on terrain geometry. We use a **Raycast Wheel**
-//! model to provide a stable, high-performance alternative:
+//! and prone to "snagging" on terrain geometry. The crate supports two
+//! realizations behind one authored tire law: raycast wheels use an analytical
+//! suspension/contact point, while jointed wheels use Avian for normal contact
+//! and the revolute constraint.
 //! 1. **Suspension Logic**: An emulated spring-damper system computes normal
 //!    forces based on ray length, preventing high-frequency jitter.
-//! 2. **Traction Physics**: Lateral and longitudinal friction are applied
-//!    at the ray's contact point, allowing for complex skid and slip behaviors
-//!    without the overhead of continuous contact manifolds.
-//! 3. **Numeric Stability**: By projecting a single ray, we ensure the wheel
-//!    always "floats" at the correct elevation, even on highly irregular
-//!    procedural terrain.
+//! 2. **Traction Physics**: Both realizations apply the same longitudinal and
+//!    lateral tire equations; only the source of the normal load and contact
+//!    point differs.
+//! 3. **Numeric Stability**: The raycast realization projects a single ray to
+//!    avoid wheel snagging on irregular procedural terrain.
 //!
 //! ## Control Mixing Models
 //! The crate supports hotswappable steering architectures:
@@ -34,10 +35,13 @@ use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::{safe_stop_control_surface, ActuatorPorts, InputPorts};
 
-/// they live here rather than in core (see the nothing-into-core rule).
+mod jointed_tire;
+/// Control kernels live here rather than in core (see the nothing-into-core
+/// rule).
 pub mod kernels;
 mod sensing;
 mod wheel_spin;
+pub use jointed_tire::{apply_jointed_tire_forces, JointedWheelTire};
 use wheel_spin::update_wheel_spin;
 
 pub mod wheel_kinematics;
@@ -81,6 +85,7 @@ impl Plugin for LunCoMobilityPlugin {
 
         app.register_type::<Suspension>()
             .register_type::<WheelRaycast>()
+            .register_type::<JointedWheelTire>()
             // `DriveMix` is the kernel-selected allocation spec. Registered
             // here with the kernels it selects between; it is a vehicle-domain
             // type and core carries no domain.
@@ -133,6 +138,7 @@ impl Plugin for LunCoMobilityPlugin {
                     apply_wheel_steering,
                     update_wheel_spin,
                     apply_wheel_drive,
+                    apply_jointed_tire_forces,
                 )
                     .chain()
                     // Read the actuator `Port` AFTER wire propagation has carried this
@@ -493,9 +499,10 @@ pub fn contact_plane_basis(
 ///
 /// The final pair is scaled onto the single Coulomb cone without changing its
 /// direction. Both wheel realizations call this function: raycast wheels apply
-/// its result to the chassis, while jointed wheels apply it at Avian's solved
-/// contact point. On jointed wheels Avian retains the normal constraint but its
-/// scalar tangential friction is disabled, so this remains the only tire model.
+/// its result to the chassis, while jointed wheels apply it to the wheel body at
+/// Avian's saved contact point. The Avian bridge retains the normal constraint
+/// but disables its generic tangent impulse for jointed tire contacts, so this
+/// remains the only tire model.
 pub fn tire_patch_force(
     longitudinal_force: f64,
     rolling_reference_speed: f64,
@@ -529,9 +536,10 @@ pub fn tire_patch_force(
 ///
 /// The return value is `(new_axle_speed, longitudinal_patch_force)`.  Both the
 /// raycast wheel's spin and patch-force calculations use this exact relationship.
-/// A physical wheel delegates tangential contact to Avian's maintained manifold
-/// solver; it consumes the same authored radius, inertia, friction coefficient,
-/// and motor curve but does not duplicate this solver or inherit its constants.
+/// A jointed wheel uses Avian only for normal contact and the revolute
+/// constraint; its tangential force and axle update call the same equations as
+/// the raycast wheel. The solver's accumulated normal impulse supplies the
+/// load, so no second lateral/friction law or physical-only coefficient exists.
 pub fn longitudinal_tire_step(
     axle_speed: f64,
     hub_speed: f64,

@@ -395,23 +395,31 @@ fn lander_asset_wiring_migrated() {
         view.value::<f32>(&lander, "inputs:touchdown_ground_speed_mps"),
         Some(0.5)
     );
+    // The IMU is a measurement conversion, not a second estimator state
+    // owner.  Its velocity inputs are live Avian observations; the mission
+    // initializes navigation state on GNC above and never mirrors it into the
+    // sensor contract.
     let imu = SdfPath::new("/LanderTest/Lander/IMU").unwrap();
     assert_eq!(
-        view.value::<f32>(&imu, "inputs:initial_velocity_x"),
-        Some(-5.0)
+        view.connections(&imu, "inputs:raw_velocity_x"),
+        ["/LanderTest/Lander.outputs:velocity_x"]
     );
     assert_eq!(
-        view.value::<f32>(&imu, "inputs:initial_velocity_y"),
-        Some(0.0)
+        view.connections(&imu, "inputs:raw_velocity_y"),
+        ["/LanderTest/Lander.outputs:velocity_y"]
     );
     assert_eq!(
-        view.value::<f32>(&imu, "inputs:initial_velocity_z"),
-        Some(-5.0)
+        view.connections(&imu, "inputs:raw_velocity_z"),
+        ["/LanderTest/Lander.outputs:velocity_z"]
     );
     let altimeter = SdfPath::new("/LanderTest/Lander/Altimeter/Model").unwrap();
     assert_eq!(
-        view.value::<f32>(&altimeter, "inputs:initial_range_m"),
-        Some(56.7)
+        view.connections(&altimeter, "inputs:ray_distance_m"),
+        ["/LanderTest/Lander/Altimeter.outputs:ray_distance"]
+    );
+    assert_eq!(
+        view.connections(&altimeter, "inputs:ray_hit_valid"),
+        ["/LanderTest/Lander/Altimeter.outputs:ray_hit_valid"]
     );
 }
 

@@ -227,6 +227,35 @@ pub struct MotorActuator {
     pub drive_sign: f64,
 }
 
+/// Resolve the signed axle torque for a motor command.
+///
+/// This is the one command-side torque decision shared by the native Avian
+/// joint motor and the shared tire-contact realization.  A brake owns the axle
+/// while it is active; otherwise the authored four-quadrant torque-speed curve
+/// supplies the drive torque.  Returning zero at exact standstill avoids
+/// inventing a brake torque direction when there is no angular motion to stop.
+#[inline]
+pub fn commanded_motor_torque(
+    motor: &MotorActuator,
+    throttle: f64,
+    axle_speed: f64,
+    braking: bool,
+) -> f64 {
+    if braking && motor.brake_torque > 0.0 {
+        return if axle_speed.abs() > f64::EPSILON {
+            -axle_speed.signum() * motor.brake_torque
+        } else {
+            0.0
+        };
+    }
+    let demand = throttle.clamp(-1.0, 1.0);
+    if demand.abs() <= f64::EPSILON || motor.max_omega <= 0.0 || motor.peak_torque <= 0.0 {
+        0.0
+    } else {
+        axle_torque(motor.peak_torque, motor.max_omega, demand, axle_speed)
+    }
+}
+
 impl Default for MotorActuator {
     fn default() -> Self {
         Self {
@@ -327,12 +356,11 @@ fn motor_actuator_system(
             joint.motor.max_torque = motor.brake_torque;
             // A brake is torque too, and it OPPOSES the spin — reporting the bare
             // magnitude would show a wheel being driven while it is being stopped.
-            let sign = if measured_omega > 0.0 { -1.0 } else { 1.0 };
             publish(
                 &mut q_readback,
                 &q_targets,
                 joint_entity,
-                sign * motor.brake_torque,
+                commanded_motor_torque(motor, 0.0, measured_omega, true),
                 measured_omega,
             );
             continue;
@@ -384,8 +412,7 @@ fn motor_actuator_system(
             continue;
         }
         let omega_signed = measured_omega;
-        let available_torque =
-            axle_torque(motor.peak_torque, motor.max_omega, throttle, omega_signed);
+        let available_torque = commanded_motor_torque(motor, throttle, omega_signed, false);
 
         // Avian uses zero as the *unlimited* torque sentinel, and `max_torque` is a
         // MAGNITUDE — the servo supplies the sign by driving toward its target from
@@ -625,7 +652,7 @@ mod readback_tests {
 
 #[cfg(test)]
 mod motor_curve_tests {
-    use super::axle_torque;
+    use super::{axle_torque, commanded_motor_torque, MotorActuator};
 
     const PEAK: f64 = 255.0;
     const W_NL: f64 = 12.0;
@@ -675,5 +702,24 @@ mod motor_curve_tests {
     #[test]
     fn no_authored_no_load_speed_degenerates_to_a_torque_source() {
         assert!((axle_torque(PEAK, 0.0, 0.5, 99.0) - 0.5 * PEAK).abs() < 1e-9);
+    }
+
+    #[test]
+    fn shared_command_torque_uses_brake_only_while_the_axle_is_moving() {
+        let motor = MotorActuator {
+            max_omega: W_NL,
+            peak_torque: PEAK,
+            brake_torque: 1500.0,
+            ..Default::default()
+        };
+        assert_eq!(commanded_motor_torque(&motor, 1.0, 0.0, true), 0.0);
+        assert_eq!(
+            commanded_motor_torque(&motor, 1.0, 3.0, true),
+            -motor.brake_torque
+        );
+        assert_eq!(
+            commanded_motor_torque(&motor, 1.0, 3.0, false),
+            axle_torque(PEAK, W_NL, 1.0, 3.0)
+        );
     }
 }

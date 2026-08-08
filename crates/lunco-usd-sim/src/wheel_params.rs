@@ -4,10 +4,11 @@
 //! (peak torque, spin limits, brake), tire (μ, slip stiffness), inertia and
 //! optional suspension compliance — are read here into a single [`WheelParams`],
 //! regardless of whether the wheel is realised as a raycast wheel
-//! (`lunco_mobility::WheelRaycast`, analytical spring + force-at-hub) or a
-//! physical wheel (avian `RevoluteJoint` + velocity motor). The two kinds
-//! differ ONLY in how force is generated; every number they act on comes from
-//! the same attributes with the same strictness.
+//! (`lunco_mobility::WheelRaycast`, analytical suspension + contact) or a
+//! physical wheel (Avian `RevoluteJoint` + normal-contact solver). Both
+//! realizations call the same tire/drivetrain laws; only suspension and normal
+//! contact acquisition differ. Every number they act on comes from the same
+//! composed attributes with the same strictness.
 //!
 //! ## Attribute provenance
 //!
@@ -36,8 +37,8 @@
 //!
 //! `lunco:motor:noLoadSpeed` reduced by `lunco:gearbox:ratio` is THE no-load axle speed, and both
 //! kinds obey it: the joint wheel's velocity motor targets it
-//! (`MotorActuator::max_omega`), and the raycast wheel rolls its drive force
-//! off toward it (`lunco_mobility::drive_force_mag`), so both self-limit at
+//! (`MotorActuator::max_omega`), and the raycast wheel rolls its shared tire
+//! drive solve off toward it, so both self-limit at
 //! `ω_max · r`. The former wheel-local speed names are gone; there is no alias
 //! and no fallback.
 //!
@@ -125,14 +126,13 @@ pub struct WheelParams {
     pub slip_stiffness: f64,
     /// Tire CORNERING stiffness (`physxVehicleTire:lateralStiffness`) — side
     /// force per RADIAN of slip angle, before the Coulomb cone. This is
-    /// consumed by the raycast tire model; a jointed wheel gets lateral force
-    /// from Avian's contact solver instead.
+    /// consumed by the shared tire model for both raycast and jointed wheels.
+    /// Avian supplies only a jointed wheel's normal contact solve.
     ///
     /// Read on the schema's own terms: "cornering stiffness" means N/rad in PhysX
     /// and in vehicle-dynamics texts. The parity scene checks that both
-    /// realizations turn correctly and share the authored vehicle/motor contract.
-    /// Exact yaw magnitudes are solver-specific unless both paths use the same
-    /// contact model.
+    /// realizations turn with the same authored contact law and vehicle/motor
+    /// contract.
     ///
     /// The PhysX schema's own companion to `longitudinalStiffness`, and read on
     /// the schema's terms: it declares a `0.0` fallback, so an unauthored tire
@@ -143,8 +143,9 @@ pub struct WheelParams {
     /// Lower edge of the tire's measured steady-state cornering-speed envelope.
     pub min_validated_speed: f64,
     /// Coulomb μ from the wheel's standard `UsdPhysicsMaterialAPI`, composed
-    /// through the `tire` variant. Raycast uses it as its analytic friction
-    /// cone; the physical wheel passes it to Avian's contact friction.
+    /// through the `tire` variant. Both realizations use it as the shared tire
+    /// cone; Avian's generic tangent friction is disabled for jointed tire
+    /// contacts so it cannot double-count this force.
     pub friction_mu: f64,
     /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
     pub steer_axis: DVec3,

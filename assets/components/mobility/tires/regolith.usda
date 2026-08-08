@@ -51,8 +51,9 @@ over "Tire" (
     # vehicle weight spreads to N ≈ 310 N and the cone is 186 N·m. The motor is
     # sized under the SMALLER of the two — see `motor.usda` — so neither spins on
     # flat ground, and grip is what stops it rather than a coincidence.
-    # Standard UsdPhysics Coulomb coefficient. The raycast tire law and Avian's
-    # joint-wheel contact solver consume this same authored value.
+    # Standard UsdPhysics Coulomb coefficient. The shared LunCo tire law uses
+    # this value for both wheel realizations; Avian supplies only normal contact
+    # for marked joint wheels, so its generic tangent friction is not a second law.
     float physics:dynamicFriction = 1.5
     float physics:staticFriction = 1.5
     # Normalized cornering stiffness: side force per radian of slip angle, per

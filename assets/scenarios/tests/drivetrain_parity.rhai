@@ -425,11 +425,12 @@ fn on_stop(me) {
 //                           tire slip ramps in over ~1-2 s, a direct body force
 //                           does not. Looser than speed on purpose, and still far
 //                           tighter than any real divergence.
-//   yaw response              Both realizations must turn in the same direction
-//                           and exceed the minimum authored-command response.
-//                           Absolute yaw magnitude is solver-dependent: the
-//                           raycast spring/contact sample and Avian's manifold
-//                           solver are different numerical realizations.
+//   yaw response              Both realizations use the same steering geometry
+//                           and tire law, so they must turn in the same direction
+//                           and agree in swept magnitude within the same 15%
+//                           response budget used for terminal speed. The remaining
+//                           difference is contact-point aggregation and integration
+//                           order, not a second yaw coefficient.
 //
 // Each number above IS the constant passed to `t_rel` below. They are a physical
 // argument about two integrators, not a dial: a tolerance changed without the
@@ -511,9 +512,9 @@ fn verdict(s) {
     f.push(t_range(yspan_ph, 0.0, 0.08, "physical high-speed chassis bob (m)"));
 
     // Yaw: each realization must respond to the same command in the same
-    // direction and with clear authority. Absolute magnitude remains a
-    // solver-specific observable, so this acceptance checks the shared command
-    // contract (sign + non-zero response), not a fitted yaw coefficient.
+    // direction, with clear authority, and with the shared tire-law response
+    // magnitude. The relative bound covers only contact aggregation and fixed
+    // versus substep integration residuals; it is not a fitted yaw multiplier.
     if s.yaw_rc == () || s.yaw_ph == () {
         f.push("heading change: MISSING (world_forward returned () for a rover)");
     } else {
@@ -529,6 +530,10 @@ fn verdict(s) {
         m_small += "deg physical=" + r2(s.yaw_ph);
         m_small += "deg, expected > 5deg under steer 0.6)";
         f.push(t_true(s.yaw_rc.abs() > 5.0 && s.yaw_ph.abs() > 5.0, m_small));
+
+        let m_yaw = "heading change magnitude (deg): raycast=" + r2(s.yaw_rc.abs());
+        m_yaw += " physical=" + r2(s.yaw_ph.abs());
+        f.push(t_rel(s.yaw_rc.abs(), s.yaw_ph.abs(), 15.0, m_yaw));
     }
 
     print("[parity] ── results ────────────────────────────────────────────");
