@@ -84,7 +84,10 @@ pub mod lint;
 pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
 
 pub mod filtered_pairs;
-pub use filtered_pairs::{FilteredPairs, PendingFilteredPairs, UsdCollisionFilter};
+pub use filtered_pairs::{
+    enable_shared_tire_contact_hooks, FilteredPairs, PendingFilteredPairs, SharedTireContact,
+    UsdCollisionFilter,
+};
 
 pub mod collision_groups;
 pub use collision_groups::{CollisionGroupTable, CollisionGroupTables};
@@ -195,6 +198,7 @@ impl Plugin for UsdAvianPlugin {
         );
 
         app.register_type::<ShouldBeDynamic>()
+            .register_type::<filtered_pairs::SharedTireContact>()
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
@@ -231,6 +235,7 @@ impl Plugin for UsdAvianPlugin {
                     build_terrain_mesh_colliders
                         .run_if(any_with_component::<PendingTerrainCollider>),
                     enforce_kinematic_on_animated,
+                    filtered_pairs::enable_shared_tire_contact_hooks,
                     project_mobility_to_rigid_body,
                 ),
             );

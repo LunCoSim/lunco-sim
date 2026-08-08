@@ -263,10 +263,10 @@ pub(crate) fn update_wheel_spin(
         let tau_drive = if braking { 0.0 } else { tau_drive };
 
         let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
-        // This is the canonical analytic raycast solve. The physical realization
-        // has a different contact owner (Avian's manifold solver), so parity is
-        // enforced through authored inputs and observable response contracts,
-        // not by copying Avian internals into this fixed-step model.
+        // This is the shared analytic tire solve. The physical realization gets
+        // its normal load and contact point from Avian, then calls this same
+        // longitudinal/lateral law; Avian's generic tangent friction is disabled
+        // for those marked wheel contacts so it cannot create a second model.
         let (w, f_long) = crate::longitudinal_tire_step(
             wheel.spin_velocity,
             v_long,

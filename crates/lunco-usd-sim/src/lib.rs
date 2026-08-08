@@ -54,7 +54,9 @@ use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
-use lunco_usd_avian::{AuthoredInitialVelocity, PendingJointAdmission, ShouldBeDynamic};
+use lunco_usd_avian::{
+    AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
+};
 use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
@@ -78,7 +80,8 @@ use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_mobility::{
-    DifferentialCoupling, Suspension, SuspensionPiston, SuspensionSpring, WheelRaycast,
+    DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
+    WheelRaycast,
 };
 use lunco_render::{PbrLook, SceneCamera};
 use openusd::sdf::Path as SdfPath;
@@ -2633,11 +2636,11 @@ fn setup_physical_wheel(
         // inertia stay consistent (see the `wheel_density` note above). A forced
         // `Mass` desynced them and the rover sank through the terrain.
         avian3d::prelude::ColliderDensity(wheel_density),
-        // Avian's maintained contact solver is the physical realization's
-        // tangential-contact owner. It consumes the same authored μ as the
-        // raycast tire cone; the two solvers are intentionally not forced to
-        // share internal iteration constants.
+        // The shared tire model owns tangential wheel-ground force. The Avian
+        // collision hook removes its generic tangent impulse for this body;
+        // Avian still owns the normal contact constraint and the wheel joint.
         Friction::new(params.friction_mu),
+        SharedTireContact,
         // BEARING DRAG IS AUTHORED, in the wheel's own units. Was
         // `AngularDamping(0.3)` — again a Rust constant, and again one the raycast
         // wheel does not share: its spin integrator subtracts
@@ -2747,10 +2750,10 @@ fn setup_physical_wheel(
     // axle + `SubstepCount(16)`. See `project_physical_rover_suspension`.)
 
     // The joint starts with the authored motor model disabled. MotorActuator is
-    // the sole owner of its velocity-motor drive; it evaluates the same
-    // authored axle torque-speed curve as the raycast path. Avian remains the
-    // physical wheel's contact/friction owner, so no second custom tire force
-    // is applied here.
+    // the sole owner of its velocity-motor drive and evaluates the same
+    // authored axle torque-speed curve as the raycast path. The shared mobility
+    // tire system owns wheel-ground tangent force; Avian supplies normal
+    // contact and joint constraints.
     let drive_motor = params.drive_motor();
 
     // Joint construction lives in `lunco-usd-avian` (the single home for all
@@ -2781,6 +2784,10 @@ fn setup_physical_wheel(
             max_omega: params.max_rotation_speed,
             peak_torque: params.peak_torque,
             brake_torque: params.brake_torque_max,
+            // The wheel hinge is authored about +X. Negative +X rotation is the
+            // demand-positive rolling sense for a chassis-forward -Z wheel;
+            // this is the convention used by both the Avian motor and shared
+            // tire solve.
             drive_sign: -1.0,
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
@@ -2804,6 +2811,22 @@ fn setup_physical_wheel(
             output_angle: 0.0,
         });
     }
+
+    // Project the complete authored tire contract onto the physical wheel.
+    // `lunco-mobility` consumes this in the same fixed-step force system as the
+    // raycast wheel; there is no physical-only lateral coefficient.
+    commands.entity(entity).insert(JointedWheelTire {
+        drive_joint: joint_entity,
+        radius: params.radius,
+        axle_inertia: params.axle_inertia(),
+        slip_stiffness: params.slip_stiffness,
+        cornering_stiffness: params.cornering_stiffness,
+        min_validated_speed: params.min_validated_speed,
+        friction_mu: params.friction_mu,
+        bearing_damping: params.bearing_damping,
+        axle_axis_local: params.axle_axis,
+        heading_local: existing_tf.rotation.as_dquat() * DVec3::NEG_Z,
+    });
 
     // The constraint itself goes through the ONE door every joint in the
     // workspace uses. `attach_joint` takes the two BODIES, so it — not this call
@@ -3688,6 +3711,7 @@ mod dynamic_activation_tests {
         app.init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<crate::cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
@@ -3753,6 +3777,7 @@ mod dynamic_activation_tests {
         app.init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<crate::cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
