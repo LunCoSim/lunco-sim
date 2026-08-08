@@ -135,14 +135,16 @@ A tree naming a deleted waypoint **refuses to compile** and keeps its last good 
 ## Interaction — document-backed and runtime-only routes
 
 For a rover mounted in an authored USD document, **no new command verbs** are
-needed. Alt+LMB lowers one intent to `ApplyUsdOps`: ordered
+needed. The `PlaceWaypoint` intent paired with the primary pointer action
+(Alt+LMB in the bundled keymap) lowers to `ApplyUsdOps`: ordered
 `AddPrim`/`SetTranslate` operations for the marker, optional mission-program
 construction (`AddPrim` + `SetApiSchemas`), and `SetAttribute` for
 `info:sourceCode`. The document journals it as one undo unit and the live projector
 sees the complete authored shape after the change set, so no ECS component is
 patched directly by the editor.
 
-A runtime-spawned asset has no owning `UsdDocument`. Alt+LMB therefore does not
+A runtime-spawned asset has no owning `UsdDocument`. The same `PlaceWaypoint`
+intent therefore does not
 guess the active document or write a path into an unrelated scene. It extends the
 vessel's mirrored `AutopilotBehaviorSpec` through the existing
 `SetAutopilotBehavior`/`EngageAutopilot` commands. The resulting route is
