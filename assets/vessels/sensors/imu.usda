@@ -18,9 +18,9 @@ def Xform "Imu" (
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/IMUSensor.mo@
 
-    float inputs:raw_velocity_x = 0.0
-    float inputs:raw_velocity_y = 0.0
-    float inputs:raw_velocity_z = 0.0
+    float inputs:raw_acceleration_x = 0.0
+    float inputs:raw_acceleration_y = 0.0
+    float inputs:raw_acceleration_z = 0.0
     float inputs:raw_sample_valid = 0.0
     float inputs:raw_angvel_x = 0.0
     float inputs:raw_angvel_y = 0.0
@@ -33,10 +33,9 @@ def Xform "Imu" (
     float inputs:gravity_world_y = 0.0
     float inputs:gravity_world_z = 0.0
 
-    # Measurement bandwidth is part of the sensor configuration, not a hidden
-    # runtime constant. The Modelica sensor exposes these parameters so a
-    # vehicle can tune them in USD without changing the sensor model.
-    float inputs:accel_filter_time_constant_s = 0.02
+    # Angular-rate bandwidth is part of the sensor configuration, not a hidden
+    # runtime constant. The linear acceleration is already sampled from the
+    # solved rigid body, so it is not differentiated or delayed here.
     float inputs:angular_accel_filter_time_constant_s = 0.02
 
     float outputs:coordinate_accel_local_x

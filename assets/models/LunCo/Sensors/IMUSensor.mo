@@ -2,11 +2,11 @@ within LunCo.Sensors;
 
 // A reusable sensor conversion, not a physics provider.
 //
-// Avian supplies the primitive rigid-body state through ordinary ports:
-// velocity, angular velocity, and attitude.  This model differentiates the
-// velocity state, transports the result to the mounted instrument frame, and
-// subtracts the authored local gravity vector.  Bias and scale are intentionally
-// parameters so each experiment can expose and tune them in USD.
+// Avian supplies primitive solved rigid-body kinematics through ordinary ports:
+// linear acceleration, angular velocity, and attitude. This model transports
+// the solved acceleration to the mounted instrument frame and subtracts the
+// authored local gravity vector. Bias and scale are intentionally parameters
+// so each experiment can expose and tune them in USD.
 model IMUSensor
   extends LunCo.Icons.Sensor;
 
@@ -21,16 +21,14 @@ model IMUSensor
   parameter Real gyro_bias_z = 0.0 "Gyroscope Z bias (rad/s)";
   parameter Real accel_scale_factor = 1.0 "Accelerometer scale factor";
   parameter Real quaternion_epsilon = 1e-12 "Quaternion normalization floor";
-  parameter Real accel_filter_time_constant_s = 0.02
-    "Accelerometer differentiator time constant (s)";
   parameter Real angular_accel_filter_time_constant_s = 0.02
     "Angular accelerometer differentiator time constant (s)";
   // Primitive Avian outputs.  These are deliberately named raw_* so a model
   // review can see that no semantic sensor value is entering the conversion.
-  input Real raw_velocity_x = 0.0 "Avian LinearVelocity X (m/s)";
-  input Real raw_velocity_y = 0.0 "Avian LinearVelocity Y (m/s)";
-  input Real raw_velocity_z = 0.0 "Avian LinearVelocity Z (m/s)";
-  input Real raw_sample_valid = 0.0 "Avian state-valid release boundary";
+  input Real raw_acceleration_x = 0.0 "Avian solved acceleration X (m/s2)";
+  input Real raw_acceleration_y = 0.0 "Avian solved acceleration Y (m/s2)";
+  input Real raw_acceleration_z = 0.0 "Avian solved acceleration Z (m/s2)";
+  input Real raw_sample_valid = 0.0 "Avian acceleration sample validity";
   input Real raw_angvel_x = 0.0 "Avian AngularVelocity X (rad/s)";
   input Real raw_angvel_y = 0.0 "Avian AngularVelocity Y (rad/s)";
   input Real raw_angvel_z = 0.0 "Avian AngularVelocity Z (rad/s)";
@@ -84,12 +82,6 @@ model IMUSensor
     quaternion_epsilon = quaternion_epsilon);
   FrameVectorTransform gyro_transform(
     quaternion_epsilon = quaternion_epsilon);
-  FilteredDerivative velocity_filter_x(
-    time_constant_s = accel_filter_time_constant_s);
-  FilteredDerivative velocity_filter_y(
-    time_constant_s = accel_filter_time_constant_s);
-  FilteredDerivative velocity_filter_z(
-    time_constant_s = accel_filter_time_constant_s);
   FilteredDerivative angular_velocity_filter_x(
     time_constant_s = angular_accel_filter_time_constant_s);
   FilteredDerivative angular_velocity_filter_y(
@@ -99,24 +91,20 @@ model IMUSensor
 
 equation
 
-  // Avian's world-frame velocity is a primitive state. A bounded-bandwidth
-  // differentiator keeps the cross-engine boundary structurally valid while
-  // modelling the finite response of a real accelerometer.
-  velocity_filter_x.u = raw_velocity_x;
-  velocity_filter_y.u = raw_velocity_y;
-  velocity_filter_z.u = raw_velocity_z;
+  // Avian's world-frame acceleration is sampled from the solved rigid body.
+  // It is already the physical accelerometer primitive: gravity, thrust,
+  // contacts, and joints are in the solved state. Do not differentiate or
+  // delay a co-simulation signal here; that would manufacture a startup
+  // transient when the Modelica instance is admitted after the first sample.
   angular_velocity_filter_x.u = raw_angvel_x;
   angular_velocity_filter_y.u = raw_angvel_y;
   angular_velocity_filter_z.u = raw_angvel_z;
-  velocity_filter_x.sample_valid = raw_sample_valid;
-  velocity_filter_y.sample_valid = raw_sample_valid;
-  velocity_filter_z.sample_valid = raw_sample_valid;
   angular_velocity_filter_x.sample_valid = raw_sample_valid;
   angular_velocity_filter_y.sample_valid = raw_sample_valid;
   angular_velocity_filter_z.sample_valid = raw_sample_valid;
-  world_accel_x = velocity_filter_x.y;
-  world_accel_y = velocity_filter_y.y;
-  world_accel_z = velocity_filter_z.y;
+  world_accel_x = raw_acceleration_x;
+  world_accel_y = raw_acceleration_y;
+  world_accel_z = raw_acceleration_z;
   angular_accel_x = angular_velocity_filter_x.y;
   angular_accel_y = angular_velocity_filter_y.y;
   angular_accel_z = angular_velocity_filter_z.y;

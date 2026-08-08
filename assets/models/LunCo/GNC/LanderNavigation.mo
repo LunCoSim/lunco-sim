@@ -28,6 +28,8 @@ model LanderNavigation
   parameter Real quaternion_epsilon = 1.0e-12 "Quaternion normalization floor";
   parameter Real range_rate_acquisition_time_constant_s = 0.25
     "Time for a newly valid altimeter rate to enter the estimator (s)";
+  parameter Real altitude_position_correction_gain = 1.0
+    "Complementary altitude correction bandwidth (1/s)";
 
   parameter Real initial_pos_x = 0.0 "Mission-initialized X position (m)";
   parameter Real initial_pos_y = 0.0 "Mission-initialized Y position (m)";
@@ -47,11 +49,8 @@ model LanderNavigation
   output Real nav_vel_z(unit = "m/s") "Estimated Z velocity";
   output Real measured_altitude(unit = "m") "Raw altimeter measurement";
 
-  Real nav_pos_y_integrated(start = 0.0)
-    "Vertical position propagated while the raw ray is invalid";
   Real nav_vel_y_integrated(start = 0.0)
     "Vertical velocity propagated while the raw ray is invalid";
-  Real vertical_position_value "Conditioned vertical position";
   Real measured_altitude_value "Conditioned altitude telemetry";
   Real navigation_accel_x;
   Real navigation_accel_y;
@@ -78,9 +77,11 @@ equation
   navigation_accel_y = acceleration_transform.world_frame_y + gravity_nav_y;
   navigation_accel_z = acceleration_transform.world_frame_z + gravity_nav_z;
 
-  // Integrate navigation-frame acceleration once for velocity and again for the
-  // lateral position estimate. Vertical position is corrected directly by the
-  // range measurement to avoid accumulating altitude drift.
+  // Integrate navigation-frame acceleration for velocity and lateral position.
+  // Vertical position is a complementary estimate: IMU propagation remains
+  // active, while a valid altimeter return corrects accumulated drift toward
+  // the measured sensor-to-ground clearance. Do not blend two absolute heights;
+  // that would make the old integrated state leak back into the measurement.
   der(nav_pos_x) = nav_vel_x;
   der(nav_pos_z) = nav_vel_z;
   der(nav_vel_x) = navigation_accel_x;
@@ -101,23 +102,20 @@ equation
   der(nav_vel_y_integrated) = navigation_accel_y;
   nav_vel_y = range_rate_confidence * altimeter_range_rate
     + (1.0 - range_rate_confidence) * nav_vel_y_integrated;
+  der(nav_pos_y) = nav_vel_y + altitude_position_correction_gain
+    * range_confidence * (altimeter_range + altimeter_mount_offset - nav_pos_y);
   // With a downward ray over the landing surface, range and world +Y have the
   // same sign: a climbing vehicle increases the measured distance, while a
   // descending vehicle decreases it. Do not negate this measurement or the
   // derivative term will brake in the wrong direction during descent.
   der(nav_vel_z) = navigation_accel_z;
 
-  der(nav_pos_y_integrated) = nav_vel_y_integrated;
-  vertical_position_value = range_confidence
-    * (altimeter_range + altimeter_mount_offset)
-    + (1.0 - range_confidence) * nav_pos_y_integrated;
-  nav_pos_y = vertical_position_value;
-  measured_altitude_value = range_confidence * altimeter_range;
+  measured_altitude_value = altimeter_range;
   measured_altitude = measured_altitude_value;
 
 initial equation
   nav_pos_x = initial_pos_x;
-  nav_pos_y_integrated = initial_pos_y;
+  nav_pos_y = initial_pos_y;
   range_rate_confidence = 0.0;
   nav_pos_z = initial_pos_z;
   nav_vel_x = initial_vel_x;

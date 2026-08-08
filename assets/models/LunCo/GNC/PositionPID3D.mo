@@ -119,6 +119,7 @@ model PositionPID3D
   Real pitch_command_raw;
   Real roll_command_raw;
   Real tilt_reference_accel;
+  Real thrust_authority;
   Real lateral_accel_magnitude;
   Real available_lateral_accel;
   Real lateral_scale;
@@ -217,9 +218,16 @@ equation
   vertical_limiter.lower_limit = 0.0;
   vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;
-  thrust_accel = sqrt(bounded_lateral_accel_x * bounded_lateral_accel_x
-    + vertical_limiter_output * vertical_limiter_output
-    + bounded_lateral_accel_z * bounded_lateral_accel_z);
+  // A zero vertical command means the descent law is deliberately coasting;
+  // it must not become a lateral-only engine command. RCS may still pre-align
+  // the body for the next burn, but the main engine stays closed until the
+  // vertical flight law asks for positive thrust.
+  thrust_authority = vertical_limiter_output
+    / max(minimum_vertical_accel_mps2, vertical_limiter_output);
+  thrust_accel = thrust_authority * sqrt(
+    bounded_lateral_accel_x * bounded_lateral_accel_x
+      + vertical_limiter_output * vertical_limiter_output
+      + bounded_lateral_accel_z * bounded_lateral_accel_z);
   unsaturated_throttle = thrust_accel
     / max(minimum_thrust_accel_mps2, max_thrust_accel);
 
@@ -248,10 +256,14 @@ equation
   // Bound the VECTOR before converting it to the normalized component-angle
   // command, so the generated thrust and the commanded attitude describe the
   // same physical wrench.
-  tilt_reference_accel = max(minimum_vertical_accel_mps2, vertical_limiter_output);
+  // Keep a meaningful thrust-vector target while the descent law is coasting.
+  // The engine remains gated by `thrust_authority` above; this reference only
+  // tells the RCS which attitude will make the next powered correction useful.
+  tilt_reference_accel = max(minimum_vertical_accel_mps2,
+    max(g, vertical_limiter_output));
   lateral_accel_magnitude = sqrt(
     lateral_accel_x * lateral_accel_x + lateral_accel_z * lateral_accel_z);
-  available_lateral_accel = max(0.0, vertical_limiter_output)
+  available_lateral_accel = tilt_reference_accel
     * tan(max(1.0e-9, command_tilt_limit_rad));
   lateral_scale = min(1.0, available_lateral_accel
     / max(minimum_vertical_accel_mps2, lateral_accel_magnitude));

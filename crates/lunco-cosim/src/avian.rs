@@ -80,6 +80,60 @@ pub struct PendingForces {
     pub torque: DVec3,
 }
 
+/// The solved linear acceleration seen by a rigid-body-mounted accelerometer.
+///
+/// Avian exposes velocity as a native solver fact, but not an accelerometer
+/// reading.  The sample is captured after physics writeback and is therefore
+/// the finite-difference kinematics of the solved body, including gravity,
+/// thrust, contacts, and joints.  The Modelica IMU converts that navigation
+/// frame quantity into specific force; no controller or scene reads this
+/// component directly.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct SolvedLinearAcceleration {
+    /// Previous solved world-frame velocity, used for the next sample.
+    previous_velocity: DVec3,
+    /// Current solved world-frame acceleration, m/s².
+    pub value: DVec3,
+    /// False until a complete velocity interval has been observed.
+    pub valid: bool,
+}
+
+/// Add the raw accelerometer state to every Avian body once it exists.
+pub fn ensure_acceleration_samples(
+    mut commands: Commands,
+    query: Query<(Entity, &LinearVelocity), (With<RigidBody>, Without<SolvedLinearAcceleration>)>,
+) {
+    for (entity, velocity) in &query {
+        commands.entity(entity).insert(SolvedLinearAcceleration {
+            previous_velocity: velocity.0,
+            value: DVec3::ZERO,
+            valid: false,
+        });
+    }
+}
+
+/// Capture solved acceleration after Avian has written back its state.
+pub fn sample_solved_acceleration(
+    time: Res<Time<Physics>>,
+    mut query: Query<(&LinearVelocity, &mut SolvedLinearAcceleration), With<RigidBody>>,
+) {
+    let dt = time.delta_secs_f64();
+    if !dt.is_finite() || dt <= 0.0 {
+        return;
+    }
+    for (velocity, mut sample) in &mut query {
+        let current = velocity.0;
+        if sample.valid {
+            sample.value = (current - sample.previous_velocity) / dt;
+        } else {
+            sample.value = DVec3::ZERO;
+            sample.valid = true;
+        }
+        sample.previous_velocity = current;
+    }
+}
+
 /// A generic force actuator authored by a USD prim.
 ///
 /// The local position is measured from the owning rigid-body origin, not from
@@ -330,6 +384,54 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "velocity_z",
             dir: PortDirection::Out,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
+            write: None,
+        },
+        // Solved navigation-frame acceleration for a rigid-body-mounted
+        // accelerometer. The sample is captured after physics writeback, so it
+        // includes every native force and constraint that changed the body.
+        AvianPort {
+            name: "acceleration_x",
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedLinearAcceleration>(e)
+                    .map(|sample| if sample.valid { sample.value.x } else { 0.0 })
+                    .or(Some(0.0))
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "acceleration_y",
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedLinearAcceleration>(e)
+                    .map(|sample| if sample.valid { sample.value.y } else { 0.0 })
+                    .or(Some(0.0))
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "acceleration_z",
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedLinearAcceleration>(e)
+                    .map(|sample| if sample.valid { sample.value.z } else { 0.0 })
+                    .or(Some(0.0))
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "acceleration_valid",
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                Some(if w
+                    .get::<SolvedLinearAcceleration>(e)
+                    .is_some_and(|sample| sample.valid)
+                {
+                    1.0
+                } else {
+                    0.0
+                })
+            }),
             write: None,
         },
         // Readiness is a separate causal fact from the existence of the body

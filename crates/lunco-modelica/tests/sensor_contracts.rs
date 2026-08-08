@@ -42,9 +42,9 @@ fn compiles_and_steps(name: &str, source: &str) {
 fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
     let source = model("Sensors/IMUSensor.mo");
     for input in [
-        "raw_velocity_x",
-        "raw_velocity_y",
-        "raw_velocity_z",
+        "raw_acceleration_x",
+        "raw_acceleration_y",
+        "raw_acceleration_z",
         "raw_angvel_x",
         "raw_angvel_y",
         "raw_angvel_z",
@@ -80,12 +80,27 @@ fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
 }
 
 #[test]
+fn filtered_signal_is_a_reusable_stateful_measurement_boundary() {
+    let source = model("Sensors/FilteredSignal.mo");
+    assert!(source.contains("der(state)"));
+    assert!(source.contains("sample_valid"));
+    assert!(source.contains("acquisition"));
+    assert!(source.contains("initial equation") && source.contains("state = u"));
+    compiles_and_steps("FilteredSignal", &source);
+}
+
+#[test]
 fn altimeter_converts_a_raw_ray_observation_without_a_fallback() {
     let source = model("Sensors/Altimeter.mo");
     for input in ["ray_distance_m", "ray_hit_valid"] {
         assert!(source.contains(input), "altimeter must consume {input}");
     }
-    for output in ["range_m", "range_rate_mps", "range_valid"] {
+    for output in [
+        "range_m",
+        "range_rate_mps",
+        "range_valid",
+        "range_confidence",
+    ] {
         assert!(source.contains(output), "altimeter must expose {output}");
     }
     assert!(!source.contains("alt_true_m"));
