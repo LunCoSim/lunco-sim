@@ -512,29 +512,16 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
         let ok = layout.focus_singleton(pid);
         bevy::log::info!("[FocusPanel] id={:?} focus_singleton -> {}", want, ok);
     } else {
-        // Not in dock yet — look up the registered panel and insert
-        // it at its default slot, then focus.
-        let registered: Option<(PanelId, PanelSlot)> = layout
-            .panels
-            .iter()
-            .find(|(pid, _)| pid.0 == want)
-            .map(|(pid, p)| (*pid, p.default_slot()));
-        if let Some((pid, slot)) = registered {
-            let inserted = layout.insert_panel_into_dock(pid, slot);
-            let focused = layout.focus_singleton(pid);
-            bevy::log::info!(
-                "[FocusPanel] id={:?} inserted={} focused={}",
-                want,
-                inserted,
-                focused
-            );
-        } else {
-            bevy::log::warn!(
-                "FocusPanel: no singleton panel registered with id {:?}; available={:?}",
-                want,
-                layout.panels.keys().map(|p| p.0).collect::<Vec<_>>()
-            );
-        }
+        // Focusing is deliberately not opening.  A perspective owns which
+        // panels are mounted; inserting a missing panel into the focused leaf
+        // can turn the viewport-only `sandbox_view` into an opaque dock and
+        // swallow the 3D scene.  Callers that want to open a panel must use the
+        // explicit View ▸ Panels layout intent (or activate a perspective
+        // preset), then FocusPanel can foreground the mounted tab.
+        bevy::log::debug!(
+            "[FocusPanel] id={:?} is not mounted in the active layout; no-op",
+            want
+        );
     }
 }
 
@@ -4803,6 +4790,44 @@ mod tests {
             app.world().resource::<PendingPanelFocus>().0,
             ["source_viewer"]
         );
+    }
+
+    struct FocusPanelFixture;
+
+    impl Panel for FocusPanelFixture {
+        fn id(&self) -> PanelId {
+            PanelId("focus_fixture")
+        }
+
+        fn title(&self) -> String {
+            "Focus fixture".into()
+        }
+
+        fn default_slot(&self) -> PanelSlot {
+            PanelSlot::SideBrowser
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+    }
+
+    #[test]
+    fn focus_panel_does_not_mount_a_closed_panel_into_the_focused_leaf() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register(FocusPanelFixture);
+        // Simulate the viewport-only perspective: the panel remains registered
+        // globally, but its tab is not part of this perspective's dock.
+        layout.set_side_browser(None);
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
+
+        focus_panel_now(&mut layout, "focus_fixture");
+
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
     }
 
     struct TestPerspective {

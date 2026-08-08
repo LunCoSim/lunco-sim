@@ -36,8 +36,8 @@ pub struct TutorialHud {
     /// leading glyph). Empty = the objectives card is hidden.
     pub objectives: String,
     /// Active spotlight: `(anchor_key, caption)`. `anchor_key` resolves against
-    /// [`HelpAnchors`](crate::HelpAnchors); an unknown/absent key still dims the
-    /// screen and shows a centred caption. `None` = no spotlight.
+    /// [`HelpAnchors`](crate::HelpAnchors); an unknown/absent key shows a
+    /// centred caption without obscuring the application. `None` = no spotlight.
     pub spotlight: Option<(String, String)>,
     /// Active guided-tour coach step (lunica-style). When set, the overlay draws
     /// the scrim+ring on `anchor` plus a coach card with a banner, body, progress
@@ -266,8 +266,9 @@ fn tutorial_overlay_visible(
 }
 
 /// Draw the spotlight: dim the screen except the anchored widget's rect, ring
-/// it with a pulsing accent, and show a caption callout. Falls back to a full
-/// dim + centred caption when the anchor isn't currently painted.
+/// it with a pulsing accent, and show a caption callout. A named anchor that is
+/// not currently painted falls back to a centred caption without obscuring the
+/// application; an explicitly empty anchor remains the modal full-dim form.
 fn draw_spotlight(
     mut egui_ctx: EguiContexts,
     hud: Res<TutorialHud>,
@@ -288,13 +289,15 @@ fn draw_spotlight(
         .unwrap_or_else(lunco_theme::Theme::dark);
     let target = anchors.get(&key);
 
-    egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
-        .order(egui::Order::Background)
-        .interactable(false)
-        .fixed_pos(screen.min)
-        .show(ctx, |ui| {
-            paint_scrim(ui.painter(), ctx, screen, target, theme.tokens.scrim)
-        });
+    if target.is_some() {
+        egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
+            .order(egui::Order::Background)
+            .interactable(false)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                paint_scrim(ui.painter(), ctx, screen, target, theme.tokens.scrim)
+            });
+    }
 
     if caption.is_empty() {
         return;
@@ -535,25 +538,31 @@ fn draw_tour(
     };
 
     // ── Scrim + ring + speech-bubble tail (behind the card) ──────────────────
-    egui::Area::new(egui::Id::new("lunco_tour_scrim"))
-        .order(egui::Order::Background)
-        .interactable(false)
-        .fixed_pos(screen.min)
-        .show(ctx, |ui| {
-            let painter = ui.painter();
-            paint_scrim(painter, ctx, screen, target, theme.tokens.scrim);
-            if let Some(t) = target {
-                let card_rect = egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
-                if let Some((apex, b1, b2)) = tour_tail_points(side, t, card_rect) {
-                    painter.add(egui::Shape::Path(egui::epaint::PathShape {
-                        points: vec![apex, b1, b2],
-                        closed: true,
-                        fill: card_fill,
-                        stroke: egui::Stroke::new(1.0, accent.linear_multiply(0.55)).into(),
-                    }));
+    // An empty anchor is an intentional modal step and dims the scene. A named
+    // anchor can be absent while a perspective/panel is settling; leave the
+    // scene visible and draw only the centred card in that case.
+    if target.is_some() || step.anchor.is_empty() {
+        egui::Area::new(egui::Id::new("lunco_tour_scrim"))
+            .order(egui::Order::Background)
+            .interactable(false)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let painter = ui.painter();
+                paint_scrim(painter, ctx, screen, target, theme.tokens.scrim);
+                if let Some(t) = target {
+                    let card_rect =
+                        egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
+                    if let Some((apex, b1, b2)) = tour_tail_points(side, t, card_rect) {
+                        painter.add(egui::Shape::Path(egui::epaint::PathShape {
+                            points: vec![apex, b1, b2],
+                            closed: true,
+                            fill: card_fill,
+                            stroke: egui::Stroke::new(1.0, accent.linear_multiply(0.55)).into(),
+                        }));
+                    }
                 }
-            }
-        });
+            });
+    }
 
     // ── Card ─────────────────────────────────────────────────────────────────
     let last = step.index + 1 >= step.total;

@@ -50,6 +50,18 @@ struct DismissTerrainOverlay;
 /// is wired.
 pub(crate) struct SandboxUiPlugin;
 
+/// The luncosim curriculum is authored against the Build workspace: its
+/// anchors are the entity/telemetry/inspector/command panels and its 3D scene
+/// is the Build viewport.  A tutorial must therefore move to that presentation
+/// before its script publishes any HUD state.  Keeping this at the host boundary
+/// means a persisted Design/View layout cannot make a lesson silently target
+/// panels that are not mounted (or insert them into the full-window camera).
+fn on_luncosim_tutorial_start(_trigger: On<lunco_tutorial::StartTutorial>, mut commands: Commands) {
+    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
+        id: "rover_build".into(),
+    });
+}
+
 /// Install the retained runtime-authored HTML surface layer.
 ///
 /// This is deliberately shared by the interactive workbench and the GPU
@@ -106,9 +118,10 @@ impl Plugin for SandboxUiPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(
             lunco_workbench::tutorial_overlay::TutorialOverlayPerspective(Some(
-                lunco_workbench::PerspectiveId("sandbox_view"),
+                lunco_workbench::PerspectiveId("rover_build"),
             )),
         );
+        app.add_observer(on_luncosim_tutorial_start);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, crate::apply_luncosim_window_icon);
         app.init_resource::<lunco_workbench::AutoTagWorkbenchCameras>();
