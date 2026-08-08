@@ -338,6 +338,18 @@ pub struct PortSurfaceReady;
 #[reflect(Component)]
 pub struct PortSurfacePending;
 
+/// Marks the boundary at which a physics participant has published its
+/// authored initial state to the co-simulation fabric.
+///
+/// This is distinct from [`PortSurfaceReady`]: a rigid body can expose its
+/// velocity and attitude ports while it is still being held kinematic during
+/// articulated-scene admission. Sensors use this fact to acquire their first
+/// live sample without treating the loader's zero-valued placeholder as a
+/// physical measurement.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct PhysicsStateReady;
+
 // ── Control surface ───────────────────────────────────────────────────────────
 
 /// An entity's declared **`inputs:*` port surface**, with current values.

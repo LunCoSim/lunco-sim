@@ -186,28 +186,6 @@ def Xform "LanderTest" (
             float inputs:command_tilt_limit_rad.connect = </LanderTest/Lander.inputs:command_tilt_limit_rad>
         }
 
-        # The IMU differentiators are physical sensor states. Initialize them
-        # from the same authored release condition as the navigation estimator
-        # so the first derivative sample is not interpreted as an acceleration
-        # impulse.
-        over "IMU"
-        {
-            float inputs:initial_velocity_x = -5.0
-            float inputs:initial_velocity_y = 0.0
-            float inputs:initial_velocity_z = -5.0
-        }
-
-        # The downward ray starts at the nozzle bottom (COM y=60 minus the
-        # authored 3.3 m mount offset) above the y=0 pad. Its filter must begin
-        # at that measured range for the first range-rate sample to describe
-        # motion rather than filter acquisition.
-        over "Altimeter"
-        {
-            over "Model"
-            {
-                float inputs:initial_range_m = 56.7
-            }
-        }
     }
 
     # ── The rover attached to the lander ──

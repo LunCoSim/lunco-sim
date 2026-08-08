@@ -3548,7 +3548,10 @@ fn activate_dynamic_bodies(
             // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
             // no-op at apply time if the entity is gone (a `get_entity` guard here
             // would not help — it only proves validity at queue time, not apply).
-            commands.entity(entity).try_insert(RigidBody::Dynamic);
+            commands.entity(entity).try_insert((
+                RigidBody::Dynamic,
+                lunco_core::PhysicsStateReady,
+            ));
             if let Some(velocity) = authored_velocity {
                 if let Some(linear) = velocity.linear {
                     commands.entity(entity).try_insert(LinearVelocity(linear));

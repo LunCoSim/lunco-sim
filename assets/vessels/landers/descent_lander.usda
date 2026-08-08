@@ -1230,6 +1230,7 @@ def Xform "DescentLander" (
         float inputs:raw_velocity_x.connect = </DescentLander.outputs:velocity_x>
         float inputs:raw_velocity_y.connect = </DescentLander.outputs:velocity_y>
         float inputs:raw_velocity_z.connect = </DescentLander.outputs:velocity_z>
+        float inputs:raw_sample_valid.connect = </DescentLander.outputs:state_valid>
         float inputs:raw_angvel_x.connect = </DescentLander.outputs:angvel_x>
         float inputs:raw_angvel_y.connect = </DescentLander.outputs:angvel_y>
         float inputs:raw_angvel_z.connect = </DescentLander.outputs:angvel_z>

@@ -332,6 +332,22 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
             write: None,
         },
+        // Readiness is a separate causal fact from the existence of the body
+        // port. During USD scene admission a dynamic body is intentionally
+        // represented as kinematic, so its required velocity component reads
+        // zero until its authored release state has been installed.
+        AvianPort {
+            name: "state_valid",
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                Some(if w.get::<lunco_core::PhysicsStateReady>(e).is_some() {
+                    1.0
+                } else {
+                    0.0
+                })
+            }),
+            write: None,
+        },
         // Ground speed — the MAGNITUDE of the linear velocity, frame-free.
         //
         // The per-axis ports are world-frame, so "how fast is this rover going"
