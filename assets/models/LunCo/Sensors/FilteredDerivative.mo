@@ -22,6 +22,8 @@ model FilteredDerivative
   output Real y "Filtered derivative of the measured signal";
 
   Real state;
+  discrete Boolean acquired(start = false)
+    "True after the first live sample has initialized the differentiator";
 
 equation
   // Before the producer is live, hold the filter state and report no
@@ -37,8 +39,9 @@ equation
     then (u - state) / time_constant_s
     else 0.0;
 
-when sample_valid > 0.5 then
+when sample_valid > 0.5 and not pre(acquired) then
   reinit(state, u);
+  acquired = true;
 end when;
 
 initial equation

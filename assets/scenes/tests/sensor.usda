@@ -75,7 +75,7 @@ def Xform "SandboxScene" (
             float inputs:raw_quat_x.connect = </SandboxScene/Box.outputs:quat_x>
             float inputs:raw_quat_y.connect = </SandboxScene/Box.outputs:quat_y>
             float inputs:raw_quat_z.connect = </SandboxScene/Box.outputs:quat_z>
-            float inputs:gravity_y.connect = </SandboxScene/Box/Environment.outputs:gravity_y>
+            float inputs:gravity_world_y.connect = </SandboxScene/Box/Environment.outputs:gravity_y>
         }
 
         # A downward raw Avian ray is mounted 0.3 m above the box centre. Its

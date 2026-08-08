@@ -49,9 +49,9 @@ fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
         "raw_angvel_y",
         "raw_angvel_z",
         "raw_quat_w",
-        "gravity_x",
-        "gravity_y",
-        "gravity_z",
+        "gravity_world_x",
+        "gravity_world_y",
+        "gravity_world_z",
     ] {
         assert!(source.contains(input), "IMU must consume {input}");
     }
@@ -69,6 +69,12 @@ fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
         source.contains("gyro_transform") && source.contains("body_frame_z"),
         "IMU must rotate Avian world angular velocity into body-frame gyro rates"
     );
+    assert!(
+        source.contains("gravity_transform")
+            && source.contains("force_transform.body_frame_y - gravity_transform.body_frame_y"),
+        "IMU must transform world acceleration and world gravity before computing body specific force"
+    );
+    assert!(!source.contains("total_accel_y - gravity_y"));
     assert!(!source.contains("gyro_body_x"));
     compiles_and_steps("IMUSensor", &source);
 }
@@ -92,7 +98,7 @@ fn altimeter_converts_a_raw_ray_observation_without_a_fallback() {
 fn filtered_derivative_is_a_reusable_stateful_sensor_boundary() {
     let source = model("Sensors/FilteredDerivative.mo");
     assert!(source.contains("der(state)"));
-    assert!(source.contains("state = u"));
+    assert!(source.contains("reinit(state, u)"));
     assert!(!source.contains("initial_value"));
     assert!(!source.contains("der(u)"));
     compiles_and_steps("FilteredDerivative", &source);

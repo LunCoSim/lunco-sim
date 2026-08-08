@@ -1237,9 +1237,9 @@ def Xform "DescentLander" (
         float inputs:raw_quat_x.connect = </DescentLander.outputs:quat_x>
         float inputs:raw_quat_y.connect = </DescentLander.outputs:quat_y>
         float inputs:raw_quat_z.connect = </DescentLander.outputs:quat_z>
-        float inputs:gravity_x.connect = </DescentLander/Environment.outputs:gravity_x>
-        float inputs:gravity_y.connect = </DescentLander/Environment.outputs:gravity_y>
-        float inputs:gravity_z.connect = </DescentLander/Environment.outputs:gravity_z>
+        float inputs:gravity_world_x.connect = </DescentLander/Environment.outputs:gravity_x>
+        float inputs:gravity_world_y.connect = </DescentLander/Environment.outputs:gravity_y>
+        float inputs:gravity_world_z.connect = </DescentLander/Environment.outputs:gravity_z>
     }
 
     # Environment is a source of local gravity facts. It is not a sensor

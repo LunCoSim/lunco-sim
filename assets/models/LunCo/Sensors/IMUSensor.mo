@@ -38,9 +38,9 @@ model IMUSensor
   input Real raw_quat_x = 0.0 "Avian Rotation quaternion X";
   input Real raw_quat_y = 0.0 "Avian Rotation quaternion Y";
   input Real raw_quat_z = 0.0 "Avian Rotation quaternion Z";
-  input Real gravity_x = 0.0 "Local gravity X in the Avian frame (m/s2)";
-  input Real gravity_y = 0.0 "Local gravity Y in the Avian frame (m/s2)";
-  input Real gravity_z = 0.0 "Local gravity Z in the Avian frame (m/s2)";
+  input Real gravity_world_x = 0.0 "Local gravity X in navigation/world frame (m/s2)";
+  input Real gravity_world_y = 0.0 "Local gravity Y in navigation/world frame (m/s2)";
+  input Real gravity_world_z = 0.0 "Local gravity Z in navigation/world frame (m/s2)";
 
   output Real coordinate_accel_local_x "Coordinate acceleration in sensor X (m/s2)";
   output Real coordinate_accel_local_y "Coordinate acceleration in sensor Y (m/s2)";
@@ -73,15 +73,14 @@ model IMUSensor
   Real total_accel_x;
   Real total_accel_y;
   Real total_accel_z;
-  Real force_x;
-  Real force_y;
-  Real force_z;
   Real sensor_accel_x;
   Real sensor_accel_y;
   Real sensor_accel_z;
   FrameVectorTransform offset_transform(
     quaternion_epsilon = quaternion_epsilon);
   FrameVectorTransform force_transform(
+    quaternion_epsilon = quaternion_epsilon);
+  FrameVectorTransform gravity_transform(
     quaternion_epsilon = quaternion_epsilon);
   FrameVectorTransform gyro_transform(
     quaternion_epsilon = quaternion_epsilon);
@@ -151,20 +150,27 @@ equation
   total_accel_y = world_accel_y + lever_accel_y;
   total_accel_z = world_accel_z + lever_accel_z;
 
-  // Convert Avian-frame acceleration and gravity into the instrument frame.
-  force_x = total_accel_x - gravity_x;
-  force_y = total_accel_y - gravity_y;
-  force_z = total_accel_z - gravity_z;
+  // Avian linear acceleration and the environment gravity source are both
+  // navigation/world-frame vectors. Convert each through the same shared
+  // transform before subtracting them. This is the specific-force equation
+  // used by a real accelerometer: f_body = a_body - g_body.
   force_transform.quaternion_w = raw_quat_w;
   force_transform.quaternion_x = raw_quat_x;
   force_transform.quaternion_y = raw_quat_y;
   force_transform.quaternion_z = raw_quat_z;
-  force_transform.vector_x = force_x;
-  force_transform.vector_y = force_y;
-  force_transform.vector_z = force_z;
-  sensor_accel_x = force_transform.body_frame_x;
-  sensor_accel_y = force_transform.body_frame_y;
-  sensor_accel_z = force_transform.body_frame_z;
+  force_transform.vector_x = total_accel_x;
+  force_transform.vector_y = total_accel_y;
+  force_transform.vector_z = total_accel_z;
+  gravity_transform.quaternion_w = raw_quat_w;
+  gravity_transform.quaternion_x = raw_quat_x;
+  gravity_transform.quaternion_y = raw_quat_y;
+  gravity_transform.quaternion_z = raw_quat_z;
+  gravity_transform.vector_x = gravity_world_x;
+  gravity_transform.vector_y = gravity_world_y;
+  gravity_transform.vector_z = gravity_world_z;
+  sensor_accel_x = force_transform.body_frame_x - gravity_transform.body_frame_x;
+  sensor_accel_y = force_transform.body_frame_y - gravity_transform.body_frame_y;
+  sensor_accel_z = force_transform.body_frame_z - gravity_transform.body_frame_z;
 
   coordinate_accel_local_x = sensor_accel_x * accel_scale_factor + accel_bias_x;
   coordinate_accel_local_y = sensor_accel_y * accel_scale_factor + accel_bias_y;
