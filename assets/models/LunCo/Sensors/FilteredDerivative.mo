@@ -22,28 +22,22 @@ model FilteredDerivative
   output Real y "Filtered derivative of the measured signal";
 
   Real state;
-  discrete Boolean acquired(start = false)
-    "True after the first live sample has initialized the differentiator";
+  Real validity "Continuous producer-validity gain";
 
 equation
-  // Before the producer is live, hold the filter state and report no
-  // derivative. The rising edge reinitializes the state to the first live
-  // value, so an async co-sim handoff cannot look like a physical acceleration
-  // impulse. Keeping the state differential in both branches is important:
-  // switching a state between an algebraic equation and der(state) leaves the
-  // live solver with a singular/non-finite derivative at release.
-  der(state) = if sample_valid > 0.5
-    then (u - state) / time_constant_s
-    else 0.0;
-  y = if sample_valid > 0.5
-    then (u - state) / time_constant_s
-    else 0.0;
-
-when sample_valid > 0.5 and not pre(acquired) then
-  reinit(state, u);
-  acquired = true;
-end when;
+  // A first-order differentiator is a physical, continuous sensor state. Use
+  // a numeric validity gain instead of a level comparison: fixed-step
+  // co-simulation can update a Real input without scheduling a Modelica event,
+  // while multiplication keeps the validity contract active in the same
+  // continuous equation. Invalid data freezes the state and reports no
+  // derivative; valid data follows the finite-bandwidth response.
+  validity = max(0.0, min(1.0, sample_valid));
+  der(state) = validity * (u - state) / max(1.0e-6, time_constant_s);
+  y = validity * der(state);
 
 initial equation
-  state = 0.0;
+  // The first solver sample is the instrument's reference velocity. This
+  // avoids manufacturing a startup impulse from the producer's pre-release
+  // placeholder while leaving subsequent changes to the continuous filter.
+  state = u;
 end FilteredDerivative;
