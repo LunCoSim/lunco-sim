@@ -500,10 +500,15 @@ impl CanvasDiagramState {
     }
 
     /// Read-only view scoped to a specific tab.
+    ///
+    /// A tab can be visible before its document-bound state is created. This
+    /// happens during perspective restoration and on the first frame after a
+    /// tab is opened. Such a tab is still an unbound canvas, so reads must use
+    /// the independent unbound state rather than panic or borrow another
+    /// tab's scene. The mutable render lookup creates the tab entry as soon as
+    /// a document is available.
     pub fn get_for_tab(&self, tab_id: CanvasKey) -> &CanvasDocState {
-        self.per_tab
-            .get(&tab_id)
-            .expect("canvas tab state must be initialized before reading")
+        self.per_tab.get(&tab_id).unwrap_or(&self.unbound)
     }
 
     /// Mutable per-tab view, creating the entry on first access.
@@ -663,6 +668,52 @@ impl CanvasDiagramState {
                 .unwrap_or_else(|| lunco_doc::DocumentId::new(0));
             (*tab_id, doc, state)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CanvasDiagramState;
+    use lunco_doc::DocumentId;
+
+    #[test]
+    fn reading_a_tab_before_first_paint_uses_only_unbound_state() {
+        let state = CanvasDiagramState::default();
+        let tab_id = 17;
+        let doc = DocumentId::new(1);
+
+        assert!(!state.has_entry_for_tab(tab_id));
+        let unbound = state.get_for_tab(tab_id) as *const _;
+        let render = state.get_for_render(Some(tab_id), Some(doc)) as *const _;
+        assert_eq!(unbound, render);
+        assert_eq!(state.get_for_tab(tab_id).canvas.scene.node_count(), 0);
+    }
+
+    #[test]
+    fn mutable_render_lookup_binds_tab_without_cross_tab_fallback() {
+        let mut state = CanvasDiagramState::default();
+        let first_tab = 17;
+        let second_tab = 18;
+        let doc = DocumentId::new(1);
+
+        state
+            .get_mut_for_render(Some(first_tab), Some(doc))
+            .last_seen_gen = 42;
+
+        assert!(state.has_entry_for_tab(first_tab));
+        assert_eq!(
+            state
+                .get_for_render(Some(first_tab), Some(doc))
+                .last_seen_gen,
+            42
+        );
+        assert!(!state.has_entry_for_tab(second_tab));
+        assert_eq!(
+            state
+                .get_for_render(Some(second_tab), Some(doc))
+                .last_seen_gen,
+            0
+        );
     }
 }
 
