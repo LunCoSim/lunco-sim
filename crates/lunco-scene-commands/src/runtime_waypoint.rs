@@ -13,8 +13,8 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml, ReachedWaypoints};
 use lunco_core::{
-    on_command, register_commands, Command, GlobalEntityId, InputPorts, Severity, TelemetryEvent,
-    TelemetryValue, TriggerZone,
+    on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
+    TelemetryEvent, TelemetryValue, TriggerZone,
 };
 use lunco_usd::document::WAYPOINT_MARKER_ASSET;
 use lunco_usd_bevy::UsdPrimPath;
@@ -262,7 +262,12 @@ pub fn mark_reached_waypoints_on_enter(
     mut starts: MessageReader<CollisionStart>,
     q_zones: Query<(&TriggerZone, &UsdPrimPath), With<Sensor>>,
     q_runtime_bindings: Query<&RuntimeWaypointBinding>,
-    q_vessel_roots: Query<(), (With<UsdPrimPath>, Or<(With<BehaviorXml>, With<InputPorts>)>)>,
+    // A physics body can expose generic input/output ports without being a
+    // controllable vessel (the authored ground body does exactly that).  The
+    // route boundary is the authored control binding; requiring it prevents a
+    // waypoint trigger's normal contact with the ground from becoming a rover
+    // arrival event.
+    q_vessel_roots: Query<(), (With<UsdPrimPath>, With<ControlBinding>)>,
     q_parents: Query<&ChildOf>,
     q_vessels: Query<(Entity, Option<&BehaviorXml>)>,
     q_reached: Query<&ReachedWaypoints>,

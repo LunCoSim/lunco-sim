@@ -60,7 +60,8 @@
 //   facts.collections[] #{ path, parent, name, members[] }
 //       standard computed collection membership from the composed stage.
 //
-//   facts.network_scopes[] #{ path, parent, members[], modelica_member_count,
+//   facts.network_scopes[] #{ path, parent, members[], synthesizer,
+//                             modelica_member_count,
 //                             units[], dangling_connectors[],
 //                             invalid_program_sources[], invalid_causal_properties[],
 //                             ambiguous_boundary_sources[], collection_error }
@@ -253,6 +254,11 @@ fn unsupported_program_prim_type(facts) {
 fn empty_component_network(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        // A non-default synthesizer owns the collection contract.  It may
+        // legitimately contain physical USD members rather than Modelica
+        // facets (for example the authored actuator-wrench allocator), so the
+        // generic acausal-network empty check does not apply.
+        if scope.synthesizer != "" { continue; }
         if scope.collection_error != "" || scope.modelica_member_count != 0 { continue; }
         let m = "declares CollectionAPI:components but includes no components —";
         m += " the domain compiler has no equations to compile.";
@@ -297,6 +303,10 @@ fn invalid_network_program_source(facts) {
 fn invalid_modelica_causal_cardinality(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        // Boundary cardinality is part of the selected synthesizer's public
+        // contract.  Only the default acausal-network synthesizer promises
+        // scalar Modelica input/output semantics here.
+        if scope.synthesizer != "" { continue; }
         for property in scope.invalid_causal_properties {
             let m = "has invalid causal connection cardinality —";
             m += " a scalar Modelica input accepts at most one source and a network output requires exactly one.";

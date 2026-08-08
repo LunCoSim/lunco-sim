@@ -194,6 +194,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("path", H::str("/BrokenNetwork")),
         ("parent", H::str("/")),
         ("members", empty()),
+        ("synthesizer", H::str("")),
         ("modelica_member_count", H::Int(0)),
         (
             "collection_error",

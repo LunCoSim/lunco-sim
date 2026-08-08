@@ -22,20 +22,18 @@ model FilteredDerivative
   output Real y "Filtered derivative of the measured signal";
 
   Real state;
+  Real validity;
 
 equation
-  // Before the producer is live, hold the filter state and report no
-  // derivative. The rising edge reinitializes the state to the first live
-  // value, so an async co-sim handoff cannot look like a physical acceleration
-  // impulse. Keeping the state differential in both branches is important:
-  // switching a state between an algebraic equation and der(state) leaves the
-  // live solver with a singular/non-finite derivative at release.
-  der(state) = if sample_valid > 0.5
-    then (u - state) / time_constant_s
-    else 0.0;
-  y = if sample_valid > 0.5
-    then (u - state) / time_constant_s
-    else 0.0;
+  // `sample_valid` is a confidence in [0, 1], so it gates both the state
+  // update and the reported derivative continuously. This keeps the
+  // cross-engine boundary branch-free while preserving the exact 0/1
+  // behaviour of a producer that publishes a discrete validity flag. The
+  // rising edge below still reinitializes the state to the first live value,
+  // preventing an asynchronous handoff from looking like a physical impulse.
+  validity = max(0.0, min(1.0, sample_valid));
+  der(state) = validity * (u - state) / time_constant_s;
+  y = validity * (u - state) / time_constant_s;
 
 when sample_valid > 0.5 then
   reinit(state, u);
