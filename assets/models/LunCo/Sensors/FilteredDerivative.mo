@@ -17,14 +17,30 @@ model FilteredDerivative
   parameter Real time_constant_s = 0.02
     "Measurement differentiator time constant (s)";
   input Real u = 0.0 "Measured signal";
+  input Real sample_valid = 0.0
+    "1 after the producer has published its first live sample";
   output Real y "Filtered derivative of the measured signal";
 
   Real state;
 
 equation
-  der(state) = (u - state) / time_constant_s;
-  y = (u - state) / time_constant_s;
+  // Before the producer is live, hold the filter state and report no
+  // derivative. The rising edge reinitializes the state to the first live
+  // value, so an async co-sim handoff cannot look like a physical acceleration
+  // impulse. Keeping the state differential in both branches is important:
+  // switching a state between an algebraic equation and der(state) leaves the
+  // live solver with a singular/non-finite derivative at release.
+  der(state) = if sample_valid > 0.5
+    then (u - state) / time_constant_s
+    else 0.0;
+  y = if sample_valid > 0.5
+    then (u - state) / time_constant_s
+    else 0.0;
+
+when sample_valid > 0.5 then
+  reinit(state, u);
+end when;
 
 initial equation
-  state = u;
+  state = 0.0;
 end FilteredDerivative;

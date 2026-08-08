@@ -30,6 +30,7 @@ model IMUSensor
   input Real raw_velocity_x = 0.0 "Avian LinearVelocity X (m/s)";
   input Real raw_velocity_y = 0.0 "Avian LinearVelocity Y (m/s)";
   input Real raw_velocity_z = 0.0 "Avian LinearVelocity Z (m/s)";
+  input Real raw_sample_valid = 0.0 "Avian state-valid release boundary";
   input Real raw_angvel_x = 0.0 "Avian AngularVelocity X (rad/s)";
   input Real raw_angvel_y = 0.0 "Avian AngularVelocity Y (rad/s)";
   input Real raw_angvel_z = 0.0 "Avian AngularVelocity Z (rad/s)";
@@ -108,6 +109,12 @@ equation
   angular_velocity_filter_x.u = raw_angvel_x;
   angular_velocity_filter_y.u = raw_angvel_y;
   angular_velocity_filter_z.u = raw_angvel_z;
+  velocity_filter_x.sample_valid = raw_sample_valid;
+  velocity_filter_y.sample_valid = raw_sample_valid;
+  velocity_filter_z.sample_valid = raw_sample_valid;
+  angular_velocity_filter_x.sample_valid = raw_sample_valid;
+  angular_velocity_filter_y.sample_valid = raw_sample_valid;
+  angular_velocity_filter_z.sample_valid = raw_sample_valid;
   world_accel_x = velocity_filter_x.y;
   world_accel_y = velocity_filter_y.y;
   world_accel_z = velocity_filter_z.y;

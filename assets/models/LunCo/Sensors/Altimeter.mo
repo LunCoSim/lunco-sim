@@ -88,6 +88,7 @@ equation
   projected_range_m = max(0.0, ray_distance_m) * vertical_projection;
   range_m = range_valid * projected_range_m;
   range_filter.u = range_m;
+  range_filter.sample_valid = range_valid;
   range_rate_mps = range_valid * range_filter.y;
   range_rate_valid = range_valid;
   sample_time_s = ray_sample_time;

@@ -21,6 +21,7 @@ def Xform "Imu" (
     float inputs:raw_velocity_x = 0.0
     float inputs:raw_velocity_y = 0.0
     float inputs:raw_velocity_z = 0.0
+    float inputs:raw_sample_valid = 0.0
     float inputs:raw_angvel_x = 0.0
     float inputs:raw_angvel_y = 0.0
     float inputs:raw_angvel_z = 0.0

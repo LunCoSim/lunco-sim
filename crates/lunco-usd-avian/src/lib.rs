@@ -1288,6 +1288,11 @@ fn extract_avian_prim(
         commands
             .entity(entity)
             .try_insert((body, mobility, lunco_core::SelectableRoot));
+        if !simulated || kinematic {
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::PhysicsStateReady);
+        }
 
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else if has_collision_api {
