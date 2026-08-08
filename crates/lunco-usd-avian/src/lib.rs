@@ -102,15 +102,14 @@ pub struct UsdAvianPlugin;
 /// Remove scene physics from Avian's graphs before the scene entities are
 /// despawned.
 ///
-/// Avian 0.7 removes contacts when ColliderMarker is removed, and removes a
-/// joint from its island when it is disabled or its authoritative joint
-/// component is removed. A
-/// raw batch despawn skips those graph transitions long enough for
-/// BodyIslandNode::on_remove to observe stale constraints. Teardown first
-/// disables every joint, then removes its joint component. This deliberately
-/// exercises Avian's supported graph transition once; the subsequent component
-/// removal sees no graph edge, and the eventual `JointDisabled` removal during
-/// despawn cannot re-enable anything because the joint component is already gone.
+/// Avian 0.7 removes contacts when `ColliderMarker` is removed, and removes a
+/// joint from its island when `JointDisabled` is added. A raw batch despawn
+/// skips those graph transitions long enough for `BodyIslandNode::on_remove`
+/// to observe stale constraints. Teardown therefore performs the transitions
+/// while the scene bodies are still alive and removes the disabled marker before
+/// despawn. The latter is important: Avian's `Remove<JointDisabled>` observer
+/// re-adds a joint, so leaving the marker on an entity that is about to despawn
+/// races against the body's island removal.
 fn prepare_scene_physics_teardown(world: &mut World) {
     let joints: Vec<(Entity, ComponentId)> = {
         let mut query = world.query_filtered::<(
@@ -135,19 +134,25 @@ fn prepare_scene_physics_teardown(world: &mut World) {
 
     // Retire constraints before contacts and bodies. Disable first so Avian
     // unlinks each edge while its endpoints and complete island list still
-    // exist. Removing active joint components directly let several removal
-    // observers mutate one island list in the same nested teardown flush; the
-    // landing gear's four prismatic joints exposed the resulting double unlink.
+    // exist. Flush that observer before removing the authoritative component;
+    // otherwise both transitions enqueue a remove for the same graph edge.
     for (entity, _) in &joints {
         if let Ok(mut entity_mut) = world.get_entity_mut(*entity) {
             entity_mut.insert(JointDisabled);
         }
     }
+    world.flush();
+
+    // Remove the joint component and its disabled marker before despawn. The
+    // joint removal observer now sees no graph edge, while the disabled-removal
+    // observer cannot re-add a joint because its component is already absent.
     for (entity, component_id) in joints {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove_by_id(component_id);
+            entity_mut.remove::<JointDisabled>();
         }
     }
+
     // Removing ColliderMarker is Avian's supported contact-graph removal path;
     // removing only Collider leaves its required marker alive until too late.
     for entity in colliders {

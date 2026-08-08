@@ -10,5 +10,6 @@
   "release":    ["KeyG"],
   "switch_mode": ["KeyV"],
   "pause":      ["KeyP"],
-  "cancel":     ["Backspace", "Escape"]
+  "cancel":     ["Backspace", "Escape"],
+  "place_waypoint": ["AltLeft"]
 }

@@ -38,7 +38,7 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{on_command, register_commands, Command, UserIntent};
 
-/// Intents forced held by [`SimulateIntent`], **keyed by the vessel they drive** —
+/// Intents forced held by [`SimulateIntent`], **keyed by the entity they drive** —
 /// a headless stand-in for the keyboard.
 ///
 /// `drive_from_bindings` treats a member exactly as a held key: it OR's into the
@@ -73,11 +73,11 @@ pub struct SimulateIntent {
     pub intent: String,
     /// `true` = hold it down, `false` = release it.
     pub held: bool,
-    /// The **vessel this intent drives**. An intent is meaningless without the thing
-    /// it controls: two spawns of one asset are two distinct vessels, and a targetless
-    /// intent drove both (see [`SimulatedIntents`]). Over the API this takes the
-    /// vessel's `api_id` — the `GlobalEntityId` `ListEntities` reports, the same
-    /// identity the cosim wires resolve by — and is resolved to the live entity.
+    /// The **entity this intent drives** (normally a vessel or avatar command
+    /// surface). An intent is meaningless without its target: two spawns of one
+    /// asset are two distinct entities, and a targetless intent is rejected. Over
+    /// the API this takes the target's `api_id` — the `GlobalEntityId` reported by
+    /// `ListEntities` — and is resolved to the live entity.
     pub target: Entity,
 }
 

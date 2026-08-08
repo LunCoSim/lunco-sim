@@ -92,6 +92,11 @@ pub enum UserIntent {
     /// While an egui field is focused egui consumes the key, so the guard suppresses
     /// this intent that frame and it acts only once the field is defocused.
     Cancel,
+    /// Place a waypoint on the scene surface when paired with the primary
+    /// pointer action. This is an editor intent, not a rover control port; it
+    /// lives in the same input map so the binding is data-driven and rebinding
+    /// does not leave the waypoint tool with a private raw-key path.
+    PlaceWaypoint,
 }
 
 /// Alias for the leafwing ActionState using our [UserIntent] enum.
@@ -163,6 +168,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
         "cancel" => Some(UserIntent::Cancel),
+        "place_waypoint" => Some(UserIntent::PlaceWaypoint),
         _ => None,
     }
 }
@@ -395,6 +401,16 @@ impl InputPorts {
         }
     }
 
+    /// Build a command surface from authored scalar defaults. The keys still
+    /// define the accepted vocabulary; this preserves USD's initial value on
+    /// each declared port instead of replacing an explicit value with zero.
+    pub fn with_defaults(defaults: impl IntoIterator<Item = (String, f64)>) -> Self {
+        Self {
+            values: defaults.into_iter().collect(),
+            brake_active: false,
+        }
+    }
+
     /// Current value of command input `name` (`0.0` if this vehicle doesn't accept
     /// it). The read side of the input surface for actuators.
     #[inline]
@@ -560,6 +576,19 @@ mod tests {
             Port::default().value,
             0.0,
             "A port should initialize to zero"
+        );
+    }
+
+    #[test]
+    fn authored_input_defaults_are_preserved_on_the_command_surface() {
+        let inputs =
+            InputPorts::with_defaults([("brake".to_string(), 1.0), ("throttle".to_string(), 0.0)]);
+        assert_eq!(inputs.cmd("brake"), 1.0);
+        assert_eq!(inputs.cmd("throttle"), 0.0);
+        assert_eq!(inputs.cmd("undeclared"), 0.0);
+        assert!(
+            !inputs.brake_active,
+            "the actuator derives this gate each tick"
         );
     }
 

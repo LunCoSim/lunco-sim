@@ -221,12 +221,10 @@ impl Panel for CommandDeck {
         } else if !view.behaviour_kind.is_empty() {
             ui.label(format!("{}", view.behaviour_kind));
         } else {
-            // Alt, NOT Ctrl: `on_scene_click_checkpoint` gates on AltLeft/AltRight
-            // (plain click possesses, Shift+click selects). This hint is the only
-            // place most users learn the gesture — if it names the wrong modifier
-            // they cannot give a rover a route at all, and the autopilot then looks
-            // broken for every vessel that did not ship with waypoints.
-            ui.weak("none — Alt+click the ground to add a checkpoint");
+            // The bundled keymap binds PlaceWaypoint to AltLeft. The handler reads
+            // that semantic intent, so this hint describes the default binding
+            // without making the editor depend on a particular key.
+            ui.weak("none — PlaceWaypoint (Alt+click by default) the ground to add a checkpoint");
         }
 
         ui.horizontal(|ui| {

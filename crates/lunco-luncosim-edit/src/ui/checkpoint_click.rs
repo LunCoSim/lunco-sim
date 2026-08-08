@@ -1,4 +1,5 @@
-//! Alt+LMB — drop a mission waypoint by **authoring a USD prim**.
+//! Place-waypoint intent + primary pointer action — drop a mission waypoint by
+//! **authoring a USD prim**.
 //!
 //! (Design: `docs/architecture/waypoints-in-usd.md`.)
 //!
@@ -31,11 +32,12 @@ use lunco_autopilot::usd_tree::{
     route_is_smooth, set_route_smooth, set_waypoint_dwell, BehaviorXml, ReachedWaypoints,
     TargetBindings,
 };
-use lunco_controller::ControllerLink;
+use lunco_controller::{ControllerLink, SimulatedIntents};
 use lunco_core::commands::SessionId;
 use lunco_core::session::SessionRegistry;
 use lunco_core::{
-    Avatar, EguiFocus, GlobalEntityId, InputPorts, SpawnToolActive, TerrainToolActive,
+    Avatar, EguiFocus, GlobalEntityId, InputPorts, IntentState, SpawnToolActive, TerrainToolActive,
+    UserIntent,
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SurfaceAlpha};
@@ -217,21 +219,24 @@ pub struct WaypointClickFrame<'w, 's> {
     pub q_parents: Query<'w, 's, &'static ChildOf>,
 }
 
-/// Vessel-side queries bundled separately from the click-ray inputs so the Alt
-/// click observer stays within Bevy's system-parameter limit. The bundle also
+/// Vessel-side queries bundled separately from the click-ray inputs so the
+/// waypoint click observer stays within Bevy's system-parameter limit. The bundle also
 /// makes the authored-document and runtime-only target surfaces explicit in one
 /// place.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WaypointVesselQueries<'w, 's> {
     pub q_prim: Query<'w, 's, &'static UsdPrimPath>,
     pub q_xml: Query<'w, 's, (Entity, &'static BehaviorXml)>,
-    pub q_inputs: Query<'w, 's, Entity, With<InputPorts>>,
+    // The free Avatar also has an InputPorts surface for flight. It is not a
+    // mission vessel, so never choose it as the implicit waypoint target when
+    // no vessel is possessed/selected.
+    pub q_inputs: Query<'w, 's, Entity, (With<InputPorts>, Without<Avatar>)>,
     pub q_autopilots: Query<'w, 's, &'static lunco_autopilot::Autopilot>,
 }
 
 /// Resolve the pointer to a point on the ground in **WORLD** (grid-absolute) space —
 /// the one spelling of "where did the user click?" for the waypoint editor, shared by
-/// the Alt+LMB drop and the Move / Insert-after placement click.
+/// the intent-driven waypoint drop and the Move / Insert-after placement click.
 ///
 /// Casts through the active camera against BOTH the DEM oracle (ground truth over open
 /// terrain, where the band-limited collider ring rounds a crater bowl) and the physics
@@ -278,20 +283,22 @@ fn pick_ground_world(
     }
 }
 
-/// Global `Pointer<Click>` observer: Alt+LMB drops a waypoint prim for the selected
-/// vessel and appends the matching `drive_to` leaf to its mission.
+/// Global `Pointer<Click>` observer: the `PlaceWaypoint` input intent paired with
+/// the primary pointer action drops a waypoint prim for the selected vessel and
+/// appends the matching `drive_to` leaf to its mission. The Alt binding lives in
+/// `assets/config/keybindings.json`; this handler never inspects a raw key.
 ///
 /// Stands down when the spawn / terrain-sculpt tool is armed, and when egui owns the
-/// pointer (the authoritative gate). Alt is excluded from the possession observer, so
-/// a checkpoint click does not also possess or follow what the ray hit.
+/// pointer (the authoritative gate). The semantic waypoint intent is excluded from
+/// the possession observer, so this click does not also possess or follow the hit.
 pub fn on_scene_click_checkpoint(
     mut click: On<Pointer<Click>>,
-    keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<EguiFocus>,
     spawn_tool: Res<SpawnToolActive>,
     terrain_tool: Res<TerrainToolActive>,
     selected: Res<SelectedEntities>,
-    avatars: Query<Entity, With<Avatar>>,
+    avatars: Query<(Entity, &IntentState), With<Avatar>>,
+    simulated_intents: Option<Res<SimulatedIntents>>,
     q_link: Query<&ControllerLink>,
     frame: WaypointClickFrame,
     vessels: WaypointVesselQueries,
@@ -311,19 +318,29 @@ pub fn on_scene_click_checkpoint(
     if click.button != PointerButton::Primary {
         return;
     }
-    // Alt+LMB only — a plain click possesses, Shift+click selects, Alt+click drops waypoints
-    if !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
+    // A plain primary click possesses/selects; the semantic PlaceWaypoint intent
+    // paired with it drops a waypoint. The input map supplies that intent, so
+    // rebinding the gesture changes this path without editor-only key handling.
+    let place_waypoint_held = avatars.iter().any(|(avatar, intents)| {
+        intents.pressed(&UserIntent::PlaceWaypoint)
+            || simulated_intents.as_ref().is_some_and(|sim| {
+                sim.0
+                    .get(&avatar)
+                    .is_some_and(|set| set.contains(&UserIntent::PlaceWaypoint))
+            })
+    });
+    if !place_waypoint_held {
         return;
     }
 
-    // Now that we are sure this is a Alt+LMB click meant for a waypoint, stop propagation.
+    // Now that this is a waypoint-intent click, stop propagation.
     click.propagate(false);
 
     // Default to the possessed vessel first, then fall back to the selected one, then fall back to the first vessel with a mission tree in the scene
     let possessed_vessel = avatars
         .iter()
         .next()
-        .and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
+        .and_then(|(av, _)| q_link.get(av).ok().map(|link| link.vessel_entity));
     let raw_vessel = possessed_vessel
         .or_else(|| selected.primary())
         .or_else(|| vessels.q_autopilots.iter().map(|ap| ap.vessel).next())
@@ -1393,7 +1410,7 @@ fn join_prim(parent: &str, name: &str) -> String {
 /// `mission_exists` comes from the **live composed stage**, not the document
 /// layer. Traverse authors its mission inside the selected site variant; an
 /// authored-layer lookup cannot see that composed prim and used to create a
-/// duplicate Mission on the first Alt-click, forcing a rover re-projection.
+/// duplicate Mission on the first waypoint click, forcing a rover re-projection.
 fn ensure_mission_program_ops(
     host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
     vessel_path: &str,

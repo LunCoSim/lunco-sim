@@ -532,6 +532,36 @@ pub fn tire_patch_force(
     }
 }
 
+/// Static friction demanded by a locked wheel at one contact patch.
+///
+/// `normal_force` is the suspension load for this wheel, so the gravity share
+/// is independent of wheel count.  Clamping to the authored Coulomb cone keeps
+/// an over-steep slope physically free to slide instead of turning the parking
+/// brake into an invisible constraint.
+fn parking_brake_force(
+    gravity: DVec3,
+    contact_normal: DVec3,
+    normal_force: f64,
+    friction_mu: f64,
+) -> DVec3 {
+    if normal_force <= 0.0 || friction_mu <= 0.0 || !gravity.is_finite() {
+        return DVec3::ZERO;
+    }
+    let normal = contact_normal.normalize_or_zero();
+    if normal == DVec3::ZERO {
+        return DVec3::ZERO;
+    }
+    let tangent_gravity = gravity - normal * gravity.dot(normal);
+    let gravity_len = gravity.length();
+    let tangent_len = tangent_gravity.length();
+    if gravity_len <= f64::EPSILON || tangent_len <= f64::EPSILON {
+        return DVec3::ZERO;
+    }
+    let requested = normal_force * tangent_len / gravity_len;
+    let available = friction_mu.max(0.0) * normal_force;
+    -tangent_gravity / tangent_len * requested.min(available)
+}
+
 /// Advance the analytic raycast longitudinal tire/axle solve by one fixed step.
 ///
 /// The return value is `(new_axle_speed, longitudinal_patch_force)`.  Both the
@@ -593,7 +623,8 @@ pub fn longitudinal_tire_step(
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::tire_patch_force;
+    use super::{parking_brake_force, tire_patch_force};
+    use bevy::math::DVec3;
 
     #[test]
     fn rolling_speed_defines_pivot_slip_angle_without_a_threshold() {
@@ -612,6 +643,14 @@ mod tire_patch_tests {
     #[test]
     fn zero_load_has_no_patch_force() {
         assert_eq!(tire_patch_force(10.0, 1.0, 1.0, 0.0, 1.0, 2.9), (0.0, 0.0));
+    }
+
+    #[test]
+    fn parking_brake_cancels_gravity_on_a_holdable_slope() {
+        let force = parking_brake_force(DVec3::new(0.0, -1.62, -0.8), DVec3::Y, 400.0, 1.5);
+        assert!(force.z > 0.0);
+        assert!((force.y).abs() < 1.0e-12);
+        assert!(force.length() <= 1.5 * 400.0 + 1.0e-9);
     }
 }
 
@@ -1006,13 +1045,18 @@ fn apply_wheel_drive(
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut q_chassis: Query<
-        (Forces, &RigidBody, Option<&InputPorts>),
+        (
+            Forces,
+            &RigidBody,
+            Option<&InputPorts>,
+            Option<&lunco_environment::LocalGravity>,
+        ),
         (With<ActuatorPorts>, lunco_physics::Integrable),
     >,
 ) {
     for (wheel, susp, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
-        if let Ok((mut forces, body, _)) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, body, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
             // drive-diag: the drive port the wheel reads, the body kind (Dynamic
             // vs Kinematic — the snap-back tell), and ground contact. Throttle-
             // gated so it only fires while driving. Whole block compiles out
@@ -1074,7 +1118,31 @@ fn apply_wheel_drive(
                     // The tire force was already solved this tick, from the real
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
                     // see `update_wheel_spin`. Applying it is all that is left.
-                    forces.apply_force_at_point(wheel.tire_force, contact_point);
+                    // A wheel brake must provide static friction as well as
+                    // spin-down torque.  The old path only damped axle spin,
+                    // so a rover with zero wheel speed still slid down a
+                    // slope: the tire solver produced a few newtons while
+                    // gravity supplied the remaining acceleration.  Project
+                    // gravity onto this contact plane and distribute the
+                    // required support by the measured normal load.  The
+                    // authored tire friction coefficient remains the hard
+                    // limit; a slope steeper than the tire can hold still
+                    // slides naturally.
+                    let parking_force = if inputs.is_some_and(|i| i.brake_active) {
+                        gravity
+                            .map(|g| {
+                                parking_brake_force(
+                                    g.0,
+                                    hit.normal,
+                                    normal_force,
+                                    wheel.friction_mu,
+                                )
+                            })
+                            .unwrap_or(DVec3::ZERO)
+                    } else {
+                        DVec3::ZERO
+                    };
+                    forces.apply_force_at_point(wheel.tire_force + parking_force, contact_point);
                     drive_diag_block!({
                         if wheel.tire_force.length() > 1.0 {
                             let arm = contact_point - forces.position().0;

@@ -8,6 +8,7 @@ license.workspace = true
 bevy = { workspace = true }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-environment = { path = "../lunco-environment" }
 # `physics_is_live` — the run condition gating force application on the solver
 # actually stepping. The wheel systems write into avian's force accumulator, which
 # only the physics step clears; the `Time<Virtual>` gate they used to carry is open

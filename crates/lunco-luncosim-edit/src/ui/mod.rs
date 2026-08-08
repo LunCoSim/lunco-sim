@@ -17,7 +17,7 @@ pub mod asset_visibility;
 pub mod autopilot_canvas;
 /// Screen-space labels a prim authored for itself (`lunco:billboard*`).
 pub mod billboard_overlay;
-/// Interactive checkpoint authoring — Alt+LMB append + right-click context
+/// Interactive checkpoint authoring — PlaceWaypoint intent + primary pointer append
 /// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
 /// commands (no new journal domain).
 pub mod checkpoint_click;

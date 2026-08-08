@@ -1287,16 +1287,23 @@ fn instantiate_usd_prim_from_stage(
                 })
                 .collect();
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
-                // `InputPorts` rides along with the binding: the binding is what
-                // DECLARES the accepted input ports, and `sync_input_ports`
-                // seeds the surface from it, so the component that holds those values
-                // belongs exactly where the declaration is. Seeded empty here — the
-                // vocabulary is never a Rust literal. (A rover also gets one at its
-                // `PhysxVehicleContextAPI` branch; `try_insert` order is irrelevant
-                // because the seeding is additive and idempotent.)
-                commands
-                    .entity(entity)
-                    .try_insert((binding, lunco_core::InputPorts::default()));
+                // Preserve authored `inputs:<port>` constants on the command
+                // surface. The binding declares which names are writable; USD
+                // remains the source of their initial state. Omitted inputs
+                // use the semantic zero default.
+                let inputs = lunco_core::InputPorts::with_defaults(binding.ports().map(|port| {
+                    let value = reader
+                        .real(&sdf_path, &format!("inputs:{port}"))
+                        .unwrap_or(0.0);
+                    (port.to_string(), value)
+                }));
+                // `InputPorts` rides along with the binding: the binding DECLARES
+                // the accepted input ports, while the composed USD inputs provide
+                // their initial values. The vocabulary is never a Rust literal.
+                // (A rover also gets one at its `PhysxVehicleContextAPI` branch;
+                // `try_insert` order is irrelevant because seeding is additive and
+                // idempotent.)
+                commands.entity(entity).try_insert((binding, inputs));
             }
 
             // Camera-follow mode is a property of how the vehicle moves, so it is
