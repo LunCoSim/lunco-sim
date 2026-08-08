@@ -68,6 +68,25 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
+    # The feet are a sliding landing interface, not traction devices.  Their
+    # prismatic joints constrain each leg to its authored rake; allowing the
+    # pad/regolith pair to develop lateral friction would turn a normal
+    # touchdown offset into a tangential impulse at the end of a 7.2 m lever.
+    # Keep that interface explicit in USD physics material rather than hiding
+    # a velocity clamp in the solver.  The normal reaction and suspension
+    # stroke remain fully physical; only tangential traction is absent.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "LandingPadSlide" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 0.0
+            float physics:staticFriction = 0.0
+            float physics:restitution = 0.0
+        }
+    }
+
     # Typed Lunica presentation contract: this assembly and its four top-level
     # flight networks are the authored schema surface.  The connection canvas
     # uses this property when present, so internal Modelica implementation
@@ -2544,6 +2563,7 @@ def Xform "DescentLander" (
             double3 xformOp:rotateXYZ = (0, 0, -20)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
         }
 
@@ -2666,6 +2686,7 @@ def Xform "DescentLander" (
             double3 xformOp:rotateXYZ = (0, 0, 20)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
         }
 
@@ -2726,6 +2747,7 @@ def Xform "DescentLander" (
             double3 xformOp:rotateXYZ = (20, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
         }
 
@@ -2786,6 +2808,7 @@ def Xform "DescentLander" (
             double3 xformOp:rotateXYZ = (-20, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
         }
 

@@ -3863,46 +3863,41 @@ pub(crate) fn install(app: &mut App) {
     // schedule config and cannot participate in this Bevy version's chained
     // system tuple. The explicit dependencies retain the same ownership order
     // without relying on tuple arity or a second compatibility path.
-    app.add_systems(
-        Update,
-        rewire_usd_connections.in_set(CosimUpdateSet::Wiring),
-    );
-    app.add_systems(
-        Update,
-        bevy::ecs::schedule::ApplyDeferred
-            .after(rewire_usd_connections)
-            .in_set(CosimUpdateSet::Wiring),
-    );
-    app.add_systems(
-        Update,
-        wrap_modelica_into_simcomponent
-            .run_if(any_unwrapped_modelica)
-            .after(rewire_usd_connections)
-            .in_set(CosimUpdateSet::Wiring),
-    );
+    // Keep the deferred flush inside the wiring transaction.  Registering an
+    // `ApplyDeferred` system separately and ordering another system against the
+    // `ApplyDeferred` type is ambiguous in Bevy 0.19 because the schedule also
+    // inserts automatic flush points.  The explicit chain gives the one
+    // dependency we need—rewire commands must land before the wrapper query—
+    // without depending on a globally unique executor system type.
+    //
     // Parameters: the authored constants the wiring pass gathered off the
     // unconnected `inputs:` ports, pushed into the model once it exists. After
     // the wrap, because it needs the `SimComponent` to write into.
-    app.add_systems(
-        Update,
-        seed_usd_input_defaults
-            .after(wrap_modelica_into_simcomponent)
-            .in_set(CosimUpdateSet::Wiring),
-    );
+    //
     // Modelica compilation consumes compile-time parameter overrides from the
     // composed USD `inputs:` surface. It therefore belongs after the wiring
     // projection, not alongside source discovery in `Scene`: on a fast local
     // asset load, dispatching earlier compiled with the Modelica declaration's
     // zero default before `UsdInputDefaults` existed on the entity. The model
     // then had a truthful-looking solver but the wrong initial state, and no
-    // later runtime input could repair a compile-time initialization value.
+    // later runtime input could repair that compile-time initialization value.
     //
     // Python has no compile-time parameter phase and remains in `Scene`; its
     // loaded source only installs the already-published generic interface.
     app.add_systems(
         Update,
-        dispatch_loaded_modelica_sources
-            .after(bevy::ecs::schedule::ApplyDeferred)
+        (
+            rewire_usd_connections,
+            bevy::ecs::schedule::ApplyDeferred,
+            wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+            seed_usd_input_defaults,
+            dispatch_loaded_modelica_sources,
+        )
+            // The explicit flush above is the only required sync point.  Do
+            // not add implicit flushes after the wrapper: preserving the
+            // existing next-frame Modelica bind/seed boundary keeps solver
+            // admission deterministic and avoids changing mission timing.
+            .chain_ignore_deferred()
             .in_set(CosimUpdateSet::Wiring),
     );
     // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after
