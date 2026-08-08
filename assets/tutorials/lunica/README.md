@@ -40,7 +40,7 @@ The **🎓 Tutorials** menu (top of the lunica menu bar) lists every lesson; F1 
 the perspective help's "Show Tour") starts the Overview. All of these issue the
 same `StartTutorial{id}` command. First-run onboarding is decided by the boot
 policy (`assets/scripting/policy/boot.rhai`) — not Rust — and shows the Overview
-once (persisted under the `tour_seen` setting).
+once (persisted in the canonical `tutorial_progress.onboarded` setting).
 
 ## Anchors (for `spotlight` / `coach_step` focus)
 

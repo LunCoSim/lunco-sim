@@ -30,6 +30,11 @@ fn the_app_layer_composes_the_tracks_it_offers() {
     let stage = lunco_usd_compose::compose_file_to_stage(&repo("assets/tutorials/luncosim.usda"))
         .expect("compose luncosim curriculum");
     let c = curriculum::project(&stage);
+    assert!(
+        c.failures.is_empty(),
+        "luncosim curriculum failures: {:?}",
+        c.failures
+    );
     let labels: Vec<&str> = c.tracks.iter().map(|t| t.label.as_str()).collect();
     assert_eq!(
         c.tracks.len(),
@@ -52,6 +57,11 @@ fn every_lesson_resolves_its_script() {
         )))
         .expect("compose curriculum");
         let c = curriculum::project(&stage);
+        assert!(
+            c.failures.is_empty(),
+            "{app} curriculum failures: {:?}",
+            c.failures
+        );
         for lesson in &c.lessons {
             let path = resolve(&lesson.script).unwrap_or_else(|| {
                 panic!("{}: unresolvable script '{}'", lesson.path, lesson.script)
@@ -81,6 +91,11 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
         )))
         .expect("compose curriculum");
         let c = curriculum::project(&stage);
+        assert!(
+            c.failures.is_empty(),
+            "{app} curriculum failures: {:?}",
+            c.failures
+        );
         for lesson in &c.lessons {
             match &lesson.world {
                 Some(w) => {
@@ -112,6 +127,11 @@ fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
         )))
         .expect("compose curriculum");
         let c = curriculum::project(&stage);
+        assert!(
+            c.failures.is_empty(),
+            "{app} curriculum failures: {:?}",
+            c.failures
+        );
         let known: std::collections::HashSet<&str> =
             c.lessons.iter().map(|l| l.path.as_str()).collect();
         for lesson in &c.lessons {

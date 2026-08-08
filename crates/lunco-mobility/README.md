@@ -9,7 +9,9 @@ This crate implements high-performance physics models for surface vehicles, focu
 - **Raycast-Based Wheel Model** — Uses emulated suspension rays instead of complex mesh-to-mesh collision for high performance on irregular terrain. Traction is decomposed in the **actual contact plane** (the ray-hit normal), so leaning single-track vehicles (bikes/motorcycles) get correct lateral grip; the steer axis is configurable (`lunco:steerAxis`) for raked motorcycle forks.
 - **Suspension Physics** — Spring-damper system (Hooke's Law) for realistic vehicle dynamics and oscillation suppression.
 - **Traction & Friction** — Coulomb friction model for longitudinal drive and lateral skid/slip behaviors.
-- **Steering Mixing** — Differential (Skid), Ackermann, and **`GenericDriveMix`** (a USD-authored linear per-port mix for arbitrary motor topologies, incl. true per-wheel independent drive).
+- **Steering Mixing** — a USD-authored `DriveMix` selects a registered allocation
+  kernel (`skid`, `linear`, or a project-provided kernel) for arbitrary motor
+  topologies, including true per-wheel independent drive.
 - **Differential Coupling** — `DifferentialCoupling`, an ideal per-substep holonomic gear that mirrors two rockers' pitch for rocker-bogie suspension (Avian has no gear joint).
 - **Joint-Based Suspension** — Prismatic joint support for vehicles with physical collision wheels.
 
@@ -23,9 +25,7 @@ Mobility logic runs in the `FixedUpdate` schedule, chain-linking suspension and 
 lunco-mobility/
   ├── WheelRaycast         — The core high-performance wheel component (contact-plane traction)
   ├── Suspension           — Spring-damper configuration for joints
-  ├── DifferentialDrive    — Control mixing for skid-steer rovers
-  ├── AckermannSteer       — Control mixing for articulated steering
-  ├── GenericDriveMix      — USD-authored linear per-port mix (arbitrary motor topology)
+  ├── DriveMix             — USD-authored kernel-selected per-port allocation
   ├── DifferentialCoupling — Per-substep rocker-bogie gear constraint
   └── systems.rs           — Ray-world intersection and force application logic
 ```
@@ -65,8 +65,8 @@ commands.spawn((
 
 ## Wheel-physics oracle (Modelica reference)
 
-The numerically-sensitive force laws (`suspension_force_mag`, `contact_friction`,
-`drive_force_mag`) are validated against a **continuous, proper-solver reference**
+The numerically-sensitive force laws (`suspension_force_mag`, `tire_patch_force`,
+`longitudinal_tire_step`) are validated against a **continuous, proper-solver reference**
 — Step 2 of [`docs/architecture/28-modelica-realtime-physics.md`](../../docs/architecture/28-modelica-realtime-physics.md).
 
 - **Declarative physics:** three companion `.mo` models state the ideal dynamics the
@@ -95,7 +95,7 @@ reference:
    `2·k·χ` (3.2 kN) while the old `.max(0)` cliff passes the full `c·v` impact spike
    (36 kN, the 27 kN-class transient the jitter work removed).
 
-**Friction** (`contact_friction`, sliding block → rest):
+**Friction** (`tire_patch_force`, sliding block → rest):
 4. **Smooth stop** — a sliding block tracks the reference (Coulomb→viscous knee) and
    comes to rest with **zero** sign-flips through zero.
 5. **Dead-band chatters** — the old slip dead-band sign-flips **149×** near rest (the
@@ -104,7 +104,7 @@ reference:
 6. **Braking grips harder** — full-cone braking stops the block while weak coasting
    grip is still rolling.
 
-**Drive** (`drive_force_mag`, longitudinal accel):
+**Drive** (`longitudinal_tire_step`, longitudinal accel):
 7. **Terminal velocity** — moderate throttle balances grip at `v_term = drive/k`
    (matches the reference to mm/s).
 8. **Reverse mirrors forward** — negative throttle gives the exact mirror (the

@@ -1842,3 +1842,72 @@ class "LunCoSurfaceAPI" (
         `primvars:displayOpacity` blending, which still occludes."""
     )
 }
+
+class "LunCoDomainSynthesisAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Selects the domain synthesizer that owns a composed network scope."
+)
+{
+    uniform token lunco:synthesizer = "" (
+        doc = "Registered synthesizer id for this domain scope."
+    )
+}
+
+class "LunCoForceActuatorAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "A force actuator geometry and its generated command-output binding."
+)
+{
+    float3 lunco:forceActuator:direction = (0, 0, 1) (
+        doc = "Unit direction in the actuator prim frame."
+    )
+    double lunco:forceActuator:maxForce = 0 (
+        doc = "Maximum force in newtons."
+    )
+    string lunco:forceActuator:commandOutput = "" (
+        doc = "Name of the selected synthesizer output that commands this actuator."
+    )
+}
+
+class "LunCoWaypointAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Marks a non-solid mission waypoint consumed by the route/event projector."
+)
+{
+    bool lunco:waypoint = false (
+        doc = "Whether this prim is a mission waypoint marker."
+    )
+}
+
+class "LunCoUiSchemaAPI" (
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Typed layout hints for the Lunica connection/schema projection."
+)
+{
+    bool lunco:ui:schemaRoot = false (
+        doc = "Whether this prim starts a projected connection-schema view."
+    )
+    bool lunco:ui:schemaNode = false (
+        doc = "Whether this prim is shown as a projected schema node."
+    )
+    int lunco:ui:schemaColumn = 0 (
+        doc = "Column in the projected schema layout."
+    )
+    int lunco:ui:schemaRow = 0 (
+        doc = "Row in the projected schema layout."
+    )
+    bool lunco:ui:controlHud = false (
+        doc = "Whether this prim contributes a control-HUD projection."
+    )
+    int lunco:ui:controlHudColumn = 0 (
+        doc = "Column in the projected control HUD."
+    )
+}

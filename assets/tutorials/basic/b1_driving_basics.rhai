@@ -28,20 +28,31 @@ fn b1_finished(me) {
     notify_kind("Nice climb — that's the feel of a grade under wheels.", "success");
 }
 
+fn b1_controlled(me) {
+    let rover = find("/DrivingBasics/Rover");
+    rover != () && controller(rover) != ()
+}
+
+fn b1_at_flag(me) {
+    let rover = find("/DrivingBasics/Rover");
+    let flag = find("/DrivingBasics/Flag");
+    if rover == () || flag == () { return false; }
+    arrived(rover, world_pos(flag), 2.5)
+}
+
 fn mission(me) {
     [
         // 1 — take control.
         objective("possess", #{
             text: "Click the rover (or press F) to take control",
-            requires_event: "cmd:PossessVessel",
+            done: Fn("b1_controlled"),
             on_complete: Fn("b1_driving_started"),
         }),
-        // 2 — climb the ramp to the finish flag. The marker's shared Sensor
-        // supplies the authoritative arrival event.
+        // 2 — climb the ramp to this lesson's finish flag.
         objective("reach_flag", #{
             text: "Drive out, then climb the ramp and stop at the finish flag",
             requires: ["possess"],
-            requires_event: "enter:waypoint",
+            done: Fn("b1_at_flag"),
             on_complete: Fn("b1_finished"),
         }),
     ]

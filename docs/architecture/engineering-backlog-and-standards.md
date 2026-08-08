@@ -175,23 +175,16 @@ is `parse_block`; a depth counter there covers the whole mutually-recursive
 family. Low urgency while only local, authored files are parsed — it matters when
 untrusted `.usda` can reach the parser.
 
-### Time-sampled values are not unit-converted
+### Resolved: time-sampled values are unit-converted
 
-**What:** Apply the canonical→stage conversion to `UsdOp::SetTimeSample` as
-`SetAttribute` already does.
+**Resolution:** `UsdDocument::apply` now applies the canonical→stage conversion
+to `UsdOp::SetTimeSample` through the same typed/unit path as `SetAttribute`.
 
-**Why:** The write-back inversion landed for `SetTranslate`, `SetRotate` and
-`SetAttribute` — the last of those dispatching on the attribute's USD type role
-and, for scalars, on the schema's declared linear unit. `SetTimeSample` carries
-the same `type_name`/`value` pair and goes through the same authoring boundary,
-but was not wired, so an **animated** position authored onto a Z-up/cm stage is
-still written in canonical values while its static counterpart is written
-correctly. A file where the static and sampled forms of one attribute disagree
-is worse than one that is uniformly wrong.
+**Evidence:** the conversion is covered by the document authoring tests; keep
+the tests as the regression gate when adding new sampled attribute roles.
 
-**Scope:** small. The conversion helpers exist and are tested; this is the same
-two call sites (author + inverse) in the `SetTimeSample` arm of
-`UsdDocument::apply`.
+**Scope:** closed. No compatibility path or alternate authoring mechanism is
+required.
 
 ### `!resetXformStack!` detaches to the stage root, not to the world
 

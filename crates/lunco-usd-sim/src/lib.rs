@@ -1095,7 +1095,10 @@ fn process_usd_sim_prim_read(
                 .unwrap_or(default.fade_end),
         });
     }
-    if reader.text(&sdf_path, "lunco:waypoint").as_deref() == Some("true") {
+    if reader
+        .scalar::<bool>(&sdf_path, "lunco:waypoint")
+        .unwrap_or(false)
+    {
         commands.entity(entity).try_insert(marker::WaypointMarker);
     }
     // Pointer behavior is scene intent, not a picking-backend concern.  The

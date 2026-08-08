@@ -526,9 +526,9 @@ def Xform "SandboxScene" (
     #   Amplifier  (Python)     scales `signal` by gain=50 → `scaled`
     #   CosimTarget (Avian)     receives `scaled` as `force_y`
     #
-    # Wire prims (`OscToAmp`, `AmpToTarget`) carry the `lunco:wireFrom` /
-    # `lunco:wireTo` rels — `lunco_usd_sim::cosim::process_usd_cosim_wires`
-    # resolves them to ECS entities and spawns one `SimConnection` each.
+    # Standard USD `inputs:*.connect` properties carry the edges; the composed
+    # USD cosim projector resolves them to ECS entities and spawns one
+    # `SimConnection` each.
     # Result: the target sphere bobs ±50 N at 1 Hz.
 
     def Scope "Oscillator" (

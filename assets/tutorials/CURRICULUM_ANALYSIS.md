@@ -23,7 +23,7 @@ now: the 2h training block is delivered as guided LuncoSim lessons.
 
 ---
 
-## 2. Current coverage (8 lessons, `sandbox/curriculum.usda`)
+## 2. Current coverage (22 lessons across four tracks)
 
 | id | kind | teaches | event-relevant? |
 |---|---|---|---|
@@ -36,9 +36,15 @@ now: the 2h training block is delivered as guided LuncoSim lessons.
 | `inspect-sim` | coach tour | live state: selection, ports, plots, API readback | ✅✅ telemetry skill |
 | `cosim` | coach tour | Modelica model flies a physics body | ➖ bonus (battery/thermal) |
 
-**Verdict:** good general-onboarding spine; **the event's specific skills are largely uncovered.**
-Nothing yet teaches slope/tip-over, reading shadow & radio-shadow, following an imported route, rover
-variants, or the scored run. `first-drive` and `inspect-sim` are the two that transfer directly.
+The table above is the original sandbox spine. The shipped catalog includes 2 LunCoSim lessons, 4 Basic rover lessons, 9
+Sandbox authoring/mission lessons, and 7 Lunica workbench lessons. Only six
+lessons currently have production scene gates; the remaining entries are
+explicitly coach/content lessons and must not be counted as physics coverage.
+
+**Verdict:** good general-onboarding spine with the core driving, slope/tip-over, and rover-variant
+lessons now present. The event-specific gaps are route import/validation, terrain and radio-shadow
+interpretation, autonomy under link loss, scoring, and battery/thermal exercises. `first-drive`,
+`driving-basics`, `slopes-tipover`, and `inspect-sim` are the current transfer-ready lessons.
 
 ---
 
@@ -48,14 +54,14 @@ variants, or the scored run. `first-drive` and `inspect-sim` are the two that tr
 
 | # | Proposed lesson | Teaches (task ref) | Build-readiness |
 |---|---|---|---|
-| S1 | **Drive on the Moon** | throttle/steer/brake, camera, wheel slip climbing a slope (§5) | **READY** — extends `first_drive`; needs a sloped mini-scene |
+| S1 | **Drive on the Moon** | throttle/steer/brake, camera, wheel slip climbing a slope (§5) | **LANDED** — `driving-basics` has a production scene gate |
 | S2 | **Read the Terrain** | slope, sun-shadow, radio-shadow zones — interpret *before* driving (§3.3) | **READY-ish** — visual/coach tour now; live rasters are a P1 build item |
 | S3 | **Follow the Route** | imported ДЗЗ waypoints, reach POI + return, "validate route vs rover" (§3.3) | **PARTIAL** — trigger-zone waypoints exist; route import is P0.3 |
-| S4 | **Rover Variants & Tip-Over** | CoM/torque/grip; why the "awful" rover tips; righting (§5) | **PARTIAL** — variants are USD-only (READY); tip-over detector is P1.5 |
+| S4 | **Rover Variants & Tip-Over** | CoM/torque/grip; why the "awful" rover tips; righting (§5) | **LANDED** — variants tour and `slopes-tipover` gate are shipped |
 | S5 | **Radio-Shadow → Autonomy** | comms drop on the floor forces autopilot; plan the traverse (§3.2) | **BLOCKED** on P1.4 zone + `piloted` gate wiring |
 | S6 | **The Scored Run** | objectives, timer, penalties, scoreboard; the practice mission, 3 tiers (§1.2) | **BLOCKED** on P1.5 scoring rhai layer |
 | S7 | **Battery & Thermal** (bonus) | energy budget, cool-in-shadow / overheat (§5 bonus) | **BLOCKED** on P2 modelica wiring |
-| S8 | **Join a Team Session** | connect, possess your team's rover, instructor topology (§2) | **READY** — possession + per-team sessions exist |
+| S8 | **Join a Team Session** | connect, possess your team's rover, instructor topology (§2) | **COACH ONLY** — flow is documented; connection/authority assertions still need a live two-peer gate |
 
 ### B. UI tours / new-feature intros (landed since Bevy 0.19, no tour yet)
 
@@ -69,12 +75,10 @@ variants, or the scored run. `first-drive` and `inspect-sim` are the two that tr
 
 ### C. Enabling gap that blocks *all* good UI tours
 
-Tutorial spotlighting currently anchors to **one generic region** (`panel.bottom` is the only anchor
-used anywhere; the anchor registry in `lunco-tutorial/src/lib.rs` is a single centered rect). Proper
-UI tours ("here is the Terrain Tools tab", "this gizmo handle rotates") need a **named-anchor
-vocabulary** per panel/widget (`panel.palette`, `panel.inspector`, `panel.terrain_tools`,
-`panel.rhai_editor`, `hud.objectives`, `viewport.gizmo`). This is a **small enabling task** and is the
-highest-leverage thing to build first — every U-tour and half the S-lessons improve once it exists.
+Tutorial spotlighting now publishes named `HelpAnchors` for the browser, inspector, command deck,
+Rhai editor, HUD, and viewport. Remaining UI-tour work is coverage and interaction proof: each new
+panel needs an anchor plus an executable click/compile/selection assertion, rather than a card that can
+be advanced with no state change.
 
 ---
 

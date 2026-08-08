@@ -1,6 +1,7 @@
 //! AST and text utility helpers.
 
 use super::errors::AstMutError;
+use crate::ast_extract::string_literal_value;
 use crate::pretty;
 use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition};
 use rumoca_compile::parsing::Token;
@@ -175,13 +176,6 @@ pub fn number_literal_value(e: &Expression) -> Option<f64> {
         }
         _ => None,
     }
-}
-
-/// Delegates to [`crate::ast_extract::string_literal_value`] — the
-/// canonical decoder. Kept here as a re-export so existing
-/// `super::util::string_literal_value` imports keep working.
-pub fn string_literal_value(e: &Expression) -> Option<String> {
-    crate::ast_extract::string_literal_value(e)
 }
 
 /// A trimmed `Text(...)` graphic.

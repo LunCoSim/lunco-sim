@@ -276,11 +276,9 @@ pub fn unescape_modelica_string(s: &str) -> String {
 /// [`unescape_modelica_string`]. Returns `None` for non-string
 /// terminals or non-terminal expressions.
 ///
-/// Canonical entry point — three earlier implementations
-/// (`ast_mut::util::string_literal_value`, the deleted
-/// `canvas_projection::string_literal_of`, and an inline pattern in
-/// `model_view::parsing`) disagreed on what to strip and which
-/// escapes to decode. Use this from now on.
+/// Canonical entry point for decoding Modelica string terminals. All AST
+/// mutation and projection code uses this same decoder so stripping and escape
+/// handling stay identical at every call site.
 pub fn string_literal_value(e: &rumoca_compile::parsing::ast::Expression) -> Option<String> {
     use rumoca_compile::parsing::ast::Expression;
     use rumoca_compile::parsing::TerminalType;

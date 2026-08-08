@@ -51,7 +51,7 @@ def Xform "DescentLander" (
     # contain component models, and the kind is what tells a browser (and the UI)
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoProgramAPI", "LunCoUiSchemaAPI"]
     # The ON-BOARD COMPUTER, as a reference arc — the vessel's COMMAND SURFACE.
     # Its `inputs:` ports (`external_throttle`/`pitch`/`roll`/`yaw`/`release`) ARE
     # the set of commands this vessel accepts; there is no lander class in engine
@@ -72,20 +72,20 @@ def Xform "DescentLander" (
     # flight networks are the authored schema surface.  The connection canvas
     # uses this property when present, so internal Modelica implementation
     # prims do not collapse the complete system into an unreadable cloud.
-    custom bool lunco:ui:schemaNode = false
+    bool lunco:ui:schemaNode = false
 
     # The body model publishes demands; these scopes choose the physical
     # actuation topology. The generated Modelica wrapper is rebuilt from the
     # actuator prims and their authored transforms whenever this composition
     # changes.
     def Scope "MainPropulsion" (
-        prepend apiSchemas = ["CollectionAPI:components"]
+        prepend apiSchemas = ["CollectionAPI:components", "LunCoDomainSynthesisAPI", "LunCoUiSchemaAPI"]
     )
     {
-        custom bool lunco:ui:schemaNode = true
+        bool lunco:ui:schemaNode = true
         string ui:displayName = "Main engine"
-        custom int lunco:ui:schemaColumn = 2
-        custom int lunco:ui:schemaRow = 1
+        int lunco:ui:schemaColumn = 2
+        int lunco:ui:schemaRow = 1
         # The engine is a generated Modelica network. Every connection below
         # is USD topology; the reusable component files own only equations.
         float inputs:valve_opening.connect = </DescentLander.outputs:throttle>
@@ -97,7 +97,6 @@ def Xform "DescentLander" (
         float inputs:rcs_fuel_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:fuel_mass_flow_kgs>
         float inputs:rcs_oxidizer_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:oxidizer_mass_flow_kgs>
         float outputs:thrust_n.connect = </DescentLander/MainPropulsion/MainChamber.outputs:thrust_n>
-        float outputs:activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
         float outputs:engine_activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
         float outputs:propellant_flow.connect = </DescentLander/MainPropulsion/MainChamber.outputs:propellant_flow>
         float outputs:propellant_mass.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_mass_kg>
@@ -295,13 +294,13 @@ def Xform "DescentLander" (
     }
 
     def Scope "AttitudeActuation" (
-        prepend apiSchemas = ["CollectionAPI:components"]
+        prepend apiSchemas = ["CollectionAPI:components", "LunCoUiSchemaAPI"]
     )
     {
-        custom bool lunco:ui:schemaNode = true
+        bool lunco:ui:schemaNode = true
         string ui:displayName = "RCS allocator"
-        custom int lunco:ui:schemaColumn = 2
-        custom int lunco:ui:schemaRow = 0
+        int lunco:ui:schemaColumn = 2
+        int lunco:ui:schemaRow = 0
         # The allocator is derived from the authored force-actuator geometry
         # below.  The selected synthesizer is explicit so a future projection
         # cannot silently reinterpret this scope as an acausal component graph.
@@ -347,13 +346,13 @@ def Xform "DescentLander" (
     # receives the thrust produced by its own Modelica engine model and its
     # flame receives that model's activity output.
     def Scope "AttitudePropulsion" (
-        prepend apiSchemas = ["CollectionAPI:components"]
+        prepend apiSchemas = ["CollectionAPI:components", "LunCoUiSchemaAPI"]
     )
     {
-        custom bool lunco:ui:schemaNode = true
+        bool lunco:ui:schemaNode = true
         string ui:displayName = "RCS jets"
-        custom int lunco:ui:schemaColumn = 3
-        custom int lunco:ui:schemaRow = 0
+        int lunco:ui:schemaColumn = 3
+        int lunco:ui:schemaRow = 0
         float inputs:pitch_pos_a_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_pos_a_valve>
         float inputs:pitch_pos_b_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_pos_b_valve>
         float inputs:pitch_neg_a_valve.connect = </DescentLander/AttitudeActuation.outputs:pitch_neg_a_valve>

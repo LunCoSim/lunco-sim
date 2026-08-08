@@ -5,16 +5,14 @@
 //! Rover skid/ackermann mixing is the first case; flight attitude/RCS allocation is
 //! the same shape (see the TODO on [`ControlKernelRegistry`]).
 //!
-//! ## Why a registry, not a component-type per steering architecture
+//! ## Why a registry per steering architecture
 //!
-//! The old model had a Rust *component* per arch (`DifferentialDrive`, `AckermannSteer`)
-//! dispatched by a hardcoded `if/else` in the mix system — a taxonomy that every new
-//! behaviour had to edit. Instead a kernel **self-registers by name** into an open
-//! registry (the same pattern as `PortRegistry` and `register_commands!`), and USD
-//! **selects** it by name. Adding a steering architecture (or a flight allocator) is a
-//! new registration + USD data — it touches no central dispatch and adds no component
-//! type. The kernel *math* stays Rust (per-tick, replayed by network prediction —
-//! mechanism); its *identity, ports, and coefficients* are data.
+//! A kernel **self-registers by name** into an open registry (the same pattern as
+//! `PortRegistry` and `register_commands!`), and USD **selects** it by name.
+//! Adding a steering architecture (or a flight allocator) is a new registration
+//! plus USD data; it touches no central dispatch and adds no component type. The
+//! kernel *math* stays Rust (per-tick, replayed by network prediction — mechanism);
+//! its *identity, ports, and coefficients* are data.
 //!
 //! Names mirror Omniverse PhysX Vehicle: `skid` ≈ `PhysxVehicleTankDifferentialAPI`,
 //! `linear` ≈ `PhysxVehicleMultiWheelDifferentialAPI` / `AckermannSteeringAPI`.
@@ -58,8 +56,7 @@ pub struct MixEntry {
 /// A vessel's actuator-allocation spec: which kernel maps its command inputs to
 /// actuator ports, plus that kernel's parameters. Authored from USD — the reader
 /// selects the kernel from the Omniverse differential/steering schema the asset
-/// declares (or an explicit authored `DriveMix` scope). Replaces the per-arch component
-/// types (`DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`).
+/// declares (or an explicit authored `DriveMix` scope).
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct DriveMix {

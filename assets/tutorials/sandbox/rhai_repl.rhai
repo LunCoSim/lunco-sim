@@ -2,7 +2,7 @@
 
 fn steps() {
     [
-        #{ anchor: "",             focus: (),              title: "Rhai Scripting",      body: "Welcome to Rhai scripting in the Sandbox. You can automate any action, write custom controllers, or define complex mission parameters. Let's look at the tools. Next / Back below." },
+        #{ anchor: "",             focus: (),              title: "Rhai Policy",         body: "Welcome to Rhai policy in the Sandbox. Use it for event-driven sequencing, mission objectives, and scenario glue; continuous controller equations belong in Modelica or Rust. Let's look at the tools. Next / Back below." },
         #{ anchor: "panel.center", focus: "rhai_editor",   title: "The Rhai Editor",     body: "We opened the Behaviour editor. Here you can edit `.rhai` script files directly inside LunCoSim with full syntax highlighting. These scripts are attached to USD entities to define their dynamic behaviour." },
         #{ anchor: "panel.bottom", focus: "rhai_repl",     title: "The Live REPL",       body: "At the bottom dock is the Rhai REPL (Read-Eval-Print Loop) console. Type commands here like `print(3 + 4)` or dispatch commands to control rovers instantly in the running simulation." },
         #{ anchor: "panel.bottom", focus: "rhai_repl",     title: "Parameter Hints",     body: "The REPL features auto-completion and USD parameter hints to make typing commands and query names quick. This is the same scripting engine that runs behind our AI agents and MCP tools." },

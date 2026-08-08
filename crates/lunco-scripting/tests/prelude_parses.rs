@@ -51,6 +51,18 @@ fn embedded_prelude_files_all_parse() {
     }
 }
 
+#[test]
+fn set_property_helper_uses_the_reflected_command_fields() {
+    let (_, src) = lunco_assets::scripting::prelude_files()
+        .into_iter()
+        .find(|(stem, _)| stem == "control")
+        .expect("control.rhai must be in the prelude");
+    assert!(src.contains("entity_id: id"));
+    assert!(src.contains("property: key"));
+    assert!(!src.contains("target: id"));
+    assert!(!src.contains("key: key"));
+}
+
 /// Every BUNDLED tutorial must parse.
 ///
 /// Same blind spot as the prelude, sharper consequence: a tutorial is a rhai ASSET,

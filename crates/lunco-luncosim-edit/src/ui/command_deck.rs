@@ -43,7 +43,7 @@ pub struct CommandDeckView {
     pub autopilot_engaged: bool,
     /// Patrol waypoints read off the `AutopilotBehaviorSpec` (empty for
     /// non-patrol or no spec).
-    pub patrol: Vec<[f32; 3]>,
+    pub patrol: Vec<[f64; 3]>,
     /// Count of arrival actions per waypoint (parallel to `patrol`). A mission
     /// authors these in rhai/USD; the deck shows a 🛠 marker when non-zero so
     /// the user can see a waypoint isn't just a geometry pin.

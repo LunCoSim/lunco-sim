@@ -38,7 +38,7 @@ APIs** — the core never enumerates domains:
 | `lunco:` USD attribute namespace | read via generic `prim_attribute_value::<T>(path, "any:string")`; core never enumerates names |
 | USD `apiSchemas` | open string labels via `has_api_schema(reader, path, "AnyAPI")` |
 | **`lunco-canvas` `Port.kind: SmolStr`** (`scene.rs:268`) | free-form domain tag — doc literally lists `"electrical.pin"`, `"modelica.flange"`, `"dataflow.f32"`, empty = untyped, *caller validates* |
-| `rel lunco:epsBus` / EPS attrs | read only via the **generic** typed reader; zero domain-specific Rust (all real usage is USD data + tests) |
+| USD `inputs:`/`outputs:` connections | read through the **generic** typed reader; signal identity and topology remain USD-owned |
 
 Note "domain" already has an *open* meaning in code — but it means **document/engine domain** (Modelica,
 USD, Cosim), via `trait DomainEngine` + `DocumentKindRegistry`. **Physical domains have no descriptor,
@@ -383,8 +383,8 @@ radius. Ordered by leverage.
   minimal `lunco:` metadata on the input (`lunco:factor`, `lunco:offset` — SSP LinearTransformation terms);
   that is the residual LunCo glue.
 - **`SimConnection`** (`lunco-cosim/connection.rs`) is not an *authored* form: it is a **projection of** the
-  USD connections, read at compose time. Electrical topology (`rel lunco:epsBus`) is a connection like any
-  other, not a schema of its own.
+  USD connections, read at compose time. Electrical topology uses the same connectable attributes as every
+  other signal, not a separate relationship encoding.
 - **Blast radius:** the cosim reader walks USD connections (`lunco-usd-sim/cosim.rs`), and every asset that
   wires (balloon, `sun_tracker.usda`, rover EPS) authors them. **This is the load-bearing form —
   everything else composes with it.**
@@ -511,8 +511,8 @@ Key realizations for us:
   structure, computed values = runtime. This gives A2's "authored identity vs runtime values" split a
   first-class USD name and a convergence target beyond OmniGraph/Fabric.
 - **`rel` vs connection is a real distinction** we must honor: bindings/membership stay `rel`; *signal
-  flow* becomes `connect`. Our current `rel lunco:epsBus` mis-uses a relationship for dataflow — A1 fixes
-  exactly this by moving it to connections.
+  flow* becomes `connect`. The former EPS relationship mis-used a relationship for dataflow; A1 keeps the
+  canonical connection form instead.
 
 ### 10.2 How the graph model matches our general architecture
 
@@ -728,7 +728,7 @@ arrays don't compose across references"). The USD-native form is *more* composab
 4. **Runtime: no change.** Spawned `SimConnection`s flip the existing `RebuildOnChange` guard → one
    recompile → resolved-slot steady state. `propagate.rs` is not touched.
 5. **Delete** `simWires` CSV parser, wire-prim schema, `parse_wire`, the CSV-composition workaround,
-   `rel lunco:epsBus` handling, and `PortType`/`classify`.
+   legacy relationship handling, and `PortType`/`classify`.
 6. **Canvas** (later): read connections → `Scene` edges; `EdgeCreated` → `openusd` `add_connection` via
    `ApplyUsdOp`; positions via `NodeGraphNodeAPI`.
 

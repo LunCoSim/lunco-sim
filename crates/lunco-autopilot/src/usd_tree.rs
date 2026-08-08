@@ -1222,7 +1222,7 @@ mod editor_tests {
         }
     }
 
-    fn drive(x: f32) -> BehaviorSpec {
+    fn drive(x: f64) -> BehaviorSpec {
         BehaviorSpec::DriveTo {
             target: [x, 0.0, 0.0],
             speed: 0.5,

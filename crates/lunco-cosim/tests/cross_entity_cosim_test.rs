@@ -16,9 +16,8 @@
 //!   3. AvianSim integrates the propagated `force_y` into LinearVelocity.
 //!
 //! The test bypasses USD asset loading (which needs the full Bevy asset
-//! pipeline) and constructs entities + wires directly, mirroring what
-//! `lunco_usd_sim::cosim::process_usd_cosim_wires` would emit at
-//! runtime. The USD reader path is exercised live by the
+//! pipeline) and constructs entities + wires directly, mirroring what the
+//! composed-USD cosim projector emits at runtime. The USD reader path is exercised live by the
 //! luncosim scene's CosimChain demo.
 
 #![cfg(feature = "python")]

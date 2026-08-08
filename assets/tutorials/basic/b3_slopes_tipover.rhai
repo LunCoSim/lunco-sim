@@ -3,7 +3,7 @@
 //! The tip-over lesson, on the deliberately top-heavy Hauler. Two truths a driver
 //! must feel: (1) a borderline grade is climbable straight up the fall-line but
 //! (2) steering ACROSS it rolls a high-centre-of-mass rover. The student is
-//! coached to first make it tip on purpose (auto-righting recovers), then climb
+//! coached to first make it tip on purpose, recover it explicitly, then climb
 //! it properly. Completion is reliable (possess → reach the top marker); the tilt
 //! itself is read with `is_tipped` / `tilt_deg` (prelude, off `world_rotation`).
 
@@ -16,13 +16,13 @@ fn on_start(me) {
 }
 
 fn b3_possessed(me) {
-    hint("First, an experiment. Drive onto the grade and steer ACROSS the slope — watch the top-heavy Hauler start to roll. If it goes over, the auto-righting sets you back on your wheels. Feel where the edge is.");
+    hint("First, an experiment. Drive onto the grade and steer ACROSS the slope — watch the top-heavy Hauler start to roll. If it goes over, use the Recover tool to put it back on its wheels. Feel where the edge is.");
 }
 
 fn b3_edge_felt(me) {
     clear_spotlight();
     let msg = if is_tipped(find("/SlopeTest/Rover"), 15.0) {
-        "Over it went — auto-righting has you. THAT is a high centre of mass."
+        "Over it went — recover it explicitly. THAT is a high centre of mass."
     } else {
         "Feel that lean? A few more degrees across the fall-line and the Hauler goes over."
     };
@@ -32,6 +32,18 @@ fn b3_edge_felt(me) {
 
 fn b3_tilted(me) {
     tilt_deg(find("/SlopeTest/Rover")) > 15.0
+}
+
+fn b3_controlled(me) {
+    let rover = find("/SlopeTest/Rover");
+    rover != () && controller(rover) != ()
+}
+
+fn b3_at_top(me) {
+    let rover = find("/SlopeTest/Rover");
+    let marker = find("/SlopeTest/Marker");
+    if rover == () || marker == () { return false; }
+    arrived(rover, world_pos(marker), 2.5)
 }
 
 fn b3_reached_top(me) {
@@ -70,7 +82,7 @@ fn mission(me) {
     [
         objective("possess", #{
             text: "Take control of the Hauler",
-            requires_event: "cmd:PossessVessel",
+            done: Fn("b3_controlled"),
             on_complete: Fn("b3_possessed"),
         }),
         // The experiment the header describes was previously UNSCORED — coached in a
@@ -91,7 +103,7 @@ fn mission(me) {
         objective("reach_top", #{
             text: "Now climb straight up the fall-line to the marker at the top",
             requires: ["feel_the_edge"],
-            requires_event: "enter:waypoint",
+            done: Fn("b3_at_top"),
             on_complete: Fn("b3_reached_top"),
         }),
     ]
@@ -118,9 +130,10 @@ fn task(me) {
         // the demo must exercise the same objective chain a student does, or CI
         // proves a path nobody takes.
         step(Fn("b3_cross_grade"), Fn("b3_cross_grade_done")),
-        // The marker sensor is the sole arrival contract. The action continues
-        // until that event, with no wider distance predicate that could stop the
-        // rover outside the authored trigger volume.
+        // The unattended drive still uses the marker sensor's authored event as
+        // its task completion contract; the student-facing objective above uses
+        // the named marker position so it cannot be completed by an unrelated
+        // waypoint event.
         #{ act: Fn("b3_climb"), event: "enter:waypoint" },
         once(Fn("b3_report_tip")),
         #{ act: Fn("b3_brake"), secs: 1.5 },

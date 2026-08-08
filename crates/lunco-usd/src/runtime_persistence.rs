@@ -106,24 +106,10 @@ fn read_bytes(path: &Path) -> Option<Vec<u8>> {
     result.ok()
 }
 
-/// Write `bytes` to `path`. Native: write a `.tmp` sibling then atomically
-/// `rename` over the target (the established lunco pattern, see `recents.rs` /
-/// `journal_persistence.rs`). Wasm: a `localStorage` set is already atomic.
+/// Write `bytes` through the shared storage boundary. The backend owns parent
+/// creation and atomic replacement on native and persistence on wasm.
 fn write_bytes(path: &Path, bytes: &[u8]) -> lunco_storage::StorageResult<()> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let tmp = path.with_extension("usda.tmp");
-        lunco_storage::FileStorage::new().write_sync(&StorageHandle::File(tmp.clone()), bytes)?;
-        std::fs::rename(&tmp, path).map_err(lunco_storage::StorageError::Io)?;
-        Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        lunco_storage::WebStorage::new().write_sync(&StorageHandle::File(path.to_path_buf()), bytes)
-    }
+    lunco_storage::write_file_sync(path, bytes)
 }
 
 /// True when a runtime layer carries real content (any prim opinion), as

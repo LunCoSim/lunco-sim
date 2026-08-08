@@ -274,13 +274,12 @@ const MAX_INPUT_FRAMES: usize = 128;
 /// presence of writes is NOT an activity signal — the *value* is.
 const INPUT_EPS: f64 = 1e-3;
 
-/// Fixed-tick input emission for prediction. Emits exactly one [`lunco_cosim::SetPorts`]
-/// per fixed tick per controller, from its [`ControlBinding`] and the currently
-/// held keys, stamped with a dense per-vessel `seq` + `SimTick`. Every bound port
-/// name is written every tick (0 on release) so setpoints zero out cleanly. For a
-/// vessel this client owns + predicts ([`lunco_core::OwnedLocally`]) the frame is
-/// buffered for replay by the [`record_control_input`] observer; on host/standalone
-/// the command still fires with `seq = 0`.
+/// Fixed-tick input emission for prediction. Emits a [`lunco_cosim::SetPorts`]
+/// while a controller is active and once on the active→idle edge, from its
+/// [`ControlBinding`] and held keys, stamped with a per-vessel `seq` + `SimTick`.
+/// For a vessel this client owns + predicts ([`lunco_core::OwnedLocally`]) the
+/// frame is buffered for replay by [`record_control_input`]; on host/standalone
+/// the command uses `seq = 0`. Silent idle ticks leave the domain writer alone.
 fn drive_from_bindings(
     role: Res<lunco_core::NetworkRole>,
     tick: Res<lunco_core::SimTick>,
@@ -414,29 +413,16 @@ fn drive_from_bindings(
         // the clean stop the every-tick stream provided. A pressed key resumes
         // writing immediately: the human always preempts a script mid-drive.
         //
-        // TODO(spec-034): predicted CLIENTS (`owned_gid.is_some()`) are exempt
-        // and keep the OLD behaviour — an unconditional per-tick `SetPorts`
-        // batch (all zeros while idle), each stamped with an incrementing
-        // `seq`. That stream exists for the prediction machinery, not for
-        // control: `record_control_input` buffers one `InputFrame` per seq and
-        // reconcile's input-replay assumes the seq stream is CONTIGUOUS — a
-        // silent gap would read as lost inputs during rollback, and the host
-        // ack watermark (`AppliedInputSeq`) would stall on the last idle frame.
-        // Consequence: on a client, an idle possessing human still stomps
-        // scripted drive of the possessed vessel (acceptable today — scripts
-        // don't co-drive client-predicted vessels). To extend idle-yield to
-        // clients, change this TOGETHER with the replay side, e.g.: (a) make
-        // reconcile treat a seq gap as "hold last input" instead of loss, or
-        // (b) keep per-tick frames in `OwnedInputLog` without emitting port
-        // writes (split bookkeeping from actuation), or (c) send explicit
-        // keep-alive frames flagged `idle` that the port path ignores. Until
-        // then, single-player/host gets the arbiter; the wire keeps its
-        // contiguous stream.
         let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
         let prev = was_active
             .insert(link.vessel_entity, active)
             .unwrap_or(false);
-        if !active && !prev && owned_gid.is_none() {
+        // An idle client does not own the control surface merely because it is
+        // predicted. The active→idle edge above emits one real zero batch so
+        // the actuator stops; subsequent idle ticks are silent and cannot
+        // overwrite a scripted/API controller. Prediction bookkeeping resumes
+        // on the next active edge with a fresh contiguous input sequence.
+        if !active && !prev {
             continue;
         }
 

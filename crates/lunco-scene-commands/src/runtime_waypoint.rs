@@ -74,7 +74,7 @@ pub fn append_runtime_patrol(
             dwell,
         }) => {
             let mut waypoints = waypoints.clone();
-            waypoints.push(lunco_autopilot::PatrolWaypoint::at(point));
+            waypoints.push(lunco_autopilot::PatrolWaypoint::at(point.map(f64::from)));
             Ok(lunco_autopilot::BehaviorSpec::Patrol {
                 waypoints,
                 speed: *speed,
@@ -87,7 +87,7 @@ pub fn append_runtime_patrol(
                 .to_string(),
         ),
         None => Ok(lunco_autopilot::BehaviorSpec::Patrol {
-            waypoints: vec![lunco_autopilot::PatrolWaypoint::at(point)],
+            waypoints: vec![lunco_autopilot::PatrolWaypoint::at(point.map(f64::from))],
             speed: 0.6,
             radius: 3.0,
             dwell: 0.0,

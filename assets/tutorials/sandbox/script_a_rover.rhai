@@ -6,9 +6,9 @@
 fn steps() {
     [
         #{ anchor: "",                   title: "Script a Rover",      body: "Behaviour in LunCoSim is rhai — hot-reloadable scripts attached to entities. This tutorial you're reading is itself one. Next / Back below." },
-        #{ anchor: "",                   title: "Lifecycle hooks",     body: "A scenario defines on_start (once), on_tick (every step), and on_event (a signal arrived). Per-entity state lives on `this`." },
-        #{ anchor: "",                   title: "High-level verbs",    body: "You don't hand-code control loops. Prelude verbs do the work: nav_to(target), drive(rover, fwd, steer), arrived(...), emit(event). Navigation, missions, and reactions are all rhai." },
-        #{ anchor: "panel.side_browser", title: "Attach & run",        body: "Attach a script by adding a `Scope` child with `prepend apiSchemas = [\"LunCoProgramAPI\"]` and `uniform asset info:sourceAsset = @scenarios/patrol.rhai@`; delete the scope and the behaviour goes with it. Per-instance settings are typed `inputs:` on that scope. Or run one live through RunScenario; re-running hot-reloads it without a rebuild." },
+        #{ anchor: "",                   title: "Event-driven lifecycle", body: "A scenario uses on_start for setup, on_event for reactions, and declarative mission/task primitives for progression. Production scenarios do not install an on_tick control loop. Per-entity state lives on `this`." },
+        #{ anchor: "",                   title: "High-level verbs",    body: "You don't hand-code continuous control loops. Modelica owns continuous equations; Rhai supplies policy and sequencing through verbs such as nav_to, arrived, emit, and mission objectives." },
+        #{ anchor: "panel.side_browser", title: "Attach & run",        body: "Attach a script by adding a `Scope` child with `prepend apiSchemas = [\"LunCoProgramAPI\"]` and `uniform asset info:sourceAsset = @scenarios/patrol.rhai@`; delete the scope and the behaviour goes with it. Per-instance settings are authored as `lunco:param:*` attributes. Or run one live through RunScenario; re-running hot-reloads it without a rebuild." },
         #{ anchor: "panel.bottom",       title: "Watch it work",       body: "print() and telemetry land in the Console below. Scripts sense and command the world through the SAME API the UI and AI agents use." },
         #{ anchor: "",                   title: "Go deeper",           body: "See the Scripting Guide and the author-scenario skill for the full verb surface, sequencing, and mission objectives." },
     ]

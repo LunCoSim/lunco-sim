@@ -15,10 +15,8 @@ use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
 use super::text;
-use super::util::{
-    graphic_entry_arg, is_graphic_entry_named, read_text_spec, render_text_spec,
-    string_literal_value,
-};
+use super::util::{graphic_entry_arg, is_graphic_entry_named, read_text_spec, render_text_spec};
+use crate::ast_extract::string_literal_value;
 use crate::pretty;
 
 // ---------------------------------------------------------------------------

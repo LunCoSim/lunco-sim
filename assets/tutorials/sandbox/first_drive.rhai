@@ -1,9 +1,9 @@
 //! First Drive tutorial — orchestrator attached to /FirstDrive/Scenario.
 //!
 //! A declarative `mission(me)`: each objective advances when the student does
-//! the real thing, not on a timer. Possession is the `cmd:PossessVessel` event
-//! (any command dispatch lands on the bus as `cmd:<Name>`); arrival is the
-//! flag's `enter:waypoint` trigger-zone event. The engine auto-publishes the
+//! the real thing, not on a timer. Possession and arrival are checked against
+//! the rover's live controller and distance to this lesson's named flag. The
+//! engine auto-publishes the
 //! objectives checklist to the tutorial HUD, so this whole lesson is ~30 lines
 //! and no Rust.
 
@@ -26,25 +26,36 @@ fn first_drive_finished(me) {
     notify_kind("You reached the flag — nice driving!", "success");
 }
 
+fn first_drive_controlled(me) {
+    let rover = find("/FirstDrive/Rover");
+    rover != () && controller(rover) != ()
+}
+
+fn first_drive_at_flag(me) {
+    let rover = find("/FirstDrive/Rover");
+    let flag = find("/FirstDrive/Flag");
+    if rover == () || flag == () { return false; }
+    arrived(rover, world_pos(flag), 2.5)
+}
+
 fn mission(me) {
     // Scene entity paths as LOCALS (not top-level `const`): rhai closures capture
     // enclosing locals by value, but named fns can't see module consts — so the
     // `done` closure below captures these, resolving each via find() every tick.
     [
-        // Step 1 — take control. Completes when a PossessVessel command fires,
-        // however the student triggers it (click the rover or press F). Works for
-        // the UI path now that native possession is mirrored onto the cmd:* bus.
+        // Step 1 — take control. A request is not success; live controller state
+        // must show that this rover is actually owned.
         objective("possess", #{
             text: "Click the rover (or press F) to take control",
-            requires_event: "cmd:PossessVessel",
+            done: Fn("first_drive_controlled"),
             on_complete: Fn("first_drive_possessed"),
         }),
-        // Step 2 — drive to the flag. Gated on step 1, then completed by the
-        // flag's shared visible-marker Sensor event.
+        // Step 2 — drive to this lesson's named flag. A generic marker event is
+        // not enough to prove the correct rover reached the correct target.
         objective("reach_flag", #{
             text: "Drive to the glowing flag",
             requires: ["possess"],
-            requires_event: "enter:waypoint",
+            done: Fn("first_drive_at_flag"),
             on_complete: Fn("first_drive_finished"),
         }),
     ]

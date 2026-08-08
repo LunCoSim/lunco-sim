@@ -366,7 +366,13 @@ fn decide(
     let default_action = if kind == kinds::PROGRAM_FAILED && settings.ignore_failed_models {
         Action::Proceed
     } else if kind == kinds::PROGRAM_FAILED {
-        Action::HoldWorld
+        // A failed participant is terminal for that participant, not for every
+        // unrelated body in the scene. Keep the world-wide escalation only for
+        // a genuinely world-scoped failure.
+        match subject {
+            Subject::Entity(_) => Action::HoldEntity,
+            Subject::World => Action::HoldWorld,
+        }
     } else {
         Action::builtin(kind, subject, elapsed_s)
     };

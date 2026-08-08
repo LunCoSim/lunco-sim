@@ -715,7 +715,7 @@ property, so nothing is hiding in a string the type system can't see.
 Now the supervisor. Create `assets/scenarios/my_mission/lander_supervisor.rhai`:
 
 ```rhai
-fn on_tick(me) {
+fn check_touchdown(me) {
     // Touchdown is "low AND slow" — two things at once, so it's easiest to spot
     // here and announce as our own event for the mission to wait on. Emits once.
     if this.touchdown != true && __settled(me) {
@@ -725,6 +725,7 @@ fn on_tick(me) {
 }
 
 fn on_event(me, evt) {
+    check_touchdown(me);
     if evt.name == "lander_low_fuel" {
         notify_kind("Lander low on fuel.", "warn");
     } else if evt.name == "lander_depleted" {

@@ -73,7 +73,7 @@ pub struct TutorialMeta {
     /// before running the script; absent is a statement, not a missing value.
     pub world: Option<String>,
     /// Auto-launch this tutorial once on the user's first run (persisted via
-    /// [`TutorialSeen::onboarded`]). At most one lesson per app should set it —
+    /// [`TutorialProgress::onboarded`]). At most one lesson per app should set it —
     /// the onboarding entry point.
     pub first_start: bool,
     /// The prim path of the lesson to chain to on completion
@@ -410,8 +410,14 @@ pub mod curriculum;
 pub struct TutorialProgress {
     /// Ids of tutorials whose mission reported `MISSION_COMPLETE`.
     pub completed: Vec<String>,
+    /// First-run onboarding has been successfully dispatched through the
+    /// canonical tutorial launcher. This belongs with tutorial progress; a
+    /// second persisted onboarding resource would drift from it.
+    #[serde(default)]
+    pub onboarded: bool,
     /// The tutorial currently running (set by [`StartTutorial`], cleared on
     /// completion/skip) — so a `MISSION_COMPLETE` is attributed correctly.
+    #[serde(skip)]
     pub current: Option<String>,
     /// When `true`, a finished tutorial chains straight to its [`TutorialMeta::next`]
     /// with no prompt; when `false` (default), completion raises the [`PendingAdvance`]
@@ -430,22 +436,6 @@ impl lunco_settings::SettingsSection for TutorialProgress {
     const KEY: &'static str = "tutorial_progress";
 }
 
-/// Persisted "first-run onboarding done" flag — read by the boot policy
-/// (`boot.rhai`) via the scripting settings verbs, and by [`consult_boot`].
-/// Reflect-registered (key `tour_seen`, preserved from the pre-rhai tour) so the
-/// rhai side can reach it. The *decision* to onboard lives in the hook; Rust only
-/// stores the flag.
-#[derive(Resource, Reflect, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
-#[reflect(Resource)]
-pub struct TutorialSeen {
-    /// Whether first-run onboarding has already happened.
-    pub onboarded: bool,
-}
-
-impl lunco_settings::SettingsSection for TutorialSeen {
-    const KEY: &'static str = "tour_seen";
-}
-
 /// The current tutorial host. It is recreated for each lesson and destroyed
 /// during wind-down, so a lesson's interpreter state cannot cross a scene or
 /// tutorial boundary.
@@ -461,6 +451,7 @@ struct PendingTutorial {
     id: String,
     source: String,
     world: String,
+    elapsed_secs: f32,
 }
 
 /// The active lesson's ownership claim. A declared world is cleared when the
@@ -569,6 +560,10 @@ fn start_tutorial_scenario(
     world_path: Option<String>,
 ) {
     let host = ensure_host(world);
+    let is_first_start = world
+        .resource::<TutorialRegistry>()
+        .get(&id)
+        .is_some_and(|meta| meta.first_start);
     info!("[tutorial] starting '{}'", id);
     world.trigger(lunco_scripting::commands::RunScenario {
         target: host,
@@ -577,8 +572,11 @@ fn start_tutorial_scenario(
     });
     world.resource_mut::<TutorialProgress>().current = Some(id);
     world.resource_mut::<TutorialSession>().world = world_path;
-    if let Some(mut seen) = world.get_resource_mut::<TutorialSeen>() {
-        seen.onboarded = true;
+    if is_first_start {
+        // Mark first-run onboarding only after the scene transaction (if any)
+        // reached this point and the canonical launcher actually attached the
+        // scenario. A failed scene never reaches this function.
+        world.resource_mut::<TutorialProgress>().onboarded = true;
     }
 }
 
@@ -651,6 +649,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 id: id.clone(),
                 source,
                 world: scene.clone(),
+                elapsed_secs: 0.0,
             });
             world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
         } else {
@@ -817,6 +816,39 @@ fn on_scene_transition_completed(
         }
         start_tutorial_scenario(world, request.id, request.source, Some(request.world));
     });
+}
+
+/// Fail a tutorial mount that never publishes a scene-completed/scene-failed
+/// lifecycle edge. This protects the progress state from a lost event or a
+/// loader that wedges after accepting a transition intent.
+fn pending_tutorial_watchdog(
+    time: Res<Time>,
+    mut pending: ResMut<PendingTutorialStart>,
+    mut progress: ResMut<TutorialProgress>,
+    mut pending_advance: ResMut<PendingAdvance>,
+    mut session: ResMut<TutorialSession>,
+    mut commands: Commands,
+) {
+    const MOUNT_TIMEOUT_SECS: f32 = 30.0;
+    let Some(request) = pending.0.as_mut() else {
+        return;
+    };
+    request.elapsed_secs += time.delta_secs();
+    if request.elapsed_secs < MOUNT_TIMEOUT_SECS {
+        return;
+    }
+    let request = pending.0.take().expect("pending tutorial request exists");
+    progress.current = None;
+    pending_advance.0 = None;
+    session.world = None;
+    commands.queue(|world: &mut World| {
+        clear_tutorial_hud(world);
+        stop_tutorial_host(world);
+    });
+    commands.trigger(tutorial_failed(format!(
+        "abandoning '{}' — scene '{}' did not complete within {MOUNT_TIMEOUT_SECS:.0}s",
+        request.id, request.world
+    )));
 }
 
 /// Abandon the running lesson when a scene load fails, so it cannot go on to
@@ -1036,7 +1068,7 @@ fn boot_env() -> (bool, bool) {
     for a in std::env::args() {
         match a.as_str() {
             "--scene" => has_scene = true,
-            "--api" | "--no-ui" => automated = true,
+            "--no-ui" => automated = true,
             _ => {}
         }
     }
@@ -1077,10 +1109,7 @@ fn hookvalue_to_json(v: &lunco_hooks::HookValue) -> serde_json::Value {
 /// (e.g. the shared [`boot_seam`] after a sandbox's own `consult_boot`) no-ops.
 pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> bool {
     use lunco_hooks::HookValue as H;
-    let onboarded = world
-        .get_resource::<TutorialSeen>()
-        .map(|s| s.onboarded)
-        .unwrap_or(false);
+    let onboarded = world.resource::<TutorialProgress>().onboarded;
     let first_start_id = world.get_resource::<TutorialRegistry>().and_then(|r| {
         r.tutorials
             .iter()
@@ -1112,9 +1141,6 @@ pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> 
         params,
         id: 0,
     });
-    if let Some(mut s) = world.get_resource_mut::<TutorialSeen>() {
-        s.onboarded = true;
-    }
     true
 }
 
@@ -1424,8 +1450,6 @@ impl Plugin for TutorialCorePlugin {
         app.init_resource::<TutorialSession>();
         app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();
-        app.register_type::<TutorialSeen>();
-        app.register_settings_section::<TutorialSeen>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
         app.add_observer(on_scene_transition_started);
@@ -1435,6 +1459,7 @@ impl Plugin for TutorialCorePlugin {
         app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);
         app.add_systems(Update, boot_seam);
+        app.add_systems(Update, pending_tutorial_watchdog);
     }
 }
 

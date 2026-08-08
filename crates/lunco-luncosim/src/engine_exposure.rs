@@ -1378,7 +1378,6 @@ fn publish_selected_control_exposure(
     let has_control_outputs = outputs.contains_key("torque_x")
         || outputs.contains_key("torque_y")
         || outputs.contains_key("torque_z")
-        || outputs.contains_key("throttle")
         || outputs.contains_key("engine_activity")
         || outputs.contains_key("propellant_mass")
         || max_valve > 0.0;
@@ -1396,7 +1395,9 @@ fn publish_selected_control_exposure(
                 .to_owned()
         })
         .unwrap_or_else(|_| "selected".to_owned());
-    let main_activity = output_alias(&outputs, &["engine_activity", "activity", "throttle"])
+    let main_activity = outputs
+        .get("engine_activity")
+        .copied()
         .unwrap_or(0.0)
         .clamp(0.0, 1.0);
     let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
@@ -1420,15 +1421,17 @@ fn publish_selected_control_exposure(
         (roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees())
     });
     let spin = q_angvel.get(root).ok().map(|angular| angular.0.length());
-    let altitude = output_alias(&outputs, &["range_m", "altitude_m", "altitude"]);
+    let altitude = outputs.get("range_m").copied();
     let target_offset = target_offset_from_authored_scene(root, q_spatial, q_paths, canonical)
         .map_or_else(
             || "—".to_owned(),
             |(x, z)| format!("X {x:+.1} · Z {z:+.1} m"),
         );
-    let propellant_mass = output_alias(&outputs, &["propellant_mass", "propellant_mass_kg"]);
-    let propellant_fraction =
-        output_alias(&outputs, &["propellant_fraction"]).map(|value| value.clamp(0.0, 1.0));
+    let propellant_mass = outputs.get("propellant_mass").copied();
+    let propellant_fraction = outputs
+        .get("propellant_fraction")
+        .copied()
+        .map(|value| value.clamp(0.0, 1.0));
 
     ui.visible(!hide_when_schema_visible);
     ui.property("vehicle", vehicle);
@@ -1524,12 +1527,6 @@ fn publish_selected_control_exposure(
             "OFF".to_owned()
         },
     );
-}
-
-fn output_alias(outputs: &std::collections::HashMap<String, f64>, aliases: &[&str]) -> Option<f64> {
-    aliases
-        .iter()
-        .find_map(|alias| outputs.get(*alias).copied())
 }
 
 /// RCS valve names are the authored actuator contract of AttitudeActuation:

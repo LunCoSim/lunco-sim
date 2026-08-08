@@ -17,7 +17,6 @@ def Xform "LandingTarget" (
 )
 {
     uniform bool lunco:spawnable = true
-    custom string lunco:navigationTarget = "true"
     custom string lunco:interaction:left = "pass_through"
     custom string lunco:interaction:right = "context"
     bool physics:rigidBodyEnabled = true

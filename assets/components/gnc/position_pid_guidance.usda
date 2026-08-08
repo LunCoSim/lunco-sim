@@ -10,26 +10,28 @@
 # vector, and the airframe consumes normalized throttle/pitch/roll/yaw commands.
 # The mission scene supplies the target connection; the component itself defaults
 # to the origin so it remains useful without a scene-specific script.
-def Xform "PositionPIDGuidance"
+def Xform "PositionPIDGuidance" (
+    prepend apiSchemas = ["LunCoUiSchemaAPI"]
+)
 {
     # This is the authored GNC boundary shown in the Lunica schema view.  The
     # canvas reads the typed property; it does not infer importance from names
     # or paths.
-    custom bool lunco:ui:schemaNode = false
+    bool lunco:ui:schemaNode = false
     # The component publishes four command outputs below. The vessel/mission
     # that consumes this reusable guidance component owns these input wires;
     # keeping them out of the reference prevents a weaker authored connection
     # from surviving when a scene deliberately selects a different command
     # source (for example a fixed RCS demonstration demand).
     def Scope "GNC" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoUiSchemaAPI"]
         doc = "Three-axis position PID navigation and thrust-vector guidance."
     )
     {
-        custom bool lunco:ui:schemaNode = true
+        bool lunco:ui:schemaNode = true
         string ui:displayName = "Guidance computer"
-        custom int lunco:ui:schemaColumn = 0
-        custom int lunco:ui:schemaRow = 0
+        int lunco:ui:schemaColumn = 0
+        int lunco:ui:schemaRow = 0
         uniform asset info:sourceAsset = @lunco://models/LunCo/GNC/PositionPID3D.mo@
         uniform bool lunco:program:realtimeSafe = true
 

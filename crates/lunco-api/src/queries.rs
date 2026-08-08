@@ -300,6 +300,9 @@ impl ApiQueryProvider for ReadinessProvider {
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         use lunco_readiness::{ReadinessRegistry, ReadinessState, Subject};
         let registry = world.get_resource::<ReadinessRegistry>();
+        let fault = world
+            .get_resource::<lunco_core::RuntimeFaults>()
+            .and_then(|faults| faults.first.as_ref());
         let world_hold = world
             .get_resource::<ReadinessState>()
             .is_some_and(|s| s.world_hold);
@@ -325,10 +328,16 @@ impl ApiQueryProvider for ReadinessProvider {
                     .collect()
             })
             .unwrap_or_default();
-        let ready = registry.is_some() && pending.is_empty() && !world_hold;
+        let ready = registry.is_some() && pending.is_empty() && !world_hold && fault.is_none();
         ApiResponse::ok(serde_json::json!({
             "ready": ready,
             "world_hold": world_hold,
+            "faulted": fault.is_some(),
+            "fault": fault.map(|fault| serde_json::json!({
+                "kind": fault.kind,
+                "subject": fault.subject,
+                "detail": fault.detail,
+            })),
             "readiness_tracked": registry.is_some(),
             "pending_count": pending.len(),
             "pending": pending,

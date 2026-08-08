@@ -80,15 +80,13 @@ no polling or physical threshold math.
 ## Verify the chain is live
 
 Don't trust the picture — read the ports. Over the HTTP API
-(`--api 3000`, see [the API doc](../architecture/12-api.md)):
+(`--api 4101`, see [the API doc](../architecture/12-api.md)):
 
-- `cosim_status` — snapshots **every** cosim entity and its live Modelica
-  variables (`y`, `vy`, `netForce`, force inputs, buoyancy, …). One call tells
-  you the model is stepping and what it computes.
-- `read_ports` / `watch_ports` — read one named port, or sample it as a
-  time-series to watch a signal evolve (SOC draining, propellant burning).
+- `CosimStatus` — snapshots the co-simulation graph and live Modelica variables.
+- `ReadPorts` — reads one entity's typed named ports.
+- `GetBrokenConnections` — reports terminal and pending wiring diagnostics.
 
-If `cosim_status` lists the entity and its variables are changing, the
+If `CosimStatus` lists the entity and its variables are changing, the
 Modelica→physics chain is real.
 
 ## Your turn: a battery on a rover
@@ -127,7 +125,7 @@ To cosim it onto a rover:
    `connect()`-ed pin to pin inside one Modelica model. A rover motor pulling
    current is a load on that bus; adding a second load changes the first one's
    share without editing either.
-3. **Observe** — `watch_ports` on `soc_out` while you drive; it falls as the bus
+3. **Observe** — poll `ReadPorts` for `soc_out` while you drive; it falls as the bus
    draws.
 
 > **Status note:** the model ships and `assets/scenes/tests/lint_selftest.usda`

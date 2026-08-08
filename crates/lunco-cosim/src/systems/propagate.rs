@@ -712,12 +712,15 @@ pub fn propagate_connections(
             .get::<crate::SimComponent>(t.entity)
             .map(|component| &component.status);
         let compiling = matches!(model_status, Some(crate::SimStatus::Compiling));
-        // A terminal model owns a real endpoint contract even when its current
-        // map is empty. Treating that as "no port surface" forever hides a
-        // missing declared input as assembly progress; only a still-compiling
-        // model (or a bare non-model structural endpoint) remains pending.
-        let terminal_model = model_status.is_some() && !compiling;
-        if compiling || (!has_port_surface && !terminal_model) {
+        // Only an explicitly published pending marker or a compiling Modelica
+        // component is assembly progress. Structural Motor/Gearbox edges are
+        // filtered during USD wire derivation, so a bare endpoint with no
+        // surface is a terminal authoring fault rather than a forever-pending
+        // wire.
+        let surface_pending = world
+            .get::<lunco_core::PortSurfacePending>(t.entity)
+            .is_some();
+        if compiling || surface_pending {
             pending.push(unresolved);
             continue;
         }
@@ -927,8 +930,8 @@ mod wire_order_tests {
         );
     }
 
-    /// A target without a runtime port surface is assembly progress, not a
-    /// broken wire. It stays observable in `pending`, never in the fault gate.
+    /// A target without a runtime port surface and without an explicit pending
+    /// marker is a terminal dangling-wire fault.
     #[test]
     fn broken_wire_populates_diagnostics() {
         use bevy::ecs::system::RunSystemOnce;
@@ -956,17 +959,13 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
-        assert_eq!(
-            diag.pending.len(),
-            1,
-            "the one unresolved target is reported"
-        );
-        let b = &diag.pending[0];
+        assert_eq!(diag.broken.len(), 1, "the unresolved target is terminal");
+        let b = &diag.broken[0];
         assert_eq!(b.port, "nonexistent_port");
         assert_eq!(b.global_id, Some(GlobalEntityId::from_raw(20)));
         assert!(
             !b.has_port_surface,
-            "empty registry ⇒ sink exposes no ports ⇒ not a genuine fault"
+            "empty registry ⇒ sink exposes no ports, so the wire is genuinely dangling"
         );
 
         // And it self-clears: give the sink nothing new, but drop the wire, and the
@@ -995,8 +994,8 @@ mod wire_order_tests {
         );
     }
 
-    /// A structural endpoint is load order, not an authoring error, so it must
-    /// never reach `faults` — the field a gate fails a run on.
+    /// An endpoint that explicitly publishes `PortSurfacePending` is assembly
+    /// progress, not an authoring error, so it must never reach `faults`.
     #[test]
     fn an_endpoint_with_no_port_surface_is_not_recorded_as_a_fault() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1006,7 +1005,9 @@ mod wire_order_tests {
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
-        let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
+        let sink = world
+            .spawn((GlobalEntityId::from_raw(20), lunco_core::PortSurfacePending))
+            .id();
         world.spawn((
             SimConnection {
                 start_element: src,
@@ -1026,7 +1027,7 @@ mod wire_order_tests {
         assert_eq!(diag.pending.len(), 1, "still visible as assembly progress");
         assert!(
             diag.faults.is_empty(),
-            "a target exposing no ports at all is still loading, not misauthored"
+            "an explicit pending marker keeps load progress out of the fault gate"
         );
     }
 
@@ -1183,8 +1184,12 @@ mod wire_order_tests {
         init_builtin_ports(&mut world);
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
-        let a = world.spawn(GlobalEntityId::from_raw(10)).id();
-        let b = world.spawn(GlobalEntityId::from_raw(20)).id();
+        let a = world
+            .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
+            .id();
+        let b = world
+            .spawn((GlobalEntityId::from_raw(20), lunco_core::PortSurfacePending))
+            .id();
         wire(&mut world, a, "out", b, "in");
         wire(&mut world, b, "out", a, "in");
 
@@ -1424,7 +1429,9 @@ mod wire_order_tests {
         world.init_resource::<PortRegistry>();
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
-        let balloon = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let balloon = world
+            .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
+            .id();
         wire(&mut world, balloon, "netForce", balloon, "force_y");
         wire(&mut world, balloon, "height", balloon, "height");
 
@@ -1448,9 +1455,15 @@ mod wire_order_tests {
         world.init_resource::<PortRegistry>();
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
 
-        let a = world.spawn(GlobalEntityId::from_raw(10)).id();
-        let b = world.spawn(GlobalEntityId::from_raw(20)).id();
-        let c = world.spawn(GlobalEntityId::from_raw(30)).id();
+        let a = world
+            .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
+            .id();
+        let b = world
+            .spawn((GlobalEntityId::from_raw(20), lunco_core::PortSurfacePending))
+            .id();
+        let c = world
+            .spawn((GlobalEntityId::from_raw(30), lunco_core::PortSurfacePending))
+            .id();
         wire(&mut world, a, "out", b, "in");
         wire(&mut world, b, "out", c, "in");
         wire(&mut world, a, "out", c, "bias"); // diamond edge, still acyclic

@@ -1113,7 +1113,7 @@ pub fn persist_property_to_runtime_layer(
     // Not shader *params*: `shader` swaps the material (no USD reader — the
     // `shaderPath` attribute was deliberately vetoed, so it stays live-only) and
     // `visible` is authored as standard `token visibility` by
-    // [`persist_wheel_and_pbr_to_runtime_layer`]. Disjoint, so neither is
+    // [`persist_wheel_to_runtime_layer`]. Disjoint, so neither is
     // double-authored.
     if matches!(cmd.property.as_str(), "shader" | "visible") {
         return;
@@ -1364,25 +1364,20 @@ pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
     WHEEL_PARAMS.iter().find(|p| p.name == name)
 }
 
-/// Persist a `SetObjectProperty` **wheel-dynamics**, **visibility** or **PBR
-/// base-colour** tune into the active USD document's runtime overlay — the
+/// Persist a `SetObjectProperty` **wheel-dynamics** or **visibility** tune into
+/// the active USD document's runtime overlay — the
 /// counterpart of [`persist_property_to_runtime_layer`] for the property classes
-/// it skips (it guards to shader-material prims). Fully decoupled + disjoint: it
-/// authors for wheel-param names (via [`wheel_param`]), `visible` (standard USD
-/// `token visibility`) or `base_color` on a PBR prim — all of
-/// which the loader already reads back, so they round-trip on reload and ride the
-/// Twin journal. Ownership-guarded and no-op without an active USD doc, like
-/// every other persister.
-pub fn persist_wheel_and_pbr_to_runtime_layer(
+/// it skips. Fully decoupled + disjoint: it authors wheel-param names (via
+/// [`wheel_param`]) or `visible` (standard USD `token visibility`). PBR intent
+/// is authored by the command handler through the canonical UsdPreviewSurface
+/// path below; keeping it out of this observer avoids two USD representations for
+/// one property.
+pub fn persist_wheel_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
-    // "Is this a PBR (non-shader) prim?" — the `PbrLook` *intent*, which exists
-    // headless as well as in a render build (the bound `StandardMaterial` is the
-    // binder's business and this crate may not name it).
-    q_std_mat: Query<(), With<PbrLook>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -1421,25 +1416,6 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
         let hidden = matches!(cmd.value.trim(), "false" | "0" | "hidden");
         let tok = if hidden { "invisible" } else { "inherited" };
         Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
-    } else if cmd.property == "base_color" {
-        // PBR base colour → `primvars:displayColor` (the loader reads it back
-        // into the prim's `PbrLook`). Linear r,g,b (drop any alpha).
-        let f: Vec<f32> = cmd
-            .value
-            .split(',')
-            .filter_map(|s| s.trim().parse::<f32>().ok())
-            .collect();
-        // ARRAY-valued: `UsdGeomGprim` declares `color3f[] primvars:displayColor`
-        // with `constant` interpolation — one element for the whole prim. A
-        // scalar `color3f` here is a type mismatch every other DCC falls back
-        // to grey on.
-        (f.len() >= 3).then(|| {
-            (
-                "primvars:displayColor".to_string(),
-                "color3f[]",
-                format!("[({}, {}, {})]", f[0], f[1], f[2]),
-            )
-        })
     } else {
         None
     };
@@ -1447,8 +1423,6 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
         return;
     };
 
-    // `base_color` only applies to PBR prims; wheel params resolve
-    // regardless (the guard is cheap and disjoint from the shader persister).
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else {
         return;
@@ -1460,9 +1434,6 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
     let Some(target) = api_registry.resolve(&global_id) else {
         return;
     };
-    if cmd.property == "base_color" && q_std_mat.get(target).is_err() {
-        return;
-    }
     let Ok(prim) = q_prim.get(target) else { return };
 
     let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
@@ -1998,10 +1969,8 @@ const PBR_LOOK_KEYS: &[&str] = &[
     "emissive",
     "metallic",
     "roughness",
-    "perceptual_roughness",
     "ior",
     "alpha",
-    "opacity",
     "unlit",
     "double_sided",
 ];
@@ -2107,7 +2076,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
 }
 
 /// Whether the edited look key names the same `UsdPreviewSurface` input as `slot`
-/// (`roughness` and `perceptual_roughness` are one input; so are `alpha`/`opacity`).
+/// (`roughness` and `alpha` are the canonical command keys).
 fn key_matches(key: &str, slot: &str) -> bool {
     lunco_usd::material::preview_surface_input(key)
         == lunco_usd::material::preview_surface_input(slot)
@@ -2137,7 +2106,7 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
             let Some(v) = f.first() else { return false };
             look.metallic = v.clamp(0.0, 1.0);
         }
-        "roughness" | "perceptual_roughness" => {
+        "roughness" => {
             let Some(v) = f.first() else { return false };
             look.perceptual_roughness = v.clamp(0.0, 1.0);
         }
@@ -2148,7 +2117,7 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
             let Some(v) = f.first() else { return false };
             look.ior = v.max(1.0);
         }
-        "alpha" | "opacity" => {
+        "alpha" => {
             let Some(v) = f.first() else { return false };
             let v = v.clamp(0.0, 1.0);
             look.base_color.alpha = v;
@@ -2407,6 +2376,7 @@ pub fn on_set_object_property(
             }
             let mut look = PbrLook::default();
             if apply_pbr_look(&mut look, key, &cmd.value) {
+                author_look_to_usd(&mut commands, target, key, &look);
                 commands.entity(target).try_insert(look);
                 info!(
                     "SET_PROPERTY: {} adopted a PbrLook, {} = {}",
@@ -3115,7 +3085,8 @@ pub fn on_import_shader(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let src = match std::fs::read_to_string(&ev.source_path) {
+        let src = match lunco_assets::read_asset_file_string(std::path::Path::new(&ev.source_path))
+        {
             Ok(s) => s,
             Err(e) => {
                 warn!("IMPORT_SHADER: read '{}' failed: {e}", ev.source_path);
@@ -3412,10 +3383,10 @@ impl Plugin for SpawnCommandPlugin {
         // overlay (non-destructive; Save stays base-only). Decoupled from the
         // live-mutation handler above, like the move/spawn persisters.
         app.add_observer(persist_property_to_runtime_layer);
-        // #15: persist wheel-dynamics tunes (suspension/drive → physxVehicle*) and
-        // PBR base_color (→ primvars:displayColor) — the classes the shader-param
-        // persister skips. Disjoint property sets, so both observers coexist.
-        app.add_observer(persist_wheel_and_pbr_to_runtime_layer);
+        // #15: persist wheel-dynamics tunes (suspension/drive → physxVehicle*)
+        // and visibility. PBR intent is authored by SetObjectProperty's
+        // canonical UsdPreviewSurface path.
+        app.add_observer(persist_wheel_to_runtime_layer);
         // #14: persist a `SetEnvironmentLight` sun tweak (illuminance / colour /
         // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
         // the names the loader already reads back — so it round-trips + journals.

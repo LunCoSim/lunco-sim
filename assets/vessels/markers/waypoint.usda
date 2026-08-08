@@ -15,12 +15,12 @@
 # AlphaMode::Blend by lunco-usd-bevy).
 def Xform "WaypointMarker" (
     doc = "Reusable mission waypoint marker with a non-solid arrival trigger for rover routes."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoWaypointAPI"]
     kind = "component"
 )
 {
     uniform bool lunco:spawnable = true
-    custom string lunco:waypoint = "true"
+    bool lunco:waypoint = true
     custom string lunco:interaction:left = "pass_through"
     custom string lunco:interaction:right = "context"
 

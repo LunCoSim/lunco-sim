@@ -5,10 +5,7 @@ use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
 
 // The actual mutation (`apply_set_model_input`) + its error type are UI-free and
-// live in `crate::model_commands` so the headless API server can call them.
-// Re-exported so existing `ui::commands::{apply_set_model_input,
-// SetModelInputError}` paths keep resolving.
-pub use crate::model_commands::{apply_set_model_input, SetModelInputError};
+// live in `crate::model_commands`; UI code calls that owning module directly.
 
 /// Apply a canvas control-widget write through the same model-input path as
 /// the API command.
@@ -27,7 +24,7 @@ pub(crate) fn on_set_model_input_requested(
     let name = trigger.name.clone();
     let value = trigger.value;
     commands.queue(move |world: &mut World| {
-        if let Err(err) = apply_set_model_input(world, doc, &name, value) {
+        if let Err(err) = crate::model_commands::apply_set_model_input(world, doc, &name, value) {
             bevy::log::warn!(
                 "[CanvasDiagram] in-canvas input write failed: name={} value={} err={err:?}",
                 name,
@@ -55,7 +52,7 @@ pub fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
     let name = trigger.event().name.clone();
     let value = trigger.event().value;
     commands.queue(move |world: &mut World| {
-        match apply_set_model_input(world, doc_raw, &name, value) {
+        match crate::model_commands::apply_set_model_input(world, doc_raw, &name, value) {
             Ok(_) => {}
             Err(e) => {
                 bevy::log::warn!("[SetModelInput] {}", e.message());

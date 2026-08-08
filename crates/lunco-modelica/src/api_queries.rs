@@ -573,7 +573,9 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 let mref = ModelRef(name.clone());
                 let annotation = bounds_from_annotation(world, doc_id, &mref);
                 let resolved = resolve_setup_bounds(world, doc_id, &mref);
-                // Mirror resolve_setup_bounds' precedence to label the source.
+                // Mirror `resolve_setup_bounds` exactly. Keep the provenance
+                // label beside the canonical resolver until the API can return
+                // its typed result directly.
                 let has_draft = world
                     .get_resource::<crate::experiments_runner::ExperimentDrafts>()
                     .and_then(|d| {
@@ -587,12 +589,12 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                     .is_some();
                 let source = if has_draft {
                     "draft_override"
-                } else if has_runner_cache {
-                    "runner_cache"
                 } else if annotation.is_some() {
                     "annotation"
+                } else if has_runner_cache {
+                    "runner_cache"
                 } else {
-                    "fallback_10s"
+                    "fallback_1s"
                 };
                 serde_json::json!({
                     "class": name,

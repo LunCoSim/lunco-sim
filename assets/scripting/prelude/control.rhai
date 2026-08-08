@@ -33,7 +33,7 @@ fn clear_scene()               { cmd("ClearScene") }
 // Reload the CURRENTLY-active scene from disk (LoadScene no-ops on the live one).
 // Picks up .usda edits; pair with pause() for "reload then freeze".
 fn restart_scene()             { cmd("RestartScene") }
-fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: key, value: val }) }
+fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ entity_id: id, property: key, value: val }) }
 
 // ── Pose writing — the write half of `world_pos` / `world_rotation` ──────────
 //
@@ -105,4 +105,3 @@ fn animation_rate(rate)        { cmd("ControlAnimation", #{ rate: rate }) }
 // each phase without any Rust — drawn by the avatar UI overlay, logged headless.
 fn notify(msg)                 { cmd("ShowNotification", #{ text: msg }) }
 fn notify_kind(msg, kind)      { cmd("ShowNotification", #{ text: msg, kind: kind }) }
-

@@ -75,9 +75,12 @@ pub fn load_timelines_from_dir(root: &std::path::Path) -> Vec<(String, String)> 
         let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        match std::fs::read_to_string(&path) {
-            Ok(json) => loaded.push((name.to_string(), json)),
-            Err(e) => warn!("[timelines] failed to read {}: {e}", path.display()),
+        match lunco_storage::read_file_sync(&path)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        {
+            Some(json) => loaded.push((name.to_string(), json)),
+            None => warn!("[timelines] failed to read {}", path.display()),
         }
     }
     loaded.sort_by(|a, b| a.0.cmp(&b.0));
@@ -95,17 +98,10 @@ pub fn save_timeline_file(
     root: &std::path::Path,
     name: &str,
     json: &str,
-) -> std::io::Result<std::path::PathBuf> {
+) -> lunco_storage::StorageResult<std::path::PathBuf> {
     let dir = root.join(TIMELINES_DIR);
-    std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.json"));
-    // Atomic replace: a kill mid-write must never leave a truncated timeline.
-    // TODO(backlog): migrate this hand-rolled temp+rename to the Storage handle once
-    // the crate gains a lunco-storage dependency (writes go through Storage) — see
-    // the engineering-backlog doc in docs/architecture (scripting writes via Storage).
-    let tmp = dir.join(format!("{name}.json.tmp"));
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, &path)?;
+    lunco_storage::write_file_sync(&path, json.as_bytes())?;
     Ok(path)
 }
 

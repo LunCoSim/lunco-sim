@@ -2047,9 +2047,13 @@ const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 /// forever-scan is exactly the failure mode this project pays most for).
 const JOINT_RESOLVE_WARN_TICKS: u32 = 600;
 
-/// Retry cadence for a pending joint past its budget. The body may still spawn
-/// late (streamed content), so resolution never stops — it just stops being hot.
+/// Retry cadence for a pending joint after its warning budget.
 const JOINT_RESOLVE_RETRY_INTERVAL: u32 = 60;
+
+/// Hard deadline for a joint whose authored body relationship never resolves.
+/// Once reached the marker is removed and the scene receives a terminal fault;
+/// readiness must not remain open forever on a typo'd relationship.
+const JOINT_RESOLVE_MAX_TICKS: u32 = 3_600;
 
 /// Return body1's velocity after seating a joint without asking the solver to
 /// remove an authored constraint violation on its first step.
@@ -2162,6 +2166,7 @@ fn build_usd_physics_joints(
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_authored_velocity: Query<&AuthoredInitialVelocity>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
@@ -2214,6 +2219,28 @@ fn build_usd_physics_joints(
                      — check the joint's body rel paths; retrying every {} ticks.",
                     joint_prim_path.path, JOINT_RESOLVE_WARN_TICKS, JOINT_RESOLVE_RETRY_INTERVAL,
                 );
+            }
+            if ticks >= JOINT_RESOLVE_MAX_TICKS {
+                let detail = format!(
+                    "body relationship did not resolve after {} physics ticks: body0='{}', \
+                     body1='{}'",
+                    JOINT_RESOLVE_MAX_TICKS, pending.body0_path, pending.body1_path
+                );
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "usd-joint-unresolved",
+                        Some(joint_entity),
+                        joint_prim_path.path.clone(),
+                        detail.clone(),
+                    );
+                }
+                error!(
+                    "[usd-avian] joint {} is terminally unresolved: {detail}",
+                    joint_prim_path.path
+                );
+                commands.entity(joint_entity).remove::<PendingUsdJoint>();
+                resolve_ticks.remove(&joint_entity);
+                continue;
             }
             resolve_ticks.insert(joint_entity, ticks);
             continue;

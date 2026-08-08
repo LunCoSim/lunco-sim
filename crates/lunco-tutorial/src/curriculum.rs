@@ -89,8 +89,13 @@ fn flag(prim: &usd::Prim, name: &str) -> bool {
 /// `payload_asset_paths` READS the arc; the stage was opened with payloads
 /// unloaded precisely so that asking stays a read. Strongest arc wins — a lesson
 /// declares one world.
-fn payload_asset(prim: &usd::Prim) -> Option<String> {
-    prim.payload_asset_paths().ok()?.into_iter().next()
+fn payload_assets(prim: &usd::Prim) -> Vec<String> {
+    prim.payload_asset_paths()
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect()
 }
 
 /// Project tutorial metadata from an already-composed USD stage.
@@ -139,8 +144,15 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
                 ));
                 continue;
             };
+            let payloads = payload_assets(&prim);
+            if payloads.len() > 1 {
+                out.failures.push(format!(
+                    "lesson '{path}' declares {} payload worlds; exactly one is allowed",
+                    payloads.len()
+                ));
+            }
             out.lessons.push(Lesson {
-                world: payload_asset(&prim),
+                world: payloads.into_iter().next(),
                 next: prim
                     .relationship("lunco:tutorial:next")
                     .targets()
@@ -154,6 +166,53 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
                 path,
                 script,
             });
+        }
+    }
+
+    // A composed curriculum is a data graph. Reject dangling successors,
+    // duplicate entry points, and cycles here so the launcher never silently
+    // selects the first payload or loops forever during auto-advance.
+    let known: std::collections::HashSet<&str> = out
+        .lessons
+        .iter()
+        .map(|lesson| lesson.path.as_str())
+        .collect();
+    for lesson in &out.lessons {
+        if let Some(next) = &lesson.next {
+            if !known.contains(next.as_str()) {
+                out.failures.push(format!(
+                    "lesson '{}' points to missing successor '{}'",
+                    lesson.path, next
+                ));
+            }
+        }
+    }
+    let starts: Vec<&str> = out
+        .lessons
+        .iter()
+        .filter(|lesson| lesson.first_start)
+        .map(|lesson| lesson.path.as_str())
+        .collect();
+    if starts.len() > 1 {
+        out.failures.push(format!(
+            "curriculum declares multiple firstStart lessons: {}",
+            starts.join(", ")
+        ));
+    }
+    for start in starts {
+        let mut seen = std::collections::HashSet::new();
+        let mut current = Some(start);
+        while let Some(path) = current {
+            if !seen.insert(path) {
+                out.failures
+                    .push(format!("curriculum successor cycle includes '{path}'"));
+                break;
+            }
+            current = out
+                .lessons
+                .iter()
+                .find(|lesson| lesson.path == path)
+                .and_then(|lesson| lesson.next.as_deref());
         }
     }
     out

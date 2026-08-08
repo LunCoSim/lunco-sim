@@ -86,9 +86,13 @@ fn __advance_objective(me, o, now) {
 /// requires are met, then advance if active. Returns the updated objective.
 fn __tick_objective(me, o, m, now, evs) {
     if o.state == "complete" || o.state == "failed" { return o; }
-    if o.requires_event != () && __obj_saw_event(evs, o.requires_event) { o.__evfired = true; }
     if o.state == "pending" && __obj_ready(m, o.requires) { o.state = "active"; }
-    if o.state == "active" { o = __advance_objective(me, o, now); }
+    // Events only belong to an objective after its prerequisites unlock. An
+    // early global event must not be latched and replayed as a later success.
+    if o.state == "active" {
+        if o.requires_event != () && __obj_saw_event(evs, o.requires_event) { o.__evfired = true; }
+        o = __advance_objective(me, o, now);
+    }
     o
 }
 
@@ -164,7 +168,7 @@ fn __init_mission(me) {
 //   #{ wait_event: "NAME" }                       hold until an event arrives
 // Any drive/brake step may add `subject: "/path"` to act on that entity instead
 // of the timeline's host (so one scenario can orchestrate a separate vessel).
-// Unknown steps lower to a no-op (skipped) — forward-compatible with new fields.
+// Unknown steps are rejected by the Rust command boundary before execution.
 //
 // `RunTimeline` owns progression internally. Scenario rhai supplies declarative
 // steps and reacts to events; it does not install a per-tick hook.
@@ -173,7 +177,9 @@ fn __init_mission(me) {
 fn timeline_subject(m, s) {
     if s.subject == () { return m; }
     let g = find(s.subject);
-    if g != () { g } else { m }
+    if g != () { return g; }
+    emit("TIMELINE_INVALID_SUBJECT", s.subject);
+    ()
 }
 
 /// Lower ONE data step to a Layer-1 step (closures capturing the step's fields).
@@ -182,16 +188,25 @@ fn timeline_step(s) {
         let wp  = s.move_to;
         let spd = if s.speed  != () { s.speed  } else { 1.0 };
         let rad = if s.radius != () { s.radius } else { 2.0 };
-        return step(|m| nav_to(timeline_subject(m, s), wp, spd, rad),
-                    |m| arrived(timeline_subject(m, s), wp, rad));
+        return step(
+            |m| { let subject = timeline_subject(m, s); if subject != () { nav_to(subject, wp, spd, rad); } },
+            |m| { let subject = timeline_subject(m, s); subject != () && arrived(subject, wp, rad) });
     }
     if s.move_to_entity != () {
         let tgt = s.move_to_entity;
         let spd = if s.speed  != () { s.speed  } else { 1.0 };
         let rad = if s.radius != () { s.radius } else { 2.0 };
         return step(
-            |m| { let g = find(tgt); if g != () { nav_to(timeline_subject(m, s), world_pos(g), spd, rad); } },
-            |m| { let g = find(tgt); g != () && arrived(timeline_subject(m, s), world_pos(g), rad) });
+            |m| {
+                let subject = timeline_subject(m, s);
+                let g = find(tgt);
+                if subject != () && g != () { nav_to(subject, world_pos(g), spd, rad); }
+            },
+            |m| {
+                let subject = timeline_subject(m, s);
+                let g = find(tgt);
+                subject != () && g != () && arrived(subject, world_pos(g), rad)
+            });
     }
     if s.possess != () {
         let tgt = s.possess;
@@ -199,7 +214,7 @@ fn timeline_step(s) {
     }
     if s.brake != () {
         let secs = if s.secs != () { s.secs } else { 1.0 };
-        return #{ act: |m| brake(timeline_subject(m, s)), secs: secs };
+        return #{ act: |m| { let subject = timeline_subject(m, s); if subject != () { brake(subject); } }, secs: secs };
     }
     if s.cmd != () {
         let name = s.cmd;
@@ -213,7 +228,7 @@ fn timeline_step(s) {
     }
     if s.wait != () { return wait(s.wait); }
     if s.wait_event != () { return wait_for(s.wait_event); }
-    once(|m| {})   // unknown → no-op, advance next tick
+    once(|m| { emit("TIMELINE_INVALID_STEP", 1); })
 }
 
 /// Lower a whole data timeline (array of data steps) to Layer-1 steps. Call ONCE

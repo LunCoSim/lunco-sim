@@ -588,10 +588,45 @@ fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), St
             .ok_or_else(|| "object form needs a `steps` array".to_string())?,
         _ => return Err("`timeline` must be an array or object".to_string()),
     };
-    let count = steps
+    let steps_array = steps
         .as_array()
-        .ok_or_else(|| "`steps` must be an array".to_string())?
-        .len();
+        .ok_or_else(|| "`steps` must be an array".to_string())?;
+    const OPERATIONS: &[&str] = &[
+        "move_to",
+        "move_to_entity",
+        "possess",
+        "brake",
+        "cmd",
+        "emit",
+        "wait",
+        "wait_event",
+    ];
+    const COMMON: &[&str] = &["speed", "radius", "secs", "params", "value", "subject"];
+    for (index, step) in steps_array.iter().enumerate() {
+        let object = step
+            .as_object()
+            .ok_or_else(|| format!("step {index} must be an object"))?;
+        let active: Vec<&str> = OPERATIONS
+            .iter()
+            .copied()
+            .filter(|name| object.contains_key(*name))
+            .collect();
+        if active.is_empty() {
+            return Err(format!("step {index} has no recognized operation"));
+        }
+        if active.len() > 1 {
+            return Err(format!(
+                "step {index} has multiple operations: {}",
+                active.join(", ")
+            ));
+        }
+        for key in object.keys() {
+            if !OPERATIONS.contains(&key.as_str()) && !COMMON.contains(&key.as_str()) {
+                return Err(format!("step {index} has unknown field `{key}`"));
+            }
+        }
+    }
+    let count = steps_array.len();
     Ok((steps, count))
 }
 
@@ -985,6 +1020,17 @@ mod tests {
         rhai::Engine::new()
             .compile(&source)
             .expect("generated timeline literal must be valid rhai");
+    }
+
+    #[test]
+    fn timeline_parser_rejects_unknown_or_ambiguous_steps() {
+        let unknown = r#"[{"drive_to":[1,2,3]}]"#;
+        let err = super::parse_timeline_steps(unknown).expect_err("unknown step must fail");
+        assert!(err.contains("no recognized operation"), "{err}");
+
+        let ambiguous = r#"[{"wait":1,"emit":"DONE"}]"#;
+        let err = super::parse_timeline_steps(ambiguous).expect_err("ambiguous step must fail");
+        assert!(err.contains("multiple operations"), "{err}");
     }
 
     #[test]

@@ -237,7 +237,7 @@ use lunco_core::tools::{ToolFired, ToolInvocation};
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PatrolWaypoint {
     /// World-space position `[x, y, z]`.
-    pub pos: [f32; 3],
+    pub pos: [f64; 3],
     /// Seconds to hold (braked) at this waypoint before its actions + departure.
     /// `None` → inherit the patrol's top-level `dwell`. Defaults to `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -249,7 +249,7 @@ pub struct PatrolWaypoint {
 
 impl PatrolWaypoint {
     /// A waypoint at `pos` with no actions and no per-waypoint dwell.
-    pub fn at(pos: [f32; 3]) -> Self {
+    pub fn at(pos: [f64; 3]) -> Self {
         Self {
             pos,
             dwell: None,
@@ -316,7 +316,7 @@ pub enum BehaviorSpec {
     /// Navigate toward a world point; `Success` within `radius` (and brakes there).
     DriveTo {
         /// World-space goal `[x, y, z]`.
-        target: [f32; 3],
+        target: [f64; 3],
         /// Cruise speed `[0, 1]`.
         #[serde(default = "default_speed")]
         speed: f64,
@@ -347,7 +347,7 @@ pub enum BehaviorSpec {
     /// The guard that makes [`Selector`](Self::Selector) fallbacks meaningful.
     Arrived {
         /// World-space point to test against.
-        target: [f32; 3],
+        target: [f64; 3],
         /// Radius that counts as "arrived".
         #[serde(default = "default_radius")]
         radius: f32,
@@ -375,7 +375,7 @@ pub enum BehaviorSpec {
     /// instrument/antenna, or orient a lander.
     Face {
         /// World point to face `[x, y, z]`.
-        target: [f32; 3],
+        target: [f64; 3],
         /// Heading tolerance in degrees that counts as "facing".
         #[serde(default = "default_face_tol")]
         tolerance: f64,
@@ -490,7 +490,7 @@ pub enum BehaviorSpec {
     /// [`Face`](Self::Face) — gate a drive on being pointed the right way.
     Facing {
         /// World point to test the heading against.
-        target: [f32; 3],
+        target: [f64; 3],
         /// Heading tolerance in degrees.
         #[serde(default = "default_face_tol")]
         tolerance: f64,
@@ -730,10 +730,11 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
 
 /// Type an authored `[x,y,z]` spec target at the compile boundary: spec coordinates
 /// are GRID-ABSOLUTE world data (baked by `usd_tree` / authored JSON), so they enter
-/// the tree as [`GridPos`]. The spec keeps `[f32; 3]` on the wire; this is the one
-/// place that widens it.
-fn grid_target(a: [f32; 3]) -> GridPos {
-    GridPos(Vec3::from_array(a).as_dvec3())
+/// the tree as [`GridPos`]. Absolute coordinates stay `f64` through the
+/// authored/spec boundary so large floating-origin coordinates do not lose
+/// precision before entering the grid frame.
+fn grid_target(a: [f64; 3]) -> GridPos {
+    GridPos(DVec3::from_array(a))
 }
 
 /// Half-angle of the forward-left/right obstacle probes, radians (~30°). Shared by
@@ -2445,7 +2446,7 @@ impl Plugin for AutopilotPlugin {
 mod tests {
     use super::*;
 
-    fn patrol(points: &[f32]) -> BehaviorSpec {
+    fn patrol(points: &[f64]) -> BehaviorSpec {
         BehaviorSpec::Patrol {
             waypoints: points
                 .iter()

@@ -28,6 +28,7 @@ lunco-readiness = { workspace = true }
 # compiled-AST memo (Substrate E fast tier; local/ephemeral, never on wire).
 lunco-hash = { path = "../lunco-hash" }
 lunco-time = { path = "../lunco-time" }
+lunco-storage = { path = "../lunco-storage" }
 pyo3 = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
 serde = { workspace = true }

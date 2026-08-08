@@ -32,7 +32,7 @@ use bevy::prelude::*;
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{ActuatorPorts, InputPorts};
+use lunco_core::{safe_stop_control_surface, ActuatorPorts, InputPorts};
 
 /// they live here rather than in core (see the nothing-into-core rule).
 pub mod kernels;
@@ -81,10 +81,9 @@ impl Plugin for LunCoMobilityPlugin {
 
         app.register_type::<Suspension>()
             .register_type::<WheelRaycast>()
-            // `DriveMix` — the kernel-selected allocation spec that replaced the
-            // per-arch `DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`.
-            // Registered here with the kernels it selects between; it is a
-            // vehicle-domain type and core carries no domain.
+            // `DriveMix` is the kernel-selected allocation spec. Registered
+            // here with the kernels it selects between; it is a vehicle-domain
+            // type and core carries no domain.
             .register_type::<DriveMix>()
             .register_type::<DifferentialCoupling>()
             .register_type::<SteerBaseRotation>()
@@ -566,7 +565,16 @@ pub fn longitudinal_tire_step(
     if f_slip.abs() <= mu_n {
         (w_grip, f_slip)
     } else {
-        let slip_sign = (axle_speed * radius - hub_speed).signum();
+        // At exact standstill the previous-step slip is zero even when the
+        // candidate grip force is non-zero (for example, a fresh drive torque).
+        // Use the candidate slip direction in that case; otherwise the first
+        // saturated tick incorrectly applies zero patch force.
+        let previous_slip = axle_speed * radius - hub_speed;
+        let slip_sign = if previous_slip.abs() > f64::EPSILON {
+            previous_slip.signum()
+        } else {
+            f_slip.signum()
+        };
         let traction_torque = slip_sign * mu_n * radius;
         let speed = axle_speed
             + dt * (drive_torque + brake_torque - traction_torque - bearing_damping * axle_speed)
@@ -1147,12 +1155,11 @@ fn apply_wheel_steering(
     }
 }
 
-// The per-arch steering components (`DifferentialDrive`, `AckermannSteer`,
-// `GenericDriveMix`) are GONE. A vessel's command→actuator allocation is now the
-// data-driven `lunco_core::kernels::DriveMix { kernel, ports, entries }`, whose
-// `kernel` names a self-registered `ControlKernel` (`skid` / `linear` / … flight
-// allocators later). `apply_drive_mix` looks the kernel up and runs it — no
-// per-architecture Rust branch, no component-type taxonomy.
+// A vessel's command-to-actuator allocation is the data-driven
+// `lunco_core::kernels::DriveMix { kernel, ports, entries }`, whose `kernel`
+// names a self-registered `ControlKernel` (`skid` / `linear` / future flight
+// allocators). `apply_drive_mix` resolves and runs the selected kernel without
+// a per-architecture component taxonomy.
 
 /// Authored `PhysicsDriveAPI` engagement and target position. `lunco-usd-sim`
 /// reads those fields into a `PendingDifferential` and
@@ -1285,6 +1292,7 @@ fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
 fn solve_differential_gear(
     q_coupling: Query<&DifferentialCoupling>,
     q_revolute: Query<&RevoluteJoint>,
+    substep_time: Res<Time<Substeps>>,
     mut q_solver: Query<
         (&mut SolverBody, &SolverBodyInertia, &Rotation),
         Without<RigidBodyDisabled>,
@@ -1359,7 +1367,18 @@ fn solve_differential_gear(
             .zip(inv_inertias.iter())
             .map(|(gradient, inverse_inertia)| gradient.dot(*inverse_inertia * *gradient))
             .sum();
-        let delta_lagrange = gear_delta_lagrange(error, inverse_mass);
+        // XPBD compliance: the authored stiffness is a real N·m/rad spring,
+        // not merely an enabled flag.  With substep duration `dt`, compliance
+        // contributes `1 / (k·dt²)` to the effective inverse mass.  This keeps
+        // the zero-stiffness disengaged state while making a soft coupling
+        // visibly differ from the stiff/default one.
+        let dt = substep_time.delta_secs_f64();
+        let compliance = if dt > f64::EPSILON {
+            1.0 / (coupling.stiffness * dt * dt)
+        } else {
+            f64::INFINITY
+        };
+        let delta_lagrange = gear_delta_lagrange(error, inverse_mass + compliance);
         if delta_lagrange == 0.0 || !delta_lagrange.is_finite() {
             continue;
         }
@@ -1473,7 +1492,7 @@ fn suspension_system(
 fn sync_input_ports(
     mut q: Query<
         (&lunco_core::ControlBinding, &mut InputPorts),
-        Changed<lunco_core::ControlBinding>,
+        Or<(Changed<lunco_core::ControlBinding>, Added<InputPorts>)>,
     >,
 ) {
     for (binding, mut inputs) in q.iter_mut() {
@@ -1518,12 +1537,12 @@ fn apply_vehicle_brake(
 /// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
 /// before being written to the port. Runs every fixed tick before wire propagation.
 fn apply_drive_mix(
-    q: Query<(Entity, &InputPorts, &ActuatorPorts, &DriveMix)>,
+    mut q: Query<(Entity, &mut InputPorts, &ActuatorPorts, &DriveMix)>,
     registry: Res<ControlKernelRegistry>,
     mut q_ports: Query<&mut Port>,
     mut unknown: Local<std::collections::HashSet<String>>,
 ) {
-    for (entity, inputs, actuators, mix) in &q {
+    for (entity, mut inputs, actuators, mix) in q.iter_mut() {
         // Read this vehicle's logical command inputs off the command surface.
         let throttle = inputs.cmd("throttle");
         let steer = inputs.cmd("steer");
@@ -1551,7 +1570,7 @@ fn apply_drive_mix(
         // (`skid`/`linear`/…) wins; otherwise `mix.kernel` names a scripted (rhai)
         // drive kernel — a `lunco_hooks` hook that computes the per-port outputs
         // itself ("control policy in rhai", `lunco:driveKernel`). An unknown name
-        // with no matching hook leaves the vessel un-actuated (fail-safe coast).
+        // with no matching hook leaves the vessel explicitly stopped and braked.
         let outputs = match registry.get(&mix.kernel) {
             Some(kernel) => kernel(drive_inputs, mix),
             None => {
@@ -1565,6 +1584,14 @@ fn apply_drive_mix(
                 scripted
             }
         };
+
+        if outputs.is_empty() {
+            // A failed scripted kernel must not leave the previous actuator
+            // registers latched.  Neutralise the complete surface and engage
+            // the brake gate before the next propagation tick.
+            safe_stop_control_surface(Some(&mut *inputs), Some(actuators), &mut q_ports);
+            continue;
+        }
 
         for (port, value) in outputs {
             if let Some(port_id) = actuators.get(&port) {
@@ -1583,8 +1610,8 @@ fn apply_drive_mix(
 /// command vocabulary is data, so a scripted kernel reads exactly the ports the
 /// vessel exposes and the script owns its own policy (incl. how `brake` gates).
 /// Reads back a `port → value` map in `[-1, 1]` (clamped defensively). Empty on an
-/// absent or faulted hook: **fail-safe** coast (ports left untouched — the brake
-/// port + `brake_active` friction cone are already applied upstream regardless).
+/// absent or faulted hook: the complete actuator surface is explicitly neutralised
+/// and braked by [`safe_stop_control_surface`].
 /// Host-side; a predicted client needs the identical hook, so the scripted-policy
 /// plane (`lunco_networking`) distributes + registers it on every peer.
 fn scripted_drive_mix(

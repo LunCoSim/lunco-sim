@@ -305,8 +305,8 @@ pub fn preview_surface_input(key: &str) -> Option<(&'static str, &'static str)> 
         "base_color" => ("inputs:diffuseColor", "color3f"),
         "emissive" => ("inputs:emissiveColor", "color3f"),
         "metallic" => ("inputs:metallic", "float"),
-        "roughness" | "perceptual_roughness" => ("inputs:roughness", "float"),
-        "alpha" | "opacity" => ("inputs:opacity", "float"),
+        "roughness" => ("inputs:roughness", "float"),
+        "alpha" => ("inputs:opacity", "float"),
         "ior" => ("inputs:ior", "float"),
         _ => return None,
     })

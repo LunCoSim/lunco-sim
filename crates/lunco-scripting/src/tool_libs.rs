@@ -84,12 +84,15 @@ pub fn load_tool_libraries_from_dir(root: &std::path::Path) -> Vec<String> {
         let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        match std::fs::read_to_string(&path) {
-            Ok(source) => {
+        match lunco_storage::read_file_sync(&path)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        {
+            Some(source) => {
                 register_tool_library(name, &source);
                 loaded.push(name.to_string());
             }
-            Err(e) => warn!("[tool_libs] failed to read {}: {e}", path.display()),
+            None => warn!("[tool_libs] failed to read {}", path.display()),
         }
     }
     loaded.sort();
@@ -107,17 +110,10 @@ pub fn save_tool_library_file(
     root: &std::path::Path,
     name: &str,
     source: &str,
-) -> std::io::Result<std::path::PathBuf> {
+) -> lunco_storage::StorageResult<std::path::PathBuf> {
     let dir = root.join(TOOLS_DIR);
-    std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.rhai"));
-    // Atomic replace: a kill mid-write must never leave a truncated library.
-    // TODO(backlog): migrate this hand-rolled temp+rename to the Storage handle once
-    // the crate gains a lunco-storage dependency (writes go through Storage) — see
-    // the engineering-backlog doc in docs/architecture (scripting writes via Storage).
-    let tmp = dir.join(format!("{name}.rhai.tmp"));
-    std::fs::write(&tmp, source)?;
-    std::fs::rename(&tmp, &path)?;
+    lunco_storage::write_file_sync(&path, source.as_bytes())?;
     Ok(path)
 }
 

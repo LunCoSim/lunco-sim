@@ -35,7 +35,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Verify it from code",
-           body: "Over the API, `cosim_status` snapshots every cosim entity and its live Modelica variables, and `read_ports` / `watch_ports` trace one signal over time. That is how you confirm a Modelica→physics chain is actually live — read the ports, never guess from the picture." },
+           body: "Over the API, `CosimStatus` snapshots the co-simulation graph and `ReadPorts` reads an entity's live named ports. Use `GetBrokenConnections` for dropped wires. That is how you confirm a Modelica→physics chain is live — read typed state, never guess from the picture." },
 
         #{ anchor: "",
            title: "Your turn: a battery on a rover",

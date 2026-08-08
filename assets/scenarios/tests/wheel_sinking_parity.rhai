@@ -37,9 +37,11 @@ fn on_start(me) {
     this.max_sink = -9999.0;
     this.first_sink = ();
     this.sampled = 0;
+    this.done = false;
 }
 
 fn on_tick(me) {
+    if this.done { return; }
     if this.rover == 0 { return; }
     this.tick += 1;
 
@@ -71,6 +73,7 @@ fn on_tick(me) {
 
     // Early FAIL: drift has blown out — the rover is progressively sinking.
     if this.max_sink - this.min_sink > DRIFT_FAIL {
+        this.done = true;
         emit("wheel_sinking", #{
             verdict: "FAIL", first: this.first_sink, min_sink: this.min_sink,
             max_sink: this.max_sink, drift: this.max_sink - this.min_sink,
@@ -82,6 +85,7 @@ fn on_tick(me) {
     // Drove long enough → verdict.
     if this.tick >= DRIVE_TICKS {
         let drift = this.max_sink - this.min_sink;
+        this.done = true;
         emit("wheel_sinking", #{
             verdict: "PASS", first: this.first_sink, min_sink: this.min_sink,
             max_sink: this.max_sink, drift: drift, sampled: this.sampled,
