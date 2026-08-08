@@ -1,6 +1,7 @@
 //! TDD for [`AutopilotBehaviorSpec`] — the source-spec mirror that lets the UI
 //! read/visualize a vessel's patrol waypoints and round-trip a spec for
-//! interactive editing (Ctrl+LMB append, right-click delete) via the existing
+//! interactive editing (PlaceWaypoint intent + primary pointer append,
+//! right-click delete) via the existing
 //! `SetAutopilotBehavior` command.
 
 use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec};
