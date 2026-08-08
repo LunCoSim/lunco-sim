@@ -29,9 +29,9 @@ def Xform "Imu" (
     float inputs:raw_quat_x = 0.0
     float inputs:raw_quat_y = 0.0
     float inputs:raw_quat_z = 0.0
-    float inputs:gravity_x = 0.0
-    float inputs:gravity_y = 0.0
-    float inputs:gravity_z = 0.0
+    float inputs:gravity_world_x = 0.0
+    float inputs:gravity_world_y = 0.0
+    float inputs:gravity_world_z = 0.0
 
     # Measurement bandwidth is part of the sensor configuration, not a hidden
     # runtime constant. The Modelica sensor exposes these parameters so a
