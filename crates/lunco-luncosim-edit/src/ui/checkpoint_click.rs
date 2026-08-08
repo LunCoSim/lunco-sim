@@ -1062,9 +1062,14 @@ pub fn draw_waypoint_overlay(
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     q_link: Query<&ControllerLink>,
+    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
+    panel_rects: Option<Res<lunco_workbench::PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
+    if scene_viewport.is_some_and(|viewport| !viewport.visible) {
+        return;
+    }
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
@@ -1080,6 +1085,10 @@ pub fn draw_waypoint_overlay(
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let origin = ctx.content_rect().min.to_vec2();
+    let clip_rect = panel_rects
+        .as_ref()
+        .and_then(|rects| rects.egui_rect(lunco_workbench::VIEWPORT_PANEL_ID, ctx))
+        .unwrap_or_else(|| ctx.content_rect());
 
     // Camera world position for distance-based sizing.
     let cam_world =
@@ -1087,10 +1096,11 @@ pub fn draw_waypoint_overlay(
             .map(|p| p.0)
             .unwrap_or(bevy::math::DVec3::ZERO);
 
-    // Under the chrome, over the 3D — see `billboard_overlay::world_overlay_layer`.
-    let painter = ctx.layer_painter(super::billboard_overlay::world_overlay_layer(
-        "waypoint_overlay",
-    ));
+    // Append to the root background before WorkbenchRenderSet so labels are
+    // deterministically below every normal egui window and dock panel.
+    let painter = ctx
+        .layer_painter(egui::LayerId::background())
+        .with_clip_rect(clip_rect);
 
     let vessel_entities: std::collections::HashSet<Entity> =
         q_vessels.iter().map(|(entity, ..)| entity).collect();

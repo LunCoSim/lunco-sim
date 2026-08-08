@@ -739,7 +739,7 @@ impl Plugin for LunCoAvatarPlugin {
         #[cfg(feature = "ui")]
         app.add_systems(
             bevy_egui::EguiPrimaryContextPass,
-            crate::ui::draw_rover_name_tags,
+            crate::ui::draw_rover_name_tags.before(lunco_workbench::WorkbenchRenderSet),
         );
         #[cfg(feature = "ui")]
         app.add_systems(

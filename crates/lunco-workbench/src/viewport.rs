@@ -247,6 +247,26 @@ pub struct PanelRect {
     pub size: UVec2,
 }
 
+impl PanelRect {
+    /// Convert this physical-pixel panel footprint to the egui point space used
+    /// by screen-space overlays.
+    ///
+    /// Bevy's camera viewport is expressed in physical pixels while egui's
+    /// painters and clip rectangles use logical points. Keeping this conversion
+    /// next to the measured rectangle prevents each world-overlay producer from
+    /// inventing its own DPI/rounding rules.
+    pub fn to_egui_rect(self, ctx: &egui::Context) -> egui::Rect {
+        let ppp = ctx.pixels_per_point().max(f32::EPSILON);
+        egui::Rect::from_min_max(
+            egui::pos2(self.origin.x as f32 / ppp, self.origin.y as f32 / ppp),
+            egui::pos2(
+                self.origin.x.saturating_add(self.size.x) as f32 / ppp,
+                self.origin.y.saturating_add(self.size.y) as f32 / ppp,
+            ),
+        )
+    }
+}
+
 /// Measurement emitted by the transparent viewport panel after it has read
 /// its egui geometry. The panel cannot mutate either view-model directly;
 /// this typed event keeps the write on the workbench side of the boundary.
@@ -303,6 +323,11 @@ impl PanelRects {
     /// Look up a panel's most-recently-recorded rect.
     pub fn get(&self, panel: PanelId) -> Option<PanelRect> {
         self.rects.get(&panel).copied()
+    }
+
+    /// Look up a panel footprint directly in egui's logical point space.
+    pub fn egui_rect(&self, panel: PanelId, ctx: &egui::Context) -> Option<egui::Rect> {
+        self.get(panel).map(|rect| rect.to_egui_rect(ctx))
     }
 }
 

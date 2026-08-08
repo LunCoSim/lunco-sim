@@ -8,7 +8,7 @@
 //! overlay this is modelled on — the difference is that what to write here comes
 //! from the scene rather than from Rust.
 //!
-//! ## Two things this must get right
+//! ## Three things this must get right
 //!
 //! **big_space.** Projection uses the subject's and camera's
 //! [`GlobalTransform`] values from the same render frame. Those are the exact
@@ -23,41 +23,25 @@
 //! each is dropped once its subject passes `fade_end`. True occlusion would
 //! need a depth read this overlay does not have; the honest mitigation is the
 //! distance cut plus a backdrop chip so text never dissolves into terrain.
+//!
+//! **Viewport ownership.** The scene camera renders the window as a layered
+//! surface and egui draws the workbench chrome over it. A screen-space label is
+//! therefore clipped to the measured `ViewportPanel` rect and appended to the
+//! workbench's root background paint list. The latter is important: an ad-hoc
+//! `Order::Background` layer has no deterministic order relative to the root
+//! layer in egui, while appending before `WorkbenchRenderSet` gives the real
+//! 3D → tags → UI sequence.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, UsdBillboard};
+use lunco_workbench::{PanelRects, VIEWPORT_PANEL_ID};
 
 /// Resolve the screen-space anchor from the same render pose as the subject's
 /// mesh. Keeping this small and explicit prevents callers from accidentally
 /// substituting an authoritative grid pose during visual projection.
 fn render_anchor(gtf: &GlobalTransform, offset_y: f32) -> Vec3 {
     gtf.translation() + Vec3::Y * offset_y
-}
-
-/// The egui layer every **world-space overlay** paints into: labels, numbers and
-/// gizmo text that annotate the 3D scene.
-///
-/// It sits in `Order::Background` — the same order the workbench's whole chrome
-/// occupies (`render_layout` builds its root `Ui` on `LayerId::background()`, and
-/// every panel and the dock show into that) — and the overlay systems are ordered
-/// `.before(WorkbenchRenderSet)`, so within that order the overlay layer is
-/// registered first and the chrome paints on top of it.
-///
-/// **That ordering is the fix, not a clip rect.** These overlays used to paint
-/// into `Order::Foreground`, which is *above* all chrome by definition, so a
-/// waypoint's coordinates drew straight across the Inspector in every authoring
-/// perspective. Clipping them to the scene rect would have hidden the symptom
-/// while leaving the layering upside-down; putting them under the chrome is the
-/// structural statement — an opaque panel covers them because it is in front,
-/// a deliberately transparent one lets them show through because the 3D shows
-/// through there too, and neither case needs a rectangle plumbed anywhere.
-///
-/// They still paint over the 3D render itself: Bevy's framebuffer is beneath the
-/// entire egui pass, not an egui layer, so `Order::Background` is as far down as
-/// an overlay can go and still be visible.
-pub fn world_overlay_layer(id: &'static str) -> egui::LayerId {
-    egui::LayerId::new(egui::Order::Background, egui::Id::new(id))
 }
 
 /// Paint every visible [`UsdBillboard`].
@@ -82,10 +66,17 @@ pub fn draw_billboard_overlay(
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     registry: Option<Res<lunco_celestial::registry::CelestialBodyRegistry>>,
+    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
+    panel_rects: Option<Res<PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
     if q_billboards.is_empty() {
+        return;
+    }
+    // A hidden workbench scene must not leave one frame of screen-space labels
+    // behind while the camera reconciler turns its window camera off.
+    if scene_viewport.is_some_and(|viewport| !viewport.visible) {
         return;
     }
     let Some((camera, cam_gtf)) = q_camera.iter().find(|(c, _)| c.is_active) else {
@@ -93,6 +84,10 @@ pub fn draw_billboard_overlay(
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let origin = ctx.content_rect().min.to_vec2();
+    let clip_rect = panel_rects
+        .as_ref()
+        .and_then(|rects| rects.egui_rect(VIEWPORT_PANEL_ID, ctx))
+        .unwrap_or_else(|| ctx.content_rect());
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
@@ -115,7 +110,13 @@ pub fn draw_billboard_overlay(
             .map(|b| b.radius_m)
     });
 
-    let painter = ctx.layer_painter(world_overlay_layer("usd_billboard_overlay"));
+    // Use the root background paint list, not a second custom Background layer.
+    // egui does not guarantee an order between ad-hoc layers that are absent
+    // from its Area order map; the system itself is scheduled before the
+    // workbench, so appending here gives a deterministic 3D → tag → UI stack.
+    let painter = ctx
+        .layer_painter(egui::LayerId::background())
+        .with_clip_rect(clip_rect);
 
     // Collect first so we can paint far-to-near: with no depth buffer, drawing
     // nearest LAST is what keeps a close label on top of a distant one.

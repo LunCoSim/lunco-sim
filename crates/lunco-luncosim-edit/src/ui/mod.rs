@@ -566,11 +566,11 @@ impl Plugin for SandboxEditUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (
-                    // The two WORLD overlays paint into `Order::Background` and must
-                    // register their layer BEFORE the workbench builds its chrome in
-                    // that same order — that is what puts the dock in front of them
-                    // instead of a waypoint label in front of the Inspector. See
-                    // `billboard_overlay::world_overlay_layer`.
+                    // The two WORLD overlays append to egui's root Background paint
+                    // list BEFORE the workbench builds its chrome. A custom egui
+                    // Background layer has no deterministic order against that
+                    // root list; this schedule edge is the actual 3D → tags → UI
+                    // composition boundary.
                     (
                         checkpoint_click::draw_waypoint_overlay,
                         // USD-authored labels (`lunco:billboard`).

@@ -3,7 +3,8 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_workbench::{
-    tutorial_overlay::TutorialHud, Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt,
+    tutorial_overlay::TutorialHud, Panel, PanelCtx, PanelId, PanelRects, PanelSlot,
+    WorkbenchAppExt, VIEWPORT_PANEL_ID,
 };
 
 use crate::RoverNameTagSettings;
@@ -433,6 +434,8 @@ pub fn draw_rover_name_tags(
     registry: Res<SessionRegistry>,
     profiles: Res<SessionProfiles>,
     settings: Res<RoverNameTagSettings>,
+    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
+    panel_rects: Option<Res<PanelRects>>,
     net_role: Option<Res<lunco_core::NetworkRole>>,
     q_camera: Query<(&Camera, &GlobalTransform), With<Avatar>>,
     q_rovers: Query<(&GlobalEntityId, &GlobalTransform)>,
@@ -446,6 +449,9 @@ pub fn draw_rover_name_tags(
     if !settings.show_always && !networked {
         return;
     }
+    if scene_viewport.is_some_and(|viewport| !viewport.visible) {
+        return;
+    }
 
     // The avatar camera is the one rendering this client's viewport. Without it
     // (e.g. headless / pre-spawn) there is nothing to project against.
@@ -457,12 +463,22 @@ pub fn draw_rover_name_tags(
 
     let [tr, tg, tb, _] = settings.text_color.to_srgba().to_u8_array();
     let origin = ctx.content_rect().min.to_vec2();
+    let clip_rect = panel_rects
+        .as_ref()
+        .and_then(|rects| rects.egui_rect(VIEWPORT_PANEL_ID, ctx))
+        .unwrap_or_else(|| ctx.content_rect());
     let cam_pos = cam_gtf.translation();
 
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("rover_name_tags"),
-    ));
+    // Name tags are world annotations, not workbench chrome. Keep them in the
+    // background world-overlay order and enforce the measured viewport boundary
+    // so they cannot leak into a side panel, graph, or inspector.
+    // Append to egui's root background list. The registration below orders this
+    // system before WorkbenchRenderSet, so dock panels and egui windows paint over
+    // these annotations deterministically; a separate custom Background layer
+    // has no guaranteed order against the root list.
+    let painter = ctx
+        .layer_painter(egui::LayerId::background())
+        .with_clip_rect(clip_rect);
 
     for (gid, gtf) in q_rovers.iter() {
         let Some(session) = registry.owner_of(gid.get()) else {
