@@ -2,6 +2,7 @@ Altimeter
 IMUSensor
 AttitudeReference
 FilteredDerivative
+FilteredSignal
 ThermalSensor
 ElectricalSensor
 StarTracker

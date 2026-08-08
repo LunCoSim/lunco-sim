@@ -1235,6 +1235,9 @@ def Xform "DescentLander" (
             float inputs:attitude_quat_x.connect = </DescentLander/IMU.outputs:attitude_quat_x>
             float inputs:attitude_quat_y.connect = </DescentLander/IMU.outputs:attitude_quat_y>
             float inputs:attitude_quat_z.connect = </DescentLander/IMU.outputs:attitude_quat_z>
+            float inputs:angular_velocity_local_x.connect = </DescentLander/IMU.outputs:gyro_x>
+            float inputs:angular_velocity_local_y.connect = </DescentLander/IMU.outputs:gyro_y>
+            float inputs:angular_velocity_local_z.connect = </DescentLander/IMU.outputs:gyro_z>
         }
     }
 
@@ -1245,10 +1248,10 @@ def Xform "DescentLander" (
     {
         double3 xformOp:translate = (0.0, 0.0, 0.0) # at CoM
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:raw_velocity_x.connect = </DescentLander.outputs:velocity_x>
-        float inputs:raw_velocity_y.connect = </DescentLander.outputs:velocity_y>
-        float inputs:raw_velocity_z.connect = </DescentLander.outputs:velocity_z>
-        float inputs:raw_sample_valid.connect = </DescentLander.outputs:state_valid>
+        float inputs:raw_acceleration_x.connect = </DescentLander.outputs:acceleration_x>
+        float inputs:raw_acceleration_y.connect = </DescentLander.outputs:acceleration_y>
+        float inputs:raw_acceleration_z.connect = </DescentLander.outputs:acceleration_z>
+        float inputs:raw_sample_valid.connect = </DescentLander.outputs:acceleration_valid>
         float inputs:raw_angvel_x.connect = </DescentLander.outputs:angvel_x>
         float inputs:raw_angvel_y.connect = </DescentLander.outputs:angvel_y>
         float inputs:raw_angvel_z.connect = </DescentLander.outputs:angvel_z>

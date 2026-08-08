@@ -350,9 +350,9 @@ fn lander_asset_wiring_migrated() {
     assert_eq!(
         view.connections(
             &SdfPath::new("/LanderTest/Lander/IMU").unwrap(),
-            "inputs:raw_velocity_y"
+            "inputs:raw_acceleration_y"
         ),
-        ["/LanderTest/Lander.outputs:velocity_y"]
+        ["/LanderTest/Lander.outputs:acceleration_y"]
     );
     let attitude_reference = SdfPath::new("/LanderTest/Lander/AttitudeReference").unwrap();
     for axis in ["w", "x", "y", "z"] {
@@ -396,21 +396,21 @@ fn lander_asset_wiring_migrated() {
         Some(0.5)
     );
     // The IMU is a measurement conversion, not a second estimator state
-    // owner.  Its velocity inputs are live Avian observations; the mission
+    // owner.  Its acceleration inputs are live solved Avian observations; the mission
     // initializes navigation state on GNC above and never mirrors it into the
     // sensor contract.
     let imu = SdfPath::new("/LanderTest/Lander/IMU").unwrap();
     assert_eq!(
-        view.connections(&imu, "inputs:raw_velocity_x"),
-        ["/LanderTest/Lander.outputs:velocity_x"]
+        view.connections(&imu, "inputs:raw_acceleration_x"),
+        ["/LanderTest/Lander.outputs:acceleration_x"]
     );
     assert_eq!(
-        view.connections(&imu, "inputs:raw_velocity_y"),
-        ["/LanderTest/Lander.outputs:velocity_y"]
+        view.connections(&imu, "inputs:raw_acceleration_y"),
+        ["/LanderTest/Lander.outputs:acceleration_y"]
     );
     assert_eq!(
-        view.connections(&imu, "inputs:raw_velocity_z"),
-        ["/LanderTest/Lander.outputs:velocity_z"]
+        view.connections(&imu, "inputs:raw_acceleration_z"),
+        ["/LanderTest/Lander.outputs:acceleration_z"]
     );
     let altimeter = SdfPath::new("/LanderTest/Lander/Altimeter/Model").unwrap();
     assert_eq!(

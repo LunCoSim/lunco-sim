@@ -3863,12 +3863,13 @@ pub(crate) fn install(app: &mut App) {
     // schedule config and cannot participate in this Bevy version's chained
     // system tuple. The explicit dependencies retain the same ownership order
     // without relying on tuple arity or a second compatibility path.
-    // Keep the deferred flush inside the wiring transaction.  Registering an
-    // `ApplyDeferred` system separately and ordering another system against the
-    // `ApplyDeferred` type is ambiguous in Bevy 0.19 because the schedule also
-    // inserts automatic flush points.  The explicit chain gives the one
-    // dependency we need—rewire commands must land before the wrapper query—
-    // without depending on a globally unique executor system type.
+    // Keep the deferred flushes inside the wiring transaction. Bevy 0.19's
+    // native `chain` configuration inserts the required synchronization after
+    // each command-producing stage. Registering an explicit `ApplyDeferred`
+    // system here is incorrect: the schedule also inserts automatic flush
+    // points for other ordered command systems, and the type-based system set
+    // then becomes ambiguous during schedule initialization (most visibly in
+    // offscreen recording startup).
     //
     // Parameters: the authored constants the wiring pass gathered off the
     // unconnected `inputs:` ports, pushed into the model once it exists. After
@@ -3888,16 +3889,15 @@ pub(crate) fn install(app: &mut App) {
         Update,
         (
             rewire_usd_connections,
-            bevy::ecs::schedule::ApplyDeferred,
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
             seed_usd_input_defaults,
             dispatch_loaded_modelica_sources,
         )
-            // The explicit flush above is the only required sync point.  Do
-            // not add implicit flushes after the wrapper: preserving the
-            // existing next-frame Modelica bind/seed boundary keeps solver
-            // admission deterministic and avoids changing mission timing.
-            .chain_ignore_deferred()
+            // Rewire commands must land before the wrapper query, and the
+            // wrapper's component insertion must land before defaults are
+            // seeded. Native deferred synchronization preserves both
+            // ownership boundaries without a duplicate ApplyDeferred node.
+            .chain()
             .in_set(CosimUpdateSet::Wiring),
     );
     // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after

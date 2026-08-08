@@ -174,7 +174,7 @@ def Xform "LanderTest" (
             # does not assume sibling names or invent a sensor provider.
             float inputs:altimeter_range.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_m>
             float inputs:altimeter_range_rate.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_rate_mps>
-            float inputs:altimeter_valid.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_valid>
+            float inputs:altimeter_valid.connect = </LanderTest/Lander/Altimeter/Model.outputs:range_confidence>
             float inputs:imu_coordinate_accel_local_x.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_x>
             float inputs:imu_coordinate_accel_local_y.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_y>
             float inputs:imu_coordinate_accel_local_z.connect = </LanderTest/Lander/IMU.outputs:coordinate_accel_local_z>

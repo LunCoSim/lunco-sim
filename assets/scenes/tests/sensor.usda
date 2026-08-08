@@ -65,9 +65,10 @@ def Xform "SandboxScene" (
             prepend references = @lunco://vessels/sensors/imu.usda@</Imu>
         )
         {
-            float inputs:raw_velocity_x.connect = </SandboxScene/Box.outputs:velocity_x>
-            float inputs:raw_velocity_y.connect = </SandboxScene/Box.outputs:velocity_y>
-            float inputs:raw_velocity_z.connect = </SandboxScene/Box.outputs:velocity_z>
+            float inputs:raw_acceleration_x.connect = </SandboxScene/Box.outputs:acceleration_x>
+            float inputs:raw_acceleration_y.connect = </SandboxScene/Box.outputs:acceleration_y>
+            float inputs:raw_acceleration_z.connect = </SandboxScene/Box.outputs:acceleration_z>
+            float inputs:raw_sample_valid.connect = </SandboxScene/Box.outputs:acceleration_valid>
             float inputs:raw_angvel_x.connect = </SandboxScene/Box.outputs:angvel_x>
             float inputs:raw_angvel_y.connect = </SandboxScene/Box.outputs:angvel_y>
             float inputs:raw_angvel_z.connect = </SandboxScene/Box.outputs:angvel_z>
