@@ -30,16 +30,17 @@
 //!
 //! ```ignore
 //! #[derive(Command)]
-//! pub struct DriveRover {
-//!     pub chassis: Entity,
-//!     pub forward: f64,
-//!     pub steer: f64,
+//! pub struct SetPorts {
+//!     pub target: Entity,
+//!     pub writes: Vec<(String, f64)>,
+//!     pub seq: u32,
+//!     pub tick: u64,
 //! }
 //! ```
 //!
 //! Domain crates define their own commands and register them with one line:
 //! ```ignore
-//! app.register_command::<DriveRover>(on_drive_rover);
+//! app.register_command::<SetPorts>(on_set_ports);
 //! ```
 //!
 //! The API layer discovers all registered commands via `AppTypeRegistry`

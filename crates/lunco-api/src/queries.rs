@@ -3,8 +3,8 @@
 //!
 //! ## Why
 //!
-//! `lunco-api` already has built-in query variants (`ListEntities`,
-//! `DiscoverSchema`, `QueryEntity`) that read ECS state and return JSON
+//! `lunco-api` already has built-in query variants (`ListEntities` and
+//! `DiscoverSchema`) that read ECS state and return JSON
 //! synchronously. Adding bundled-model / Twin / MSL listing the same way
 //! would require `lunco-api` to depend on `lunco-modelica` and
 //! `lunco-workspace` — a layering inversion (those crates already depend
@@ -291,7 +291,8 @@ impl ApiQueryProvider for ReadPortsProvider {
 /// `ready: false, readiness_tracked: false` rather than a hopeful `true`.
 ///
 /// params: none · returns:
-/// `{ ready, world_hold, readiness_tracked, pending_count, pending: [{kind, subject, label, elapsed_s, action}] }`
+/// `{ ready, world_hold, faulted, fault: {kind, subject, detail} | null,
+///    readiness_tracked, pending_count, pending: [{kind, subject, label, elapsed_s, action}] }`
 pub struct ReadinessProvider;
 impl ApiQueryProvider for ReadinessProvider {
     fn name(&self) -> &'static str {

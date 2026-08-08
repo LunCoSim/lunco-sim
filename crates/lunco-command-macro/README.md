@@ -31,23 +31,24 @@ use bevy::prelude::*;
 
 // 1. Define the command. `default` = HTTP-API-fillable.
 #[Command(default)]
-pub struct DriveRover {
+pub struct SetPorts {
     pub target: Entity,
-    pub forward: f64,
-    pub steer: f64,
+    pub writes: Vec<(String, f64)>,
+    pub seq: u32,
+    pub tick: u64,
 }
 
 // 2. Define the observer. The macro keeps `trigger: On<X>` as the
 //    synthetic first parameter; bodies can use `cmd.field` (auto-bound
 //    via `let cmd = trigger.event();`) or the explicit `trigger`.
-#[on_command(DriveRover)]
-fn on_drive_rover(trigger: On<DriveRover>, mut q: Query<&mut InputPorts>) {
+#[on_command(SetPorts)]
+fn on_set_ports(trigger: On<SetPorts>, mut q: Query<&mut InputPorts>) {
     let cmd = trigger.event();
-    // cmd.forward, cmd.steer available directly
+    // cmd.writes is available directly
 }
 
 // 3. List all observers in this plugin's command set.
-register_commands!(on_drive_rover, on_brake_rover);
+register_commands!(on_set_ports);
 
 // 4. In Plugin::build, one call replaces the whole register_type +
 //    add_observer cascade.

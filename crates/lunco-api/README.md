@@ -44,11 +44,12 @@ Content-Type: application/json
 
 {
   "type": "ExecuteCommand",
-  "command": "DriveRover",
+  "command": "SetPorts",
   "params": {
     "target": 42,
-    "forward": 0.8,
-    "steer": 0.0
+    "writes": [["throttle", 0.8], ["steer", 0.0], ["brake", 0.0]],
+    "seq": 0,
+    "tick": 0
   }
 }
 ```
@@ -75,15 +76,14 @@ Returns all available commands with their field types:
 {
   "commands": [
     {
-      "name": "DriveRover",
+      "name": "LoadScene",
       "fields": [
-        { "name": "target", "type_name": "bevy::prelude::Entity" },
-        { "name": "forward", "type_name": "f64" },
-        { "name": "steer", "type_name": "f64" }
+        { "name": "path", "type_name": "alloc::string::String" },
+        { "name": "root_prim", "type_name": "alloc::string::String" }
       ]
     }
   ],
-  "queries": ["EntitiesInRadius", "GetReadiness", "Nearest", "ReadExposures", "ReadPorts"]
+  "queries": ["GetBrokenConnections", "GetReadiness", "ListPorts", "Nearest", "ReadExposures", "ReadPorts"]
 }
 ```
 
@@ -108,13 +108,13 @@ Commands triggered via API arrive as `ApiCommandEvent`. Domain observers can han
 
 **Option 1: Observe `ApiCommandEvent` directly**
 ```rust
-fn on_drive_rover_api(
+fn on_set_ports_api(
     trigger: On<ApiCommandEvent>,
     mut q_inputs: Query<&mut InputPorts>,
 ) {
-    if trigger.event().command != "DriveRover" { return; }
+    if trigger.event().command != "SetPorts" { return; }
     let params = &trigger.event().params;
-    let forward = params["forward"].as_f64().unwrap_or(0.0);
+    let writes = &params["writes"];
     // ... handle command
 }
 ```
@@ -122,11 +122,11 @@ fn on_drive_rover_api(
 **Option 2: Use the typed command + API event**
 ```rust
 // Internal trigger
-fn on_drive_rover_internal(trigger: On<DriveRover>, ...) { ... }
+fn on_set_ports_internal(trigger: On<SetPorts>, ...) { ... }
 
 // API trigger
-fn on_drive_rover_api(trigger: On<ApiCommandEvent>, ...) {
-    if trigger.event().command == "DriveRover" {
+fn on_set_ports_api(trigger: On<ApiCommandEvent>, ...) {
+    if trigger.event().command == "SetPorts" {
         // Same logic, different source
     }
 }

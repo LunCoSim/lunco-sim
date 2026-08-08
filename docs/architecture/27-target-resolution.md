@@ -1,6 +1,6 @@
 # 27 — Simulation Target & Run-Configuration Resolution
 
-> Status: Design · Audience: contributors working on target/run-config resolution.
+> Status: Implemented · Audience: contributors working on target/run-config resolution.
 
 **Scope:** how LunCoSim decides *which* thing to simulate and *with what bounds*, why the current logic breeds drift bugs, how to make that bug class unrepresentable, and how the same machinery generalizes from Modelica to USD (framed against the FMI / SSP standards).
 
@@ -14,7 +14,7 @@ The typical resolution bug has the same shape: **one question is answered by N i
 |---|---|---|
 | Which class? | `simulation_candidates()` (tier-ranked) **vs** `first_non_pkg` (HashMap order) **vs** `dispatch_experiment`'s own manual candidate list | ranked vs unranked → different class chosen → wrong/short run |
 | Which name matches the query? | exact-or-leaf `rsplit('.').next()` idiom copy-pasted in ≥4 sites | one copy did exact-only → short-name `FastRunActiveModel{class:"RoverThermalSystem"}` missed the `experiment(...)` annotation, silently fell back |
-| Which bounds / what fallback? | `resolve_setup_bounds` (fallback `t_end = 10.0`) **vs** `dispatch_experiment` (fallback `t_end = 1.0`) | **live divergence**: panel & API show 10 s, FastRun actually runs 1 s |
+| Which bounds / what fallback? | All run surfaces use `sim_target::default_bounds` (`t_end = 1.0`) through `resolve_bounds` | **resolved**: panel, API, and Fast Run share one canonical fallback |
 
 Initial fixes were **point fixes** (swap `first_non_pkg` → `simulation_candidates()` at two call sites). They removed three divergences but left the structure that breeds them: resolution is computed *inline at each call site*. While that is true, every new call site reinvents the logic and re-introduces drift.
 
@@ -32,12 +32,12 @@ File references in `crates/lunco-modelica` and `crates/lunco-experiments`:
 
 ### 2.2 The four resolution paths
 1. **`on_compile_model`** (`compile.rs`) — class precedence: `explicit > drilled > picker(if ambiguous) > detected[0]`. Does not resolve bounds (compile only).
-2. **`dispatch_experiment`** (`compile.rs`) — class precedence: `explicit > drilled > picker > sole`; **builds its own candidate list by raw `index.classes` iteration** (does not call `simulation_candidates()`). Bounds composed as a 4-layer overwrite: `fallback(t_end=1.0) → annotation → draft → cmd_override` (`compile.rs`).
+2. **`dispatch_experiment`** (`compile.rs`) — class precedence: `explicit > drilled > picker > sole`; candidates and bounds use the shared target helpers. Bounds use the canonical `fallback(t_end=1.0) → annotation → draft → cmd_override` ladder.
 3. **`render_setup_section`** (`experiments.rs`) — class: `drilled > simulation_candidates()[0]`; bounds via `resolve_setup_bounds`.
-4. **`QueryExperimentBounds`** (`api_queries.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) + recomputes a `source` label (`"draft_override" | "runner_cache" | "annotation" | "fallback_10s"`).
+4. **`QueryExperimentBounds`** (`api_queries.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) and its source label (`"draft_override" | "runner_cache" | "annotation" | "fallback_1s"`).
 
-### 2.3 Bounds resolution — `compile.rs`
-- `resolve_setup_bounds() -> RunBounds` (`compile.rs`): precedence `draft override → runner cache → annotation → fallback(t_end=10.0)` (`compile.rs`).
+### 2.3 Bounds resolution — `model_commands.rs`
+- `resolve_setup_bounds() -> RunBounds` (`model_commands.rs`): precedence `draft override → annotation → runner cache → fallback(t_end=1.0)` through `sim_target::resolve_bounds`.
 - `bounds_from_annotation() -> Option<RunBounds>` (`compile.rs`): looks up class by qualified **or** leaf name; requires `experiment.stop_time = Some(_)`; maps `start_time → t_start` (default 0.0), `stop_time → t_end`, `interval(>0) → dt`, `tolerance → tolerance`; `solver`/`h0` always `None`.
 
 ### 2.4 Types — `lunco-experiments/src/lib.rs`
@@ -57,11 +57,11 @@ File references in `crates/lunco-modelica` and `crates/lunco-experiments`:
 | Path | Class algorithm | Bounds fallback `t_end` | Bounds precedence mechanism |
 |---|---|---|---|
 | `on_compile_model` | ranked candidates + picker | — | — |
-| `dispatch_experiment` | **manual unranked list** | **1.0 s** | overwrite: fallback→annotation→draft→cmd |
-| `render_setup_section` | `simulation_candidates()` | 10.0 s | first-Some: draft→cache→annotation→fallback |
-| `QueryExperimentBounds` | all non-package | 10.0 s | + independently recomputes provenance label |
+| `dispatch_experiment` | ranked candidates / shared resolver | **1.0 s** | shared resolver: draft→annotation→cache→fallback |
+| `render_setup_section` | `simulation_candidates()` | **1.0 s** | shared resolver: draft→annotation→cache→fallback |
+| `QueryExperimentBounds` | all non-package | **1.0 s** | resolver result plus source label |
 
-Two implementations of "no bounds known" (1.0 vs 10.0). Two implementations of precedence (overwrite vs first-Some) — these can disagree on **partial overrides** (e.g. a draft that sets only `t_end`: where does `t_start` come from? answered differently by each). Provenance ("where did this value come from") is computed a third time, separately, in the API query.
+The former two fallback values and precedence implementations have been collapsed into one `resolve_bounds` function. The API source label is still derived from the same ordered inputs and should eventually be returned as typed provenance from that resolver.
 
 ---
 
@@ -95,9 +95,9 @@ No call site does its own `rsplit`. The exact-only bug is uncompilable because t
 
 ### 4.3 One bounds default
 ```rust
-impl Default for RunBounds { fn default() -> Self { Self { t_end: 10.0, /* … */ } } }
+impl Default for RunBounds { fn default() -> Self { Self { t_end: 1.0, /* … */ } } }
 ```
-Delete the `1.0` literal in `compile.rs`. Both paths call `RunBounds::default()`. The two-constant divergence cannot recur because there is one constant.
+Both paths call `sim_target::default_bounds()` through `resolve_bounds`; the two-constant divergence cannot recur because there is one canonical fallback.
 
 ### 4.4 Bounds precedence as one fold that returns its source
 ```rust

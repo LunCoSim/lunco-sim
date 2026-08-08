@@ -49,7 +49,7 @@ curl -s http://127.0.0.1:4101/api/commands \
 # Query a specific entity by its numeric api_id (from ListEntities)
 curl -s http://127.0.0.1:4101/api/commands \
   -H 'content-type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":98466552102768}}' | jq .
+  -d '{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":98466552102768}}' | jq .
 ```
 
 ## Endpoints
@@ -62,7 +62,7 @@ resources.
 |---|---|---|
 | `GET` | `/api/health` | Liveness. Answered by the transport thread; no world access. |
 | `GET` | `/api/commands/schema` | The runtime `DiscoverSchema` — every callable command and its field types. |
-| `POST` | `/api/commands` | Execute a tagged command or query (`ListEntities`, `QueryEntity`, `DiscoverSchema`, `SubscribeTelemetry`). |
+| `POST` | `/api/commands` | Execute a tagged command or discovered query (`ListEntities`, `DiscoverSchema`, `SubscribeTelemetry`, `ReadPorts`, `GetReadiness`, and domain providers). |
 
 ## API Queries (Data Retrieval)
 

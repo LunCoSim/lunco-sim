@@ -4,7 +4,7 @@
 // Control is the ONE generic `SetPorts` command: a batch of named input-port
 // writes on the vessel's FlightSoftware command surface (`throttle`/`steer`/
 // `brake`). A `DriveMix` + kernel then projects those onto the actuator ports.
-// There is no `DriveRover`/`BrakeRover`. Like the keyboard path, we write EVERY
+// There are no dedicated rover command verbs. Like the keyboard path, we write EVERY
 // command port every tick (0 when unused) so a released setpoint — especially a
 // prior `brake` — zeroes out cleanly instead of sticking.
 

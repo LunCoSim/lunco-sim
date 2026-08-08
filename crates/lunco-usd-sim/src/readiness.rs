@@ -134,15 +134,12 @@ fn track_model_compiles(
         let owner = owning_physics_entity(entity, &parents, &rigid_bodies);
         match (kind, wait) {
             (Some(kind), None) => {
-                let ticket =
-                    registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
-                commands
-                    .entity(entity)
-                    .try_insert(ModelCompileWait {
-                        ticket,
-                        kind,
-                        owner,
-                    });
+                let ticket = registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
+                commands.entity(entity).try_insert(ModelCompileWait {
+                    ticket,
+                    kind,
+                    owner,
+                });
             }
             (None, Some((_, wait))) => {
                 registry.finish(wait.ticket);
@@ -150,15 +147,12 @@ fn track_model_compiles(
             }
             (Some(kind), Some((_, wait))) if kind != wait.kind || owner != wait.owner => {
                 registry.finish(wait.ticket);
-                let ticket =
-                    registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
-                commands
-                    .entity(entity)
-                    .try_insert(ModelCompileWait {
-                        ticket,
-                        kind,
-                        owner,
-                    });
+                let ticket = registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
+                commands.entity(entity).try_insert(ModelCompileWait {
+                    ticket,
+                    kind,
+                    owner,
+                });
             }
             _ => {}
         }
@@ -345,11 +339,8 @@ mod tests {
             .world_mut()
             .spawn(avian3d::prelude::RigidBody::Dynamic)
             .id();
-        app.world_mut().spawn((
-            ChildOf(body),
-            UsdSourcedCosim,
-            ModelicaModel::default(),
-        ));
+        app.world_mut()
+            .spawn((ChildOf(body), UsdSourcedCosim, ModelicaModel::default()));
 
         app.update();
 

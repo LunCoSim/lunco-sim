@@ -7,10 +7,11 @@
 //!
 //! ```ignore
 //! #[Command]
-//! pub struct DriveRover {
+//! pub struct SetPorts {
 //!     pub target: Entity,
-//!     pub forward: f64,
-//!     pub steer: f64,
+//!     pub writes: Vec<(String, f64)>,
+//!     pub seq: u32,
+//!     pub tick: u64,
 //! }
 //! ```
 //!
@@ -19,8 +20,8 @@
 //! Wraps the observer and generates a registration helper.
 //!
 //! ```ignore
-//! #[on_command(DriveRover)]
-//! fn on_drive_rover(cmd: DriveRover, mut q: Query<&mut Fsw>) { ... }
+//! #[on_command(SetPorts)]
+//! fn on_set_ports(cmd: SetPorts, mut q: Query<&mut PortRegistry>) { ... }
 //! ```
 //!
 //! # Registration: `register_commands!(fn_a, fn_b)`
@@ -30,7 +31,7 @@
 //! live in split submodules without per-function import boilerplate.
 //!
 //! ```ignore
-//! register_commands!(on_drive_rover, on_brake_rover);
+//! register_commands!(on_set_ports);
 //! register_commands!(nav::on_set_zoom, doc::on_undo);
 //! ```
 

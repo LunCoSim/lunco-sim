@@ -70,7 +70,7 @@ fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut
     if get("brake").is_some_and(|b| b > 0.5) {
         brakes.0 += 1;
     }
-    // A throttle/steer write is a drive sample (mirrors the old `DriveRover` log).
+    // A throttle/steer write is a drive sample on the generic port command.
     if cmd
         .writes
         .iter()

@@ -133,7 +133,7 @@ enforce them in review:
 5. **No spatial math in command observers.** Observers record intent;
    a system at a fixed schedule point (First) applies it on
    frame-consistent transforms, and always via same-instant GT *deltas*.
-6. Distances/positions for UI/API (`QueryEntity`) are heliocentric-absolute;
+6. Distances/positions for UI/API read providers are heliocentric-absolute;
    scene-frame consumers must convert via the site frame, never mix.
 
 ## 4. Migration slices

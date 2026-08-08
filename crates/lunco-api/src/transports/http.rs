@@ -46,8 +46,9 @@ pub async fn handle_health() -> impl IntoResponse {
 /// `GET /api/ready` — readiness. Unlike `/api/health` (liveness, no world
 /// access), this reaches into the world for the `ReadinessRegistry` state via the
 /// `GetReadiness` query provider: `ready` is true only when nothing is holding on
-/// a scene load / program compile / participant init. Answers `200` with the
-/// structured status either way — "not ready" is a valid state, not an error.
+/// a scene load / program compile / participant init and no terminal runtime fault
+/// is latched. Answers `200` with the structured status either way — "not ready"
+/// is a valid state, not an error.
 pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse {
     // A query provider returns data inline through the same command channel.
     execute_api_request(

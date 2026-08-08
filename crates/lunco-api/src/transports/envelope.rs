@@ -83,24 +83,24 @@ mod tests {
     }
 
     #[test]
-    fn canonical_query_entity_uses_the_execute_command_envelope() {
+    fn canonical_provider_query_uses_the_execute_command_envelope() {
         match parse(
-            r#"{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":98466552102768}}"#,
+            r#"{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":98466552102768}}"#,
         )
         .unwrap()
         {
             ApiRequest::ExecuteCommand { command, params } => {
-                assert_eq!(command, "QueryEntity");
-                assert_eq!(params["id"], 98466552102768_u64);
+                assert_eq!(command, "ReadPorts");
+                assert_eq!(params["api_id"], 98466552102768_u64);
             }
-            other => panic!("expected the QueryEntity provider call, got {other:?}"),
+            other => panic!("expected the provider query call, got {other:?}"),
         }
     }
 
     #[test]
     fn command_params_are_left_for_typed_validation() {
         assert!(parse(
-            r#"{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":"98466552102768"}}"#,
+            r#"{"type":"ExecuteCommand","command":"ReadPorts","params":{"api_id":"98466552102768"}}"#,
         )
         .is_ok());
 
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn untagged_command_forms_are_rejected() {
         assert!(parse(r#"{"command":"SetCamera","params":{"eye":[1,2,3]}}"#).is_err());
-        assert!(parse(r#"{"type":"QueryEntity","id":42}"#).is_err());
+        assert!(parse(r#"{"type":"Query","id":42}"#).is_err());
         assert!(parse(r#"{"type":"QueryCommandResult","id":42}"#).is_err());
         assert!(
             parse(r#"{"type":"ExecuteCommand","command":"SetCamera","eye":[1,2,3]}"#,).is_err()

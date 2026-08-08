@@ -21,7 +21,7 @@
 >   (`lunco-api::executor`) — the single funnel every HTTP / MCP / rhai / UI command
 >   passes through — has **zero** journal interaction. There is no
 >   `DomainKind::Command`.
-> - ⇒ `SpawnEntity`, `PossessVessel`, `DriveRover`, `SetPorts`, `SetTerrainOverlay`,
+> - ⇒ `SpawnEntity`, `PossessVessel`, `SetPorts`, `SetTerrainOverlay`,
 >   `SpawnDemTerrain` and all time control are **not** recorded, **not** undoable and
 >   **not** replayable. Load a twin, drive a rover, spawn terrain, reopen: the journal
 >   replays *document* state only — the runtime mutation history is gone.
@@ -34,7 +34,7 @@
 >
 > Recording at the dispatcher is easy; making the recording *mean* something is not:
 > 1. **Selection.** Journaling every command floods a persisted, network-synced log
->    with per-frame `DriveRover`/time-control traffic. Needs an opt-in marker on the
+>    with per-frame `SetPorts`/time-control traffic. Needs an opt-in marker on the
 >    command type (a reflect attribute → `lunco-command-macro`), i.e. mutations only.
 > 2. **Inverses.** Undo needs a per-command inverse (or an explicit "non-undoable,
 >    replay-only" declaration). See "Decisions" §2.

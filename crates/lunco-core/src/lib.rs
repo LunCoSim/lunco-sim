@@ -207,7 +207,7 @@ impl std::fmt::Display for GlobalEntityId {
 pub struct SyncLocal;
 
 /// Field marker for host authorization: the gid field a networked command is
-/// checked for ownership against (e.g. `DriveRover.target`). The wire apply
+/// checked for ownership against (e.g. `SetPorts.target`). The wire apply
 /// path finds it via `has_attribute::<AuthzTarget>()` to read which global id
 /// to authorize, instead of hardcoding a `"target"` field name. Attach via
 /// `#[authz_target]` on a `#[Command]` field. Derives `Reflect` because reflect

@@ -158,7 +158,7 @@ Representative commands already covering the user's surface:
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
-| Queries (return data) | `QueryEntity`, `ListEntities`, `DiscoverSchema` (all use the tagged `ExecuteCommand` envelope where applicable) |
+| Queries (return data) | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `ReadExposures`, `GetReadiness`, and domain providers (all use the tagged `ExecuteCommand` envelope where applicable) |
 
 ---
 
@@ -214,7 +214,7 @@ there is no separate one-shot backend or compatibility execution path.
 ### 3.2 Exposed verbs (the entire vocabulary, ~6 functions)
 ```rust
 cmd(name: &str, params: Map) -> Dynamic   // dispatch ANY command by name (reflect)
-query(name: &str, params: Map) -> Dynamic // ApiRequest queries (QueryEntity, ...)
+query(name: &str, params: Map) -> Dynamic // discovered ApiQueryProvider names
 find(name: &str) -> i64                    // Name -> GlobalEntityId (sugar over ListEntities)
 entity(id) -> EntityHandle                 // position/rotation/components accessor
 sim_time() -> f64                          // SimTick * SECS_PER_TICK
@@ -344,9 +344,9 @@ The command bus is the right channel for **writes that must be authoritative,
 replicated, RBAC-gated, undoable, and audited**. It is the wrong channel for
 **reads** and **fine-grained state** — which a per-tick `on_tick` callback needs
 constantly. Commands that need a result use the original deferred response
-(`executor.rs`); `QueryEntity` returns only a fixed blob
-(pos/rot/name/type, `executor.rs:535`) — no arbitrary component fields, no
-cosim/Modelica values; reflect-dispatch JSON-(de)serializes per call. And the
+(`executor.rs`); read providers own their result shape and coordinate-frame
+semantics — no generic component dump, no guessed render-frame position, and no
+implicit compatibility blob. Reflect-dispatch JSON-(de)serializes per call. And the
 intended read bridge (`python/reflect.rs` `EntityProxy`) is a **stub** — it
 touches no ECS (`reflect.rs:28-37`).
 

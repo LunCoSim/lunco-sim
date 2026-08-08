@@ -22,7 +22,7 @@
 //! │  ApiDiscovery  — schema introspection via TypeRegistry         │
 //! │  ApiTelemetry  — telemetry subscription + broadcast            │
 //! │                                                                │
-//! │  ApiRequest    — ExecuteCommand, QueryEntity, MutateResource…  │
+//! │  ApiRequest    — ExecuteCommand, ListEntities, Subscribe…      │
 //! │  ApiResponse   — Ok, Error, TelemetryEvent                     │
 //! └────────────────────────┬───────────────────────────────────────┘
 //!                          │

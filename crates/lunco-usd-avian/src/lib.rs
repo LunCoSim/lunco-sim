@@ -2421,7 +2421,6 @@ fn build_usd_physics_joints(
                         pos1.0 += delta;
                     }
                 }
-
             }
 
             // Seat velocity for every joint that locks orientation. Fixed
@@ -2446,9 +2445,8 @@ fn build_usd_physics_joints(
                     )
                 });
                 if let (Some((lin0, ang0)), Some((lin1, ang1))) = (motion0, motion1) {
-                    let free_axis_world = (!rigid).then(|| {
-                        (r0 * pending.local_rot0 * pending.axis).normalize()
-                    });
+                    let free_axis_world =
+                        (!rigid).then(|| (r0 * pending.local_rot0 * pending.axis).normalize());
                     let (target_lin, target_ang) = seated_body1_velocity(
                         p0.0,
                         p1_seated.0,
@@ -2471,9 +2469,7 @@ fn build_usd_physics_joints(
                         // through its joint contract. Do not let dynamic
                         // admission reapply the unconstrained value on the
                         // next Update boundary.
-                        commands
-                            .entity(b1)
-                            .try_remove::<AuthoredInitialVelocity>();
+                        commands.entity(b1).try_remove::<AuthoredInitialVelocity>();
                     }
                 }
             }

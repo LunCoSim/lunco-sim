@@ -50,7 +50,7 @@ How rover sync works when ROS2 is in the loop. Short version:
 
 | ROS2 node role | Our equivalent | Path |
 |---|---|---|
-| **Control node** publishing `/cmd_vel`, joint goals | a controller **possessing** a vessel | bridge subscribes → feeds the **same `DriveRover` / actuator** path as a human pilot (M4/M3). `NetworkAuthority.owner = ros_bridge_session`. |
+| **Control node** publishing `/cmd_vel`, joint goals | a controller **possessing** a vessel | bridge subscribes → feeds the **same `SetPorts` / actuator** path as a human pilot (M4/M3). `NetworkAuthority.owner = ros_bridge_session`. |
 | **Perception/observer** consuming `/odom`, `/tf`, sensors | an **observer** | bridge publishes telemetry derived from authoritative state (M2). |
 
 So when a ROS2 node drives the rover, human clients simply see it as
@@ -65,7 +65,7 @@ layer.
 | ROS2 primitive | Dir | Maps to |
 |---|---|---|
 | Topic — sensor/telemetry pub (sim→ROS) | out | **M2** state: bridge reads authoritative components, publishes `sensor_msgs`, `nav_msgs/Odometry`, `geometry_msgs` |
-| Topic — command sub (`/cmd_vel`, joints) | in | **M4 input / M3 command** → existing `DriveRover`/actuator observers |
+| Topic — command sub (`/cmd_vel`, joints) | in | **M4 input / M3 command** → existing `SetPorts`/actuator observers |
 | `/tf`, `/tf_static` | out | **M2 poses** (cell+transform → TF tree) + **M1** static structure |
 | `/clock` (+ `use_sim_time`) | out | **M6** — our sim clock *is* ROS time |
 | Service (request/response) | both | **M3** command with **`Ack`** (the `Mutation<P>`/`Ack` envelope is request/response already) |
@@ -175,7 +175,7 @@ hold.
 
 **Where it fits:** exactly like the ROS2 bridge — a **server-side, native-only**
 adapter. A Copper pipeline acting as a controller is *another participant* that
-possesses a vessel and drives the same `DriveRover`/actuator path (M4/M3); telemetry
+possesses a vessel and drives the same `SetPorts`/actuator path (M4/M3); telemetry
 flows out via M2. The bridge generalizes: ROS2 *or* Copper (*or* both) plug into the
 same authority boundary.
 

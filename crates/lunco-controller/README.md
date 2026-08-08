@@ -7,7 +7,7 @@ Input mapping and controller translation for LunCoSim vessels.
 This crate translates raw user input (Keyboard, Gamepad, Mouse) into typed command events that the Flight Software (FSW) can consume.
 
 - **Input Mapping** — Standard WASD + Space mapping for rovers and astronauts via `leafwing-input-manager`.
-- **Intent Translation** — Translates abstract human actions (e.g., `DriveForward`) into domain-specific command events (e.g., `DriveRover`).
+- **Intent Translation** — Translates abstract human actions (e.g., `DriveForward`) into the shared `SetPorts` command surface.
 - **Control Latching** — Implements "cruise control" behavior (`Shift + Axis`) to toggle sticky setpoints for hands-free operation.
 - **Context Awareness** — Supports modifier-gated input (e.g., `Ctrl` for free-look camera mode) to prevent command flow during inspection.
 
@@ -47,5 +47,5 @@ commands.spawn((
 
 ## See Also
 
-- `lunco-mobility` — Consumes the `DriveRover` and `BrakeRover` events triggered by this crate.
+- `lunco-mobility` — Consumes the bound `SetPorts` inputs and projects them onto the authored actuator ports.
 - `lunco-core` — Defines standard `UserIntent` used for avatar navigation.

@@ -572,7 +572,7 @@ mod binding_lifecycle_tests {
 
 /// The ONE generic control command: write a batch of named input ports on
 /// `target`, applied through [`PortRegistry::write_port`]. This is the whole of
-/// vessel control — there is no `DriveRover`/`BrakeRover`/`DriveLander` and no
+/// vessel control — there are no dedicated rover/lander command verbs and no
 /// axis/`VesselIntent` vocabulary. "Controlling" anything means writing its
 /// command input ports:
 /// - a wheeled rover exposes `throttle`/`steer`/`brake` (its `InputPorts`
@@ -585,8 +585,8 @@ mod binding_lifecycle_tests {
 /// The same command is emitted by the keyboard input path
 /// (`lunco-controller`), the HTTP/MCP API, scripts, and replayed remote peers —
 /// so every surface drives every controllable thing identically. `seq`/`tick`
-/// carry the prediction bookkeeping (host ack + client input log), replacing
-/// `DriveRover`'s; it rides `SyncChannel::ControlStream` over the network.
+/// carry the prediction bookkeeping (host ack + client input log); it rides
+/// `SyncChannel::ControlStream` over the network.
 #[Command]
 pub struct SetPorts {
     /// The entity whose input ports are written.

@@ -584,7 +584,6 @@ impl Plugin for LunCoAvatarPlugin {
         // not here: the tool's closure triggers `CaptureFromCamera`, whose observer is a
         // render-world readback this crate deliberately cannot link.
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
-        app.add_observer(on_user_intent);
         // Secondary observers on the SAME verbs — the authority-bookkeeping leg,
         // not the command handlers (those go through `register_commands!`).
         app.add_observer(record_possession_authority);
@@ -3429,19 +3428,6 @@ fn on_release_command(
         is_surface
     );
 }
-
-/// No-op placeholder.
-///
-/// **History**: this observer used to forward analog WASD into `DriveRover`
-/// commands, racing the typed `lunco-controller::translate_intents_to_commands`
-/// path on the same physical keys. Two writers on the same steer port produced
-/// per-frame torque oscillation (jitter on rotation) and the embedded
-/// "Ctrl-zeroes-rover" hack made Ctrl stop the wheels even though Ctrl is now
-/// strictly a camera modifier. The vessel-driving logic lives entirely in
-/// `lunco-controller` now; this observer is left in place only so the
-/// `IntentAnalogState` event still has a registered handler if other crates
-/// rely on it firing.
-fn on_user_intent(_trigger: On<IntentAnalogState>) {}
 
 /// Helper function to find the grid an entity belongs to.
 fn get_grid_for_entity(

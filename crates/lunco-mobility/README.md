@@ -125,7 +125,7 @@ parameter, so the 0.2 / −0.2 / 0.8 oracle scenarios are a parameter scrub.
 
 ## See Also
 
-- `lunco-controller` — Translates user input into the `DriveRover` events consumed here.
+- `lunco-controller` — Translates user input into the shared `SetPorts` inputs consumed here.
 - `lunco-hardware` — Provides the physical actuators (motors, brakes) that mobility systems interface with.
 - `avian3d` — The underlying physics engine for force integration.
 - `docs/architecture/28-modelica-realtime-physics.md` — the realtime/multiplayer physics plan this oracle is Step 2 of.

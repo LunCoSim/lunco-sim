@@ -58,13 +58,14 @@ Launch with `--api` and drive the sim over HTTP (POST to `/api/commands`) or via
 the MCP server for AI agents.
 
 - **Command format:** `{"type":"ExecuteCommand","command":"<Name>","params":{...}}`.
-  Meta requests use `{"type":"DiscoverSchema"}`, `{"type":"ListEntities"}`,
-  and `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":<n>}}`.
+  Meta requests use `{"type":"DiscoverSchema"}` and `{"type":"ListEntities"}`.
+  Entity state is read through discovered providers such as `ReadPorts`,
+  `ReadExposures`, and `GetReadiness`.
 - **The command set is discovered, not hard-coded.** New `#[Command]` types
   self-register; enumerate the live surface with `DiscoverSchema` (HTTP) or the
-  `discover_schema` MCP tool. Built-in read queries: `ListEntities`,
-  `DiscoverSchema`, `QueryEntity`, `ReadExposures`, plus extension queries (`ListBundled`,
-  `ListOpenDocuments`, `ListTwin`, `ListMsl`).
+  `discover_schema` MCP tool. Read providers include `ListPorts`, `ReadPorts`,
+  `ReadExposures`, `GetReadiness`, and `GetBrokenConnections`, plus domain
+  extensions such as `ListBundled`, `ListOpenDocuments`, `ListTwin`, and `ListMsl`.
 - **Full API reference:** [`architecture/12-api.md`](../architecture/12-api.md)
   and [`crates/lunco-api/README.md`](../../crates/lunco-api/README.md).
 - **MCP server:** [`mcp/README.md`](../../mcp/README.md) — wraps the HTTP API as
