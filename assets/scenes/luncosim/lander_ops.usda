@@ -163,7 +163,12 @@ def Xform "LanderTest" (
             float inputs:initial_vel_x = -5.0
             float inputs:initial_vel_y = 0.0
             float inputs:initial_vel_z = -5.0
-            float inputs:vehicle_mass = 2000.0
+            # Guidance must normalize thrust with the same live mass that the
+            # propulsion network publishes to the Avian body.  A second fixed
+            # mass here silently overcommands a fueled lander (the authored
+            # startup mass is 4000 kg) and lets the guidance/vehicle equations
+            # disagree as propellant burns.
+            float inputs:vehicle_mass.connect = </LanderTest/Lander/MainPropulsion.outputs:vehicle_mass_kg>
 
             # Mission-owned sensor topology. The reusable guidance component
             # does not assume sibling names or invent a sensor provider.
