@@ -213,9 +213,21 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
     // the perimeter to cover the gap. Depth scales with the tile's relief (+ a
     // small floor) so it always spans the gap without a needlessly tall wall.
     let skirt_depth = ((max_y - min_y) * 0.75 + region.side() as f32 * 0.05).max(0.5);
+    // Skirts close cracks between two neighboring LOD tiles.  At the outer DEM
+    // boundary there is no neighbor, so emitting one there creates an artificial
+    // vertical wall at the edge of the surveyed surface (especially visible from
+    // inside a canyon).  Keep the seam skirts on the other edges only.
+    let edge_epsilon = (dem_half_extent * 1.0e-9).max(1.0e-6);
+    let outer_edges = [
+        region.center[1] - region.half <= -dem_half_extent + edge_epsilon,
+        region.center[1] + region.half >= dem_half_extent - edge_epsilon,
+        region.center[0] - region.half <= -dem_half_extent + edge_epsilon,
+        region.center[0] + region.half >= dem_half_extent - edge_epsilon,
+    ];
     append_skirts(
         res,
         skirt_depth,
+        outer_edges,
         &mut positions,
         &mut morph_targets,
         &mut morph_normals,
@@ -243,6 +255,7 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
 fn append_skirts(
     res: usize,
     skirt_depth: f32,
+    outer_edges: [bool; 4],
     positions: &mut Vec<[f32; 3]>,
     morph_targets: &mut Vec<[f32; 3]>,
     morph_normals: &mut Vec<[f32; 3]>,
@@ -256,7 +269,10 @@ fn append_skirts(
     let left: Vec<usize> = (0..res).map(|iz| iz * res).collect();
     let right: Vec<usize> = (0..res).map(|iz| iz * res + (res - 1)).collect();
 
-    for edge in [top, bottom, left, right] {
+    for (edge, is_outer) in [top, bottom, left, right].into_iter().zip(outer_edges) {
+        if is_outer {
+            continue;
+        }
         // Drop a skirt vertex below each edge vertex, recording its new index.
         let mut skirt: Vec<u32> = Vec::with_capacity(edge.len());
         for &gi in &edge {
@@ -339,6 +355,48 @@ mod tests {
         assert!(m.positions[res * res..].iter().all(|p| p[1] < 0.0));
         // Flat → up normals (interior + skirts copy the edge normal).
         assert!(m.normals.iter().all(|n| n[1] > 0.99));
+    }
+
+    #[test]
+    fn outer_dem_edges_have_no_artificial_skirt_walls() {
+        let dem = flat_dem();
+        let res = 5;
+
+        let interior = bake_tile_mesh(
+            &dem,
+            &dem,
+            Square {
+                center: [0.0, 0.0],
+                half: 50.0,
+            },
+            res,
+            100.0,
+            [0.0, 0.0],
+            0.0,
+        );
+        assert_eq!(
+            interior.positions.len(),
+            res * res + 4 * res,
+            "interior tiles retain all four seam skirts"
+        );
+
+        let corner = bake_tile_mesh(
+            &dem,
+            &dem,
+            Square {
+                center: [50.0, 50.0],
+                half: 50.0,
+            },
+            res,
+            100.0,
+            [0.0, 0.0],
+            0.0,
+        );
+        assert_eq!(
+            corner.positions.len(),
+            res * res + 2 * res,
+            "the +X/+Z DEM boundary must not grow vertical skirt walls"
+        );
     }
 
     /// DIAGNOSTIC for "newly appeared LODs are black / wrongly lit".
