@@ -66,7 +66,7 @@ pub use bake::resample;
 /// between what a wheel touches and what an eye sees. See [`band`] and
 /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1.
 pub use band::SurfaceBand;
-pub use collider_ring::{ColliderTiles, TerrainColliderRing};
+pub use collider_ring::{ColliderTileOf, ColliderTiles, TerrainColliderRing};
 pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
 pub use derived_layers::{DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps};
 pub use georef::{TerrainGeoref, DEFAULT_ANCHOR_BODY};

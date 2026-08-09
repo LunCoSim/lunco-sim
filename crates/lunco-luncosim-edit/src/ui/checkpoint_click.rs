@@ -28,9 +28,9 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
-    append_waypoint_leaf, catmull_rom_path, insert_waypoint_after, remove_waypoint_leaf,
-    route_is_smooth, set_route_smooth, set_waypoint_dwell, BehaviorXml, ReachedWaypoints,
-    TargetBindings,
+    BehaviorXml, ReachedWaypoints, TargetBindings, append_waypoint_leaf, catmull_rom_path,
+    insert_waypoint_after, remove_waypoint_leaf, route_is_smooth, set_route_smooth,
+    set_waypoint_dwell,
 };
 use lunco_controller::{ControllerLink, SimulatedIntents};
 use lunco_core::commands::SessionId;
@@ -50,8 +50,8 @@ use lunco_usd::document::{
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
-use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
 use lunco_scene_commands::SelectedEntities;
+use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -217,6 +217,18 @@ pub struct WaypointClickFrame<'w, 's> {
         With<Camera3d>,
     >,
     pub q_parents: Query<'w, 's, &'static ChildOf>,
+    /// Terrain collider tiles are a streamed physics approximation of the DEM.
+    /// They are useful for body contact, but they are not authoritative for
+    /// waypoint authoring when the retained analytic surface covers the click.
+    pub terrain_colliders: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            With<lunco_terrain_surface::ColliderTileOf>,
+            With<lunco_terrain_surface::DemHeightField>,
+        )>,
+    >,
 }
 
 /// Vessel-side queries bundled separately from the click-ray inputs so the
@@ -261,7 +273,7 @@ fn pick_ground_world(
     // physics colliders — the ring around the rover — could place a waypoint.
     let origin = surface.to_grid(lunco_core::coords::RenderPos(ray.origin.as_dvec3()))?;
     let dir = ray.direction.as_dvec3();
-    let phys = raycaster
+    let phys_hit = raycaster
         .cast_ray_grid(
             origin,
             ray.direction,
@@ -269,15 +281,34 @@ fn pick_ground_world(
             false,
             &avian3d::prelude::SpatialQueryFilter::default(),
         )
-        .map(|h| h.distance);
+        // Collider tiles are band-limited, streamed approximations.  A tile
+        // hit must never replace the DEM's absolute surface in authored
+        // waypoint coordinates; static props remain eligible physics hits.
+        .filter(|hit| !frame.terrain_colliders.contains(hit.entity));
+    let phys = phys_hit.map(|hit| hit.distance);
     let terr = surface.raycast(origin, ray.direction, 1.0e6);
-    match (phys, terr) {
+    Some(select_ground_point(origin.0, dir, phys, terr)?)
+}
+
+/// Choose the nearest authored placement surface after streamed terrain
+/// colliders have been removed from the physics candidate set.
+///
+/// Keeping this small decision pure makes the precedence contract explicit:
+/// the analytic DEM is the terrain authority, while a real physics prop that
+/// lies above it remains selectable.
+fn select_ground_point(
+    origin: DVec3,
+    direction: DVec3,
+    physics_distance: Option<f64>,
+    terrain: Option<lunco_terrain_surface::surface_query::SurfaceHit>,
+) -> Option<DVec3> {
+    match (physics_distance, terrain) {
         (Some(pd), Some(hit)) => Some(if hit.distance <= pd {
             hit.point.0
         } else {
-            origin.0 + dir * pd
+            origin + direction * pd
         }),
-        (Some(pd), None) => Some(origin.0 + dir * pd),
+        (Some(pd), None) => Some(origin + direction * pd),
         (None, Some(hit)) => Some(hit.point.0),
         (None, None) => None,
     }
@@ -1538,7 +1569,7 @@ pub fn handle_autopilot_toggle_hotkey(
     }
 }
 
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// Command to engage autopilot on a vessel.
 #[Command]
@@ -2287,14 +2318,28 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        route_loops, route_ribbon_points, route_visual_state, BehaviorXml, ReachedWaypoints,
-        WAYPOINT_MARKER_ASSET,
+        BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET, route_loops, route_ribbon_points,
+        route_visual_state, select_ground_point,
     };
     use bevy::math::DVec3;
-    use bevy::prelude::LinearRgba;
+    use bevy::prelude::{Entity, LinearRgba};
     use lunco_autopilot::{
-        btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
+        AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint, btcpp_xml::value_to_xml,
     };
+
+    #[test]
+    fn analytic_surface_remains_authoritative_when_streamed_terrain_hit_is_removed() {
+        let terrain = lunco_terrain_surface::surface_query::SurfaceHit {
+            point: lunco_core::coords::GridPos(DVec3::new(0.0, -100.0, 0.0)),
+            distance: 100.0,
+            terrain: Entity::PLACEHOLDER,
+        };
+
+        let point = select_ground_point(DVec3::ZERO, DVec3::NEG_Y, None, Some(terrain))
+            .expect("the DEM hit is a valid placement point");
+
+        assert_eq!(point, terrain.point.0);
+    }
     use lunco_render::PbrLook;
     use lunco_scene_commands::runtime_waypoint::append_runtime_patrol;
 

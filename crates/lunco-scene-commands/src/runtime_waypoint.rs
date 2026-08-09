@@ -11,15 +11,15 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml, ReachedWaypoints};
+use lunco_autopilot::usd_tree::{BehaviorXml, ReachedWaypoints, append_waypoint_leaf};
 use lunco_core::{
-    on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
-    TelemetryEvent, TelemetryValue, TriggerZone,
+    Command, ControlBinding, GlobalEntityId, InputPorts, Severity, TelemetryEvent, TelemetryValue,
+    TriggerZone, on_command, register_commands,
 };
 use lunco_usd::document::WAYPOINT_MARKER_ASSET;
 use lunco_usd_bevy::UsdPrimPath;
 
-use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
+use crate::catalog::{SpawnAnchor, SpawnCatalog, SpawnSource, spawn_usd_entry};
 
 /// A runtime waypoint appended to a spawned vessel's patrol.
 ///
@@ -276,8 +276,15 @@ pub fn mark_reached_waypoints_on_enter(
     mut commands: Commands,
 ) {
     enum Arrival {
-        Authored { marker_path: String, vessel: Entity },
-        Runtime { vessel: Entity, index: usize },
+        Authored {
+            marker_path: String,
+            vessel: Entity,
+            targets: Vec<String>,
+        },
+        Runtime {
+            vessel: Entity,
+            index: usize,
+        },
     }
     let mut arrivals = Vec::new();
 
@@ -323,9 +330,24 @@ pub fn mark_reached_waypoints_on_enter(
                                 });
                             }
                         } else {
+                            let Ok((_, Some(xml))) = q_vessels.get(curr) else {
+                                continue;
+                            };
+                            let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+                                continue;
+                            };
+                            let mut targets = Vec::new();
+                            collect_targets(&value, &mut targets);
+                            if !targets
+                                .iter()
+                                .any(|target| target_matches(target, marker_path))
+                            {
+                                continue;
+                            }
                             arrivals.push(Arrival::Authored {
                                 marker_path: marker_path.to_string(),
                                 vessel: curr,
+                                targets,
                             });
                         }
                         resolved = true;
@@ -343,50 +365,46 @@ pub fn mark_reached_waypoints_on_enter(
         }
     }
 
+    // CollisionStart messages are read as one batch. Commands are applied after
+    // this system, so keep the working arrival set here as well: two ordered
+    // waypoint sensors entered in one physics step must still be admitted one at
+    // a time, never against the stale component snapshot.
+    let mut pending_reached: std::collections::HashMap<Entity, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+
     for arrival in arrivals {
-        let (vessel, key) = match arrival {
-            Arrival::Runtime { vessel, index } => (vessel, runtime_waypoint_key(index)),
+        let (vessel, key, ordered) = match arrival {
+            Arrival::Runtime { vessel, index } => (
+                vessel,
+                runtime_waypoint_key(index),
+                ArrivalOrder::Runtime { index },
+            ),
             Arrival::Authored {
                 marker_path,
                 vessel,
-            } => {
-                let Ok((_, Some(xml))) = q_vessels.get(vessel) else {
-                    continue;
-                };
-                let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
-                    continue;
-                };
-                let mut targets = Vec::new();
-                collect_targets(&value, &mut targets);
-                if !targets.iter().any(|target| {
-                    target == &marker_path
-                        || target.ends_with(&marker_path)
-                        || marker_path.ends_with(target)
-                }) {
-                    continue;
-                }
-                (vessel, marker_path)
-            }
+                targets,
+            } => (vessel, marker_path, ArrivalOrder::Authored { targets }),
         };
-        if q_reached
-            .get(vessel)
-            .map(|reached| {
-                reached
-                    .0
-                    .iter()
-                    .any(|path| path == &key || path.ends_with(&key) || key.ends_with(path))
-            })
-            .unwrap_or(false)
-        {
+        let set = pending_reached.entry(vessel).or_insert_with(|| {
+            q_reached
+                .get(vessel)
+                .map(|reached| reached.0.clone())
+                .unwrap_or_default()
+        });
+        let allowed = match &ordered {
+            ArrivalOrder::Runtime { index } => runtime_waypoint_is_next(*index, set),
+            ArrivalOrder::Authored { targets } => authored_waypoint_is_next(targets, set, &key),
+        };
+        if !allowed {
             continue;
         }
+        if !set.insert(key.clone()) {
+            continue;
+        }
+        commands
+            .entity(vessel)
+            .insert(ReachedWaypoints(set.clone()));
         info!("[waypoint] reached {key} (sensor enter)");
-        let mut set = q_reached
-            .get(vessel)
-            .map(|reached| reached.0.clone())
-            .unwrap_or_default();
-        set.insert(key.clone());
-        commands.entity(vessel).insert(ReachedWaypoints(set));
         commands.trigger(TelemetryEvent {
             name: "waypoint.reached".to_string(),
             source: q_gids.get(vessel).map(GlobalEntityId::get).unwrap_or(0),
@@ -395,6 +413,34 @@ pub fn mark_reached_waypoints_on_enter(
             timestamp: world_time.as_ref().map(|time| time.sim_secs).unwrap_or(0.0),
         });
     }
+}
+
+enum ArrivalOrder {
+    Authored { targets: Vec<String> },
+    Runtime { index: usize },
+}
+
+fn target_matches(a: &str, b: &str) -> bool {
+    a == b || a.ends_with(b) || b.ends_with(a)
+}
+
+fn authored_waypoint_is_next(
+    targets: &[String],
+    reached: &std::collections::HashSet<String>,
+    candidate: &str,
+) -> bool {
+    targets
+        .iter()
+        .find(|target| !reached.iter().any(|done| target_matches(done, target)))
+        .is_some_and(|next| target_matches(next, candidate))
+}
+
+fn runtime_waypoint_is_next(index: usize, reached: &std::collections::HashSet<String>) -> bool {
+    let mut next = 0;
+    while reached.contains(&runtime_waypoint_key(next)) {
+        next += 1;
+    }
+    index == next
 }
 
 fn collect_targets(value: &serde_json::Value, out: &mut Vec<String>) {
@@ -434,7 +480,11 @@ pub fn register(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::append_runtime_patrol;
+    use super::{
+        append_runtime_patrol, authored_waypoint_is_next, runtime_waypoint_is_next,
+        runtime_waypoint_key,
+    };
+    use std::collections::HashSet;
 
     #[test]
     fn runtime_patrol_starts_with_one_waypoint() {
@@ -446,5 +496,31 @@ mod tests {
             }
             _ => panic!("runtime waypoint must create a patrol"),
         }
+    }
+
+    #[test]
+    fn authored_arrival_must_follow_route_order() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let reached = HashSet::new();
+
+        assert!(!authored_waypoint_is_next(&targets, &reached, "/Route/W1"));
+        assert!(authored_waypoint_is_next(&targets, &reached, "/Route/W0"));
+    }
+
+    #[test]
+    fn authored_arrival_advances_to_the_next_unvisited_target() {
+        let targets = vec!["/Route/W0".to_string(), "/Route/W1".to_string()];
+        let reached = HashSet::from(["/Route/W0".to_string()]);
+
+        assert!(!authored_waypoint_is_next(&targets, &reached, "/Route/W0"));
+        assert!(authored_waypoint_is_next(&targets, &reached, "/Route/W1"));
+    }
+
+    #[test]
+    fn runtime_arrival_must_follow_runtime_index_order() {
+        let reached = HashSet::from([runtime_waypoint_key(0)]);
+
+        assert!(!runtime_waypoint_is_next(2, &reached));
+        assert!(runtime_waypoint_is_next(1, &reached));
     }
 }
