@@ -80,6 +80,67 @@ fn imu_converts_raw_avian_kinematics_and_environment_gravity() {
 }
 
 #[test]
+fn imu_observables_are_coherent_with_the_current_raw_sample() {
+    let source = model("Sensors/IMUSensor.mo");
+    let mut compiler = ModelicaCompiler::new();
+    let dae = compiler
+        .compile_str(
+            "IMUSensor",
+            &source,
+            "lunco://models/LunCo/Sensors/IMUSensor.mo",
+        )
+        .expect("IMUSensor must compile");
+    let mut stepper = rumoca_sim::SimulationSession::new(
+        &dae.dae,
+        rumoca_sim::SimOptions {
+            t_end: 10.0,
+            ..Default::default()
+        },
+    )
+    .expect("IMUSensor must create a live stepper");
+
+    for (name, value) in [
+        ("raw_acceleration_x", 1.25),
+        ("raw_acceleration_y", 0.5),
+        ("raw_acceleration_z", -0.75),
+        ("raw_sample_valid", 1.0),
+        ("raw_quat_w", 1.0),
+        ("gravity_world_y", -1.62),
+    ] {
+        stepper
+            .set_input(name, value)
+            .unwrap_or_else(|error| panic!("failed to set {name}: {error}"));
+    }
+    stepper
+        .step(1.0 / 60.0)
+        .expect("IMUSensor must advance with a raw sample");
+
+    let values: std::collections::HashMap<_, _> = stepper
+        .state()
+        .expect("IMUSensor state must be observable")
+        .values
+        .into_iter()
+        .collect();
+    for (name, expected) in [
+        ("world_accel_x", 1.25),
+        ("world_accel_y", 0.5),
+        ("world_accel_z", -0.75),
+        ("coordinate_accel_local_x", 1.25),
+        ("coordinate_accel_local_y", 2.12),
+        ("coordinate_accel_local_z", -0.75),
+    ] {
+        let actual = values
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| panic!("missing IMUSensor observable {name}"));
+        assert!(
+            (actual - expected).abs() < 1.0e-9,
+            "{name} must use the current raw sample: expected {expected}, got {actual}"
+        );
+    }
+}
+
+#[test]
 fn filtered_signal_is_a_reusable_stateful_measurement_boundary() {
     let source = model("Sensors/FilteredSignal.mo");
     assert!(source.contains("der(state)"));

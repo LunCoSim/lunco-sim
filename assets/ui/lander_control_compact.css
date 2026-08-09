@@ -1,16 +1,15 @@
 @import "ui/runtime_fonts.css";
 
 :root {
-  --panel-background: rgba(11, 17, 29, 0.92);
-  --panel-border: rgba(166, 173, 200, 0.34);
-  --text-color: rgba(225, 231, 247, 1);
-  --muted-color: rgba(166, 173, 200, 1);
+  --panel-background: rgba(7, 13, 24, 0.97);
+  --panel-border: rgba(127, 212, 255, 0.58);
+  --panel-inner: rgba(20, 35, 53, 0.82);
+  --text-color: rgba(236, 241, 252, 1);
+  --muted-color: rgba(169, 181, 205, 1);
   --accent-color: rgba(127, 212, 255, 1);
   --ok-color: rgba(166, 227, 161, 1);
-  --warm-color: rgba(255, 185, 105, 1);
+  --warm-color: rgba(255, 194, 112, 1);
   --ui-status-color: var(--accent-color);
-  --ui-rcs-activity-width: 0%;
-  --ui-propellant-width: 0%;
 }
 
 #compact-control-root {
@@ -19,56 +18,68 @@
   row-gap: 4px;
   width: 100%;
   height: 100%;
-  padding: 7px 8px;
+  padding: 8px 11px;
   box-sizing: border-box;
   border-width: 1px;
   border-color: var(--panel-border);
-  border-radius: 9px;
+  border-radius: 10px;
   background-color: var(--panel-background);
   color: var(--text-color);
   font-family: "LunCo UI";
 }
 
-#compact-control-header,
-#compact-control-fuel-label {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  column-gap: 10px;
-}
-
 #compact-control-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: 8px;
+  min-height: 20px;
   padding-bottom: 4px;
   border-bottom-width: 1px;
-  border-bottom-color: rgba(166, 173, 200, 0.22);
+  border-bottom-color: rgba(169, 181, 205, 0.28);
+}
+
+#compact-control-title {
+  display: flex;
+  flex-direction: column;
+  row-gap: 1px;
+  min-width: 0px;
 }
 
 #compact-control-kicker,
-#compact-control-motion-title,
-#compact-attitude-section,
-#compact-actuators-section,
-#compact-fuel-section,
+#compact-vertical-primary-label,
 #compact-ground-label,
-#compact-lateral-label,
-#compact-vertical-label,
 #compact-altitude-label {
   color: var(--muted-color);
   font-size: 8px;
   font-weight: 700;
-  letter-spacing: 0.8px;
-}
-
-#compact-target-offset {
-  color: var(--muted-color);
-  font-size: 8px;
-  font-weight: 700;
+  letter-spacing: 1px;
 }
 
 #compact-control-vehicle {
-  padding-top: 1px;
-  color: var(--ok-color);
-  font-size: 11px;
+  color: var(--text-color);
+  font-size: 14px;
   font-weight: 700;
+}
+
+#compact-control-status-chip {
+  display: flex;
+  align-items: center;
+  column-gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 5px;
+  border-width: 1px;
+  border-color: rgba(127, 212, 255, 0.3);
+  border-radius: 5px;
+  background-color: rgba(127, 212, 255, 0.08);
+}
+
+#compact-control-status-marker {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background-color: var(--ui-status-color);
 }
 
 #compact-control-status {
@@ -80,86 +91,96 @@
 #compact-control-motion {
   display: flex;
   flex-direction: column;
-  row-gap: 3px;
-  padding: 5px 6px;
+  row-gap: 4px;
+  padding: 5px 8px 4px;
   border-width: 1px;
-  border-color: rgba(127, 212, 255, 0.2);
-  border-radius: 6px;
-  background-color: rgba(127, 212, 255, 0.045);
+  border-color: rgba(127, 212, 255, 0.27);
+  border-radius: 7px;
+  background-color: var(--panel-inner);
+}
+
+#compact-vertical-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: 8px;
+  min-height: 29px;
+  padding-bottom: 4px;
+  border-bottom-width: 1px;
+  border-bottom-color: rgba(255, 194, 112, 0.35);
+}
+
+#compact-vertical-primary-copy {
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
+  min-width: 0px;
+}
+
+#compact-vertical-primary-label {
+  color: var(--warm-color);
+}
+
+#compact-vertical-primary-direction {
+  color: var(--text-color);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+}
+
+#compact-vertical-primary-value {
+  color: var(--warm-color);
+  font-size: 20px;
+  font-weight: 700;
 }
 
 #compact-control-motion-grid {
   display: flex;
-  flex-wrap: wrap;
-  row-gap: 3px;
-  column-gap: 5px;
+  column-gap: 10px;
 }
 
-#compact-control-motion-grid > node {
+#compact-ground,
+#compact-altitude {
   display: flex;
   flex-direction: column;
-  row-gap: 0px;
-  width: 48%;
-}
-
-#compact-ground-value,
-#compact-lateral-value,
-#compact-vertical-value,
-#compact-altitude-value,
-#compact-attitude-value,
-#compact-rcs-value,
-#compact-engine-value,
-#compact-fuel-value {
-  color: var(--ok-color);
-  font-size: 9px;
-  font-weight: 700;
-}
-
-#compact-lateral-value {
-  color: var(--accent-color);
-}
-
-#compact-vertical-value {
-  color: var(--warm-color);
-}
-
-#compact-control-bottom {
-  display: flex;
-  column-gap: 8px;
-}
-
-#compact-control-attitude,
-#compact-control-actuators {
-  display: flex;
-  flex-direction: column;
-  row-gap: 3px;
+  row-gap: 2px;
   width: 50%;
   min-width: 0px;
 }
 
-#compact-control-actuators {
-  padding-left: 8px;
-  border-left-width: 1px;
-  border-left-color: rgba(166, 173, 200, 0.22);
+#compact-ground-value,
+#compact-altitude-value {
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 700;
 }
 
-#compact-control-fuel {
+#compact-altitude-value {
+  color: var(--ok-color);
+}
+
+#compact-target-offset {
+  color: var(--muted-color);
+  font-size: 7px;
+  font-weight: 700;
+}
+
+#compact-control-bottom {
   display: flex;
-  flex-direction: column;
-  row-gap: 3px;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: 8px;
+  min-width: 0px;
+  padding-top: 1px;
 }
 
-#compact-control-fuel-track {
-  width: 100%;
-  height: 3px;
-  overflow: clip;
-  border-radius: 2px;
-  background-color: rgba(166, 173, 200, 0.22);
+#compact-rcs-value,
+#compact-engine-value {
+  color: var(--accent-color);
+  font-size: 8px;
+  font-weight: 700;
 }
 
-#compact-control-fuel-fill {
-  width: var(--ui-propellant-width);
-  height: 3px;
-  border-radius: 2px;
-  background-color: var(--ok-color);
+#compact-engine-value {
+  color: var(--ok-color);
 }

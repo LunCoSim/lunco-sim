@@ -11,6 +11,7 @@ big_space.workspace = true
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-environment = { path = "../lunco-environment" }
+lunco-readiness = { path = "../lunco-readiness" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 # The lint seam: this crate gathers USD physics FACTS; the RULES are authored in

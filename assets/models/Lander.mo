@@ -18,10 +18,6 @@ model Lander
     "Lower bound for normalized valve and command inputs";
   input Real command_upper_bound = 1.0
     "Upper bound for normalized valve and command inputs";
-  input Real touchdown_force_threshold_n = 250.0
-    "Total leg load at the centre of the touchdown transition (N)";
-  input Real touchdown_transition_width_n = 100.0
-    "Width of the touchdown load transition (N)";
   // The rigid-body mass/COM/inertia names belong exclusively to the Avian endpoint on
   // the owning USD prim. Controller gains use a deliberately distinct input
   // surface so one connection cannot be claimed by the Modelica map backend
@@ -91,6 +87,8 @@ model Lander
     "Attitude-error gain in angular acceleration units";
   input Real hold_kd = 2.5
     "Body-rate damping gain";
+  input Real hold_torque_limit_nm = 6000.0
+    "Per-axis attitude torque authority supplied by the composed RCS (N.m)";
   input Real attitude_deadband_rad = 0.01
     "Attitude error below which the stabilizer requests no RCS torque";
   input Real rate_deadband_rad_s = 0.02
@@ -132,13 +130,9 @@ model Lander
   Real hold_rate_x;
   Real hold_rate_y;
   Real hold_rate_z;
-  Real total_leg_force;
   Real all_legs_contact;
   Real upright_contact_gate;
   Real attitude_authority;
-  Real touchdown_error;
-  Real touchdown_width;
-  Real touchdown_load_gate;
   Real ground_speed;
   Real descent_speed;
   Real ground_speed_gate;
@@ -218,30 +212,30 @@ equation
   // firing RCS—hold the vehicle. The transition is continuous because
   // `touchdown` is the filtered native-contact state below.
   attitude_authority = attitude_hold * max(0.0, min(1.0, 1.0 - touchdown));
-  hold_torque_x = attitude_authority * controller_inertia_xx
-    * (hold_kp * hold_error_x - hold_kd * hold_rate_x);
-  hold_torque_y = attitude_authority * controller_inertia_yy
-    * (hold_kp * hold_error_y - hold_kd * hold_rate_y);
-  hold_torque_z = attitude_authority * controller_inertia_zz
-    * (hold_kp * hold_error_z - hold_kd * hold_rate_z);
+  // Bound the requested torque at the controller/actuator boundary. Without
+  // this, a large measured attitude error becomes an impossible torque request
+  // that the downstream valve clamp silently clips, invalidating the loop's
+  // tuning assumptions and making a recovery sensitive to tiny solver noise.
+  hold_torque_x = max(-max(0.0, hold_torque_limit_nm), min(
+    max(0.0, hold_torque_limit_nm), attitude_authority * controller_inertia_xx
+      * (hold_kp * hold_error_x - hold_kd * hold_rate_x)));
+  hold_torque_y = max(-max(0.0, hold_torque_limit_nm), min(
+    max(0.0, hold_torque_limit_nm), attitude_authority * controller_inertia_yy
+      * (hold_kp * hold_error_y - hold_kd * hold_rate_y)));
+  hold_torque_z = max(-max(0.0, hold_torque_limit_nm), min(
+    max(0.0, hold_torque_limit_nm), attitude_authority * controller_inertia_zz
+      * (hold_kp * hold_error_z - hold_kd * hold_rate_z)));
 
   torque_x = command_torque_x + hold_torque_x;
   torque_y = command_torque_y + hold_torque_y;
   torque_z = command_torque_z + hold_torque_z;
 
-  total_leg_force = leg_force_px + leg_force_nx + leg_force_pz + leg_force_nz;
   // A pad can touch while the hull still has lateral or downward speed. Keep
-  // contact separate from settled touchdown so GNC finishes braking before it
-  // removes flight authority. Requiring all four native pad contacts and a
-  // measured upright body prevents a one-leg or upside-down collision from
-  // being reported as a successful landing. These are measured physical
-  // signals, not a Rhai timer or a scene-specific landing branch.
-  touchdown_error = total_leg_force - touchdown_force_threshold_n;
-  touchdown_width = sqrt(
-    touchdown_transition_width_n * touchdown_transition_width_n + 1.0e-12);
-  touchdown_load_gate = 0.5 + 0.5 * touchdown_error
-    / sqrt(touchdown_error * touchdown_error
-      + touchdown_width * touchdown_width);
+  // physical four-pad contact separate from settled touchdown so the flight
+  // computer stops steering against the leg constraints first, then waits for
+  // measured navigation velocities to fall below the landing tolerances. The
+  // all-pad gate is sourced only from the native pad colliders; trigger volumes
+  // are excluded by the Avian contact primitive.
   ground_speed = sqrt(
     navigation_velocity_x * navigation_velocity_x
       + navigation_velocity_z * navigation_velocity_z);
@@ -261,8 +255,7 @@ equation
   // side-lying body (body-frame up component <= 0.2).
   upright_contact_gate = max(0.0, min(1.0,
     (upright_axis_y - 0.2) / 0.6));
-  settled_touchdown_target = touchdown_load_gate
-    * all_legs_contact
+  settled_touchdown_target = all_legs_contact
     * upright_contact_gate
     * ground_speed_gate * descent_speed_gate;
   // Contact and settled touchdown are different physical states. Contact is
@@ -270,9 +263,7 @@ equation
   // flight guidance must stop fighting the leg constraints even if the
   // navigation estimate still contains pre-contact inertial drift. The
   // low-speed filter below remains the mission's settled-touchdown event.
-  landing_contact = touchdown_load_gate
-    * all_legs_contact
-    * upright_contact_gate;
+  landing_contact = all_legs_contact * upright_contact_gate;
   der(settled_touchdown_state) = (settled_touchdown_target
     - settled_touchdown_state)
     / max(minimum_time_constant_s, touchdown_settle_tau_s);

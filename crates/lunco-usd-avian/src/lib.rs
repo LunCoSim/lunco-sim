@@ -1224,6 +1224,12 @@ fn extract_avian_prim(
             lunco_core::Mobility::Static,
             lunco_terrain_globe::TerrainTile,
         ));
+        // Terrain is a static body, but it is still a USD physics surface.
+        // Apply the authored material before its collider is admitted so the
+        // solver combines the ground's friction/restitution with the touching
+        // body's material exactly as it does for a dynamic body.  Keeping this
+        // on the classification branch avoids a scene-specific ground override.
+        apply_physics_material(commands, entity, reader, sdf_path);
         if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
             commands.entity(entity).try_insert(collider);
         } else {
@@ -2189,11 +2195,22 @@ fn build_usd_physics_joints(
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_authored_velocity: Query<&AuthoredInitialVelocity>,
+    readiness: Option<Res<lunco_readiness::ReadinessState>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
+        // A composed scene may have its USD prims present while Modelica,
+        // terrain, or the physics-transform bridge is still warming up. During
+        // that world hold the body query is intentionally empty/not admitted;
+        // counting those frames as failed joint resolution turns normal startup
+        // latency into a misleading "check body rel paths" warning. Once the
+        // readiness event releases the world, this same resolver runs and either
+        // builds the joint or reports a real authored relationship failure.
+        if readiness.as_deref().is_some_and(|state| state.world_hold) {
+            continue;
+        }
         let ticks = resolve_ticks.get(&joint_entity).copied().unwrap_or(0);
         if ticks >= JOINT_RESOLVE_WARN_TICKS && ticks % JOINT_RESOLVE_RETRY_INTERVAL != 0 {
             resolve_ticks.insert(joint_entity, ticks.saturating_add(1));
@@ -2237,10 +2254,27 @@ fn build_usd_physics_joints(
                     (true, _) => format!("body '{}'", pending.body0_path),
                     _ => format!("body '{}'", pending.body1_path),
                 };
+                let candidates: Vec<String> = q_bodies
+                    .iter()
+                    .filter(|(_, path)| {
+                        path.path == pending.body0_path || path.path == pending.body1_path
+                    })
+                    .map(|(entity, path)| {
+                        format!(
+                            "entity={entity:?} path={} stage={:?} instance={:?}",
+                            path.path,
+                            path.stage_handle.id(),
+                            instance_key(entity, &q_provenance, &q_gid, &q_instance_root),
+                        )
+                    })
+                    .collect();
                 warn!(
                     "[usd-avian] joint {}: {missing} still unresolved after {} physics ticks \
-                     — check the joint's body rel paths; retrying every {} ticks.",
-                    joint_prim_path.path, JOINT_RESOLVE_WARN_TICKS, JOINT_RESOLVE_RETRY_INTERVAL,
+                     — check the joint's body rel paths and stage/instance identity; \
+                     candidates={candidates:?}; retrying every {} ticks.",
+                    joint_prim_path.path,
+                    JOINT_RESOLVE_WARN_TICKS,
+                    JOINT_RESOLVE_RETRY_INTERVAL,
                 );
             }
             if ticks >= JOINT_RESOLVE_MAX_TICKS {
@@ -3029,46 +3063,7 @@ fn apply_rigid_body_mass_props(
     if let Some(d) = reader.real_f32(sdf_path, PHYSX_ANGULAR_DAMPING) {
         commands.entity(entity).try_insert(AngularDamping(d as f64));
     }
-    // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
-    // NOT from a `physics:friction` attribute on the body, which is not a thing
-    // UsdPhysics defines (see `read_physics_material`).
-    //
-    // USD and Avian BOTH model dynamic and static friction separately, so map
-    // them across one-to-one rather than collapsing to a single coefficient.
-    // Either may be unauthored; fall back to Avian's own default for that one
-    // (0.5), not to the other coefficient — "sticky but slippery" is a legitimate
-    // surface, and silently mirroring one onto the other would erase it.
-    //
-    // How the ROVER's friction and the GROUND's friction interact: they don't
-    // average in USD — USD only says what each surface IS. The pairing happens in
-    // the solver, per contact: Avian takes the two bodies' `Friction` components
-    // and combines each coefficient with the `combine_rule` (default `Average`,
-    // matching PhysX). So regolith at 1.0 under a wheel at 0.8 yields 0.9 unless
-    // a material says otherwise — and a material CAN say otherwise, via
-    // `physxMaterial:frictionCombineMode` (`min` is the usual choice when you
-    // want "the slipperiest surface wins", which is the physically honest rule
-    // for a wheel on dust).
-    if let Some(pm) = read_physics_material(reader, sdf_path) {
-        if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
-            let d = Friction::default();
-            commands.entity(entity).try_insert(Friction {
-                dynamic_coefficient: pm
-                    .dynamic_friction
-                    .map_or(d.dynamic_coefficient, |f| f.into()),
-                static_coefficient: pm
-                    .static_friction
-                    .map_or(d.static_coefficient, |f| f.into()),
-                combine_rule: pm.friction_combine.unwrap_or(d.combine_rule),
-            });
-        }
-        if let Some(r) = pm.restitution {
-            let d = Restitution::default();
-            commands.entity(entity).try_insert(Restitution {
-                coefficient: r.into(),
-                combine_rule: pm.restitution_combine.unwrap_or(d.combine_rule),
-            });
-        }
-    }
+    apply_physics_material(commands, entity, reader, sdf_path);
     // The spec frames both velocities in the BODY's local space: convert the
     // components by the stage convention (`physics:velocity` is units/s so it
     // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
@@ -3103,6 +3098,54 @@ fn apply_rigid_body_mass_props(
             if let Some(ang) = authored_angular {
                 commands.entity(entity).try_insert(AngularVelocity(ang));
             }
+        }
+    }
+}
+
+/// Project the surface properties of the USD physics material bound to a prim.
+///
+/// This is intentionally shared by static terrain and dynamic rigid bodies:
+/// material binding describes a surface, not a mobility class. A terrain
+/// classifier that skipped this projection would silently turn authored lunar
+/// regolith into Avian's default surface and make touchdown behavior depend on
+/// which USD prim type happened to carry the collider.
+fn apply_physics_material(
+    commands: &mut Commands,
+    entity: Entity,
+    reader: &StageView<'_>,
+    sdf_path: &SdfPath,
+) {
+    // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
+    // NOT from a `physics:friction` attribute on the body, which is not a thing
+    // UsdPhysics defines (see `read_physics_material`).
+    //
+    // USD and Avian BOTH model dynamic and static friction separately, so map
+    // them across one-to-one rather than collapsing to a single coefficient.
+    // Either may be unauthored; fall back to Avian's own default for that one
+    // (0.5), not to the other coefficient — "sticky but slippery" is a legitimate
+    // surface, and silently mirroring one onto the other would erase it.
+    //
+    // The pairwise combination remains Avian's responsibility. USD describes
+    // each surface; it does not average the two surfaces at load time.
+    if let Some(pm) = read_physics_material(reader, sdf_path) {
+        if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
+            let d = Friction::default();
+            commands.entity(entity).try_insert(Friction {
+                dynamic_coefficient: pm
+                    .dynamic_friction
+                    .map_or(d.dynamic_coefficient, |f| f.into()),
+                static_coefficient: pm
+                    .static_friction
+                    .map_or(d.static_coefficient, |f| f.into()),
+                combine_rule: pm.friction_combine.unwrap_or(d.combine_rule),
+            });
+        }
+        if let Some(r) = pm.restitution {
+            let d = Restitution::default();
+            commands.entity(entity).try_insert(Restitution {
+                coefficient: r.into(),
+                combine_rule: pm.restitution_combine.unwrap_or(d.combine_rule),
+            });
         }
     }
 }

@@ -2476,7 +2476,7 @@ impl Plugin for SandboxCorePlugin {
             // writer actually moved it. Must be added AFTER PhysicsPlugins
             // (it overrides PhysicsTransformConfig).
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
-            // 16 solver substeps (avian default 6): the raked prismatic landing
+            // 32 solver substeps (avian default 6): the raked prismatic landing
             // joints and joint-based rovers need the higher fixed-step resolution
             // to converge their hard angular constraints under contact load.
             // Quantified in the headless
@@ -2487,7 +2487,7 @@ impl Plugin for SandboxCorePlugin {
             // hard-joint convergence needed by the authored mechanisms. Native and
             // server builds use 16 for full fidelity and peer determinism.
             .insert_resource(avian3d::prelude::SubstepCount(
-                if cfg!(target_arch = "wasm32") { 10 } else { 16 },
+                if cfg!(target_arch = "wasm32") { 16 } else { 32 },
             ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)

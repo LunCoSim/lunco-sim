@@ -12,10 +12,10 @@
 #lunica-schema-root {
   display: flex;
   flex-direction: column;
-  row-gap: 10px;
+  row-gap: 6px;
   width: 100%;
   height: 100%;
-  padding: 14px 18px;
+  padding: 10px 14px;
   box-sizing: border-box;
   border-width: 1px;
   border-color: var(--panel-border);
@@ -30,14 +30,14 @@
   align-items: flex-start;
   justify-content: space-between;
   column-gap: 20px;
-  padding-bottom: 8px;
+  padding-bottom: 5px;
   border-bottom-width: 1px;
   border-bottom-color: rgba(166, 173, 200, 0.24);
 }
 
 #lunica-schema-title {
   color: var(--accent-color);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -56,7 +56,7 @@
 }
 
 #lunica-schema-note {
-  padding-top: 4px;
+  padding-top: 2px;
   text-align: right;
 }
 
@@ -66,7 +66,7 @@
   justify-content: space-between;
   flex-grow: 1;
   min-height: 0px;
-  column-gap: 8px;
+  column-gap: 5px;
 }
 
 #schema-column-0,
@@ -76,7 +76,7 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  row-gap: 7px;
+  row-gap: 4px;
   width: 23%;
   min-width: 0px;
 }
@@ -91,9 +91,9 @@
 #schema-slot-3-1 {
   display: flex;
   flex-direction: column;
-  row-gap: 4px;
-  min-height: 42px;
-  padding: 8px 9px;
+  row-gap: 2px;
+  min-height: 31px;
+  padding: 5px 7px;
   border-width: 1px;
   border-color: rgba(127, 212, 255, 0.36);
   border-radius: 6px;
@@ -109,7 +109,7 @@
 #schema-slot-3-0-title,
 #schema-slot-3-1-title {
   color: var(--ok-color);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -122,22 +122,22 @@
 #schema-slot-3-0-role,
 #schema-slot-3-1-role {
   color: var(--muted-color);
-  font-size: 8px;
+  font-size: 7px;
 }
 
 #schema-arrow-0,
 #schema-arrow-1,
 #schema-arrow-2 {
   color: var(--accent-color);
-  font-size: 22px;
+  font-size: 17px;
   font-weight: 700;
 }
 
 #lunica-schema-flow {
   display: flex;
   flex-direction: column;
-  row-gap: 4px;
-  padding-top: 6px;
+  row-gap: 3px;
+  padding-top: 3px;
   border-top-width: 1px;
   border-top-color: rgba(166, 173, 200, 0.2);
 }
@@ -145,8 +145,8 @@
 #lunica-schema-flow-lines {
   display: flex;
   flex-wrap: wrap;
-  column-gap: 16px;
-  row-gap: 3px;
+  column-gap: 10px;
+  row-gap: 2px;
 }
 
 #schema-wire-0,
@@ -158,5 +158,5 @@
 #schema-wire-6,
 #schema-wire-7 {
   color: var(--text-color);
-  font-size: 8px;
+  font-size: 7px;
 }
