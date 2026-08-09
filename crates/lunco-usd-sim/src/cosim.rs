@@ -1615,7 +1615,20 @@ fn modelica_models_terminal<'a>(
         // solver participant.
         (None, Some(component)) => !matches!(component.status, SimStatus::Compiling),
         (None, None) => true,
-        (Some(_), Some(component)) => !matches!(component.status, SimStatus::Compiling),
+        // `SimComponent::status` intentionally remains `Compiling` until the
+        // first solver step has produced live outputs.  That is the public
+        // simulation status, not the source-compilation transaction.  Once
+        // the authoritative Modelica worker has compiled the model, the
+        // binding epoch must be allowed to seal; otherwise scene readiness is
+        // coupled to the first fixed tick and a cold compile can hold the
+        // world indefinitely.  The next fixed tick will promote the wrapper
+        // to Running (or reopen the epoch if endpoint admission is still
+        // pending).
+        (Some(model), Some(component)) => {
+            model.is_compiled
+                || model.last_error.is_some()
+                || matches!(component.status, SimStatus::Error(_))
+        }
         (Some(_), None) => false,
     })
 }
@@ -4152,12 +4165,21 @@ mod tests {
             Some(&compiling),
         ))));
 
+        let mut compiled = ModelicaModel::default();
+        compiled.is_compiled = true;
+        assert!(modelica_models_terminal(std::iter::once((
+            Some(&compiled),
+            Some(&compiling),
+        ))));
+
         let ready = SimComponent {
             status: SimStatus::Idle,
             ..default()
         };
+        let mut ready_model = ModelicaModel::default();
+        ready_model.is_compiled = true;
         assert!(modelica_models_terminal(std::iter::once((
-            Some(&model),
+            Some(&ready_model),
             Some(&ready),
         ))));
         assert!(modelica_models_terminal(std::iter::once((None, None))));

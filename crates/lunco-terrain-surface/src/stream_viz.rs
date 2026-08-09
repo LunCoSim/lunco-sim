@@ -1633,10 +1633,13 @@ fn spawn_tile(
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
         // Streamed ground must never participate in Bevy's directional-shadow
-        // atlas as a caster. At lunar grazing angles the atlas produces
-        // saw-toothed terrain self-shadows and each cascade redraws the entire
-        // active tile set. It remains a receiver, so rover and structure
-        // shadows still land on the ground at normal CSM cost.
+        // atlas as a caster or receiver. At lunar grazing angles the atlas
+        // produces saw-toothed terrain self-shadows, and receiving the coarse
+        // cascade on top of the tile's heightfield shadow makes an entire
+        // streamed site black. The tile's terrain shader is the single
+        // self-shadow authority; dynamic objects continue to receive their
+        // own CSM shadows.
+        bevy::light::NotShadowReceiver,
         bevy::light::NotShadowCaster,
     ));
     tile.id()
@@ -2920,6 +2923,11 @@ pub(crate) fn bind_shadow_cache_to_tiles(
         }
         for entity in tiles.tile_entities() {
             let mut tile = commands.entity(entity);
+            // Keep already-resident tiles on the same single-owner shadow
+            // contract as newly spawned tiles. Without this, a tile that was
+            // resident before the cache late-bind would still receive the
+            // coarse CSM and could turn black at a grazing sun.
+            tile.try_insert(bevy::light::NotShadowReceiver);
             tile.try_insert(bevy::light::NotShadowCaster);
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
