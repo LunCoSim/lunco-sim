@@ -72,6 +72,7 @@
         "ground_speed": { "source": "ground_speed" },
         "lateral_speed": { "source": "lateral_speed" },
         "vertical_speed": { "source": "vertical_speed" },
+        "vertical_direction": { "source": "vertical_direction" },
         "altitude": { "source": "altitude" },
         "target_offset": { "source": "target_offset" },
         "propellant": { "source": "propellant" },
@@ -87,9 +88,9 @@
       "placement": {
         "mode": "window",
         "anchor": "bottom_left",
-        "offset": [14.0, -14.0],
-        "width": 224.0,
-        "height": 128.0
+        "offset": [16.0, -16.0],
+        "width": 236.0,
+        "height": 146.0
       }
     },
     {
@@ -105,6 +106,7 @@
         "ground_speed": { "source": "ground_speed" },
         "lateral_speed": { "source": "lateral_speed" },
         "vertical_speed": { "source": "vertical_speed" },
+        "vertical_direction": { "source": "vertical_direction" },
         "altitude": { "source": "altitude" },
         "target_offset": { "source": "target_offset" },
         "propellant": { "source": "propellant" },
@@ -120,9 +122,9 @@
       "placement": {
         "mode": "window",
         "anchor": "bottom_right",
-        "offset": [-14.0, -14.0],
-        "width": 224.0,
-        "height": 128.0
+        "offset": [-16.0, -16.0],
+        "width": 236.0,
+        "height": 146.0
       }
     },
     {

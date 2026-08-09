@@ -857,6 +857,7 @@ pub(crate) fn publish_exposure(
             &mut runtime.exposures,
             &runtime.selected,
             &queries.name,
+            &queries.callsign,
             &queries.sim,
             &queries.parents,
             &queries.velocity,
@@ -970,6 +971,7 @@ pub(crate) fn publish_exposure(
         &mut runtime.exposures,
         &runtime.selected,
         &queries.name,
+        &queries.callsign,
         &queries.sim,
         &queries.parents,
         &queries.velocity,
@@ -1189,6 +1191,7 @@ fn publish_control_exposures(
     exposures: &mut EngineExposures,
     selected: &SelectedEntities,
     q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
     q_vel: &Query<&LinearVelocity>,
@@ -1210,6 +1213,7 @@ fn publish_control_exposures(
         "lander-control-0",
         roots.first().and_then(|(entity, _)| *entity),
         q_name,
+        q_callsign,
         q_sim,
         q_parents,
         q_vel,
@@ -1225,6 +1229,7 @@ fn publish_control_exposures(
         "lander-control-1",
         roots.get(1).and_then(|(entity, _)| *entity),
         q_name,
+        q_callsign,
         q_sim,
         q_parents,
         q_vel,
@@ -1315,6 +1320,7 @@ fn publish_selected_control_exposure(
     namespace: &str,
     root: Option<Entity>,
     q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
     q_vel: &Query<&LinearVelocity>,
@@ -1333,6 +1339,7 @@ fn publish_selected_control_exposure(
     ui.property("ground_speed", "—");
     ui.property("lateral_speed", "—");
     ui.property("vertical_speed", "—");
+    ui.property("vertical_direction", "—");
     ui.property("altitude", "—");
     ui.property("target_offset", "—");
     ui.property("propellant", "—");
@@ -1385,16 +1392,21 @@ fn publish_selected_control_exposure(
         return;
     }
 
-    let vehicle = q_name
+    let vehicle = q_callsign
         .get(root)
-        .map(|name| {
-            name.as_str()
-                .rsplit('/')
-                .next()
-                .unwrap_or("selected")
-                .to_owned()
+        .ok()
+        .map(|callsign| callsign.0.trim().to_owned())
+        .filter(|label| !label.is_empty())
+        .or_else(|| {
+            q_name.get(root).ok().map(|name| {
+                name.as_str()
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("selected")
+                    .to_owned()
+            })
         })
-        .unwrap_or_else(|_| "selected".to_owned());
+        .unwrap_or_else(|| "selected".to_owned());
     let main_activity = outputs
         .get("engine_activity")
         .copied()
@@ -1452,13 +1464,20 @@ fn publish_selected_control_exposure(
         "vertical_speed",
         motion.map_or_else(
             || "—".to_owned(),
+            |(_, _, speed)| format!("{speed:+.2} m/s"),
+        ),
+    );
+    ui.property(
+        "vertical_direction",
+        motion.map_or_else(
+            || "—".to_owned(),
             |(_, _, speed)| {
                 if speed < -0.01 {
-                    format!("DOWN {:.2} m/s", -speed)
+                    "DESCENDING".to_owned()
                 } else if speed > 0.01 {
-                    format!("UP {speed:.2} m/s")
+                    "CLIMBING".to_owned()
                 } else {
-                    "HOLD 0.00 m/s".to_owned()
+                    "HOLD".to_owned()
                 }
             },
         ),

@@ -5,6 +5,7 @@
   <property name="ground_speed">—</property>
   <property name="lateral_speed">—</property>
   <property name="vertical_speed">—</property>
+  <property name="vertical_direction">—</property>
   <property name="altitude">—</property>
   <property name="target_offset">—</property>
   <property name="propellant">—</property>
@@ -19,30 +20,34 @@
 
   <node id="compact-control-root">
     <node id="compact-control-header">
-      <node>
-        <text id="compact-control-kicker">DESCENT CONTROL</text>
+      <node id="compact-control-title">
+        <text id="compact-control-kicker">DESCENT</text>
         <text id="compact-control-vehicle">{vehicle}</text>
       </node>
-      <text id="compact-control-status">{status}</text>
+      <node id="compact-control-status-chip">
+        <node id="compact-control-status-marker" />
+        <text id="compact-control-status">{status}</text>
+      </node>
     </node>
 
     <node id="compact-control-motion">
-      <text id="compact-control-motion-title">TOUCHDOWN APPROACH</text>
-      <node id="compact-control-motion-grid">
-        <node id="compact-ground"><text id="compact-ground-label">SPEED</text><text id="compact-ground-value">{ground_speed}</text></node>
-        <node id="compact-lateral"><text id="compact-lateral-label">SIDEWAYS</text><text id="compact-lateral-value">{lateral_speed}</text></node>
-        <node id="compact-vertical"><text id="compact-vertical-label">DOWN</text><text id="compact-vertical-value">{vertical_speed}</text></node>
-        <node id="compact-altitude"><text id="compact-altitude-label">HEIGHT</text><text id="compact-altitude-value">{altitude}</text></node>
+      <node id="compact-vertical-primary">
+        <node id="compact-vertical-primary-copy">
+          <text id="compact-vertical-primary-label">VERTICAL RATE</text>
+          <text id="compact-vertical-primary-direction">{vertical_direction}</text>
+        </node>
+        <text id="compact-vertical-primary-value">{vertical_speed}</text>
       </node>
-      <text id="compact-target-offset">PAD OFFSET {target_offset}</text>
+      <node id="compact-control-motion-grid">
+        <node id="compact-ground"><text id="compact-ground-label">HORIZONTAL</text><text id="compact-ground-value">{ground_speed}</text></node>
+        <node id="compact-altitude"><text id="compact-altitude-label">ALTITUDE</text><text id="compact-altitude-value">{altitude}</text></node>
+      </node>
+      <text id="compact-target-offset">PAD {target_offset}</text>
     </node>
 
     <node id="compact-control-bottom">
-      <node id="compact-control-actuators">
-        <text id="compact-actuators-section">CONTROL OUTPUT</text>
-        <text id="compact-rcs-value">RCS  {rcs_axis}  {rcs_activity}</text>
-        <text id="compact-engine-value">MAIN ENGINE  {main_engine}</text>
-      </node>
+      <text id="compact-rcs-value">RCS {rcs_axis} · {rcs_activity}</text>
+      <text id="compact-engine-value">ENGINE {main_engine}</text>
     </node>
   </node>
 </template>
