@@ -4,6 +4,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
 use lunco_core::{on_command, register_commands, Command};
+use lunco_render::SceneCamera;
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
 
@@ -340,7 +341,10 @@ pub fn update_spawn_ghost(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
-    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
+    cameras: Query<
+        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
+        (With<Camera3d>, With<SceneCamera>),
+    >,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     egui_focus: Res<lunco_core::EguiFocus>,
@@ -580,7 +584,10 @@ pub fn on_scene_click_spawn(
     keys: Res<ButtonInput<KeyCode>>,
     diagnostics: Res<SpawnDiagnostics>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
-    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
+    cameras: Query<
+        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
+        (With<Camera3d>, With<SceneCamera>),
+    >,
     egui_focus: Res<lunco_core::EguiFocus>,
     // `GridSpatialQuery`, not raw `SpatialQuery` — same choke point the ghost preview
     // (and wheels / altimeter) use: the click ray + corner probes originate in the

@@ -27,6 +27,7 @@ use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
@@ -102,7 +103,7 @@ pub fn draw_camera_paths(
     q_paths: Query<(&CameraPath, &GlobalTransform)>,
     q_playback: Query<&Playback>,
     q_gt: Query<&GlobalTransform>,
-    q_active: Query<(Entity, &Camera), With<Camera3d>>,
+    q_active: Query<(Entity, &Camera), (With<Camera3d>, With<SceneCamera>)>,
     mut gizmos: Gizmos,
 ) {
     if !viz.show_paths {
@@ -201,7 +202,7 @@ pub struct AddCameraHere {
 #[on_command(AddCameraHere)]
 fn on_add_camera_here(
     trigger: On<AddCameraHere>,
-    q_cam: Query<(Entity, &Camera, &RenderTarget), With<Camera3d>>,
+    q_cam: Query<(Entity, &Camera, &RenderTarget), (With<Camera3d>, With<SceneCamera>)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,

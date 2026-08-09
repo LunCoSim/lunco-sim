@@ -40,7 +40,7 @@ use lunco_core::{
     UserIntent,
 };
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_render::{PbrLook, SceneCamera, SurfaceAlpha};
 use lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding;
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
@@ -214,7 +214,7 @@ pub struct WaypointClickFrame<'w, 's> {
             &'static GlobalTransform,
             &'static bevy::camera::RenderTarget,
         ),
-        With<Camera3d>,
+        (With<Camera3d>, With<SceneCamera>),
     >,
     pub q_parents: Query<'w, 's, &'static ChildOf>,
 }
@@ -1068,7 +1068,7 @@ pub fn draw_waypoint_overlay(
         With<UsdPrimPath>,
     >,
     selected: Res<SelectedEntities>,
-    q_camera: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
+    q_camera: Query<(Entity, &Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
     q_avatar_cam: Query<Entity, With<Avatar>>,
     q_autopilots: Query<(
         &lunco_autopilot::Autopilot,
