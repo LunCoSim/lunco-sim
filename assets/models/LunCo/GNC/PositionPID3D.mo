@@ -64,6 +64,8 @@ model PositionPID3D
     "Maximum commanded descent speed above the landing target (m/s)";
   input Real descent_braking_accel_mps2 = 3.0
     "Acceleration used by the stopping-distance descent schedule (m/s²)";
+  input Real landing_flare_range_m = 4.0
+    "Altimeter range below which guidance maintains hover thrust until touchdown (m)";
   input Real g = 1.62 "Local gravity (m/s²)";
   input Real max_thrust = 60000.0 "Maximum engine thrust (N)";
   input Real vehicle_mass = 2000.0 "Vehicle mass (kg)";
@@ -73,6 +75,8 @@ model PositionPID3D
     "Smallest vertical acceleration used in tilt normalization (m/s²)";
   input Real minimum_thrust_accel_mps2 = 1.0e-6
     "Smallest thrust acceleration used in throttle normalization (m/s²)";
+  input Real minimum_engine_alignment = 0.55
+    "Minimum upward projection before the main engine may light";
 
   // The airframe uses normalized guidance commands.
   input Real piloted = 0.0 "1 while a pilot owns the vehicle";
@@ -126,9 +130,11 @@ model PositionPID3D
   Real bounded_lateral_accel_x;
   Real bounded_lateral_accel_z;
   Real thrust_vertical_projection;
+  Real engine_alignment_gate;
   Real pid_y_command;
   Real altitude_above_target;
   Real descent_rate_schedule_magnitude;
+  Real landing_flare_gate;
   Real vertical_limiter_output;
   Real throttle_command_value;
   Real pitch_command_value;
@@ -214,7 +220,23 @@ equation
   // This makes the limiter a proper signal boundary and prevents the output
   // alias from participating in the PID algebraic matching row.
   pid_y_command = pid_y.command;
-  vertical_limiter.command = g + pid_y_command;
+  // Close to the ground, a vertical PID can legitimately request zero thrust
+  // while the measured body is still rising from a first pad contact.  That
+  // leaves the remaining pads to catch a moving vehicle and makes horizontal
+  // settling depend on contact order.  The altimeter-driven flare supplies a
+  // reusable minimum hover command until native touchdown is settled: it is
+  // not a timer and it disappears when the four-leg/upright/low-speed
+  // touchdown state is true. The ramp reaches the gravity-compensating hover
+  // command at the ground, giving the suspension time to take load instead of
+  // asking the pads to absorb the whole descent rate.
+  landing_flare_gate = max(0.0, min(1.0, altimeter_valid))
+    * max(0.0, min(1.0,
+      (max(0.0, landing_flare_range_m) - navigation.measured_altitude)
+        / max(1.0e-9, landing_flare_range_m)));
+  vertical_limiter.command = max(
+    g + pid_y_command,
+    landing_flare_gate
+      * g * (1.0 - touchdown));
   vertical_limiter.lower_limit = 0.0;
   vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;
@@ -246,6 +268,15 @@ equation
   thrust_axis_transform.vector_z = 0.0;
   thrust_vertical_projection = noEvent(max(0.0, min(1.0,
     thrust_axis_transform.world_frame_y)));
+  // A vehicle released on its side must first use RCS to turn its thrust axis
+  // toward the surface normal. Multiplying by the raw projection alone would
+  // still allow a sideways engine to burn while the projection is small; that
+  // spends horizontal fuel before the guidance vector is physically useful.
+  // This is a reusable flight-computer safety boundary, expressed from the
+  // measured attitude, not a scene timer or a scripted trajectory.
+  engine_alignment_gate = noEvent(max(0.0, min(1.0,
+    (thrust_vertical_projection - minimum_engine_alignment)
+      / max(1.0e-9, 1.0 - minimum_engine_alignment))));
 
   // Body +Y is the engine axis. A requested lateral acceleration is physically
   // achievable only when the available vertical thrust can support the
@@ -278,13 +309,19 @@ equation
   // scene-specific correction.
   roll_command_raw = -atan2(bounded_lateral_accel_x, tilt_reference_accel)
     / max(1.0e-9, command_tilt_limit_rad);
-  // A landed vehicle must not continue steering against its leg constraints.
-  // Touchdown is a measured airframe state, not a Rhai timer or a scene-specific
-  // controller branch. The continuous touchdown signal lets the guidance
-  // demand fade out as the load settles.
+  // Keep flight authority while the airframe is touching but still carrying
+  // lateral or vertical impact speed. The suspension needs the flight
+  // computer to brake that residual motion; cutting authority on the first
+  // four-pad contact turns a supported-but-moving body into an uncontrolled
+  // skid. `landing_contact` remains a native contact input for telemetry and
+  // contact-state diagnostics, but it is not the handoff event: a contact edge
+  // is not a landing. The filtered low-speed `touchdown` state is the physical
+  // authority boundary, so the engine and RCS stop only after the vehicle has
+  // actually settled on its native suspension.
   flight_command_gain = engage * (1.0 - piloted)
-    * max(0.0, min(1.0, 1.0 - max(touchdown, landing_contact)));
-  throttle_command_value = flight_command_gain * thrust_vertical_projection
+    * max(0.0, min(1.0, 1.0 - touchdown));
+  throttle_command_value = flight_command_gain * engine_alignment_gate
+    * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));
   // Throttle is gated by the measured +Y thrust projection because a sideways
   // engine cannot provide useful upward force. Attitude commands are not gated:

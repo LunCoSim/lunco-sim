@@ -309,7 +309,7 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
 ///
 /// This is the motor LAW evaluated on the solver's own state, not a solver
 /// reading. avian's [`PrismaticJoint`] exposes no accumulated impulse — unlike a
-/// contact, where `warm_start_normal_impulse` is a real measured impulse — so
+/// contact, where `normal_impulse` is a real measured impulse — so
 /// there is no ground truth to read instead, and the law is only reported where
 /// it is exact:
 ///
@@ -407,10 +407,10 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bo
 
 /// Compression-only landing-strut force law.
 ///
-/// `compression_rate` is positive while the strut is closing. The damping
-/// contribution is bounded by the spring reaction, so a hard impact cannot
-/// create a large force spike and a rebound cannot turn the passive strut into
-/// a tensile actuator. The result is therefore always finite and non-negative.
+/// `compression_rate` is positive while the strut is closing. Damping is
+/// allowed to absorb impact energy; the authored `max_force` is the only force
+/// saturation. A rebound can never turn the passive strut into a tensile
+/// actuator because the final force is clamped to zero.
 pub fn passive_prismatic_force(
     compression: f64,
     compression_rate: f64,
@@ -428,7 +428,7 @@ pub fn passive_prismatic_force(
         return 0.0;
     }
     let spring = compression * spring_k;
-    let damping = (compression_rate * damping_c).clamp(-spring, spring);
+    let damping = compression_rate * damping_c;
     let force = (spring + damping).clamp(0.0, f64::MAX);
     if max_force.is_finite() && max_force > 0.0 {
         force.min(max_force)
@@ -599,8 +599,8 @@ mod tests {
         assert_eq!(rebound, 0.0, "fast rebound cannot create tensile force");
         let closing = passive_prismatic_force(0.20, 10.0, 4000.0, 3600.0, 30_000.0);
         assert_eq!(
-            closing, 1600.0,
-            "closing damping is bounded to one spring load"
+            closing, 30_000.0,
+            "closing damping is limited only by the authored force rating"
         );
     }
 

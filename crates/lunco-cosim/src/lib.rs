@@ -354,7 +354,10 @@ impl Plugin for CoSimPlugin {
         // sampling itself remains after the solver writeback above.
         app.add_systems(
             Update,
-            (systems::collider::sync_collider, avian::ensure_acceleration_samples),
+            (
+                systems::collider::sync_collider,
+                avian::ensure_acceleration_samples,
+            ),
         );
 
         // A model's own variables — the INTERNAL Modelica state included — become

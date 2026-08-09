@@ -8056,6 +8056,7 @@ dependencies = [
  "lunco-environment",
  "lunco-hooks",
  "lunco-lint",
+ "lunco-readiness",
  "lunco-terrain-globe",
  "lunco-usd-bevy",
  "openusd",

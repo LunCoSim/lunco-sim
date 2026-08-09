@@ -1197,7 +1197,7 @@ fn publish_control_exposures(
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     canonical: &CanonicalStages,
-    _schema_visible: bool,
+    schema_visible: bool,
 ) {
     let mut roots = authored_control_roots(q_paths, canonical);
     if roots.is_empty() {
@@ -1218,7 +1218,7 @@ fn publish_control_exposures(
         q_spatial,
         q_paths,
         canonical,
-        false,
+        schema_visible,
     );
     publish_selected_control_exposure(
         exposures,
@@ -1233,7 +1233,7 @@ fn publish_control_exposures(
         q_spatial,
         q_paths,
         canonical,
-        false,
+        schema_visible,
     );
 }
 

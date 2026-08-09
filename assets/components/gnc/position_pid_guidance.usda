@@ -138,6 +138,9 @@ def Xform "PositionPIDGuidance" (
         float inputs:descent_braking_accel_mps2 = 3.0 (
             customData = { double min = 0.0 double max = 30.0 string unit = "m/s2" }
         )
+        float inputs:landing_flare_range_m = 4.0 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "m" }
+        )
         float inputs:g = 1.62 (
             customData = { double min = 0.0 double max = 20.0 string unit = "m/s2" }
         )

@@ -27,34 +27,22 @@
     </node>
 
     <node id="compact-control-motion">
-      <text id="compact-control-motion-title">MOTION RELATIVE TO GROUND</text>
+      <text id="compact-control-motion-title">TOUCHDOWN APPROACH</text>
       <node id="compact-control-motion-grid">
-        <node id="compact-ground"><text id="compact-ground-label">GROUND</text><text id="compact-ground-value">{ground_speed}</text></node>
-        <node id="compact-lateral"><text id="compact-lateral-label">LEFT / RIGHT</text><text id="compact-lateral-value">{lateral_speed}</text></node>
-        <node id="compact-vertical"><text id="compact-vertical-label">VERTICAL</text><text id="compact-vertical-value">{vertical_speed}</text></node>
-        <node id="compact-altitude"><text id="compact-altitude-label">ALTITUDE</text><text id="compact-altitude-value">{altitude}</text></node>
+        <node id="compact-ground"><text id="compact-ground-label">SPEED</text><text id="compact-ground-value">{ground_speed}</text></node>
+        <node id="compact-lateral"><text id="compact-lateral-label">SIDEWAYS</text><text id="compact-lateral-value">{lateral_speed}</text></node>
+        <node id="compact-vertical"><text id="compact-vertical-label">DOWN</text><text id="compact-vertical-value">{vertical_speed}</text></node>
+        <node id="compact-altitude"><text id="compact-altitude-label">HEIGHT</text><text id="compact-altitude-value">{altitude}</text></node>
       </node>
-      <text id="compact-target-offset">TARGET OFFSET {target_offset}</text>
+      <text id="compact-target-offset">PAD OFFSET {target_offset}</text>
     </node>
 
     <node id="compact-control-bottom">
-      <node id="compact-control-attitude">
-        <text id="compact-attitude-section">ATTITUDE</text>
-        <text id="compact-attitude-value">R {roll}  P {pitch}  Y {yaw}</text>
-      </node>
       <node id="compact-control-actuators">
-        <text id="compact-actuators-section">ACTUATORS</text>
-        <text id="compact-rcs-value">RCS {rcs_activity} · {rcs_axis}</text>
-        <text id="compact-engine-value">ENGINE {main_engine}</text>
+        <text id="compact-actuators-section">CONTROL OUTPUT</text>
+        <text id="compact-rcs-value">RCS  {rcs_axis}  {rcs_activity}</text>
+        <text id="compact-engine-value">MAIN ENGINE  {main_engine}</text>
       </node>
-    </node>
-
-    <node id="compact-control-fuel">
-      <node id="compact-control-fuel-label">
-        <text id="compact-fuel-section">PROPELLANT</text>
-        <text id="compact-fuel-value">{propellant}</text>
-      </node>
-      <node id="compact-control-fuel-track"><node id="compact-control-fuel-fill" /></node>
     </node>
   </node>
 </template>

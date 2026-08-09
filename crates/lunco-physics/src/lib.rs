@@ -322,10 +322,16 @@ pub fn grant_physics_step(
     mut steps: ResMut<PhysicsStepRequest>,
     mut physics_time: ResMut<Time<Physics>>,
 ) {
-    if coupling.is_some_and(|state| state.physics_held)
-        || faults.is_some_and(|state| state.active())
-    {
+    if faults.is_some_and(|state| state.active()) {
         steps.clear();
+        physics_time.pause();
+        return;
+    }
+    if coupling.is_some_and(|state| state.physics_held) {
+        // Modelica owns a solver barrier, not the caller's recording clock.
+        // Keep queued cinematic steps until the in-flight model result releases
+        // the barrier; dropping them makes a deterministic recorder capture the
+        // same pose repeatedly while its Rhai frame index continues advancing.
         physics_time.pause();
         return;
     }
@@ -482,6 +488,36 @@ mod tests {
         );
 
         // The fixed step finally runs and spends it.
+        world.run_system_once(grant_physics_step).unwrap();
+        assert!(!world.resource::<Time<Physics>>().is_paused());
+        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
+    }
+
+    /// A Modelica result barrier delays a deliberate recording step; it must not
+    /// erase that step. Otherwise the capture clock advances while the physical
+    /// pose repeats until the next solver result happens to arrive.
+    #[test]
+    fn modelica_barrier_preserves_cinematic_step_debt() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(PhysicsStepRequest::default());
+        world.insert_resource(Time::<Physics>::default());
+        world.insert_resource(lunco_core::RealtimeCoupling {
+            physics_held: true,
+            ..Default::default()
+        });
+
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::CINEMATIC, true);
+        world.resource_mut::<PhysicsStepRequest>().request(1);
+        world.run_system_once(grant_physics_step).unwrap();
+        assert!(world.resource::<Time<Physics>>().is_paused());
+        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 1);
+
+        world.resource_mut::<lunco_core::RealtimeCoupling>().physics_held = false;
         world.run_system_once(grant_physics_step).unwrap();
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);

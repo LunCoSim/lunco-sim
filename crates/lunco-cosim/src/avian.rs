@@ -20,7 +20,7 @@ use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties,
     ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph, Forces,
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
-    RigidBody, Rotation, SubstepCount, WriteRigidBodyForces,
+    RigidBody, Rotation, Sensor, WriteRigidBodyForces,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -102,7 +102,14 @@ pub struct SolvedLinearAcceleration {
 /// Add the raw accelerometer state to every Avian body once it exists.
 pub fn ensure_acceleration_samples(
     mut commands: Commands,
-    query: Query<(Entity, &LinearVelocity), (With<RigidBody>, Without<SolvedLinearAcceleration>)>,
+    query: Query<
+        (Entity, &LinearVelocity),
+        (
+            With<RigidBody>,
+            With<lunco_core::PhysicsStateReady>,
+            Without<SolvedLinearAcceleration>,
+        ),
+    >,
 ) {
     for (entity, velocity) in &query {
         commands.entity(entity).insert(SolvedLinearAcceleration {
@@ -116,7 +123,10 @@ pub fn ensure_acceleration_samples(
 /// Capture solved acceleration after Avian has written back its state.
 pub fn sample_solved_acceleration(
     time: Res<Time<Physics>>,
-    mut query: Query<(&LinearVelocity, &mut SolvedLinearAcceleration), With<RigidBody>>,
+    mut query: Query<
+        (&LinearVelocity, &mut SolvedLinearAcceleration),
+        (With<RigidBody>, With<lunco_core::PhysicsStateReady>),
+    >,
 ) {
     let dt = time.delta_secs_f64();
     if !dt.is_finite() || dt <= 0.0 {
@@ -218,36 +228,69 @@ fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) 
 /// reads the same native contact fact; it does not re-derive it, or the two
 /// answers could drift.
 ///
-/// The force is `Σ warm-start normal impulse / substep_dt`. Warm-start impulses
-/// are what the solver carries between substeps, so the sum is
-/// solver-config-robust — independent of substep count and restitution — rather
-/// than a tuned divisor.
+/// The force is `Σ normal impulse / (solver passes × physics_dt)`. Avian's
+/// documented `normal_impulse` is accumulated across the substeps, but Avian
+/// 0.7 records the accumulated normal impulse once in each of its two contact
+/// passes (bias and relaxation). This boundary converts that solver accounting
+/// into the physical impulse delivered during the complete physics interval.
+/// The divisor is the full physics interval, not a solver substep interval.
 ///
 /// `contact_pairs_with` yields every pair whose AABBs overlap, INCLUDING pairs
 /// that are not yet touching, so `is_touching` is not optional: without it a leg
 /// reads "in contact" while its pad is still approaching, which is the exact
-/// false-early-contact this replaced.
-pub fn contact_of(graph: &ContactGraph, substep_dt: f64, entity: Entity) -> (bool, f64) {
-    let mut warm_impulse = 0.0;
+/// false-early-contact this replaced. Sensor colliders are also excluded here:
+/// a landing marker's overlap volume is a mission event, not a load-bearing
+/// surface, and must not feed a physical touchdown signal.
+pub fn contact_of(graph: &ContactGraph, physics_dt: f64, entity: Entity) -> (bool, f64) {
+    contact_of_filtered(graph, physics_dt, entity, |_| false)
+}
+
+/// Read contact while excluding explicitly authored overlap-only colliders.
+/// The predicate is supplied by the caller because `ContactGraph` deliberately
+/// stores pair topology, not ECS component semantics.
+fn contact_of_filtered(
+    graph: &ContactGraph,
+    physics_dt: f64,
+    entity: Entity,
+    is_sensor: impl Fn(Entity) -> bool,
+) -> (bool, f64) {
+    // Avian 0.7 runs the normal contact constraint twice per substep: once
+    // with penetration bias and once without it. `normal_impulse` is the
+    // solver's documented accumulated field, but its implementation adds the
+    // accumulated value in both passes. Keep this conversion here, at the
+    // native contact boundary, so every consumer receives a physical load.
+    const CONTACT_SOLVER_PASSES: f64 = 2.0;
+    let mut normal_impulse = 0.0;
     let mut touching = false;
     for pair in graph.contact_pairs_with(entity) {
+        let other = if pair.collider1 == entity {
+            pair.collider2
+        } else {
+            pair.collider1
+        };
+        if is_sensor(entity) || is_sensor(other) {
+            continue;
+        }
         if !pair.is_touching() {
             continue;
         }
         touching = true;
         for manifold in &pair.manifolds {
             for point in &manifold.points {
-                warm_impulse += point.warm_start_normal_impulse;
+                normal_impulse += point.normal_impulse;
             }
         }
     }
-    (touching, warm_impulse / substep_dt.max(1e-9))
+    (
+        touching,
+        normal_impulse / (CONTACT_SOLVER_PASSES * physics_dt.max(1e-9)),
+    )
 }
 
 /// [`contact_of`] for a caller holding only a `&World` — the port-read closures.
 ///
-/// Physics timing comes from the same resources the solver uses, so a port read
-/// and the solver agree about what a substep is. Missing resources mean physics
+/// Physics timing comes from the same resource the solver uses, so a port read
+/// and the solver agree about the duration of the solved step. Missing resources mean physics
 /// has not started; "not touching" is the truthful answer then, not a panic.
 pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
     let Some(graph) = world.get_resource::<ContactGraph>() else {
@@ -258,11 +301,9 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
         .map(|t| t.delta_secs_f64())
         .unwrap_or(0.0)
         .max(1e-9);
-    let substeps = world
-        .get_resource::<SubstepCount>()
-        .map(|s| s.0.max(1))
-        .unwrap_or(1);
-    contact_of(graph, dt / substeps as f64, entity)
+    contact_of_filtered(graph, dt, entity, |candidate| {
+        world.get::<Sensor>(candidate).is_some()
+    })
 }
 
 /// Contact as a PHYSICS fact, on any collider — no instrument required.
@@ -423,14 +464,15 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "acceleration_valid",
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                Some(if w
-                    .get::<SolvedLinearAcceleration>(e)
-                    .is_some_and(|sample| sample.valid)
-                {
-                    1.0
-                } else {
-                    0.0
-                })
+                Some(
+                    if w.get::<SolvedLinearAcceleration>(e)
+                        .is_some_and(|sample| sample.valid)
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                )
             }),
             write: None,
         },

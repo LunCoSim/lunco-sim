@@ -54,9 +54,9 @@
       "placement": {
         "mode": "window",
         "anchor": "top_center",
-        "offset": [0.0, 48.0],
-        "width": 940.0,
-        "height": 300.0
+        "offset": [0.0, 34.0],
+        "width": 900.0,
+        "height": 232.0
       }
     },
     {
@@ -88,8 +88,8 @@
         "mode": "window",
         "anchor": "bottom_left",
         "offset": [14.0, -14.0],
-        "width": 238.0,
-        "height": 158.0
+        "width": 224.0,
+        "height": 128.0
       }
     },
     {
@@ -121,8 +121,8 @@
         "mode": "window",
         "anchor": "bottom_right",
         "offset": [-14.0, -14.0],
-        "width": 238.0,
-        "height": 158.0
+        "width": 224.0,
+        "height": 128.0
       }
     },
     {
