@@ -15,7 +15,7 @@
 # binary directly works exactly as running the launcher does.
 #
 # Usage:
-#     ./scripts/build_native.sh <binary> [--release] [--package] [options]
+#     ./scripts/build_native.sh <binary> [--release] [--package|--velopack] [options]
 #
 # Binaries:
 #     lunica      — Modelica Workbench IDE (desktop GUI)
@@ -24,6 +24,8 @@
 # Options:
 #     --release          Optimized release build (default: dev)
 #     --package          Create a .tar.gz (unix) or .zip (windows) archive
+#     --velopack         Create a Velopack release from the staged directory
+#     --version <semver>  SemVer2 version used by Velopack (or env override)
 #     --target <triple>  Cross-compile target (default: host triple)
 #     --no-cache         Skip bundling assets/.cache/ subdirs (binary + assets only)
 #     --skip-download    Skip the cache asset download step (use existing .cache/)
@@ -134,6 +136,30 @@ arch_short() {
 }
 
 is_windows() { [[ "$1" == *windows* ]]; }
+
+velopack_runtime() {
+    case "$1" in
+        *windows*)
+            case "$1" in
+                *aarch64*) echo "win-arm64" ;;
+                *) echo "win-x64" ;;
+            esac
+            ;;
+        *darwin*)
+            case "$1" in
+                *x86_64*) echo "osx-x64" ;;
+                *) echo "osx-arm64" ;;
+            esac
+            ;;
+        *linux*)
+            case "$1" in
+                *aarch64*) echo "linux-arm64" ;;
+                *) echo "linux-x64" ;;
+            esac
+            ;;
+        *) error "No Velopack runtime mapping for target '$1'"; exit 1 ;;
+    esac
+}
 
 # ── Per-binary cache subdirs ──────────────────────────────────────────────
 # Each binary needs a different subset of the .cache/ tree at runtime.
@@ -484,18 +510,24 @@ shift
 
 RELEASE=0
 PACKAGE=0
+VELOPACK=0
+RELEASE_VERSION="${LUNCO_RELEASE_VERSION:-}"
 TARGET=""
 NO_CACHE=0
 SKIP_DOWNLOAD=0
 FULL_CACHE=0
 NO_ASSETS=0
 OUT_DIR=""
+VELOPACK_OUT=""
 EXTRA_ARGS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --release)       RELEASE=1; shift ;;
         --package)       PACKAGE=1; shift ;;
+        --velopack)      VELOPACK=1; shift ;;
+        --version)       RELEASE_VERSION="$2"; shift 2 ;;
+        --version=*)     RELEASE_VERSION="${1#--version=}"; shift ;;
         --target)        TARGET="$2"; shift 2 ;;
         --target=*)      TARGET="${1#--target=}"; shift ;;
         --no-cache)      NO_CACHE=1; shift ;;
@@ -504,12 +536,19 @@ while [ $# -gt 0 ]; do
         --no-assets)     NO_ASSETS=1; shift ;;
         --out)           OUT_DIR="$2"; shift 2 ;;
         --out=*)         OUT_DIR="${1#--out=}"; shift ;;
+        --velopack-out)  VELOPACK_OUT="$2"; shift 2 ;;
+        --velopack-out=*) VELOPACK_OUT="${1#--velopack-out=}"; shift ;;
         --extra)         EXTRA_ARGS+=("$2"); shift 2 ;;
         --extra=*)       EXTRA_ARGS+=("${1#--extra=}"); shift ;;
         -h|--help)       usage 0 ;;
         *)               error "Unknown option: $1"; usage 2 ;;
     esac
 done
+
+if [ "$PACKAGE" -eq 1 ] && [ "$VELOPACK" -eq 1 ]; then
+    error "Choose either --package or --velopack, not both"
+    exit 2
+fi
 
 # Validate binary
 case "$BINARY" in
@@ -566,7 +605,7 @@ fi
 info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
 cd "$PROJECT_DIR"
 
-    cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 8 \
+    cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 4 \
     --bin "$BINARY" -p "$CRATE" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
@@ -706,8 +745,46 @@ fi
 
 info "Run:  $OUT_DIR/run.$(is_windows "$TRIPLE" && echo bat || echo sh)"
 
-# ── Archive ───────────────────────────────────────────────────────────────
-if [ "$PACKAGE" -eq 1 ]; then
+# ── Velopack release or legacy-free direct archive ────────────────────────
+if [ "$VELOPACK" -eq 1 ]; then
+    if [ -z "$RELEASE_VERSION" ]; then
+        error "--velopack requires --version <SemVer2> or LUNCO_RELEASE_VERSION"
+        exit 2
+    fi
+    if ! command -v vpk >/dev/null 2>&1; then
+        error "Velopack packaging requested but 'vpk' is not installed"
+        error "Install the pinned Velopack CLI with: dotnet tool install -g vpk --version 1.2.110-ge826545"
+        exit 1
+    fi
+    if [ -z "$VELOPACK_OUT" ]; then
+        VELOPACK_OUT="$PROJECT_DIR/dist/velopack-${PLATFORM}-${ARCH}"
+    fi
+    rm -rf "$VELOPACK_OUT"
+    mkdir -p "$VELOPACK_OUT"
+    VPK_RUNTIME="$(velopack_runtime "$TRIPLE")"
+    # Keep one feed per runtime so a client can never select another
+    # architecture's full package. Velopack channels accept this slug format.
+    VPK_CHANNEL="$VPK_RUNTIME"
+    # Include the runtime in the package id as well: Velopack's package
+    # filenames are derived from packId + version, and all runtime packages
+    # are published into one GitHub Release.
+    VPK_PACK_ID="LunCoSim-$VPK_RUNTIME"
+    info "Creating Velopack release: version $RELEASE_VERSION, runtime $VPK_RUNTIME, channel $VPK_CHANNEL"
+    vpk pack \
+        --packId "$VPK_PACK_ID" \
+        --packTitle LunCoSim \
+        --packVersion "$RELEASE_VERSION" \
+        --channel "$VPK_CHANNEL" \
+        --runtime "$VPK_RUNTIME" \
+        --packDir "$OUT_DIR" \
+        --mainExe "$BIN_NAME" \
+        --outputDir "$VELOPACK_OUT"
+    if ! find "$VELOPACK_OUT" -maxdepth 1 -type f -name "releases.$VPK_CHANNEL.json" -print -quit | grep -q .; then
+        error "Velopack did not create releases.$VPK_CHANNEL.json in $VELOPACK_OUT"
+        exit 1
+    fi
+    success "Velopack release assembled: $VELOPACK_OUT"
+elif [ "$PACKAGE" -eq 1 ]; then
     create_archive "$OUT_DIR" "$TRIPLE"
 fi
 

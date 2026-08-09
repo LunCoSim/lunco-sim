@@ -35,6 +35,10 @@ mod rhai_repl_panel;
 /// Generic retained HUI/Flair exposure boundary shared by runtime-authored
 /// templates and engine value producers.
 mod runtime_exposure;
+/// Native Velopack update checks and package installation. WASM has no native
+/// process/update helper and intentionally does not compile this module.
+#[cfg(not(target_arch = "wasm32"))]
+mod update;
 /// Typed intent emitted by the authored terrain-progress surface.
 #[derive(Event, Clone, Debug)]
 struct DismissTerrainOverlay;
@@ -165,6 +169,8 @@ impl Plugin for SandboxUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_plugins(update::UpdatePlugin);
         if args.iter().any(|arg| arg == "--windowed-ui") {
             app.insert_resource(lunco_workbench::OfflineRecordingPresentation {
                 retain_workbench_chrome: true,

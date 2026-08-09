@@ -35,6 +35,13 @@ fn main() {
         "cargo:rustc-env=LUNCO_GIT_SHA={sha}{}",
         if dirty { "-dirty" } else { "" }
     );
+    // Cargo's package version remains the source-of-truth base version. CI can
+    // inject a SemVer2 product version (for example
+    // `0.6.0-nightly.123.1`) without rewriting Cargo.toml in the checkout.
+    let release_version = std::env::var("LUNCO_RELEASE_VERSION")
+        .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
+    println!("cargo:rustc-env=LUNCO_RELEASE_VERSION={release_version}");
+    println!("cargo:rerun-if-env-changed=LUNCO_RELEASE_VERSION");
     // Re-stamp when the checked-out revision moves. Without this the sha is baked at
     // first compile and every later build lies about which commit it is.
     println!("cargo:rerun-if-changed=../../.git/HEAD");

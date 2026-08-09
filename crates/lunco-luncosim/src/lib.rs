@@ -58,6 +58,11 @@ use lunco_usd_bevy::UsdRead;
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
 /// propagate the process exit code (e.g. the startup-scene fail-loud guard).
 pub use bevy::app::AppExit;
+/// SemVer2 product version stamped into this build. Release builds may carry a
+/// CI-derived nightly version while Cargo.toml keeps the stable package base.
+pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
+/// Short source revision stamped into this build for diagnostics.
+pub const GIT_SHA: &str = env!("LUNCO_GIT_SHA");
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
@@ -382,8 +387,8 @@ fn log_build_identity(headless: bool, offscreen: bool) {
     };
     println!(
         "[lunco] luncosim {ver} ({sha}) {profile} {mode} {os}/{arch}",
-        ver = env!("CARGO_PKG_VERSION"),
-        sha = env!("LUNCO_GIT_SHA"),
+        ver = PRODUCT_VERSION,
+        sha = GIT_SHA,
         profile = if cfg!(debug_assertions) {
             "debug"
         } else {

@@ -199,6 +199,10 @@ lunco-storage = { path = "../lunco-storage" }
 # only.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1"
+# Native desktop startup hooks and update checks. The Velopack application
+# entry point is only used by the windowed `luncosim` binary; headless and WASM
+# builds do not execute or link the updater path.
+velopack = { version = "=1.2.110-ge826545", optional = true }
 
 [features]
 # `ui` + `lunco-api` are on by default so native `cargo run --bin luncosim`
@@ -223,6 +227,7 @@ default = ["ui", "celestial", "lunco-api", "transport-http"]
 # intent (`PbrLook`/`ShaderLook`/`SceneCamera`); this binds it.
 # See docs/architecture/render-decoupling.md.
 ui = [
+    "dep:velopack",
     "dep:winit",
     "dep:bevy_winit",
     # The screenshot backend lives in the workbench, which only a GUI build links at all.

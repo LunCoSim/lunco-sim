@@ -2,6 +2,13 @@
 //! so the headless `luncosim-server` binary shares the same composition root.
 //! Built with the default `ui` feature.
 fn main() -> lunco_luncosim::AppExit {
+    // Velopack must see the original process before CLI dispatch. It handles
+    // install/update hooks and applies a package that was downloaded during a
+    // previous run. It does not perform the GitHub update check; that remains
+    // an explicit native GUI operation in the Updates settings menu.
+    #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+    velopack::VelopackApp::build().run();
+
     #[cfg(not(target_family = "wasm"))]
     if std::env::args().skip(1).any(|a| a == "test") {
         std::process::exit(lunco_luncosim::debug_scene::run() as i32);
