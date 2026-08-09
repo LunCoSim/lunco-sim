@@ -3219,6 +3219,7 @@ fn attach_programs(
     let mut programs: Vec<_> = reader
         .children(owner)
         .into_iter()
+        .filter(|child| reader.is_active(child))
         .filter(|child| reader.has_api_schema(child, "LunCoProgramAPI"))
         .collect();
     // Intrinsic behavior is authored directly on a physical prim. A separable
