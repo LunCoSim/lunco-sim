@@ -48,7 +48,7 @@ fn scene(app: &mut App, pin_pos: Vec3) -> (Entity, Entity) {
 }
 
 /// The compiled `drive_to` target of the vessel's derived spec.
-fn drive_target(app: &App, vessel: Entity) -> [f32; 3] {
+fn drive_target(app: &App, vessel: Entity) -> [f64; 3] {
     let spec = app
         .world()
         .get::<AutopilotBehaviorSpec>(vessel)

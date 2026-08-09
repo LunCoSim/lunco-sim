@@ -149,6 +149,14 @@ fn prepare_scene_physics_teardown(world: &mut World) {
     for (entity, component_id) in joints {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove_by_id(component_id);
+            // Avian's joint removal hook queues removal of `JointComponentId`.
+            // Remove that ownership marker synchronously as well: the
+            // `Remove<JointDisabled>` observer runs from the same deferred
+            // batch and must not see a marker that tells it to re-add the
+            // joint we just retired.  Leaving the hook's queued removal as a
+            // harmless no-op is preferable to allowing a graph resurrection
+            // during scene teardown.
+            entity_mut.remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>();
             entity_mut.remove::<JointDisabled>();
         }
     }

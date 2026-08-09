@@ -236,7 +236,8 @@ fn refresh_view_help_controls(
 ///
 /// The user switches via the workspace tabs in the transport bar.
 /// `ViewportPanel` reserves the centre slot in both perspectives; the
-/// 3D camera (tagged `WorkbenchViewportCamera`) is confined to that
+/// 3D camera (declared by the canonical `lunco_render::SceneCamera` intent) is
+/// confined to that
 /// rect each frame by `lunco_workbench::apply_workbench_viewport`, and
 /// the panel paints its theme backdrop around it.
 pub struct SandboxEditUiPlugin;
