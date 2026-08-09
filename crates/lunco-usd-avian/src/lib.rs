@@ -2195,22 +2195,17 @@ fn build_usd_physics_joints(
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_authored_velocity: Query<&AuthoredInitialVelocity>,
-    readiness: Option<Res<lunco_readiness::ReadinessState>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
-        // A composed scene may have its USD prims present while Modelica,
-        // terrain, or the physics-transform bridge is still warming up. During
-        // that world hold the body query is intentionally empty/not admitted;
-        // counting those frames as failed joint resolution turns normal startup
-        // latency into a misleading "check body rel paths" warning. Once the
-        // readiness event releases the world, this same resolver runs and either
-        // builds the joint or reports a real authored relationship failure.
-        if readiness.as_deref().is_some_and(|state| state.world_hold) {
-            continue;
-        }
+        // Joint preparation is intentionally allowed while world readiness
+        // holds. The hold pauses integration, not topology construction:
+        // `attach_joint` parks the native constraint and `JointAttachPlugin`
+        // admits it after Avian creates the solver body-island nodes. Holding
+        // this builder would deadlock readiness because the binding epoch waits
+        // for the pending joint marker to clear.
         let ticks = resolve_ticks.get(&joint_entity).copied().unwrap_or(0);
         if ticks >= JOINT_RESOLVE_WARN_TICKS && ticks % JOINT_RESOLVE_RETRY_INTERVAL != 0 {
             resolve_ticks.insert(joint_entity, ticks.saturating_add(1));

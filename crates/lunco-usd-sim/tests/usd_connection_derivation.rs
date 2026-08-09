@@ -393,7 +393,10 @@ fn lander_asset_wiring_migrated() {
     assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_z"), Some(-5.0));
     assert_eq!(
         view.value::<f32>(&lander, "inputs:touchdown_ground_speed_mps"),
-        Some(0.5)
+        // The reusable descent airframe authors the settled-contact threshold
+        // at 0.1 m/s. This is intentionally stricter than the Modelica source
+        // default: the composed USD asset is the authoritative vehicle tuning.
+        Some(0.1)
     );
     // The IMU is a measurement conversion, not a second estimator state
     // owner.  Its acceleration inputs are live solved Avian observations; the mission

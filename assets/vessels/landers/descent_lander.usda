@@ -2463,14 +2463,18 @@ def Xform "DescentLander" (
     # child rotation keeps the pad level, so it cannot rotate independently of
     # the strut. The prismatic joint is the only moving joint in the mechanism.
     #
-    # The SPRING is the joint's own linear drive — `drive:linear:physics:stiffness`
-    # and `:damping`, in SI, integrated by avian. Rust owns the dynamics; there is
-    # no equation and no script in the loop. Two layers remain:
-    #   the joint            — the spring: k = 4000 N/m, c = 2200 N·s/m, stroke
-    #                          -0.8..0 m (negative IS compression, see the axis
-    #                          note below). Static settle = 500 kg · 1.62 / 4000
-    #                          = -0.20 m per leg (a quarter of the vehicle each),
-    #                          large enough to read in a landing close-up.
+    # The SPRING is the authored `LunCoPrismaticSuspensionAPI` load law, not a
+    # bilateral linear motor. `stiffness`, `damping`, and `maxForce` are read from
+    # that typed API by the generic co-simulation physics layer, which applies the
+    # compression-only reaction at the two authored joint anchors before Avian's
+    # solver step. Rust owns the dynamics; there is no Modelica equation, Rhai
+    # command, or lander-specific branch in the loop. Two layers remain:
+    #   the joint            — the geometric constraint and rotation lock; the
+    #                          passive API supplies k = 4000 N/m, c = 2200 N·s/m,
+    #                          and stroke -0.8..0 m (negative IS compression, see
+    #                          the axis note below). Static settle = 500 kg · 1.62
+    #                          / 4000 = -0.20 m per leg (a quarter of the vehicle
+    #                          each), large enough to read in a landing close-up.
     #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
     #                          compression reads as a mechanism.
     #
