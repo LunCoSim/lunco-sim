@@ -33,6 +33,7 @@ use lunco_celestial::link::LinkState;
 use lunco_core::coords::{world_pose, GridPos};
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
 use lunco_core::{GlobalEntityId, ScriptParams};
+use lunco_render::SceneCamera;
 
 /// The `info:id` the beam part authors.
 const DRIVER_ID: &str = "link_beams";
@@ -132,7 +133,7 @@ fn beam_len(
 fn camera_distances<F: bevy::ecs::query::QueryFilter>(
     source_pos: GridPos,
     peer_pos: GridPos,
-    q_cam: &Query<(&Camera, Entity), With<Camera3d>>,
+    q_cam: &Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
@@ -200,7 +201,7 @@ fn aim_link_beams(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<LinkBeamInstance>>,
-    q_cam: Query<(&Camera, Entity), With<Camera3d>>,
+    q_cam: Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
 ) {
     for (co, inst, mut tf) in &mut q_beams {
         // A cached peer can outlive its entity between reconciles. Skip rather
@@ -289,7 +290,7 @@ fn reconcile_link_beams(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_cam: Query<(&Camera, Entity), With<Camera3d>>,
+    q_cam: Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
 ) {
     // GID → entity, so a peer (named by identity in `LinkState`) resolves to something
     // `world_pose` can place.

@@ -47,6 +47,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use lunco_api::executor::{ApiResponseEvent, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api::schema::ApiResponse;
 use lunco_core::{on_command, register_commands, Command, SceneViewport};
+use lunco_render::SceneCamera;
 use lunco_tools_bevy::{register_closure_tool, ToolResult};
 
 /// **The one screenshot command.**
@@ -314,7 +315,7 @@ fn on_capture_from_camera(
     viewport: Option<Res<SceneViewport>>,
     // `RenderTarget` is a separate component (see `camera_switch.rs`), not a field on
     // `Camera` — query it alongside so we know which window to capture.
-    cameras: Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget)>,
+    cameras: Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget), With<SceneCamera>>,
     children: Query<&Children>,
     mut commands: Commands,
 ) {
@@ -390,7 +391,7 @@ fn on_capture_from_camera(
 /// Walk `root`'s descendants (BFS) and return the first `Camera3d` — a vessel's mounted camera.
 fn find_descendant_camera(
     root: Entity,
-    cameras: &Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget)>,
+    cameras: &Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget), With<SceneCamera>>,
     children: &Query<&Children>,
 ) -> Option<Entity> {
     let mut stack = vec![root];

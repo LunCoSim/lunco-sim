@@ -69,7 +69,7 @@ use bevy::render::{
     ExtractSchedule, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_egui::{egui, EguiContexts};
-use lunco_render::{GpuShadowBudget, RenderingQualitySettings, ShadowMapSuppressed};
+use lunco_render::{GpuShadowBudget, RenderingQualitySettings, SceneCamera, ShadowMapSuppressed};
 use lunco_settings::AppSettingsExt;
 
 const INTEGRATED_DIRECTIONAL_SHADOW_SIZE: usize = 1024;
@@ -942,7 +942,10 @@ fn apply_integrated_shadow_budget(
     warning: Option<Res<RenderWarning>>,
     mut directional_shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut point_shadow_map: ResMut<bevy::light::PointLightShadowMap>,
-    cameras: Query<(&bevy::camera::Camera, &GlobalTransform), With<bevy::camera::Camera3d>>,
+    cameras: Query<
+        (&bevy::camera::Camera, &GlobalTransform),
+        (With<bevy::camera::Camera3d>, With<SceneCamera>),
+    >,
     mut directionals: Query<(
         Entity,
         &mut bevy::light::DirectionalLight,
@@ -1381,6 +1384,7 @@ mod tests {
         app.add_systems(PostUpdate, apply_integrated_shadow_budget);
         app.world_mut().spawn((
             bevy::camera::Camera3d::default(),
+            SceneCamera::default(),
             GlobalTransform::default(),
         ));
         for index in 0..(INTEGRATED_POINT_CASTERS + 2) {

@@ -55,6 +55,7 @@ use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use lunco_render::SceneCamera;
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
@@ -374,7 +375,9 @@ pub fn refresh_dome_entity(
 fn bind_dome_to_cameras(
     mut commands: Commands,
     domes: Query<(&UsdDomeEnvironment, &DomeCubemap, Option<&GlobalTransform>)>,
-    cameras: Query<Entity, With<Camera3d>>,
+    cameras: Query<Entity, (With<Camera3d>, With<SceneCamera>)>,
+    // Include a camera whose intent was removed so stale view components are
+    // cleaned up during role transitions; only `cameras` is an authoring owner.
     bound: Query<Entity, (With<DomeBoundCamera>, With<Camera3d>)>,
 ) {
     // One sky. A second textured dome is a scene-authoring error, not a feature

@@ -237,7 +237,8 @@ fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
 // visible — the viewport renders black even though this system spawns the
 // correct tile entities (verified via list_entities: f0-f5 L0 + L1 refinements
 // for Earth & Moon, camera auto-focused Earth at 3x radius). The viewport CHROME
-// is fixed (ViewportPanel + auto_tag → Camera3d active, black clear) and the
+// is fixed (ViewportPanel + canonical SceneCamera binder → Camera3d active,
+// black clear) and the
 // 2x-radius tile placement bug is fixed (tiles now built centre-relative). But
 // nothing renders. Prior notes say spacecraft glTFs were also invisible, so the
 // remaining cause is likely GLOBAL, not tile-specific. Suspects to investigate:

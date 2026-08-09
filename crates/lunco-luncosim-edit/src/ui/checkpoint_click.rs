@@ -28,9 +28,9 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
-    BehaviorXml, ReachedWaypoints, TargetBindings, append_waypoint_leaf, catmull_rom_path,
-    insert_waypoint_after, remove_waypoint_leaf, route_is_smooth, set_route_smooth,
-    set_waypoint_dwell,
+    append_waypoint_leaf, catmull_rom_path, insert_waypoint_after, remove_waypoint_leaf,
+    route_is_smooth, set_route_smooth, set_waypoint_dwell, BehaviorXml, ReachedWaypoints,
+    TargetBindings,
 };
 use lunco_controller::{ControllerLink, SimulatedIntents};
 use lunco_core::commands::SessionId;
@@ -50,8 +50,8 @@ use lunco_usd::document::{
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 use serde_json::Value;
 
-use lunco_scene_commands::SelectedEntities;
 use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
+use lunco_scene_commands::SelectedEntities;
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -1569,7 +1569,7 @@ pub fn handle_autopilot_toggle_hotkey(
     }
 }
 
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 
 /// Command to engage autopilot on a vessel.
 #[Command]
@@ -2318,13 +2318,13 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET, route_loops, route_ribbon_points,
-        route_visual_state, select_ground_point,
+        route_loops, route_ribbon_points, route_visual_state, select_ground_point, BehaviorXml,
+        ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
     use lunco_autopilot::{
-        AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint, btcpp_xml::value_to_xml,
+        btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
 
     #[test]
