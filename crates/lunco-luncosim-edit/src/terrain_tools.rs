@@ -24,6 +24,7 @@ use bevy::input::mouse::MouseWheel;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
+use lunco_render::SceneCamera;
 use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
 
 /// Which terrain brush is armed. `None` = the tool is off and clicks pass
@@ -168,7 +169,10 @@ pub fn update_terrain_brush_ghost(
     mut meshes: ResMut<Assets<Mesh>>,
     state: Res<TerrainToolState>,
     keys: Res<ButtonInput<KeyCode>>,
-    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
+    cameras: Query<
+        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
+        (With<Camera3d>, With<SceneCamera>),
+    >,
     windows: Query<&Window>,
     egui_focus: Res<lunco_core::EguiFocus>,
     mut q_ghost: Query<

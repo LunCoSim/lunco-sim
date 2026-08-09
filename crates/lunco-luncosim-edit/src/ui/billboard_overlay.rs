@@ -34,6 +34,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_render::SceneCamera;
 use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, UsdBillboard};
 use lunco_workbench::{PanelRects, VIEWPORT_PANEL_ID};
 
@@ -60,7 +61,7 @@ pub fn draw_billboard_overlay(
         Option<&lunco_core::markers::Callsign>,
         &GlobalTransform,
     )>,
-    q_camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    q_camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
