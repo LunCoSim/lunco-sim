@@ -528,14 +528,15 @@ path hangs on — cadence ≠ clock, chosen independently.
 
 Everything below is unbuilt. Ordered so each unblocks the next.
 
-1. **Verify the gizmo fix** (written, compiles, NOT run). `gizmo::confine_scene_cameras_to_viewport`
-   tags window scene cameras with `WorkbenchViewportCamera` before `sync_gizmo_camera` picks the
-   gizmo camera. Symptom it targets: selection AABB visible, transform gizmo absent — because Bevy
-   `Gizmos` draw world-space lines through ANY camera while transform-gizmo resolves the pointer
-   against the tagged camera's viewport, and a cut to a USD `def Camera` bound it to an unclamped
-   full-window viewport. **Cannot be verified over the API**: `ListEntities` returns 0 for this scene
-   (empty `ApiEntityRegistry`) so `SelectEntity` has no id, and no command switches perspective. It
-   needs a human click in Build mode. Fix this first — point dragging is the same gizmo.
+1. **Verify the gizmo fix** (written, compiles, NOT run). `gizmo::sync_gizmo_camera` now selects
+   only the active window camera that carries the canonical `lunco_render::SceneCamera` intent; it
+   no longer relies on a Workbench-only tag added after a concrete `Camera3d` exists. Symptom it
+   targets: selection AABB visible, transform gizmo absent — because Bevy `Gizmos` draw world-space
+   lines through ANY camera while transform-gizmo resolves the pointer against the scene camera's
+   viewport, and a cut to a USD `def Camera` previously bound it to an unclamped full-window
+   viewport. **Cannot be verified over the API**: `ListEntities` returns 0 for this scene (empty
+   `ApiEntityRegistry`) so `SelectEntity` has no id, and no command switches perspective. It needs a
+   human click in Build mode. Fix this first — point dragging is the same gizmo.
 2. **Drag control points.** `points` is an ARRAY, not prims, so the selection gizmo cannot touch it —
    the cost of the standard representation (§8c). Shape: handle entities projected from the array →
    existing `transform_gizmo_bevy` → write back via `ApplyUsdOp` (`SetAttribute` on `points`) so edits

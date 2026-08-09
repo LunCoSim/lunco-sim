@@ -12,6 +12,7 @@ fn on_start(me) {
     // No ordinal: position is the `lunco:tutorial:next` chain in the curriculum
     // layer alone. Ordinals duplicated into scripts are how this track ended up
     // titled "2 ·" while toasting "S3".
+    cmd("FocusPanel", #{ id: "command_deck" });
     spotlight("panel.command_deck", "Use the Command Deck to verify who is driving before you move.");
     notify_kind("Tutorial: Moon Driving Basics", "info");
     hint("Welcome, driver. Click the rover (or press F) to take control.");
@@ -19,6 +20,7 @@ fn on_start(me) {
 
 fn b1_driving_started(me) {
     clear_spotlight();
+    cmd("FocusPanel", #{ id: "telemetry_browser" });
     spotlight("panel.telemetry_browser", "Read speed and wheel signals here while you drive.");
     hint("You're driving. W / S throttle forward and back, A / D steer, Space brakes. Read the telemetry while you roll onto the ramp.");
 }

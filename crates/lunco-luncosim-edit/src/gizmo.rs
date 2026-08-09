@@ -21,6 +21,7 @@ use bevy::camera::RenderTarget;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::FloatingOrigin;
+use lunco_render::SceneCamera;
 use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTarget};
 
 /// The authoritative lifecycle of a gizmo edit.
@@ -629,7 +630,7 @@ pub fn drive_gizmo_drag_no_shift(
 /// the wrong one. So exactly the active window camera (`Camera::is_active`) is
 /// tagged; the rest are untagged as the active view switches.
 pub fn sync_gizmo_camera(
-    q_cameras: Query<(Entity, &Camera, &RenderTarget), With<Camera3d>>,
+    q_cameras: Query<(Entity, &Camera, &RenderTarget), (With<Camera3d>, With<SceneCamera>)>,
     q_tagged: Query<Entity, With<GizmoCamera>>,
     mut commands: Commands,
 ) {

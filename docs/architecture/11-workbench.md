@@ -144,7 +144,7 @@ The window is drawn by **two layered cameras**, not by tiling:
 
 | Order | Camera | Role |
 |-------|--------|------|
-| 0 | scene `Camera3d` (`WorkbenchViewportCamera`) | renders the 3D **full-window**; **clears** the target |
+| 0 | scene `Camera3d` (`lunco_render::SceneCamera` intent) | renders the 3D **full-window**; **clears** the target |
 | 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints the chrome on top with `ClearColorConfig::None` so it does not wipe the 3D |
 
 The host is a separate camera because scene cameras are transient (USD spawns

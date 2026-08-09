@@ -4,8 +4,8 @@
 //!
 //! Two cameras share the window, and they are **layered**, not tiled:
 //!
-//! 1. The scene `Camera3d` (order 0), tagged [`WorkbenchViewportCamera`] (or
-//!    spawned as [`WorkbenchSceneCamera`]). It renders the 3D **full-window** —
+//! 1. The scene `Camera3d` (order 0), declared by the canonical
+//!    [`lunco_render::SceneCamera`] intent. It renders the 3D **full-window** —
 //!    [`apply_workbench_viewport`] publishes visibility into
 //!    `lunco_core::SceneViewport` with `rect = None`, and the single-authority
 //!    reconciler in `lunco-usd-bevy` actuates it. It **clears** the window's
@@ -56,17 +56,16 @@
 //!   marker on exactly one camera. Extra Camera2d entities (vello
 //!   diagram targets, USD preview tabs, …) are harmless because they
 //!   target offscreen Images.
-//! - **Required components prevent foot-guns.** [`WorkbenchEguiHost`]
-//!   pairs `Camera2d` with `PrimaryEguiContext` at the type level;
-//!   [`WorkbenchSceneCamera`] pairs `Camera3d` with
-//!   [`WorkbenchViewportCamera`]. New code that wants a workbench-aware
-//!   camera spawns *one* type and gets the right pair automatically.
-//! - **Sentinels catch regressions.** [`check_camera_invariants`]
-//!   panics in debug (errors in release) when a new `Camera3d` is added
-//!   targeting the window without the marker.
+//! - **The camera intent is the ownership boundary.** `SceneCamera` is
+//!   authored by USD/avatar projection code and is observed by the render
+//!   binder. The Workbench consumes that same component; it does not add a
+//!   presentation-only tag after the render pipeline exists.
+//! - **Sentinels catch regressions.** [`check_camera_invariants`] warns when a
+//!   new window-targeting `Camera3d` has no `SceneCamera` intent. Such a camera
+//!   has no owner and must be fixed at its spawn/binding site, not adopted here.
 //! - **The texture-sharing key is synced, not assumed.**
 //!   [`sync_egui_host_msaa`] re-establishes it whenever a scene camera's MSAA
-//!   moves or a camera is newly tagged, so a change to the setting (it is
+//!   moves or a camera intent is newly bound, so a change to the setting (it is
 //!   user-facing, and `Off` on wasm) cannot quietly split the textures again.
 //!
 //! ## When NO 3D camera renders the window
@@ -85,7 +84,7 @@
 //!   — publish viewport *visibility* into `SceneViewport` (the rect stays
 //!   `None`: the 3D renders full-window and the chrome overlays it).
 //! - `check_camera_invariants` (Update, runs on `Added<Camera3d>`) —
-//!   loud failure if a window-targeting Camera3d shows up untagged.
+//!   loud failure if a window-targeting Camera3d shows up without its camera intent.
 //! - `ViewportPanel::render` — records the panel's screen rect into
 //!   `PanelRects` and reserves the space; the 3D camera does the
 //!   actual painting.
@@ -101,36 +100,11 @@ use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
 /// place the viewport in a slot without instantiating the panel.
 pub const VIEWPORT_PANEL_ID: PanelId = PanelId("workbench::viewport");
-
-/// Marker on a `Camera` (typically a `Camera3d`) whose `Camera::viewport`
-/// should follow the [`ViewportPanel`]'s rect each frame.
-///
-/// Add this to any existing camera spawn site that wants to be confined
-/// to the workbench's central viewport. For new spawn sites, prefer
-/// [`WorkbenchSceneCamera`] — it pairs `Camera3d` with this marker via
-/// required-components.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct WorkbenchViewportCamera;
-
-/// Opt-in for applications whose window-targeting scene cameras belong inside
-/// the workbench viewport.
-#[derive(Resource, Debug, Default)]
-pub struct AutoTagWorkbenchCameras;
-
-/// Required-component bundle: the primary 3D scene camera for a
-/// workbench-using binary.
-///
-/// Spawning `WorkbenchSceneCamera` is equivalent to spawning
-/// `(Camera3d::default(), WorkbenchViewportCamera)`. The
-/// required-components feature guarantees both end up on the entity —
-/// new code can't accidentally drop the marker.
-#[derive(Component, Debug, Clone, Copy, Default)]
-#[require(Camera3d, WorkbenchViewportCamera)]
-pub struct WorkbenchSceneCamera;
 
 /// Marker component on the egui-owning camera for one window.
 ///
@@ -576,7 +550,7 @@ pub struct ViewportPlaceholder {
 /// The panel itself paints nothing — its only job is to record its
 /// screen-space rect into [`PanelRects`] each frame so the
 /// [`apply_workbench_viewport`] system can drive every
-/// [`WorkbenchViewportCamera`]-tagged camera's `Camera::viewport`.
+/// [`SceneCamera`]-owned camera's `Camera::viewport`.
 ///
 /// Background: was historically transparent so a full-window 3D camera
 /// could show through the dock. That design caused the "UI vanishes on
@@ -685,8 +659,8 @@ impl Panel for ViewportPanel {
 /// (active window scene-camera → host) can change — the earlier set missed two, which
 /// is how the ghost came back:
 /// - `Changed<Msaa>` — the user flipped the setting (insertion counts as a change);
-/// - `Added<WorkbenchViewportCamera>` — a camera newly became a scene camera
-///   (`auto_tag_workbench_3d_cameras` tags USD/avatar cameras long after startup);
+/// - `Added<SceneCamera>` — a camera intent was added and the render binder will
+///   attach or refresh its concrete pipeline;
 /// - `Changed<Camera>` — a DIFFERENT camera became active (`is_active` lives on
 ///   `Camera`), AND a window **resize** (bevy's camera driver rewrites `Camera.computed`
 ///   with the new target size). Both must re-pick/re-sync;
@@ -700,26 +674,22 @@ impl Panel for ViewportPanel {
 /// archetype checks and returns.
 pub(crate) fn sync_egui_host_msaa(
     // `Without<WorkbenchEguiHost>` on the scene-camera queries, and
-    // `Without<WorkbenchViewportCamera>` on the host's `&mut Msaa`, keep the read and
+    // `Without<SceneCamera>` on the host's `&mut Msaa`, keep the read and
     // write sets disjoint — Bevy rejects the system otherwise (B0001), because a
     // `Changed<T>` filter is an access to `T` just like reading it.
     dirty: Query<
         (),
         (
-            With<WorkbenchViewportCamera>,
+            With<SceneCamera>,
             Without<WorkbenchEguiHost>,
-            Or<(
-                Changed<Msaa>,
-                Changed<Camera>,
-                Added<WorkbenchViewportCamera>,
-            )>,
+            Or<(Changed<Msaa>, Changed<Camera>, Added<SceneCamera>)>,
         ),
     >,
-    mut removed: RemovedComponents<WorkbenchViewportCamera>,
+    mut removed: RemovedComponents<SceneCamera>,
     host_added: Query<(), Added<WorkbenchEguiHost>>,
     scene_cams: Query<
         (&Camera, &Msaa, &RenderTarget, Has<Hdr>),
-        (With<WorkbenchViewportCamera>, Without<WorkbenchEguiHost>),
+        (With<SceneCamera>, Without<WorkbenchEguiHost>),
     >,
     // The host must match the scene camera's `Hdr` too, not just MSAA. Both feed bevy's
     // main-texture key `(target, usages, format, msaa)` — the `Hdr` marker selects the
@@ -727,10 +697,7 @@ pub(crate) fn sync_egui_host_msaa(
     // gets a DIFFERENT-format private texture that never shares the (cleared) 3D texture,
     // and stale chrome bakes into it — the ghost that returns on a perspective switch,
     // where only panels change and no camera event fires.
-    mut host: Query<
-        (Entity, &mut Msaa, Has<Hdr>),
-        (With<WorkbenchEguiHost>, Without<WorkbenchViewportCamera>),
-    >,
+    mut host: Query<(Entity, &mut Msaa, Has<Hdr>), (With<WorkbenchEguiHost>, Without<SceneCamera>)>,
     mut commands: Commands,
 ) {
     // A removed scene camera (scene swap) must re-run the sync even though no live
@@ -914,71 +881,35 @@ pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: Pane
 }
 
 /// Sentinel — runs each frame on newly-added Camera3d entities and
-/// panics (debug) / logs (release) when one targets the window without
-/// the [`WorkbenchViewportCamera`] marker.
+/// warns when one targets the window without the canonical [`SceneCamera`]
+/// intent.
 ///
-/// Catches the entire regression class: any future code path that
-/// spawns a window-targeting `Camera3d` without going through
-/// [`WorkbenchSceneCamera`] or remembering to add the marker will trip
-/// this the moment the entity is built.
+/// Catches the entire regression class at the ownership boundary: any future
+/// code path that constructs a concrete window `Camera3d` without first
+/// declaring a render-free `SceneCamera` is incomplete. The Workbench does not
+/// infer or adopt that camera, because doing so would hide the missing owner
+/// from every other camera consumer.
 ///
 /// The check is per-`Added<Camera3d>` rather than a periodic sweep so
 /// USD/avatar-spawned cameras (which can land many frames after
 /// startup) are still validated, and so deleting + respawning the host
 /// during teardown doesn't yield false negatives.
 pub(crate) fn check_camera_invariants(
-    new_cams: Query<
-        (Entity, Option<&RenderTarget>),
-        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
-    >,
+    new_cams: Query<(Entity, Option<&RenderTarget>), (Added<Camera3d>, Without<SceneCamera>)>,
 ) {
     for (entity, target) in &new_cams {
         let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
         if targets_window {
-            // Warn loudly but don't panic — tooling binaries
-            // (model_viewer) deliberately wants a
-            // full-window 3D camera and don't use ViewportPanel. The
-            // warning identifies workbench-using binaries that forgot
-            // the tag, without breaking the legitimate cases.
+            // Warn loudly but don't panic: a concrete window camera without
+            // the intent has no declared owner. If a tooling binary really
+            // wants a full-window camera, it should still declare SceneCamera;
+            // that is the shared contract for render, switching and viewport
+            // ownership.
             warn!(
                 "WorkbenchPlugin: Camera3d {entity:?} targets the window without \
-                 `WorkbenchViewportCamera`. If this binary uses `ViewportPanel`, the 3D \
-                 scene will bleed across the egui chrome on pass skip — spawn via \
-                 `WorkbenchSceneCamera` or insert `WorkbenchViewportCamera`. If this \
-                 binary intentionally uses a full-window 3D camera (model_viewer, \
-                 …) this warning is benign."
+                 `lunco_render::SceneCamera`; declare the camera intent at its \
+                 spawn/translation site instead of relying on Workbench inference."
             );
-        }
-    }
-}
-
-/// Opt-in system — tag freshly-added window-targeting `Camera3d`
-/// entities with [`WorkbenchViewportCamera`] so [`apply_workbench_viewport`]
-/// manages their `is_active`/viewport and they stop tripping
-/// [`check_camera_invariants`].
-///
-/// This is **opt-in** rather than part of [`WorkbenchViewportPlugin`]:
-/// tooling binaries (`model_viewer`) deliberately want a
-/// bare full-window 3D camera and never register a [`ViewportPanel`], so
-/// auto-tagging is the host app's choice. Workbench apps that DO show the
-/// 3D scene inside a [`ViewportPanel`] (luncosim, luncosim) add this in
-/// `Update` so avatar-/USD-spawned cameras — which land async, long after
-/// `Startup` — get the marker the moment they appear.
-///
-/// RTT cameras (`RenderTarget::Image`) are skipped: they paint into their
-/// own offscreen Image (USD preview, vello diagrams) and must not have a
-/// window-scoped viewport written to them.
-pub fn auto_tag_workbench_3d_cameras(
-    mut commands: Commands,
-    new_cams: Query<
-        (Entity, Option<&RenderTarget>),
-        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
-    >,
-) {
-    for (entity, target) in &new_cams {
-        let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
-        if targets_window {
-            commands.entity(entity).try_insert(WorkbenchViewportCamera);
         }
     }
 }
@@ -1203,9 +1134,6 @@ impl Plugin for WorkbenchViewportPlugin {
             .add_systems(
                 Update,
                 (
-                    auto_tag_workbench_3d_cameras
-                        .run_if(resource_exists::<AutoTagWorkbenchCameras>)
-                        .before(check_camera_invariants),
                     check_camera_invariants,
                     check_host_invariant_once,
                     // Load-bearing for the no-ghost-chrome invariant — see

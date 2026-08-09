@@ -124,7 +124,6 @@ impl Plugin for SandboxUiPlugin {
         app.add_observer(on_luncosim_tutorial_start);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, crate::apply_luncosim_window_icon);
-        app.init_resource::<lunco_workbench::AutoTagWorkbenchCameras>();
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
         // requestAnimationFrame on web) act as the frame timer; ReactiveLowPower
         // keeps fans quiet when backgrounded. Networked windows stay Continuous
