@@ -179,9 +179,7 @@ fn track_physics_admission(
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    let waiting = !still_kinematic.is_empty()
-        || !still_pending.is_empty()
-        || activation.0 != 0;
+    let waiting = !still_kinematic.is_empty() || !still_pending.is_empty() || activation.0 != 0;
     match (waiting, wait) {
         (true, None) => {
             let ticket = registry.begin(
@@ -261,7 +259,11 @@ impl Plugin for UsdReadinessPlugin {
         // that closes it is visible.
         app.add_systems(
             PostUpdate,
-            (track_scene_load, track_model_compiles, track_physics_admission),
+            (
+                track_scene_load,
+                track_model_compiles,
+                track_physics_admission,
+            ),
         );
         // Every wait belongs to the scene that declared it. The registry already
         // drops waits whose subject entity was despawned, but a WORLD-scoped one

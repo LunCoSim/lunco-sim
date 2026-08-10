@@ -41,6 +41,8 @@
 //! may not be loaded yet (async loading). The `process_usd_avian_prims` system runs in the
 //! `Update` schedule and retries every frame until the asset is available.
 
+use avian3d::dynamics::solver::islands::PhysicsIslands;
+use avian3d::dynamics::solver::joint_graph::JointGraph;
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::ecs::component::ComponentId;
@@ -118,6 +120,11 @@ fn prepare_scene_physics_teardown(world: &mut World) {
             world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
         query.iter(world).collect()
     };
+    let scene_entities: EntityHashSet = {
+        let mut query =
+            world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
+        query.iter(world).collect()
+    };
     let joints: Vec<(Entity, ComponentId)> = {
         let mut query = world.query_filtered::<(
             Entity,
@@ -155,47 +162,46 @@ fn prepare_scene_physics_teardown(world: &mut World) {
         .map(|edge| edge.entity)
         .collect();
 
-    let mut teardown_state: SystemState<(
-        ResMut<avian3d::dynamics::solver::islands::PhysicsIslands>,
-        ResMut<avian3d::dynamics::solver::joint_graph::JointGraph>,
-        Res<avian3d::prelude::ContactGraph>,
+    // Retire constraints before contacts and bodies. The public graph API lets
+    // us tolerate an edge whose island was already emptied by an earlier body
+    // teardown without asking Avian's observer to unlink it a second time.
+    let mut graph_state: SystemState<(
+        ResMut<PhysicsIslands>,
+        ResMut<JointGraph>,
+        Res<ContactGraph>,
         Query<
             &'static mut avian3d::dynamics::solver::islands::BodyIslandNode,
             Or<(With<Disabled>, Without<Disabled>)>,
         >,
     )> = SystemState::new(world);
-    let (mut islands, mut joint_graph, contact_graph, mut body_islands) = teardown_state
-        .get_mut(world)
-        .expect("scene physics teardown parameters must not conflict");
+    {
+        let (mut islands, mut joint_graph, contact_graph, mut body_islands) = graph_state
+            .get_mut(world)
+            .expect("scene physics teardown parameters must not conflict");
 
-    for entity in graph_joints {
-        let Some((joint_id, island_id)) = joint_graph
-            .get(entity)
-            .map(|edge| (edge.id, edge.island.island_id()))
-        else {
-            continue;
-        };
-
-        if island_id != avian3d::dynamics::solver::islands::IslandId::PLACEHOLDER {
-            // A stale graph edge can survive a failed admission. It has no
-            // island list entry to unlink, so discard only the edge.
-            let joint_count = islands
-                .get(island_id)
-                .map(|island| island.joint_count())
-                .unwrap_or(0);
-            if joint_count > 0 {
-                let _ = islands.remove_joint(
-                    joint_id,
-                    &mut body_islands,
-                    &contact_graph,
-                    &mut joint_graph,
-                );
+        for entity in graph_joints {
+            let Some(edge) = joint_graph.get(entity).cloned() else {
+                continue;
+            };
+            let island_id = edge.island.island_id();
+            if island_id != avian3d::dynamics::solver::islands::IslandId::PLACEHOLDER {
+                let joint_count = islands
+                    .get(island_id)
+                    .map(|island| island.joint_count())
+                    .unwrap_or(0);
+                if joint_count > 0 {
+                    let _ = islands.remove_joint(
+                        edge.id,
+                        &mut body_islands,
+                        &contact_graph,
+                        &mut joint_graph,
+                    );
+                }
             }
+            joint_graph.remove_joint(entity);
         }
-        joint_graph.remove_joint(entity);
     }
-    drop(body_islands);
-    teardown_state.apply(world);
+    graph_state.apply(world);
 
     // Remove the joint component and any marker before despawn. The component
     // removal observer now sees no graph edge, and removing JointComponentId
