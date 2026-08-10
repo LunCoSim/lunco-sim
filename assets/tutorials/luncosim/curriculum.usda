@@ -15,7 +15,7 @@ def Scope "LunCoSim" (
     prepend apiSchemas = ["LunCoTutorialTrackAPI"]
 )
 {
-    string lunco:track:label = "1️⃣ LunCoSim Foundations"
+    string lunco:track:label = "LunCoSim Foundations"
 
     def Scope "Welcome" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]

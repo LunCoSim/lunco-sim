@@ -15,7 +15,7 @@ fn on_start(me) {
     cmd("FocusPanel", #{ id: "command_deck" });
     spotlight("panel.command_deck", "Use the Command Deck to verify who is driving before you move.");
     notify_kind("Tutorial: Moon Driving Basics", "info");
-    hint("Welcome, driver. Click the rover (or press F) to take control.");
+    hint("Welcome, driver. Click the rover to take control. Watch the Command Deck: F engages autopilot, so use it only when a route is authored.");
 }
 
 fn b1_driving_started(me) {
@@ -46,7 +46,7 @@ fn mission(me) {
     [
         // 1 — take control.
         objective("possess", #{
-            text: "Click the rover (or press F) to take control",
+            text: "Click the rover to take control. F engages autopilot when a route is authored",
             done: Fn("b1_controlled"),
             on_complete: Fn("b1_driving_started"),
         }),

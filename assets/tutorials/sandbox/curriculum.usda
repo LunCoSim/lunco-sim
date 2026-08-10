@@ -38,7 +38,7 @@ def Scope "Sandbox" (
     prepend apiSchemas = ["LunCoTutorialTrackAPI"]
 )
 {
-    string lunco:track:label = "1️⃣ Sandbox Onboarding"
+    string lunco:track:label = "Sandbox Onboarding"
 
     def Scope "SandboxIntro" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]

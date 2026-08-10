@@ -256,7 +256,11 @@ impl CurriculumRoot {
         };
         failures.extend(composed.failures);
         let tracks = composed.tracks.len();
-        for track in composed.tracks {
+        // USD exposes composed top-level children in strongest-to-weakest
+        // composition order. The authored subLayer list is the learner-facing
+        // order, so reverse that projection once here; menu code then only
+        // sorts by this derived order and never parses hand-written ordinals.
+        for track in composed.tracks.into_iter().rev() {
             // Keyed by the track's PRIM PATH — the same key each lesson carries
             // in `app`, and the only name a track has, so a heading always lands
             // on its own group.
@@ -451,6 +455,11 @@ struct PendingTutorial {
     id: String,
     source: String,
     world: String,
+    /// A lesson replacement clears the outgoing owned world before issuing the
+    /// new load. This matters when both lessons declare the same stage:
+    /// ordinary `LoadScene` intentionally no-ops for an already-mounted
+    /// identity.
+    clear_before_load: bool,
     elapsed_secs: f32,
 }
 
@@ -486,6 +495,22 @@ pub struct StartTutorial {
 /// `cmd("SkipTutorial")`.
 #[Command(default)]
 pub struct SkipTutorial {}
+
+/// Clear persisted completion and first-run state without changing the loaded
+/// scene. This is the explicit recovery path for a shared settings file whose
+/// tutorial history no longer matches the user's current installation.
+#[Command(default)]
+pub struct ResetTutorialProgress {}
+
+#[on_command(ResetTutorialProgress)]
+fn on_reset_tutorial_progress(
+    _trigger: On<ResetTutorialProgress>,
+    mut progress: ResMut<TutorialProgress>,
+) {
+    progress.completed.clear();
+    progress.onboarded = false;
+    info!("[tutorial] cleared persisted tutorial progress");
+}
 
 /// Enable/disable a simulation subsystem at runtime (progressive fidelity).
 /// `name` must be registered by the owning subsystem plugin. Rhai:
@@ -645,13 +670,22 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
 
         if let Some(scene) = meta.world.clone() {
             info!("[tutorial] '{}' declares world {}", meta.title, scene);
+            let clear_before_load = outgoing_world.is_some();
             world.resource_mut::<PendingTutorialStart>().0 = Some(PendingTutorial {
                 id: id.clone(),
                 source,
                 world: scene.clone(),
+                clear_before_load,
                 elapsed_secs: 0.0,
             });
-            world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
+            if clear_before_load {
+                // Keep LoadScene's same-stage no-op correct for ordinary scene
+                // selection. Tutorial replacement has an explicit lifecycle:
+                // clear the owned world, then load from its completion edge.
+                world.trigger(lunco_core::SceneTransitionIntent::clear());
+            } else {
+                world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
+            }
         } else {
             if outgoing_world.is_some() {
                 world.trigger(lunco_core::SceneTransitionIntent::clear());
@@ -718,6 +752,7 @@ fn on_set_subsystem_enabled(
 register_commands!(
     on_start_tutorial,
     on_skip_tutorial,
+    on_reset_tutorial_progress,
     on_set_subsystem_enabled,
 );
 
@@ -774,6 +809,13 @@ fn on_scene_transition_started(
     mut session: ResMut<TutorialSession>,
     mut commands: Commands,
 ) {
+    let is_pending_clear = matches!(
+        &trigger.event().transition,
+        lunco_core::SceneTransition::Clear
+    ) && pending
+        .0
+        .as_ref()
+        .is_some_and(|request| request.clear_before_load);
     let belongs_to_pending = match &trigger.event().transition {
         lunco_core::SceneTransition::Load { path, .. } => pending
             .0
@@ -781,7 +823,7 @@ fn on_scene_transition_started(
             .is_some_and(|request| request.world.as_str() == path.as_str()),
         lunco_core::SceneTransition::Clear | lunco_core::SceneTransition::Restart { .. } => false,
     };
-    if !belongs_to_pending {
+    if !belongs_to_pending && !is_pending_clear {
         pending.0 = None;
     }
     if progress.current.is_none() && session.world.is_none() {
@@ -800,22 +842,53 @@ fn on_scene_transition_started(
 /// viewport was still empty or still belonged to the outgoing scene.
 fn on_scene_transition_completed(
     trigger: On<lunco_core::SceneTransitionCompleted>,
+    pending: Res<PendingTutorialStart>,
     mut commands: Commands,
 ) {
-    let lunco_core::SceneTransition::Load { path, .. } = &trigger.event().transition else {
-        return;
-    };
-    let path = path.clone();
-    commands.queue(move |world: &mut World| {
-        let Some(request) = world.resource_mut::<PendingTutorialStart>().0.take() else {
-            return;
-        };
-        if request.world != path {
-            world.resource_mut::<PendingTutorialStart>().0 = Some(request);
-            return;
+    match &trigger.event().transition {
+        lunco_core::SceneTransition::Clear => {
+            let Some(request) = pending
+                .0
+                .as_ref()
+                .filter(|request| request.clear_before_load)
+            else {
+                return;
+            };
+            let scene = request.world.clone();
+            commands.queue(move |world: &mut World| {
+                let should_load = {
+                    let mut pending = world.resource_mut::<PendingTutorialStart>();
+                    let Some(request) = pending.0.as_mut() else {
+                        return;
+                    };
+                    if !request.clear_before_load || request.world != scene {
+                        return;
+                    }
+                    request.clear_before_load = false;
+                    request.elapsed_secs = 0.0;
+                    true
+                };
+                if !should_load {
+                    return;
+                }
+                world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
+            });
         }
-        start_tutorial_scenario(world, request.id, request.source, Some(request.world));
-    });
+        lunco_core::SceneTransition::Load { path, .. } => {
+            let path = path.clone();
+            commands.queue(move |world: &mut World| {
+                let Some(request) = world.resource_mut::<PendingTutorialStart>().0.take() else {
+                    return;
+                };
+                if request.world != path {
+                    world.resource_mut::<PendingTutorialStart>().0 = Some(request);
+                    return;
+                }
+                start_tutorial_scenario(world, request.id, request.source, Some(request.world));
+            });
+        }
+        lunco_core::SceneTransition::Restart { .. } => {}
+    }
 }
 
 /// Fail a tutorial mount that never publishes a scene-completed/scene-failed
@@ -892,6 +965,29 @@ fn on_scene_transition_failed(
             .as_ref()
             .is_some_and(|request| request.world == path)
     });
+    if path.is_none()
+        && pending_start
+            .0
+            .as_ref()
+            .is_some_and(|request| request.clear_before_load)
+    {
+        let request = pending_start
+            .0
+            .take()
+            .expect("pending clear request exists");
+        pending_advance.0 = None;
+        session.world = None;
+        commands.queue(|world: &mut World| {
+            clear_tutorial_hud(world);
+            stop_tutorial_host(world);
+        });
+        commands.trigger(tutorial_failed(format!(
+            "abandoning '{}' — its previous scene could not be cleared ({:?})",
+            request.id,
+            trigger.event().error
+        )));
+        return;
+    }
     if matches_pending {
         let request = pending_start.0.take().expect("pending request matched");
         pending_advance.0 = None;
@@ -1229,7 +1325,7 @@ fn register_tutorials_menu(world: &mut World) {
             return;
         }
         ui.label(
-            egui::RichText::new("Interactive, scripted lessons")
+            egui::RichText::new("Interactive, scripted lessons · ✓ completed · 🎓 not completed")
                 .weak()
                 .small(),
         );
@@ -1294,6 +1390,10 @@ fn register_tutorials_menu(world: &mut World) {
         }
 
         ui.separator();
+        if !progress.completed.is_empty() && ui.button("Reset completion history").clicked() {
+            ctx.trigger(ResetTutorialProgress {});
+            ui.close();
+        }
         ui.add_enabled_ui(progress.current.is_some(), |ui| {
             if ui.button("⏹ Stop tutorial").clicked() {
                 ctx.trigger(SkipTutorial {});
@@ -1341,10 +1441,13 @@ impl Panel for TutorialsPanel {
         ui.add_space(4.0);
         ui.heading("🎓 Tutorials");
         ui.label(
-            egui::RichText::new("Interactive, scripted lessons.")
+            egui::RichText::new("Interactive, scripted lessons · ✓ completed · 🎓 not completed.")
                 .weak()
                 .small(),
         );
+        if !progress.completed.is_empty() && ui.button("Reset completion history").clicked() {
+            ctx.trigger(ResetTutorialProgress {});
+        }
 
         let mut auto = progress.autoproceed;
         if ui
@@ -1636,6 +1739,98 @@ mod tests {
             lunco_core::SceneTransition::load("lunco://tutorials/sandbox/first_drive.usda", "",),
             lunco_core::SceneTransition::Clear,
         ]));
+    }
+
+    /// Replacing a world-backed lesson must clear the outgoing world before
+    /// loading the new one, even when both lessons name the same stage. A
+    /// direct LoadScene would correctly no-op on that identity and leave the
+    /// old lesson's entities in place.
+    #[test]
+    fn replacing_world_lesson_clears_before_loading_same_stage() {
+        #[derive(Resource, Default)]
+        struct TransitionsSeen(Vec<lunco_core::SceneTransition>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        for (id, title) in [("/Test/First", "First"), ("/Test/Second", "Second")] {
+            app.register_tutorial(TutorialMeta {
+                id: id.into(),
+                title: title.into(),
+                blurb: String::new(),
+                app: "/Test".into(),
+                difficulty: String::new(),
+                script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+                world: Some("lunco://tutorials/sandbox/first_drive.usda".into()),
+                first_start: false,
+                next: None,
+                source: CurriculumSource::Bundled,
+            });
+        }
+        app.insert_resource(TransitionsSeen::default());
+        app.add_observer(
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
+                seen.0.push(trigger.event().transition.clone());
+            },
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/First".into(),
+        });
+        app.update();
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Second".into(),
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert!(matches!(
+            app.world().resource::<TransitionsSeen>().0.as_slice(),
+            [
+                lunco_core::SceneTransition::Load { .. },
+                lunco_core::SceneTransition::Clear,
+            ]
+        ));
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::Clear,
+            });
+        app.update();
+        assert!(matches!(
+            app.world().resource::<TransitionsSeen>().0.as_slice(),
+            [
+                lunco_core::SceneTransition::Load { .. },
+                lunco_core::SceneTransition::Clear,
+                lunco_core::SceneTransition::Load { .. },
+            ]
+        ));
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/Second")
+        );
     }
 
     /// Starting an unknown tutorial id must publish [`TUTORIAL_FAILED`] — the
