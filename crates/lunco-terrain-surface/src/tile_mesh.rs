@@ -183,13 +183,10 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
     let mut morph_normals = Vec::with_capacity(res * res);
     let mut normals = Vec::with_capacity(res * res);
     let mut uvs = Vec::with_capacity(res * res);
-    let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
     for iz in 0..res {
         for ix in 0..res {
             let (wx, wz) = world(ix, iz);
             let y = (h_at(ix as isize, iz as isize) - origin_y) as f32;
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
             positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
 
             // Snap to the parent's even lattice, with the PARENT-gated height —
@@ -225,12 +222,11 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
 
     let mut indices = grid_indices(res);
 
-    // --- Skirts: hide T-junction cracks between neighbouring tiles of different
-    // LOD. The per-tile morph band can't guarantee a finer tile's edge matches its
-    // coarser neighbour's straight edge, so a thin vertical wall is dropped around
-    // the perimeter to cover the gap. Depth scales with the tile's relief (+ a
-    // small floor) so it always spans the gap without a needlessly tall wall.
-    let skirt_depth = ((max_y - min_y) * 0.75 + region.side() as f32 * 0.05).max(0.5);
+    // --- Skirts: close only the measured T-junction gap between neighbouring
+    // LODs. The morph target is the surface the coarser neighbour renders, so
+    // the largest edge difference is the exact vertical gap the seam can expose.
+    // A fixed fraction of tile width would invent metre- to kilometre-scale walls
+    // on coarse tiles and is not terrain geometry.
     // Skirts close cracks between two neighboring LOD tiles. At the outer DEM
     // boundary there is no neighboring terrain, so emitting a wall there would
     // invent geometry outside the authored DEM. Keep seam skirts only where a
@@ -242,9 +238,40 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         region.center[0] - region.half <= -dem_half_extent + edge_epsilon,
         region.center[0] + region.half >= dem_half_extent - edge_epsilon,
     ];
+    let edge_gaps = [
+        (0..res)
+            .map(|i| (positions[i][1] - morph_targets[i][1]).abs())
+            .fold(0.0f32, f32::max),
+        (0..res)
+            .map(|i| {
+                let index = (res - 1) * res + i;
+                (positions[index][1] - morph_targets[index][1]).abs()
+            })
+            .fold(0.0f32, f32::max),
+        (0..res)
+            .map(|i| {
+                let index = i * res;
+                (positions[index][1] - morph_targets[index][1]).abs()
+            })
+            .fold(0.0f32, f32::max),
+        (0..res)
+            .map(|i| {
+                let index = i * res + (res - 1);
+                (positions[index][1] - morph_targets[index][1]).abs()
+            })
+            .fold(0.0f32, f32::max),
+    ]
+    .map(|edge_gap| {
+        if edge_gap > 0.0 {
+            // Only a numerical closure margin, scaled to the f32 terrain coordinate.
+            edge_gap + (region.side() as f32 * 4.0 * f32::EPSILON).max(1.0e-4)
+        } else {
+            0.0
+        }
+    });
     append_skirts(
         res,
-        skirt_depth,
+        edge_gaps,
         outer_edges,
         &mut positions,
         &mut morph_targets,
@@ -272,7 +299,7 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
 #[allow(clippy::too_many_arguments)]
 fn append_skirts(
     res: usize,
-    skirt_depth: f32,
+    skirt_depths: [f32; 4],
     outer_edges: [bool; 4],
     positions: &mut Vec<[f32; 3]>,
     morph_targets: &mut Vec<[f32; 3]>,
@@ -287,23 +314,38 @@ fn append_skirts(
     let left: Vec<usize> = (0..res).map(|iz| iz * res).collect();
     let right: Vec<usize> = (0..res).map(|iz| iz * res + (res - 1)).collect();
 
-    for (edge, is_outer) in [top, bottom, left, right].into_iter().zip(outer_edges) {
-        if is_outer {
+    for (edge_index, (edge, is_outer)) in [top, bottom, left, right]
+        .into_iter()
+        .zip(outer_edges)
+        .enumerate()
+    {
+        let skirt_depth = skirt_depths[edge_index];
+        if is_outer || skirt_depth <= 0.0 {
             continue;
         }
+        // Skirt vertices are a vertical seam wall, not another copy of the
+        // surface. Give that wall its geometric outward normal. Reusing the
+        // sloped terrain normal made the wall's lighting depend on the DEM
+        // gradient and produced black bands when the wall was viewed from its
+        // reverse winding.
+        let wall_normal = match edge_index {
+            0 => [0.0, 0.0, -1.0], // z = -half
+            1 => [0.0, 0.0, 1.0],  // z = +half
+            2 => [-1.0, 0.0, 0.0], // x = -half
+            3 => [1.0, 0.0, 0.0],  // x = +half
+            _ => unreachable!(),
+        };
         // Drop a skirt vertex below each edge vertex, recording its new index.
         let mut skirt: Vec<u32> = Vec::with_capacity(edge.len());
         for &gi in &edge {
             let p = positions[gi];
             let mt = morph_targets[gi];
-            let n = normals[gi];
-            let mn = morph_normals[gi];
             let uv = uvs[gi];
             skirt.push(positions.len() as u32);
             positions.push([p[0], p[1] - skirt_depth, p[2]]);
             morph_targets.push([mt[0], mt[1] - skirt_depth, mt[2]]);
-            morph_normals.push(mn); // hidden wall — reuse the edge morph normal
-            normals.push(n); // hidden wall — reuse the edge normal
+            morph_normals.push(wall_normal);
+            normals.push(wall_normal);
             uvs.push(uv);
         }
         // Wall quads per segment, emitted with BOTH windings (double-sided).
@@ -365,19 +407,18 @@ mod tests {
             [0.0, 0.0],
             0.0,
         );
-        // Interior grid first, then appended skirt verts.
-        assert!(m.positions.len() >= res * res);
-        assert!(m.indices.len() >= 4 * 4 * 6);
-        // Interior surface is flat at y=0; skirt verts hang below it.
+        // A flat source has no LOD height gap, so it needs no invented seam
+        // wall. The surface remains exactly the authored grid.
+        assert_eq!(m.positions.len(), res * res);
+        assert_eq!(m.indices.len(), (res - 1) * (res - 1) * 6);
         assert!(m.positions[..res * res].iter().all(|p| p[1] == 0.0));
-        assert!(m.positions[res * res..].iter().all(|p| p[1] < 0.0));
-        // Flat → up normals (interior + skirts copy the edge normal).
+        // Flat → up normals.
         assert!(m.normals.iter().all(|n| n[1] > 0.99));
     }
 
     #[test]
     fn outer_dem_edges_have_no_artificial_skirt_walls() {
-        let dem = flat_dem();
+        let dem = ramp_dem();
         let res = 5;
 
         let interior = bake_tile_mesh(

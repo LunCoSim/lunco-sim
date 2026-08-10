@@ -721,12 +721,10 @@ impl CancelIntent<'_, '_> {
 
 /// True while a waypoint's right-click context menu is open.
 ///
-/// Read by avatar mouse-look to hold the camera still. `Look` is bound to raw
-/// `MouseMove` (always-on, FPS-style) and is only suppressed once the pointer is
-/// already OVER egui — so without this the camera spins while you travel the cursor
-/// to the menu, which made the menu effectively unusable. Set/cleared by
-/// sandbox-edit's waypoint menu. Deliberately separate from [`WaypointToolActive`]:
-/// during ground-placement you still WANT to look around.
+/// Read by avatar mouse-look to hold the camera still while the pointer is
+/// being used by the menu. Set/cleared by sandbox-edit's waypoint menu.
+/// Deliberately separate from [`WaypointToolActive`]: during ground-placement
+/// you still WANT to look around.
 #[derive(Resource, Default)]
 pub struct WaypointMenuOpen(pub bool);
 

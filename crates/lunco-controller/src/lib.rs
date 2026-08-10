@@ -34,6 +34,7 @@
 //! can drive a vessel by naming intents — the same consistent vocabulary. All writes
 //! land through the same [`lunco_core::ports::PortRegistry`].
 
+use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{on_command, register_commands, Command, UserIntent};
@@ -619,6 +620,37 @@ fn record_control_input(
 /// to its ports via its USD `Controls` profile.
 const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.json");
 
+/// Read the pointer button that activates the semantic `Look` intent.
+///
+/// Pointer bindings live beside the keyboard bindings because they are part of
+/// the same user input map. The documented default is the secondary button; an
+/// authored keymap can select another button without changing camera code.
+///
+/// An omitted field is the documented semantic default. An invalid explicit
+/// value is rejected instead of silently changing the user's control scheme.
+pub fn look_button(json: &str) -> Option<MouseButton> {
+    let value = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    let Some(raw) = value.get("look_button") else {
+        return Some(MouseButton::Right);
+    };
+    let Some(name) = raw.as_str().map(str::to_ascii_lowercase) else {
+        warn!("[input] look_button must be a pointer-button string");
+        return None;
+    };
+
+    match name.as_str() {
+        "left" => Some(MouseButton::Left),
+        "middle" => Some(MouseButton::Middle),
+        "back" => Some(MouseButton::Back),
+        "forward" => Some(MouseButton::Forward),
+        "right" => Some(MouseButton::Right),
+        unknown => {
+            warn!("[input] unknown look_button '{unknown}'; Look is unbound");
+            None
+        }
+    }
+}
+
 /// The bundled default key → intent convention, as data suitable for help and
 /// accessibility surfaces. Port bindings remain per controlled entity.
 pub fn default_key_bindings() -> Vec<(UserIntent, Vec<KeyCode>)> {
@@ -664,12 +696,29 @@ pub fn key_label(keys: &[KeyCode]) -> String {
         .join(" / ")
 }
 
-/// Build an avatar `InputMap<UserIntent>` from a key→intent JSON object
+/// Resolve a user-facing key label against the bundled keymap.
+///
+/// This is used by scripted input injection and the input overlay, so those
+/// surfaces cannot grow a second Rust-owned list of keys. Both the compact
+/// label (`W`) and Bevy's serialized/debug spelling (`KeyW`) are accepted.
+pub fn default_key_code(label: &str) -> Option<KeyCode> {
+    let needle = label.trim();
+    default_key_bindings()
+        .into_iter()
+        .flat_map(|(_, keys)| keys.into_iter())
+        .find(|key| {
+            let debug = format!("{key:?}");
+            debug.eq_ignore_ascii_case(needle)
+                || key_label(std::slice::from_ref(key)).eq_ignore_ascii_case(needle)
+        })
+}
+
+/// Build an avatar `InputMap<UserIntent>` from a key/pointer→intent JSON object
 /// (`{"forward":["KeyW"], "action":["KeyF","Space"], …}`; keys are bevy
 /// `KeyCode` variant names, intents are canonical USD control names via
 /// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
-/// and unknown intents are skipped. The mouse `Look`/`Zoom` axes are not
-/// key-bindable, so they're always added in code.
+/// and unknown intents are skipped. `look_button` selects the button that
+/// chords the `Look` mouse axis; `Zoom` remains the standard scroll axis.
 pub fn build_avatar_input_map(
     json: &str,
 ) -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
@@ -682,8 +731,12 @@ pub fn build_avatar_input_map(
             input_map.insert(intent, key);
         }
     }
-    // Mouse axes — not key-bindable, always present.
-    input_map.insert_dual_axis(Look, MouseMove::default());
+    // This chord is the complete look binding. Camera behaviour consumes only
+    // the resulting semantic axis, so no downstream system needs a raw button
+    // gate.
+    if let Some(button) = look_button(json) {
+        input_map.insert_dual_axis(Look, DualAxislikeChord::new(button, MouseMove::default()));
+    }
     input_map.insert_axis(Zoom, MouseScrollAxis::Y);
     input_map
 }
@@ -868,6 +921,73 @@ mod tests {
     use super::*;
     use lunco_core::UserIntent;
 
+    /// The configured pointer button is part of the same semantic `Look`
+    /// binding as the mouse axis. This prevents camera code from silently
+    /// reintroducing a raw secondary-button assumption.
+    #[test]
+    fn look_axis_uses_the_configured_pointer_button() {
+        use bevy::input::mouse::MouseButton;
+        use bevy::input::InputPlugin;
+        use leafwing_input_manager::prelude::{
+            Buttonlike, DualAxislike, InputManagerPlugin, MouseMove,
+        };
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((
+                ActionState::<UserIntent>::default(),
+                build_avatar_input_map(r#"{"look_button":"Middle"}"#),
+            ))
+            .id();
+
+        MouseButton::Right.press(app.world_mut());
+        MouseMove::default().set_axis_pair(app.world_mut(), Vec2::new(4.0, -2.0));
+        app.update();
+        assert_eq!(
+            app.world()
+                .entity(entity)
+                .get::<ActionState<UserIntent>>()
+                .expect("action state")
+                .axis_pair(&UserIntent::Look),
+            Vec2::ZERO,
+            "an unconfigured button must not activate Look"
+        );
+
+        MouseButton::Middle.press(app.world_mut());
+        MouseMove::default().set_axis_pair(app.world_mut(), Vec2::new(4.0, -2.0));
+        app.update();
+        assert_eq!(
+            app.world()
+                .entity(entity)
+                .get::<ActionState<UserIntent>>()
+                .expect("action state")
+                .axis_pair(&UserIntent::Look),
+            Vec2::new(4.0, -2.0),
+            "the configured button must activate Look"
+        );
+    }
+
+    #[test]
+    fn invalid_pointer_binding_does_not_rebind_look() {
+        assert!(look_button(r#"{"look_button":"sideways"}"#).is_none());
+        assert!(build_avatar_input_map(r#"{"look_button":"sideways"}"#)
+            .get_dual_axislike(&UserIntent::Look)
+            .is_none());
+    }
+
+    #[test]
+    fn simulated_key_labels_are_resolved_from_the_keymap() {
+        assert_eq!(default_key_code("W"), Some(KeyCode::KeyW));
+        assert_eq!(default_key_code("KeyG"), Some(KeyCode::KeyG));
+        assert_eq!(default_key_code("not-bound"), None);
+    }
+
     /// The bundled keybindings file parses, every entry is a known intent bound to
     /// real `KeyCode`s, and the builder runs — guards the data file against a typo
     /// silently emptying the keymap.
@@ -879,6 +999,10 @@ mod tests {
         let mut bound_keys = 0;
         for (name, val) in obj {
             if name.starts_with('_') {
+                continue;
+            }
+            if name == "look_button" {
+                assert_eq!(val.as_str(), Some("Right"));
                 continue;
             }
             assert!(

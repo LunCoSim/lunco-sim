@@ -1,5 +1,6 @@
 {
-  "_comment": "Default key -> UserIntent bindings for avatar + vessel control. Keys are bevy KeyCode variant names (e.g. 'KeyW', 'Space'); intents use the canonical USD control names. A vessel maps these intents to its ports via its USD Controls profile (see assets/vessels/control_profiles.usda). Mouse Look/Zoom axes are added in code (not key-bindable). This file is the single source of the default keymap — no keys are hardcoded in Rust.",
+  "_comment": "Default key/pointer -> UserIntent bindings for avatar + vessel control. Keys are bevy KeyCode variant names (e.g. 'KeyW', 'Space'); intents use the canonical USD control names. A vessel maps these intents to its ports via its USD Controls profile (see assets/vessels/control_profiles.usda). The look_button value selects the pointer button that activates the Look axis. This file is the single source of the default keymap.",
+  "look_button": "Right",
   "forward":    ["KeyW"],
   "backward":   ["KeyS"],
   "left":       ["KeyA"],

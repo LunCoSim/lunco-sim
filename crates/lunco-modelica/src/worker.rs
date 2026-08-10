@@ -3039,6 +3039,11 @@ pub fn handle_modelica_responses(
     // Core compile-state (UI-agnostic). Optional so headless cosim tests run
     // without it.
     compile_states: Option<ResMut<lunco_doc_bevy::DocumentDiagnostics>>,
+    // Generated USD networks establish their document before dispatch. Keep
+    // the registry available as the authoritative generation source for a
+    // late-linked model too; a successful compile must never be marked stale
+    // merely because its document generation was assigned after dispatch.
+    documents: Option<Res<crate::state::ModelicaDocumentRegistry>>,
     // Lifecycle messages leave as core events; the reactive UI console observer
     // projects them. Core no longer references the console panel.
     mut notices: MessageWriter<crate::ModelicaNotice>,
@@ -3297,7 +3302,17 @@ pub fn handle_modelica_responses(
                 // generation captured at dispatch) to `compiled_generation` so
                 // staleness checks see the model as up to date.
                 if result.error.is_none() {
-                    model.compiled_generation = model.pending_generation;
+                    model.compiled_generation = if model.pending_generation != 0 {
+                        model.pending_generation
+                    } else if !model.document.is_unassigned() {
+                        documents
+                            .as_ref()
+                            .and_then(|registry| registry.host(model.document))
+                            .map(|host| host.document().generation_owned())
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
                     model.paused = !model.resume_after_compile;
                     model.resume_after_compile = false;
                     // Worker has installed a stepper for this entity.

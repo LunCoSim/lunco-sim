@@ -8204,6 +8204,7 @@ dependencies = [
  "js-sys",
  "lunco-api",
  "lunco-assets",
+ "lunco-controller",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
