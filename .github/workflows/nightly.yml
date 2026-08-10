@@ -283,8 +283,18 @@ jobs:
             fi
             cp "$package_file" "artifacts/$package_name"
           done
-          find artifacts -mindepth 2 -type f \( -name 'releases.*.json' -o -name 'assets.*.json' \) -delete
-          find artifacts -mindepth 1 -type d -empty -delete || true
+          # The package files were copied to the release root above. Remove
+          # every nested file afterwards; leaving the original package files
+          # under `artifacts/<job>/` makes the shell glob passed to `gh`
+          # include that directory, which the release API rejects with
+          # "read ...: is a directory".
+          find artifacts -mindepth 2 -type f -delete
+          find artifacts -depth -mindepth 1 -type d -empty -delete || true
+          if find artifacts -mindepth 1 -maxdepth 1 ! -type f -print -quit | grep -q .; then
+            echo "Unexpected non-file entry remains in the release staging root:" >&2
+            find artifacts -mindepth 1 -maxdepth 1 ! -type f -print >&2
+            exit 1
+          fi
           package_count=$(find artifacts -maxdepth 1 -type f \
             ! -name 'releases.*.json' ! -name 'assets.*.json' | wc -l)
           if [ "$package_count" -lt 4 ]; then
@@ -335,8 +345,13 @@ jobs:
 
           # Create the release with the timestamped assets
           echo "Creating new release for ${{ needs.meta.outputs.tag }}..."
+          mapfile -d '' release_assets < <(find artifacts -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+          if [ "${#release_assets[@]}" -eq 0 ]; then
+            echo "No regular files remain in the release staging root." >&2
+            exit 1
+          fi
           gh release create "${{ needs.meta.outputs.tag }}" \
             --title "Nightly ${{ needs.meta.outputs.date }}" \
             --notes-file release_notes.md \
             --prerelease \
-            artifacts/*
+            "${release_assets[@]}"
