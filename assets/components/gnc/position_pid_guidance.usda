@@ -41,6 +41,8 @@ def Xform "PositionPIDGuidance" (
         float inputs:altimeter_range = 0.0
         float inputs:altimeter_range_rate = 0.0
         float inputs:altimeter_valid = 0.0
+        float inputs:altimeter_vehicle_position_x = 0.0
+        float inputs:altimeter_vehicle_position_z = 0.0
         float inputs:imu_coordinate_accel_local_x = 0.0
         float inputs:imu_coordinate_accel_local_y = 0.0
         float inputs:imu_coordinate_accel_local_z = 0.0
@@ -66,6 +68,9 @@ def Xform "PositionPIDGuidance" (
             customData = { double min = 0.0 double max = 10.0 string unit = "m" }
         )
         float inputs:vertical_velocity_correction_gain = 2.0 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "1/s" }
+        )
+        float inputs:lateral_position_correction_gain = 0.8 (
             customData = { double min = 0.0 double max = 20.0 string unit = "1/s" }
         )
 

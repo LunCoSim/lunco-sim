@@ -1306,7 +1306,9 @@ fn extract_avian_prim(
         } else if kinematic {
             (RigidBody::Kinematic, lunco_core::Mobility::Kinematic)
         } else {
-            commands.entity(entity).try_insert(ShouldBeDynamic);
+            commands
+                .entity(entity)
+                .try_insert((ShouldBeDynamic, lunco_core::PhysicsStatePending));
             (RigidBody::Kinematic, lunco_core::Mobility::Dynamic)
         };
         commands

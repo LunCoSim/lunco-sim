@@ -46,7 +46,14 @@ def Xform "Altimeter" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/Altimeter.mo@
         float inputs:ray_distance_m.connect = </Altimeter.outputs:ray_distance>
         float inputs:ray_hit_valid.connect = </Altimeter.outputs:ray_hit_valid>
+        float inputs:ray_hit_position_x.connect = </Altimeter.outputs:ray_hit_position_x>
+        float inputs:ray_hit_position_z.connect = </Altimeter.outputs:ray_hit_position_z>
         float inputs:ray_sample_time.connect = </Altimeter.outputs:ray_sample_time>
+        # The ray origin is mounted on the vehicle, so the Modelica sensor
+        # removes this authored local offset after back-projecting the hit.
+        float inputs:mount_local_x = 0.0
+        float inputs:mount_local_y = -3.3
+        float inputs:mount_local_z = 0.0
         # The direction is part of the authored ray geometry. Modelica uses the
         # live IMU attitude to turn its Avian hit distance into vertical clearance.
         float inputs:ray_direction_local_x = 0.0
@@ -73,6 +80,8 @@ def Xform "Altimeter" (
         float outputs:range_valid
         float outputs:range_confidence
         float outputs:range_rate_valid
+        float outputs:vehicle_position_x
+        float outputs:vehicle_position_z
         float outputs:sample_time_s
         float outputs:vertical_projection
         float outputs:ray_direction_nav_y

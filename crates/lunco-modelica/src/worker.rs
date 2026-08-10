@@ -23,6 +23,8 @@ use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 use lunco_signal::{SimSnapshot, SimStream};
 
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 3;
+
 /// Solver options for the **LIVE** (co-simulated) path.
 ///
 /// WHAT IS LIVE-SPECIFIC, and it is only this: a **fixed macro/micro step
@@ -72,6 +74,232 @@ fn live_stepper_options(
     Ok((spec, options))
 }
 
+/// A prepared solve model is reusable only for the exact compiled DAE and the
+/// exact parameter override vector that produced it. The DAE identity is the
+/// `Arc` identity held by `DaeCompilationResult`; the shared compilation cache
+/// deliberately preserves that identity across USD instances.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PreparedSolveKey {
+    dae_identity: usize,
+    solver_id: String,
+    parameter_overrides: Vec<(String, u64)>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PreparedSolveDiskRecord {
+    version: u32,
+    source_key: u64,
+    library_fingerprint: u64,
+    parameter_overrides: Vec<(String, u64)>,
+    model: rumoca_ir_solve::SolveModel,
+}
+
+#[derive(Default)]
+struct PreparedSolveCache {
+    models: HashMap<PreparedSolveKey, rumoca_ir_solve::SolveModel>,
+    #[cfg(not(target_arch = "wasm32"))]
+    library_fingerprint: Option<u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    persistent_enabled: bool,
+}
+
+impl PreparedSolveCache {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new() -> Self {
+        Self {
+            models: HashMap::default(),
+            library_fingerprint: None,
+            persistent_enabled: true,
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn key(
+        comp_res: &rumoca_compile::compile::DaeCompilationResult,
+        spec: &solver::SolverSpec,
+        parameter_overrides: &[(String, f64)],
+    ) -> PreparedSolveKey {
+        PreparedSolveKey {
+            dae_identity: Arc::as_ptr(&comp_res.dae) as usize,
+            solver_id: spec.id.to_string(),
+            parameter_overrides: parameter_overrides
+                .iter()
+                .map(|(name, value)| (name.clone(), value.to_bits()))
+                .collect(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.models.clear();
+    }
+
+    fn remove_compiled(&mut self, comp_res: &rumoca_compile::compile::DaeCompilationResult) {
+        let dae_identity = Arc::as_ptr(&comp_res.dae) as usize;
+        self.models
+            .retain(|key, _| key.dae_identity != dae_identity);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disk_path(
+        source_key: u64,
+        library_fingerprint: u64,
+        parameter_overrides: &[(String, u64)],
+    ) -> std::path::PathBuf {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
+        source_key.hash(&mut hasher);
+        library_fingerprint.hash(&mut hasher);
+        parameter_overrides.hash(&mut hasher);
+        let key = hasher.finish();
+        modelica_dir()
+            .join("prepared-solve-v3")
+            .join(format!("{source_key:016x}-{key:016x}.bin.zst"))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn hash_tree(root: &std::path::Path, hasher: &mut impl std::hash::Hasher) {
+        let Ok(entries) = std::fs::read_dir(root) else { return };
+        let mut paths = entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            let Ok(relative) = path.strip_prefix(root) else { continue };
+            use std::hash::Hash;
+            relative.to_string_lossy().hash(hasher);
+            if path.is_dir() {
+                Self::hash_tree(&path, hasher);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                bytes.hash(hasher);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn compute_library_fingerprint() -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
+        let model_root = std::env::current_dir().ok().map(|root| root.join("assets/models"));
+        if let Some(root) = model_root {
+            root.to_string_lossy().hash(&mut hasher);
+            Self::hash_tree(&root, &mut hasher);
+        }
+        if let Some(root) = lunco_assets::msl_source_root_path() {
+            root.to_string_lossy().hash(&mut hasher);
+            Self::hash_tree(&root, &mut hasher);
+        }
+        hasher.finish()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn library_fingerprint(&mut self) -> Option<u64> {
+        if !self.persistent_enabled {
+            return None;
+        }
+        Some(*self
+            .library_fingerprint
+            .get_or_insert_with(Self::compute_library_fingerprint))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn library_fingerprint(&mut self) -> Option<u64> {
+        None
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disable_persistent(&mut self) {
+        self.persistent_enabled = false;
+        self.clear();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn disable_persistent(&mut self) {
+        self.clear();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_disk(
+        &self,
+        source_key: u64,
+        library_fingerprint: u64,
+        parameter_overrides: &[(String, u64)],
+    ) -> Option<rumoca_ir_solve::SolveModel> {
+        let path = Self::disk_path(source_key, library_fingerprint, parameter_overrides);
+        let compressed = std::fs::read(&path).ok()?;
+        let bytes = zstd::stream::decode_all(compressed.as_slice()).ok()?;
+        let (record, _): (PreparedSolveDiskRecord, usize) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).ok()?;
+        if record.version != PREPARED_SOLVE_CACHE_VERSION
+            || record.source_key != source_key
+            || record.library_fingerprint != library_fingerprint
+            || record.parameter_overrides != parameter_overrides
+        {
+            return None;
+        }
+        Some(record.model)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn load_disk(
+        &self,
+        _source_key: u64,
+        _library_fingerprint: u64,
+        _parameter_overrides: &[(String, u64)],
+    ) -> Option<rumoca_ir_solve::SolveModel> {
+        None
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_disk(
+        &self,
+        source_key: u64,
+        library_fingerprint: u64,
+        parameter_overrides: &[(String, u64)],
+        model: &rumoca_ir_solve::SolveModel,
+    ) {
+        let path = Self::disk_path(source_key, library_fingerprint, parameter_overrides);
+        let Some(parent) = path.parent() else { return };
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        let record = PreparedSolveDiskRecord {
+            version: PREPARED_SOLVE_CACHE_VERSION,
+            source_key,
+            library_fingerprint,
+            parameter_overrides: parameter_overrides.to_vec(),
+            model: model.clone(),
+        };
+        let Ok(bytes) = bincode::serde::encode_to_vec(record, bincode::config::standard()) else {
+            return;
+        };
+        let Ok(compressed) = zstd::stream::encode_all(bytes.as_slice(), 3) else {
+            return;
+        };
+        // Write beside the final path and rename so an interrupted recording
+        // can leave at most an ignored .tmp file, never a partial cache hit.
+        let tmp = path.with_extension("bin.zst.tmp");
+        if std::fs::write(&tmp, compressed).is_ok() {
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn save_disk(
+        &self,
+        _source_key: u64,
+        _library_fingerprint: u64,
+        _parameter_overrides: &[(String, u64)],
+        _model: &rumoca_ir_solve::SolveModel,
+    ) {
+    }
+}
+
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
 ///
 /// **Single source of truth** for live stepper construction across the worker —
@@ -107,7 +335,14 @@ fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
+    source_key: u64,
+    prepared: &mut PreparedSolveCache,
 ) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
+    // USD property traversal is not an ordering contract. Canonicalize before
+    // lowering and before forming cache keys so two fresh recorder processes
+    // see the same instance parameter set even when the upstream map was
+    // enumerated in a different order.
+    let parameter_overrides = canonical_parameter_overrides(parameter_overrides);
     let (spec, mut opts) = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
@@ -116,8 +351,63 @@ fn build_stepper(
     // `Dae.variables.parameters[*].start` after compilation leaves the already
     // compiled initialization vector stale, which turns authored release values
     // into a physically plausible but wrong startup impulse.
-    opts.param_overrides = parameter_overrides.to_vec();
-    crate::simulation_session::live(&comp_res.dae, &spec, opts)
+    opts.param_overrides = parameter_overrides.clone();
+    let key = PreparedSolveCache::key(comp_res, &spec, &parameter_overrides);
+    if !prepared.models.contains_key(&key) {
+        let override_key: Vec<(String, u64)> = parameter_overrides
+            .iter()
+            .map(|(name, value)| (name.clone(), value.to_bits()))
+            .collect();
+        let model = if let Some(library_fingerprint) = prepared.library_fingerprint() {
+            if let Some(model) = prepared.load_disk(source_key, library_fingerprint, &override_key) {
+                bevy::log::info!(
+                    "[modelica-runtime] loaded prepared solver IR for `{}`: cache=disk-hit",
+                    spec.id,
+                );
+                Some(model)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let model = if let Some(model) = model {
+            model
+        } else {
+            let lower_started = web_time::Instant::now();
+            let model = crate::simulation_session::lower_for_live(&comp_res.dae, &opts)?;
+            let lower_elapsed = lower_started.elapsed();
+            bevy::log::info!(
+                "[modelica-runtime] prepared solver IR for `{}`: lower={lower_elapsed:?} cache=miss",
+                spec.id,
+            );
+            if let Some(library_fingerprint) = prepared.library_fingerprint() {
+                prepared.save_disk(source_key, library_fingerprint, &override_key, &model);
+            }
+            model
+        };
+        prepared.models.insert(key.clone(), model);
+    } else {
+        bevy::log::info!(
+            "[modelica-runtime] reused prepared solver IR for `{}`: cache=hit",
+            spec.id,
+        );
+    }
+    let model = prepared
+        .models
+        .get(&key)
+        .expect("prepared solver model inserted or found above");
+    crate::simulation_session::live_from_solve_model(model, &spec, opts)
+}
+
+fn canonical_parameter_overrides(values: &[(String, f64)]) -> Vec<(String, f64)> {
+    let mut canonical = values.to_vec();
+    canonical.sort_unstable_by(|(left_name, left_value), (right_name, right_value)| {
+        left_name
+            .cmp(right_name)
+            .then_with(|| left_value.to_bits().cmp(&right_value.to_bits()))
+    });
+    canonical
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -447,6 +737,23 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
     h.finish()
 }
 
+/// Stable cross-process identity for the solve-IR cache. It includes the
+/// complete authored source set and the worker library generation; unlike a
+/// Bevy entity or a Rumoca source id it is identical in a fresh recorder
+/// process.
+fn prepared_unit_hash(
+    model_name: &str,
+    doc_uri: &str,
+    unit: &CompileUnit,
+    library_gen: u64,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    compile_unit_hash(model_name, doc_uri, unit).hash(&mut h);
+    library_gen.hash(&mut h);
+    h.finish()
+}
+
 /// Stable key for a compiled DAE that can be shared by multiple scene
 /// participants.  The document URI is intentionally absent: it identifies
 /// the authoring document, not the Modelica equations.  Two USD instances
@@ -510,6 +817,8 @@ struct CacheRebuild {
     /// The instance values that must be supplied to Rumoca when the cached DAE
     /// is lowered into a fresh live stepper.
     parameter_overrides: Vec<(String, f64)>,
+    /// Stable source-set identity used by the cross-process solve-IR cache.
+    unit_key: u64,
     /// Assembled from the cached source set — carries the `input_defaults`
     /// to re-seed and the stripped primary for error diagnostics.
     unit: CompileUnit,
@@ -549,6 +858,7 @@ fn rebuild_from_cache(
     };
     let mut unit = assemble_compile_unit(&source, extras);
     let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
+    let unit_key = prepared_unit_hash(&model_name, &doc_uri, &unit, library_gen);
     // Library defaults are folded in AFTER hashing on purpose: the hash keys the
     // source set, and `library_gen` already invalidates the artifact when the
     // seated libraries change. Both the reuse and the recompile path below need
@@ -566,6 +876,7 @@ fn rebuild_from_cache(
             model_name,
             doc_uri,
             parameter_overrides,
+            unit_key,
             unit,
             outcome: Ok(compiled),
             reused: true,
@@ -591,6 +902,7 @@ fn rebuild_from_cache(
         model_name,
         doc_uri,
         parameter_overrides,
+        unit_key,
         unit,
         outcome,
         reused: false,
@@ -1285,6 +1597,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     // per entity, so this changes startup cost without coupling simulations.
     let mut compiled_artifacts: HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>> =
         HashMap::default();
+    // DAE compilation and solve-IR preparation are separate caches. The latter
+    // is keyed by the shared DAE Arc plus authored overrides so two USD
+    // instances do not lower identical networks twice during scene startup.
+    let mut prepared_solve_cache = PreparedSolveCache::new();
     // Lock-free publish stream per entity (Phase A of the multi-sim
     // refactor — see `sim_stream.rs`). The UI side holds a clone of
     // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
@@ -1366,6 +1682,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         &comp_res,
                                         profile_for(entity, &realtime_models),
                                         &rb.parameter_overrides,
+                                        rb.unit_key,
+                                        &mut prepared_solve_cache,
                                     ) {
                                         Ok(mut stepper) => {
                                             apply_input_defaults_validated(
@@ -1474,6 +1792,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 &comp_res,
                                 profile_for(entity, &realtime_models),
                                 &[],
+                                prepared_unit_hash(&model_name, &doc_uri, &unit, library_gen),
+                                &mut prepared_solve_cache,
                             ) {
                                 Ok(mut stepper) => {
                                     apply_input_defaults_validated(
@@ -1627,6 +1947,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     &comp_res,
                                     profile_for(entity, &realtime_models),
                                     &parameter_overrides,
+                                    prepared_unit_hash(&model_name, &doc_uri, &unit, library_gen),
+                                    &mut prepared_solve_cache,
                                 );
                                 match stepper_result {
                                     Ok(mut stepper) => {
@@ -1776,6 +2098,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             &comp_res,
                                             profile_for(entity, &realtime_models),
                                             &rb.parameter_overrides,
+                                            rb.unit_key,
+                                            &mut prepared_solve_cache,
                                         ) {
                                             Ok(mut s) => {
                                                 apply_input_defaults_validated(
@@ -1900,7 +2224,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                     }
                     ModelicaCommand::Despawn { entity } => {
                         steppers.remove(&entity);
-                        cached_models.remove(&entity);
+                        if let Some(cached) = cached_models.remove(&entity) {
+                            prepared_solve_cache.remove_compiled(&cached.compiled);
+                        }
                         sim_streams.remove(&entity);
                         // M11: this entity's compile temp dirs are dead —
                         // delete every generation of its index.
@@ -1912,6 +2238,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         // artifacts (next Reset / auto-init recompiles).
                         library_gen += 1;
                         compiled_artifacts.clear();
+                        prepared_solve_cache.disable_persistent();
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         let t0 = web_time::Instant::now();
                         let report = match payload {
@@ -2106,6 +2433,7 @@ pub struct InlineWorkerInner {
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiled_artifacts: HashMap<u64, Box<rumoca_compile::compile::DaeCompilationResult>>,
+    prepared_solve_cache: PreparedSolveCache,
     compiler: Option<ModelicaCompiler>,
     /// Models that declared the realtime promise — the same per-entity fact the
     /// native worker keeps, so wasm resolves the same solver for the same model.
@@ -2147,6 +2475,7 @@ impl InlineWorker {
     pub(crate) fn reset_compiler(&mut self) {
         self.inner.compiler = None;
         self.inner.compiled_artifacts.clear();
+        self.inner.prepared_solve_cache.clear();
         // The fresh compiler will see the just-landed MSL bundle — anything
         // compiled against the old (possibly MSL-less) session is stale.
         self.inner.library_gen += 1;
@@ -2235,6 +2564,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                                 &rb.parameter_overrides,
+                                rb.unit_key,
+                                &mut w.prepared_solve_cache,
                             ) {
                                 apply_input_defaults_validated(
                                     &mut s,
@@ -2370,6 +2701,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &parameter_overrides,
+                        prepared_unit_hash(&model_name, &doc_uri, &unit, w.library_gen),
+                        &mut w.prepared_solve_cache,
                     );
                     match stepper_result {
                         Ok(mut stepper) => {
@@ -2483,6 +2816,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             &comp_res,
                             profile_for(entity, &w.realtime_models),
                             &rb.parameter_overrides,
+                            rb.unit_key,
+                            &mut w.prepared_solve_cache,
                         ) {
                             apply_input_defaults_validated(
                                 &mut stepper,
@@ -2584,7 +2919,13 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 w.library_gen,
             ) {
                 Ok(comp_res) => {
-                    match build_stepper(&comp_res, profile_for(entity, &w.realtime_models), &[]) {
+                    match build_stepper(
+                        &comp_res,
+                        profile_for(entity, &w.realtime_models),
+                        &[],
+                        prepared_unit_hash(&model_name, &doc_uri, &unit, w.library_gen),
+                        &mut w.prepared_solve_cache,
+                    ) {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(
                                 &mut stepper,
@@ -2671,7 +3012,9 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
         }
         ModelicaCommand::Despawn { entity } => {
             w.steppers.remove(&entity);
-            w.cached_models.remove(&entity);
+            if let Some(cached) = w.cached_models.remove(&entity) {
+                w.prepared_solve_cache.remove_compiled(&cached.compiled);
+            }
             w.sim_streams.remove(&entity);
         }
         ModelicaCommand::LoadSourceRoot { id, payload } => {
@@ -2681,6 +3024,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             // M3: invalidate cached compiled artifacts (see native arm).
             w.library_gen += 1;
             w.compiled_artifacts.clear();
+            w.prepared_solve_cache.disable_persistent();
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let t0 = web_time::Instant::now();
             let report = match payload {
@@ -3825,6 +4169,21 @@ mod artifact_cache_tests {
             shared_hash_of("M", "model M end M;", Vec::new()),
             shared_hash_of("M", "model M Real x; end M;", Vec::new())
         );
+    }
+
+    #[test]
+    fn parameter_override_cache_keys_are_order_independent() {
+        let first = canonical_parameter_overrides(&[
+            ("zeta".into(), 2.0),
+            ("alpha".into(), 1.0),
+        ]);
+        let second = canonical_parameter_overrides(&[
+            ("alpha".into(), 1.0),
+            ("zeta".into(), 2.0),
+        ]);
+        assert_eq!(first, second);
+        assert_eq!(first[0].0, "alpha");
+        assert_eq!(first[1].0, "zeta");
     }
 }
 

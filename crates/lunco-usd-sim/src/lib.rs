@@ -3624,6 +3624,9 @@ fn activate_dynamic_bodies(
             commands
                 .entity(entity)
                 .try_insert((RigidBody::Dynamic, lunco_core::PhysicsStateReady));
+            commands
+                .entity(entity)
+                .try_remove::<lunco_core::PhysicsStatePending>();
             if let Some(velocity) = authored_velocity {
                 if let Some(linear) = velocity.linear {
                     commands.entity(entity).try_insert(LinearVelocity(linear));

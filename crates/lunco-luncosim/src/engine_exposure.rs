@@ -1433,7 +1433,16 @@ fn publish_selected_control_exposure(
         (roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees())
     });
     let spin = q_angvel.get(root).ok().map(|angular| angular.0.length());
-    let altitude = outputs.get("range_m").copied();
+    // A tipped lander can have a valid-looking zero range while its downward
+    // beam has no usable surface return.  Exposing that as `0.0 m` makes the
+    // HUD claim that the vehicle is on the ground during the attitude-recovery
+    // phase.  Keep the sensor contract honest: a range is displayable only
+    // when the Modelica altimeter reports usable vertical confidence.
+    let altitude = outputs
+        .get("range_m")
+        .copied()
+        .zip(outputs.get("range_confidence").copied())
+        .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
     let target_offset = target_offset_from_authored_scene(root, q_spatial, q_paths, canonical)
         .map_or_else(
             || "—".to_owned(),
@@ -1464,7 +1473,10 @@ fn publish_selected_control_exposure(
         "vertical_speed",
         motion.map_or_else(
             || "—".to_owned(),
-            |(_, _, speed)| format!("{speed:+.2} m/s"),
+            // The model keeps the signed world-frame velocity.  The film-facing
+            // card reports a rate magnitude and puts the sign into the adjacent
+            // direction word, so "DOWN 1.82 m/s" is immediately readable.
+            |(_, _, speed)| format!("{:.2} m/s", speed.abs()),
         ),
     );
     ui.property(
@@ -1484,7 +1496,7 @@ fn publish_selected_control_exposure(
     );
     ui.property(
         "altitude",
-        altitude.map_or_else(|| "—".to_owned(), |value| format!("{value:.1} m")),
+        altitude.map_or_else(|| "NO LOCK".to_owned(), |value| format!("{value:.1} m")),
     );
     ui.property("target_offset", target_offset);
     ui.property(

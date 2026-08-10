@@ -22,7 +22,12 @@ model Altimeter
 
   input Real ray_distance_m = 0.0 "Raw Avian hit distance (m)";
   input Real ray_hit_valid = 0.0 "Raw Avian hit validity (1 = hit)";
+  input Real ray_hit_position_x = 0.0 "Raw hit point world X (m)";
+  input Real ray_hit_position_z = 0.0 "Raw hit point world Z (m)";
   input Real ray_sample_time = 0.0 "Raw Avian physics sample time (s)";
+  input Real mount_local_x = 0.0 "Sensor mount position in vehicle X (m)";
+  input Real mount_local_y = 0.0 "Sensor mount position in vehicle Y (m)";
+  input Real mount_local_z = 0.0 "Sensor mount position in vehicle Z (m)";
   input Real attitude_quat_w = 1.0 "Measured attitude quaternion W";
   input Real attitude_quat_x = 0.0 "Measured attitude quaternion X";
   input Real attitude_quat_y = 0.0 "Measured attitude quaternion Y";
@@ -40,6 +45,10 @@ model Altimeter
   output Real range_confidence
     "Confidence in the range geometry, 0..1";
   output Real range_rate_valid "1 when range rate is meaningful";
+  output Real vehicle_position_x
+    "Measured vehicle X from ray origin and authored sensor mount (m)";
+  output Real vehicle_position_z
+    "Measured vehicle Z from ray origin and authored sensor mount (m)";
   output Real sample_time_s "Physics sample time carried with the reading (s)";
   output Real vertical_projection "Downward projection of the measured ray";
   output Real ray_direction_nav_y "Measured ray direction in navigation Y";
@@ -61,6 +70,7 @@ model Altimeter
   Real vertical_validity;
   Real range_validity;
   FrameVectorTransform ray_transform;
+  FrameVectorTransform mount_transform;
   FrameVectorTransform angular_velocity_transform;
 
 equation
@@ -84,6 +94,18 @@ equation
   ray_direction_nav_x = ray_transform.world_frame_x;
   ray_direction_nav_y = ray_transform.world_frame_y;
   ray_direction_nav_z = ray_transform.world_frame_z;
+  // The raw hit point is not the vehicle position when the vehicle is tilted:
+  // it is the end of an oblique ray.  Back-project by the measured range to
+  // recover the ray origin, then remove the authored sensor mount in the same
+  // measured attitude.  This is a geometric altimeter observation, not a
+  // read of the rigid body's simulator pose.
+  mount_transform.quaternion_w = attitude_quat_w;
+  mount_transform.quaternion_x = attitude_quat_x;
+  mount_transform.quaternion_y = attitude_quat_y;
+  mount_transform.quaternion_z = attitude_quat_z;
+  mount_transform.vector_x = mount_local_x;
+  mount_transform.vector_y = mount_local_y;
+  mount_transform.vector_z = mount_local_z;
   // The range is projected onto navigation vertical.  When the vehicle is
   // rotating, the projection itself changes even if the vehicle has no
   // vertical motion.  Use the measured body rate to remove that geometric
@@ -134,5 +156,16 @@ equation
   range_rate_mps = range_valid * (range_filter.y * vertical_projection
     - max(0.0, ray_distance_m) * ray_direction_rate_nav_y);
   range_rate_valid = range_confidence;
+  // The Avian hit point is the endpoint of the ray, not the vehicle position.
+  // Recover the ray origin before removing the sensor mount. The navigation
+  // estimator applies the result as a bounded complementary correction
+  // alongside IMU propagation and only while the ray is good vertical
+  // evidence.
+  vehicle_position_x = ray_hit_valid * (ray_hit_position_x
+    - max(0.0, ray_distance_m) * ray_direction_nav_x
+    - mount_transform.world_frame_x);
+  vehicle_position_z = ray_hit_valid * (ray_hit_position_z
+    - max(0.0, ray_distance_m) * ray_direction_nav_z
+    - mount_transform.world_frame_z);
   sample_time_s = ray_sample_time;
 end Altimeter;

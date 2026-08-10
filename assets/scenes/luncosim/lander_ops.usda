@@ -169,6 +169,7 @@ def Xform "LanderTest" (
             # startup mass is 4000 kg) and lets the guidance/vehicle equations
             # disagree as propellant burns.
             float inputs:vehicle_mass.connect = </LanderTest/Lander/MainPropulsion.outputs:vehicle_mass_kg>
+            float inputs:max_thrust.connect = </LanderTest/Lander/MainPropulsion.outputs:maximum_thrust_n>
 
             # Mission-owned sensor topology. The reusable guidance component
             # does not assume sibling names or invent a sensor provider.

@@ -169,6 +169,7 @@ image = { workspace = true }
 # it through `experiments_runner::stepper_options_from_bounds`, never from
 # `SimOptions::default()` — see the docs there.
 rumoca-sim = { workspace = true }
+rumoca-solver-rk45 = { workspace = true }
 rumoca-eval-solve = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
 # FACTS for the `modelica` lint domain (`src/lint.rs`) are `HookValue`, the same
