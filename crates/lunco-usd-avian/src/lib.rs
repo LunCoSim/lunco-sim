@@ -120,11 +120,6 @@ fn prepare_scene_physics_teardown(world: &mut World) {
             world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
         query.iter(world).collect()
     };
-    let scene_entities: EntityHashSet = {
-        let mut query =
-            world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
-        query.iter(world).collect()
-    };
     let joints: Vec<(Entity, ComponentId)> = {
         let mut query = world.query_filtered::<(
             Entity,
