@@ -15,7 +15,7 @@
 def Xform "DrivingBasics" (
     kind = "assembly"
     doc = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
 
@@ -50,6 +50,20 @@ def Xform "DrivingBasics" (
         }
     }
     uniform bool lunco:spawnable = false
+
+    # The rover antenna includes an Earth tracker. This lesson therefore
+    # authors the same local lunar frame as the production sandbox instead of
+    # leaving the tracker with an impossible zero Earth direction.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.3
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
 
     # Flat plot, ±60 m.
     def Cube "Ground" (

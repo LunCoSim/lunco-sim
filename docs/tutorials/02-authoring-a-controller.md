@@ -112,7 +112,7 @@ release → the GNC resumes.**
 
 ## Step 5 — run & tune
 
-Load the scene, watch it hover. Possess it (click / F) and throttle — you fly it.
+Load the scene, watch it hover. Click it to possess it, then throttle — you fly it.
 Release — it holds again. Open the Inspector during the run and drag `target_alt` (make
 it a der-fed live input if you want it editable at sim-rate — see the skill).
 

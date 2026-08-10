@@ -40,7 +40,7 @@ use lunco_core::{
 use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
-use lunco_workbench::tutorial_overlay::TutorialHud;
+use lunco_workbench::tutorial_overlay::{TutorialHud, TutorialStopRequested};
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
@@ -545,6 +545,7 @@ fn clear_tutorial_hud(world: &mut World) {
 #[cfg(feature = "ui")]
 fn reset_hud<H: std::ops::DerefMut<Target = TutorialHud>>(hud: Option<H>) {
     let Some(mut hud) = hud else { return };
+    hud.title.clear();
     hud.hint.clear();
     hud.objectives.clear();
     hud.spotlight = None;
@@ -589,6 +590,12 @@ fn start_tutorial_scenario(
         .resource::<TutorialRegistry>()
         .get(&id)
         .is_some_and(|meta| meta.first_start);
+    #[cfg(feature = "ui")]
+    if let Some(meta) = world.resource::<TutorialRegistry>().get(&id) {
+        if let Some(mut hud) = world.get_resource_mut::<TutorialHud>() {
+            hud.title = meta.title.clone();
+        }
+    }
     info!("[tutorial] starting '{}'", id);
     world.trigger(lunco_scripting::commands::RunScenario {
         target: host,
@@ -662,6 +669,10 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             });
 
         clear_tutorial_hud(world);
+        #[cfg(feature = "ui")]
+        if let Some(mut hud) = world.get_resource_mut::<TutorialHud>() {
+            hud.title = meta.title.clone();
+        }
         world.resource_mut::<PendingAdvance>().0 = None;
         stop_tutorial_host(world);
         world.resource_mut::<TutorialProgress>().current = None;
@@ -755,6 +766,11 @@ register_commands!(
     on_reset_tutorial_progress,
     on_set_subsystem_enabled,
 );
+
+#[cfg(feature = "ui")]
+fn on_tutorial_stop_requested(_trigger: On<TutorialStopRequested>, mut commands: Commands) {
+    commands.trigger(SkipTutorial {});
+}
 
 /// On `MISSION_COMPLETE`, record the completion and advance the chain by starting
 /// the current tutorial's [`TutorialMeta::next`] — the chain lives entirely in
@@ -1298,16 +1314,16 @@ fn sync_twin_curriculum_root(
 /// a completion tick; clicking starts one. Shared by every workbench app.
 #[cfg(feature = "ui")]
 fn register_tutorials_menu(world: &mut World) {
-    const MENU_WIDTH: f32 = 360.0;
-    const MENU_ITEM_WIDTH: f32 = 332.0;
+    const MENU_MIN_WIDTH: f32 = 320.0;
+    const MENU_MAX_WIDTH: f32 = 420.0;
     const MENU_HEIGHT: f32 = 360.0;
 
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
     layout.register_custom_menu("🎓 Tutorials", |ui, ctx| {
-        ui.set_min_width(MENU_WIDTH);
-        ui.set_max_width(MENU_WIDTH);
+        ui.set_min_width(MENU_MIN_WIDTH);
+        ui.set_max_width(MENU_MAX_WIDTH);
         let registry = ctx
             .resource::<TutorialRegistry>()
             .cloned()
@@ -1360,20 +1376,18 @@ fn register_tutorials_menu(world: &mut World) {
                 .map(|t| t.label.clone())
                 .unwrap_or_else(|| app_key.clone());
             ui.menu_button(label, |ui| {
-                ui.set_min_width(MENU_WIDTH);
-                ui.set_max_width(MENU_WIDTH);
+                ui.set_min_width(MENU_MIN_WIDTH);
+                ui.set_max_width(MENU_MAX_WIDTH);
                 egui::ScrollArea::vertical()
                     .max_height(MENU_HEIGHT)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_min_width(MENU_ITEM_WIDTH);
-                        ui.set_max_width(MENU_ITEM_WIDTH);
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
                             let glyph = if done { "✓" } else { "🎓" };
                             if ui
                                 .add_sized(
-                                    [MENU_ITEM_WIDTH, 0.0],
+                                    [ui.available_width(), 0.0],
                                     egui::Button::new(format!("{glyph}  {}", meta.title)).wrap(),
                                 )
                                 .on_hover_text(meta.blurb.as_str())
@@ -1394,7 +1408,11 @@ fn register_tutorials_menu(world: &mut World) {
             ctx.trigger(ResetTutorialProgress {});
             ui.close();
         }
-        ui.add_enabled_ui(progress.current.is_some(), |ui| {
+        let running = progress.current.is_some()
+            || ctx
+                .resource::<TutorialHud>()
+                .is_some_and(|hud| !hud.title.is_empty());
+        ui.add_enabled_ui(running, |ui| {
             if ui.button("⏹ Stop tutorial").clicked() {
                 ctx.trigger(SkipTutorial {});
                 ui.close();
@@ -1558,6 +1576,8 @@ impl Plugin for TutorialCorePlugin {
         app.add_observer(on_scene_transition_started);
         app.add_observer(on_scene_transition_completed);
         app.add_observer(on_scene_transition_failed);
+        #[cfg(feature = "ui")]
+        app.add_observer(on_tutorial_stop_requested);
         app.add_observer(resolve_show_tutorial_intent);
         app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);

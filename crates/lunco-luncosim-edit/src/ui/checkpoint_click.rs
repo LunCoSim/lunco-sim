@@ -1583,6 +1583,10 @@ fn on_start_autopilot(
     trigger: On<StartAutopilot>,
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
+    q_route: Query<(
+        Has<lunco_autopilot::usd_tree::BehaviorXml>,
+        Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+    )>,
     mut registry: ResMut<SessionRegistry>,
     mut commands: Commands,
 ) {
@@ -1590,6 +1594,23 @@ fn on_start_autopilot(
     let vessel = cmd.vessel;
     let autopilot_engaged = q_autopilot.iter().any(|(_, ap)| ap.vessel == vessel);
     if !autopilot_engaged {
+        let has_route = q_route
+            .get(vessel)
+            .is_ok_and(|(has_xml, spec)| has_authored_movement_route(has_xml, spec));
+        if !has_route {
+            info!(
+                "[autopilot] start ignored for vessel {:?}: no authored movement route",
+                vessel
+            );
+            commands.trigger(lunco_avatar::ShowNotification {
+                text:
+                    "No autopilot route is authored for this vessel; manual control remains active."
+                        .to_string(),
+                kind: "warn".to_string(),
+                secs: 3.0,
+            });
+            return;
+        }
         info!("Engaging autopilot on vessel {:?}", vessel);
         let spec_json = if let Ok(spec) = q_spec.get(vessel) {
             spec.to_json().unwrap_or_default()
@@ -1622,6 +1643,10 @@ fn on_toggle_autopilot(
     trigger: On<ToggleAutopilot>,
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
+    q_route: Query<(
+        Has<lunco_autopilot::usd_tree::BehaviorXml>,
+        Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+    )>,
     q_gid: Query<&GlobalEntityId>,
     mut registry: ResMut<SessionRegistry>,
     mut commands: Commands,
@@ -1637,6 +1662,23 @@ fn on_toggle_autopilot(
             let _ = registry.claim(SessionId::LOCAL, gid.get());
         }
     } else {
+        let has_route = q_route
+            .get(vessel)
+            .is_ok_and(|(has_xml, spec)| has_authored_movement_route(has_xml, spec));
+        if !has_route {
+            info!(
+                "[autopilot] F ignored for vessel {:?}: no authored movement route",
+                vessel
+            );
+            commands.trigger(lunco_avatar::ShowNotification {
+                text:
+                    "No autopilot route is authored for this vessel; manual control remains active."
+                        .to_string(),
+                kind: "warn".to_string(),
+                secs: 3.0,
+            });
+            return;
+        }
         info!("Engaging autopilot on vessel {:?}", vessel);
         let spec_json = if let Ok(spec) = q_spec.get(vessel) {
             spec.to_json().unwrap_or_default()
@@ -1655,6 +1697,17 @@ fn on_toggle_autopilot(
             spec_json,
         });
     }
+}
+
+/// A route may be authored as XML before its derived runtime spec is ready.
+/// Treat that state as available so a user pressing F during scene startup does
+/// not get a false "no route" warning; once a spec exists, its actual movement
+/// content is authoritative and an empty/holding tree is still rejected.
+fn has_authored_movement_route(
+    has_xml: bool,
+    spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+) -> bool {
+    spec.map_or(has_xml, |spec| spec.0.has_motion())
 }
 
 register_commands!(
@@ -2318,8 +2371,8 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        route_loops, route_ribbon_points, route_visual_state, select_ground_point, BehaviorXml,
-        ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        route_loops, route_ribbon_points, route_visual_state, select_ground_point,
+        has_authored_movement_route, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
@@ -2383,6 +2436,23 @@ mod tests {
         let current = AutopilotBehaviorSpec::new(BehaviorSpec::Brake);
         let err = append_runtime_patrol(Some(&current), None, [1.0, 0.0, 1.0]).unwrap_err();
         assert!(err.contains("non-patrol"));
+    }
+
+    #[test]
+    fn pending_authored_xml_is_a_route_until_its_spec_is_derived() {
+        assert!(has_authored_movement_route(true, None));
+        assert!(!has_authored_movement_route(
+            false,
+            Some(&AutopilotBehaviorSpec::new(BehaviorSpec::Brake))
+        ));
+        assert!(has_authored_movement_route(
+            false,
+            Some(&AutopilotBehaviorSpec::new(BehaviorSpec::DriveTo {
+                target: [1.0, 0.0, 0.0],
+                speed: 0.5,
+                radius: 1.0,
+            }))
+        ));
     }
 
     #[test]

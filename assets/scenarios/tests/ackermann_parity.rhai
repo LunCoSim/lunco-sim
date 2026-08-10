@@ -436,6 +436,9 @@ fn on_tick(me) {
             brake(this.rc);
             brake(this.ph);
             this.phase = "done";
+            let kernel_rc = get(this.rc, "DriveMix.kernel");
+            let kernel_ph = get(this.ph, "DriveMix.kernel");
+            let entries_rc = get(this.rc, "DriveMix.entries");
             // An explicit map, NOT `this`: helpers never see `this` (the runtime
             // binds it only in the hook it calls directly), and passing a plain
             // map keeps the verdict function a pure function of measurements.
@@ -448,9 +451,9 @@ fn on_tick(me) {
                 ypiv_rc:  this.ypiv_rc,  ypiv_ph:  this.ypiv_ph,
                 dpiv_rc:  this.dpiv_rc,  dpiv_ph:  this.dpiv_ph,
                 deflect_rc: this.deflect_rc,
-                kernel_rc: get(this.rc, "DriveMix.kernel"),
-                kernel_ph: get(this.ph, "DriveMix.kernel"),
-                entries_rc: get(this.rc, "DriveMix.entries"),
+                kernel_rc: kernel_rc,
+                kernel_ph: kernel_ph,
+                entries_rc: entries_rc,
                 v_ceiling: this.v_ceiling,
                 steer_cmd: this.steer_cmd
             });

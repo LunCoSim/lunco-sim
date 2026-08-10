@@ -430,6 +430,8 @@ fn on_tick(me) {
         if since >= this.pivot_s {
             brake(this.rover);
             this.phase = "done";
+            let kernel = get(this.rover, "DriveMix.kernel");
+            let entries = get(this.rover, "DriveMix.entries");
             // An explicit map, NOT `this`: helpers never see `this` (the runtime
             // binds it only in the hook it calls directly), and passing a plain
             // map keeps the verdict a pure function of the measurements.
@@ -441,8 +443,8 @@ fn on_tick(me) {
                 yaw_left: this.yaw_left,   dist_left: this.dist_left,
                 yaw_pivot: this.yaw_pivot, dist_pivot: this.dist_pivot,
                 yaw_ok: this.yaw_ok, yaw_bad: this.yaw_bad,
-                kernel: get(this.rover, "DriveMix.kernel"),
-                entries: get(this.rover, "DriveMix.entries"),
+                kernel: kernel,
+                entries: entries,
                 v_ceiling: this.v_ceiling,
                 steer_cmd: this.steer_cmd
             });
