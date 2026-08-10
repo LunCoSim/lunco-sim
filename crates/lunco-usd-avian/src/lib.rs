@@ -2545,9 +2545,7 @@ fn build_usd_physics_joints(
                         lin1,
                         ang1,
                         free_axis_world,
-                        authored1.is_some_and(|v| {
-                            v.linear.is_some() || v.angular.is_some()
-                        }),
+                        authored1.is_some_and(|v| v.linear.is_some() || v.angular.is_some()),
                     );
                     if (lin1 - target_lin).length() > JOINT_SEAT_EPS
                         || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS

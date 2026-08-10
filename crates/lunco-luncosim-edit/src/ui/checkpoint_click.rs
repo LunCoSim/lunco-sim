@@ -2371,8 +2371,8 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        route_loops, route_ribbon_points, route_visual_state, select_ground_point,
-        has_authored_movement_route, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        has_authored_movement_route, route_loops, route_ribbon_points, route_visual_state,
+        select_ground_point, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
