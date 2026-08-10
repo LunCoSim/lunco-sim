@@ -12,6 +12,7 @@ description = "Whole-body cube-sphere terrain tiling (orbital/planetary scale) f
 # list it used to carry pulled bevy_render into every consumer for nothing.
 bevy = { workspace = true, features = ["bevy_mesh"] }
 bevy_mesh = { workspace = true }
+lunco-terrain-core = { path = "../lunco-terrain-core" }
 
 [lints]
 workspace = true

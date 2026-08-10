@@ -624,11 +624,15 @@ pub fn sync_terrain_body_curvature(
             With<lunco_terrain_surface::DemTerrainRequest>,
         )>,
     >,
-    q_built_dem: Query<&lunco_terrain_surface::DemHeightField>,
+    q_built_dem: Query<(
+        Entity,
+        &lunco_terrain_surface::DemHeightField,
+        Option<&lunco_terrain_surface::TerrainGeoref>,
+    )>,
     q_globes: Query<(
         Entity,
         &crate::registry::CelestialBody,
-        Option<&crate::globe_lod::GlobePunch>,
+        Option<&crate::globe_lod::GlobeHandoff>,
     )>,
 ) {
     // The site anchor still places the scene on the globe (that IS its job, and it
@@ -640,9 +644,11 @@ pub fn sync_terrain_body_curvature(
         if current.is_some() {
             commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
         }
-        for (e, _, punch) in &q_globes {
-            if punch.is_some() {
-                commands.entity(e).remove::<crate::globe_lod::GlobePunch>();
+        for (e, _, handoff) in &q_globes {
+            if handoff.is_some() {
+                commands
+                    .entity(e)
+                    .remove::<crate::globe_lod::GlobeHandoff>();
             }
         }
         return;
@@ -665,12 +671,9 @@ pub fn sync_terrain_body_curvature(
             Some(_) => {}
         }
     }
-    // No DEM is NOT "nothing to do". A scene can stand on a plain authored ground
-    // slab (`def Cube "Ground"` with `LunCoTerrainAPI`) and never build a
-    // `DemHeightField` — episode 01 does exactly that — and such a scene still needs
-    // the globe punched out from under it. Falling back to the site anchor's own body
-    // keeps the curvature resource DEM-only (there is genuinely nothing to curve)
-    // while letting the punch below run off the anchor alone.
+    // No DEM is NOT "nothing to do" for curvature bookkeeping: a scene can stand
+    // on a plain authored ground slab and still be site-anchored. It simply has no
+    // source-driven globe handoff because there is no measured footprint.
     let has_dem = body.is_some();
     let body = body.unwrap_or(anchor.body);
     if mixed {
@@ -692,40 +695,56 @@ pub fn sync_terrain_body_curvature(
             body, desc.radius_m
         );
     }
-    // Globe hole-punch under the local DEM. The tangent basis and square extent
-    // come from the same authored site anchor and DEM oracle used by curvature;
-    // there is no guessed cone or fixed shell sink. A scene without a DEM has no
-    // terrain-surface footprint to hand over, so it leaves globe ownership intact.
-    let half_extent = if has_dem {
-        q_built_dem
-            .iter()
-            .map(|d| d.0.half_extent() as f64)
-            .fold(0.0, f64::max)
-    } else {
-        0.0
-    };
-    for (e, globe, punch) in &q_globes {
+    // Build one source-backed handoff from the largest built footprint. The
+    // source is the retained oracle itself, so a live terrain edit changes the
+    // handoff content key and causes globe meshes to rebuild with the same new
+    // boundary heights.
+    let selected_dem = q_built_dem
+        .iter()
+        .filter(|(_, _, georef)| {
+            georef.map_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY, |g| g.body) == body
+        })
+        .max_by(|(ea, a, _), (eb, b, _)| {
+            a.0.half_extent()
+                .total_cmp(&b.0.half_extent())
+                .then_with(|| ea.index().cmp(&eb.index()))
+        });
+    let half_extent = selected_dem.map_or(0.0, |(_, dem, _)| dem.0.half_extent() as f64);
+    let oracle = selected_dem.map(|(_, dem, _)| dem.0.clone());
+    for (e, globe, handoff) in &q_globes {
         if globe.ephemeris_id != body {
             continue;
         }
+        let Some(oracle) = oracle.clone() else {
+            if handoff.is_some() {
+                commands
+                    .entity(e)
+                    .remove::<crate::globe_lod::GlobeHandoff>();
+            }
+            continue;
+        };
         if half_extent <= 0.0 || half_extent >= desc.radius_m {
-            if punch.is_some() {
-                commands.entity(e).remove::<crate::globe_lod::GlobePunch>();
+            if handoff.is_some() {
+                commands
+                    .entity(e)
+                    .remove::<crate::globe_lod::GlobeHandoff>();
             }
             continue;
         }
         let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, desc.radius_m);
-        let next = crate::globe_lod::GlobePunch {
-            dir: tangent.up,
-            east: tangent.east,
-            north: tangent.north,
+        let next = crate::globe_lod::GlobeHandoff::new(
+            tangent.up,
+            tangent.east,
+            tangent.north,
+            desc.radius_m,
+            oracle,
             half_extent,
-            radius_m: desc.radius_m,
-        };
-        if punch != Some(&next) {
+        );
+        if handoff != Some(&next) {
             commands.entity(e).try_insert(next);
             debug!(
-                "globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)"
+                "globe handoff composed at site body {body} (footprint ±{half_extent:.0} m, collar ±{:.0} m)",
+                half_extent * 2.0
             );
         }
     }
