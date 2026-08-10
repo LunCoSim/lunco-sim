@@ -685,7 +685,6 @@ fn process_usd_cosim_prim_read(
             let (inputs, outputs) = declared_interface(reader, sdf_path);
             commands.entity(entity).try_insert((
                 UsdSimProcessed,
-                lunco_core::SelectableRoot,
                 lunco_core::NotPredictable,
                 SimComponent {
                     model_name: format!("Python:{asset_path}"),
@@ -720,9 +719,7 @@ fn process_usd_cosim_prim_read(
     // prim — fine, because link/celestial projection is now its OWN system
     // (`project_celestial_comms_prims`), gated by its OWN marker, so a cosim antenna
     // still gets its `LinkNode`. The two concerns no longer race on one flag.
-    commands
-        .entity(entity)
-        .try_insert((UsdSimProcessed, lunco_core::SelectableRoot));
+    commands.entity(entity).try_insert(UsdSimProcessed);
 
     // NOTE: there is no possessable/vessel tag to stamp — possession is not gated by
     // a marker at all (an avatar may possess anything; WHO may hold it is the

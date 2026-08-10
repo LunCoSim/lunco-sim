@@ -608,10 +608,17 @@ pub fn restore_gizmo_dynamic(
 pub fn drive_gizmo_drag_no_shift(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    q_targets: Query<&GizmoTarget>,
     mut drag_started: MessageWriter<GizmoDragStarted>,
     mut dragging: MessageWriter<GizmoDragging>,
 ) {
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+        || !q_targets.iter().any(|target| target.is_focused())
+    {
+        // Selection and gizmo interaction are two edges: the first click
+        // creates/shows the target, and only a later click over a handle may
+        // arm the drag. This remains true while physics is paused; a bare
+        // click must never make the selected body start moving.
         return;
     }
     if mouse.just_pressed(MouseButton::Left) {

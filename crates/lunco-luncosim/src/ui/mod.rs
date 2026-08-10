@@ -18,7 +18,7 @@ use big_space::prelude::*;
 use lunco_avatar::{FreeFlightCamera, ProvisionalAvatarCamera};
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_render::SceneCamera;
-use lunco_workbench::MenuCtx;
+use lunco_workbench::{CurrentSceneName, CurrentScenePath, MenuCtx};
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
@@ -274,7 +274,7 @@ impl Plugin for SandboxUiPlugin {
             .add_observer(
                 |t: On<lunco_usd::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
-                 current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
+                 current_name: Option<ResMut<CurrentSceneName>>,
                  hud: Option<ResMut<lunco_workbench::tutorial_overlay::TutorialHud>>,
                  pending: Option<ResMut<lunco_tutorial::PendingAdvance>>| {
                     if let Some(mut current) = current {
@@ -308,6 +308,16 @@ impl Plugin for SandboxUiPlugin {
                     }
                     if let Some(mut pending) = pending {
                         pending.0 = None;
+                    }
+                },
+            )
+            .add_observer(
+                |_t: On<lunco_core::SceneTransitionStarted>,
+                 mut current: ResMut<CurrentScenePath>,
+                 mut current_name: ResMut<CurrentSceneName>| {
+                    if matches!(_t.event().transition, lunco_core::SceneTransition::Clear) {
+                        current.0.clear();
+                        current_name.0.clear();
                     }
                 },
             )
@@ -602,17 +612,13 @@ fn sandbox_boot_from_url(
     state.done = true;
 }
 
-/// Tracks the currently loaded scene path, so the user can restart it.
-#[derive(Resource, Clone)]
-pub(crate) struct CurrentScenePath(pub(crate) String);
-
 fn init_current_scene_path(
     scene_path: Res<crate::ScenePath>,
-    mut commands: Commands,
-    current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
+    mut current: ResMut<CurrentScenePath>,
+    current_name: Option<ResMut<CurrentSceneName>>,
 ) {
     if let Some(path) = scene_path.0.as_deref() {
-        commands.insert_resource(CurrentScenePath(path.to_string()));
+        current.0 = path.to_string();
         if let Some(mut name) = current_name {
             name.0 = std::path::Path::new(path)
                 .file_name()
@@ -807,7 +813,9 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
     layout.register_custom_menu("Scenarios", |ui, ctx| {
         ui.set_min_width(SCENARIO_MENU_WIDTH);
         ui.set_max_width(SCENARIO_MENU_WIDTH);
-        let has_scene = ctx.resource::<CurrentScenePath>().is_some();
+        let has_scene = ctx
+            .resource::<CurrentScenePath>()
+            .is_some_and(|path| !path.0.is_empty());
 
         ui.add_enabled_ui(has_scene, |ui| {
             if ui.button("🔄 Restart Scenario").clicked() {

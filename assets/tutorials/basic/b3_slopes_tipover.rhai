@@ -13,11 +13,11 @@ fn on_start(me) {
     cmd("FocusPanel", #{ id: "sandbox_inspector" });
     spotlight("panel.sandbox_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
-    hint("This is the Hauler — heavy and top-heavy on purpose. Click it (or press F) to take control.");
+    hint("This is the Hauler — heavy and top-heavy on purpose. Click it to take control. F engages autopilot, so drive this lesson yourself.");
 }
 
 fn b3_possessed(me) {
-    hint("First, an experiment. Drive onto the grade and steer ACROSS the slope — watch the top-heavy Hauler start to roll. If it goes over, use the Recover tool to put it back on its wheels. Feel where the edge is.");
+    hint("First, an experiment. Drive onto the grade and steer ACROSS the slope — watch the top-heavy Hauler start to roll. If it goes over, use the Recover tool to put it back on its wheels. Witness where the edge is.");
 }
 
 fn b3_edge_felt(me) {

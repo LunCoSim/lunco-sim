@@ -204,7 +204,9 @@ fn draw_tutorial_hud(
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = ctx.content_rect();
+    // The viewport rect is the full egui viewport. The background layer keeps
+    // this non-interactive HUD behind the workbench chrome.
+    let screen = ctx.viewport_rect();
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
@@ -283,11 +285,18 @@ fn draw_spotlight(
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = ctx.content_rect();
+    let screen = ctx.viewport_rect();
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
     let target = anchors.get(&key);
+    let caption = if target.is_none() && !key.is_empty() {
+        format!(
+            "⚠ The tutorial target `{key}` is not visible. Open the named panel or switch to the required perspective.\n\n{caption}"
+        )
+    } else {
+        caption
+    };
 
     if target.is_some() {
         egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
@@ -438,7 +447,7 @@ fn draw_tour(
 ) {
     let Some(step) = hud.tour.clone() else { return };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = ctx.content_rect();
+    let screen = ctx.viewport_rect();
 
     let theme = theme
         .map(|t| t.clone())
@@ -636,6 +645,17 @@ fn draw_tour(
                     egui::Frame::new()
                         .inner_margin(egui::Margin::symmetric(18, 14))
                         .show(ui, |ui| {
+                            if !step.anchor.is_empty() && target.is_none() {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "⚠ Waiting for `{}` to appear",
+                                        step.anchor
+                                    ))
+                                    .color(theme.tokens.warning)
+                                    .strong(),
+                                );
+                                ui.add_space(6.0);
+                            }
                             if !step.body.is_empty() {
                                 ui.label(egui::RichText::new(&step.body).size(14.0).color(text));
                                 ui.add_space(10.0);

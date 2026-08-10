@@ -2679,8 +2679,8 @@ fn surface_camera_system(
 ///
 /// Only active with a `FreeFlightCamera`/`SurfaceCamera`, or when CTRL is held while
 /// possessing a vessel (a momentary free-flight overlay). `Shift` boosts speed ×10.
-/// In surface mode, `up` uses the radial direction so movement follows the tangent
-/// plane. Runs in PostUpdate at render rate on wall-clock time, so the ghost camera
+/// Q/E elevation follows the avatar's current orientation. Runs in PostUpdate at
+/// render rate on wall-clock time, so the ghost camera
 /// keeps moving even when the sim's virtual clock is paused/slowed.
 fn apply_fly(
     mut q_avatar: Query<
@@ -2692,14 +2692,10 @@ fn apply_fly(
             &lunco_core::InputPorts,
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
-            Option<&SurfaceRelativeMode>,
         ),
         (With<Avatar>, Without<lunco_core::CinematicCameraLock>),
     >,
     q_grids: Query<&Grid>,
-    q_world: Query<(), With<lunco_core::WorldGrid>>,
-    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    q_bodies: Query<(Entity, &CelestialBody)>,
     keys: Res<ButtonInput<KeyCode>>,
     // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
     // paused, because pausing the simulation is not supposed to paralyse the user. Runs
@@ -2707,7 +2703,6 @@ fn apply_fly(
     time: Res<Time>,
     mut commands: Commands,
 ) {
-    let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
         10.0
@@ -2715,16 +2710,8 @@ fn apply_fly(
         1.0
     };
 
-    for (
-        entity,
-        mut tf,
-        mut cell,
-        child_of,
-        inputs,
-        has_freeflight,
-        has_surface_camera,
-        surface_mode,
-    ) in q_avatar.iter_mut()
+    for (entity, mut tf, mut cell, child_of, inputs, has_freeflight, has_surface_camera) in
+        q_avatar.iter_mut()
     {
         let Ok(grid) = q_grids.get(child_of.0) else {
             continue;
@@ -2750,18 +2737,13 @@ fn apply_fly(
         // Actively moving → cancel any idle auto-action.
         commands.entity(entity).remove::<lunco_core::ActiveAction>();
 
-        // In surface mode, "up" = radial direction from the body centre
-        // (body-centre aware — see `surface_up`); else world Y.
-        let up_dir = if surface_mode.is_some() {
-            surface_up(current_pos, q_world.contains(child_of.0), site_center)
-        } else {
-            Vec3::Y
-        };
-
         let mut move_vec = Vec3::ZERO;
         move_vec += *tf.forward() * forward;
         move_vec += *tf.right() * side;
-        move_vec += up_dir * elevation;
+        // Q/E are local vertical movement, not world-Y movement. This keeps
+        // elevation relative to the current view after looking up/down and
+        // while flying forward.
+        move_vec += *tf.up() * elevation;
 
         // 23.1 m/s base fly speed × the real frame delta.
         let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * time.delta_secs_f64();

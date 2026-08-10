@@ -793,6 +793,7 @@ impl Plugin for WorkbenchPlugin {
             // its own handler on build. See `uri.rs` for the trait.
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
+            .init_resource::<CurrentScenePath>()
             .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
@@ -851,6 +852,16 @@ impl Plugin for WorkbenchPlugin {
 #[derive(Resource, Clone, Default, Debug, Reflect)]
 #[reflect(Resource, Default)]
 pub struct CurrentSceneName(pub String);
+
+/// Holds the canonical path used to load the currently displayed USD scene.
+///
+/// The status bar owns the display affordance, while the luncosim host updates
+/// this resource at the typed `LoadScene` boundary. Keeping the path beside the
+/// display name means a click can reveal the exact source without making the UI
+/// parse or reconstruct a path from a filename.
+#[derive(Resource, Clone, Default, Debug, Reflect)]
+#[reflect(Resource, Default)]
+pub struct CurrentScenePath(pub String);
 
 /// Workbench state: registered panels + the dock tree they live in.
 ///
@@ -4414,13 +4425,17 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         .get_resource::<lunco_core::NetStatus>()
         .map(|s| !matches!(s.role, lunco_core::NetworkRole::Standalone))
         .unwrap_or(false);
+    let scene_name = world
+        .get_resource::<CurrentSceneName>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+    let scene_path = world
+        .get_resource::<CurrentScenePath>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+    let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
 
     ui.horizontal(|ui| {
-        let scene_name = world
-            .get_resource::<CurrentSceneName>()
-            .map(|s| s.0.clone())
-            .unwrap_or_default();
-
         // Calculate the reserved width for all elements to the right of the status scope
         let right_reserve = 16.0
             + if perf_enabled { 300.0 } else { 0.0 }
@@ -4433,6 +4448,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         let response = ui
             .scope(|ui| {
                 ui.set_height(18.0);
+                ui.set_min_width(status_width);
+                ui.set_width(status_width);
                 ui.set_max_width(status_width);
                 if let Some(l) = latest.as_ref() {
                     let dot_color = match l.level {
@@ -4448,8 +4465,10 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                     ui.label(egui::RichText::new(l.source).small().strong());
+                    let progress_width = l.progress_pct.map(|_| 128.0).unwrap_or(0.0);
+                    let text_width = (ui.available_width() - progress_width).max(40.0);
                     let text = egui::RichText::new(&l.message).small();
-                    ui.add(egui::Label::new(text).truncate());
+                    ui.add_sized(egui::vec2(text_width, 18.0), egui::Label::new(text).wrap());
                     if let Some(pct) = l.progress_pct {
                         ui.add(
                             egui::ProgressBar::new((pct as f32) / 100.0)
@@ -4471,7 +4490,30 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
 
         if !scene_name.is_empty() {
             ui.separator();
-            ui.label(egui::RichText::new(format!("🎬 {}", scene_name)).small());
+            let scene_response = ui
+                .add(
+                    egui::Label::new(egui::RichText::new(format!("🎬 {}", scene_name)).small())
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text("Click to show the full path of the loaded USD file");
+            if scene_response.clicked() {
+                egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
+            }
+            if !scene_path.is_empty() {
+                egui::Popup::from_response(&scene_response)
+                    .id(scene_popup_id)
+                    .align(egui::RectAlign::BOTTOM_START)
+                    .open_memory(None)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.set_min_width(520.0);
+                        ui.heading("Loaded USD file");
+                        ui.separator();
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&scene_path).monospace()).wrap(),
+                        );
+                    });
+            }
         }
 
         ui.separator();
@@ -4543,14 +4585,16 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                                 .small()
                                 .color(theme.tokens.text_subdued),
                         };
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(level_tag.monospace());
                             ui.label(
                                 egui::RichText::new(format!("[{}]", ev.source))
                                     .small()
                                     .strong(),
                             );
-                            ui.label(egui::RichText::new(&ev.message).small());
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&ev.message).small()).wrap(),
+                            );
                         });
                     }
                 });

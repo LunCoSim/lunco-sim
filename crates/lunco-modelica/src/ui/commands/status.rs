@@ -58,13 +58,24 @@ pub fn update_status_bar(
             })
         })
         .unwrap_or_else(|| "(untitled)".to_string());
+    let model_file = active_doc
+        .and_then(|d| registry.host(d))
+        .map(|host| {
+            let uri = host.document().origin().session_uri();
+            std::path::Path::new(&uri)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(uri)
+        })
+        .unwrap_or_else(|| "(untitled)".to_string());
 
     let text = match active_doc {
         None => "ready".to_string(),
         Some(doc) => match compile_states.state_of(doc) {
             lunco_doc::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
             lunco_doc::CompileState::Error => format!("⚠ Compile error in {model_name}"),
-            lunco_doc::CompileState::Ready => format!("✓ Compiled {model_name}"),
+            lunco_doc::CompileState::Ready => format!("✓ Modelica ready: {model_file}"),
             lunco_doc::CompileState::Idle => format!("● {model_name}"),
         },
     };
