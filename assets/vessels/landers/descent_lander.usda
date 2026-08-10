@@ -2911,7 +2911,7 @@ def Xform "DescentLander" (
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
         float lunco:prismaticSuspension:damping = 4000.0
-        float lunco:prismaticSuspension:maxForce = 30000.0
+        float lunco:prismaticSuspension:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
         prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
@@ -2932,7 +2932,7 @@ def Xform "DescentLander" (
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
         float lunco:prismaticSuspension:damping = 4000.0
-        float lunco:prismaticSuspension:maxForce = 30000.0
+        float lunco:prismaticSuspension:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
         prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
@@ -2949,7 +2949,7 @@ def Xform "DescentLander" (
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
         float lunco:prismaticSuspension:damping = 4000.0
-        float lunco:prismaticSuspension:maxForce = 30000.0
+        float lunco:prismaticSuspension:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
         prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
@@ -2966,7 +2966,7 @@ def Xform "DescentLander" (
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
         float lunco:prismaticSuspension:damping = 4000.0
-        float lunco:prismaticSuspension:maxForce = 30000.0
+        float lunco:prismaticSuspension:maxForce = 12000.0
     }
 
 }

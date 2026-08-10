@@ -721,9 +721,7 @@ pub(crate) fn update_globe_lod(
                     return false;
                 }
                 (0..2).all(|di| {
-                    (0..2).all(|dj| {
-                        covered(set, body, face, level + 1, i * 2 + di, j * 2 + dj)
-                    })
+                    (0..2).all(|dj| covered(set, body, face, level + 1, i * 2 + di, j * 2 + dj))
                 })
             }
             for face in 0..6u8 {

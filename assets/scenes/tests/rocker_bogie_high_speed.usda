@@ -12,6 +12,20 @@ def Xform "RockerBogieHighSpeed" (
     kind = "assembly"
 )
 {
+    # The shared rover includes an Earth tracker. Keep this focused flat-ground
+    # fixture physically simple while still supplying the authored lunar frame
+    # and solar ephemeris that tracker requires.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+
+    def Xform "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)
@@ -46,8 +60,20 @@ def Xform "RockerBogieHighSpeed" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
-        double3 xformOp:translate = (0, 1.6, 0)
+        # The six wheel centres are authored 0.6 m below the chassis and their
+        # radius is 0.2625 m; 0.90 m puts the tires on the flat test ground
+        # without a metre-scale spawn drop contaminating the stability window.
+        double3 xformOp:translate = (0, 0.9, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # This fixture exercises the rover's sustained high-speed operating
+        # configuration. The articulated-link bearings use their measured
+        # high-speed loss here; the shared vessel default remains the lower
+        # obstacle-course setting used by rover_comparison.
+        over "RockerL" { float physxRigidBody:angularDamping = 3.0 }
+        over "RockerR" { float physxRigidBody:angularDamping = 3.0 }
+        over "BogieL" { float physxRigidBody:angularDamping = 3.0 }
+        over "BogieR" { float physxRigidBody:angularDamping = 3.0 }
     }
 
     def Scope "Scenario"

@@ -576,7 +576,12 @@ fn validate_wgsl(reference: &str, text: &str) -> ValidationReport {
 /// time, not compile time.
 fn validate_rhai(reference: &str, text: &str) -> ValidationReport {
     let report = ValidationReport::new(reference, "rhai");
-    match rhai::Engine::new().compile(text) {
+    let mut engine = rhai::Engine::new();
+    // Preflight and live execution must share the same parser/resource policy.
+    // The comparison scenario uses the supported function depth; a bare Rhai
+    // engine would reject it before the production scripting engine sees it.
+    lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+    match engine.compile(text) {
         Ok(_) => report.finish(),
         // rhai's Display includes "line N, position M".
         Err(e) => report.error(format!("rhai compile: {e}")),

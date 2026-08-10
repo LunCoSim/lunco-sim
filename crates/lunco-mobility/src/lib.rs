@@ -34,6 +34,7 @@ use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::{safe_stop_control_surface, ActuatorPorts, InputPorts};
+use std::collections::HashSet;
 
 mod jointed_tire;
 /// Control kernels live here rather than in core (see the nothing-into-core
@@ -819,6 +820,28 @@ impl WheelRaycast {
     }
 }
 
+/// Bodies whose independent mobility force sources are held by a fixed weld to
+/// another dynamic body. A raycast wheel is not an Avian body, so its analytical
+/// suspension must not become a second support path while the chassis is being
+/// carried by that weld. The set is rebuilt from the live joint graph each tick;
+/// detaching the authored joint therefore releases the wheels without a
+/// scene-specific callback or stale latch.
+fn dynamically_fixed_bodies(
+    fixed_joints: &Query<&FixedJoint>,
+    bodies: &Query<&RigidBody>,
+) -> HashSet<Entity> {
+    let mut held = HashSet::new();
+    for joint in fixed_joints.iter() {
+        if matches!(bodies.get(joint.body1), Ok(RigidBody::Dynamic))
+            && matches!(bodies.get(joint.body2), Ok(RigidBody::Dynamic))
+        {
+            held.insert(joint.body1);
+            held.insert(joint.body2);
+        }
+    }
+    held
+}
+
 /// System solving the vertical suspension dynamics.
 ///
 /// **Logic**: Performs a ray-world intersection check. If a hit is detected
@@ -850,8 +873,12 @@ fn apply_wheel_suspension(
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut q_chassis: Query<(Forces, &RigidBody), (With<ActuatorPorts>, lunco_physics::Integrable)>,
+    fixed_joints: Query<&FixedJoint>,
+    q_bodies: Query<&RigidBody>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<ActuatorPorts>)>,
 ) {
+    let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
+
     for (mut wheel, susp, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = parent.parent();
         if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
@@ -862,7 +889,8 @@ fn apply_wheel_suspension(
             // animation derived from the downward raycast, so they STILL run: that's
             // what lets a proxy's wheels rest on the terrain and report `on_ground`
             // to the spin model instead of floating at their authored rest offset.
-            let apply_force = !matches!(body, RigidBody::Kinematic);
+            let apply_force = !matches!(body, RigidBody::Kinematic)
+                && !fixed_dynamic_bodies.contains(&parent_entity);
             let (world_pos, _) = wheel_hub_pose(
                 GridPos(forces.position().0),
                 GridRot(forces.rotation().0),
@@ -1053,10 +1081,17 @@ fn apply_wheel_drive(
         ),
         (With<ActuatorPorts>, lunco_physics::Integrable),
     >,
+    fixed_joints: Query<&FixedJoint>,
+    q_bodies: Query<&RigidBody>,
 ) {
+    let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
+
     for (wheel, susp, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
         if let Ok((mut forces, body, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
+            if fixed_dynamic_bodies.contains(&parent_entity) {
+                continue;
+            }
             // drive-diag: the drive port the wheel reads, the body kind (Dynamic
             // vs Kinematic — the snap-back tell), and ground contact. Throttle-
             // gated so it only fires while driving. Whole block compiles out
@@ -1368,7 +1403,6 @@ fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
 fn solve_differential_gear(
     q_coupling: Query<&DifferentialCoupling>,
     q_revolute: Query<&RevoluteJoint>,
-    substep_time: Res<Time<Substeps>>,
     mut q_solver: Query<
         (&mut SolverBody, &SolverBodyInertia, &Rotation),
         Without<RigidBodyDisabled>,
@@ -1443,18 +1477,11 @@ fn solve_differential_gear(
             .zip(inv_inertias.iter())
             .map(|(gradient, inverse_inertia)| gradient.dot(*inverse_inertia * *gradient))
             .sum();
-        // XPBD compliance: the authored stiffness is a real N·m/rad spring,
-        // not merely an enabled flag.  With substep duration `dt`, compliance
-        // contributes `1 / (k·dt²)` to the effective inverse mass.  This keeps
-        // the zero-stiffness disengaged state while making a soft coupling
-        // visibly differ from the stiff/default one.
-        let dt = substep_time.delta_secs_f64();
-        let compliance = if dt > f64::EPSILON {
-            1.0 / (coupling.stiffness * dt * dt)
-        } else {
-            f64::INFINITY
-        };
-        let delta_lagrange = gear_delta_lagrange(error, inverse_mass + compliance);
+        // The authored drive stiffness is the engagement control for this
+        // standard gear joint. Once engaged, it is a holonomic relation; a
+        // penalty compliance here makes the coupling resolution depend on the
+        // fixed-step size and creates a discontinuous soft/locked bifurcation.
+        let delta_lagrange = gear_delta_lagrange(error, inverse_mass);
         if delta_lagrange == 0.0 || !delta_lagrange.is_finite() {
             continue;
         }

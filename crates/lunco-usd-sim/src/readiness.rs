@@ -359,7 +359,10 @@ mod tests {
             .init_resource::<GroundActivationInFlight>()
             .add_systems(Update, track_physics_admission);
 
-        let body = app.world_mut().spawn(ShouldBeDynamic).id();
+        let body = app
+            .world_mut()
+            .spawn((ShouldBeDynamic, UsdPrimPath::default()))
+            .id();
         app.update();
         let item = app
             .world()
