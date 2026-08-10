@@ -17,14 +17,20 @@
 //! preserved — only *which* tiles exist becomes dynamic.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_materials::ShaderLook;
 use lunco_render::SceneCamera;
+use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square};
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
-use lunco_terrain_globe::{create_quadsphere_tile_mesh, GlobeCutout, TerrainTile, TileCoord};
+use lunco_terrain_globe::{
+    create_quadsphere_tile_mesh, GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch,
+    TerrainTile, TileCoord,
+};
+use lunco_terrain_surface::SurfaceOracle;
 
 /// Per-body live-LOD context. Inserted on a celestial body entity in place of the
 /// old fixed tile loop; [`update_globe_lod`] reads it to stream cube-sphere tiles.
@@ -45,6 +51,163 @@ pub struct GlobeLod {
     pub max_lod: u32,
     /// `refine when dist < tile_arc · factor` — larger = refine from farther.
     pub lod_distance_factor: f64,
+}
+
+/// A finite DEM's continuation at the globe boundary.
+///
+/// The DEM owns exactly its authored square. Outside that square it has no
+/// measured samples, so extending the nearest edge sample through the whole
+/// globe collar would turn an edge crater/rim into a many-kilometre artificial
+/// apron. The only valid continuation is the measured border datum, reached
+/// over one raster posting so the handoff remains continuous at the boundary.
+#[derive(Clone)]
+struct BoundarySiteSource {
+    oracle: Arc<SurfaceOracle>,
+    region: Square,
+    half_extent: f64,
+    datum_m: f64,
+    boundary_m: f64,
+}
+
+impl HeightSource for BoundarySiteSource {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        if self.region.distance_to([x, z]) <= 0.0 {
+            return self.oracle.height_at(x, z);
+        }
+
+        let edge_height = self.oracle.height_at(
+            x.clamp(-self.half_extent, self.half_extent),
+            z.clamp(-self.half_extent, self.half_extent),
+        );
+        if self.boundary_m <= 0.0 {
+            return self.datum_m;
+        }
+        let t = (self.region.distance_to([x, z]) / self.boundary_m).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        edge_height + (self.datum_m - edge_height) * t
+    }
+}
+
+/// Mean-body sphere expressed as a tangent-plane height graph. This is the
+/// globe side of the composed source, not a second terrain datum.
+#[derive(Clone, Copy)]
+struct MeanSphereSource {
+    radius_m: f64,
+}
+
+impl HeightSource for MeanSphereSource {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        // The handoff coordinates are gnomonic (`x = R·tan(theta)`), not
+        // orthographic tangent-plane coordinates. Convert that ray to its
+        // exact radial intersection so the composed source and globe mesh use
+        // the same sphere geometry at the collar's outer edge.
+        let q = (1.0 + (x * x + z * z) / (self.radius_m * self.radius_m)).sqrt();
+        self.radius_m / q - self.radius_m
+    }
+}
+
+#[derive(Clone)]
+struct HandoffSource(CompositeHeightSource<BoundarySiteSource, MeanSphereSource>);
+
+impl HeightSource for HandoffSource {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        self.0.height_at(x, z)
+    }
+}
+
+/// The one continuous site/globe ownership record for a body.
+///
+/// Inside the exact DEM square, the local terrain remains authoritative. Outside
+/// it, the same composed source supplies a footprint-derived collar and then the
+/// mean-body sphere. The component owns the source so globe tile generation never
+/// reaches into terrain assets or invents a fallback height.
+#[derive(Component, Clone)]
+pub struct GlobeHandoff {
+    pub dir: DVec3,
+    pub east: DVec3,
+    pub north: DVec3,
+    pub half_extent: f64,
+    pub radius_m: f64,
+    pub blend_m: f64,
+    source: HandoffSource,
+    source_key: u64,
+}
+
+impl PartialEq for GlobeHandoff {
+    fn eq(&self, other: &Self) -> bool {
+        self.dir == other.dir
+            && self.east == other.east
+            && self.north == other.north
+            && self.half_extent == other.half_extent
+            && self.radius_m == other.radius_m
+            && self.blend_m == other.blend_m
+            && self.source_key == other.source_key
+    }
+}
+
+impl GlobeHandoff {
+    pub fn new(
+        dir: DVec3,
+        east: DVec3,
+        north: DVec3,
+        radius_m: f64,
+        oracle: Arc<SurfaceOracle>,
+        half_extent: f64,
+    ) -> Self {
+        // The DEM is in the body's absolute vertical datum. The bridge must not
+        // turn a kilometre-scale datum offset into a near-vertical wall at the
+        // crop edge. Choose the first tangent distance where the mean sphere's
+        // sagitta reaches that measured border datum, then use the authored
+        // footprint as the minimum. This is the body geometry's scale, not a
+        // visual fudge factor.
+        let border_datum = oracle.grid().border_datum();
+        let sagitta_distance = (2.0 * radius_m * border_datum.abs()).sqrt();
+        let blend_m = half_extent.max(sagitta_distance).max(0.0);
+        let region = Square {
+            center: [0.0, 0.0],
+            half: half_extent,
+        };
+        let source = HandoffSource(CompositeHeightSource::new(
+            BoundarySiteSource {
+                oracle: oracle.clone(),
+                region,
+                half_extent,
+                datum_m: border_datum,
+                boundary_m: oracle.spacing() as f64,
+            },
+            MeanSphereSource { radius_m },
+            region,
+            blend_m,
+        ));
+        Self {
+            dir,
+            east,
+            north,
+            half_extent,
+            radius_m,
+            blend_m,
+            source,
+            source_key: oracle.surface_key(),
+        }
+    }
+
+    fn geometry(&self) -> GlobeHandoffGeometry {
+        GlobeHandoffGeometry {
+            dir: self.dir,
+            east: self.east,
+            north: self.north,
+            radius_m: self.radius_m,
+            half_extent: self.half_extent,
+            blend_m: self.blend_m,
+        }
+    }
+
+    fn patch(&self) -> GlobeSurfacePatch<'_> {
+        GlobeSurfacePatch {
+            handoff: self.geometry(),
+            source: &self.source,
+        }
+    }
 }
 
 /// The cube-sphere tiles currently resident for a body, keyed by quadtree node.
@@ -81,10 +244,10 @@ pub struct GlobeTiles {
     /// `MissionSpawned` is (missions.rs): a `Local` outlives scene teardown and
     /// would keep stale keys for despawned bodies, while this dies with the body.
     pub last_solve_cam: Option<DVec3>,
-    /// The [`GlobePunch`] in force at that solve. The punch is an INPUT to the
-    /// desired set, so a site appearing/moving must re-open the gate even if the
-    /// camera has not moved a millimetre.
-    pub last_solve_punch: Option<GlobePunch>,
+    /// The [`GlobeHandoff`] in force at that solve. The handoff is an INPUT to
+    /// the desired set, so a site appearing/moving must re-open the gate even if
+    /// the camera has not moved a millimetre.
+    pub last_solve_handoff: Option<GlobeHandoff>,
 }
 
 #[derive(Clone)]
@@ -188,63 +351,34 @@ fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
     }
 }
 
-/// Hole-punch under a site's DEM terrain patch: globe tiles that lie fully
-/// inside this exact tangent-plane square are dropped from the desired set;
-/// triangles in boundary tiles are clipped by [`GlobeCutout`]. The DEM curves
-/// onto the sphere (`TerrainBodyCurvature`) and owns this region completely,
-/// while the globe owns the surface outside it. Inserted/updated by
-/// `placement::sync_terrain_body_curvature`.
-#[derive(Component, Clone, Copy, PartialEq)]
-pub struct GlobePunch {
-    /// Site direction (unit) in the tile frame (body-fixed).
-    pub dir: DVec3,
-    /// Unit east and north axes at the site.
-    pub east: DVec3,
-    pub north: DVec3,
-    /// Exact DEM half extent in the tangent plane.
-    pub half_extent: f64,
-    /// Body radius used by the tangent-plane projection.
-    pub radius_m: f64,
-}
-
-impl GlobePunch {
-    fn contains(self, direction: DVec3) -> bool {
-        let denominator = direction.dot(self.dir);
-        if denominator <= 0.0 {
-            return false;
-        }
-        let x = direction.dot(self.east) / denominator * self.radius_m;
-        let z = direction.dot(self.north) / denominator * self.radius_m;
-        x.abs() <= self.half_extent && z.abs() <= self.half_extent
-    }
-
-    fn cutout(self) -> GlobeCutout {
-        GlobeCutout {
-            dir: self.dir,
-            east: self.east,
-            north: self.north,
-            radius_m: self.radius_m,
-            half_extent: self.half_extent,
-        }
-    }
-}
-
-/// Whether the tile's spherical footprint lies entirely inside the authored DEM
-/// square (all four corners + centre). Tiles crossing the boundary stay resident
-/// and their triangles are clipped by the exact same square in the mesh builder.
-fn tile_fully_in_punch(face: u8, level: u32, i: i32, j: i32, punch: &GlobePunch) -> bool {
-    let step = 2.0 / (1i64 << level) as f64;
-    let u0 = -1.0 + i as f64 * step;
-    let v0 = -1.0 + j as f64 * step;
+/// Whether a direction lies in the exact DEM square.
+fn tile_fully_in_handoff(face: u8, level: u32, i: i32, j: i32, handoff: &GlobeHandoff) -> bool {
+    let geometry = handoff.geometry();
     [
-        (u0, v0),
-        (u0 + step, v0),
-        (u0, v0 + step),
-        (u0 + step, v0 + step),
-        (u0 + step * 0.5, v0 + step * 0.5),
+        (
+            -1.0 + i as f64 * 2.0 / (1i64 << level) as f64,
+            -1.0 + j as f64 * 2.0 / (1i64 << level) as f64,
+        ),
+        (
+            -1.0 + (i + 1) as f64 * 2.0 / (1i64 << level) as f64,
+            -1.0 + j as f64 * 2.0 / (1i64 << level) as f64,
+        ),
+        (
+            -1.0 + i as f64 * 2.0 / (1i64 << level) as f64,
+            -1.0 + (j + 1) as f64 * 2.0 / (1i64 << level) as f64,
+        ),
+        (
+            -1.0 + (i + 1) as f64 * 2.0 / (1i64 << level) as f64,
+            -1.0 + (j + 1) as f64 * 2.0 / (1i64 << level) as f64,
+        ),
+        (
+            -1.0 + (i as f64 + 0.5) * 2.0 / (1i64 << level) as f64,
+            -1.0 + (j as f64 + 0.5) * 2.0 / (1i64 << level) as f64,
+        ),
     ]
     .iter()
-    .all(|&(u, v)| punch.contains(cube_to_sphere(face, u, v)))
+    .map(|&(u, v)| cube_to_sphere(face, u, v))
+    .all(|direction| geometry.contains(direction))
 }
 
 /// Whether two tiles overlap on the sphere: same body face and one is the
@@ -281,7 +415,7 @@ pub(crate) fn update_globe_lod(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<SceneCamera>>,
     transforms: Query<&GlobalTransform>,
     grids: Query<&Grid>,
-    mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobePunch>)>,
+    mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobeHandoff>)>,
 ) {
     // ONLY the active window camera may steer the LOD. `iter().next()` picked
     // an arbitrary Camera3d — including offscreen preview cameras — and
@@ -299,7 +433,7 @@ pub(crate) fn update_globe_lod(
     };
     let cam_pos = cam.translation().as_dvec3();
 
-    for (body_ent, lod, mut tiles, punch) in &mut bodies {
+    for (body_ent, lod, mut tiles, handoff) in &mut bodies {
         // Camera relative to the body centre (= the surface grid origin, inertial),
         // in the frame the tiles live in. f32 render-space is plenty for choosing
         // the LOD; tile PLACEMENT below stays f64-precise via `translation_to_grid`.
@@ -311,10 +445,18 @@ pub(crate) fn update_globe_lod(
         };
         let camera_body_local = cam_pos - sg_gt.translation().as_dvec3();
 
-        // A cutout changes the geometry of every resident tile that crosses its
+        // A handoff changes the geometry of every resident tile that crosses its
         // boundary. Retire the old meshes before solving the new cover so a
         // cached uncut globe tile cannot survive under the local DEM.
-        if tiles.last_solve_punch.as_ref() != punch {
+        let handoff_changed = tiles.last_solve_handoff.as_ref() != handoff;
+        if handoff_changed {
+            debug!(
+            "globe LOD handoff solve: body={body_ent:?} camera={cam_pos:?} surface_grid={:?} surface_grid_world={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
+                lod.surface_grid,
+                sg_gt.translation(),
+                lod.radius_m,
+                handoff.is_some()
+            );
             for (_, entity) in tiles.resident.drain() {
                 commands.entity(entity).try_despawn();
             }
@@ -328,7 +470,7 @@ pub(crate) fn update_globe_lod(
 
         // CAMERA-MOTION GATE. Everything below — two `HashSet`s, a `Vec`, a sort,
         // and six recursive quadtree descents — is a pure function of
-        // (camera_body_local, punch, the resident set). With the resident set
+        // (camera_body_local, handoff, the resident set). With the resident set
         // settled and both inputs unmoved the answer is bit-identical to last
         // frame's, so a parked view rebuilt ~600 `TileCoord`s per body per frame
         // to conclude that nothing should change.
@@ -341,7 +483,7 @@ pub(crate) fn update_globe_lod(
         if let Some(prev_cam) = tiles.last_solve_cam {
             let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
             let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
-            if tiles.last_solve_punch.as_ref() == punch
+            if tiles.last_solve_handoff.as_ref() == handoff
                 && (camera_body_local - prev_cam).length_squared() < slack * slack
             {
                 continue;
@@ -369,11 +511,11 @@ pub(crate) fn update_globe_lod(
             );
         }
 
-        // Site DEM hole-punch: tiles fully under the curved terrain patch are
-        // never desired (see `GlobePunch`). Retirement below then lets any
+        // Site DEM handoff: tiles fully under the curved terrain patch are
+        // never desired (see `GlobeHandoff`). Retirement below then lets any
         // resident tile there go once its surviving siblings are up.
-        if let Some(p) = punch {
-            desired.retain(|c| !tile_fully_in_punch(c.face, c.level, c.i, c.j, p));
+        if let Some(handoff) = handoff {
+            desired.retain(|c| !tile_fully_in_handoff(c.face, c.level, c.i, c.j, handoff));
         }
 
         // Spawn newly-desired tiles FIRST (so this frame's spawns count as
@@ -464,7 +606,7 @@ pub(crate) fn update_globe_lod(
                     lod.radius_m,
                     lod.res,
                     tile_body_local,
-                    punch.copied().map(GlobePunch::cutout),
+                    handoff.map(GlobeHandoff::patch),
                 );
                 let handle = meshes.add(mesh);
                 tiles.mesh_cache.insert(
@@ -582,7 +724,7 @@ pub(crate) fn update_globe_lod(
         let settled =
             tiles.retiring.is_empty() && desired.iter().all(|c| tiles.resident.contains_key(c));
         tiles.last_solve_cam = settled.then_some(camera_body_local);
-        tiles.last_solve_punch = punch.copied();
+        tiles.last_solve_handoff = handoff.cloned();
 
         // `LUNCO_LOD_VALIDATE=1`: assert the resident set still covers the
         // whole sphere after this frame's spawn/retire pass (the invariant
@@ -593,15 +735,16 @@ pub(crate) fn update_globe_lod(
             let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
             fn covered(
                 set: &HashSet<TileCoord>,
-                punch: Option<&GlobePunch>,
+                handoff: Option<&GlobeHandoff>,
                 body: Entity,
                 face: u8,
                 level: u32,
                 i: i32,
                 j: i32,
             ) -> bool {
-                // The site hole-punch is an INTENTIONAL hole (the DEM covers it).
-                if punch.is_some_and(|p| tile_fully_in_punch(face, level, i, j, p)) {
+                // The exact DEM square is an intentional globe omission because
+                // the local terrain projection owns those triangles.
+                if handoff.is_some_and(|h| tile_fully_in_handoff(face, level, i, j, h)) {
                     return true;
                 }
                 if set.contains(&TileCoord {
@@ -618,12 +761,12 @@ pub(crate) fn update_globe_lod(
                 }
                 (0..2).all(|di| {
                     (0..2).all(|dj| {
-                        covered(set, punch, body, face, level + 1, i * 2 + di, j * 2 + dj)
+                        covered(set, handoff, body, face, level + 1, i * 2 + di, j * 2 + dj)
                     })
                 })
             }
             for face in 0..6u8 {
-                if !covered(&resident, punch, body_ent, face, 0, 0, 0) {
+                if !covered(&resident, handoff, body_ent, face, 0, 0, 0) {
                     warn!(
                         "globe LOD hole: body {body_ent} face {face} uncovered ({} resident, {} retiring)",
                         resident.len(),
@@ -642,38 +785,66 @@ mod tests {
 
     const MOON_RADIUS_M: f64 = 1_737_400.0;
 
-    /// The square `placement.rs` builds for a given ground footprint.
-    fn punch_for(half_extent_m: f64, dir: DVec3) -> GlobePunch {
-        GlobePunch {
+    /// The source-backed handoff `placement.rs` builds for a given footprint.
+    fn handoff_for(half_extent_m: f64, dir: DVec3) -> GlobeHandoff {
+        use lunco_obstacle_field::field::HeightGrid;
+
+        GlobeHandoff::new(
             dir,
-            east: DVec3::Z,
-            north: DVec3::Y,
-            half_extent: half_extent_m,
-            radius_m: MOON_RADIUS_M,
-        }
+            DVec3::Z,
+            DVec3::Y,
+            MOON_RADIUS_M,
+            Arc::new(SurfaceOracle::bare(Arc::new(HeightGrid::new_flat(3, 1.0)))),
+            half_extent_m,
+        )
     }
 
-    /// The punch cannot be what keeps the globe off a surface site.
+    #[test]
+    fn finite_dem_edge_relief_is_not_extruded_into_the_globe_collar() {
+        use lunco_obstacle_field::field::HeightGrid;
+
+        let mut grid = HeightGrid::new_flat(3, 10.0);
+        grid.heights.fill(100.0);
+        grid.heights[2 * 3 + 2] = 200.0;
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(grid)));
+        let region = Square {
+            center: [0.0, 0.0],
+            half: 10.0,
+        };
+        let source = BoundarySiteSource {
+            oracle,
+            region,
+            half_extent: 10.0,
+            datum_m: 100.0,
+            boundary_m: 10.0,
+        };
+
+        assert_eq!(source.height_at(10.0, 10.0), 200.0);
+        assert_eq!(source.height_at(20.0, 20.0), 100.0);
+        assert!(source.height_at(15.0, 15.0) < 200.0);
+    }
+
+    /// The handoff keeps the exact DEM square out of the globe LOD set.
     ///
     /// A tile may straddle the exact DEM square, so the tile remains resident and
     /// the mesh builder clips only its outside triangles. A fully covered tile is
     /// removed from the LOD set altogether.
     #[test]
-    fn a_dem_sized_square_punch_drops_only_fully_covered_tiles() {
+    fn a_dem_sized_handoff_drops_only_fully_covered_tiles() {
         let (face, level, i, j) = (0u8, 8u32, 128, 128);
         let (u, v) = tile_center_uv(face, level, i, j);
         let dir = cube_to_sphere(face, u, v).normalize();
 
         assert!(
-            tile_fully_in_punch(face, level, i, j, &punch_for(20_000.0, dir)),
+            tile_fully_in_handoff(face, level, i, j, &handoff_for(20_000.0, dir)),
             "a tile wholly inside the DEM square is removed"
         );
-        assert!(!tile_fully_in_punch(
+        assert!(!tile_fully_in_handoff(
             face,
             level,
             i,
             j,
-            &punch_for(1.0, dir)
+            &handoff_for(1.0, dir)
         ));
     }
 

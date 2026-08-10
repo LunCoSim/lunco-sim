@@ -32,6 +32,6 @@ sample — so visuals and physics stay in lockstep. See the design narrative:
   `HeightSource` for whole bodies seen from orbit.
 
 The orbit→surface bridge is `CompositeHeightSource` (above): it returns the site
-DEM inside a georeferenced region and the globe height outside it. The core type
-exists; live app-wiring (build from `lunco:anchor:lat/lon`, relate globe/surface
-grids, altitude swap) is the remaining step.
+DEM inside its georeferenced region, a composed collar at the measured boundary,
+and the globe height outside it. `lunco-celestial` supplies the live oracle and
+tangent frame to the globe projection; the core remains pure and render-free.

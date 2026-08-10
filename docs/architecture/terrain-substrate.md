@@ -485,13 +485,14 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
    `UsdRead`/`StageView`; replace the `AssetEvent<UsdStageAsset>` reload observer
    with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
    activation unit (see *Alignment* above).
-5. **Orbit→surface bridge app-wiring** — build the `CompositeHeightSource` *live*
-   from `lunco:anchor:lat/lon`, relate the globe and surface grids, and swap by
-   altitude. The local DEM/globe visual handoff is already exact: celestial clips
-   globe triangles to the authored DEM tangent square and does not synthesize a
-   punch for scenes without a DEM;
-   only the continuous orbit-heightfield composition and lat/lon↔XZ reprojection
-   remain deferred. (`CompositeHeightSource` itself is done in core.)
+5. **Orbit→surface bridge app-wiring** — **landed**: `lunco-celestial` builds the
+   live `CompositeHeightSource` from the retained DEM oracle and authored site
+   tangent frame. Globe triangles are clipped only inside the exact DEM square;
+   boundary triangles sample the DEM through a collar whose width is derived from
+   the measured border datum and the body's sagitta, then meet the radial globe
+   exactly at the collar edge. There is no shell sink, guessed wall, or second
+   terrain source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs remains
+   deferred.
 6. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead

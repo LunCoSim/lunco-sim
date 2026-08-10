@@ -7887,6 +7887,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_mesh",
+ "lunco-terrain-core",
 ]
 
 [[package]]
