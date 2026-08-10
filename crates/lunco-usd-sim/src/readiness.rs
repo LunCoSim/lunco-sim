@@ -33,6 +33,7 @@ use crate::GroundActivationInFlight;
 use lunco_cosim::SimComponent;
 use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy::UsdAwaitingStage;
+use lunco_usd_bevy::UsdPrimPath;
 
 /// The open world-scoped scene-load wait, if a scene is loading.
 #[derive(Resource)]
@@ -172,8 +173,8 @@ fn track_model_compiles(
 /// startup program must see one coherent initial condition across its
 /// articulated participants.
 fn track_physics_admission(
-    still_kinematic: Query<(), With<ShouldBeDynamic>>,
-    still_pending: Query<(), With<lunco_core::PhysicsStatePending>>,
+    still_kinematic: Query<&UsdPrimPath, With<ShouldBeDynamic>>,
+    still_pending: Query<&UsdPrimPath, With<lunco_core::PhysicsStatePending>>,
     activation: Res<GroundActivationInFlight>,
     wait: Option<Res<PhysicsAdmissionWait>>,
     mut registry: ResMut<ReadinessRegistry>,
@@ -182,6 +183,16 @@ fn track_physics_admission(
     let waiting = !still_kinematic.is_empty() || !still_pending.is_empty() || activation.0 != 0;
     match (waiting, wait) {
         (true, None) => {
+            let held = still_kinematic
+                .iter()
+                .map(|path| path.path.as_str())
+                .chain(still_pending.iter().map(|path| path.path.as_str()))
+                .take(16)
+                .collect::<Vec<_>>();
+            info!(
+                "[readiness] physics admission held by authored paths: {:?}",
+                held
+            );
             let ticket = registry.begin(
                 Subject::World,
                 kinds::PARTICIPANT_INIT,

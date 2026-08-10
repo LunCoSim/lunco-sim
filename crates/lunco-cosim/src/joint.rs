@@ -577,27 +577,28 @@ mod tests {
 
     /// Gravity a landing leg is tuned against (m/s²).
     const MOON_G: f64 = 1.62;
-    /// Vehicle share one leg carries — a quarter of a 2 t lander.
-    const SPRUNG_MASS: f64 = 500.0;
+    /// Vehicle share one leg carries — a quarter of the 4 t startup hull.
+    const SPRUNG_MASS: f64 = 1000.0;
     /// The leg spring, as `descent_lander.usda` authors it.
     const SPRING_K: f64 = 4000.0;
-    const SPRING_C: f64 = 2200.0;
+    /// Critical damping for the authored per-leg sprung mass: 2*sqrt(k*m).
+    const SPRING_C: f64 = 4000.0;
 
     /// Static deflection the spring must settle to: `m*g/k`.
     const STATIC_DEFLECTION: f64 = SPRUNG_MASS * MOON_G / SPRING_K;
 
     #[test]
     fn passive_suspension_is_compression_only_and_damps_rebound() {
-        let spring = passive_prismatic_force(0.20, 0.0, 4000.0, 3600.0, 30_000.0);
+        let spring = passive_prismatic_force(0.20, 0.0, SPRING_K, SPRING_C, 30_000.0);
         assert!((spring - 800.0).abs() < 1e-9);
         assert_eq!(
-            passive_prismatic_force(0.0, 10.0, 4000.0, 3600.0, 30_000.0),
+            passive_prismatic_force(0.0, 10.0, SPRING_K, SPRING_C, 30_000.0),
             0.0,
             "an extended landing leg must not pull itself out"
         );
-        let rebound = passive_prismatic_force(0.20, -10.0, 4000.0, 3600.0, 30_000.0);
+        let rebound = passive_prismatic_force(0.20, -10.0, SPRING_K, SPRING_C, 30_000.0);
         assert_eq!(rebound, 0.0, "fast rebound cannot create tensile force");
-        let closing = passive_prismatic_force(0.20, 10.0, 4000.0, 3600.0, 30_000.0);
+        let closing = passive_prismatic_force(0.20, 10.0, SPRING_K, SPRING_C, 30_000.0);
         assert_eq!(
             closing, 30_000.0,
             "closing damping is limited only by the authored force rating"
@@ -703,16 +704,17 @@ mod tests {
         );
     }
 
-    /// The spring must SETTLE at `m*g/k` — not diverge (ForceBased with a stiff
+    /// The spring must settle near `m*g/k` — not diverge (ForceBased with a stiff
     /// gain and a heavy body is exactly where XPBD blows up) and not ring forever
-    /// (ζ = c/(2√(km)) = 0.78, one overshoot then still).
+    /// (ζ = c/(2√(km)) = 1.0, critical damping). The tolerance includes the
+    /// prismatic solver's effective mass and anchor-frame correction.
     #[test]
     fn sprung_leg_settles_at_static_deflection() {
         let (mut app, joint) = sprung_leg(MOON_G, 600);
         let x = read_measured_displacement(app.world(), joint).expect("displacement port");
         assert!(x.is_finite(), "solver diverged: x = {x}");
         assert!(
-            (x + STATIC_DEFLECTION).abs() < 0.05,
+            (x + STATIC_DEFLECTION).abs() < 0.06,
             "expected settle near -{STATIC_DEFLECTION} m, got {x} m"
         );
         // SETTLED means the position has STOPPED MOVING, checked by position

@@ -211,12 +211,12 @@ equation
   altitude_above_target = max(0.0, navigation.nav_pos_y - target_y);
   // The stopping-distance law limits the rate high above the pad, while the
   // flare law makes the terminal rate approach zero before the feet touch.
-  // Keep lateral braking active through contact unless the vehicle is actually
-  // over the authored landing target. Native four-leg contact is a physical
-  // fact, not proof that the mission reached its mark: on a flat surface a
-  // vehicle can settle far away with four valid contacts. The explicit target
-  // radius is the GNC mission contract; it is not inferred from altitude or a
-  // presentation timer.
+  // Keep lateral braking active through most of the descent unless the vehicle
+  // is actually over the authored landing target. Native four-leg contact is a
+  // physical fact, not proof that the mission reached its mark: on a flat
+  // surface a vehicle can settle far away with four valid contacts. The
+  // explicit target radius is the GNC mission contract; it is not inferred
+  // from a presentation timer.
   horizontal_target_error = sqrt(
     pid_x.error * pid_x.error + pid_z.error * pid_z.error);
   // The zone is a mission event, not a proportional throttle fade. Once the
@@ -227,7 +227,16 @@ equation
       <= max(0.0, landing_zone_radius_m) then 1.0 else 0.0);
   landing_handoff = noEvent(if target_zone_gate >= 0.5
       and max(touchdown, landing_contact) >= 0.5 then 1.0 else 0.0);
-  lateral_landing_gate = max(0.0, min(1.0, 1.0 - landing_handoff));
+  // Terminal descent is a separate flight phase. As the measured altitude
+  // enters the flare envelope, progressively remove lateral acceleration so
+  // the attitude loop returns the thrust axis upright before the feet reach
+  // the surface. Keeping full lateral position authority until first contact
+  // makes the four legs arrive at different times and asks the suspension to
+  // correct a controller command; fading it from the reusable altitude law
+  // gives the native contact solver a level, low-rate vehicle to receive.
+  lateral_landing_gate = max(0.0, min(1.0,
+    altitude_above_target / max(1.0e-9, landing_flare_range_m)))
+    * max(0.0, min(1.0, 1.0 - landing_handoff));
   // A speed cap by itself would still command the cap at the surface and
   // leave the suspension to remove the vehicle's descent energy.
   flare_descent_rate_magnitude = max(0.0, descent_speed_limit_mps)

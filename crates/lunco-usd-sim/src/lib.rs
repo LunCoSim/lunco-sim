@@ -3535,6 +3535,7 @@ fn activate_dynamic_bodies(
     mut commands: Commands,
     ground_pending: Res<GroundColliderPending>,
     mut activation: ResMut<GroundActivationInFlight>,
+    readiness_holds: Option<Res<lunco_physics::PhysicsHolds>>,
     q_kinematic: Query<
         (Entity, &UsdPrimPath, Option<&AuthoredInitialVelocity>),
         With<ShouldBeDynamic>,
@@ -3563,6 +3564,14 @@ fn activate_dynamic_bodies(
     // `PhysicsSupportFootprint` and placement policy from their physics owner.
     q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
+    // USD/Avian topology is built in the fixed schedule, while this admission
+    // pass runs in Update.  During scene readiness physics is deliberately held,
+    // so a parked joint is safe to admit on the first released fixed tick.  Do
+    // not deadlock the world by waiting for a nested-schedule admission that can
+    // only happen after this pass has published the bodies as Dynamic.
+    let readiness_hold_active = readiness_holds
+        .as_deref()
+        .is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::READINESS));
     let mut promoted = false;
     for (entity, path, authored_velocity) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints.iter().any(|(joint_path, pending)| {
@@ -3611,9 +3620,8 @@ fn activate_dynamic_bodies(
             .iter()
             .any(|d_path| d_path.stage_handle == path.stage_handle);
         let blocked = ground_pending.0
-            || has_pending_joint
-            || has_pending_admission
-            || has_unready_authored_joint
+            || (!readiness_hold_active
+                && (has_pending_joint || has_pending_admission || has_unready_authored_joint))
             || has_pending_diff;
         if !blocked {
             // Despawn-safe: scene-load churn / doc-backed reload can despawn a
