@@ -946,6 +946,18 @@ fn read_port(
     match registry.read_port(world, entity, name) {
         Some(v) => Some(TelemetryValue::F64(v)),
         None => {
+            // A declared Modelica output has an authoritative port identity before
+            // its first solver snapshot. `entity_ports` reports that contract, but
+            // `read_port` quite correctly has no value to return yet. Do not turn
+            // that normal compile-to-first-sample interval into a permanent failed
+            // clock: the output will become readable when the worker publishes it.
+            if registry.has_output_port(world, entity, name)
+                || world
+                    .get::<lunco_core::PortSurfacePending>(entity)
+                    .is_some()
+            {
+                return None;
+            }
             warn_once!("telemetry: port '{name}' not found on {entity} — channel will stay silent");
             clock.resolve_failed = true;
             None
@@ -1006,6 +1018,9 @@ mod tests {
     #[derive(Component)]
     struct TestOutput(f64);
 
+    #[derive(Component)]
+    struct TestDeclaredOutput;
+
     fn list_test_output(world: &World, entity: Entity, out: &mut Vec<lunco_core::ports::PortRef>) {
         if let Some(source) = world.get::<TestOutput>(entity) {
             out.push(lunco_core::ports::PortRef {
@@ -1030,6 +1045,38 @@ mod tests {
         read_slot: None,
         write_slot: None,
     };
+
+    fn list_test_declared_output(
+        world: &World,
+        entity: Entity,
+        out: &mut Vec<lunco_core::ports::PortRef>,
+    ) {
+        if world.get::<TestDeclaredOutput>(entity).is_some() {
+            out.push(lunco_core::ports::PortRef {
+                name: "value".to_string(),
+                direction: PortDirection::Out,
+                value: world.get::<TestOutput>(entity).map_or(0.0, |value| value.0),
+            });
+        }
+    }
+
+    fn read_test_declared_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
+        (name == "value")
+            .then(|| world.get::<TestOutput>(entity).map(|value| value.0))
+            .flatten()
+    }
+
+    const TEST_DECLARED_OUTPUT_BACKEND: lunco_core::ports::PortBackend =
+        lunco_core::ports::PortBackend {
+            list: list_test_declared_output,
+            read_output: read_test_declared_output,
+            read_input: |_, _, _| None,
+            write_input: |_, _, _, _| false,
+            resolve_output: None,
+            resolve_input: None,
+            read_slot: None,
+            write_slot: None,
+        };
 
     /// 20 ms per update against the 64 Hz default fixed step (~15.6 ms).
     const UPDATE_MS: u64 = 20;
@@ -1168,6 +1215,49 @@ mod tests {
             .scalar_history(&signal)
             .expect("runtime port telemetry must exist");
         assert_eq!(history.samples.back().unwrap().value, 7.5);
+    }
+
+    #[test]
+    fn a_declared_output_waits_for_its_first_sample_without_becoming_failed() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        app.init_resource::<PortRegistry>();
+        app.world_mut()
+            .resource_mut::<PortRegistry>()
+            .register(TEST_DECLARED_OUTPUT_BACKEND);
+        let source = app
+            .world_mut()
+            .spawn((
+                TestDeclaredOutput,
+                Parameter {
+                    name: "fuel".to_string(),
+                    source: ChannelSource::Port("value".to_string()),
+                    target: None,
+                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    ..Default::default()
+                },
+            ))
+            .id();
+
+        // The contract exists, but the producer has not published a value yet.
+        step_fixed(&mut app, 2);
+        assert!(seen.lock().unwrap().is_empty());
+        assert!(
+            !app.world()
+                .entity(source)
+                .get::<ChannelClock>()
+                .expect("sampling creates a clock")
+                .resolve_failed
+        );
+
+        // Once the first live value arrives, the same authored channel must
+        // sample it; re-authoring the Parameter is not part of the lifecycle.
+        app.world_mut().entity_mut(source).insert(TestOutput(3.25));
+        step_fixed(&mut app, 2);
+        assert_eq!(
+            seen.lock().unwrap().last().map(|sample| &sample.value),
+            Some(&TelemetryValue::F64(3.25))
+        );
     }
 
     #[test]

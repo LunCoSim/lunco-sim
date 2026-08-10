@@ -83,6 +83,8 @@ model Lander
 
   input Real attitude_hold = 0.0
     "Enable local attitude stabilization";
+  input Real landing_handoff = 0.0
+    "Target-qualified handoff from flight control to the landing gear";
   input Real hold_kp = 2.0
     "Attitude-error gain in angular acceleration units";
   input Real hold_kd = 2.5
@@ -208,12 +210,14 @@ equation
   hold_rate_z = gyro_z * noEvent(max(0.0,
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
-  // Once all four native feet carry an upright hull, the legs—not a
-  // continuously firing RCS—hold the vehicle. `landing_contact` is the
-  // physical authority handoff; `touchdown` remains the filtered low-speed
-  // settling measurement used by telemetry and mission logic.
+  // Native contact is not by itself a landing: a flat surface can catch all
+  // four feet while the vehicle is still far from its commanded pad. The
+  // flight computer owns the target-qualified handoff, so the RCS remains
+  // available until the vehicle is both settled and over the authored zone.
+  // This prevents a missed vehicle from losing attitude authority merely
+  // because its feet touched some other part of the terrain.
   attitude_authority = attitude_hold * max(0.0, min(1.0,
-    1.0 - max(touchdown, landing_contact)));
+    1.0 - landing_handoff));
   // Bound the requested torque at the controller/actuator boundary. Without
   // this, a large measured attitude error becomes an impossible torque request
   // that the downstream valve clamp silently clips, invalidating the loop's

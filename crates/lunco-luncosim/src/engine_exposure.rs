@@ -1342,6 +1342,7 @@ fn publish_selected_control_exposure(
     ui.property("vertical_direction", "—");
     ui.property("altitude", "—");
     ui.property("target_offset", "—");
+    ui.property("predicted_impact", "—");
     ui.property("propellant", "—");
     ui.property("propellant_width", "0%");
     ui.property("roll", "—");
@@ -1412,8 +1413,10 @@ fn publish_selected_control_exposure(
         .copied()
         .unwrap_or(0.0)
         .clamp(0.0, 1.0);
+    let landing_handoff = outputs.get("landing_handoff").copied();
     let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
-    let status = if touchdown >= 0.5 {
+    let landing_complete = landing_handoff.is_some_and(|value| value >= 0.5);
+    let status = if landing_complete || (landing_handoff.is_none() && touchdown >= 0.5) {
         ("TOUCHDOWN", "var(--ok-color)")
     } else if max_valve > 0.01 {
         ("RCS FIRING", "var(--accent-color)")
@@ -1443,18 +1446,40 @@ fn publish_selected_control_exposure(
         .copied()
         .zip(outputs.get("range_confidence").copied())
         .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
-    let target_offset = target_offset_from_authored_scene(root, q_spatial, q_paths, canonical)
-        .map_or_else(
-            || "—".to_owned(),
-            |(x, z)| format!("X {x:+.1} · Z {z:+.1} m"),
-        );
+    let target_offset_xy = target_offset_from_authored_scene(root, q_spatial, q_paths, canonical);
+    let target_offset = target_offset_xy.map_or_else(
+        || "—".to_owned(),
+        |(x, z)| format!("X {x:+.1} · Z {z:+.1} m"),
+    );
+    let predicted_impact = match (
+        outputs.get("predicted_landing_x"),
+        outputs.get("predicted_landing_z"),
+        outputs.get("predicted_landing_time"),
+        target_offset_xy,
+        q_spatial.get(root).ok(),
+    ) {
+        (Some(&x), Some(&z), Some(&time), Some((offset_x, offset_z)), Some((_, transform))) => {
+            let target_x = f64::from(transform.translation.x - offset_x);
+            let target_z = f64::from(transform.translation.z - offset_z);
+            format!(
+                "X {:+.1} · Z {:+.1} m / {time:.1}s",
+                x - target_x,
+                z - target_z,
+            )
+        }
+        _ => "—".to_owned(),
+    };
     let propellant_mass = outputs.get("propellant_mass").copied();
     let propellant_fraction = outputs
         .get("propellant_fraction")
         .copied()
         .map(|value| value.clamp(0.0, 1.0));
 
-    ui.visible(!hide_when_schema_visible);
+    // The explanatory schema is a separate surface. Keep the flight card
+    // mounted while it appears so a shot boundary never causes a large HUD
+    // pop-in or removes the horizontal-speed readout.
+    let _ = hide_when_schema_visible;
+    ui.visible(true);
     ui.property("vehicle", vehicle);
     ui.property("status", status.0);
     ui.property("status_color", status.1);
@@ -1499,6 +1524,7 @@ fn publish_selected_control_exposure(
         altitude.map_or_else(|| "NO LOCK".to_owned(), |value| format!("{value:.1} m")),
     );
     ui.property("target_offset", target_offset);
+    ui.property("predicted_impact", predicted_impact);
     ui.property(
         "propellant",
         match (propellant_fraction, propellant_mass) {

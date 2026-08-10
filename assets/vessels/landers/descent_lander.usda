@@ -1069,13 +1069,12 @@ def Xform "DescentLander" (
     float inputs:authority_initial = 0.6
     float inputs:command_lower_bound = 0.0
     float inputs:command_upper_bound = 1.0
-    # The settled touchdown tolerance includes normal supported-body contact
-    # oscillation. Flight authority is already removed by landing_contact;
-    # this value only determines when the low-speed mission event is emitted.
-    # Do not declare the vehicle settled while it is still translating across
-    # the pad. Guidance remains authoritative until this measured residual
-    # speed is low enough that the native foot contact can hold the mark.
-    float inputs:touchdown_ground_speed_mps = 0.1
+    # Use Lander.mo's declared touchdown_ground_speed_mps default (0.5 m/s).
+    # The reusable USD asset must not replace the Modelica landing criterion
+    # with a stricter presentation-specific threshold: native four-pad contact,
+    # upright attitude, and the measured velocity gates already decide whether
+    # a body is settled. Missions that need another vehicle requirement should
+    # author it explicitly at their composed controller boundary.
     # The generated mass-properties network drives the native Avian ports from
     # one live source. The controller receives an explicitly separate set of
     # `controller_inertia_*` inputs below; this keeps the physical port names
@@ -1095,6 +1094,11 @@ def Xform "DescentLander" (
     float inputs:attitude_error_y.connect = </DescentLander/AttitudeReference.outputs:error_y>
     float inputs:attitude_error_z.connect = </DescentLander/AttitudeReference.outputs:error_z>
     float inputs:upright_axis_y.connect = </DescentLander/AttitudeReference.outputs:estimated_up_y>
+    # Flight control decides when the gear may own the vehicle. Native contact
+    # remains a sensor input to the controller, but is not target-qualified
+    # landing on its own. The mission scene connects this public input to its
+    # chosen GNC output; the reusable airframe stays valid for piloted and
+    # unguided compositions too.
 
     # `guidance_throttle` and the `guidance_pitch/roll/yaw` attitude wires are
     # deliberately NOT connected. Unwired, they are 0, and the lander commands nothing
@@ -1179,16 +1183,6 @@ def Xform "DescentLander" (
         float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:depleted>
         uniform token lunco:event:name = "lander_depleted"
         uniform token lunco:event:severity = "warning"
-    }
-
-    def LunCoEvent "Touchdown"
-    {
-        # Touchdown is a mission transition, not a recurring contact-state
-        # notification. The continuous load signal may chatter as the legs
-        # settle, so the event remains disarmed after its first rising edge.
-        float inputs:trigger.connect = </DescentLander.outputs:touchdown>
-        uniform token lunco:event:name = "lander_touchdown"
-        uniform bool lunco:event:latched = true
     }
 
     # ── Onboard supervisor ───────────────────────────────────────────────────
