@@ -938,7 +938,6 @@ fn layer_contributions(
     if let Some(r) = curvature_radius {
         contributions.push(crate::oracle::curvature_contribution(
             r,
-            half_extent,
             base.border_datum(),
         ));
     }
@@ -1300,7 +1299,7 @@ fn start_dem_builds(
                 // Datum from the pristine raster (`base_grid`), before the stamp
                 // pass above — see `spawn_restamp_task` for why.
                 let datum = base_grid.border_datum();
-                contributions.push(crate::oracle::curvature_contribution(r, half_extent, datum));
+                contributions.push(crate::oracle::curvature_contribution(r, datum));
             }
             let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
                 std::sync::Arc::new(tile),
@@ -1888,9 +1887,10 @@ fn spawn_restamp_task(
             .collect();
         if let Some(r) = curvature_radius {
             // The PRISTINE base decides the datum — a stamped pit or a flattened
-            // pad must not move the plain the apron feathers to.
+            // pad must not change the physical site sphere used by the
+            // curvature transform.
             let datum = base_grid.border_datum();
-            contributions.push(crate::oracle::curvature_contribution(r, half_extent, datum));
+            contributions.push(crate::oracle::curvature_contribution(r, datum));
         }
         let oracle = if layers.iter().any(|l| l.stamps()) {
             // A stamp mutates the raster → a genuinely new grid, so its key must be

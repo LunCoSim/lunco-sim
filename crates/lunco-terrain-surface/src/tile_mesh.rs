@@ -213,10 +213,10 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
     // the perimeter to cover the gap. Depth scales with the tile's relief (+ a
     // small floor) so it always spans the gap without a needlessly tall wall.
     let skirt_depth = ((max_y - min_y) * 0.75 + region.side() as f32 * 0.05).max(0.5);
-    // Skirts close cracks between two neighboring LOD tiles.  At the outer DEM
-    // boundary there is no neighbor, so emitting one there creates an artificial
-    // vertical wall at the edge of the surveyed surface (especially visible from
-    // inside a canyon).  Keep the seam skirts on the other edges only.
+    // Skirts close cracks between two neighboring LOD tiles. At the outer DEM
+    // boundary there is no neighboring terrain, so emitting a wall there would
+    // invent geometry outside the authored DEM. Keep seam skirts only where a
+    // neighboring tile can actually exist.
     let edge_epsilon = (dem_half_extent * 1.0e-9).max(1.0e-6);
     let outer_edges = [
         region.center[1] - region.half <= -dem_half_extent + edge_epsilon,
@@ -395,8 +395,34 @@ mod tests {
         assert_eq!(
             corner.positions.len(),
             res * res + 2 * res,
-            "the +X/+Z DEM boundary must not grow vertical skirt walls"
+            "outer DEM edges must not grow fabricated vertical walls"
         );
+    }
+
+    #[test]
+    fn interior_seam_skirts_follow_measured_edge_relief() {
+        let dem = ramp_dem();
+        let res = 5;
+        let mesh = bake_tile_mesh(
+            &dem,
+            &dem,
+            Square {
+                center: [0.0, 0.0],
+                half: 80.0,
+            },
+            res,
+            100.0,
+            [0.0, 0.0],
+            0.0,
+        );
+
+        // The first appended run is an interior seam. Its wall must retain the
+        // edge's relief rather than replacing the run with one cap height.
+        let top = &mesh.positions[..res];
+        let top_skirt = &mesh.positions[res * res..res * res + res];
+        assert!((top[0][1] - top[res - 1][1]).abs() > 100.0);
+        assert!((top_skirt[0][1] - top_skirt[res - 1][1]).abs() > 100.0);
+        assert!((top[0][1] - top_skirt[0][1]).abs() > 0.5);
     }
 
     /// DIAGNOSTIC for "newly appeared LODs are black / wrongly lit".

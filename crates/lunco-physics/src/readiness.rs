@@ -86,6 +86,19 @@ pub struct FrozenForReadiness {
     collider: bool,
 }
 
+/// Marks a joint that readiness disabled along with its owning subtree.
+///
+/// Avian keeps joints in the same simulation-island bookkeeping as bodies. A
+/// body cannot be removed from an island while one of its joints is still
+/// linked there: the later joint removal would underflow the island's joint
+/// count. This marker lets release restore only the joints this module took,
+/// and lets release happen after the bodies have been admitted again.
+#[derive(Component, Debug, Clone, Copy)]
+struct FrozenJointForReadiness {
+    /// The [`HeldForReadiness`] entity that owns this freeze.
+    owner: Entity,
+}
+
 /// Project [`ReadinessState::world_hold`] onto [`PhysicsHolds`].
 ///
 /// Change-guarded, so it writes only on an edge and a readiness hold composes
@@ -106,12 +119,30 @@ pub fn reconcile_frozen_subtrees(
     children: Query<&Children>,
     bodies: Query<(), (With<RigidBody>, Without<RigidBodyDisabled>)>,
     colliders: Query<(), (With<Collider>, Without<ColliderDisabled>)>,
+    joints: Query<
+        (),
+        (
+            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            Without<JointDisabled>,
+        ),
+    >,
     frozen: Query<(Entity, &FrozenForReadiness)>,
     mut commands: Commands,
 ) {
     // ── Freeze: everything under a held root that is not frozen yet ──────────
     for root in &held {
         for entity in std::iter::once(root).chain(children.iter_descendants(root)) {
+            // Retire joints BEFORE disabling either endpoint. Avian removes a
+            // disabled joint from the island immediately; the body can then
+            // leave the island without leaving a dangling joint edge behind.
+            // The command order is intentional and the chained systems below
+            // provide the matching release boundary.
+            if joints.contains(entity) {
+                commands
+                    .entity(entity)
+                    .insert((JointDisabled, FrozenJointForReadiness { owner: root }));
+            }
+
             let body = bodies.contains(entity);
             let collider = colliders.contains(entity);
             if !body && !collider {
@@ -152,6 +183,28 @@ pub fn reconcile_frozen_subtrees(
     }
 }
 
+/// Re-enable joints after [`reconcile_frozen_subtrees`] has restored bodies.
+///
+/// This is a separate chained system rather than another command in the
+/// reconcile loop: Avian's `Remove<JointDisabled>` observer immediately adds
+/// the edge back to the island, so all endpoint `RigidBodyDisabled` removals
+/// must have been applied first.
+fn release_frozen_joints(
+    held: Query<Entity, With<HeldForReadiness>>,
+    frozen: Query<(Entity, &FrozenJointForReadiness)>,
+    mut commands: Commands,
+) {
+    for (entity, record) in &frozen {
+        if held.contains(record.owner) {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .try_remove::<JointDisabled>()
+            .try_remove::<FrozenJointForReadiness>();
+    }
+}
+
 /// Installs the physics side of readiness. Added by [`crate::PhysicsGatePlugin`],
 /// so whoever owns physics owns the enforcement of a readiness decision.
 pub struct ReadinessEffectPlugin;
@@ -163,7 +216,11 @@ impl Plugin for ReadinessEffectPlugin {
         }
         app.add_systems(
             PreUpdate,
-            (apply_world_readiness_hold, reconcile_frozen_subtrees)
+            (
+                apply_world_readiness_hold,
+                reconcile_frozen_subtrees,
+                release_frozen_joints,
+            )
                 .chain()
                 // After the decision they enforce, and before
                 // `apply_physics_holds` projects the hold set onto the clock.
@@ -284,6 +341,54 @@ mod tests {
 
         assert!(app.world().entity(late).contains::<RigidBodyDisabled>());
         assert!(app.world().entity(late).contains::<ColliderDisabled>());
+    }
+
+    /// A held joint must leave Avian's graph before its body leaves the island,
+    /// and must only be re-admitted after the body is restored. This uses the
+    /// graph's required marker directly so the test stays focused on the
+    /// readiness ordering rather than solver integration.
+    #[test]
+    fn a_held_joint_is_disabled_and_restored_after_its_body() {
+        let mut app = app();
+        let body = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, Collider::sphere(1.0)))
+            .id();
+        let other = app.world_mut().spawn(RigidBody::Dynamic).id();
+        let joint = app
+            .world_mut()
+            .spawn((
+                RevoluteJoint::new(body, other),
+                avian3d::dynamics::solver::joint_graph::JointComponentId::new(),
+                ChildOf(body),
+            ))
+            .id();
+
+        let ticket = app.world_mut().resource_mut::<ReadinessRegistry>().begin(
+            Subject::Entity(body),
+            kinds::PROGRAM_COMPILE,
+            "jointed vehicle",
+        );
+        app.update();
+
+        assert!(app.world().entity(body).contains::<RigidBodyDisabled>());
+        assert!(app.world().entity(joint).contains::<JointDisabled>());
+        assert!(app
+            .world()
+            .entity(joint)
+            .contains::<FrozenJointForReadiness>());
+
+        app.world_mut()
+            .resource_mut::<ReadinessRegistry>()
+            .finish(ticket);
+        app.update();
+
+        assert!(!app.world().entity(body).contains::<RigidBodyDisabled>());
+        assert!(!app.world().entity(joint).contains::<JointDisabled>());
+        assert!(!app
+            .world()
+            .entity(joint)
+            .contains::<FrozenJointForReadiness>());
     }
 
     /// A world-scoped wait pauses the physics clock through the ordinary hold
