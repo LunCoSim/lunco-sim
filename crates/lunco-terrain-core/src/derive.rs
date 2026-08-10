@@ -19,7 +19,7 @@
 //! linearly-filtered texture is read by the planar-UV terrain shader.
 
 use crate::quadtree::Square;
-use crate::source::HeightSource;
+use crate::source::{normal_at_bounded, HeightSource};
 
 /// World XZ of texel `(ix, iz)` at the centre of its cell in a `res×res` raster
 /// over `region`.
@@ -112,11 +112,14 @@ pub fn ao_map<S: HeightSource>(
     radius_m: f64,
     dirs: usize,
     steps: usize,
+    source_half_extent: f64,
 ) -> Vec<f32> {
     let res = res.max(1);
     let dirs = dirs.max(1);
     let steps = steps.max(1);
     let radius = radius_m.max(1e-3);
+    let bounded = source_half_extent.is_finite();
+    let source_half = source_half_extent.max(0.0);
     // Precompute ray directions evenly around the circle.
     let angles: Vec<(f64, f64)> = (0..dirs)
         .map(|d| {
@@ -135,7 +138,14 @@ pub fn ao_map<S: HeightSource>(
                 let mut max_sin = 0.0f64;
                 for s in 1..=steps {
                     let dist = radius * (s as f64) / (steps as f64);
-                    let dh = src.height_at(x + dx * dist, z + dz * dist) - h0;
+                    let sx = x + dx * dist;
+                    let sz = z + dz * dist;
+                    if bounded && (sx.abs() > source_half || sz.abs() > source_half) {
+                        // The ray has left the finite authored terrain. Beyond
+                        // that edge is open sky, not repeated edge elevation.
+                        break;
+                    }
+                    let dh = src.height_at(sx, sz) - h0;
                     if dh > 0.0 {
                         // sin of the elevation angle to this sample.
                         let sin_e = dh / (dh * dh + dist * dist).sqrt();
@@ -298,6 +308,7 @@ pub fn albedo_map<S: HeightSource>(
     region: &Square,
     res: usize,
     stencil_texels: f64,
+    source_half_extent: f64,
 ) -> Vec<f32> {
     let res = res.max(1);
     let stencil = stencil_texels.max(1.0);
@@ -306,21 +317,78 @@ pub fn albedo_map<S: HeightSource>(
     for iz in 0..res {
         for ix in 0..res {
             let (x, z) = texel_world(region, res, ix, iz);
-            let h = src.height_at(x, z);
-            let lap = (src.height_at(x + eps, z)
-                + src.height_at(x - eps, z)
-                + src.height_at(x, z + eps)
-                + src.height_at(x, z - eps)
-                - 4.0 * h)
-                / (eps * eps);
+            let lap = second_difference_bounded(src, x, z, eps, source_half_extent, true)
+                + second_difference_bounded(src, x, z, eps, source_half_extent, false);
             // Concave (positive Laplacian) → darker; convex → brighter.
             let curve = (-lap * CURVATURE_TONE_SCALE_M).tanh() as f32;
-            let slope = src.slope_at(x, z, eps) as f32;
+            let slope = if source_half_extent.is_finite() {
+                let n = normal_at_bounded(src, x, z, eps, source_half_extent);
+                n[1].clamp(-1.0, 1.0).acos() as f32
+            } else {
+                src.slope_at(x, z, eps) as f32
+            };
             let a = 0.5 + 0.30 * curve + 0.10 * (slope / 0.6).min(1.0);
             out.push(a.clamp(0.0, 1.0));
         }
     }
     out
+}
+
+/// Second derivative over a finite square. Central differences are used where
+/// both sides are measured; at an edge a one-sided stencil is fitted entirely
+/// inside the footprint. No sample is obtained by extending a DEM's clamped
+/// edge beyond the authored surface.
+fn second_difference_bounded<S: HeightSource>(
+    src: &S,
+    x: f64,
+    z: f64,
+    eps: f64,
+    half_extent: f64,
+    along_x: bool,
+) -> f64 {
+    let eps = eps.abs().max(f64::EPSILON);
+    if !half_extent.is_finite() {
+        let h0 = src.height_at(x, z);
+        let hp = if along_x {
+            src.height_at(x + eps, z)
+        } else {
+            src.height_at(x, z + eps)
+        };
+        let hm = if along_x {
+            src.height_at(x - eps, z)
+        } else {
+            src.height_at(x, z - eps)
+        };
+        return (hp + hm - 2.0 * h0) / (eps * eps);
+    }
+
+    let half = half_extent.max(0.0);
+    let p = if along_x { x } else { z };
+    let forward_room = (half - p).max(0.0);
+    let backward_room = (half + p).max(0.0);
+    let sample = |offset: f64| {
+        if along_x {
+            src.height_at(x + offset, z)
+        } else {
+            src.height_at(x, z + offset)
+        }
+    };
+
+    if forward_room >= eps && backward_room >= eps {
+        return (sample(eps) + sample(-eps) - 2.0 * sample(0.0)) / (eps * eps);
+    }
+
+    // Use a two-step one-sided stencil, shrinking the step when the texel
+    // centre is close to the boundary so both samples remain authored.
+    if forward_room >= backward_room && forward_room > 0.0 {
+        let step = eps.min(forward_room * 0.5);
+        return (sample(2.0 * step) - 2.0 * sample(step) + sample(0.0)) / (step * step);
+    }
+    if backward_room > 0.0 {
+        let step = eps.min(backward_room * 0.5);
+        return (sample(0.0) - 2.0 * sample(-step) + sample(-2.0 * step)) / (step * step);
+    }
+    0.0
 }
 
 /// Bilinear upsample of a square scalar map from `src_res`² to `dst_res`².
@@ -452,6 +520,19 @@ mod tests {
         }
     }
 
+    /// A deliberately discontinuous continuation used only to prove that a
+    /// finite AO footprint never samples beyond its authored boundary.
+    struct EdgeWall;
+    impl HeightSource for EdgeWall {
+        fn height_at(&self, x: f64, _z: f64) -> f64 {
+            if x > 100.0 {
+                100.0
+            } else {
+                0.0
+            }
+        }
+    }
+
     /// A conical pit centred at the origin (height rises with radius up to 0).
     struct Pit;
     impl HeightSource for Pit {
@@ -478,7 +559,7 @@ mod tests {
         let slope = slope_map(&s, &r, 8);
         assert!(slope.iter().all(|&v| v.abs() < 1e-5));
         // Flat → unoccluded everywhere.
-        let ao = ao_map(&s, &r, 8, 30.0, 8, 6);
+        let ao = ao_map(&s, &r, 8, 30.0, 8, 6, f64::INFINITY);
         assert!(ao.iter().all(|&v| (v - 1.0).abs() < 1e-4));
     }
 
@@ -511,7 +592,7 @@ mod tests {
     #[test]
     fn pit_bottom_is_more_occluded_than_rim() {
         let r = region();
-        let ao = ao_map(&Pit, &r, 16, 60.0, 8, 8);
+        let ao = ao_map(&Pit, &r, 16, 60.0, 8, 8, f64::INFINITY);
         // texel index helper
         let res = 16;
         let at = |ix: usize, iz: usize| ao[iz * res + ix];
@@ -519,6 +600,20 @@ mod tests {
         let corner = at(0, 0); // out near the rim
         assert!(center < corner, "pit bottom {center} not < rim {corner}");
         assert!((0.0..=1.0).contains(&center) && (0.0..=1.0).contains(&corner));
+    }
+
+    #[test]
+    fn finite_ao_opens_at_the_authored_edge() {
+        let s = EdgeWall;
+        let r = Square {
+            center: [0.0, 0.0],
+            half: 100.0,
+        };
+        let bounded = ao_map(&s, &r, 8, 60.0, 8, 8, 100.0);
+        let unbounded = ao_map(&s, &r, 8, 60.0, 8, 8, f64::INFINITY);
+        // At the right edge, rays that leave the measured square see open sky;
+        // extending the ramp beyond the DEM would incorrectly occlude them.
+        assert!(bounded[3 * 8 + 7] > unbounded[3 * 8 + 7]);
     }
 
     #[test]
@@ -575,7 +670,7 @@ mod tests {
     #[test]
     fn albedo_map_rim_brighter_than_bowl() {
         let r = region();
-        let a = albedo_map(&Pit, &r, 16, 1.0);
+        let a = albedo_map(&Pit, &r, 16, 1.0, f64::INFINITY);
         let res = 16;
         let at = |ix: usize, iz: usize| a[iz * res + ix];
         // The conical pit's floor is concave (positive Laplacian) → darker than
@@ -587,5 +682,16 @@ mod tests {
             "bowl {center} not darker than open ground {corner}"
         );
         assert!(a.iter().all(|&v| (0.0..=1.0).contains(&v)));
+    }
+
+    #[test]
+    fn finite_albedo_keeps_a_linear_edge_source_linear() {
+        let r = Square {
+            center: [0.0, 0.0],
+            half: 100.0,
+        };
+        let a = albedo_map(&Ramp(0.1), &r, 8, 1.0, 100.0);
+        let first = a[0];
+        assert!(a.iter().all(|&value| (value - first).abs() < 1.0e-6));
     }
 }

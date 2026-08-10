@@ -41,10 +41,26 @@ pub fn crop_centered(grid: &HeightGrid, half_window: f64) -> HeightGrid {
     {
         return grid.clone();
     }
+    if n < 2 {
+        return grid.clone();
+    }
+    // Keep the source's parity. For an even raster the physical centre lies
+    // between two samples; selecting an odd-sized crop moved the labelled
+    // origin by half a source cell (the vschroteri2 crop was shifted by 2 m).
+    // The even case therefore keeps k cells on either side of that midpoint,
+    // which honestly realizes [-((2k+1)s)/2, +((2k+1)s)/2].
     let k = (half_window / s).floor() as usize; // native cells each side of centre
-    let centre = (n - 1) / 2;
-    let lo = centre.saturating_sub(k);
-    let hi = (centre + k).min(n - 1);
+    let (lo, hi) = if n.is_multiple_of(2) {
+        let centre_right = n / 2;
+        let lo = centre_right.saturating_sub(k + 1);
+        let hi = (centre_right + k).min(n - 1);
+        (lo, hi)
+    } else {
+        let centre = n / 2;
+        let lo = centre.saturating_sub(k);
+        let hi = (centre + k).min(n - 1);
+        (lo, hi)
+    };
     let res = hi - lo + 1;
     let mut heights = vec![0.0f64; res * res];
     for (zo, z) in (lo..=hi).enumerate() {
@@ -128,6 +144,39 @@ mod tests {
         assert_eq!(crop_centered(&src, 100.0).heights, src.heights);
         assert_eq!(crop_centered(&src, 0.0).res, src.res);
         assert_eq!(crop_centered(&src, f64::INFINITY).res, src.res);
+    }
+
+    #[test]
+    fn even_crop_preserves_the_source_midpoint() {
+        // 512 samples at 4 m/step have their physical midpoint between 255/256.
+        // A ±1000 m crop is therefore 502 samples at ±1002 m, not 501 samples
+        // relabelled as ±1000 m.
+        let src = HeightGrid {
+            res: 512,
+            half_extent: 1022.0,
+            heights: (0..512 * 512).map(|i| i as f64).collect(),
+        };
+        let cropped = crop_centered(&src, 1000.0);
+        assert_eq!(cropped.res, 502);
+        assert_eq!(cropped.half_extent, 1002.0);
+        assert_eq!(cropped.heights[0], src.heights[5 * 512 + 5]);
+        assert_eq!(
+            cropped.heights[cropped.heights.len() - 1],
+            src.heights[506 * 512 + 506]
+        );
+    }
+
+    #[test]
+    fn even_crop_keeps_two_samples_for_a_sub_cell_window() {
+        let src = HeightGrid {
+            res: 4,
+            half_extent: 1.5,
+            heights: (0..16).map(|i| i as f64).collect(),
+        };
+        let cropped = crop_centered(&src, 0.01);
+        assert_eq!(cropped.res, 2);
+        assert_eq!(cropped.half_extent, 0.5);
+        assert_eq!(cropped.heights, vec![5.0, 6.0, 9.0, 10.0]);
     }
 
     #[test]

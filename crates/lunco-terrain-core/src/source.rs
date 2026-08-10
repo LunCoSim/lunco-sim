@@ -43,6 +43,73 @@ pub trait HeightSource: Send + Sync {
     }
 }
 
+/// Compute a finite-difference normal without sampling outside a finite
+/// square source footprint.  At an edge this becomes a genuine one-sided
+/// derivative; it must not be approximated by sampling the source's clamped
+/// value outside the DEM, which halves the measured slope.
+pub fn normal_at_bounded(
+    source: &dyn HeightSource,
+    x: f64,
+    z: f64,
+    eps: f64,
+    half_extent: f64,
+) -> [f64; 3] {
+    let half = half_extent.max(0.0);
+    let eps = eps.abs().max(f64::EPSILON);
+    let x = x.clamp(-half, half);
+    let z = z.clamp(-half, half);
+    let xl = (x - eps).max(-half);
+    let xr = (x + eps).min(half);
+    let zl = (z - eps).max(-half);
+    let zr = (z + eps).min(half);
+    let dx = xr - xl;
+    let dz = zr - zl;
+    let gx = if dx > 0.0 {
+        (source.height_at(xr, z) - source.height_at(xl, z)) / dx
+    } else {
+        0.0
+    };
+    let gz = if dz > 0.0 {
+        (source.height_at(x, zr) - source.height_at(x, zl)) / dz
+    } else {
+        0.0
+    };
+    let len = (gx * gx + 1.0 + gz * gz).sqrt();
+    [-gx / len, 1.0 / len, -gz / len]
+}
+
+/// A finite-square view of a [`HeightSource`].  It owns the boundary contract:
+/// height samples are clamped to the measured footprint and derivatives use
+/// one-sided differences there.  Consumers such as field rasters can therefore
+/// safely use their normal stencil at an authored DEM edge without inventing an
+/// outside surface.
+pub struct BoundedHeightSource<'a> {
+    source: &'a dyn HeightSource,
+    half_extent: f64,
+}
+
+impl<'a> BoundedHeightSource<'a> {
+    pub fn new(source: &'a dyn HeightSource, half_extent: f64) -> Self {
+        Self {
+            source,
+            half_extent: half_extent.max(0.0),
+        }
+    }
+}
+
+impl HeightSource for BoundedHeightSource<'_> {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        self.source.height_at(
+            x.clamp(-self.half_extent, self.half_extent),
+            z.clamp(-self.half_extent, self.half_extent),
+        )
+    }
+
+    fn normal_at(&self, x: f64, z: f64, eps: f64) -> [f64; 3] {
+        normal_at_bounded(self.source, x, z, eps, self.half_extent)
+    }
+}
+
 /// Deterministic analytic source: multi-octave hash value-noise FBM. Pure (no
 /// RNG state), continuous, and identical across native + wasm. For bring-up and
 /// tests only — replace with a DEM-backed source for real terrain.
@@ -200,6 +267,13 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
 mod tests {
     use super::*;
 
+    struct Ramp;
+    impl HeightSource for Ramp {
+        fn height_at(&self, x: f64, _z: f64) -> f64 {
+            2.0 * x
+        }
+    }
+
     #[test]
     fn deterministic() {
         let s = AnalyticHeightSource::default();
@@ -218,6 +292,22 @@ mod tests {
             let p = i as f64 * 7.13;
             assert!(s.height_at(p, -p).abs() < bound);
         }
+    }
+
+    #[test]
+    fn bounded_normal_is_one_sided_at_the_edge() {
+        let n = normal_at_bounded(&Ramp, 10.0, 0.0, 1.0, 10.0);
+        assert!(((-n[0] / n[1]) - 2.0).abs() < 1e-12, "normal {n:?}");
+        let n = normal_at_bounded(&Ramp, -10.0, 0.0, 1.0, 10.0);
+        assert!(((-n[0] / n[1]) - 2.0).abs() < 1e-12, "normal {n:?}");
+    }
+
+    #[test]
+    fn bounded_source_clamps_height_but_preserves_edge_slope() {
+        let src = BoundedHeightSource::new(&Ramp, 10.0);
+        assert_eq!(src.height_at(100.0, 0.0), 20.0);
+        let n = src.normal_at(10.0, 0.0, 1.0);
+        assert!(((-n[0] / n[1]) - 2.0).abs() < 1e-12, "normal {n:?}");
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! and assembles the attributes into a Bevy `Mesh`.
 
 use lunco_obstacle_field::field::grid_indices;
-use lunco_terrain_core::HeightSource;
+use lunco_terrain_core::{normal_at_bounded, HeightSource};
 
 use crate::quadtree::Square;
 
@@ -161,12 +161,20 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         for ex in 0..even {
             let k = ez * even + ex;
             parent_y[k] = (ph_at(ex as isize, ez as isize) - origin_y) as f32;
-            let hx = ph_at(ex as isize + 1, ez as isize) - ph_at(ex as isize - 1, ez as isize);
-            let hz = ph_at(ex as isize, ez as isize + 1) - ph_at(ex as isize, ez as isize - 1);
-            let nx = -hx / (2.0 * pstep);
-            let nz = -hz / (2.0 * pstep);
-            let len = (nx * nx + 1.0 + nz * nz).sqrt();
-            parent_n[k] = [(nx / len) as f32, (1.0 / len) as f32, (nz / len) as f32];
+            let (pwx, pwz) = world((ex * 2).min(res - 1), (ez * 2).min(res - 1));
+            let edge =
+                pwx.abs() >= dem_half_extent - 1.0e-9 || pwz.abs() >= dem_half_extent - 1.0e-9;
+            parent_n[k] = if edge {
+                let n = normal_at_bounded(morph_src, pwx, pwz, pstep, dem_half_extent);
+                [n[0] as f32, n[1] as f32, n[2] as f32]
+            } else {
+                let hx = ph_at(ex as isize + 1, ez as isize) - ph_at(ex as isize - 1, ez as isize);
+                let hz = ph_at(ex as isize, ez as isize + 1) - ph_at(ex as isize, ez as isize - 1);
+                let nx = -hx / (2.0 * pstep);
+                let nz = -hz / (2.0 * pstep);
+                let len = (nx * nx + 1.0 + nz * nz).sqrt();
+                [(nx / len) as f32, (1.0 / len) as f32, (nz / len) as f32]
+            };
         }
     }
 
@@ -197,7 +205,17 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
             // surface the tile is morphing AWAY from.
             morph_normals.push(parent_n[k]);
 
-            normals.push(fine_normal(ix as isize, iz as isize));
+            let edge = wx.abs() >= dem_half_extent - 1.0e-9 || wz.abs() >= dem_half_extent - 1.0e-9;
+            normals.push(if edge {
+                // The padded lattice intentionally covers interior tile seams,
+                // but its outer samples are outside the measured DEM. Use the
+                // same bounded one-sided derivative as point queries there;
+                // clamped ghost values otherwise halve the boundary slope.
+                let n = normal_at_bounded(src, wx, wz, step, dem_half_extent);
+                [n[0] as f32, n[1] as f32, n[2] as f32]
+            } else {
+                fine_normal(ix as isize, iz as isize)
+            });
             uvs.push([
                 ((wx + dem_half_extent) * inv_uv) as f32,
                 ((wz + dem_half_extent) * inv_uv) as f32,

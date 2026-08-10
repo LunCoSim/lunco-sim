@@ -202,9 +202,6 @@ fn parse_terrain_layer_stack(
         lunco_terrain_surface::LayerId,
         lunco_terrain_surface::EditKind,
     )> = Vec::new();
-    // Whether the scene authors its OWN overzoom prim (even a zeroed/disabled one
-    // counts — that's an explicit opt-out of the default sub-DEM detail).
-    let mut authored_overzoom = false;
     // CANONICAL child order. `children()` iterates a hash map, so its order varies
     // per process AND per parse (bridge vs composed re-parse). The stack's fold
     // order feeds `SurfaceOracle::content_key` — unsorted, every launch minted a
@@ -241,9 +238,6 @@ fn parse_terrain_layer_stack(
         if layer_type == "dem" {
             continue;
         }
-        if layer_type == "overzoom" {
-            authored_overzoom = true;
-        }
         if !registry.knows(&layer_type) {
             warn!("[usd-dem] child layer '{layer_type}' has no registered terrain layer parser");
             continue;
@@ -253,16 +247,6 @@ fn parse_terrain_layer_stack(
             // several same-kind layers coexist and be addressed individually.
             stack.push_layer(child.as_str(), layer);
         }
-    }
-    // Sub-DEM detail defaults ON: without it the ground between the finest shader
-    // grain (~12 cm) and the DEM data resolution (~5 m) is empty in every channel
-    // and reads as flat plastic one step from the camera. Authoring an `overzoom`
-    // prim — including a zeroed one — takes over from the default.
-    if !authored_overzoom {
-        stack.push_layer(
-            "overzoom/default",
-            lunco_terrain_surface::default_overzoom_layer(),
-        );
     }
     if !edits.is_empty() {
         stack.push_layer(
