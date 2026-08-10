@@ -1256,10 +1256,11 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
     members
 }
 
-/// Clearance the settle lifts a member's CENTRE to above the local surface —
-/// generous enough to clear a wheel radius so the drop-in makes contact from
-/// ABOVE (a body already below a one-sided heightfield never recovers).
-const SETTLE_CLEARANCE: f64 = 0.6;
+/// Clearance left between the lowest authored collider point and the terrain
+/// when an articulated assembly is initially placed. The collider AABB is
+/// authoritative; using a body-centre clearance here lifts small wheels and
+/// long landing assemblies by different, arbitrary amounts.
+const SETTLE_CLEARANCE: f64 = 0.05;
 
 // A raycast contact is the *wheel axle*, not a rigid tyre volume. Its cast
 // starts at the suspension strut top and only supports the chassis once it is
@@ -1290,6 +1291,7 @@ pub fn settle_grounded_assemblies(
         Option<&mut avian3d::prelude::LinearVelocity>,
         Option<&mut avian3d::prelude::AngularVelocity>,
     )>,
+    colliders: Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
     rotations: Query<&avian3d::prelude::Rotation>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
@@ -1320,6 +1322,21 @@ pub fn settle_grounded_assemblies(
     let mut pos_of: HashMap<Entity, GridPos> = HashMap::default();
     for (e, pos, _, _) in bodies.iter() {
         pos_of.insert(e, GridPos(pos.0));
+    }
+    // Use the same broad-phase geometry Avian will solve. A compound collider
+    // owns its AABB directly; child colliders point to their body through
+    // `ColliderOf`. This avoids turning initial placement into a metre-scale
+    // drop merely because a body has a small wheel or a long leg.
+    let mut lowest_collider_y: HashMap<Entity, f64> = HashMap::default();
+    for (collider, aabb, owner) in &colliders {
+        if !aabb.min.is_finite() {
+            continue;
+        }
+        let body = owner.map_or(collider, |owner| owner.body);
+        lowest_collider_y
+            .entry(body)
+            .and_modify(|lowest| *lowest = lowest.min(aabb.min.y))
+            .or_insert(aabb.min.y);
     }
     let adj = joints.adjacency(|e| {
         dynamics
@@ -1380,7 +1397,8 @@ pub fn settle_grounded_assemblies(
             }
         } else {
             // Physical wheels are real bodies, so lift from the deepest dynamic
-            // member. The chassis (high) never drives it; the low wheels do.
+            // member. Prefer the actual collider lower edge; the centre-based
+            // fallback is only for a body whose AABB has not published yet.
             for &m in &members {
                 let Some(p) = pos_of.get(&m) else { continue };
                 if p.0.x.abs() > half || p.0.z.abs() > half {
@@ -1388,7 +1406,11 @@ pub fn settle_grounded_assemblies(
                 }
                 over_terrain = true;
                 let surface = hf.0.height_at(p.0.x, p.0.z);
-                lift = lift.max(surface + SETTLE_CLEARANCE - p.0.y);
+                let lowest = lowest_collider_y
+                    .get(&m)
+                    .copied()
+                    .unwrap_or(p.0.y - SETTLE_CLEARANCE);
+                lift = lift.max(surface + SETTLE_CLEARANCE - lowest);
             }
         }
         if !over_terrain || lift <= 0.0 {

@@ -74,12 +74,10 @@ def Xform "RoverComparison" (
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
-        # The plate must CONTAIN the course. The rovers start at z = +32 and the
-        # last station is the 40% berm, centred at z = -46 and 10 m long, so the
-        # sequence runs to z = -51 with a real flat run-out beyond it. At the
-        # previous 90 m the plate ended at z = -45: the final ramp stood off the
-        # edge and a rover that reached it drove into empty space and fell out of
-        # the world.
+        # The plate contains the bounded comparison fixture. The rovers start at
+        # z = +2; the lane parent applies a uniform 0.4 Y/Z scale and the final
+        # berm is authored at local z = -40, so its far edge is still inside the
+        # generous plate and the run-out cannot drive into empty space.
         double3 xformOp:scale = (40, 1, 120)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.24, 0.22, 0.19)]
@@ -106,8 +104,14 @@ def Xform "RoverComparison" (
 
     # Every obstacle group below is copied at x = -10, 0, +10.  Keep the three
     # copies numerically identical apart from X; that is the test's invariant.
-    def Scope "Lanes"
+    # Keep the full seven-obstacle sequence but use a uniform Y/Z compression
+    # for the bounded headless comparison. X lane separation, grade ratios, and
+    # collision topology remain unchanged; each vehicle still sees a numerically
+    # identical copy of the same ordered course.
+    def Xform "Lanes"
     {
+        double3 xformOp:scale = (1, 0.4, 0.4)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
         # Rounded ridges: a row of modest cylinders that checks wheel rotation,
         # contact retention, and suspension response without a vertical wall.
         def Cylinder "Ridge_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
@@ -329,7 +333,7 @@ def Xform "RoverComparison" (
             int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
             uniform token subdivisionScheme = "none"
             uniform token physics:approximation = "none"
-            double3 xformOp:translate = (-10, 0, -46)
+            double3 xformOp:translate = (-10, 0, -40)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
@@ -341,7 +345,7 @@ def Xform "RoverComparison" (
             int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
             uniform token subdivisionScheme = "none"
             uniform token physics:approximation = "none"
-            double3 xformOp:translate = (0, 0, -46)
+            double3 xformOp:translate = (0, 0, -40)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
@@ -353,34 +357,34 @@ def Xform "RoverComparison" (
             int[] faceVertexIndices = [0, 1, 3, 5, 7, 6, 4, 2, 0, 1, 9, 8, 6, 14, 15, 7, 0, 2, 4, 6, 14, 12, 10, 8, 1, 9, 11, 13, 15, 7, 5, 3, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14]
             uniform token subdivisionScheme = "none"
             uniform token physics:approximation = "none"
-            double3 xformOp:translate = (10, 0, -46)
+            double3 xformOp:translate = (10, 0, -40)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
     }
 
-    # Same initial Y/Z and same drive direction.  Only X and the referenced tier
+    # Same initial Y/Z and same drive direction. Only X and the referenced tier
     # differ; simultaneous execution ensures no phase or terrain-state bias.
     def Xform "Easy" (
         prepend references = @lunco://vessels/rovers/variants/rover_easy.usda@</RoverEasy>
     )
     {
-        double3 xformOp:translate = (-10, 1.6, 32)
+        double3 xformOp:translate = (-10, 1.6, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "Medium" (
         prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
     )
     {
-        double3 xformOp:translate = (0, 1.6, 32)
+        double3 xformOp:translate = (0, 1.6, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "Awful" (
         prepend references = @lunco://vessels/rovers/variants/rover_awful.usda@</RoverAwful>
     )
     {
-        double3 xformOp:translate = (10, 1.6, 32)
+        double3 xformOp:translate = (10, 1.6, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

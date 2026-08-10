@@ -301,6 +301,10 @@ def Xform "RockerBogie" (
         # differential constrains its hinge motion independently.
         float physics:mass = 50.0
         float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
+        # Hinge/bearing loss for the articulated arm. Without an authored
+        # rotational loss the loaded rocker mode rings after each tire-contact
+        # correction and makes the chassis bob at speed.
+        float physxRigidBody:angularDamping = 0.1
         double3 xformOp:translate = (-0.99, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
@@ -477,6 +481,7 @@ def Xform "RockerBogie" (
         # differential constrains its hinge motion independently.
         float physics:mass = 50.0
         float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
+        float physxRigidBody:angularDamping = 0.1
         double3 xformOp:translate = (0.99, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
@@ -600,6 +605,7 @@ def Xform "RockerBogie" (
         # diagonal inertia.
         float physics:mass = 30.0
         float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
+        float physxRigidBody:angularDamping = 0.1
         double3 xformOp:translate = (-0.99, -0.4, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
@@ -783,6 +789,7 @@ def Xform "RockerBogie" (
         # diagonal inertia.
         float physics:mass = 30.0
         float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
+        float physxRigidBody:angularDamping = 0.1
         double3 xformOp:translate = (0.99, -0.4, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
