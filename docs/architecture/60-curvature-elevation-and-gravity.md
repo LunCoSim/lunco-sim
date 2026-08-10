@@ -4,32 +4,39 @@
 >
 > Written out of a live defect on the Summer Space
 > School twin, where a 1 km site rendered as kilometre-tall spikes. The diagnosis
-below is measured and confirmed; the fixes are proposals, not decisions.
+below is measured and confirmed; the terrain edge fix is now shipped, while the
+gravity work remains design-stage.
 
 Companion to [`57-dem-georeferencing.md`](57-dem-georeferencing.md) (where a
 raster's extent comes from) and
 [`59-georeferenced-rasters-as-assets.md`](59-georeferenced-rasters-as-assets.md).
 
-## 1. The measured defect: the edge feather descends ABSOLUTE relief
+## 1. The measured defect: the edge feather replaced measured relief
 
 `BodyCurvature::apply` (`lunco-terrain-core/src/modifier.rs`) folds the
-tangent-plane DEM onto the body sphere and feathers its edge so the patch meets
-the surrounding globe tiles instead of floating the sagitta above them:
+tangent-plane DEM onto the body sphere. The old implementation additionally
+replaced the outer part of the authored crop with a synthetic apron:
 
 ```rust
 sag + h_in * f + self.edge_lift_m * (1.0 - f)   // f: 1 interior → 0 at edge
 ```
 
-`h_in * f` scales the height toward zero across the feather band, so at the edge
-the surface sits at `edge_lift_m` (1 m) above the sphere.
+That interior feather made every crop boundary a level cap, erasing real canyon
+and rille walls. The authoritative implementation is now only:
 
-**That is only meaningful when `h_in` is relative to the reference sphere.** For a
-DEM carrying ABSOLUTE elevations the term interpolates between "the real ground"
-and "the datum", which is not a physical surface at all. The Apollo 15 site sits
-at ≈ −1917 m, so the patch descends 1917 m inside the band.
+```rust
+h_in + sag
+```
 
-Measured against predicted on the live twin (half_extent 498 m, `feather_from`
-0.6 ⇒ band r = 299…498 m):
+It preserves every DEM sample and applies only the physical body-curvature
+transform. The DEM square is a hard data boundary: the terrain renderer emits
+no fabricated outer wall, and the globe renderer owns the surface outside it.
+
+This is required for absolute DEMs as well as relative DEMs. An absolute Apollo
+15 sample near −1917 m must not be blended toward zero or toward a guessed apron.
+
+Measured against predicted on the live twin before the fix (half_extent 498 m,
+with the former interior feather band):
 
 | x (z = 0) | predicted | measured |
 |---|---|---|
@@ -53,27 +60,20 @@ a corner, so the ground beneath it reads ≈ 1 m while the vehicle sits at −19
 Scale hides it elsewhere. Moonbase is a ±4000 m patch, so the same ~1.9 km
 descent is spread over a 1600 m band and reads as a distant rim rather than a wall.
 
-### Candidate fixes
+### Historical candidate fixes
 
-1. **Chebyshev feather** — drive `f` from `max(|x|, |z|)` so the band follows the
-   square DEM boundary. Fixes the corner flattening outright. Does not on its own
-   rescue a small site whose content lives inside the band.
-2. **Feather toward the patch's own edge elevation** rather than the datum: blend
-   `h_in` toward the mean height of the DEM border, so an absolute-elevation patch
-   stays at its own elevation and only the curvature `sag` applies. Principled for
-   absolute DEMs; changes how a patch meets globe tiles, which moonbase relies on.
-3. **Apply curvature only when there is a globe to meet.** A standalone
-   site-anchored DEM with no surrounding body tiles has nothing to blend onto, and
-   the feather is pure damage.
+1. **Chebyshev feather** — drove `f` from `max(|x|, |z|)` so the band followed
+   the square boundary, but still replaced measured rows.
+2. **Edge-elevation apron** — kept the site datum instead of zero, but still
+   invented values outside the authored raster.
+3. **Exact crop plus globe ownership** — the shipped implementation. The site
+   DEM owns its authored square; the globe owns the outside surface.
 
-Preference at time of writing: **3 + 1**. (2) is a larger call about what a
-site-anchored DEM means and should not be made casually.
+### Authoring guidance
 
-### Authoring guidance until this is fixed
-
-Keep scene content well inside `feather_from × half_extent` (default 0.6). On a
-1 km site that is a 300 m radius — smaller than authors expect, and the reason the
-school twin's 380–395 m placements fell off the usable surface.
+The authored DEM square is preserved through its boundary. Do not place
+scene-owned terrain content outside the measured raster unless a separate,
+authored globe/site composition provides the surface there.
 
 ## 2. Gravity must follow the curved ground
 

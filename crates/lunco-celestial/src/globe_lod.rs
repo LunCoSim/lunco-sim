@@ -193,8 +193,8 @@ fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
 /// set. The DEM curves onto the sphere (`TerrainBodyCurvature`) and covers
 /// this region completely, so the globe underneath is pure overdraw — and
 /// worse, it pokes through crater floors that dip below the datum sphere.
-/// Tiles merely overlapping the cone's edge still render (the DEM's feathered
-/// edge sits `edge_lift_m` above them, so no z-fight). Inserted/updated by
+/// Tiles merely overlapping the cone's edge still render: the globe owns the
+/// surface outside the authored DEM square. Inserted/updated by
 /// `placement::sync_terrain_body_curvature`.
 #[derive(Component, Clone, Copy, PartialEq)]
 pub struct GlobePunch {

@@ -741,7 +741,7 @@ pub fn sync_terrain_body_curvature(
         }
         // Punch only what the terrain provably covers: the inscribed disc of
         // the square footprint, shrunk a hair so the boundary ring keeps its
-        // globe backing under the feathered terrain edge.
+        // globe backing under the DEM boundary.
         let sin_theta = (half_extent * 0.999) / desc.radius_m;
         let next = crate::globe_lod::GlobePunch {
             // WHERE on the globe to punch is the site anchor's business; only the
