@@ -91,6 +91,8 @@ model PositionPID3D
     "Touchdown state; guidance is removed as the vehicle settles on its legs";
   input Real landing_contact = 0.0
     "Physical four-leg contact; remove flight authority before settled touchdown";
+  input Real landing_zone_radius_m = 4.0
+    "Horizontal target radius required before contact may hand off flight authority (m)";
   output Real vertical_accel(unit = "m/s2") = vertical_limiter_output
     "Gravity-compensated Y acceleration";
   output Real throttle_cmd "Main-engine command, 0..1";
@@ -106,6 +108,16 @@ model PositionPID3D
   output Real position_error_x(unit = "m") "X position error";
   output Real position_error_y(unit = "m") "Y position error";
   output Real position_error_z(unit = "m") "Z position error";
+  output Real target_zone_gate
+    "Target-proximity gate for the physical contact handoff";
+  output Real landing_handoff
+    "Contact handoff permitted only when the vehicle is over its target";
+  output Real predicted_landing_x(unit = "m")
+    "Ballistic projected impact X from the current navigation state";
+  output Real predicted_landing_z(unit = "m")
+    "Ballistic projected impact Z from the current navigation state";
+  output Real predicted_landing_time(unit = "s")
+    "Ballistic projected time to the target-height plane";
   output Real descent_rate_command(unit = "m/s")
     "Sensor-driven descent-rate setpoint from stopping distance";
 
@@ -140,6 +152,8 @@ model PositionPID3D
   Real pid_y_command;
   Real altitude_above_target;
   Real lateral_landing_gate;
+  Real horizontal_target_error;
+  Real projected_time_to_target;
   Real descent_rate_schedule_magnitude;
   Real flare_descent_rate_magnitude;
   Real landing_flare_gate;
@@ -197,13 +211,23 @@ equation
   altitude_above_target = max(0.0, navigation.nav_pos_y - target_y);
   // The stopping-distance law limits the rate high above the pad, while the
   // flare law makes the terminal rate approach zero before the feet touch.
-  // Keep lateral braking active through the first-foot contact. With a tipped
-  // release, one pad can cross the plane before the COM reaches the target;
-  // gating on altitude there would leave the vehicle carrying horizontal speed
-  // into the remaining three contacts. The native settled-touchdown signal is
-  // the physical handoff: only after all four pads, an upright hull, and low
-  // translational rates are true may flight authority be removed.
-  lateral_landing_gate = max(0.0, min(1.0, 1.0 - landing_contact));
+  // Keep lateral braking active through contact unless the vehicle is actually
+  // over the authored landing target. Native four-leg contact is a physical
+  // fact, not proof that the mission reached its mark: on a flat surface a
+  // vehicle can settle far away with four valid contacts. The explicit target
+  // radius is the GNC mission contract; it is not inferred from altitude or a
+  // presentation timer.
+  horizontal_target_error = sqrt(
+    pid_x.error * pid_x.error + pid_z.error * pid_z.error);
+  // The zone is a mission event, not a proportional throttle fade. Once the
+  // measured vehicle is inside the authored landing radius, contact may hand
+  // flight authority to the gear; outside it, four feet touching flat terrain
+  // must not declare success.
+  target_zone_gate = noEvent(if horizontal_target_error
+      <= max(0.0, landing_zone_radius_m) then 1.0 else 0.0);
+  landing_handoff = noEvent(if target_zone_gate >= 0.5
+      and max(touchdown, landing_contact) >= 0.5 then 1.0 else 0.0);
+  lateral_landing_gate = max(0.0, min(1.0, 1.0 - landing_handoff));
   // A speed cap by itself would still command the cap at the surface and
   // leave the suspension to remove the vehicle's descent energy.
   flare_descent_rate_magnitude = max(0.0, descent_speed_limit_mps)
@@ -261,7 +285,7 @@ equation
   vertical_limiter.command = max(
     g + pid_y_command,
     landing_flare_gate
-      * g * (1.0 - touchdown));
+      * g * (1.0 - landing_handoff));
   vertical_limiter.lower_limit = 0.0;
   vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;
@@ -334,14 +358,12 @@ equation
   // scene-specific correction.
   roll_command_raw = -atan2(bounded_lateral_accel_x, tilt_reference_accel)
     / max(1.0e-9, command_tilt_limit_rad);
-  // Once all four native feet carry an upright hull, flight authority ends.
-  // This is the physical handoff to the suspension: the engine must not keep
-  // lifting a supported vehicle while a filtered touchdown value is still
-  // converging. `touchdown` remains in the maximum so a low-speed settled
-  // signal is still visible to the rest of the flight computer, but it is not
-  // the only path that can remove thrust after genuine four-foot contact.
+  // Once native contact is settled over the authored target, flight authority
+  // hands off to the suspension. Contact away from the target does not
+  // terminate guidance: the vehicle must perform a real go-around or
+  // repositioning manoeuvre using the same thrust and sensor loops.
   flight_command_gain = engage * (1.0 - piloted)
-    * max(0.0, min(1.0, 1.0 - max(touchdown, landing_contact)));
+    * max(0.0, min(1.0, 1.0 - landing_handoff));
   throttle_command_value = flight_command_gain * engine_alignment_gate
     * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));
@@ -359,6 +381,23 @@ equation
   pitch_cmd = pitch_command_value;
   roll_cmd = roll_command_value;
   yaw_cmd = yaw_command_value;
+
+  // KSP-style landing prediction: project the current measured navigation
+  // state under lunar gravity until it reaches the authored COM landing plane.
+  // This is deliberately labelled ballistic in the UI. It is not a replayed
+  // curve and it does not pretend to know future throttle; the projected point
+  // moves as the IMU/altimeter-driven state and the real engine response move.
+  projected_time_to_target = max(0.0,
+    (navigation.nav_vel_y + sqrt(max(0.0,
+      navigation.nav_vel_y * navigation.nav_vel_y
+        + 2.0 * max(0.0, g) * max(0.0,
+          navigation.nav_pos_y - target_y))))
+      / max(1.0e-9, g));
+  predicted_landing_time = projected_time_to_target;
+  predicted_landing_x = navigation.nav_pos_x
+    + navigation.nav_vel_x * projected_time_to_target;
+  predicted_landing_z = navigation.nav_pos_z
+    + navigation.nav_vel_z * projected_time_to_target;
 
   target_distance_m = sqrt((target_x - navigation.nav_pos_x)
     * (target_x - navigation.nav_pos_x)

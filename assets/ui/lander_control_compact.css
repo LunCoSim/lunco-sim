@@ -161,8 +161,9 @@
 
 #compact-target-offset {
   color: var(--muted-color);
-  font-size: 7px;
+  font-size: 6px;
   font-weight: 700;
+  letter-spacing: 0.2px;
 }
 
 #compact-control-bottom {

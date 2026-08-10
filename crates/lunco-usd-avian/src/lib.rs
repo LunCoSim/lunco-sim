@@ -2223,18 +2223,17 @@ fn build_usd_physics_joints(
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
     // Preparation may run while the world-readiness hold has paused Avian's
     // nested PhysicsSchedule. These filters establish that both USD endpoints
-    // are live rigid bodies with a Position slot and are not explicitly
-    // disabled; they do NOT claim island admission. `attach_joint` parks the
+    // are live rigid bodies with a Position slot. They may still carry
+    // `RigidBodyDisabled` while readiness freezes the authored subtree; that
+    // marker means "do not integrate yet", not "the authored body does not
+    // exist". They do NOT claim island admission. `attach_joint` parks the
     // constraint as `PendingJoint`, and `JointAttachPlugin` is the sole owner of
     // admitting that parked constraint after Avian creates both island nodes.
     //
     // `Position` is still only pose storage until `q_shadow` below confirms the
     // bridge has seeded it. Keeping those two facts separate prevents seating
     // against the required-component default at the origin.
-    q_bodies: Query<
-        (Entity, &UsdPrimPath),
-        (With<RigidBody>, With<Position>, Without<RigidBodyDisabled>),
-    >,
+    q_bodies: Query<(Entity, &UsdPrimPath), (With<RigidBody>, With<Position>)>,
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
     q_shadow: Query<&big_space_bridge::BridgeShadow>,

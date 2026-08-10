@@ -528,6 +528,18 @@ fn project_usd_telemetry(
                 port.filter(|p| !p.is_empty()),
                 name.filter(|n| !n.is_empty()),
             ) {
+                // A generated domain root is projected one Update before its
+                // Modelica wrapper can publish SimComponent. Publish the typed
+                // lifecycle fact before the first FixedUpdate so the sampler
+                // waits for the authoritative port surface instead of
+                // converting loading order into a missing-port fault. Direct
+                // Modelica programs publish their SimComponent in the same
+                // prim-processing pass and do not need this hold.
+                if view.has_api_schema(&path, "LunCoDomainSynthesisAPI") {
+                    commands
+                        .entity(entity)
+                        .try_insert(lunco_core::PortSurfacePending);
+                }
                 commands.spawn((
                     Name::new(format!("telemetry:{name}")),
                     ChildOf(entity),
@@ -1306,6 +1318,12 @@ pub(crate) fn wrap_modelica_into_simcomponent(
             status: modelica_status(model),
             is_stepping: model.is_stepping,
         });
+        // Generated domain roots publish their ModelicaModel one Update before
+        // this wrapper can expose the shared SimComponent port surface. Keep
+        // telemetry and connection diagnostics in typed assembly-pending state
+        // for that real lifecycle interval; the wrapper owns readiness once it
+        // has been inserted.
+        entity_commands.remove::<lunco_core::PortSurfacePending>();
         if let Some(contract) = contract {
             entity_commands.try_insert(DeclaredOutputPorts {
                 names: contract.outputs.iter().cloned().collect(),
@@ -3923,7 +3941,15 @@ pub(crate) fn install(app: &mut App) {
         FixedUpdate,
         (
             validate_usd_modelica_port_contracts.before(sync_modelica_outputs),
-            sync_modelica_outputs.before(PropagateCosimSet::Propagate),
+            // Scenario hooks read the public SimComponent surface directly.
+            // Make the publication edge explicit: without this dependency a
+            // fast cached compile could open the scenario gate and let Rhai
+            // observe the wrapper before the first Modelica snapshot had been
+            // copied into it. Cold runs happened to order the two systems the
+            // other way, which made the first telemetry sample nondeterministic.
+            sync_modelica_outputs
+                .before(lunco_scripting::world_bridge::tick_rhai_scenarios)
+                .before(PropagateCosimSet::Propagate),
             sync_script_outputs.before(PropagateCosimSet::Propagate),
             sync_modelica_inputs
                 .after(ApplyForcesCosimSet::ApplyForces)

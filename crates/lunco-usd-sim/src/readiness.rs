@@ -9,6 +9,7 @@
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage or its projected participants are still settling | world |
 //! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | its owning physical subtree |
+//! | [`kinds::PARTICIPANT_INIT`] | an authored rigid body has not been admitted to Avian | world |
 //!
 //! # Why reconcile systems rather than events
 //!
@@ -28,12 +29,25 @@ use lunco_modelica::ModelicaModel;
 use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
+use crate::GroundActivationInFlight;
 use lunco_cosim::SimComponent;
+use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy::UsdAwaitingStage;
 
 /// The open world-scoped scene-load wait, if a scene is loading.
 #[derive(Resource)]
 struct SceneLoadWait {
+    ticket: ReadinessTicket,
+}
+
+/// The open world-scoped wait for the USD → Avian admission boundary.
+///
+/// `ShouldBeDynamic` is the authoritative marker that a body is still held in
+/// its kinematic loading state. `GroundActivationInFlight` covers the deferred
+/// command boundary after promotion, when the authored velocity has been
+/// queued but the next schedule has not yet observed it.
+#[derive(Resource)]
+struct PhysicsAdmissionWait {
     ticket: ReadinessTicket,
 }
 
@@ -148,6 +162,43 @@ fn track_model_compiles(
     }
 }
 
+/// Keep scene-owned scenario hooks closed until every authored dynamic body has
+/// crossed the USD/Avian admission boundary.
+///
+/// The body projector owns the truth here; this system only publishes it as a
+/// readiness fact. That prevents a fixed-step scenario from observing one body
+/// with zero kinematic velocity while another body has already received its
+/// authored release velocity. The wait is world-scoped because a scene's
+/// startup program must see one coherent initial condition across its
+/// articulated participants.
+fn track_physics_admission(
+    still_kinematic: Query<(), With<ShouldBeDynamic>>,
+    still_pending: Query<(), With<lunco_core::PhysicsStatePending>>,
+    activation: Res<GroundActivationInFlight>,
+    wait: Option<Res<PhysicsAdmissionWait>>,
+    mut registry: ResMut<ReadinessRegistry>,
+    mut commands: Commands,
+) {
+    let waiting = !still_kinematic.is_empty()
+        || !still_pending.is_empty()
+        || activation.0 != 0;
+    match (waiting, wait) {
+        (true, None) => {
+            let ticket = registry.begin(
+                Subject::World,
+                kinds::PARTICIPANT_INIT,
+                "USD physics admission",
+            );
+            commands.insert_resource(PhysicsAdmissionWait { ticket });
+        }
+        (false, Some(wait)) => {
+            registry.finish(wait.ticket);
+            commands.remove_resource::<PhysicsAdmissionWait>();
+        }
+        _ => {}
+    }
+}
+
 /// Find the physical entity that owns a USD-authored program.
 ///
 /// USD program prims are ordinary children of the object they control. The
@@ -208,7 +259,10 @@ impl Plugin for UsdReadinessPlugin {
         // `PostUpdate`: after the frame's spawning and compile-wrapping have run,
         // so a wait that closed this frame is not re-declared before the state
         // that closes it is visible.
-        app.add_systems(PostUpdate, (track_scene_load, track_model_compiles));
+        app.add_systems(
+            PostUpdate,
+            (track_scene_load, track_model_compiles, track_physics_admission),
+        );
         // Every wait belongs to the scene that declared it. The registry already
         // drops waits whose subject entity was despawned, but a WORLD-scoped one
         // has no entity to die with — the outgoing scene's load wait would be
@@ -220,6 +274,7 @@ impl Plugin for UsdReadinessPlugin {
             |mut registry: ResMut<ReadinessRegistry>,
              mut dirty: ResMut<crate::cosim::BindingEpochDirty>,
              wait: Option<Res<crate::cosim::BindingEpochWait>>,
+             physics_wait: Option<Res<PhysicsAdmissionWait>>,
              mut commands: Commands| {
                 registry.clear();
                 dirty.0 = true;
@@ -228,6 +283,10 @@ impl Plugin for UsdReadinessPlugin {
                     commands.remove_resource::<crate::cosim::BindingEpochWait>();
                 }
                 commands.remove_resource::<SceneLoadWait>();
+                if let Some(wait) = physics_wait {
+                    registry.finish(wait.ticket);
+                    commands.remove_resource::<PhysicsAdmissionWait>();
+                }
             },
         );
     }
@@ -278,6 +337,36 @@ mod tests {
     fn scene_wait_covers_only_stage_mounting() {
         assert!(scene_still_loading(true));
         assert!(!scene_still_loading(false));
+    }
+
+    #[test]
+    fn physics_admission_wait_covers_the_authored_velocity_boundary() {
+        let mut app = App::new();
+        app.init_resource::<ReadinessRegistry>()
+            .init_resource::<GroundActivationInFlight>()
+            .add_systems(Update, track_physics_admission);
+
+        let body = app.world_mut().spawn(ShouldBeDynamic).id();
+        app.update();
+        let item = app
+            .world()
+            .resource::<ReadinessRegistry>()
+            .pending()
+            .next()
+            .expect("a held USD body must publish participant readiness");
+        assert_eq!(item.subject, Subject::World);
+        assert_eq!(item.kind, kinds::PARTICIPANT_INIT);
+
+        app.world_mut().entity_mut(body).remove::<ShouldBeDynamic>();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ReadinessRegistry>()
+                .pending()
+                .next()
+                .is_none(),
+            "the participant wait must close only after admission is visible"
+        );
     }
 
     #[test]

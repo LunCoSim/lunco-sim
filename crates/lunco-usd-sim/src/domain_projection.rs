@@ -1558,6 +1558,12 @@ pub fn project_domain_islands(
         commands.entity(entity).try_insert((
             model,
             UsdSourcedCosim,
+            // The generated ModelicaModel is installed before the ordinary
+            // wrapper pass can publish SimComponent. This is an explicit
+            // lifecycle fact, not a timing guess: consumers must wait for the
+            // wrapper's port surface instead of classifying the interval as a
+            // missing authored port.
+            lunco_core::PortSurfacePending,
             // The generated wrapper owns execution and signal lifecycle; this
             // metadata preserves the composed USD presentation topology.
             lunco_cosim::CosimOutputMetadata {
