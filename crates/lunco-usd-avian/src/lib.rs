@@ -41,11 +41,15 @@
 //! may not be loaded yet (async loading). The `process_usd_avian_prims` system runs in the
 //! `Update` schedule and retries every frame until the asset is available.
 
+use avian3d::dynamics::solver::islands::PhysicsIslands;
+use avian3d::dynamics::solver::joint_graph::JointGraph;
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::entity::EntityHashMap;
+use bevy::ecs::entity_disabling::Disabled;
 use bevy::ecs::schedule::common_conditions::any_with_component;
+use bevy::ecs::system::SystemState;
 use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
@@ -103,13 +107,13 @@ pub struct UsdAvianPlugin;
 /// despawned.
 ///
 /// Avian 0.7 removes contacts when `ColliderMarker` is removed, and removes a
-/// joint from its island when `JointDisabled` is added. A raw batch despawn
-/// skips those graph transitions long enough for `BodyIslandNode::on_remove`
-/// to observe stale constraints. Teardown therefore performs the transitions
-/// while the scene bodies are still alive and removes the disabled marker before
-/// despawn. The latter is important: Avian's `Remove<JointDisabled>` observer
-/// re-adds a joint, so leaving the marker on an entity that is about to despawn
-/// races against the body's island removal.
+/// joint from its island when the joint graph edge is removed. A raw batch
+/// despawn skips those graph transitions long enough for
+/// `BodyIslandNode::on_remove` to observe stale constraints. Teardown therefore
+/// detaches owned graph edges while the scene bodies are still alive, and only
+/// then removes the ECS components. Direct graph removal is intentional here:
+/// triggering `JointDisabled` for every joint in one batch can revisit an edge
+/// whose island has already been emptied by an earlier body teardown.
 fn prepare_scene_physics_teardown(world: &mut World) {
     let joints: Vec<(Entity, ComponentId)> = {
         let mut query = world.query_filtered::<(
@@ -132,30 +136,52 @@ fn prepare_scene_physics_teardown(world: &mut World) {
         query.iter(world).collect()
     };
 
-    // Retire constraints before contacts and bodies. Disable first so Avian
-    // unlinks each edge while its endpoints and complete island list still
-    // exist. Flush that observer before removing the authoritative component;
-    // otherwise both transitions enqueue a remove for the same graph edge.
-    for (entity, _) in &joints {
-        if let Ok(mut entity_mut) = world.get_entity_mut(*entity) {
-            entity_mut.insert(JointDisabled);
+    // Retire constraints before contacts and bodies. Avian's public graph API
+    // has the same island bookkeeping as its observer, but lets us handle an
+    // edge that is already absent from its island without calling
+    // `remove_joint` a second time. This is the shape produced by a scene swap
+    // when an endpoint's island was removed earlier in the same teardown.
+    let mut graph_state: SystemState<(
+        ResMut<PhysicsIslands>,
+        ResMut<JointGraph>,
+        Res<ContactGraph>,
+        Query<
+            &'static mut avian3d::dynamics::solver::islands::BodyIslandNode,
+            Or<(With<Disabled>, Without<Disabled>)>,
+        >,
+    )> = SystemState::new(world);
+    {
+        let Ok((mut islands, mut joint_graph, contact_graph, mut body_islands)) =
+            graph_state.get_mut(world)
+        else {
+            return;
+        };
+        for (entity, _) in &joints {
+            let Some(edge) = joint_graph.get(*entity).cloned() else {
+                continue;
+            };
+            let island_has_joints = islands
+                .get(edge.island.island_id())
+                .is_some_and(|island| island.joint_count() > 0);
+            if island_has_joints {
+                let _ = islands.remove_joint(
+                    edge.id,
+                    &mut body_islands,
+                    &contact_graph,
+                    &mut joint_graph,
+                );
+            }
+            joint_graph.remove_joint(*entity);
         }
     }
-    world.flush();
+    graph_state.apply(world);
 
-    // Remove the joint component and its disabled marker before despawn. The
-    // joint removal observer now sees no graph edge, while the disabled-removal
-    // observer cannot re-add a joint because its component is already absent.
+    // Remove the joint component and its graph marker before despawn. The
+    // joint-removal observer now sees no graph edge, so it has nothing to
+    // unlink or re-add while the scene entities are reclaimed.
     for (entity, component_id) in joints {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove_by_id(component_id);
-            // Avian's joint removal hook queues removal of `JointComponentId`.
-            // Remove that ownership marker synchronously as well: the
-            // `Remove<JointDisabled>` observer runs from the same deferred
-            // batch and must not see a marker that tells it to re-add the
-            // joint we just retired.  Leaving the hook's queued removal as a
-            // harmless no-op is preferable to allowing a graph resurrection
-            // during scene teardown.
             entity_mut.remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>();
             entity_mut.remove::<JointDisabled>();
         }
@@ -2498,9 +2524,7 @@ fn build_usd_physics_joints(
                         lin1,
                         ang1,
                         free_axis_world,
-                        authored1.is_some_and(|v| {
-                            v.linear.is_some() || v.angular.is_some()
-                        }),
+                        authored1.is_some_and(|v| v.linear.is_some() || v.angular.is_some()),
                     );
                     if (lin1 - target_lin).length() > JOINT_SEAT_EPS
                         || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS
