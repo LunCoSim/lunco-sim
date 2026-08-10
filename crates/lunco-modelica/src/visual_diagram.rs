@@ -534,6 +534,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_msl_index_accepts_indexer_output() {
+        let component = |name: &str, category: &str| crate::index::ClassEntry {
+            name: name.to_owned(),
+            kind: crate::index::ClassKind::Model,
+            source_range: None,
+            extends: Vec::new(),
+            description: String::new(),
+            children: Vec::new(),
+            icon: None,
+            documentation: (None, None),
+            equation_count: 0,
+            partial: false,
+            experiment: None,
+            ports: Vec::new(),
+            parameters: Vec::new(),
+            diagram_graphics: None,
+            icon_text: None,
+            category: category.to_owned(),
+        };
+        let expected = MslIndex {
+            components: vec![
+                component(
+                    "Modelica.Electrical.Analog.Basic.Resistor",
+                    "Electrical/Analog",
+                ),
+                component(
+                    "Modelica.Electrical.Analog.Basic.Ground",
+                    "Electrical/Analog",
+                ),
+            ],
+            bundled: Vec::new(),
+        };
+        let encoded = serde_json::to_string(&expected).expect("test index serializes");
+        let decoded = parse_msl_index(&encoded).expect("indexer format parses");
+
+        assert_eq!(decoded.components.len(), 2);
+        assert!(decoded
+            .components
+            .iter()
+            .any(|entry| entry.short_name() == "Resistor"));
+        assert!(decoded
+            .components
+            .iter()
+            .any(|entry| entry.short_name() == "Ground"));
+    }
+
+    #[test]
+    #[ignore = "requires the external MSL asset bundle and generated index"]
     fn test_msl_library_not_empty() {
         let lib = msl_class_library();
         assert!(!lib.is_empty());

@@ -11,15 +11,15 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_autopilot::usd_tree::{BehaviorXml, ReachedWaypoints, append_waypoint_leaf};
+use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml, ReachedWaypoints};
 use lunco_core::{
-    Command, ControlBinding, GlobalEntityId, InputPorts, Severity, TelemetryEvent, TelemetryValue,
-    TriggerZone, on_command, register_commands,
+    on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
+    TelemetryEvent, TelemetryValue, TriggerZone,
 };
 use lunco_usd::document::WAYPOINT_MARKER_ASSET;
 use lunco_usd_bevy::UsdPrimPath;
 
-use crate::catalog::{SpawnAnchor, SpawnCatalog, SpawnSource, spawn_usd_entry};
+use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 
 /// A runtime waypoint appended to a spawned vessel's patrol.
 ///

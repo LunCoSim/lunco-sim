@@ -1967,16 +1967,29 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `SkipTutorial`
 
  Stop the current tutorial: clear the HUD (hint, objectives, spotlight, coach
- card) and forget the current id. Leaves any loaded scene. `cmd("SkipTutorial")`.
+ card), stop its host, and clear a world owned by that tutorial through the
+ normal scene lifecycle. A UI-only tutorial leaves an unrelated loaded scene
+ alone. `cmd("SkipTutorial")`.
 
 - *defined in:* `crates/lunco-tutorial/src/lib.rs`
 - *fields:* none — call with `SkipTutorial` (no params)
 
+#### `ResetTutorialProgress`
+
+ Clear persisted tutorial completion and first-run onboarding state without
+ changing the currently loaded scene. This is the explicit recovery command
+ when the shared settings file no longer matches the installed curriculum.
+
+- *defined in:* `crates/lunco-tutorial/src/lib.rs`
+- *fields:* none — call with `ResetTutorialProgress` (no params)
+
 #### `StartTutorial`
 
- Start a tutorial by id: load its `.rhai` and run it on the host entity, and
- record it as current. The single launch path — menu, F1, HTTP API, MCP, and
- other scripts (`cmd("StartTutorial", #{ id })`) all route here.
+ Start a tutorial by id: resolve its authored curriculum entry, mount its
+ declared world through the scene lifecycle, and run its `.rhai` on the host
+ after the scene transaction completes. The single launch path — menu, F1,
+ HTTP API, MCP, and other scripts (`cmd("StartTutorial", #{ id })`) all route
+ here.
 
 - *defined in:* `crates/lunco-tutorial/src/lib.rs`
 

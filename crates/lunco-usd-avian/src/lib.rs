@@ -44,8 +44,10 @@
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::ecs::component::ComponentId;
-use bevy::ecs::entity::EntityHashMap;
+use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
+use bevy::ecs::entity_disabling::Disabled;
 use bevy::ecs::schedule::common_conditions::any_with_component;
+use bevy::ecs::system::SystemState;
 use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
@@ -103,14 +105,19 @@ pub struct UsdAvianPlugin;
 /// despawned.
 ///
 /// Avian 0.7 removes contacts when `ColliderMarker` is removed, and removes a
-/// joint from its island when `JointDisabled` is added. A raw batch despawn
-/// skips those graph transitions long enough for `BodyIslandNode::on_remove`
-/// to observe stale constraints. Teardown therefore performs the transitions
-/// while the scene bodies are still alive and removes the disabled marker before
-/// despawn. The latter is important: Avian's `Remove<JointDisabled>` observer
-/// re-adds a joint, so leaving the marker on an entity that is about to despawn
-/// races against the body's island removal.
+/// joint from its island when its joint component is removed. A raw batch
+/// despawn skips those graph transitions long enough for `BodyIslandNode::on_remove`
+/// to observe stale constraints. Teardown therefore retires the graph edges
+/// directly while the scene bodies are still alive, then removes the ECS
+/// components. Going through `JointDisabled` here is unsafe: its observer and
+/// the component-removal observer both mutate the same island list during one
+/// reload, which can unlink a joint twice.
 fn prepare_scene_physics_teardown(world: &mut World) {
+    let scene_entities: EntityHashSet = {
+        let mut query =
+            world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
+        query.iter(world).collect()
+    };
     let joints: Vec<(Entity, ComponentId)> = {
         let mut query = world.query_filtered::<(
             Entity,
@@ -132,30 +139,70 @@ fn prepare_scene_physics_teardown(world: &mut World) {
         query.iter(world).collect()
     };
 
-    // Retire constraints before contacts and bodies. Disable first so Avian
-    // unlinks each edge while its endpoints and complete island list still
-    // exist. Flush that observer before removing the authoritative component;
-    // otherwise both transitions enqueue a remove for the same graph edge.
-    for (entity, _) in &joints {
-        if let Ok(mut entity_mut) = world.get_entity_mut(*entity) {
-            entity_mut.insert(JointDisabled);
-        }
-    }
-    world.flush();
+    // Retire every graph edge touching this scene, not just joint entities that
+    // carry a scene marker. A synthesized constraint may be attached before its
+    // ownership marker is visible, while its body is already scene-owned; the
+    // body despawn must never be the first graph transition for that edge.
+    let graph_joints: Vec<Entity> = world
+        .resource::<avian3d::dynamics::solver::joint_graph::JointGraph>()
+        .graph()
+        .all_edge_weights()
+        .filter(|edge| {
+            scene_entities.contains(&edge.entity)
+                || scene_entities.contains(&edge.body1)
+                || scene_entities.contains(&edge.body2)
+        })
+        .map(|edge| edge.entity)
+        .collect();
 
-    // Remove the joint component and its disabled marker before despawn. The
-    // joint removal observer now sees no graph edge, while the disabled-removal
-    // observer cannot re-add a joint because its component is already absent.
+    let mut teardown_state: SystemState<(
+        ResMut<avian3d::dynamics::solver::islands::PhysicsIslands>,
+        ResMut<avian3d::dynamics::solver::joint_graph::JointGraph>,
+        Res<avian3d::prelude::ContactGraph>,
+        Query<
+            &'static mut avian3d::dynamics::solver::islands::BodyIslandNode,
+            Or<(With<Disabled>, Without<Disabled>)>,
+        >,
+    )> = SystemState::new(world);
+    let (mut islands, mut joint_graph, contact_graph, mut body_islands) = teardown_state
+        .get_mut(world)
+        .expect("scene physics teardown parameters must not conflict");
+
+    for entity in graph_joints {
+        let Some((joint_id, island_id)) = joint_graph
+            .get(entity)
+            .map(|edge| (edge.id, edge.island.island_id()))
+        else {
+            continue;
+        };
+
+        if island_id != avian3d::dynamics::solver::islands::IslandId::PLACEHOLDER {
+            // A stale graph edge can survive a failed admission. It has no
+            // island list entry to unlink, so discard only the edge.
+            let joint_count = islands
+                .get(island_id)
+                .map(|island| island.joint_count())
+                .unwrap_or(0);
+            if joint_count > 0 {
+                let _ = islands.remove_joint(
+                    joint_id,
+                    &mut body_islands,
+                    &contact_graph,
+                    &mut joint_graph,
+                );
+            }
+        }
+        joint_graph.remove_joint(entity);
+    }
+    drop(body_islands);
+    teardown_state.apply(world);
+
+    // Remove the joint component and any marker before despawn. The component
+    // removal observer now sees no graph edge, and removing JointComponentId
+    // first prevents a JointDisabled removal observer from re-adding anything.
     for (entity, component_id) in joints {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove_by_id(component_id);
-            // Avian's joint removal hook queues removal of `JointComponentId`.
-            // Remove that ownership marker synchronously as well: the
-            // `Remove<JointDisabled>` observer runs from the same deferred
-            // batch and must not see a marker that tells it to re-add the
-            // joint we just retired.  Leaving the hook's queued removal as a
-            // harmless no-op is preferable to allowing a graph resurrection
-            // during scene teardown.
             entity_mut.remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>();
             entity_mut.remove::<JointDisabled>();
         }
@@ -2269,9 +2316,7 @@ fn build_usd_physics_joints(
                     "[usd-avian] joint {}: {missing} still unresolved after {} physics ticks \
                      — check the joint's body rel paths and stage/instance identity; \
                      candidates={candidates:?}; retrying every {} ticks.",
-                    joint_prim_path.path,
-                    JOINT_RESOLVE_WARN_TICKS,
-                    JOINT_RESOLVE_RETRY_INTERVAL,
+                    joint_prim_path.path, JOINT_RESOLVE_WARN_TICKS, JOINT_RESOLVE_RETRY_INTERVAL,
                 );
             }
             if ticks >= JOINT_RESOLVE_MAX_TICKS {

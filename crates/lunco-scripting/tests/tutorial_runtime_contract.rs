@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rhai::{AST, Dynamic, Engine, Map, Scope};
+use rhai::{Dynamic, Engine, Map, Scope, AST};
 
 fn runtime_engine(commands: Arc<Mutex<Vec<String>>>) -> Engine {
     let mut engine = Engine::new();

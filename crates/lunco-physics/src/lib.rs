@@ -517,7 +517,9 @@ mod tests {
         assert!(world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 1);
 
-        world.resource_mut::<lunco_core::RealtimeCoupling>().physics_held = false;
+        world
+            .resource_mut::<lunco_core::RealtimeCoupling>()
+            .physics_held = false;
         world.run_system_once(grant_physics_step).unwrap();
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);

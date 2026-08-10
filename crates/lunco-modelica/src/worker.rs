@@ -164,11 +164,18 @@ impl PreparedSolveCache {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn hash_tree(root: &std::path::Path, hasher: &mut impl std::hash::Hasher) {
-        let Ok(entries) = std::fs::read_dir(root) else { return };
-        let mut paths = entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>();
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        let mut paths = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
         paths.sort();
         for path in paths {
-            let Ok(relative) = path.strip_prefix(root) else { continue };
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
             use std::hash::Hash;
             relative.to_string_lossy().hash(hasher);
             if path.is_dir() {
@@ -185,7 +192,9 @@ impl PreparedSolveCache {
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
-        let model_root = std::env::current_dir().ok().map(|root| root.join("assets/models"));
+        let model_root = std::env::current_dir()
+            .ok()
+            .map(|root| root.join("assets/models"));
         if let Some(root) = model_root {
             root.to_string_lossy().hash(&mut hasher);
             Self::hash_tree(&root, &mut hasher);
@@ -202,9 +211,11 @@ impl PreparedSolveCache {
         if !self.persistent_enabled {
             return None;
         }
-        Some(*self
-            .library_fingerprint
-            .get_or_insert_with(Self::compute_library_fingerprint))
+        Some(
+            *self
+                .library_fingerprint
+                .get_or_insert_with(Self::compute_library_fingerprint),
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -359,7 +370,8 @@ fn build_stepper(
             .map(|(name, value)| (name.clone(), value.to_bits()))
             .collect();
         let model = if let Some(library_fingerprint) = prepared.library_fingerprint() {
-            if let Some(model) = prepared.load_disk(source_key, library_fingerprint, &override_key) {
+            if let Some(model) = prepared.load_disk(source_key, library_fingerprint, &override_key)
+            {
                 bevy::log::info!(
                     "[modelica-runtime] loaded prepared solver IR for `{}`: cache=disk-hit",
                     spec.id,
@@ -4173,14 +4185,8 @@ mod artifact_cache_tests {
 
     #[test]
     fn parameter_override_cache_keys_are_order_independent() {
-        let first = canonical_parameter_overrides(&[
-            ("zeta".into(), 2.0),
-            ("alpha".into(), 1.0),
-        ]);
-        let second = canonical_parameter_overrides(&[
-            ("alpha".into(), 1.0),
-            ("zeta".into(), 2.0),
-        ]);
+        let first = canonical_parameter_overrides(&[("zeta".into(), 2.0), ("alpha".into(), 1.0)]);
+        let second = canonical_parameter_overrides(&[("alpha".into(), 1.0), ("zeta".into(), 2.0)]);
         assert_eq!(first, second);
         assert_eq!(first[0].0, "alpha");
         assert_eq!(first[1].0, "zeta");

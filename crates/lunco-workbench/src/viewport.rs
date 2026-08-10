@@ -2,14 +2,15 @@
 //!
 //! ## Architecture (read this if anything here looks weird)
 //!
-//! Two cameras share the window, and they are **layered**, not tiled:
+//! Two cameras share the window, and they are **layered**, with the scene camera
+//! tiled to the active viewport leaf when a docked layout is present:
 //!
 //! 1. The scene `Camera3d` (order 0), declared by the canonical
-//!    [`lunco_render::SceneCamera`] intent. It renders the 3D **full-window** —
-//!    [`apply_workbench_viewport`] publishes visibility into
-//!    `lunco_core::SceneViewport` with `rect = None`, and the single-authority
-//!    reconciler in `lunco-usd-bevy` actuates it. It **clears** the window's
-//!    main texture each frame.
+//!    [`lunco_render::SceneCamera`] intent. In the viewport-only perspective it
+//!    renders the 3D **full-window**; in a docked layout,
+//!    [`apply_workbench_viewport`] publishes the measured viewport leaf rect and
+//!    the single-authority reconciler in `lunco-usd-bevy` confines it to that
+//!    physical-pixel sub-rect. It **clears** the window's main texture each frame.
 //! 2. The egui host `Camera2d` (order 1) — [`WorkbenchEguiHost`], carrying
 //!    `PrimaryEguiContext`, auto-spawned by [`ensure_egui_host`]. bevy_egui
 //!    paints the chrome into *this camera's* `ViewTarget`, on top, with
@@ -81,8 +82,8 @@
 //! - `ensure_egui_host` (Startup) — auto-spawn the egui host.
 //! - `sync_egui_host_msaa` (Update) — hold the shared-main-texture invariant.
 //! - `apply_workbench_viewport` (PostUpdate, before `CameraUpdateSystems`)
-//!   — publish viewport *visibility* into `SceneViewport` (the rect stays
-//!   `None`: the 3D renders full-window and the chrome overlays it).
+//!   — publish viewport visibility and the measured dock leaf rect into
+//!   `SceneViewport`.
 //! - `check_camera_invariants` (Update, runs on `Added<Camera3d>`) —
 //!   loud failure if a window-targeting Camera3d shows up without its camera intent.
 //! - `ViewportPanel::render` — records the panel's screen rect into
@@ -798,37 +799,50 @@ pub(crate) fn ensure_egui_host(
     }
 }
 
-/// Push the workbench's layout state — is the 3D scene shown, and (future) in
-/// what rect — into [`SceneViewport`](lunco_core::SceneViewport). The
+/// Push the workbench's layout state — whether the 3D scene is shown and which
+/// physical-pixel rect it occupies — into [`SceneViewport`](lunco_core::SceneViewport). The
 /// viewport-camera reconciler in `lunco-usd-bevy` actuates it onto the actual
 /// cameras; this system deliberately does NOT touch `Camera::is_active` so the
 /// workbench and the camera switch stop fighting over it.
 pub(crate) fn apply_workbench_viewport(
     layout: Option<Res<crate::WorkbenchLayout>>,
+    panel_rects: Option<Res<PanelRects>>,
     vp: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
-    // The workbench contributes VISIBILITY (and a future rect) to the scene
-    // viewport; it never writes `Camera::is_active` — the viewport-camera
-    // reconciler in `lunco-usd-bevy` is the single authority. Gated on the
-    // *current layout's contents* (never on stale `PanelRects`):
-    //   (a) Empty layout / no layout (View perspective, tooling) → visible.
-    //   (b) Layout CONTAINS ViewportPanel (Build)                 → visible.
-    //   (c) Other panels but NO ViewportPanel (Design)            → hidden, so
-    //       no 3D reaches the framebuffer and no pass-skip leaks it under the UI.
-    let (layout_empty, layout_has_viewport) = match layout.as_ref() {
+    // The workbench contributes data only; `lunco-usd-bevy` remains the single
+    // authority that actuates `Camera::is_active` and `Camera::viewport`.
+    let (visible, rect) = resolve_scene_viewport_layout(layout.as_deref(), panel_rects.as_deref());
+    let Some(mut vp) = vp else { return };
+    vp.visible = visible;
+    vp.rect = rect;
+}
+
+/// Resolve the workbench's contribution to the scene viewport without touching
+/// ECS state. A docked scene is rendered only inside the measured
+/// `ViewportPanel` leaf; the safe transition state before that measurement
+/// exists is hidden rather than full-window, which prevents a frame of 3D from
+/// bleeding under a newly opened opaque panel.
+fn resolve_scene_viewport_layout(
+    layout: Option<&crate::WorkbenchLayout>,
+    panel_rects: Option<&PanelRects>,
+) -> (bool, Option<(UVec2, UVec2)>) {
+    let (layout_empty, layout_has_viewport) = match layout {
         None => (true, false),
         Some(l) => (
             layout_is_empty(l),
             layout_contains_panel(l, VIEWPORT_PANEL_ID),
         ),
     };
-    let Some(mut vp) = vp else { return };
-    // 3D renders full-window: the chrome panels (opaque side/top/bottom)
-    // overlay it and the scene shows through every transparent gap. `rect =
-    // None` = full window; a future sub-rect would derive it from the
-    // ViewportPanel's recorded rect.
-    vp.visible = layout_empty || layout_has_viewport;
-    vp.rect = None;
+    if layout_empty {
+        return (true, None);
+    }
+    if !layout_has_viewport {
+        return (false, None);
+    }
+    let rect = panel_rects
+        .and_then(|rects| rects.get(VIEWPORT_PANEL_ID))
+        .map(|rect| (rect.origin, rect.size));
+    (rect.is_some(), rect)
 }
 
 /// True iff `panel` appears in the active layout — either as a tab in
@@ -1468,5 +1482,54 @@ mod tests {
         gate.mark_rendered();
         gate.resolve(hovering((100.0, 100.0)));
         assert_eq!(gate.resolved(), Some(SceneTarget::MainViewport));
+    }
+
+    // ── SceneViewport layout contribution ──────────────────────────────────
+
+    #[test]
+    fn docked_viewport_uses_measured_leaf_rect() {
+        let mut layout = crate::WorkbenchLayout::default();
+        layout.center.push(VIEWPORT_PANEL_ID);
+        let mut rects = PanelRects::default();
+        let expected = PanelRect {
+            origin: UVec2::new(440, 64),
+            size: UVec2::new(1098, 798),
+        };
+        rects.record(VIEWPORT_PANEL_ID, expected);
+
+        let (visible, rect) = resolve_scene_viewport_layout(Some(&layout), Some(&rects));
+
+        assert!(visible);
+        assert_eq!(rect, Some((expected.origin, expected.size)));
+    }
+
+    #[test]
+    fn docked_viewport_waits_for_measurement() {
+        let mut layout = crate::WorkbenchLayout::default();
+        layout.center.push(VIEWPORT_PANEL_ID);
+
+        let (visible, rect) = resolve_scene_viewport_layout(Some(&layout), None);
+
+        assert!(!visible);
+        assert_eq!(rect, None);
+    }
+
+    #[test]
+    fn design_layout_never_paints_scene() {
+        let mut layout = crate::WorkbenchLayout::default();
+        layout.center.push(PanelId("lunica::diagram"));
+        let mut rects = PanelRects::default();
+        rects.record(
+            VIEWPORT_PANEL_ID,
+            PanelRect {
+                origin: UVec2::new(440, 64),
+                size: UVec2::new(1098, 798),
+            },
+        );
+
+        let (visible, rect) = resolve_scene_viewport_layout(Some(&layout), Some(&rects));
+
+        assert!(!visible);
+        assert_eq!(rect, None);
     }
 }

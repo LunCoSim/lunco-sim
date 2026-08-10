@@ -571,10 +571,13 @@ just controls the default.
 7. To use the model: drag it from Library onto viewport, or right-click
    an entity → "Attach Modelica model"
 
-Today (pre-Document-System) the workflow is rougher:
-- Code Editor and Diagram are disconnected (see § 11 Gaps)
-- Parameter changes may not trigger recompile (fixed in
-  `ModelicaInspectorPanel`; legacy `TelemetryPanel` still has the bug)
+The current workflow keeps Code Editor, Diagram, Telemetry, and Inspector on the
+same `ModelicaDocument`/operation pipeline:
+- Code Editor and Diagram edits share the document projection and reparse
+  boundary (see § 11 Gaps for the remaining visual polish)
+- Parameter edits from both the Telemetry panel and the diagram Inspector use
+  `ModelicaOp::SetParameter`, so the source, journal, projection, and compiled
+  model observe one authoritative change
 
 ## 9. The Modelica diagram editor
 
@@ -910,8 +913,8 @@ twin-journal doc; not in scope here.
 | **MSL Palette** | ✅ Working | ~20 MSL components |
 | **Library Browser** | ✅ Working | File tree of `.mo` files |
 | **Package Browser** | ✅ Working | MSL package hierarchy |
-| **Telemetry / Parameters** | ⚠️ Has parameter-update bug (see gaps) | Legacy |
-| **`ModelicaInspectorPanel`** | 🔶 Planned (not yet implemented) | Intended compact, context-aware inspector to fix the parameter-update bug |
+| **Telemetry / Parameters** | ✅ Working | Runtime values, inputs, plotting toggles, and document-backed parameter edits |
+| **Inspector** | ✅ Working | Context-aware selected-component editor backed by `ModelicaOp::SetParameter` |
 | **Graphs** | ✅ Working | Time-series via `egui_plot` |
 
 ## 11. Current gaps
@@ -920,12 +923,6 @@ The following issues are tracked as implementation work, not architectural
 decisions:
 
 ### P0 — Blocking
-
-**Parameter changes not propagated** (legacy `TelemetryPanel`): drag
-a parameter value → the UI updates the hashmap but doesn't send
-`ModelicaCommand::UpdateParameters` to the worker. Simulation keeps using
-the old value. Fixed in new `ModelicaInspectorPanel`; legacy panel to be
-retired.
 
 **Diagram ↔ Code synchronization**: The Diagram and Code editor share a single `ModelicaDocument`. Edits in either panel flow through the document and update the other on the next frame. Opening a file from the Library Browser populates both views from the same source. See § 5 and § 9 above.
 
@@ -967,7 +964,7 @@ Feature parity snapshot:
 | Library browser | ✅ | ✅ |
 | Diagram canvas | ✅ custom icons | ✅ generic rects (Dymola-style in progress) |
 | Text view | ✅ | ✅ |
-| Parameter dialog | ✅ | ⚠️ partial (P0 bug in legacy panel) |
+| Parameter dialog | ✅ | ✅ (Telemetry + selected-component Inspector) |
 | Plot variables | ✅ | ✅ (`egui_plot`) |
 | Variables browser | ✅ | ✅ |
 | Compilation pipeline | ✅ | ✅ (rumoca) |

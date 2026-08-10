@@ -1671,6 +1671,29 @@ mod tests {
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
     }
 
+    /// The public recovery command clears only persisted progress; it must not
+    /// tear down a running lesson or mutate the loaded scene.
+    #[test]
+    fn reset_progress_clears_history_without_stopping_the_lesson() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.world_mut().resource_mut::<TutorialProgress>().completed =
+            vec!["/Test/Finished".into()];
+        app.world_mut().resource_mut::<TutorialProgress>().onboarded = true;
+        app.world_mut().resource_mut::<TutorialProgress>().current = Some("/Test/Running".into());
+
+        app.world_mut().trigger(ResetTutorialProgress {});
+        app.update();
+
+        let progress = app.world().resource::<TutorialProgress>();
+        assert!(progress.completed.is_empty());
+        assert!(!progress.onboarded);
+        assert_eq!(progress.current.as_deref(), Some("/Test/Running"));
+    }
+
     /// A world-backed lesson is a transaction: it requests the world first,
     /// starts only on the completion edge, and cancelling while it is pending
     /// clears the transaction through the normal scene command.
