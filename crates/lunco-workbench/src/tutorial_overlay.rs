@@ -30,6 +30,10 @@ use lunco_core::{on_command, register_commands, Command};
 /// the commands never panic on a missing resource; only the draw is ui-gated.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct TutorialHud {
+    /// Display title of the currently running tutorial. Empty when no lesson
+    /// owns the HUD; the workbench status bar uses this as the primary lesson
+    /// identity and keeps the loaded USD filename as the secondary identity.
+    pub title: String,
     /// One-line instruction shown at the top of the HUD card. Empty = hidden.
     pub hint: String,
     /// Pre-formatted objectives checklist block (one objective per line, with a
@@ -138,6 +142,12 @@ pub struct SetTourStep {
 /// End the guided tour (hide the coach card + scrim). Rhai: `end_tour()`.
 #[Command(default)]
 pub struct ClearTour {}
+
+/// Stop the active tutorial from the coach card itself. The tutorial crate
+/// owns the lifecycle command; this event keeps the overlay independent of
+/// that crate while making Stop available wherever the coach card appears.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct TutorialStopRequested;
 
 #[on_command(SetHint)]
 fn on_set_hint(trigger: On<SetHint>, mut hud: ResMut<TutorialHud>) {
@@ -267,6 +277,15 @@ fn tutorial_overlay_visible(
         .is_none_or(|required| layout.is_some_and(|l| l.active_perspective() == Some(required)))
 }
 
+/// The workbench menu bar occupies the first 30 px of the viewport. Keep
+/// spotlight scrims, coach cards, and their placement candidates below it so a
+/// tutorial can never cover the menu it is asking the user to use.
+fn tutorial_content_rect(ctx: &egui::Context) -> egui::Rect {
+    let mut rect = ctx.viewport_rect();
+    rect.min.y += 34.0;
+    rect
+}
+
 /// Draw the spotlight: dim the screen except the anchored widget's rect, ring
 /// it with a pulsing accent, and show a caption callout. A named anchor that is
 /// not currently painted falls back to a centred caption without obscuring the
@@ -285,7 +304,7 @@ fn draw_spotlight(
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = ctx.viewport_rect();
+    let screen = tutorial_content_rect(ctx);
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
@@ -447,7 +466,7 @@ fn draw_tour(
 ) {
     let Some(step) = hud.tour.clone() else { return };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = ctx.viewport_rect();
+    let screen = tutorial_content_rect(ctx);
 
     let theme = theme
         .map(|t| t.clone())
@@ -578,6 +597,7 @@ fn draw_tour(
     let mut next = false;
     let mut back = false;
     let mut skip = false;
+    let mut stop = false;
     let mut goto: Option<usize> = None;
 
     egui::Area::new(egui::Id::new("lunco_tour_card"))
@@ -726,6 +746,13 @@ fn draw_tour(
                                 {
                                     skip = true;
                                 }
+                                if ui
+                                    .button(egui::RichText::new("Stop").color(muted).size(11.0))
+                                    .on_hover_text("Stop this tutorial and clear its scene")
+                                    .clicked()
+                                {
+                                    stop = true;
+                                }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -771,6 +798,9 @@ fn draw_tour(
             "cmd:TutorialSkip",
             lunco_core::TelemetryValue::Bool(true),
         );
+    }
+    if stop {
+        commands.trigger(TutorialStopRequested);
     }
     if let Some(i) = goto {
         emit_tour(

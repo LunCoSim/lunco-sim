@@ -803,7 +803,8 @@ fn register_graphics_settings(world: &mut World) {
     });
 }
 
-const SCENARIO_MENU_WIDTH: f32 = 300.0;
+const SCENARIO_MENU_MIN_WIDTH: f32 = 300.0;
+const SCENARIO_MENU_MAX_WIDTH: f32 = 420.0;
 const SCENARIO_MENU_HEIGHT: f32 = 360.0;
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
@@ -811,8 +812,16 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, ctx| {
-        ui.set_min_width(SCENARIO_MENU_WIDTH);
-        ui.set_max_width(SCENARIO_MENU_WIDTH);
+        ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+        ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
+        ui.label(
+            bevy_egui::egui::RichText::new(
+                "Scenarios load a world or demo. Tutorials are guided lessons layered on a world.",
+            )
+            .weak()
+            .small(),
+        );
+        ui.separator();
         let has_scene = ctx
             .resource::<CurrentScenePath>()
             .is_some_and(|path| !path.0.is_empty());
@@ -849,8 +858,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
             ui.menu_button(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
-                ui.set_min_width(SCENARIO_MENU_WIDTH);
-                ui.set_max_width(SCENARIO_MENU_WIDTH);
+                ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+                ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 if entries.is_empty() {
                     ui.label(
                         bevy_egui::egui::RichText::new("(connect to a server to download one)")
@@ -985,8 +994,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             |ui: &mut bevy_egui::egui::Ui,
              ctx: &mut MenuCtx,
              items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
-                ui.set_min_width(SCENARIO_MENU_WIDTH);
-                ui.set_max_width(SCENARIO_MENU_WIDTH);
+                ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+                ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 bevy_egui::egui::ScrollArea::vertical()
                     .max_height(SCENARIO_MENU_HEIGHT)
                     .auto_shrink([false, false])
@@ -1085,8 +1094,8 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         .unwrap_or_default();
 
     ui.menu_button("🎓 Tutorials", |ui| {
-        ui.set_min_width(SCENARIO_MENU_WIDTH);
-        ui.set_max_width(SCENARIO_MENU_WIDTH);
+        ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+        ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         let Some(registry) = registry else {
             ui.label(
                 egui::RichText::new("(tutorials unavailable)")

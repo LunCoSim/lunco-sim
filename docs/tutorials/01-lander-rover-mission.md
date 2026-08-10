@@ -898,7 +898,7 @@ fn task(me) {
 
         once(|m| {
             emit("rover_deployed");                    // wakes the autopilot (Step 10)
-            notify_kind("Rover deployed - autopilot driving. Click the rover (or press F) to take over.", "success");
+            notify_kind("Rover deployed - autopilot driving. Click the rover to take over. F toggles the authored route autopilot.", "success");
         }),
 
         // The course. The scene's Sensor events are the only arrival facts;

@@ -512,14 +512,40 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
         let ok = layout.focus_singleton(pid);
         bevy::log::info!("[FocusPanel] id={:?} focus_singleton -> {}", want, ok);
     } else {
-        // Focusing is deliberately not opening.  A perspective owns which
-        // panels are mounted; inserting a missing panel into the focused leaf
-        // can turn the viewport-only `sandbox_view` into an opaque dock and
-        // swallow the 3D scene.  Callers that want to open a panel must use the
-        // explicit View ▸ Panels layout intent (or activate a perspective
-        // preset), then FocusPanel can foreground the mounted tab.
-        bevy::log::debug!(
-            "[FocusPanel] id={:?} is not mounted in the active layout; no-op",
+        // A tutorial's named anchor is an actionable request, not a promise
+        // that the user already opened the panel. Mount the registered panel
+        // in its authored default slot, then foreground it. Floating panels
+        // have no rendered host in v0.1, so they use the side browser until
+        // detached-window support exists.
+        let Some((pid, authored_slot)) = layout
+            .panels
+            .iter()
+            .find(|(pid, _)| pid.0 == want)
+            .map(|(pid, panel)| (*pid, panel.default_slot()))
+        else {
+            bevy::log::warn!("[FocusPanel] id={:?} is not registered", want);
+            return;
+        };
+        let slot = match authored_slot {
+            PanelSlot::Floating => PanelSlot::SideBrowser,
+            slot => slot,
+        };
+        match slot {
+            PanelSlot::SideBrowser if !layout.side_browser.contains(&pid) => {
+                layout.side_browser.push(pid)
+            }
+            PanelSlot::Center if !layout.center.contains(&pid) => layout.center.push(pid),
+            PanelSlot::RightInspector if !layout.right_inspector.contains(&pid) => {
+                layout.right_inspector.push(pid)
+            }
+            PanelSlot::Bottom if !layout.bottom.contains(&pid) => layout.bottom.push(pid),
+            PanelSlot::Floating => unreachable!("floating panels are normalized above"),
+            _ => {}
+        }
+        let inserted = layout.insert_panel_into_dock(pid, slot);
+        let focused = layout.focus_singleton(pid);
+        bevy::log::info!(
+            "[FocusPanel] id={:?} opened (inserted={inserted}) and focused={focused}",
             want
         );
     }
@@ -4429,6 +4455,10 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         .get_resource::<CurrentSceneName>()
         .map(|s| s.0.clone())
         .unwrap_or_default();
+    let tutorial_title = world
+        .get_resource::<crate::tutorial_overlay::TutorialHud>()
+        .map(|hud| hud.title.clone())
+        .unwrap_or_default();
     let scene_path = world
         .get_resource::<CurrentScenePath>()
         .map(|s| s.0.clone())
@@ -4440,6 +4470,11 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         let right_reserve = 16.0
             + if perf_enabled { 300.0 } else { 0.0 }
             + if net_active { 220.0 } else { 0.0 }
+            + if !tutorial_title.is_empty() {
+                190.0
+            } else {
+                0.0
+            }
             + if !scene_name.is_empty() { 150.0 } else { 0.0 };
 
         let status_width = (ui.available_width() - right_reserve).max(160.0);
@@ -4486,6 +4521,15 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
 
         if response.clicked() {
             egui::Popup::toggle_id(ui.ctx(), popup_id);
+        }
+
+        if !tutorial_title.is_empty() {
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!("🎓 {tutorial_title}"))
+                    .small()
+                    .strong(),
+            );
         }
 
         if !scene_name.is_empty() {

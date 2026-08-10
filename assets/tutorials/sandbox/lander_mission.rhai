@@ -49,7 +49,7 @@ fn lander_touchdown_message(me) {
 }
 
 fn lander_deployed_message(me) {
-    hint("The rover is driving itself. Take it: click the rover, or press F.");
+    hint("The rover is driving itself. Take it by clicking the rover; F toggles its authored route autopilot.");
 }
 
 fn lander_human_takeover(me) {
@@ -122,7 +122,7 @@ fn mission(me) {
         // 3 — take over. Completes when a PERSON holds the rover, however they got
         // it. NOT an event latch: possessing the lander must not satisfy this.
         objective("takeover", #{
-            text: "Take control of the deployed rover (click it or press F)",
+            text: "Take control of the deployed rover by clicking it",
             requires: ["deploy"],
             done: Fn("lander_human_has_control"),
             on_complete: Fn("lander_human_takeover"),

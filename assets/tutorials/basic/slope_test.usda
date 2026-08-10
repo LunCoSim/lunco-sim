@@ -14,7 +14,7 @@
 def Xform "SlopeTest" (
     kind = "assembly"
     doc = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
 
@@ -47,6 +47,20 @@ def Xform "SlopeTest" (
         }
     }
     uniform bool lunco:spawnable = false
+
+    # The rover antenna includes an Earth tracker. Keep this teaching scene
+    # physically honest by providing its authored lunar site frame and
+    # celestial hierarchy, just like the production sandbox.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.3
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
 
     # Flat approach plot, ±60 m.
     def Cube "Ground" (

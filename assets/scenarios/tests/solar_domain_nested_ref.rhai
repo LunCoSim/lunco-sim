@@ -78,6 +78,7 @@ fn port_or_zero(elec, rover, member, field) {
 /// every motor has one. Spelling it `Motor_FL` names a port that does not exist,
 /// which reads back exactly like an island that failed to publish.
 const MOTOR = "RockerL_x2f_Motor__FL";
+const ENVIRONMENT_WARMUP_S = 1.0;
 
 fn on_start(me) {
     this.t = 0.0;
@@ -165,11 +166,11 @@ fn on_tick(me) {
             // this rig is about. If IT is down, generated electrical islands are
             // broken outright and neither solar result means anything.
             if !b_live {
-                let why = "the BASELINE battery island (no panel) publishes no " +
-                          "ports either, so generated electrical islands are not " +
-                          "working at all and nothing here is a statement about " +
-                          "solar. Fix that first — the two solar rovers cannot " +
-                          "be read until it is up";
+                let why = "the BASELINE battery island (no panel) publishes no ";
+                why += "ports either, so generated electrical islands are not ";
+                why += "working at all and nothing here is a statement about ";
+                why += "solar. Fix that first — the two solar rovers cannot ";
+                why += "be read until it is up";
                 fail_fast(why, "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
                 return;
             }
@@ -186,17 +187,27 @@ fn on_tick(me) {
             return;
         }
 
-        // All three up. Take the at-rest panel reading, then load the bus.
+        // All three up. The environment provider may publish its first finite
+        // mount-frame Sun vector after the generated islands become live. Keep
+        // the rovers at rest until that startup projection has had a bounded
+        // chance to arrive; otherwise a valid panel is sampled as zero on the
+        // first participant tick and the test blames reference composition.
+        if this.t < ENVIRONMENT_WARMUP_S { return; }
+
+        // Take the at-rest panel reading, then load the bus.
         this.d_panel_rest = port_or_zero(this.d_elec, "Direct", "SolarPanel", "power_out");
         this.n_panel_rest = port_or_zero(this.n_elec, "Nested", "SolarPanel", "power_out");
-        print("[solar-nested] t=" + r2(this.t) + "  battery=up direct=up nested=up" +
-              "  panel@rest direct=" + r2(this.d_panel_rest) +
-              "W nested=" + r2(this.n_panel_rest) + "W");
+        let panel_line = "[solar-nested] t=" + r2(this.t);
+        panel_line += "  battery=up direct=up nested=up";
+        panel_line += "  panel@rest direct=" + r2(this.d_panel_rest);
+        panel_line += "W nested=" + r2(this.n_panel_rest) + "W";
+        print(panel_line);
 
         this.phase = "drive";
         this.drive_until = this.t + this.drive_s;
-        print("[solar-nested] loading the bus: full throttle straight for " +
-              r2(this.drive_s) + "s");
+        let load_line = "[solar-nested] loading the bus: full throttle straight for ";
+        load_line += r2(this.drive_s) + "s";
+        print(load_line);
         return;
     }
 
@@ -217,10 +228,11 @@ fn on_tick(me) {
         // would report a wiring fault as a solver fault.
         if !island_live(this.b_elec, "BatteryOnly", MOTOR, "electrical_power") {
             this.done = true;
-            fail_fast("the baseline island publishes no `" +
-                      port_name("BatteryOnly", MOTOR, "electrical_power") +
-                      "` port at all, so the motor is not a member of the " +
-                      "generated model and no draw could be read from any rover",
+            let missing = "the baseline island publishes no `";
+            missing += port_name("BatteryOnly", MOTOR, "electrical_power");
+            missing += "` port at all, so the motor is not a member of the ";
+            missing += "generated model and no draw could be read from any rover";
+            fail_fast(missing,
                       "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
             return;
         }
@@ -243,12 +255,13 @@ fn on_tick(me) {
         // child `Port` entity and is not readable by name here.
         if !this.traced {
             this.traced = true;
-            print("[solar-nested] demand chain  rover.throttle=" +
-                  get(this.b_rover, "throttle") +
-                  "  island.drive_left=" + get(this.b_elec, "drive_left") +
-                  "  motor.demand=" +
-                  get(this.b_elec, port_name("BatteryOnly", MOTOR, "demand")) +
-                  "  motor.electrical_power=" + b);
+            let trace = "[solar-nested] demand chain  rover.throttle=";
+            trace += get(this.b_rover, "throttle");
+            trace += "  island.drive_left=" + get(this.b_elec, "drive_left");
+            trace += "  motor.demand=";
+            trace += get(this.b_elec, port_name("BatteryOnly", MOTOR, "demand"));
+            trace += "  motor.electrical_power=" + b;
+            print(trace);
         }
         if b > this.b_draw { this.b_draw = b; }
         if d > this.d_draw { this.d_draw = d; }
@@ -258,9 +271,11 @@ fn on_tick(me) {
     }
 
     this.done = true;
-    print("[solar-nested] t=" + r2(this.t) + "  peak motor draw  battery=" +
-          r2(this.b_draw) + "W direct=" + r2(this.d_draw) + "W nested=" +
-          r2(this.n_draw) + "W");
+    let peak_line = "[solar-nested] t=" + r2(this.t);
+    peak_line += "  peak motor draw  battery=" + r2(this.b_draw) + "W";
+    peak_line += " direct=" + r2(this.d_draw) + "W nested=";
+    peak_line += r2(this.n_draw) + "W";
+    print(peak_line);
 
     // ── The second anti-trivial gate ─────────────────────────────────────────
     // The baseline's motors are on the same demand wiring as the solar rovers'.
@@ -269,11 +284,11 @@ fn on_tick(me) {
     // about solar. A test that reported "solar draws nothing" in that state
     // would be blaming the wrong subsystem, loudly.
     if this.b_draw <= 0.0 {
-        let why = "the BASELINE rover (no panel) drew NO motor current under " +
-                  "full throttle, so `Electrical.inputs:drive_left|right` are " +
-                  "not reaching the motors on any rover and the solar readings " +
-                  "below measure the wiring, not the panel. Fix the boundary " +
-                  "inputs first";
+        let why = "the BASELINE rover (no panel) drew NO motor current under ";
+        why += "full throttle, so `Electrical.inputs:drive_left|right` are ";
+        why += "not reaching the motors on any rover and the solar readings ";
+        why += "below measure the wiring, not the panel. Fix the boundary ";
+        why += "inputs first";
         fail_fast(why, "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
         return;
     }

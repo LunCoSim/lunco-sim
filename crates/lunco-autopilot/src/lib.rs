@@ -594,6 +594,48 @@ fn default_cone() -> f64 {
 }
 
 impl BehaviorSpec {
+    /// Whether this tree contains an authored movement or steering action.
+    ///
+    /// A human's autopilot hotkey must not release keyboard authority into an
+    /// empty holding tree: without this distinction, pressing F on a normal
+    /// hand-driven rover looked like a successful mode switch while the rover
+    /// stopped responding. Guards, waits, brakes, and instrumentation do not
+    /// count as a route.
+    pub fn has_motion(&self) -> bool {
+        match self {
+            Self::DriveTo { .. }
+            | Self::Cruise { .. }
+            | Self::Face { .. }
+            | Self::Follow { .. }
+            | Self::Intercept { .. }
+            | Self::SteerClear { .. } => true,
+            Self::Patrol { waypoints, .. } => !waypoints.is_empty(),
+            Self::Sequence { children }
+            | Self::Selector { children }
+            | Self::Parallel { children, .. }
+            | Self::ReactiveSequence { children }
+            | Self::ReactiveSelector { children } => children.iter().any(Self::has_motion),
+            Self::Forever { child }
+            | Self::Repeat { child, .. }
+            | Self::Invert { child }
+            | Self::ForceSuccess { child }
+            | Self::ForceFailure { child }
+            | Self::Retry { child, .. }
+            | Self::Timeout { child, .. }
+            | Self::Cooldown { child, .. } => child.has_motion(),
+            Self::Arrived { .. }
+            | Self::Wait { .. }
+            | Self::Brake
+            | Self::Facing { .. }
+            | Self::Succeed
+            | Self::Fail
+            | Self::ObstacleAhead { .. }
+            | Self::Hold
+            | Self::PathBlocked { .. }
+            | Self::RunTool { .. } => false,
+        }
+    }
+
     /// Collect the [`GlobalEntityId`]s (api_ids) this tree's tracking leaves
     /// ([`Follow`](Self::Follow) / [`Intercept`](Self::Intercept)) reference
     /// into `out`. Returns `true` if the tree contains a leaf that scans the
@@ -2456,6 +2498,26 @@ mod tests {
             radius: 1.0,
             dwell: 0.0,
         }
+    }
+
+    #[test]
+    fn empty_autopilot_tree_is_not_a_movement_route() {
+        assert!(!BehaviorSpec::Brake.has_motion());
+        assert!(!BehaviorSpec::Patrol {
+            waypoints: Vec::new(),
+            speed: 0.6,
+            radius: 1.0,
+            dwell: 0.0,
+        }
+        .has_motion());
+    }
+
+    #[test]
+    fn nested_autopilot_tree_reports_movement() {
+        let tree = BehaviorSpec::Sequence {
+            children: vec![BehaviorSpec::PathBlocked { distance: 2.0 }, patrol(&[10.0])],
+        };
+        assert!(tree.has_motion());
     }
 
     fn ctx_at(x: f64) -> DriveCtx {

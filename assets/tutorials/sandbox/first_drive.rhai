@@ -46,7 +46,7 @@ fn mission(me) {
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
         objective("possess", #{
-            text: "Click the rover (or press F) to take control",
+            text: "Click the rover to take control. F toggles autopilot when a route is authored.",
             done: Fn("first_drive_controlled"),
             on_complete: Fn("first_drive_possessed"),
         }),

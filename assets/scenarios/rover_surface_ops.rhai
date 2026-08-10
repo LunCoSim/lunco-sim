@@ -50,7 +50,7 @@ fn release_notice(me) {
 fn engage_notice(me) {
     emit("rover_deployed");
     cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
-    notify_kind("Rover deployed - autopilot driving the course. Click the rover (or press F) to take over.", "success");
+    notify_kind("Rover deployed - autopilot driving the course. Click the rover to take over. F toggles the authored route autopilot.", "success");
 }
 
 fn gate_one_notice(me) {
