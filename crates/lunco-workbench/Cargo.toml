@@ -51,6 +51,9 @@ egui_dock = { version = "0.20", features = ["serde"] }
 # `OpenFolder`, `OpenTwin`, ...) onto the same typed-command bus that
 # domain crates already use.
 lunco-core = { path = "../lunco-core" }
+# The overlay is a view of the controller's authored keymap; it must not keep a
+# second list of keyboard labels that drifts when keybindings.json changes.
+lunco-controller = { path = "../lunco-controller" }
 # Tool-execution adapter. The `science::take_photo` instrument registers as a closure tool
 # whose body triggers the typed `CaptureFromCamera` directly (no JSON, no reflection). It is
 # registered HERE, next to that command's render-world observer — see `src/screenshot.rs`.

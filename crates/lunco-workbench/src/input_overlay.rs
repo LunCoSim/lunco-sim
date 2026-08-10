@@ -6,6 +6,7 @@
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use lunco_controller::{default_key_bindings, default_key_code, key_label};
 use lunco_core::{on_command, register_commands, Command};
 use std::collections::HashSet;
 
@@ -79,32 +80,16 @@ fn on_toggle_input_overlay(
 #[on_command(SimulateInput)]
 fn on_simulate_input(trigger: On<SimulateInput>, mut simulated: ResMut<SimulatedInputs>) {
     let cmd = trigger.event();
-    // Every key the vessel control profile actually binds. The old list stopped
-    // at W/A/S/D/Space/Shift, so `SimulateInput` for anything else was accepted
-    // and silently dropped — most visibly `G`, the release-to-autopilot key: a
-    // scripted handback fired the command, changed the flight authority, and
-    // showed the viewer nothing at all.
-    let code = match cmd.key.as_str() {
-        "W" | "w" => Some(KeyCode::KeyW),
-        "A" | "a" => Some(KeyCode::KeyA),
-        "S" | "s" => Some(KeyCode::KeyS),
-        "D" | "d" => Some(KeyCode::KeyD),
-        "Q" | "q" => Some(KeyCode::KeyQ),
-        "E" | "e" => Some(KeyCode::KeyE),
-        "G" | "g" => Some(KeyCode::KeyG),
-        "R" | "r" => Some(KeyCode::KeyR),
-        "L" | "l" => Some(KeyCode::KeyL),
-        "M" | "m" => Some(KeyCode::KeyM),
-        "Space" | "space" => Some(KeyCode::Space),
-        "Shift" | "shift" => Some(KeyCode::ShiftLeft),
-        _ => {
-            warn!(
-                "[input-overlay] SimulateInput: unmapped key {:?} — ignored",
-                cmd.key
-            );
-            None
-        }
-    };
+    // Resolve through the same bundled keymap that builds the real semantic
+    // input map and draws the overlay. There is one input vocabulary, not a
+    // second Rust-only simulation list.
+    let code = default_key_code(&cmd.key).or_else(|| {
+        warn!(
+            "[input-overlay] SimulateInput: key {:?} is not in the keymap — ignored",
+            cmd.key
+        );
+        None
+    });
     if let Some(c) = code {
         if cmd.pressed {
             simulated.keys.insert(c);
@@ -191,8 +176,8 @@ pub fn draw_input_overlay(
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
 
-    let panel_w = 430.0;
-    let panel_h = 52.0;
+    let panel_w = 700.0;
+    let panel_h = 86.0;
     let x = (window.width() - panel_w) / 2.0;
     let y = window.height() - panel_h - 20.0;
 
@@ -206,7 +191,7 @@ pub fn draw_input_overlay(
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .corner_radius(6.0)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         // Keyboard key visualizer, drawn as KEYCAP CHIPS. A pressed
                         // key fills its chip with the warning (amber) token and
                         // flips the glyph dark — a colored-text-only pressed state
@@ -240,59 +225,13 @@ pub fn draw_input_overlay(
                         };
 
                         ui.label(egui::RichText::new("⌨").size(15.0).weak());
-                        draw_key(
-                            ui,
-                            "W",
-                            keys.pressed(KeyCode::KeyW) || simulated.keys.contains(&KeyCode::KeyW),
-                        );
-                        draw_key(
-                            ui,
-                            "A",
-                            keys.pressed(KeyCode::KeyA) || simulated.keys.contains(&KeyCode::KeyA),
-                        );
-                        draw_key(
-                            ui,
-                            "S",
-                            keys.pressed(KeyCode::KeyS) || simulated.keys.contains(&KeyCode::KeyS),
-                        );
-                        draw_key(
-                            ui,
-                            "D",
-                            keys.pressed(KeyCode::KeyD) || simulated.keys.contains(&KeyCode::KeyD),
-                        );
-                        ui.separator();
-                        draw_key(
-                            ui,
-                            "Space",
-                            keys.pressed(KeyCode::Space)
-                                || simulated.keys.contains(&KeyCode::Space),
-                        );
-                        draw_key(
-                            ui,
-                            "Shift",
-                            keys.pressed(KeyCode::ShiftLeft)
-                                || keys.pressed(KeyCode::ShiftRight)
-                                || simulated.keys.contains(&KeyCode::ShiftLeft),
-                        );
-                        // Q/E yaw and G (release to autopilot) are bound by the
-                        // vessel control profile and were missing from the row —
-                        // so the single most important keystroke in a piloted
-                        // landing, the handback, was invisible.
-                        draw_key(
-                            ui,
-                            "Q",
-                            keys.pressed(KeyCode::KeyQ) || simulated.keys.contains(&KeyCode::KeyQ),
-                        );
-                        draw_key(
-                            ui,
-                            "E",
-                            keys.pressed(KeyCode::KeyE) || simulated.keys.contains(&KeyCode::KeyE),
-                        );
-                        draw_key(
-                            ui,
-                            "G",
-                            keys.pressed(KeyCode::KeyG) || simulated.keys.contains(&KeyCode::KeyG),
-                        );
+                        for (_, binding) in default_key_bindings() {
+                            let label = key_label(&binding);
+                            let pressed = binding
+                                .iter()
+                                .any(|key| keys.pressed(*key) || simulated.keys.contains(key));
+                            draw_key(ui, &label, pressed);
+                        }
                         ui.separator();
 
                         // WHO IS FLYING. A key row shows inputs arriving; it

@@ -36,14 +36,10 @@
 
 //!@ui      albedo            color  "Albedo"
 //!@default albedo            0.13,0.13,0.13
-//!@ui      macro_clump_scale 1 20   "Macro clump scale (/m)"
-//!@default macro_clump_scale 8
-//!@ui      macro_bump        0 0.3  "Meso hummock strength"
-//!@default macro_bump        0.1
-//!@ui      mid_scale         0.02 1 "Meso hummock scale (/m)"
-//!@default mid_scale         0.45
-//!@ui      mid_bump          0 1.5  "Mid hummock strength"
-//!@default mid_bump          0.6
+//!@ui      tooth_scale       4 40    "Regolith tooth scale (/m)"
+//!@default tooth_scale       8
+//!@ui      tooth_bump        0 0.05  "Regolith tooth strength"
+//!@default tooth_bump        0.012
 //!@ui      fine_scale        50 400 "Fine grain scale (/m)"
 //!@default fine_scale        180
 //!@ui      fine_bump         0 0.1  "Fine grain strength"
@@ -91,10 +87,8 @@
 //!@default lod_depth         0
 struct Material {
     albedo:            vec3<f32>,
-    macro_clump_scale: f32,
-    macro_bump:        f32,
-    mid_scale:         f32,
-    mid_bump:          f32,
+    tooth_scale:       f32,
+    tooth_bump:        f32,
     fine_scale:        f32,
     fine_bump:         f32,
     rough_mix:         f32,
@@ -306,34 +300,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         n = normalize(mix(n, n_baked, weight_normal));
     }
 
-    //   • meso hummocks — the ~0.7–2 m relief band. The geometry stack carries
-    //     craters ≥ 0.4 m as real relief, but between discrete craterlets real
-    //     regolith still undulates (buried, saturated, gardened relief) at this
-    //     scale; its absence was the "one step forward and the ground is a flat
-    //     sheet" read. Normal-only is fine here: sub-2 m features at standing
-    //     height don't need parallax. Two octave-spaced layers, footprint-faded.
-    let meso_scale = max(mat.mid_scale, 0.02);           // default 0.45 → λ ≈ 2.2 m
-    let meso_fade  = aa_fade(meso_scale, pw);
-    var meso_h = 0.5;
-    if (meso_fade > 0.0) {
-        n = bump_layer(n, p, meso_scale, 3, 0.55, 0.35, 0.65, mat.macro_bump * meso_fade, &meso_h);
-    }
-    let subm_scale = meso_scale * 3.0;                   // λ ≈ 0.74 m
-    let subm_fade  = aa_fade(subm_scale, pw);
-    var subm_h = 0.5;
-    if (subm_fade > 0.0) {
-        n = bump_layer(n, p, subm_scale, 2, 0.5, 0.40, 0.60, mat.macro_bump * 0.6 * subm_fade, &subm_h);
-    }
-
-    //   • regolith tooth — smooth decimetre dimples that give the close-up ground
-    //     life without pretending to be geometry. Both octaves footprint-faded so
-    //     they never alias into shimmer. Amplitude/scale reuse mid_bump/macro_clump_scale
-    //     (freed by dropping the fake relief) so they stay live-tunable via hot-reload.
-    let tooth_scale = clamp(mat.macro_clump_scale, 4.0, 40.0); // default 8 → ≈12 cm
+    //   • regolith tooth — a sub-decimetre material detail. All relief at metre
+    //     scale belongs to the DEM/mesh; normal-only FBM at that scale produced
+    //     painted black patches under the authored grazing sun.
+    let tooth_scale = clamp(mat.tooth_scale, 4.0, 40.0);
     let tooth_fade  = aa_fade(tooth_scale, pw);
     var tooth_h = 0.5;
     if (tooth_fade > 0.0) {
-        n = bump_layer(n, p, tooth_scale, 3, 0.5, 0.40, 0.62, mat.mid_bump * 0.12 * tooth_fade, &tooth_h);
+        n = bump_layer(n, p, tooth_scale, 3, 0.5, 0.40, 0.62, mat.tooth_bump * tooth_fade, &tooth_h);
     }
 
     //   • fine regolith grain — millimetre tooth that catches the grazing sun in
@@ -353,13 +327,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Metre-scale tonal grain: between the 250 m dust wash above and the
     // normal-only micro layers there was NO albedo variation at human scale, so
     // genuinely smooth ground read as untextured plastic. Disturbed (cresting)
-    // regolith is subtly brighter than compacted lows — tie a touch of the meso
-    // height in, plus an independent ~3 m fbm. Footprint-faded like the bumps.
+    // regolith is subtly brighter than compacted lows through an independent
+    // ~3 m albedo variation. This changes colour only; it never invents relief.
     let grain_fade = aa_fade(0.35, pw);
     if (grain_fade > 0.0) {
         let grain = surface_fbm(p * 0.35, 2, 0.5);
         albedo *= 1.0 + (grain - 0.5) * 0.16 * grain_fade;
-        albedo *= 1.0 + (meso_h - 0.5) * 0.10 * meso_fade;
     }
 
     // Baked relief tone: rims/ejecta brighter, bowls darker (normal_tex alpha,

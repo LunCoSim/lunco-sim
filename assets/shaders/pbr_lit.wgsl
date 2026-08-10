@@ -61,7 +61,12 @@ fn lit_n(
     pbr_input.world_normal = pbr_functions::prepare_world_normal(
         normalize(in.world_normal), false, is_front);
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
-    pbr_input.N = n;
+    // Custom shading normals must follow the rendered face as well. This is
+    // essential for the double-sided seam walls on streamed terrain: their
+    // geometric normal is intentionally authored once, while the fragment may
+    // arrive through either winding. Without this flip the reverse face is lit
+    // with an inward normal and becomes a black strip.
+    pbr_input.N = select(-n, n, is_front);
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
     pbr_input.material.base_color = vec4(base_color, 1.0);
     pbr_input.material.perceptual_roughness = perceptual_roughness;

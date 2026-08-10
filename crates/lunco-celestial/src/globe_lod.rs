@@ -154,12 +154,11 @@ impl GlobeHandoff {
         oracle: Arc<SurfaceOracle>,
         half_extent: f64,
     ) -> Self {
-        // The DEM is in the body's absolute vertical datum. The bridge must not
-        // turn a kilometre-scale datum offset into a near-vertical wall at the
-        // crop edge. Choose the first tangent distance where the mean sphere's
-        // sagitta reaches that measured border datum, then use the authored
-        // footprint as the minimum. This is the body geometry's scale, not a
-        // visual fudge factor.
+        // The DEM is in the body's absolute vertical datum. The body-scale
+        // sagitta determines the source-to-sphere collar below; the finite DEM
+        // source itself must only carry its measured edge relief through one
+        // raster posting. Extending the edge sample across the whole collar
+        // turns a real edge feature into an invented apron.
         let border_datum = oracle.grid().border_datum();
         let sagitta_distance = (2.0 * radius_m * border_datum.abs()).sqrt();
         let blend_m = half_extent.max(sagitta_distance).max(0.0);
@@ -351,36 +350,6 @@ fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
     }
 }
 
-/// Whether a direction lies in the exact DEM square.
-fn tile_fully_in_handoff(face: u8, level: u32, i: i32, j: i32, handoff: &GlobeHandoff) -> bool {
-    let geometry = handoff.geometry();
-    [
-        (
-            -1.0 + i as f64 * 2.0 / (1i64 << level) as f64,
-            -1.0 + j as f64 * 2.0 / (1i64 << level) as f64,
-        ),
-        (
-            -1.0 + (i + 1) as f64 * 2.0 / (1i64 << level) as f64,
-            -1.0 + j as f64 * 2.0 / (1i64 << level) as f64,
-        ),
-        (
-            -1.0 + i as f64 * 2.0 / (1i64 << level) as f64,
-            -1.0 + (j + 1) as f64 * 2.0 / (1i64 << level) as f64,
-        ),
-        (
-            -1.0 + (i + 1) as f64 * 2.0 / (1i64 << level) as f64,
-            -1.0 + (j + 1) as f64 * 2.0 / (1i64 << level) as f64,
-        ),
-        (
-            -1.0 + (i as f64 + 0.5) * 2.0 / (1i64 << level) as f64,
-            -1.0 + (j as f64 + 0.5) * 2.0 / (1i64 << level) as f64,
-        ),
-    ]
-    .iter()
-    .map(|&(u, v)| cube_to_sphere(face, u, v))
-    .all(|direction| geometry.contains(direction))
-}
-
 /// Whether two tiles overlap on the sphere: same body face and one is the
 /// other's quadtree ancestor (or the same node).
 fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
@@ -511,12 +480,10 @@ pub(crate) fn update_globe_lod(
             );
         }
 
-        // Site DEM handoff: tiles fully under the curved terrain patch are
-        // never desired (see `GlobeHandoff`). Retirement below then lets any
-        // resident tile there go once its surviving siblings are up.
-        if let Some(handoff) = handoff {
-            desired.retain(|c| !tile_fully_in_handoff(c.face, c.level, c.i, c.j, handoff));
-        }
+        // Site DEM handoff is resolved by exact per-triangle clipping in the
+        // globe mesh. Keep the quadtree cover intact: a tile's spherical
+        // triangles are not the local terrain square, and retiring a tile from
+        // a few direction samples can leave an uncovered outside sliver.
 
         // Spawn newly-desired tiles FIRST (so this frame's spawns count as
         // coverage for retirement below), BUDGETED per frame by
@@ -735,18 +702,12 @@ pub(crate) fn update_globe_lod(
             let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
             fn covered(
                 set: &HashSet<TileCoord>,
-                handoff: Option<&GlobeHandoff>,
                 body: Entity,
                 face: u8,
                 level: u32,
                 i: i32,
                 j: i32,
             ) -> bool {
-                // The exact DEM square is an intentional globe omission because
-                // the local terrain projection owns those triangles.
-                if handoff.is_some_and(|h| tile_fully_in_handoff(face, level, i, j, h)) {
-                    return true;
-                }
                 if set.contains(&TileCoord {
                     body,
                     face,
@@ -761,12 +722,12 @@ pub(crate) fn update_globe_lod(
                 }
                 (0..2).all(|di| {
                     (0..2).all(|dj| {
-                        covered(set, handoff, body, face, level + 1, i * 2 + di, j * 2 + dj)
+                        covered(set, body, face, level + 1, i * 2 + di, j * 2 + dj)
                     })
                 })
             }
             for face in 0..6u8 {
-                if !covered(&resident, handoff, body_ent, face, 0, 0, 0) {
+                if !covered(&resident, body_ent, face, 0, 0, 0) {
                     warn!(
                         "globe LOD hole: body {body_ent} face {face} uncovered ({} resident, {} retiring)",
                         resident.len(),
@@ -781,23 +742,6 @@ pub(crate) fn update_globe_lod(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_terrain_globe::quad_sphere::tile_center_uv;
-
-    const MOON_RADIUS_M: f64 = 1_737_400.0;
-
-    /// The source-backed handoff `placement.rs` builds for a given footprint.
-    fn handoff_for(half_extent_m: f64, dir: DVec3) -> GlobeHandoff {
-        use lunco_obstacle_field::field::HeightGrid;
-
-        GlobeHandoff::new(
-            dir,
-            DVec3::Z,
-            DVec3::Y,
-            MOON_RADIUS_M,
-            Arc::new(SurfaceOracle::bare(Arc::new(HeightGrid::new_flat(3, 1.0)))),
-            half_extent_m,
-        )
-    }
 
     #[test]
     fn finite_dem_edge_relief_is_not_extruded_into_the_globe_collar() {
@@ -822,30 +766,6 @@ mod tests {
         assert_eq!(source.height_at(10.0, 10.0), 200.0);
         assert_eq!(source.height_at(20.0, 20.0), 100.0);
         assert!(source.height_at(15.0, 15.0) < 200.0);
-    }
-
-    /// The handoff keeps the exact DEM square out of the globe LOD set.
-    ///
-    /// A tile may straddle the exact DEM square, so the tile remains resident and
-    /// the mesh builder clips only its outside triangles. A fully covered tile is
-    /// removed from the LOD set altogether.
-    #[test]
-    fn a_dem_sized_handoff_drops_only_fully_covered_tiles() {
-        let (face, level, i, j) = (0u8, 8u32, 128, 128);
-        let (u, v) = tile_center_uv(face, level, i, j);
-        let dir = cube_to_sphere(face, u, v).normalize();
-
-        assert!(
-            tile_fully_in_handoff(face, level, i, j, &handoff_for(20_000.0, dir)),
-            "a tile wholly inside the DEM square is removed"
-        );
-        assert!(!tile_fully_in_handoff(
-            face,
-            level,
-            i,
-            j,
-            &handoff_for(1.0, dir)
-        ));
     }
 
     #[test]

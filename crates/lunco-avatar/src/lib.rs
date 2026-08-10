@@ -2868,14 +2868,8 @@ fn avatar_behavior_input_system(
     >,
     q_grids: Query<&Grid>,
     sensitivity: Res<MouseSensitivity>,
-    mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
-    // Only process look input when right mouse button is held.
-    if !mouse.pressed(MouseButton::Right) {
-        return;
-    }
-
     let Some((analog, surface_mode)) = q_avatar.iter().next() else {
         return;
     };
