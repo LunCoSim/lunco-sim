@@ -39,7 +39,6 @@ use crate::stream_viz::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
-pub use overzoom::default_overzoom_layer;
 pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]

@@ -33,7 +33,8 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::coords::GridPos;
 use lunco_terrain_core::{
-    field_map, AspectField, ElevationField, HeightSource, SlopeField, Square, SurfaceField,
+    field_map, normal_at_bounded, AspectField, BoundedHeightSource, ElevationField, SlopeField,
+    Square, SurfaceField,
 };
 
 use crate::oracle::SurfaceOracle;
@@ -121,8 +122,9 @@ impl ApiQueryProvider for TerrainHeightProvider {
             let eps = eps_override
                 .unwrap_or_else(|| oracle.spacing() as f64)
                 .max(1e-6);
-            let n = HeightSource::normal_at(oracle.as_ref(), p.0.x, p.0.z, eps);
-            let slope = HeightSource::slope_at(oracle.as_ref(), p.0.x, p.0.z, eps);
+            let half = oracle.half_extent() as f64;
+            let n = normal_at_bounded(oracle.as_ref(), p.0.x, p.0.z, eps, half);
+            let slope = n[1].clamp(-1.0, 1.0).acos();
 
             let entity = world
                 .get_resource::<ApiEntityRegistry>()
@@ -157,10 +159,9 @@ impl ApiQueryProvider for TerrainHeightProvider {
 ///
 /// returns: `{ found, field, res, half, center:[x,z], min, max, data:[f32; res*res] }`
 /// where `data` is row-major (row `iz` outer, `ix` inner), texel `(ix,iz)` sampled at
-/// the texel centre. `{ found: false }` when no DEM terrain covers the centre. The
-/// region is sampled as-is against the covering terrain's oracle; texels past the
-/// footprint edge take the oracle's clamped/extrapolated value (no NoData mask yet —
-/// that arrives with tiled multi-map coverage).
+/// the texel centre. `{ found: false }` when the complete requested square is not
+/// covered by one DEM. A finite footprint is required so a field never silently
+/// turns an outside region into repeated edge terrain.
 pub struct TerrainFieldProvider;
 
 impl ApiQueryProvider for TerrainFieldProvider {
@@ -195,6 +196,12 @@ impl ApiQueryProvider for TerrainFieldProvider {
                 "TerrainField: `half` must be > 0".to_string(),
             );
         }
+        if !x.is_finite() || !z.is_finite() || !half.is_finite() {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "TerrainField: `x`, `z`, and `half` must be finite".to_string(),
+            );
+        }
         let res = params
             .get("res")
             .and_then(serde_json::Value::as_u64)
@@ -213,14 +220,15 @@ impl ApiQueryProvider for TerrainFieldProvider {
         // boundary — `Square` is DEM-frame math).
         for oracle in terrains {
             let hx = oracle.half_extent() as f64;
-            if center.0.x.abs() > hx || center.0.z.abs() > hx {
+            if center.0.x.abs() + half > hx || center.0.z.abs() + half > hx {
                 continue;
             }
             let region = Square {
                 center: [center.0.x, center.0.z],
                 half,
             };
-            let data = field_map(field.as_ref(), oracle.as_ref(), &region, res);
+            let bounded = BoundedHeightSource::new(oracle.as_ref(), hx);
+            let data = field_map(field.as_ref(), &bounded, &region, res);
             let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
             for &v in &data {
                 min = min.min(v);
@@ -575,6 +583,17 @@ mod tests {
         let d = ok_data(TerrainFieldProvider.execute(
             &mut world,
             &json!({"field": "slope", "x": 100.0, "z": 0.0, "half": 5.0}),
+        ));
+        assert_eq!(d["found"], json!(false));
+    }
+
+    #[test]
+    fn field_reports_not_found_when_region_crosses_footprint() {
+        let mut world = World::new();
+        tilted_terrain(&mut world);
+        let d = ok_data(TerrainFieldProvider.execute(
+            &mut world,
+            &json!({"field": "elevation", "x": 8.0, "z": 0.0, "half": 5.0}),
         ));
         assert_eq!(d["found"], json!(false));
     }

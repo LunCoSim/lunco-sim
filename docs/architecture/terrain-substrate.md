@@ -413,8 +413,8 @@ texture bakes, the rock scatter, the `TerrainHeight` query, and **UI picking**
 march the oracle instead of physics colliders, so placement hugs the drawn
 ground even where no collider exists) — craters and runtime edits are analytic
 modifiers (`Craters`, `EditsLayer`), no longer raster stamps, so rim crispness
-is bounded by tile tessellation, not grid resolution (`detailUpsample` is
-retired); **the crater model** — octave-stratified overprint (same-scale
+is bounded by tile tessellation, not grid resolution; **the crater model** —
+octave-stratified overprint (same-scale
 craters overprint via min/max, scale-separated ones superpose, so small bowls
 survive inside large ones), power-law size-frequency population (2–60 m,
 exponent −1.8) with azimuth-lobed secondaries around large parents, and a
@@ -436,8 +436,8 @@ a content-addressed on-disk tile cache (`tile_cache`, keyed on the oracle's
 `TerrainStreamStatus` driving a status-bar progress indicator; **procedural
 over-zoom** — `Overzoom` in core (hashed craterlet bands ≤ 2 m on the lunar
 size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
-`SurfaceOracle::detail_limited`), **on by default** — an authored
-`lunco:layer = "overzoom"` prim overrides or zeroes it; streamed CDLOD visual
+`SurfaceOracle::detail_limited`), **explicit opt-in** — an authored
+`lunco:layer = "overzoom"` prim is the sole source of synthetic detail; streamed CDLOD visual
 tiles (`stream_viz`) with vertex-morph geomorph via `ShaderMaterial`, tiles
 `NotShadowCaster` (rim self-shadow rides the horizon ray-march, not the
 cascades); **the collider ring** (`collider_ring`) — 3×3 depth-7 tiles of 129²
@@ -452,8 +452,9 @@ content-addressed through `lunco-precompute` (`derived_layers.rs`, keyed on
 base heights + the oracle's modifier content key); `TerrainHeight` scripting
 query.
 
-The bake itself (GeoTIFF decode → crop/resample → intelligent upscale → crater
-stamp → `HeightGrid`) is the pure, bevy/avian-free `lunco-terrain-bake` crate, so
+The bake itself (GeoTIFF decode → native crop → optional coarse-preview resample
+→ crater stamp → `HeightGrid`) is the pure, bevy/avian-free `lunco-terrain-bake`
+crate, so
 the SAME code runs off-thread on both platforms: native inside an
 `AsyncComputeTaskPool` task; on wasm — where that pool degrades to the page's main
 thread and the ~40 MB decode + stamp froze the tab — dispatched to the `dem_worker`
@@ -485,9 +486,12 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
    with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
    activation unit (see *Alignment* above).
 5. **Orbit→surface bridge app-wiring** — build the `CompositeHeightSource` *live*
-   from `lunco:anchor:lat/lon`, relate the globe and surface grids, swap by
-   altitude. (`CompositeHeightSource` is done in core; the wiring + lat/lon↔XZ
-   reprojection are deferred.)
+   from `lunco:anchor:lat/lon`, relate the globe and surface grids, and swap by
+   altitude. The local DEM/globe visual handoff is already exact: celestial clips
+   globe triangles to the authored DEM tangent square and does not synthesize a
+   punch for scenes without a DEM;
+   only the continuous orbit-heightfield composition and lat/lon↔XZ reprojection
+   remain deferred. (`CompositeHeightSource` itself is done in core.)
 6. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead

@@ -24,7 +24,7 @@ use big_space::prelude::*;
 use lunco_materials::ShaderLook;
 use lunco_render::SceneCamera;
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
-use lunco_terrain_globe::{create_quadsphere_tile_mesh, TerrainTile, TileCoord};
+use lunco_terrain_globe::{create_quadsphere_tile_mesh, GlobeCutout, TerrainTile, TileCoord};
 
 /// Per-body live-LOD context. Inserted on a celestial body entity in place of the
 /// old fixed tile loop; [`update_globe_lod`] reads it to stream cube-sphere tiles.
@@ -188,25 +188,50 @@ fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
     }
 }
 
-/// Hole-punch under a site's DEM terrain patch: globe tiles that lie FULLY
-/// inside this cone around the site direction are dropped from the desired
-/// set. The DEM curves onto the sphere (`TerrainBodyCurvature`) and covers
-/// this region completely, so the globe underneath is pure overdraw — and
-/// worse, it pokes through crater floors that dip below the datum sphere.
-/// Tiles merely overlapping the cone's edge still render: the globe owns the
-/// surface outside the authored DEM square. Inserted/updated by
+/// Hole-punch under a site's DEM terrain patch: globe tiles that lie fully
+/// inside this exact tangent-plane square are dropped from the desired set;
+/// triangles in boundary tiles are clipped by [`GlobeCutout`]. The DEM curves
+/// onto the sphere (`TerrainBodyCurvature`) and owns this region completely,
+/// while the globe owns the surface outside it. Inserted/updated by
 /// `placement::sync_terrain_body_curvature`.
 #[derive(Component, Clone, Copy, PartialEq)]
 pub struct GlobePunch {
     /// Site direction (unit) in the tile frame (body-fixed).
     pub dir: DVec3,
-    /// Cosine of the punch cone's angular radius.
-    pub cos_theta: f64,
+    /// Unit east and north axes at the site.
+    pub east: DVec3,
+    pub north: DVec3,
+    /// Exact DEM half extent in the tangent plane.
+    pub half_extent: f64,
+    /// Body radius used by the tangent-plane projection.
+    pub radius_m: f64,
 }
 
-/// Whether the tile's spherical footprint lies entirely inside the punch cone
-/// (all four corners + centre — sufficient for any tile small enough to fit a
-/// sub-degree cone; a level-0 face's 90°-spread corners can never all pass).
+impl GlobePunch {
+    fn contains(self, direction: DVec3) -> bool {
+        let denominator = direction.dot(self.dir);
+        if denominator <= 0.0 {
+            return false;
+        }
+        let x = direction.dot(self.east) / denominator * self.radius_m;
+        let z = direction.dot(self.north) / denominator * self.radius_m;
+        x.abs() <= self.half_extent && z.abs() <= self.half_extent
+    }
+
+    fn cutout(self) -> GlobeCutout {
+        GlobeCutout {
+            dir: self.dir,
+            east: self.east,
+            north: self.north,
+            radius_m: self.radius_m,
+            half_extent: self.half_extent,
+        }
+    }
+}
+
+/// Whether the tile's spherical footprint lies entirely inside the authored DEM
+/// square (all four corners + centre). Tiles crossing the boundary stay resident
+/// and their triangles are clipped by the exact same square in the mesh builder.
 fn tile_fully_in_punch(face: u8, level: u32, i: i32, j: i32, punch: &GlobePunch) -> bool {
     let step = 2.0 / (1i64 << level) as f64;
     let u0 = -1.0 + i as f64 * step;
@@ -219,7 +244,7 @@ fn tile_fully_in_punch(face: u8, level: u32, i: i32, j: i32, punch: &GlobePunch)
         (u0 + step * 0.5, v0 + step * 0.5),
     ]
     .iter()
-    .all(|&(u, v)| cube_to_sphere(face, u, v).dot(punch.dir) >= punch.cos_theta)
+    .all(|&(u, v)| punch.contains(cube_to_sphere(face, u, v)))
 }
 
 /// Whether two tiles overlap on the sphere: same body face and one is the
@@ -233,26 +258,18 @@ fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
     (deep.i >> d) == shallow.i && (deep.j >> d) == shallow.j
 }
 
-// TODO(globe-invisible): In luncosim's dev `cargo run`, the globe is NOT
-// visible — the viewport renders black even though this system spawns the
-// correct tile entities (verified via list_entities: f0-f5 L0 + L1 refinements
-// for Earth & Moon, camera auto-focused Earth at 3x radius). The viewport CHROME
-// is fixed (ViewportPanel + canonical SceneCamera binder → Camera3d active,
-// black clear) and the
-// 2x-radius tile placement bug is fixed (tiles now built centre-relative). But
-// nothing renders. Prior notes say spacecraft glTFs were also invisible, so the
-// remaining cause is likely GLOBAL, not tile-specific. Suspects to investigate:
-//   - avatar camera clip planes: `update_avatar_clip_planes_system`
-//     (lunco-avatar) only adapts near/far for cameras WITH AdaptiveNearPlane +
-//     CellCoord + ChildOf(Grid). If the Observer Camera misses one, projection
-//     stays default (far≈1000 m) → everything at orbital distance is clipped.
-//   - blueprint.wgsl ShaderMaterial actually producing visible output for the
-//     globe tiles (backface winding / cull mode / `transition` mode).
-//   - big_space GlobalTransform propagation for tiles under the surface grid.
-// NOTE: luncosim screenshots (MCP + HTTP CaptureScreenshot) render the viewport
-// WHITE — they do not composite the Camera3d pass — so this must be verified in
-// the real window, not via screenshot. See memory
-// project_luncosim_viewport_and_globe_fix.
+fn branch_has_gap(
+    desired: &HashSet<TileCoord>,
+    resident: &HashMap<TileCoord, Entity>,
+    face: u8,
+) -> bool {
+    desired.iter().filter(|tile| tile.face == face).any(|leaf| {
+        !resident
+            .keys()
+            .any(|resident| tiles_overlap(leaf, resident))
+    })
+}
+
 /// Per-frame: stream each body's cube-sphere tile set against the camera.
 pub(crate) fn update_globe_lod(
     mut commands: Commands,
@@ -293,6 +310,21 @@ pub(crate) fn update_globe_lod(
             continue;
         };
         let camera_body_local = cam_pos - sg_gt.translation().as_dvec3();
+
+        // A cutout changes the geometry of every resident tile that crosses its
+        // boundary. Retire the old meshes before solving the new cover so a
+        // cached uncut globe tile cannot survive under the local DEM.
+        if tiles.last_solve_punch.as_ref() != punch {
+            for (_, entity) in tiles.resident.drain() {
+                commands.entity(entity).try_despawn();
+            }
+            for (entity, _, _) in tiles.retiring.drain(..) {
+                commands.entity(entity).try_despawn();
+            }
+            tiles.mesh_cache.clear();
+            tiles.mesh_cache_bytes = 0;
+            tiles.last_solve_cam = None;
+        }
 
         // CAMERA-MOTION GATE. Everything below — two `HashSet`s, a `Vec`, a sort,
         // and six recursive quadtree descents — is a pure function of
@@ -351,11 +383,33 @@ pub(crate) fn update_globe_lod(
         // viewer is looking at. Placement verbatim from the proven static
         // path: mesh in body-local (tile_center = ZERO), entity anchored at the
         // tile centre via the surface grid, reparented in place.
-        let mut missing: Vec<TileCoord> = desired
+        let mut missing: HashSet<TileCoord> = desired
             .iter()
             .filter(|c| !tiles.resident.contains_key(c))
             .copied()
             .collect();
+        // A budgeted globe must never bootstrap with only refined leaves: until
+        // every leaf in a branch is resident, its root is the exact coarse cover
+        // for that branch. Without this fallback the first 16 child meshes can
+        // leave the other faces visibly black for several frames. The root is
+        // intentionally not added to `desired`; normal retirement below keeps it
+        // until all overlapping desired leaves are present, then removes it.
+        for face in 0..6u8 {
+            let root = TileCoord {
+                body: body_ent,
+                face,
+                level: 0,
+                i: 0,
+                j: 0,
+            };
+            if desired.contains(&root) || tiles.resident.contains_key(&root) {
+                continue;
+            }
+            if branch_has_gap(&desired, &tiles.resident, face) {
+                missing.insert(root);
+            }
+        }
+        let mut missing: Vec<TileCoord> = missing.into_iter().collect();
         missing.sort_by(|a, b| {
             a.level.cmp(&b.level).then_with(|| {
                 tile_dist2(a, lod.radius_m, camera_body_local).total_cmp(&tile_dist2(
@@ -410,6 +464,7 @@ pub(crate) fn update_globe_lod(
                     lod.radius_m,
                     lod.res,
                     tile_body_local,
+                    punch.copied().map(GlobePunch::cutout),
                 );
                 let handle = meshes.add(mesh);
                 tiles.mesh_cache.insert(
@@ -587,40 +642,62 @@ mod tests {
 
     const MOON_RADIUS_M: f64 = 1_737_400.0;
 
-    /// The cone `placement.rs` builds for a given ground footprint.
+    /// The square `placement.rs` builds for a given ground footprint.
     fn punch_for(half_extent_m: f64, dir: DVec3) -> GlobePunch {
-        let sin_theta = (half_extent_m * 0.999) / MOON_RADIUS_M;
         GlobePunch {
             dir,
-            cos_theta: (1.0 - sin_theta * sin_theta).sqrt(),
+            east: DVec3::Z,
+            north: DVec3::Y,
+            half_extent: half_extent_m,
+            radius_m: MOON_RADIUS_M,
         }
     }
 
     /// The punch cannot be what keeps the globe off a surface site.
     ///
-    /// `tile_fully_in_punch` needs a whole tile inside the cone, so a cone sized at the
-    /// DEM's own half extent drops NOTHING. That is why an opaque datum-radius globe
-    /// hung over sites authored at negative elevations as a flat grey lid. The fix is
-    /// `GLOBE_SINK_M` (lunco-terrain-globe), NOT a bigger cone — a cone large enough to
-    /// bite would void ~60 km around a 2 km site. This pins the geometry so nobody
-    /// "fixes" the lid by growing the punch again.
+    /// A tile may straddle the exact DEM square, so the tile remains resident and
+    /// the mesh builder clips only its outside triangles. A fully covered tile is
+    /// removed from the LOD set altogether.
     #[test]
-    fn a_dem_sized_punch_cannot_drop_a_tile_but_the_site_floor_can() {
+    fn a_dem_sized_square_punch_drops_only_fully_covered_tiles() {
         let (face, level, i, j) = (0u8, 8u32, 128, 128);
         let (u, v) = tile_center_uv(face, level, i, j);
         let dir = cube_to_sphere(face, u, v).normalize();
 
-        // A 1950 m footprint is a 0.064° cone; these tiles subtend ~0.35°.
         assert!(
-            !tile_fully_in_punch(face, level, i, j, &punch_for(1950.0, dir)),
-            "a DEM-sized cone cannot contain a tile — hence the floor"
+            tile_fully_in_punch(face, level, i, j, &punch_for(20_000.0, dir)),
+            "a tile wholly inside the DEM square is removed"
         );
+        assert!(!tile_fully_in_punch(
+            face,
+            level,
+            i,
+            j,
+            &punch_for(1.0, dir)
+        ));
+    }
 
-        // SITE_PUNCH_DEG = 2.0 in `placement.rs`.
-        let floor = MOON_RADIUS_M * 2.0_f64.to_radians().sin();
-        assert!(
-            tile_fully_in_punch(face, level, i, j, &punch_for(floor, dir)),
-            "the site-scale floor must actually drop tiles"
-        );
+    #[test]
+    fn a_missing_refined_branch_requires_a_coarse_cover() {
+        let body = Entity::PLACEHOLDER;
+        let leaf = TileCoord {
+            body,
+            face: 3,
+            level: 2,
+            i: 1,
+            j: 2,
+        };
+        let root = TileCoord {
+            body,
+            face: 3,
+            level: 0,
+            i: 0,
+            j: 0,
+        };
+        let desired = HashSet::from([leaf]);
+        let mut resident = HashMap::new();
+        assert!(branch_has_gap(&desired, &resident, 3));
+        resident.insert(root, Entity::PLACEHOLDER);
+        assert!(!branch_has_gap(&desired, &resident, 3));
     }
 }

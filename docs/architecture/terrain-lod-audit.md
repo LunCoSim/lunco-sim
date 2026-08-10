@@ -119,8 +119,8 @@ Fix — the body is now the terrain's own authored property:
 **Scope kept deliberately narrow.** An intermediate version also sourced the globe-punch
 *geodetic* from `TerrainGeoref` — which would have regressed any scene with a `SiteAnchor` but
 no authored terrain georef (moonbase is exactly that), punching the globe at lat/lon 0,0
-instead of the pole, because the georef default is 0,0. Only the body **radius** reaches the
-oracle; *where* on the globe to punch remains the site anchor's job and is unchanged.
+instead of the pole, because the georef default is 0,0. The handoff now keeps the site anchor
+as the location authority and clips the authored DEM square in its tangent basis.
 
 Verified non-vacuous by mutation: restoring the `q_site.iter().next()` pick fails 4 of the 5
 tests, including the spawn-order one.

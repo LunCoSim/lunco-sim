@@ -39,7 +39,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
 use lunco_core::coords::{GridPos, RenderPos};
-use lunco_terrain_core::HeightSource;
+use lunco_terrain_core::{normal_at_bounded, HeightSource};
 
 use crate::stream_viz::DemHeightField;
 
@@ -108,8 +108,12 @@ impl GridSurfaceQuery<'_, '_> {
     /// view/LOD dependent and are not suitable for a measured grade.
     pub fn slope_at(&self, p: GridPos, eps: f64) -> Option<f64> {
         self.terrains.iter().find_map(|(_, terrain)| {
-            height_in_footprint(&terrain.0, p)
-                .map(|_| HeightSource::slope_at(terrain.0.as_ref(), p.0.x, p.0.z, eps.max(1.0e-6)))
+            height_in_footprint(&terrain.0, p).map(|_| {
+                let half = terrain.0.half_extent() as f64;
+                normal_at_bounded(terrain.0.as_ref(), p.0.x, p.0.z, eps.max(1.0e-6), half)[1]
+                    .clamp(-1.0, 1.0)
+                    .acos()
+            })
         })
     }
 

@@ -50,7 +50,7 @@ use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use lunco_terrain_core::{
     albedo_map, ao_map, normal_slope_maps, pack_normal_rgba8, pack_surface_rgba8,
-    roughness_from_slope, Square,
+    roughness_from_slope, BoundedHeightSource, Square,
 };
 
 use crate::band::SurfaceBand;
@@ -428,7 +428,8 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
 
     // One derive pass: slope is `acos(n.y)` of the very normal just computed,
     // so the fused kernel halves the oracle samples per texel.
-    let (normals, slope) = normal_slope_maps(&limited, &region, res);
+    let bounded = BoundedHeightSource::new(&limited, half);
+    let (normals, slope) = normal_slope_maps(&bounded, &region, res);
     // AO is smooth by construction (a horizon integral over AO_RADIUS_FRAC of
     // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
@@ -442,13 +443,15 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
         region,
         half * AO_RADIUS_FRAC + 2.0 * ao_texel,
     );
+    let ao_bounded = BoundedHeightSource::new(&ao_limited, half);
     let ao_small = ao_map(
-        &ao_limited,
+        &ao_bounded,
         &region,
         ao_res,
         half * AO_RADIUS_FRAC,
         AO_DIRS,
         AO_STEPS,
+        half,
     );
     let ao = lunco_terrain_core::upsample_bilinear(&ao_small, ao_res, res);
     // Tone: 3-texel curvature stencil on a source limited at 2× the stencil.
@@ -471,7 +474,14 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // whole bake. The stencil is halved IN TEXELS so its width IN METRES is
     // unchanged: same tone, a quarter of the samples.
     let tone_res = (res / 2).max(1);
-    let albedo_small = albedo_map(&tone_limited, &region, tone_res, TONE_STENCIL_TEXELS * 0.5);
+    let tone_bounded = BoundedHeightSource::new(&tone_limited, half);
+    let albedo_small = albedo_map(
+        &tone_bounded,
+        &region,
+        tone_res,
+        TONE_STENCIL_TEXELS * 0.5,
+        half,
+    );
     let albedo = lunco_terrain_core::upsample_bilinear(&albedo_small, tone_res, res);
 
     let roughness: Vec<f32> = slope

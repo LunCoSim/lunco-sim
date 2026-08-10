@@ -27,7 +27,7 @@ use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisResource;
 use crate::geo::{
     body_rotation, equatorial_frame, geodetic_to_body_fixed, solar_tangent_frame, GeodeticAnchor,
-    SiteAnchor,
+    LocalTangentFrame, SiteAnchor,
 };
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
@@ -692,42 +692,17 @@ pub fn sync_terrain_body_curvature(
             body, desc.radius_m
         );
     }
-    // Globe hole-punch under the local surface.
-    //
-    // With a DEM, the footprint is the DEM's own half extent — punch exactly what the
-    // terrain provably covers.
-    //
-    // WITHOUT one, the footprint has to come from the tile grid instead, and it must
-    // be SITE-SCALE, not slab-scale. `tile_fully_in_punch` drops a tile only when the
-    // whole tile fits inside the cone, and the Moon's finest tiles still subtend
-    // ~90°/2^max_lod ≈ 0.35°; a 200 m slab subtends 0.007°, so a slab-sized cone would
-    // pass the test for exactly zero tiles and punch nothing at all. `SITE_PUNCH_DEG`
-    // is therefore sized in TILES, not in metres of authored ground: big enough that
-    // the fine tiles around the site fall entirely inside it.
-    //
-    // What this buys, and why the near-field globe must go: standing on a site, the
-    // globe's own tiles are coincident with the authored ground at the datum. While
-    // they rendered as blueprint wireframe that only showed up as z-fight moiré; the
-    // moment they carry real albedo (see `celestial_visuals_system`) they also become
-    // opaque, and at 5 m altitude the near tiles wall off the sky as a brown smear of
-    // ~5 km/texel mosaic. The local ground owns the near field; the globe owns the far
-    // field and the limb, and the punch is the seam between them.
-    // NOTE: with a DEM this cone punches NOTHING, and that is tolerated by design.
-    // `tile_fully_in_punch` needs a tile's four corners AND centre inside the cone, but
-    // a 1950 m footprint on the Moon is a 0.064° cone while the finest tiles subtend
-    // ~0.35° — no tile can ever fit. So the punch is NOT what keeps the globe off a
-    // site: `GLOBE_SINK_M` (lunco-terrain-globe) is, by sinking the shell below every
-    // surface placement. Do NOT re-size this cone to compensate — enlarging it enough
-    // to bite would delete ~60 km of globe around a 2 km site, invisible at eye height
-    // but an obvious void ring from any altitude above it.
-    const SITE_PUNCH_DEG: f64 = 2.0;
+    // Globe hole-punch under the local DEM. The tangent basis and square extent
+    // come from the same authored site anchor and DEM oracle used by curvature;
+    // there is no guessed cone or fixed shell sink. A scene without a DEM has no
+    // terrain-surface footprint to hand over, so it leaves globe ownership intact.
     let half_extent = if has_dem {
         q_built_dem
             .iter()
             .map(|d| d.0.half_extent() as f64)
             .fold(0.0, f64::max)
     } else {
-        desc.radius_m * SITE_PUNCH_DEG.to_radians().sin()
+        0.0
     };
     for (e, globe, punch) in &q_globes {
         if globe.ephemeris_id != body {
@@ -739,16 +714,13 @@ pub fn sync_terrain_body_curvature(
             }
             continue;
         }
-        // Punch only what the terrain provably covers: the inscribed disc of
-        // the square footprint, shrunk a hair so the boundary ring keeps its
-        // globe backing under the DEM boundary.
-        let sin_theta = (half_extent * 0.999) / desc.radius_m;
+        let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, desc.radius_m);
         let next = crate::globe_lod::GlobePunch {
-            // WHERE on the globe to punch is the site anchor's business; only the
-            // body RADIUS (which folds into the oracle) had to become the
-            // terrain's own property.
-            dir: geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m).normalize(),
-            cos_theta: (1.0 - sin_theta * sin_theta).sqrt(),
+            dir: tangent.up,
+            east: tangent.east,
+            north: tangent.north,
+            half_extent,
+            radius_m: desc.radius_m,
         };
         if punch != Some(&next) {
             commands.entity(e).try_insert(next);

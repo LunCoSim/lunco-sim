@@ -2,13 +2,13 @@
 //!
 //! Fire the [`SpawnDemTerrain`] command (`uri` = a `lunar_terrain_exporter` site
 //! directory). The DEM bytes are read through `lunco-storage` (cross-platform),
-//! decoded + resampled **off the main thread**, then a single static entity is
+//! decoded and cropped **off the main thread**, then a single static entity is
 //! spawned with an avian `Collider::heightfield` (always) and a Bevy mesh (when
 //! render assets exist — the headless server builds colliders only, so physics
 //! stays identical server/client). Anchored into the big_space world grid at the
 //! origin cell, mirroring `lunco-obstacle-field`.
 //!
-//! This is the non-streamed spine: one downsampled tile of the whole DEM. Tiled
+//! This is the non-streamed spine: one derived visual tile of the whole DEM. Tiled
 //! streaming + LOD + a canonical-res collider ring around dynamic physical
 //! support footprints come later (M7); the
 //! `resample` bridge and this spawn path are what they build on.
@@ -171,12 +171,11 @@ pub struct DemTerrainRequest {
     /// resolution. `f64::INFINITY` = the whole DEM.
     pub half_window: f64,
     /// Visual-quality knob: if `> 0` and below the cropped native resolution, the
-    /// tile is **resampled** (lossy downsample, via [`crate::bake::resample`]) to
-    /// this many samples per side before meshing — so you can A/B different DEM
-    /// qualities (256² … native) on the same site. `0` = keep native (default).
-    /// NOTE: this coarsens the **whole** tile (mesh + collider together); the M7
-    /// streaming ring is what keeps the near-field collider native while only the
-    /// far visual LOD decimates.
+    /// static visual mesh is resampled (lossy downsample, via
+    /// [`crate::bake::resample`]) to this many samples per side. `0` = native
+    /// visual resolution. The retained oracle and static collider always keep
+    /// the complete cropped DEM resolution; this setting cannot change physics
+    /// or analytic waypoint heights.
     pub target_res: usize,
     /// Suppress the static visual mesh and instead stream camera-driven CDLOD
     /// tiles (procedural-regolith geomorph; see [`crate::stream_viz`]). The
@@ -197,8 +196,8 @@ pub struct DemTerrainRequest {
 }
 
 /// Retained on a built DEM terrain so its crater layer can be **re-baked live**
-/// (Inspector → `UpdateObstacleFieldSpec`) without re-reading the GeoTIFF: the cropped /
-/// resampled grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
+/// (Inspector → `UpdateObstacleFieldSpec`) without re-reading the GeoTIFF: the
+/// cropped native grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
 /// regenerate path clones this, re-stamps the current [`ObstacleFieldSpec`]
 /// craters, and swaps the result into [`crate::stream_viz::DemHeightField`].
 #[derive(Component, Clone)]
@@ -805,7 +804,35 @@ struct DemBuild {
     res: usize,
     /// Native crop resolution before any resample (for honest logging).
     native_res: usize,
+    /// Authored visual target; the authoritative oracle/collider remains native.
+    visual_target_res: usize,
     site: String,
+}
+
+#[derive(Component, Clone, Copy)]
+struct DemVisualTargetRes(usize);
+
+/// Build the optional static visual product from the composed oracle. The
+/// collider and retained base never pass through this function: `targetRes` is
+/// deliberately a visual-only projection.
+fn static_visual_mesh_from_native(
+    oracle: &crate::oracle::SurfaceOracle,
+    native: &HeightGrid,
+    target_res: usize,
+) -> MeshData {
+    let grid = if target_res > 0 && target_res < native.res {
+        let visual_step = (2.0 * native.half_extent as f64) / (target_res.max(2) as f64 - 1.0);
+        let limited = oracle.detail_limited(visual_step);
+        resample(&limited, native.half_extent as f64, target_res)
+    } else {
+        native.clone()
+    };
+    grid.to_mesh_data()
+}
+
+fn static_visual_mesh(oracle: &crate::oracle::SurfaceOracle, target_res: usize) -> MeshData {
+    let native = oracle.materialize();
+    static_visual_mesh_from_native(oracle, &native, target_res)
 }
 
 #[derive(Component)]
@@ -823,6 +850,7 @@ pub struct DemWorkerJob {
     collider_ring: bool,
     lod_viz: bool,
     with_default_material: bool,
+    target_res: usize,
     #[cfg(target_arch = "wasm32")]
     pub download_progress: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
     /// OPFS grid-cache key (hex), filled by the fetch task on a cache MISS so the
@@ -870,6 +898,7 @@ fn dem_build_from_baked(
     baked: BakedGrid,
     collider_ring: bool,
     lod_viz: bool,
+    target_res: usize,
     contributions: Vec<crate::oracle::HeightContribution>,
 ) -> DemBuild {
     let half_extent = baked.grid.half_extent;
@@ -899,11 +928,15 @@ fn dem_build_from_baked(
             DVec3::new(2.0 * h, 1.0, 2.0 * h),
         ))
     };
-    let mesh = if lod_viz {
-        None
-    } else {
-        materialized.as_ref().map(|g| g.to_mesh_data())
-    };
+    let mesh = (!lod_viz).then(|| {
+        static_visual_mesh_from_native(
+            oracle.as_ref(),
+            materialized
+                .as_ref()
+                .expect("materialized for static visual mesh"),
+            target_res,
+        )
+    });
     DemBuild {
         collider,
         mesh,
@@ -913,6 +946,7 @@ fn dem_build_from_baked(
         half_extent,
         res: baked.res,
         native_res: baked.native_res,
+        visual_target_res: target_res,
         site: baked.site,
     }
 }
@@ -1093,8 +1127,6 @@ fn start_dem_builds(
         #[cfg(target_arch = "wasm32")]
         let job = DemBakeJob {
             half_window: req.half_window,
-            target_res: req.target_res,
-            detail_upsample: 1,
             stamps,
         };
 
@@ -1112,6 +1144,7 @@ fn start_dem_builds(
                 collider_ring,
                 lod_viz,
                 with_default_material: req.with_default_material,
+                target_res: req.target_res,
                 download_progress: download_progress.clone(),
                 cache_key: cache_key.clone(),
             });
@@ -1262,12 +1295,9 @@ fn start_dem_builds(
             // share this surface so visuals and contact agree.
             let tile = crop_centered(&grid, half_window);
             let native_res = tile.res;
-            // Optional visual-quality downsample (lossy). 0 / ≥ native keeps native.
-            let mut tile = if target_res > 0 && target_res < native_res {
-                resample(&tile, tile.half_extent as f64, target_res)
-            } else {
-                tile
-            };
+            // Keep the cropped native grid authoritative. `target_res` is only
+            // applied when the static visual mesh is derived below.
+            let mut tile = tile;
             // Same f32 round-trip the worker bake applies in `finish_bake`:
             // a native-inline peer and a worker/cache peer must produce
             // bit-identical heights or their collider quantize lattices
@@ -1326,11 +1356,15 @@ fn start_dem_builds(
                 ))
             };
             // Static visual mesh unless lod_viz streams visual tiles instead.
-            let mesh = if lod_viz {
-                None
-            } else {
-                materialized.as_ref().map(|g| g.to_mesh_data())
-            };
+            let mesh = (!lod_viz).then(|| {
+                static_visual_mesh_from_native(
+                    oracle.as_ref(),
+                    materialized
+                        .as_ref()
+                        .expect("materialized for static visual mesh"),
+                    target_res,
+                )
+            });
             Ok(DemBuild {
                 collider,
                 mesh,
@@ -1340,6 +1374,7 @@ fn start_dem_builds(
                 half_extent,
                 res,
                 native_res,
+                visual_target_res: target_res,
                 site: site_id,
             })
         });
@@ -1429,6 +1464,7 @@ fn assemble_dem_build(
         e.try_insert((
             DemBaseGrid(built.base_grid, built.base_key),
             DemTerrainSource { collider_ring },
+            DemVisualTargetRes(built.visual_target_res),
         ));
         // Retain the oracle + mark the streaming mode(s). `lod_viz` streams visual LOD
         // tiles (static mesh suppressed); `collider_ring` streams physics tiles
@@ -1605,8 +1641,13 @@ fn finish_dem_worker(
                     res: reply.res,
                     stage: lunco_terrain_bake::BakeStage::Coarse,
                 };
-                let built =
-                    dem_build_from_baked(baked, job.collider_ring, job.lod_viz, contributions);
+                let built = dem_build_from_baked(
+                    baked,
+                    job.collider_ring,
+                    job.lod_viz,
+                    job.target_res,
+                    contributions,
+                );
                 // Drop the request so the physics hold releases (rovers settle on the
                 // coarse collider). Keep DemWorkerJob to receive the full grid.
                 commands.entity(entity).remove::<DemTerrainRequest>();
@@ -1666,6 +1707,7 @@ fn finish_dem_worker(
                         tiles,
                         pending,
                         has_static_mesh,
+                        job.target_res,
                         meshes.as_deref_mut(),
                     );
                     any_full = true;
@@ -1681,8 +1723,13 @@ fn finish_dem_worker(
                         res: reply.res,
                         stage: lunco_terrain_bake::BakeStage::Full,
                     };
-                    let built =
-                        dem_build_from_baked(baked, job.collider_ring, job.lod_viz, contributions);
+                    let built = dem_build_from_baked(
+                        baked,
+                        job.collider_ring,
+                        job.lod_viz,
+                        job.target_res,
+                        contributions,
+                    );
                     commands.entity(entity).remove::<DemTerrainRequest>();
                     assemble_dem_build(
                         &mut commands,
@@ -1749,6 +1796,7 @@ fn swap_terrain_grid(
     tiles: Option<Mut<crate::stream_viz::LodTiles>>,
     pending: Option<Mut<crate::stream_viz::PendingTileBakes>>,
     has_static_mesh: bool,
+    target_res: usize,
     meshes: Option<&mut Assets<Mesh>>,
 ) {
     // Defer the (heavy) static-collider rebuild so the VISUAL swap lands immediately
@@ -1768,7 +1816,7 @@ fn swap_terrain_grid(
                 normals,
                 uvs,
                 indices,
-            } = oracle.materialize().to_mesh_data();
+            } = static_visual_mesh(oracle.as_ref(), target_res);
             let handle = meshes.add(lunco_obstacle_field::grid_mesh(
                 positions,
                 normals,
@@ -1869,6 +1917,7 @@ fn spawn_restamp_task(
     stack: &crate::terrain_layers::TerrainLayerStack,
     curvature_radius: Option<f64>,
     needs_static_mesh: bool,
+    visual_target_res: usize,
 ) {
     let base_grid = base.0.clone();
     let base_key = base.1;
@@ -1909,7 +1958,8 @@ fn spawn_restamp_task(
         // Static-mesh terrains rasterise the composed surface HERE, off-thread —
         // the same conditional-materialize split the initial build task makes.
         // Streaming terrains skip it (tiles sample the oracle directly).
-        let mesh = needs_static_mesh.then(|| oracle.materialize().to_mesh_data());
+        let mesh =
+            needs_static_mesh.then(|| static_visual_mesh(oracle.as_ref(), visual_target_res));
         (oracle, mesh)
     });
     commands.entity(entity).try_insert(DemRestampTask(task));
@@ -1933,6 +1983,7 @@ fn start_dem_restamp(
         Has<DemRestampTask>,
         Option<&mut DemRestampDebounce>,
         Has<Mesh3d>,
+        Option<&DemVisualTargetRes>,
     )>,
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
@@ -1942,7 +1993,7 @@ fn start_dem_restamp(
     // command-ordering races a one-shot message would have), or when forced.
     let forced = !events.is_empty();
     events.clear();
-    for (entity, base, stack, busy, debounce, has_static_mesh) in &mut q {
+    for (entity, base, stack, busy, debounce, has_static_mesh, visual_target) in &mut q {
         if forced || stack.is_changed() {
             // (Re)arm the debounce on every change so a continuous drag keeps
             // pushing the deadline out → exactly one re-stamp once the drag stops.
@@ -1980,6 +2031,7 @@ fn start_dem_restamp(
             &stack,
             curvature_radius,
             has_static_mesh,
+            visual_target.map_or(0, |target| target.0),
         );
     }
 }
@@ -2514,4 +2566,26 @@ pub(crate) fn register(app: &mut App) {
         app.add_systems(Update, finish_dem_worker);
     }
     register_all_commands(app);
+}
+
+#[cfg(test)]
+mod visual_product_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn target_resolution_changes_only_the_static_visual_product() {
+        let native = HeightGrid {
+            res: 9,
+            half_extent: 4.0,
+            heights: (0..81).map(|i| i as f64).collect(),
+        };
+        let oracle = crate::oracle::SurfaceOracle::bare(Arc::new(native.clone()));
+        let mesh = static_visual_mesh(&oracle, 3);
+
+        assert_eq!(mesh.positions.len(), 9);
+        assert_eq!(mesh.indices.len(), 24);
+        assert_eq!(oracle.materialize().res, native.res);
+        assert_eq!(oracle.materialize().heights, native.heights);
+    }
 }

@@ -17,7 +17,8 @@
 //! Do not confuse this with the **surface**-scale terrain
 //! (`lunco-terrain-core` / `-surface` / `-bake`): that is the CDLOD heightfield you
 //! drive a rover across. Two different scales, two different systems, both live.
-//! The globe↔surface handover is not implemented in either.
+//! The globe↔surface handover is supplied by `lunco-celestial`: authored local
+//! DEM footprints clip the globe mesh at the exact tangent-plane square.
 //!
 //! (An older version of this header claimed the crate was "VESTIGIAL — not wired".
 //! That was wrong and would have cost someone the orbital view: the plugin having

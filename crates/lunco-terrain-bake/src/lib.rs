@@ -49,10 +49,6 @@ pub struct DemBakeJob {
     /// Half side length (m) of the centred region realized at native resolution.
     /// `f64::INFINITY` = the whole DEM.
     pub half_window: f64,
-    /// Visual-quality downsample target (samples/side); `0` = native.
-    pub target_res: usize,
-    /// Intelligent-upscaling factor applied to the ground before stamping.
-    pub detail_upsample: usize,
     /// Geometry stamp layers (craters, …) applied into the working grid.
     pub stamps: Vec<StampSpec>,
 }
@@ -85,7 +81,8 @@ pub struct BakedGrid {
     pub site: String,
     /// Native crop resolution before any resample (for honest logging).
     pub native_res: usize,
-    /// Tile resolution actually produced (= native crop, or the resample target).
+    /// Tile resolution actually produced for this bake stage. The full stage is
+    /// native; visual target resolution is applied later by the surface renderer.
     pub res: usize,
     pub stage: BakeStage,
 }
@@ -99,37 +96,31 @@ pub fn decode_raw(tif: &[u8]) -> Result<HeightGrid, String> {
 
 /// Produce ONE stage's [`BakedGrid`] from the pre-decoded native grid. The Coarse
 /// stage forces [`COARSE_RES`] and skips the detail upscale so it finishes fast;
-/// the Full stage honours the job's `target_res` + `detail_upsample`.
+/// the Full stage retains the native crop. Visual downsampling belongs to the
+/// surface renderer and must never change the authoritative collider/query grid.
 ///
-/// This is the crop → resample → upscale → stamp core that `start_dem_builds`
-/// used to run inline — identical, so native behaviour is unchanged.
+/// This is the crop → preview-resample → stamp core shared by native and worker
+/// paths. The full stage never resamples the authoritative DEM.
 pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeStage) -> BakedGrid {
     // Crop the playable region at native resolution (mesh + collider share it).
     let tile = bake::crop_centered(raw, job.half_window);
     let native_res = tile.res;
-    // Stage/quality downsample. Coarse forces COARSE_RES; Full honours target_res.
+    // Coarse is a temporary preview only. Full retains every cropped DEM sample;
+    // `targetRes` is a visual product setting and is not part of this bake.
     let target = match stage {
         BakeStage::Coarse => COARSE_RES.min(native_res.saturating_sub(1)),
-        BakeStage::Full => job.target_res,
+        BakeStage::Full => 0,
     };
     let mut tile = if target > 0 && target < native_res {
         bake::resample(&tile, tile.half_extent as f64, target)
     } else {
         tile
     };
-    // Intelligent upscaling (Full only — the coarse preview stays coarse): bilinearly
-    // upscale the coarse ground to a finer working grid BEFORE the crater stamp, so
-    // rims resolve below the DEM sampling. Decouples crater fidelity from DEM res.
-    if stage == BakeStage::Full && job.detail_upsample > 1 {
-        let up = (tile.res - 1) * job.detail_upsample + 1;
-        tile = bake::resample(&tile, tile.half_extent as f64, up);
-    }
     let res = tile.res;
     // Retain the crater-FREE grid so a live regenerate re-stamps off it — but ONLY
     // for the Full stage. The Coarse preview is a throwaway (it is replaced the
     // moment `Full` lands, and the worker posts only `grid` over the wire, never
-    // `base_grid`), so cloning the working grid for it was pure waste: res² × f64 —
-    // with `detail_upsample` that is ~19 MB per bake.
+    // `base_grid`), so cloning the working grid for it was pure waste: res² × f64.
     let base_grid = match stage {
         BakeStage::Full => tile.clone(),
         BakeStage::Coarse => HeightGrid {
@@ -191,7 +182,7 @@ pub struct BakeReplyHeader {
 
 /// Bump when [`encode_grid_blob`]'s layout or the bake semantics change, so
 /// stale cache entries are never matched (content-addressed → no explicit purge).
-pub const GRID_CACHE_VERSION: u64 = 1;
+pub const GRID_CACHE_VERSION: u64 = 2;
 
 /// Cache key for a Full-stage DEM bake: FNV-1a over the format version, the raw
 /// the site id, the raw GeoTIFF bytes, and the bincoded [`DemBakeJob`]
@@ -280,8 +271,6 @@ mod tests {
         };
         let job = DemBakeJob {
             half_window: 900.0,
-            target_res: 33,
-            detail_upsample: 1,
             stamps: Vec::new(),
         };
         let coarse = finish_bake(&raw, "site", &job, BakeStage::Coarse);
@@ -328,8 +317,6 @@ mod tests {
         };
         let job = DemBakeJob {
             half_window: 900.0,
-            target_res: 0,
-            detail_upsample: 2,
             stamps: Vec::new(),
         };
         let baked = finish_bake(&raw, "site", &job, BakeStage::Full);
@@ -357,8 +344,6 @@ mod tests {
     fn grid_cache_key_tracks_every_input() {
         let job = DemBakeJob {
             half_window: 2000.0,
-            target_res: 1024,
-            detail_upsample: 2,
             stamps: Vec::new(),
         };
         let base = grid_cache_key(b"meta", b"tif", &job);
@@ -366,7 +351,7 @@ mod tests {
         assert_ne!(base, grid_cache_key(b"meta2", b"tif", &job));
         assert_ne!(base, grid_cache_key(b"meta", b"tif2", &job));
         let mut job2 = job.clone();
-        job2.target_res = 2048;
+        job2.half_window = 2001.0;
         assert_ne!(base, grid_cache_key(b"meta", b"tif", &job2));
     }
 }

@@ -17,8 +17,8 @@ that compute into a real Web Worker while keeping native on its threaded path, w
 
 ## What it does
 
-`decode_raw` (the expensive GeoTIFF decode) → `finish_bake` (crop → resample →
-intelligent upscale → apply the serializable `StampSpec`s) → a `HeightGrid`.
+`decode_raw` (the expensive GeoTIFF decode) → `finish_bake` (crop → coarse
+preview resample → apply the serializable `StampSpec`s) → a `HeightGrid`.
 `bake_grid` is the single-pass native convenience (`decode_raw` + `finish_bake`).
 
 | Item | Role |

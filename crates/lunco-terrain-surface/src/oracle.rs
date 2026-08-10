@@ -290,12 +290,9 @@ impl HeightSource for SurfaceOracle {
         // A non-finite height is never a terrain fact: it means a non-finite
         // SAMPLE COORDINATE reached us (a poisoned frame upstream — see
         // `lunco-celestial`'s site anchor), or a modifier divided by an
-        // authored zero. Substituting 0.0 keeps one bad tile from taking the
-        // frame down, but it is a containment, not a cure: an all-NaN tile
-        // bakes an all-NaN vertex column, whose AABB half-extent is NaN, and
-        // `Aabb3d::new`'s `half_size >= 0.0` assertion then fails inside
-        // `bevy_picking`. So it REPORTS, once, with the coordinate that did
-        // it — the value that actually identifies the upstream culprit.
+        // authored zero. Report it once with the coordinate that identifies
+        // the upstream culprit, then return the actual value. A fabricated
+        // zero would turn a broken surface into apparently valid terrain.
         // Absurd-but-finite is reported too, and NOT substituted: it is a real
         // number the maths produced, so silently replacing it would hide the
         // modifier that produced it. `1e7` m is ~6× the Moon's radius — no
@@ -315,12 +312,12 @@ impl HeightSource for SurfaceOracle {
         }
         if !NON_FINITE_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             bevy::log::error!(
-                "[terrain-oracle] non-finite height at sample ({x}, {z}) — substituting 0.0. \
+                "[terrain-oracle] non-finite height at sample ({x}, {z}) — rejecting the sample. \
                  A non-finite SAMPLE COORDINATE (x/z above) means the terrain's frame was \
                  poisoned upstream; a finite coordinate means a modifier produced it."
             );
         }
-        0.0
+        h
     }
 }
 

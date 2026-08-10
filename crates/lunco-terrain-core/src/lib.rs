@@ -60,6 +60,9 @@ pub use modifier::{
 pub use overzoom::Overzoom;
 pub use quadtree::{QuadCoord, Quadtree, Selected, Square, REFINE_HYSTERESIS};
 pub use quantize::{quantize, QuantizedHeightSource};
-pub use source::{AnalyticHeightSource, CompositeHeightSource, HeightSource};
+pub use source::{
+    normal_at_bounded, AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource,
+    HeightSource,
+};
 pub use tile::{TileCoord, TileGrid};
 pub use transfer::{hazard_color, Rgba, TransferFn, HAZARD_CLIFF, HAZARD_SAFE, HAZARD_WARN};

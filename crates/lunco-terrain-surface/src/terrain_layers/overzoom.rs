@@ -47,20 +47,6 @@ impl TerrainLayer for OverzoomLayer {
     }
 }
 
-/// The default sub-DEM detail layer (all [`Overzoom::default`] parameters:
-/// 0.4–2 m craterlets handing off to the crater layer's 2 m SFD floor + FBM
-/// micro-relief). The USD bridge folds this in when a terrain authors no
-/// `overzoom` prim of its own — without SOME sub-DEM signal the ground between
-/// the finest shader grain (~12 cm) and the DEM resolution (~5 m) is empty in
-/// every channel and reads as flat plastic one step from the camera. A scene
-/// that wants scientifically-honest bare interpolation authors an `overzoom`
-/// prim with `amplitude = 0` and `density = 0`.
-pub fn default_overzoom_layer() -> Arc<dyn TerrainLayer> {
-    Arc::new(OverzoomLayer {
-        spec: Overzoom::default(),
-    })
-}
-
 /// Parse a `lunco:layer = "overzoom"` prim:
 /// - `amplitude` — micro-relief amplitude (m), default 0.08; `0` disables relief;
 /// - `reliefScale` — coarsest relief wavelength (m), default 14;

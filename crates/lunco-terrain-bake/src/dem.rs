@@ -95,10 +95,10 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
 /// never scaled — so the georeferencing stays exact, and the window stays
 /// centred so the site anchor remains the centre sample.
 ///
-/// The fill below tests `is_finite()`, which is sufficient ONLY because
-/// [`decode_geotiff_f64`] has already mapped every sentinel to `NaN` — see
-/// [`nodata_to_nan`]. Do not "simplify" that away: a finite sentinel reaching
-/// here is indistinguishable from terrain and is filled into the surface.
+/// The finite check below is an invariant guard: [`decode_geotiff_f64`] has
+/// already mapped every declared sentinel to `NaN` — see [`nodata_to_nan`]. Do
+/// not "simplify" that away: a non-finite value reaching the crop path is
+/// invalid terrain and must not become an invented surface.
 pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
     let (w, h, mut heights) = decode_geotiff_f64(bytes)?;
     if w != h {
@@ -117,16 +117,29 @@ pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
         return Err(DemError::AllNoData);
     }
 
+    // Only a nodata component connected to the raster boundary is an overrun
+    // margin. A disconnected hole is an interior measurement failure and must
+    // be rejected; filling it would fabricate terrain in the authoritative DEM.
+    let interior_nodata = interior_nodata_count(&heights, w, h);
+    if interior_nodata > 0 {
+        return Err(DemError::InteriorNoData {
+            count: interior_nodata,
+        });
+    }
+
     // Prefer a SMALLER REAL surface over a larger invented one: trim the crop to
     // the largest centred square that is entirely measured, rather than
     // extrapolating a nodata margin into terrain that was never surveyed.
-    let res = largest_measured_centred_square(&heights, w, h);
+    let res = largest_measured_centred_square(&heights, w, h).ok_or(
+        DemError::NoCenteredMeasuredSquare {
+            width: w,
+            height: h,
+        },
+    )?;
     if res < w {
         heights = crop_centred(&heights, w, res);
     }
-    // Only interior specks can remain (the trim removed the margin). Nearest-
-    // neighbour so a speck reads as its surroundings, never as a pit.
-    fill_nodata_from_nearest(&mut heights, res, res);
+    debug_assert!(heights.iter().all(|v| v.is_finite()));
 
     // Node-based: the span is (res - 1) pixels wide, so the trimmed extent must
     // be re-derived from the NEW sample count, not scaled from the old one.
@@ -147,13 +160,14 @@ pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
 /// surface off its coordinates. Shrinking symmetrically keeps the anchor where
 /// it is and simply admits a smaller map.
 ///
-/// Returns `w` when the raster is fully measured. The window shrinks two samples
-/// at a time so its parity matches `w` and the centre sample stays the centre.
+/// Returns `Some(w)` when the raster is fully measured. The window shrinks two
+/// samples at a time so its parity matches `w` and the centre sample stays the
+/// centre. Returns `None` when no measured centred square exists.
 ///
 /// Monotone by construction — a smaller centred window is a subset of a larger
 /// one, so it can never contain more nodata — which is what makes the binary
 /// search valid. `O(w·h)` for the summed-area table, `O(log w)` probes after.
-fn largest_measured_centred_square(heights: &[f64], w: usize, h: usize) -> usize {
+fn largest_measured_centred_square(heights: &[f64], w: usize, h: usize) -> Option<usize> {
     // Summed-area table of NODATA counts, so any window's count is 4 lookups.
     let mut sat = vec![0u32; (w + 1) * (h + 1)];
     for y in 0..h {
@@ -180,7 +194,8 @@ fn largest_measured_centred_square(heights: &[f64], w: usize, h: usize) -> usize
             hi = k;
         }
     }
-    w.saturating_sub(2 * lo).max(1)
+    let res = w.saturating_sub(2 * lo);
+    (res > 0).then_some(res)
 }
 
 /// Take the centred `n × n` window out of a `w × w` grid.
@@ -194,70 +209,55 @@ fn crop_centred(heights: &[f64], w: usize, n: usize) -> Vec<f64> {
     out
 }
 
-/// Replace every `NaN` with its NEAREST measured height (breadth-first from the
-/// measured/nodata boundary, 4-connected).
-///
-/// **Why nearest and not the global minimum.** Filling the nodata margin with
-/// the crop's lowest elevation is a *constant*, and a constant next to real
-/// relief is a CLIFF: an Apollo-15-sized crop spans kilometres of elevation, so
-/// the fill met the terrain as a ~5 km vertical wall around the map edge —
-/// visible as a sheer black/white barrier, and a `world bounds min.y` far below
-/// any ground the scene contains. It also dragged the whole surface's height
-/// range down, which costs precision in everything derived from it.
-///
-/// Nearest-neighbour extension instead continues the measured surface outward,
-/// so the seam is C0 by construction — the fill equals the boundary sample it
-/// came from, and there is no step to see. It does not invent relief (the
-/// margin is flat in the direction of extension, which is honest: we have no
-/// data there), it only refuses to invent a cliff.
-///
-/// BFS gives exact 4-connected nearest for free and touches each cell once, so
-/// this is O(w·h) with no distance transform to get wrong. Ties resolve by
-/// visit order, which is deterministic — the oracle's purity depends on this
-/// being a pure function of the raster.
-fn fill_nodata_from_nearest(heights: &mut [f64], w: usize, h: usize) {
-    // Seed the frontier with every measured cell that touches a hole — ONLY
-    // those. Seeding every finite cell queued the whole raster (~10 M usize on
-    // a 3200² DEM for one interior speck) and swept it all; non-adjacent seeds
-    // write nothing, and dropping them preserves the ascending-index order of
-    // the seeds that do, so the fill is byte-identical.
-    let finite_at = |i: usize| heights[i].is_finite();
-    let hole_adjacent = |i: usize| {
-        let (x, y) = (i % w, i / w);
-        (x > 0 && !finite_at(i - 1))
-            || (x + 1 < w && !finite_at(i + 1))
-            || (y > 0 && !finite_at(i - w))
-            || (y + 1 < h && !finite_at(i + w))
+/// Count non-finite samples that are not connected to the raster boundary.
+/// Boundary-connected samples are an honest crop overrun and are removed by
+/// [`largest_measured_centred_square`]; disconnected samples are interior holes.
+fn interior_nodata_count(heights: &[f64], w: usize, h: usize) -> usize {
+    let mut exterior = vec![false; heights.len()];
+    let mut queue = std::collections::VecDeque::new();
+    let mut seed = |x: usize, y: usize| {
+        let i = y * w + x;
+        if !heights[i].is_finite() && !exterior[i] {
+            exterior[i] = true;
+            queue.push_back(i);
+        }
     };
-    let mut queue: std::collections::VecDeque<usize> = (0..heights.len())
-        .filter(|&i| finite_at(i) && hole_adjacent(i))
-        .collect();
-    if queue.is_empty() {
-        return; // hole-free raster (or no finite cell to extend from)
+    for x in 0..w {
+        seed(x, 0);
+        seed(x, h - 1);
+    }
+    for y in 0..h {
+        seed(0, y);
+        seed(w - 1, y);
     }
     while let Some(i) = queue.pop_front() {
-        let v = heights[i];
-        let (x, y) = (i % w, i / w);
-        let mut visit = |nx: usize, ny: usize, q: &mut std::collections::VecDeque<usize>| {
+        let x = i % w;
+        let y = i / w;
+        let mut visit = |nx: usize, ny: usize| {
             let n = ny * w + nx;
-            if !heights[n].is_finite() {
-                heights[n] = v;
-                q.push_back(n);
+            if !heights[n].is_finite() && !exterior[n] {
+                exterior[n] = true;
+                queue.push_back(n);
             }
         };
         if x > 0 {
-            visit(x - 1, y, &mut queue);
+            visit(x - 1, y);
         }
         if x + 1 < w {
-            visit(x + 1, y, &mut queue);
+            visit(x + 1, y);
         }
         if y > 0 {
-            visit(x, y - 1, &mut queue);
+            visit(x, y - 1);
         }
         if y + 1 < h {
-            visit(x, y + 1, &mut queue);
+            visit(x, y + 1);
         }
     }
+    heights
+        .iter()
+        .enumerate()
+        .filter(|(i, value)| !value.is_finite() && !exterior[*i])
+        .count()
 }
 
 /// Errors from loading a DEM terrain asset.
@@ -276,6 +276,16 @@ pub enum DemError {
     },
     /// Every sample was nodata/NaN — no surface to build.
     AllNoData,
+    /// Non-finite samples remain inside the measured footprint. The loader does
+    /// not invent heights for an interior measurement hole.
+    InteriorNoData {
+        count: usize,
+    },
+    /// Boundary trimming left no measured square centred on the authored site.
+    NoCenteredMeasuredSquare {
+        width: usize,
+        height: usize,
+    },
     /// The raster carries no usable georeferencing, so its ground extent is
     /// unknown. Fatal by design: the alternative is terrain at a guessed scale.
     NoGeoreferencing(String),
@@ -296,6 +306,14 @@ impl fmt::Display for DemError {
                 )
             }
             DemError::AllNoData => write!(f, "DEM is entirely nodata"),
+            DemError::InteriorNoData { count } => write!(
+                f,
+                "DEM contains {count} interior nodata samples; repair the source raster"
+            ),
+            DemError::NoCenteredMeasuredSquare { width, height } => write!(
+                f,
+                "DEM {width}x{height} has no measured square centred on the authored site"
+            ),
             DemError::NoGeoreferencing(m) => write!(
                 f,
                 "heightmap has no usable georeferencing, so its ground extent is \
@@ -336,7 +354,7 @@ mod tests {
             g.extend_from_slice(&[1.0, 1.0, 1.0, 1.0, n, n]);
         }
         // Centred clean square: trimming 2 per side leaves x/y 2..=3 → side 2.
-        let side = largest_measured_centred_square(&g, 6, 6);
+        let side = largest_measured_centred_square(&g, 6, 6).unwrap();
         assert_eq!(side, 2, "must shrink about the CENTRE, not slide left");
         let cropped = crop_centred(&g, 6, side);
         assert_eq!(cropped.len(), side * side);
@@ -351,15 +369,13 @@ mod tests {
     #[test]
     fn clean_raster_is_not_trimmed() {
         let g = vec![5.0f64; 16];
-        assert_eq!(largest_measured_centred_square(&g, 4, 4), 4);
+        assert_eq!(largest_measured_centred_square(&g, 4, 4), Some(4));
     }
 
-    /// The nodata margin must not become a cliff: filling it with the crop's
-    /// global minimum put a kilometres-tall wall around the map edge. The fill
-    /// must equal the nearest measured sample, so the seam has no step.
+    /// Boundary-connected nodata is a crop overrun and may be removed; it is not
+    /// an interior measurement hole.
     #[test]
-    fn nodata_margin_is_extended_not_stepped_to_the_minimum() {
-        // 4×4: a low pit at one corner, a plateau at 1000, and a nodata margin.
+    fn boundary_nodata_is_distinguished_from_an_interior_hole() {
         let n = f64::NAN;
         let mut g = vec![
             -4000.0, 1000.0, 1000.0, n, //
@@ -367,35 +383,25 @@ mod tests {
             1000.0, 1000.0, 1000.0, n, //
             n, n, n, n,
         ];
-        fill_nodata_from_nearest(&mut g, 4, 4);
-        assert!(g.iter().all(|v| v.is_finite()), "no holes left");
-        // Every filled cell took its neighbouring plateau value, NOT the -4000 min.
-        for (i, v) in g.iter().enumerate() {
-            assert!(
-                *v >= 1000.0 || i == 0,
-                "cell {i} = {v}: fill must not import the pit"
-            );
-        }
-        // The seam is C0: the filled cell equals the measured one beside it.
-        assert_eq!(g[3], g[2]);
+        assert_eq!(interior_nodata_count(&g, 4, 4), 0);
+        g[5] = n;
+        assert_eq!(interior_nodata_count(&g, 4, 4), 1);
     }
 
-    /// One interior speck must fill from its nearest measured neighbour, with
-    /// the hole-adjacent seeding reproducing the whole-grid seed's visit order
-    /// exactly: seeds pop in ascending index, so the speck takes its
-    /// smallest-index finite 4-neighbour (here: the cell above). Every cell
-    /// that is not a hole stays untouched.
+    /// Interior nodata is not silently repaired by a nearest-neighbour terrain
+    /// guess. The loader rejects it so the source asset can be corrected.
     #[test]
-    fn interior_speck_fills_from_nearest_and_touches_nothing_else() {
+    fn interior_speck_is_rejected_by_the_boundary_classifier() {
         let mut g: Vec<f64> = (0..25).map(|i| i as f64).collect();
         g[12] = f64::NAN;
-        fill_nodata_from_nearest(&mut g, 5, 5);
-        assert_eq!(g[12], 7.0, "ascending seed order → filled from above");
-        for (i, v) in g.iter().enumerate() {
-            if i != 12 {
-                assert_eq!(*v, i as f64, "cell {i} must be untouched");
-            }
-        }
+        assert_eq!(interior_nodata_count(&g, 5, 5), 1);
+    }
+
+    #[test]
+    fn even_raster_without_a_measured_centre_is_rejected() {
+        let mut g = vec![f64::NAN; 4 * 4];
+        g[0] = 1.0;
+        assert_eq!(largest_measured_centred_square(&g, 4, 4), None);
     }
 
     /// Encode a georeferenced `w*h` f32 raster spanning `size_m`, as the DEM
@@ -447,6 +453,17 @@ mod tests {
         assert_eq!(grid.height_at(-1.0, 1.0), 20.0);
         assert_eq!(grid.height_at(1.0, 1.0), 30.0);
         assert_eq!(grid.height_at(0.0, 0.0), 15.0);
+    }
+
+    #[test]
+    fn raster_without_a_centred_measured_square_is_rejected() {
+        let mut data = vec![f32::NAN; 16];
+        data[0] = 1.0;
+        let err = height_grid_from_geotiff(&encode_dem(4, &data, 4.0)).unwrap_err();
+        assert!(
+            matches!(err, DemError::NoCenteredMeasuredSquare { .. }),
+            "{err}"
+        );
     }
 
     /// The extent the grid reports must be the extent the raster declares —

@@ -116,18 +116,11 @@ Consequences to work through before implementing:
 - **Rollback/prediction.** Gravity direction becomes position-dependent, so it must
   be derived identically on client and server or predicted bodies will diverge.
 
-## 3. Related open question: the no-LOD path
+## 3. Static visual path
 
 `lunco:layer:lodViz = false` selects a static mesh instead of streamed LOD tiles —
-conceptually "load it all at once". On the school twin that path rendered **nothing
-at all**, while `lodViz = true` rendered (revealing the feather defect above).
-
-The static-mesh branch does build a mesh: `needs_static_grid = !collider_ring ||
-!lod_viz` is true, and `mesh = if lod_viz { None } else { Some(...) }` yields
-`Some`, with a material confirmed applied by `wire_terrain_materials`. Mesh and
-material both exist, yet nothing draws.
-
-**Unresolved.** If "no LOD" is meant to be the simple, always-correct fallback —
-the tool you reach for when the streaming path misbehaves — then it is currently a
-regression and should be the first thing fixed, since it is the path with the
-fewest moving parts to reason about.
+The path now keeps the cropped native DEM as the authoritative oracle and static
+heightfield collider, then derives the optional visual mesh from that oracle. An
+authored `targetRes` can reduce only the visual mesh; it cannot move the query or
+physics surface onto a lossy grid. The regression is covered by
+`terrain::visual_product_tests::target_resolution_changes_only_the_static_visual_product`.
