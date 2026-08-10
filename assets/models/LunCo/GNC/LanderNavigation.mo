@@ -15,6 +15,10 @@ model LanderNavigation
     "Measured range rate (m/s), positive when the vehicle climbs";
   input Real altimeter_valid = 0.0
     "1 when the range measurement hit terrain, 0 when it is out of range";
+  input Real altimeter_vehicle_position_x = 0.0
+    "Altimeter-derived vehicle X position (m)";
+  input Real altimeter_vehicle_position_z = 0.0
+    "Altimeter-derived vehicle Z position (m)";
   input Real imu_coordinate_accel_local_x = 0.0 "IMU local coordinate acceleration X (m/s²)";
   input Real imu_coordinate_accel_local_y = 0.0 "IMU local coordinate acceleration Y (m/s²)";
   input Real imu_coordinate_accel_local_z = 0.0 "IMU local coordinate acceleration Z (m/s²)";
@@ -30,6 +34,8 @@ model LanderNavigation
     "Time for a newly valid altimeter rate to enter the estimator (s)";
   parameter Real altitude_position_correction_gain = 1.0
     "Complementary altitude correction bandwidth (1/s)";
+  input Real lateral_position_correction_gain = 0.8
+    "Complementary terrain-hit lateral correction bandwidth (1/s)";
 
   parameter Real initial_pos_x = 0.0 "Mission-initialized X position (m)";
   parameter Real initial_pos_y = 0.0 "Mission-initialized Y position (m)";
@@ -82,8 +88,15 @@ equation
   // active, while a valid altimeter return corrects accumulated drift toward
   // the measured sensor-to-ground clearance. Do not blend two absolute heights;
   // that would make the old integrated state leak back into the measurement.
-  der(nav_pos_x) = nav_vel_x;
-  der(nav_pos_z) = nav_vel_z;
+  // A nadir terrain return also carries the horizontal location of the ray
+  // hit. Use it as a complementary position correction so IMU integration
+  // remains the high-rate propagation while long-flight lateral drift stays
+  // observable. During attitude recovery the ray is invalid and this term
+  // naturally disappears.
+  der(nav_pos_x) = nav_vel_x + lateral_position_correction_gain
+    * range_confidence * (altimeter_vehicle_position_x - nav_pos_x);
+  der(nav_pos_z) = nav_vel_z + lateral_position_correction_gain
+    * range_confidence * (altimeter_vehicle_position_z - nav_pos_z);
   der(nav_vel_x) = navigation_accel_x;
   // The valid range-rate is the direct vertical-velocity measurement. Use it
   // for the control output whenever the altimeter has a real return, and keep

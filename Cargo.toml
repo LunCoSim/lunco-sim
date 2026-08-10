@@ -292,6 +292,7 @@ rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", branch = "mai
 rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }

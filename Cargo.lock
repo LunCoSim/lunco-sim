@@ -7596,6 +7596,7 @@ dependencies = [
  "rumoca-ir-solve",
  "rumoca-phase-parse",
  "rumoca-sim",
+ "rumoca-solver-rk45",
  "rumoca-tool-fmt",
  "rumoca-tool-lint",
  "ruzstd 0.7.3",

@@ -14,6 +14,7 @@
 use indexmap::IndexMap;
 use rumoca_compile::compile::Dae;
 use rumoca_eval_solve::SolveRuntime;
+use rumoca_ir_solve::SolveModel;
 use rumoca_sim::{SessionState, SimOptions, SimulationDiagnosticError};
 
 const ALGEBRAIC_TOL: f64 = 1.0e-10;
@@ -36,6 +37,24 @@ pub struct FixedStepSession {
 impl FixedStepSession {
     /// Lower and prepare a DAE for the fixed-step backend.
     pub fn new(dae: &Dae, options: SimOptions) -> Result<Self, SimulationDiagnosticError> {
+        let lower_started = web_time::Instant::now();
+        let model = rumoca_sim::lower_for_simulation_with_overrides(dae, &options)?;
+        let lower_elapsed = lower_started.elapsed();
+        Self::from_solve_model(&model, options, Some(lower_elapsed))
+    }
+
+    /// Prepare a fixed-step session from an already-lowered solve model.
+    ///
+    /// DAE lowering is immutable with respect to a compiled artifact and its
+    /// parameter overrides. The worker owns a cache of these solve models, so
+    /// Reset and a second USD instance do not repeat the expensive structural
+    /// lowering pass. The model is borrowed only while `SolveRuntime` copies
+    /// the executable solve representation into the session.
+    pub fn from_solve_model(
+        model: &SolveModel,
+        options: SimOptions,
+        lower_elapsed: Option<web_time::Duration>,
+    ) -> Result<Self, SimulationDiagnosticError> {
         let fixed_dt = options.dt.ok_or_else(|| {
             SimulationDiagnosticError::Solver(
                 "fixed-rk4 requires an explicit positive SimOptions::dt".into(),
@@ -57,12 +76,9 @@ impl FixedStepSession {
             ));
         }
 
-        let lower_started = web_time::Instant::now();
-        let model = rumoca_sim::lower_for_simulation_with_overrides(dae, &options)?;
-        let lower_elapsed = lower_started.elapsed();
-        reject_unsupported_constructs(&model)?;
+        reject_unsupported_constructs(model)?;
         let runtime_started = web_time::Instant::now();
-        let runtime = SolveRuntime::new(&model)?;
+        let runtime = SolveRuntime::new(model)?;
         let runtime_elapsed = runtime_started.elapsed();
         let state_count = model.state_scalar_count();
         if model.initial_y.len() < state_count {
@@ -73,8 +89,11 @@ impl FixedStepSession {
             )));
         }
         log::info!(
-            "[fixed-rk4] prepared solve runtime: lower={lower_elapsed:?} runtime={runtime_elapsed:?} \
+            "[fixed-rk4] prepared solve runtime: lower={} runtime={runtime_elapsed:?} \
              states={} solver_slots={} algebraic_slots={}",
+            lower_elapsed
+                .map(|elapsed| format!("{elapsed:?}"))
+                .unwrap_or_else(|| "cached".to_string()),
             state_count,
             model.solver_scalar_count(),
             model.solver_scalar_count().saturating_sub(state_count),
@@ -86,7 +105,7 @@ impl FixedStepSession {
             state: initial_state.clone(),
             initial_state,
             params: model.parameters.clone(),
-            initial_params: model.parameters,
+            initial_params: model.parameters.clone(),
             input_values: IndexMap::new(),
             time_origin: options.t_start,
             step_index: 0,

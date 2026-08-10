@@ -117,9 +117,14 @@ fn shot(spec) {
     seq([
         // Open. `once` completes on its first tick, so this runs exactly once.
         once(|m| {
-            shot_begin(shot_dir(out, idx), fps, frozen);
-            cmd("ToggleInputOverlay", #{ enabled: overlay });
+            // Apply presentation state before arming the recorder.  A begin
+            // callback can change the selected USD root, which changes the
+            // exposed runtime surfaces.  Starting first lets the recorder see
+            // the previous surface as ready and capture one stale frame at a
+            // shot boundary.
             if begin != () { begin.call(m); }
+            cmd("ToggleInputOverlay", #{ enabled: overlay });
+            shot_begin(shot_dir(out, idx), fps, frozen);
         }),
 
         // Run. `act` fires every tick while the leaf is live; `done` ends it.

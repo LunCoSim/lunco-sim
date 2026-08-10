@@ -525,6 +525,10 @@ pub struct OfflineRecordingState {
     /// Primary window present mode as it was before recording uncapped it,
     /// restored on stop.
     pub prev_present_mode: Option<bevy::window::PresentMode>,
+    /// Virtual-time clamp as it was before recording. Normal interactive runs
+    /// use a small catch-up cap; a declared 25 FPS take needs its full 40 ms
+    /// frame delta or the film silently runs short.
+    pub prev_virtual_max_delta: Option<std::time::Duration>,
     /// Encode straight to a video file via a spawned `ffmpeg` instead of a PNG
     /// sequence (destination named a video file — see [`output_is_video`]).
     /// Demoted back to a PNG sequence at activation if `ffmpeg` is not
@@ -853,6 +857,7 @@ fn activate_recording(
     // that state first; subsequent deliveries set this latch and advance virtual
     // time by exactly one frame before requesting the next capture.
     state.frame_just_captured = false;
+    state.prev_virtual_max_delta = None;
 
     // Video mode needs a runnable `ffmpeg`. Probe NOW, not at the first frame:
     // a missing encoder must demote the recording to a PNG sequence with a loud
@@ -934,6 +939,7 @@ fn teardown_recording(
     state: &mut OfflineRecordingState,
     keep_awake: &mut lunco_core::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    virtual_time: &mut bevy::time::Time<bevy::time::Virtual>,
     video_sink: &mut OfflineVideoSink,
     commands: &mut Commands,
 ) {
@@ -951,6 +957,9 @@ fn teardown_recording(
     if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take()) {
         window.present_mode = prev;
     }
+    if let Some(prev) = state.prev_virtual_max_delta.take() {
+        virtual_time.set_max_delta(prev);
+    }
     // Restore automatic realtime ticking
     commands.insert_resource(TimeUpdateStrategy::Automatic);
 }
@@ -961,6 +970,7 @@ fn on_stop_offline_recording(
     mut state: ResMut<OfflineRecordingState>,
     mut keep_awake: ResMut<lunco_core::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
     mut commands: Commands,
 ) {
@@ -974,6 +984,7 @@ fn on_stop_offline_recording(
             &mut state,
             &mut keep_awake,
             &mut windows,
+            &mut virtual_time,
             &mut video_sink,
             &mut commands,
         );
@@ -1051,7 +1062,11 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 /// 2. **Every mesh handle is loaded *with its dependencies*.** This is the direct
 ///    read for "meshes and the materials/textures hanging off them have resolved",
 ///    and it is what catches the untextured-placeholder opening frame.
-/// 3. **No visual subsystem reports in-flight work on the [`StatusBus`]** (see
+/// 3. **No dynamic physics participant is still admitting its authored state.**
+///    This is the generic USD/Avian lifecycle boundary; it prevents a capture
+///    from observing the loader's kinematic zero state while GNC has already
+///    received the authored release condition.
+/// 4. **No visual subsystem reports in-flight work on the [`StatusBus`]** (see
 ///    [`VISUAL_BUSY_SOURCES`]). This carries the weight of the condition, and is how
 ///    the gate shares — rather than re-implements — the existing definitions of
 ///    ready. `"scene"` is `SceneLoadInFlight`: prims are still spawning, the state
@@ -1067,6 +1082,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 fn scene_visuals_ready(
     meshes: &Query<&bevy::mesh::Mesh3d>,
     asset_server: &AssetServer,
+    physics_pending: &Query<(), With<lunco_core::PhysicsStatePending>>,
     bus: Option<&crate::status_bus::StatusBus>,
 ) -> Option<String> {
     // (1) Nothing spawned yet — not "ready", just "empty".
@@ -1098,7 +1114,17 @@ fn scene_visuals_ready(
         return Some(format!("{unloaded}/{total} mesh assets still loading"));
     }
 
-    // (3) Visual subsystems that report their own progress.
+    // (3) The USD→Avian projection has not yet published authored initial
+    // state to the live solver. Do not let the recorder capture the transient
+    // kinematic placeholder while sensors/controllers are already live.
+    let pending_physics = physics_pending.iter().len();
+    if pending_physics > 0 {
+        return Some(format!(
+            "{pending_physics} physics participant(s) still admitting authored state"
+        ));
+    }
+
+    // (4) Visual subsystems that report their own progress.
     if let Some(bus) = bus {
         let mut busy: Vec<String> = bus
             .entries_in(crate::status_bus::BusyScope::Global)
@@ -1130,6 +1156,7 @@ fn start_recording_when_scene_ready(
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
+    physics_pending: Query<(), With<lunco_core::PhysicsStatePending>>,
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
     // binary does not add. Absent simply means clause (3) has nothing to say.
     bus: Option<Res<crate::status_bus::StatusBus>>,
@@ -1137,7 +1164,7 @@ fn start_recording_when_scene_ready(
 ) {
     let Some(mut pending) = pending else { return };
 
-    let blocker = scene_visuals_ready(&meshes, &asset_server, bus.as_deref());
+    let blocker = scene_visuals_ready(&meshes, &asset_server, &physics_pending, bus.as_deref());
     let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
     if let Some(reason) = blocker {
         if !timed_out {
@@ -1201,6 +1228,7 @@ fn drive_offline_clock(
     // otherwise a slow worker produces duplicate frames at the same simulation
     // time and the captured sequence outruns its force state.
     coupling: Option<Res<lunco_core::RealtimeCoupling>>,
+    mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
@@ -1235,6 +1263,15 @@ fn drive_offline_clock(
     }
 
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);
+    if state.prev_virtual_max_delta.is_none() {
+        state.prev_virtual_max_delta = Some(virtual_time.max_delta());
+    }
+    // The simulator's normal 33 ms cap prevents interactive catch-up storms.
+    // It must not clip the recorder's explicit frame duration: at 25 FPS that
+    // would turn a nominal 40 s take into roughly 32 s of simulation.
+    if virtual_time.max_delta() < frame_dur {
+        virtual_time.set_max_delta(frame_dur);
+    }
 
     if state.is_waiting_for_frame {
         // Capture in flight — hold the clock so the pending frame stays the one
@@ -1276,6 +1313,7 @@ fn deliver_offline_frame(
     mut state: ResMut<OfflineRecordingState>,
     mut keep_awake: ResMut<lunco_core::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
     video_settings: Res<OfflineVideoSettings>,
     mut commands: Commands,
@@ -1337,6 +1375,7 @@ fn deliver_offline_frame(
                         &mut state,
                         &mut keep_awake,
                         &mut windows,
+                        &mut virtual_time,
                         &mut video_sink,
                         &mut commands,
                     );
@@ -1355,6 +1394,7 @@ fn deliver_offline_frame(
                 &mut state,
                 &mut keep_awake,
                 &mut windows,
+                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );
@@ -1369,6 +1409,7 @@ fn deliver_offline_frame(
                 &mut state,
                 &mut keep_awake,
                 &mut windows,
+                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );
@@ -1390,6 +1431,7 @@ fn deliver_offline_frame(
                 &mut state,
                 &mut keep_awake,
                 &mut windows,
+                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );
@@ -1414,6 +1456,7 @@ fn deliver_offline_frame(
                 &mut state,
                 &mut keep_awake,
                 &mut windows,
+                &mut virtual_time,
                 &mut video_sink,
                 &mut commands,
             );

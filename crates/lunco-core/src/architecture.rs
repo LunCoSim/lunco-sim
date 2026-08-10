@@ -345,6 +345,17 @@ pub struct PortSurfaceReady;
 #[reflect(Component)]
 pub struct PortSurfacePending;
 
+/// Marks a dynamic physics participant while its authored initial state is
+/// still being admitted into the live solver.
+///
+/// This is the inverse lifecycle state of [`PhysicsStateReady`]. Consumers
+/// must not sample or record a dynamic body until the USD projection has
+/// published its authored pose and velocity and the body has been promoted
+/// from its admission state.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct PhysicsStatePending;
+
 /// Marks the boundary at which a physics participant has published its
 /// authored initial state to the co-simulation fabric.
 ///

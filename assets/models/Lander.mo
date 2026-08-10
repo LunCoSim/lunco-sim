@@ -102,7 +102,7 @@ model Lander
   output Real torque_y "Requested body torque about Y (N.m)";
   output Real torque_z "Requested body torque about Z (N.m)";
   output Real landing_contact
-    "Physical four-leg contact while the airframe remains upright";
+    "Settled four-leg contact while the airframe remains upright";
   output Real touchdown "Touchdown signal from local landing loads";
   output Real desired_tilt_x
     "Requested thrust tilt toward navigation +Z (rad)";
@@ -208,10 +208,12 @@ equation
   hold_rate_z = gyro_z * noEvent(max(0.0,
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
-  // Once the physical touchdown state is settled, the legs—not a continuously
-  // firing RCS—hold the vehicle. The transition is continuous because
-  // `touchdown` is the filtered native-contact state below.
-  attitude_authority = attitude_hold * max(0.0, min(1.0, 1.0 - touchdown));
+  // Once all four native feet carry an upright hull, the legs—not a
+  // continuously firing RCS—hold the vehicle. `landing_contact` is the
+  // physical authority handoff; `touchdown` remains the filtered low-speed
+  // settling measurement used by telemetry and mission logic.
+  attitude_authority = attitude_hold * max(0.0, min(1.0,
+    1.0 - max(touchdown, landing_contact)));
   // Bound the requested torque at the controller/actuator boundary. Without
   // this, a large measured attitude error becomes an impossible torque request
   // that the downstream valve clamp silently clips, invalidating the loop's
@@ -258,12 +260,13 @@ equation
   settled_touchdown_target = all_legs_contact
     * upright_contact_gate
     * ground_speed_gate * descent_speed_gate;
-  // Contact and settled touchdown are different physical states. Contact is
-  // the authority boundary: once every pad is carrying an upright airframe,
-  // flight guidance must stop fighting the leg constraints even if the
-  // navigation estimate still contains pre-contact inertial drift. The
-  // low-speed filter below remains the mission's settled-touchdown event.
-  landing_contact = all_legs_contact * upright_contact_gate;
+  // Contact alone is not yet a landing: a vehicle can touch four pads while
+  // still translating or descending fast enough to slide across the surface.
+  // Keep the flight computer authoritative until the native contact loads and
+  // measured body velocity satisfy the same low-speed condition used by the
+  // touchdown filter. This lets the engine/RCS dissipate the real residual
+  // kinetic energy instead of handing it to an unpowered, sliding airframe.
+  landing_contact = settled_touchdown_target;
   der(settled_touchdown_state) = (settled_touchdown_target
     - settled_touchdown_state)
     / max(minimum_time_constant_s, touchdown_settle_tau_s);

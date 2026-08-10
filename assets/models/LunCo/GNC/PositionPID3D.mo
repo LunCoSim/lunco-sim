@@ -16,6 +16,10 @@ model PositionPID3D
   input Real altimeter_range = 0.0 "Altimeter range to terrain (m)";
   input Real altimeter_range_rate = 0.0 "Altimeter range rate (m/s)";
   input Real altimeter_valid = 0.0 "1 when the raw ray has a valid return";
+  input Real altimeter_vehicle_position_x = 0.0
+    "Altimeter-derived vehicle X position (m)";
+  input Real altimeter_vehicle_position_z = 0.0
+    "Altimeter-derived vehicle Z position (m)";
   input Real imu_coordinate_accel_local_x = 0.0 "IMU local coordinate acceleration X (m/s²)";
   input Real imu_coordinate_accel_local_y = 0.0 "IMU local coordinate acceleration Y (m/s²)";
   input Real imu_coordinate_accel_local_z = 0.0 "IMU local coordinate acceleration Z (m/s²)";
@@ -32,6 +36,8 @@ model PositionPID3D
   input Real altimeter_mount_offset = 3.3 "Altimeter-to-COM offset (m)";
   input Real vertical_velocity_correction_gain = 2.0
     "Range-rate correction gain for the vertical estimator (1/s)";
+  input Real lateral_position_correction_gain = 0.8
+    "Terrain-hit lateral correction bandwidth (1/s)";
 
   // Mission landing target. Its position comes from a kinematic USD target
   // body's live output ports; target velocity is optional and defaults to zero.
@@ -133,7 +139,9 @@ model PositionPID3D
   Real engine_alignment_gate;
   Real pid_y_command;
   Real altitude_above_target;
+  Real lateral_landing_gate;
   Real descent_rate_schedule_magnitude;
+  Real flare_descent_rate_magnitude;
   Real landing_flare_gate;
   Real vertical_limiter_output;
   Real throttle_command_value;
@@ -148,6 +156,8 @@ equation
   navigation.altimeter_range = altimeter_range;
   navigation.altimeter_range_rate = altimeter_range_rate;
   navigation.altimeter_valid = altimeter_valid;
+  navigation.altimeter_vehicle_position_x = altimeter_vehicle_position_x;
+  navigation.altimeter_vehicle_position_z = altimeter_vehicle_position_z;
   navigation.imu_coordinate_accel_local_x = imu_coordinate_accel_local_x;
   navigation.imu_coordinate_accel_local_y = imu_coordinate_accel_local_y;
   navigation.imu_coordinate_accel_local_z = imu_coordinate_accel_local_z;
@@ -160,6 +170,7 @@ equation
   navigation.gravity_nav_z = 0.0;
   navigation.altimeter_mount_offset = altimeter_mount_offset;
   navigation.vertical_velocity_correction_gain = vertical_velocity_correction_gain;
+  navigation.lateral_position_correction_gain = lateral_position_correction_gain;
 
   // Navigation -> PID X/Y/Z. Each axis receives setpoint, feedback, rate, and
   // its own live gains; no axis is a copied or hidden special case.
@@ -184,10 +195,24 @@ equation
   // rate as the remaining altitude disappears.  This is a reusable flight-law
   // boundary, not a scene timer or a per-episode target override.
   altitude_above_target = max(0.0, navigation.nav_pos_y - target_y);
+  // The stopping-distance law limits the rate high above the pad, while the
+  // flare law makes the terminal rate approach zero before the feet touch.
+  // Keep lateral braking active through the first-foot contact. With a tipped
+  // release, one pad can cross the plane before the COM reaches the target;
+  // gating on altitude there would leave the vehicle carrying horizontal speed
+  // into the remaining three contacts. The native settled-touchdown signal is
+  // the physical handoff: only after all four pads, an upright hull, and low
+  // translational rates are true may flight authority be removed.
+  lateral_landing_gate = max(0.0, min(1.0, 1.0 - landing_contact));
+  // A speed cap by itself would still command the cap at the surface and
+  // leave the suspension to remove the vehicle's descent energy.
+  flare_descent_rate_magnitude = max(0.0, descent_speed_limit_mps)
+    * max(0.0, min(1.0,
+      altitude_above_target / max(1.0e-9, landing_flare_range_m)));
   descent_rate_schedule_magnitude = min(
     max(0.0, descent_speed_limit_mps),
-    sqrt(2.0 * max(0.0, descent_braking_accel_mps2)
-      * altitude_above_target));
+    min(sqrt(2.0 * max(0.0, descent_braking_accel_mps2)
+      * altitude_above_target), flare_descent_rate_magnitude));
   descent_rate_command = target_vel_y - descent_rate_schedule_magnitude;
   pid_y.setpoint_rate = descent_rate_command;
   pid_y.measurement_rate = navigation.nav_vel_y;
@@ -214,8 +239,8 @@ equation
   // PIDAxis owns saturation. Keep this boundary as a direct signal connection
   // so the parent does not create a second, redundant limiter around the
   // reusable controller's public command.
-  lateral_accel_x = pid_x.command;
-  lateral_accel_z = pid_z.command;
+  lateral_accel_x = lateral_landing_gate * pid_x.command;
+  lateral_accel_z = lateral_landing_gate * pid_z.command;
   // Keep the bounded internal control signal separate from the evidence output.
   // This makes the limiter a proper signal boundary and prevents the output
   // alias from participating in the PID algebraic matching row.
@@ -223,15 +248,15 @@ equation
   // Close to the ground, a vertical PID can legitimately request zero thrust
   // while the measured body is still rising from a first pad contact.  That
   // leaves the remaining pads to catch a moving vehicle and makes horizontal
-  // settling depend on contact order.  The altimeter-driven flare supplies a
-  // reusable minimum hover command until native touchdown is settled: it is
-  // not a timer and it disappears when the four-leg/upright/low-speed
-  // touchdown state is true. The ramp reaches the gravity-compensating hover
-  // command at the ground, giving the suspension time to take load instead of
-  // asking the pads to absorb the whole descent rate.
+  // settling depend on contact order.  The reusable flare supplies a minimum
+  // hover command until native touchdown is settled: it is not a timer and it
+  // disappears when the four-leg/upright/low-speed touchdown state is true.
+  // It must be keyed to the same target-relative altitude as the stopping law.
+  // Using raw altimeter range here mixes the sensor mount/beam geometry with
+  // the COM landing datum and can hold a vehicle above its own pad forever.
   landing_flare_gate = max(0.0, min(1.0, altimeter_valid))
     * max(0.0, min(1.0,
-      (max(0.0, landing_flare_range_m) - navigation.measured_altitude)
+      altitude_above_target
         / max(1.0e-9, landing_flare_range_m)));
   vertical_limiter.command = max(
     g + pid_y_command,
@@ -309,17 +334,14 @@ equation
   // scene-specific correction.
   roll_command_raw = -atan2(bounded_lateral_accel_x, tilt_reference_accel)
     / max(1.0e-9, command_tilt_limit_rad);
-  // Keep flight authority while the airframe is touching but still carrying
-  // lateral or vertical impact speed. The suspension needs the flight
-  // computer to brake that residual motion; cutting authority on the first
-  // four-pad contact turns a supported-but-moving body into an uncontrolled
-  // skid. `landing_contact` remains a native contact input for telemetry and
-  // contact-state diagnostics, but it is not the handoff event: a contact edge
-  // is not a landing. The filtered low-speed `touchdown` state is the physical
-  // authority boundary, so the engine and RCS stop only after the vehicle has
-  // actually settled on its native suspension.
+  // Once all four native feet carry an upright hull, flight authority ends.
+  // This is the physical handoff to the suspension: the engine must not keep
+  // lifting a supported vehicle while a filtered touchdown value is still
+  // converging. `touchdown` remains in the maximum so a low-speed settled
+  // signal is still visible to the rest of the flight computer, but it is not
+  // the only path that can remove thrust after genuine four-foot contact.
   flight_command_gain = engage * (1.0 - piloted)
-    * max(0.0, min(1.0, 1.0 - touchdown));
+    * max(0.0, min(1.0, 1.0 - max(touchdown, landing_contact)));
   throttle_command_value = flight_command_gain * engine_alignment_gate
     * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));

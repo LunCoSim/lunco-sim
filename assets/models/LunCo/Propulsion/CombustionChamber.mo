@@ -28,6 +28,8 @@ model CombustionChamber
   output Real ideal_chamber_pressure_pa "Pressure implied by c-star and throat area, Pa";
   output Real chamber_temperature_k "Estimated combustion temperature, K";
   output Real thrust_n "Generated thrust, N";
+  output Real maximum_thrust_n
+    "Thrust capability at the authored nominal propellant flow, N";
   output Real activity "Combustion activity, 0..1";
   output Real heat_release_w "Approximate released chemical power, W";
 
@@ -60,6 +62,12 @@ equation
     * combustion_efficiency * mixture_efficiency;
   thrust_n = propellant_flow * effective_exhaust_velocity_mps
     * combustion_efficiency * mixture_efficiency;
+  // This is a capability signal, not a measurement of current thrust.  The
+  // flight computer uses it to normalize acceleration commands against the
+  // same chamber performance model that generates thrust.  Keep the contract
+  // in the propulsion model so consumers do not duplicate an engine constant.
+  maximum_thrust_n = nominal_flow_kgs * effective_exhaust_velocity_mps
+    * combustion_efficiency;
   heat_release_w = propellant_flow * fuel_energy_j_kg
     * combustion_efficiency * mixture_efficiency;
 end CombustionChamber;

@@ -68,6 +68,13 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
+    # The USD rigid-body projection aggregates the four foot colliders into one
+    # Avian compound body. Bind the landing surface at that body boundary so
+    # the solver receives the authored friction for the compound, rather than
+    # silently falling back to Avian's default because child-only bindings are
+    # not separate rigid bodies.
+    rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
+
     # The feet are a load-bearing landing interface. Their prismatic joints
     # constrain each leg to its authored rake, while a finite regolith grip
     # removes residual horizontal velocity after touchdown. This is authored
@@ -116,6 +123,7 @@ def Xform "DescentLander" (
         float inputs:rcs_fuel_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:fuel_mass_flow_kgs>
         float inputs:rcs_oxidizer_mass_flow_kgs.connect = </DescentLander/AttitudePropulsion.outputs:oxidizer_mass_flow_kgs>
         float outputs:thrust_n.connect = </DescentLander/MainPropulsion/MainChamber.outputs:thrust_n>
+        float outputs:maximum_thrust_n.connect = </DescentLander/MainPropulsion/MainChamber.outputs:maximum_thrust_n>
         float outputs:engine_activity.connect = </DescentLander/MainPropulsion/MainChamber.outputs:activity>
         float outputs:propellant_flow.connect = </DescentLander/MainPropulsion/MainChamber.outputs:propellant_flow>
         float outputs:propellant_mass.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:propellant_mass_kg>
@@ -256,7 +264,10 @@ def Xform "DescentLander" (
             float inputs:throat_area_m2 = 0.0045
             float inputs:effective_exhaust_velocity_mps = 2940.0
             float inputs:combustion_efficiency = 0.96
-            float inputs:nominal_flow_kgs = 29.0
+            # 8 kg/s fuel + 21 kg/s oxidizer at the full-tank pump pressure
+            # gives 31.75 kg/s.  This is the capability used by the connected
+            # GNC normalization output, not a second controller constant.
+            float inputs:nominal_flow_kgs = 31.75
             float inputs:chamber_temperature_full_k = 3300.0
             float inputs:minimum_flow_kgs = 0.000001
             float inputs:minimum_throat_area_m2 = 0.000000001
@@ -274,6 +285,7 @@ def Xform "DescentLander" (
             float outputs:ideal_chamber_pressure_pa
             float outputs:chamber_temperature_k
             float outputs:thrust_n
+            float outputs:maximum_thrust_n
             float outputs:activity
             float outputs:heat_release_w
         }
@@ -2487,6 +2499,8 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
+
         # THE LEG'S OWN FRAME, and the reason this prim is an Xform and not the
         # strut itself: origin AT the hull anchor, local -Y along the raked
         # strut. Every part of the leg is then placed by how far down the leg it
@@ -2901,7 +2915,7 @@ def Xform "DescentLander" (
         float physics:upperLimit = 0.0
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
-        float lunco:prismaticSuspension:damping = 2200.0
+        float lunco:prismaticSuspension:damping = 4000.0
         float lunco:prismaticSuspension:maxForce = 30000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
@@ -2922,7 +2936,7 @@ def Xform "DescentLander" (
         float physics:upperLimit = 0.0
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
-        float lunco:prismaticSuspension:damping = 2200.0
+        float lunco:prismaticSuspension:damping = 4000.0
         float lunco:prismaticSuspension:maxForce = 30000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
@@ -2939,7 +2953,7 @@ def Xform "DescentLander" (
         float physics:upperLimit = 0.0
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
-        float lunco:prismaticSuspension:damping = 2200.0
+        float lunco:prismaticSuspension:damping = 4000.0
         float lunco:prismaticSuspension:maxForce = 30000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
@@ -2956,7 +2970,7 @@ def Xform "DescentLander" (
         float physics:upperLimit = 0.0
         float lunco:prismaticSuspension:restPosition = 0.0
         float lunco:prismaticSuspension:stiffness = 4000.0
-        float lunco:prismaticSuspension:damping = 2200.0
+        float lunco:prismaticSuspension:damping = 4000.0
         float lunco:prismaticSuspension:maxForce = 30000.0
     }
 

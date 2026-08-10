@@ -1,6 +1,7 @@
 //! One construction boundary for rumoca simulation sessions.
 
 use rumoca_compile::compile::Dae;
+use rumoca_ir_solve::SolveModel;
 use rumoca_sim::{SimOptions, SimulationDiagnosticError, SimulationSession};
 
 use crate::fixed_step::FixedStepSession;
@@ -8,35 +9,45 @@ use lunco_experiments::solver::{SolverId, SolverSpec};
 
 /// Live Modelica stepper selected by the authoritative solver capability.
 pub enum LiveStepper {
-    Adaptive(SimulationSession),
+    Adaptive(rumoca_solver_rk45::SimulationSession),
     Fixed(FixedStepSession),
+}
+
+fn adaptive_error(error: rumoca_solver_rk45::SimError) -> SimulationDiagnosticError {
+    SimulationDiagnosticError::Solver(error.to_string())
 }
 
 impl LiveStepper {
     pub fn set_input(&mut self, name: &str, value: f64) -> Result<(), SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.set_input(name, value),
+            Self::Adaptive(session) => session.set_input(name, value).map_err(adaptive_error),
             Self::Fixed(session) => session.set_input(name, value),
         }
     }
 
     pub fn reset(&mut self, t_start: f64) -> Result<(), SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.reset(t_start),
+            Self::Adaptive(session) => session.reset(t_start).map_err(adaptive_error),
             Self::Fixed(session) => session.reset(t_start),
         }
     }
 
     pub fn step(&mut self, dt: f64) -> Result<(), SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.step(dt),
+            Self::Adaptive(session) => session.step(dt).map_err(adaptive_error),
             Self::Fixed(session) => session.step(dt),
         }
     }
 
     pub fn state(&self) -> Result<rumoca_sim::SessionState, SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.state(),
+            Self::Adaptive(session) => session
+                .state()
+                .map(|state| rumoca_sim::SessionState {
+                    time: state.time,
+                    values: state.values,
+                })
+                .map_err(adaptive_error),
             Self::Fixed(session) => session.state(),
         }
     }
@@ -50,7 +61,7 @@ impl LiveStepper {
 
     pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.get(name),
+            Self::Adaptive(session) => session.get(name).map_err(adaptive_error),
             Self::Fixed(session) => session.get(name),
         }
     }
@@ -72,10 +83,33 @@ pub fn live(
     spec: &SolverSpec,
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
+    let solve_model = lower_for_live(dae, &options)?;
+    live_from_solve_model(&solve_model, spec, options)
+}
+
+/// Lower a compiled DAE once at the live-session boundary. Callers that own a
+/// worker-local prepared-model cache use this function directly and then pass
+/// the cached result to [`live_from_solve_model`].
+pub fn lower_for_live(
+    dae: &Dae,
+    options: &SimOptions,
+) -> Result<SolveModel, SimulationDiagnosticError> {
+    rumoca_sim::lower_for_simulation_with_overrides(dae, options)
+}
+
+/// Build a live session from prepared solve IR. This keeps solver construction
+/// separate from DAE lowering, which is the expensive and reusable part.
+pub fn live_from_solve_model(
+    solve_model: &SolveModel,
+    spec: &SolverSpec,
+    options: SimOptions,
+) -> Result<LiveStepper, SimulationDiagnosticError> {
     if spec.id == SolverId::from("fixedrk4") {
-        FixedStepSession::new(dae, options).map(LiveStepper::Fixed)
+        FixedStepSession::from_solve_model(solve_model, options, None).map(LiveStepper::Fixed)
     } else {
-        construct(dae, options).map(LiveStepper::Adaptive)
+        rumoca_solver_rk45::SimulationSession::new(solve_model, options)
+            .map(LiveStepper::Adaptive)
+            .map_err(adaptive_error)
     }
 }
 
