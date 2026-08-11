@@ -118,6 +118,15 @@ struct RockScatterLayer {
     seed: u64,
 }
 
+/// The typed values read from one authored scattered-rock layer.
+#[derive(Clone, Copy, Debug)]
+pub struct RockLayerParams {
+    pub layer: RockLayer,
+    pub region_half_extent: f32,
+    pub pattern: Pattern,
+    pub seed: u64,
+}
+
 impl TerrainLayer for RockScatterLayer {
     fn id(&self) -> &'static str {
         "rocks"
@@ -404,25 +413,33 @@ mod tests {
 /// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
 /// (modal radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`,
 /// `regionM` (near-field scatter half-extent), `seed`.
-pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+pub fn read_rock_layer(a: &dyn LayerAttrSource) -> RockLayerParams {
     let density = a.get_f32("density").unwrap_or(0.0);
-    if density <= 0.0 {
-        return None;
-    }
     let mode = a.get_f32("sizeMode").unwrap_or(0.6);
     let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
     let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
-    let rocks = RockLayer {
-        enabled: true,
-        density,
-        // min ≤ mode ≤ max — same validity guard as the Inspector sliders.
-        size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
-        dynamic_fraction: a.get_f32("dynamicFrac").unwrap_or(0.0),
-    };
-    Some(Arc::new(RockScatterLayer {
-        rocks,
+    RockLayerParams {
+        layer: RockLayer {
+            enabled: density > 0.0,
+            density,
+            // min ≤ mode ≤ max — same validity guard as the Inspector sliders.
+            size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
+            dynamic_fraction: a.get_f32("dynamicFrac").unwrap_or(0.0),
+        },
         region_half_extent: a.get_f32("regionM").unwrap_or(300.0),
         pattern: Pattern::Uniform,
         seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0xB0A1),
-    }))
+    }
+}
+
+pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    let params = read_rock_layer(a);
+    params.layer.enabled.then(|| {
+        Arc::new(RockScatterLayer {
+            rocks: params.layer,
+            region_half_extent: params.region_half_extent,
+            pattern: params.pattern,
+            seed: params.seed,
+        }) as _
+    })
 }

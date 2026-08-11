@@ -463,13 +463,8 @@ fn runtime_focus_body(
 }
 
 fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: "runtime-ui-action-failed".to_string(),
-        source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(message.to_string()),
-        timestamp: 0.0,
-    });
+    warn!("[runtime-ui] {message}");
+    lunco_core::trigger_error(commands, "runtime-ui-action-failed", message);
 }
 
 /// Register an egui-hosted, keyboard-accessible route to the same semantic
@@ -497,10 +492,7 @@ fn register_camera_menu(world: &mut World) {
         ];
         for (label, action) in actions {
             if ui.button(label).clicked() {
-                ctx.trigger(runtime_exposure::RuntimeUiAction {
-                    action,
-                    source: None,
-                });
+                ctx.trigger(runtime_exposure::RuntimeUiAction { action });
                 ui.close();
             }
         }

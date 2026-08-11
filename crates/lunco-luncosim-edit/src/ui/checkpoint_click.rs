@@ -56,13 +56,7 @@ use lunco_scene_commands::SelectedEntities;
 fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) {
     let message = message.into();
     warn!("[waypoint] {message}");
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: "waypoint-edit-failed".to_string(),
-        source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(message),
-        timestamp: 0.0,
-    });
+    lunco_core::trigger_error(commands, "waypoint-edit-failed", message);
 }
 
 /// Track context menu state for right-clicking waypoints.

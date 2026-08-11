@@ -21,7 +21,7 @@
 
 use bevy::prelude::*;
 use lunco_doc_bevy::{DocumentClosed, DocumentOpened};
-use lunco_workbench::BrowserSectionRegistry;
+use lunco_workbench::{BrowserSectionRegistry, PanelId};
 
 use crate::document::UsdDocument;
 use lunco_doc_bevy::DocumentRegistry;
@@ -33,7 +33,12 @@ pub mod scene_files;
 pub mod session_codec;
 pub mod viewport;
 
-pub use browser_section::UsdSceneSection;
+/// Stable singleton panel id for the USD wiring graph. The panel renderer is
+/// supplied by the simulator editor, while navigation belongs to the USD
+/// domain's Twin Browser contribution.
+pub const USD_CONNECTION_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canvas");
+
+pub use browser_section::{ConnectionsSection, UsdSceneSection};
 pub use loaded_stages::{
     produce_usd_browser_view, LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage,
 };
@@ -68,6 +73,9 @@ impl Plugin for UsdUiPlugin {
         app.world_mut()
             .resource_mut::<BrowserSectionRegistry>()
             .register(UsdSceneSection);
+        app.world_mut()
+            .resource_mut::<BrowserSectionRegistry>()
+            .register(ConnectionsSection);
 
         // "What files is this scene made of" — the resolved reference closure,
         // in the Files scope beside the raw folder tree. Its producer is gated on

@@ -1589,9 +1589,7 @@ impl Document for UsdDocument {
                 // per-model `lunco:` param that no schema declares.
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 if define_local_over {
-                    stage
-                        .define_prim(prim_sdf.as_str())
-                        .map_err(author_err)?;
+                    stage.define_prim(prim_sdf.as_str()).map_err(author_err)?;
                 }
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
@@ -3939,7 +3937,8 @@ def Xform \"Traverse\" (\n\
         .expect("runtime over opinion on a referenced child is valid");
         let path = SdfPath::new("/Traverse/Terrain/Overzoom").unwrap();
         assert_eq!(
-            doc.runtime_data().prim_attribute_value::<bool>(&path, "lunco:layer:enabled"),
+            doc.runtime_data()
+                .prim_attribute_value::<bool>(&path, "lunco:layer:enabled"),
             Some(false),
             "the override must be authored in the runtime layer"
         );

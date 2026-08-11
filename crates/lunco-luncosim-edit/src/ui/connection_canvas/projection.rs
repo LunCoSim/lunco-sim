@@ -204,7 +204,7 @@ pub(crate) fn collect_graph(
     (nodes, wires)
 }
 
-/// Select the authored system boundaries for the Connections perspective.
+/// Select the authored system boundaries for the Connections view.
 ///
 /// This is intentionally separate from [`collect_graph`]. The canonical USD
 /// graph must remain complete for simulation, editing, diagnostics, and any

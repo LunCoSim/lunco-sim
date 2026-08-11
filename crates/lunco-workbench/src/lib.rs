@@ -562,6 +562,35 @@ fn drain_pending_panel_focus(
     }
 }
 
+/// Drain panel-navigation intents emitted by Twin Browser sections.
+///
+/// Sections are rendered while `WorkbenchLayout` is temporarily removed from
+/// the world, so they cannot focus a panel inline. Keeping this small bridge
+/// in the shell gives every domain the same navigation path and leaves panel
+/// ownership with the workbench.
+fn drain_browser_navigation(world: &mut World) {
+    let actions = {
+        let Some(mut outbox) = world.get_resource_mut::<BrowserActions>() else {
+            return;
+        };
+        outbox.take_where(|action| matches!(action, BrowserAction::OpenPanel { .. }))
+    };
+    if actions.is_empty() {
+        return;
+    }
+
+    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+        bevy::log::warn!("Twin Browser emitted panel navigation before WorkbenchLayout was ready");
+        return;
+    };
+    for action in actions {
+        let BrowserAction::OpenPanel { id } = action else {
+            unreachable!("browser navigation filter returned a non-navigation action")
+        };
+        focus_panel_now(&mut layout, &id);
+    }
+}
+
 register_commands!(on_focus_panel,);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -856,6 +885,7 @@ impl Plugin for WorkbenchPlugin {
             bevy::prelude::Update,
             (maintain_dock_widths, drain_pending_panel_focus),
         )
+        .add_systems(bevy::prelude::Update, drain_browser_navigation)
         .add_systems(Startup, register_graphics_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get

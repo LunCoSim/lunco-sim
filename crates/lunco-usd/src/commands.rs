@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_core::{on_command, register_commands, Command};
-use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, RedoDocument,
     SaveDocument, UndoDocument,
@@ -1223,11 +1223,11 @@ pub fn on_redo_usd_document(
 /// `realign_component_ops` call sites in `lunco-luncosim-edit` (`ui/inspector.rs`,
 /// `ui/usd_mount.rs`), which still apply op-by-op.
 ///
-/// Ops that are rejected are logged and skipped (unchanged semantics — a partial
-/// apply stays visible rather than hiding behind a rollback the journal can't
-/// see); the difference is that whatever *did* apply is now one atomic undo unit.
-/// Headless builds with no `JournalResource` simply apply the ops — nothing to
-/// group.
+/// The complete sequence is validated against a clone of the current USD document
+/// before the live host is touched. A malformed multi-op intent therefore applies
+/// zero operations; a valid intent is then committed as one journal change set.
+/// Headless builds with no `JournalResource` still get the same all-or-nothing
+/// validation, just without undo grouping.
 ///
 /// Returns `(applied, total)`.
 pub fn apply_ops_as_change_set(
@@ -1237,6 +1237,39 @@ pub fn apply_ops_as_change_set(
     ops: Vec<UsdOp>,
 ) -> (usize, usize) {
     let total = ops.len();
+    // `UsdDocument` is cloneable and its `Document::apply` path is the authoritative
+    // validator. Run the whole intent against a private candidate first so a bad
+    // attribute, missing prim, or read-only document cannot leave a half-authored
+    // terrain/component assembly in the live host.
+    let validation = {
+        let registry = world.resource::<DocumentRegistry<UsdDocument>>();
+        match registry.host(doc) {
+            None => Err(lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}"))),
+            Some(host) => {
+                let mut candidate = host.document().clone();
+                let mut result = Ok(());
+                for op in &ops {
+                    if let Err(error) = candidate.apply(op.clone()) {
+                        result = Err(match error {
+                            lunco_doc::DocumentError::ReadOnly => lunco_doc::Reject::ReadOnly,
+                            lunco_doc::DocumentError::ValidationFailed(message)
+                            | lunco_doc::DocumentError::Internal(message) => {
+                                lunco_doc::Reject::InvalidOp(message)
+                            }
+                            _ => lunco_doc::Reject::InvalidOp(format!("{error:?}")),
+                        });
+                        break;
+                    }
+                }
+                result
+            }
+        }
+    };
+    if let Err(reject) = validation {
+        bevy::log::warn!("[usd] {doc} compound operation rejected before apply: {reject:?}");
+        return (0, total);
+    }
+
     // Clone the handle FIRST: `registry.apply` takes `&mut World`'s registry, so
     // the journal resource can't stay borrowed across it.
     let journal = world
@@ -1640,6 +1673,44 @@ mod change_set_tests {
                 !um.can_undo(),
                 "nothing left behind — the attach was one unit"
             );
+        });
+    }
+
+    #[test]
+    fn rejected_compound_operation_does_not_partially_apply() {
+        let (mut world, doc, journal) = world_with_doc();
+        let ops = vec![
+            UsdOp::SetAttribute {
+                edit_target: LayerId::runtime(),
+                path: "/Rig/Chassis".to_owned(),
+                name: "test:compoundValue".to_owned(),
+                type_name: "float".to_owned(),
+                value: "1.0".to_owned(),
+            },
+            UsdOp::SetAttribute {
+                edit_target: LayerId::runtime(),
+                path: "/Rig/Missing".to_owned(),
+                name: "test:compoundValue".to_owned(),
+                type_name: "float".to_owned(),
+                value: "2.0".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            apply_ops_as_change_set(&mut world, doc, "Invalid compound", ops),
+            (0, 2)
+        );
+        assert_eq!(
+            world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("document host")
+                .generation(),
+            0,
+            "validation must happen before the live host is mutated"
+        );
+        journal.with_read(|j| {
+            assert_eq!(j.entries_for_doc(doc).count(), 0);
         });
     }
 

@@ -10,7 +10,7 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::twin_browser::BrowserScope;
+use lunco_workbench::twin_browser::{BrowserAction, BrowserScope};
 use lunco_workbench::{BrowserCtx, BrowserSection};
 use openusd::sdf;
 // The layer browser walks the AUTHORED specs of a layer, deliberately without
@@ -21,6 +21,56 @@ use lunco_usd_bevy::UsdData;
 
 use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::ui::viewport::{SetActiveUsdViewport, USD_VIEWPORT_PANEL_ID};
+use crate::ui::USD_CONNECTION_CANVAS_PANEL_ID;
+
+/// Twin navigation entry for the composed USD connection graph.
+///
+/// The graph itself remains a simulator/editor panel because it needs the
+/// live spawned-stage projection and USD write-back path. The entry belongs to
+/// the USD domain and is surfaced by the Twin Browser used by Lunica's Design
+/// workspace, rather than by a separate top-level perspective.
+pub struct ConnectionsSection;
+
+impl BrowserSection for ConnectionsSection {
+    fn id(&self) -> &str {
+        "lunco.usd.connections"
+    }
+
+    fn title(&self) -> &str {
+        "Connections"
+    }
+
+    fn scope(&self) -> BrowserScope {
+        BrowserScope::Models
+    }
+
+    fn default_open(&self) -> bool {
+        true
+    }
+
+    fn order(&self) -> u32 {
+        125
+    }
+
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
+        ui.label("Inspect and edit the authored USD wiring graph.");
+        if ui.button("Open Connections graph").clicked() {
+            ctx.actions.push(BrowserAction::OpenPanel {
+                id: USD_CONNECTION_CANVAS_PANEL_ID.0.to_string(),
+            });
+        }
+        if ctx
+            .resource::<UsdBrowserView>()
+            .is_some_and(|view| view.stages.is_empty())
+        {
+            ui.label(
+                egui::RichText::new("Open a USD scene first to populate the graph.")
+                    .weak()
+                    .italics(),
+            );
+        }
+    }
+}
 
 /// Browser section that lists every loaded USD stage as a sibling row
 /// in the Twin browser's Models scope. Populated by the lifecycle

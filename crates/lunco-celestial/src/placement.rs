@@ -625,7 +625,6 @@ pub fn sync_terrain_body_curvature(
         )>,
     >,
     q_built_dem: Query<(
-        Entity,
         &lunco_terrain_surface::DemHeightField,
         Option<&lunco_terrain_surface::TerrainGeoref>,
     )>,
@@ -696,21 +695,31 @@ pub fn sync_terrain_body_curvature(
         );
     }
     // Build one source-backed handoff from the largest built footprint. The
-    // source is the retained oracle itself, so a live terrain edit changes the
-    // handoff content key and causes globe meshes to rebuild with the same new
-    // boundary heights.
-    let selected_dem = q_built_dem
+    // current globe component is one handoff per body, so multiple same-body
+    // DEMs are an explicit scene-level ambiguity rather than an entity-order
+    // choice. The largest footprint remains the documented policy; equal
+    // footprints use the source content key, which is stable across ECS spawn
+    // order. A multi-site handoff needs a keyed component in a future schema.
+    let candidates: Vec<_> = q_built_dem
         .iter()
-        .filter(|(_, _, georef)| {
+        .filter(|(_, georef)| {
             georef.map_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY, |g| g.body) == body
         })
-        .max_by(|(ea, a, _), (eb, b, _)| {
-            a.0.half_extent()
-                .total_cmp(&b.0.half_extent())
-                .then_with(|| ea.index().cmp(&eb.index()))
-        });
-    let half_extent = selected_dem.map_or(0.0, |(_, dem, _)| dem.0.half_extent() as f64);
-    let oracle = selected_dem.map(|(_, dem, _)| dem.0.clone());
+        .collect();
+    if candidates.len() > 1 {
+        warn_once!(
+            "{} built DEM terrains author body {}; one globe handoff is available, +             so the largest footprint is selected and equal footprints use source content +             identity",
+            candidates.len(),
+            body
+        );
+    }
+    let selected_dem = candidates.into_iter().max_by(|(a, _), (b, _)| {
+        a.0.half_extent()
+            .total_cmp(&b.0.half_extent())
+            .then_with(|| a.0.surface_key().cmp(&b.0.surface_key()))
+    });
+    let half_extent = selected_dem.map_or(0.0, |(dem, _)| dem.0.half_extent() as f64);
+    let oracle = selected_dem.map(|(dem, _)| dem.0.clone());
     for (e, globe, handoff) in &q_globes {
         if globe.ephemeris_id != body {
             continue;

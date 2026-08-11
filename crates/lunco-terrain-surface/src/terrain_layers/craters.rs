@@ -46,6 +46,16 @@ struct CraterFieldLayer {
     seed: u64,
 }
 
+/// The typed values read from one authored crater layer.
+///
+/// Keeping the defaults and validity rules beside the runtime parser means every
+/// consumer of a USD-free [`LayerAttrSource`] sees the same crater contract.
+#[derive(Clone, Copy, Debug)]
+pub struct CraterLayerParams {
+    pub layer: CraterLayer,
+    pub seed: u64,
+}
+
 impl TerrainLayer for CraterFieldLayer {
     fn id(&self) -> &'static str {
         "craters"
@@ -241,35 +251,33 @@ impl TerrainLayer for CraterFieldLayer {
 /// Parse a `lunco:layer = "craters"` prim: `density` (per ha, required > 0),
 /// `sizeMode` (modal rim radius m), `sizeMin`/`sizeMax` (radius band m),
 /// `depthRatio`, `rimRatio`, `seed`.
-pub(super) fn parse_crater_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+pub fn read_crater_layer(a: &dyn LayerAttrSource) -> CraterLayerParams {
     let density = a.get_f32("density").unwrap_or(0.0);
-    if density <= 0.0 {
-        return None;
-    }
     let mode = a.get_f32("sizeMode").unwrap_or(22.0);
-    // Default 2–60 m radii: the SFD floor sits at the smallest crater the finest
-    // visual LOD (~0.65 m vertex pitch) fully resolves; the tail past the
-    // mode is the rare large-crater "punctuation". Sub-2 m is the overzoom
-    // synthesiser's band. The old 8–40 m band with a hump at the mode was
-    // the single biggest procedural tell — every crater the same order of
-    // magnitude.
     let size_min = a.get_f32("sizeMin").unwrap_or(2.0);
     let size_max = a.get_f32("sizeMax").unwrap_or(60.0);
-    let craters = CraterLayer {
-        enabled: true,
-        density,
-        // min ≤ mode ≤ max — an inverted band makes the log-normal sampler clamp
-        // every crater to one end (same guard as the Inspector sliders).
-        size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7),
-        // Fresh simple craters measure d/D ≈ 0.2 → depth = 0.4·r.
-        depth_ratio: a.get_f32("depthRatio").unwrap_or(0.4),
-        // Fresh rim/depth: 0.18 × depth 0.4·r gives rim/D ≈ 0.036 — the measured
-        // lunar value. Taller lips were both the "wall" rovers hit nosing into
-        // young craters and a strong fake-crater cue.
-        rim_height_ratio: a.get_f32("rimRatio").unwrap_or(0.18),
-    };
-    let seed = a.get_i64("seed").map(|s| s as u64).unwrap_or(0xC0FFEE);
-    Some(Arc::new(CraterFieldLayer { craters, seed }))
+    CraterLayerParams {
+        layer: CraterLayer {
+            enabled: density > 0.0,
+            density,
+            // min ≤ mode ≤ max — an inverted band makes the log-normal sampler
+            // clamp every crater to one end (same guard as the Inspector sliders).
+            size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7),
+            depth_ratio: a.get_f32("depthRatio").unwrap_or(0.4),
+            rim_height_ratio: a.get_f32("rimRatio").unwrap_or(0.18),
+        },
+        seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0xC0FFEE),
+    }
+}
+
+pub(super) fn parse_crater_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    let params = read_crater_layer(a);
+    params.layer.enabled.then(|| {
+        Arc::new(CraterFieldLayer {
+            craters: params.layer,
+            seed: params.seed,
+        }) as _
+    })
 }
 
 /// Build a crater layer from a typed [`CraterLayer`] (e.g. the Inspector's

@@ -373,8 +373,9 @@ Inspector-*derives*-never-hardcodes rule (§3.5).
 **Phase 2 — wire.** ✅ **DONE** (2026-07-11). Connection canvas landed as a second `lunco-canvas`
 projector: `crates/lunco-luncosim-edit/src/ui/connection_canvas/` (`projection.rs` pure `collect_graph`
 + `build_scene`, unit-tested; `visuals.rs`; `mod.rs` panel + main-thread producer + write-back).
-Registered in `SandboxEditUiPlugin`, docked as a `🔗 Connections` centre tab in the Object Builder
-perspective. Reads every wiring-relevant prim (connectors or `PhysicsRigidBodyAPI` body) as a node,
+Registered as the USD domain's `Connections` entry in the Lunica/Twin Browser; selecting it opens the
+registered graph panel in the centre. It is no longer a top-level perspective or a duplicate Object
+Builder tab. Reads every wiring-relevant prim (connectors or `PhysicsRigidBodyAPI` body) as a node,
 `inputs:*.connect` as dataflow edges and `physics:body0/1` as joint edges; wire-drag →
 `SetConnection`, delete → clear / `RemovePrim`, all via the journaled `ApplyUsdOp`. Boot-verified in
 the luncosim (`142 prim entities → 25 nodes, 10 edges`). **Note:** enumerate prims from the ECS

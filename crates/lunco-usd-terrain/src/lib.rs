@@ -181,10 +181,21 @@ fn find_dem_layer(
     reader: &StageView<'_>,
     terrain: &openusd::sdf::Path,
 ) -> Option<openusd::sdf::Path> {
-    reader
-        .children(terrain)
+    sorted_terrain_children(reader, terrain)
         .into_iter()
         .find(|c| reader.text(c, "lunco:layer").as_deref() == Some("dem"))
+}
+
+/// Return terrain child prims in the one order used by both the runtime stack and
+/// the Inspector projection. `StageView::children` is backed by a map, so relying
+/// on its iteration order makes layer precedence and content keys process-dependent.
+fn sorted_terrain_children(
+    reader: &StageView<'_>,
+    terrain: &openusd::sdf::Path,
+) -> Vec<openusd::sdf::Path> {
+    let mut children = reader.children(terrain).into_iter().collect::<Vec<_>>();
+    children.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    children
 }
 
 /// Parse the non-ground child layer prims (`craters`/`rocks`/`shader`/…) into the
@@ -209,9 +220,7 @@ fn parse_terrain_layer_stack(
     // map cache (cold-bake storm on every boot) and reordering non-commutative
     // edits. Sorting by path makes stack order — and thus the key and the composed
     // surface — a pure function of the document.
-    let mut children: Vec<_> = reader.children(terrain).into_iter().collect();
-    children.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    for child in children {
+    for child in sorted_terrain_children(reader, terrain) {
         // An edit prim (`LunCoTerrainEditAPI`)? Aggregate into the single edits layer,
         // keyed by its prim path (its stable identity).
         let edit_attrs = UsdLayerAttrs {
@@ -274,11 +283,9 @@ fn sync_obstacle_spec_from_usd(
     terrain: &openusd::sdf::Path,
     spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
-    use lunco_obstacle_field::spec::SizeDist;
-    use lunco_terrain_surface::LayerAttrSource;
     let mut has_crater_layer = false;
     let mut has_enabled_overzoom = false;
-    for child in reader.children(terrain) {
+    for child in sorted_terrain_children(reader, terrain) {
         // Read through the SAME adapter the layer parsers use, so the `lunco:layer:`
         // namespace is applied in one place ([`ns_attr`]) and this panel cannot
         // drift from the parsers by reading a name they no longer author.
@@ -289,36 +296,20 @@ fn sync_obstacle_spec_from_usd(
         };
         match reader.text(&child, "lunco:layer").as_deref() {
             Some("craters") => {
-                let density = a.get_f32("density").unwrap_or(0.0);
-                let mode = a.get_f32("sizeMode").unwrap_or(22.0);
+                let params = lunco_terrain_surface::read_crater_layer(&a);
                 has_crater_layer = true;
-                spec.craters.enabled = density > 0.0;
-                spec.craters.density = density;
-                spec.craters.depth_ratio = a.get_f32("depthRatio").unwrap_or(0.4);
-                spec.craters.rim_height_ratio = a.get_f32("rimRatio").unwrap_or(0.18);
-                let size_min = a.get_f32("sizeMin").unwrap_or(2.0);
-                let size_max = a.get_f32("sizeMax").unwrap_or(60.0);
-                spec.craters.size =
-                    SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7);
-                if let Some(seed) = a.get_i64("seed") {
-                    spec.seed = seed as u64;
-                }
+                spec.craters = params.layer;
+                spec.seed = params.seed;
             }
             Some("overzoom") => {
-                let enabled = a.get_bool("enabled") != Some(false)
-                    && (a.get_f32("amplitude").unwrap_or(0.08) > 0.0
-                        || a.get_f32("density").unwrap_or(0.9) > 0.0);
+                let params = lunco_terrain_surface::read_overzoom_layer(&a);
+                let enabled = params.enabled
+                    && (params.spec.relief_amp > 0.0 || params.spec.crater_mean > 0.0);
                 has_enabled_overzoom |= enabled;
             }
             Some("rocks") => {
-                let density = a.get_f32("density").unwrap_or(0.0);
-                let mode = a.get_f32("sizeMode").unwrap_or(0.6);
-                spec.rocks.enabled = density > 0.0;
-                spec.rocks.density = density;
-                let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
-                let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
-                spec.rocks.size = SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
-                spec.rocks.dynamic_fraction = a.get_f32("dynamicFrac").unwrap_or(0.0);
+                let params = lunco_terrain_surface::read_rock_layer(&a);
+                spec.rocks = params.layer;
             }
             _ => {}
         }
@@ -909,25 +900,21 @@ fn refresh_docbacked_terrain_from_doc(
     }
 }
 
-/// Author one attribute onto a prim's **runtime** layer (non-destructive override).
-fn author_layer_attr(
-    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
-    doc: lunco_doc::DocumentId,
+/// Queue one logical terrain-layer attribute as its canonical USD namespaced op.
+fn push_layer_attr(
+    ops: &mut Vec<lunco_usd::UsdOp>,
     path: &str,
     name: &str,
     type_name: &str,
     value: String,
 ) {
-    let _ = registry.apply(
-        doc,
-        lunco_usd::UsdOp::SetAttribute {
-            edit_target: lunco_usd::LayerId::runtime(),
-            path: path.to_string(),
-            name: name.to_string(),
-            type_name: type_name.to_string(),
-            value,
-        },
-    );
+    ops.push(lunco_usd::UsdOp::SetAttribute {
+        edit_target: lunco_usd::LayerId::runtime(),
+        path: path.to_string(),
+        name: ns_attr(NS_LAYER, name),
+        type_name: type_name.to_string(),
+        value,
+    });
 }
 
 /// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
@@ -947,9 +934,8 @@ fn on_obstacle_spec_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     stages: NonSend<lunco_usd_bevy::CanonicalStages>,
-    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
+    mut commands: Commands,
 ) {
-    let Some(mut registry) = registry else { return };
     let spec = &trigger.event().spec;
     // The USD crater/rock layer parsers use `density > 0` as the on/off signal
     // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
@@ -981,8 +967,7 @@ fn on_obstacle_spec_authored(
             continue;
         };
         let reader = stage.view();
-        let layers: Vec<(String, String)> = reader
-            .children(&sdf)
+        let layers: Vec<(String, String)> = sorted_terrain_children(&reader, &sdf)
             .into_iter()
             .filter_map(|child| {
                 reader
@@ -990,53 +975,48 @@ fn on_obstacle_spec_authored(
                     .map(|ty| (child.as_str().to_string(), ty))
             })
             .collect();
+        let mut ops = Vec::new();
         for (path, layer_type) in layers {
             match layer_type.as_str() {
                 "craters" => {
                     info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, spec.seed, td.doc);
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "density",
                         "float",
                         crater_density.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "sizeMode",
                         "float",
                         spec.craters.size.mode.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "sizeMin",
                         "float",
                         spec.craters.size.min.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "sizeMax",
                         "float",
                         spec.craters.size.max.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "depthRatio",
                         "float",
                         spec.craters.depth_ratio.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "rimRatio",
                         "float",
@@ -1046,9 +1026,8 @@ fn on_obstacle_spec_authored(
                     // (`s as u64`), so the full Reseed range round-trips. Without this attr
                     // every doc-driven re-parse falls back to the parser default and the
                     // crater layout silently flips between the resource seed and 0xC0FFEE.
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "seed",
                         "int64",
@@ -1056,9 +1035,8 @@ fn on_obstacle_spec_authored(
                     );
                 }
                 "overzoom" => {
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "enabled",
                         "bool",
@@ -1066,49 +1044,43 @@ fn on_obstacle_spec_authored(
                     );
                 }
                 "rocks" => {
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "density",
                         "float",
                         rock_density.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "sizeMode",
                         "float",
                         spec.rocks.size.mode.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "sizeMin",
                         "float",
                         spec.rocks.size.min.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "sizeMax",
                         "float",
                         spec.rocks.size.max.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "dynamicFrac",
                         "float",
                         spec.rocks.dynamic_fraction.to_string(),
                     );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
+                    push_layer_attr(
+                        &mut ops,
                         &path,
                         "seed",
                         "int64",
@@ -1117,6 +1089,13 @@ fn on_obstacle_spec_authored(
                 }
                 _ => {}
             }
+        }
+        if !ops.is_empty() {
+            commands.trigger(lunco_usd::commands::ApplyUsdOps {
+                doc,
+                label: "Terrain obstacle settings".to_owned(),
+                ops,
+            });
         }
     }
 }
@@ -1429,7 +1408,7 @@ mod dem_bridge_tests {
     //! real `World`, and the assertions read back the components the projection
     //! actually attached — not intermediate parse values.
 
-    use super::bridge_dem_prim_read;
+    use super::{bridge_dem_prim_read, push_layer_attr};
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_usd_bevy::{CanonicalStage, StageRecipe};
@@ -1452,6 +1431,52 @@ mod dem_bridge_tests {
         )
     }
 
+    #[test]
+    fn obstacle_authoring_uses_the_layer_namespace() {
+        let mut ops = Vec::new();
+        push_layer_attr(
+            &mut ops,
+            "/Terrain/craters",
+            "density",
+            "float",
+            "2.5".into(),
+        );
+        let lunco_usd::UsdOp::SetAttribute { name, .. } = &ops[0] else {
+            panic!("terrain authoring must lower to SetAttribute");
+        };
+        assert_eq!(name, "lunco:layer:density");
+    }
+
+    #[test]
+    fn obstacle_inspector_values_share_parser_defaults_and_clamps() {
+        let scene = dem_scene(
+            "    def Xform \"Craters\"\n    {\n\
+             \x20       token lunco:layer = \"craters\"\n\
+             \x20       float lunco:layer:density = 3.0\n\
+             \x20       float lunco:layer:sizeMode = 4.0\n\
+             \x20       float lunco:layer:sizeMin = 8.0\n\
+             \x20       float lunco:layer:sizeMax = 2.0\n\
+             \x20       int64 lunco:layer:seed = 42\n\
+             \x20   }\n\
+             \x20   def Xform \"Rocks\"\n    {\n\
+             \x20       token lunco:layer = \"rocks\"\n\
+             \x20       float lunco:layer:density = 5.0\n\
+             \x20       float lunco:layer:sizeMode = 0.6\n\
+             \x20       float lunco:layer:sizeMin = 1.0\n\
+             \x20       float lunco:layer:sizeMax = 0.2\n\
+             \x20   }\n",
+            "",
+        );
+        let (_, _, spec) = bridge_with_spec(&scene);
+        assert_eq!(spec.seed, 42);
+        assert_eq!(spec.craters.size.min, 4.0);
+        assert_eq!(spec.craters.size.mode, 4.0);
+        assert_eq!(spec.craters.size.max, 4.0);
+        assert_eq!(spec.rocks.size.min, 0.6);
+        assert_eq!(spec.rocks.size.mode, 0.6);
+        assert_eq!(spec.rocks.size.max, 0.6);
+    }
+
     /// Run the real bridge body for `/Terrain` on a fresh world; returns the
     /// world + entity so each test reads back exactly the components it pins.
     fn bridge(scene: &str) -> (World, Entity) {
@@ -1461,11 +1486,7 @@ mod dem_bridge_tests {
 
     fn bridge_with_spec(
         scene: &str,
-    ) -> (
-        World,
-        Entity,
-        lunco_obstacle_field::spec::ObstacleFieldSpec,
-    ) {
+    ) -> (World, Entity, lunco_obstacle_field::spec::ObstacleFieldSpec) {
         let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", scene))
             .expect("stage builds");
         let view = cs.view();
@@ -1621,7 +1642,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
             .expect("terrain layer stack attached");
         assert!(
-            stack.0.iter().any(|entry| entry.id.as_str().ends_with("Detail")),
+            stack
+                .0
+                .iter()
+                .any(|entry| entry.id.as_str().ends_with("Detail")),
             "enabled overzoom must remain in the composed stack"
         );
     }
@@ -1646,7 +1670,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
             .expect("terrain layer stack attached");
         assert!(
-            stack.0.iter().all(|entry| !entry.id.as_str().ends_with("Detail")),
+            stack
+                .0
+                .iter()
+                .all(|entry| !entry.id.as_str().ends_with("Detail")),
             "disabled overzoom must not contribute a height layer"
         );
     }

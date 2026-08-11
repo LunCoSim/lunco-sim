@@ -32,6 +32,13 @@ const UPDATE_CHANNEL: &str = "linux-x64";
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const UPDATE_CHANNEL: &str = "linux-arm64";
 
+#[cfg(target_os = "linux")]
+const UPDATE_PACKAGE_GUIDANCE: &str =
+    "On Linux, run the official Velopack .AppImage from a writable location and keep launching that same file; the update replaces it in place.";
+#[cfg(not(target_os = "linux"))]
+const UPDATE_PACKAGE_GUIDANCE: &str =
+    "Run the official Velopack package from its installed location; source builds and ordinary archives are not update-managed.";
+
 /// Persisted preference for the native desktop updater.
 #[derive(Resource, Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
@@ -162,6 +169,20 @@ fn register_update_settings_menu(world: &mut World) {
             "LunCoSim nightly updates · {} channel",
             UPDATE_CHANNEL
         ));
+        egui::CollapsingHeader::new("How automatic updates work")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label("LunCoSim checks once per day when this GUI starts.");
+                ui.label(
+                    "A check never installs anything by itself: choose Download update, then Install and restart.",
+                );
+                ui.label(
+                    UPDATE_PACKAGE_GUIDANCE,
+                );
+                ui.label(
+                    "Source builds, target/debug binaries, and ordinary archives are not update-managed.",
+                );
+            });
         ui.add_space(6.0);
 
         let Some(mut settings) = ctx.resource::<UpdateSettings>().cloned() else {
@@ -189,17 +210,18 @@ fn register_update_settings_menu(world: &mut World) {
                         "Update available: {}",
                         info.TargetFullRelease.Version
                     ));
-                    ui.label("The complete application package will be downloaded.");
+                    ui.label("Choose Download update, then install and restart.");
                 }
             }
             UpdateStatus::Downloading => {
                 ui.label("Downloading update…");
             }
             UpdateStatus::ReadyToRestart => {
-                ui.label("Update downloaded and ready to install.");
+                ui.label("Update downloaded. Choose Install and restart.");
             }
             UpdateStatus::NotInstalled => {
-                ui.label("Updates are available after installing a Velopack package.");
+                ui.label("This build is not running from an update-managed Velopack package.");
+                ui.label(UPDATE_PACKAGE_GUIDANCE);
             }
             UpdateStatus::Error => {
                 if let Some(error) = state.error.as_deref() {

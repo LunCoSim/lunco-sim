@@ -51,8 +51,6 @@ impl RuntimeUiActionKind {
 pub(crate) struct RuntimeUiAction {
     /// Closed semantic action authored by the surface adapter.
     pub action: RuntimeUiActionKind,
-    /// The retained HTML entity that emitted the action.
-    pub source: Option<Entity>,
 }
 
 /// Bind one HUI callback name to a semantic runtime action.
@@ -63,11 +61,8 @@ pub(crate) fn register_action(
 ) {
     functions.register(
         callback,
-        move |In(source): In<Entity>, mut commands: Commands| {
-            commands.trigger(RuntimeUiAction {
-                action,
-                source: Some(source),
-            });
+        move |In(_source): In<Entity>, mut commands: Commands| {
+            commands.trigger(RuntimeUiAction { action });
         },
     );
 }

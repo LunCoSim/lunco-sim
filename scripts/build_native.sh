@@ -423,6 +423,16 @@ Or run the binary directly (from this directory):
 - \`AGENTS.md\` — AI agent guidelines for working on the codebase
 - \`run.sh\` / \`run.bat\` — launcher that sets the cache path
 
+## Updates
+
+Official Velopack releases check for updates once per day when the GUI starts.
+An update is not installed silently: open Settings ▸ Updates, choose
+**Download update**, then **Install and restart**. On Linux, the official
+download is a single \`.AppImage\`; make it executable, keep it in a writable
+location, and keep launching that same file so Velopack can replace it in
+place. Source builds, \`target/debug\` binaries, and ordinary archive packages
+are not update-managed.
+
 ## Documentation
 
 See \`docs/\` for:

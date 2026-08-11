@@ -46,6 +46,21 @@ The luncosim has two workspaces, switched via the tabs at the top of the window:
   plus the bundled models in `assets/models/` (`Lander.mo`, `Battery.mo`,
   `QuarterCar.mo`, …). Open `Lander.mo` here to see the law the lander flies.
 
+### Linux desktop updates
+
+The official Linux download is a Velopack `.AppImage`. Make it executable and
+launch that same file from a writable location. LunCoSim checks the
+`linux-x64` update feed once per day at GUI startup; it does not download or
+restart unexpectedly. When an update is found, open **Settings → Updates**,
+choose **Download update**, then **Install and restart**. Velopack replaces the
+running AppImage in place and the next launch uses the new complete package.
+
+This does not apply to `target/debug/luncosim`, a source build, or a normal
+`.tar.gz` archive. Those are portable development packages and have no
+update-managed installation metadata. Updates are read from the machine-only
+`LunCoSim/lunco-sim-updates` GitHub release feed; human-facing installers remain
+in the dated LunCoSim release.
+
 ## CLI Usage
 
 ```bash

@@ -19,6 +19,12 @@ struct OverzoomLayer {
     spec: Overzoom,
 }
 
+/// The typed values read from one authored overzoom layer.
+pub struct OverzoomLayerParams {
+    pub enabled: bool,
+    pub spec: Overzoom,
+}
+
 impl TerrainLayer for OverzoomLayer {
     fn id(&self) -> &'static str {
         "overzoom"
@@ -56,11 +62,8 @@ impl TerrainLayer for OverzoomLayer {
 /// - `seed` — determinism seed.
 ///
 /// Returns `None` when the layer is explicitly disabled or both channels are zeroed.
-pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+pub fn read_overzoom_layer(a: &dyn LayerAttrSource) -> OverzoomLayerParams {
     let defaults = Overzoom::default();
-    if a.get_bool("enabled") == Some(false) {
-        return None;
-    }
     let relief_amp = a
         .get_f32("amplitude")
         .map(f64::from)
@@ -69,26 +72,36 @@ pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn Te
         .get_f32("density")
         .map(f64::from)
         .unwrap_or(defaults.crater_mean);
-    if relief_amp <= 0.0 && crater_mean <= 0.0 {
+    OverzoomLayerParams {
+        enabled: a.get_bool("enabled") != Some(false),
+        spec: Overzoom {
+            seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(defaults.seed),
+            max_radius: a
+                .get_f32("maxFeature")
+                .map(f64::from)
+                .unwrap_or(defaults.max_radius),
+            min_radius: a
+                .get_f32("minFeature")
+                .map(f64::from)
+                .unwrap_or(defaults.min_radius),
+            crater_mean,
+            relief_amp,
+            relief_scale: a
+                .get_f32("reliefScale")
+                .map(f64::from)
+                .unwrap_or(defaults.relief_scale),
+            ..defaults
+        },
+    }
+}
+
+pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    let params = read_overzoom_layer(a);
+    if !params.enabled {
         return None;
     }
-    let spec = Overzoom {
-        seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(defaults.seed),
-        max_radius: a
-            .get_f32("maxFeature")
-            .map(f64::from)
-            .unwrap_or(defaults.max_radius),
-        min_radius: a
-            .get_f32("minFeature")
-            .map(f64::from)
-            .unwrap_or(defaults.min_radius),
-        crater_mean,
-        relief_amp,
-        relief_scale: a
-            .get_f32("reliefScale")
-            .map(f64::from)
-            .unwrap_or(defaults.relief_scale),
-        ..defaults
-    };
-    Some(Arc::new(OverzoomLayer { spec }))
+    if params.spec.relief_amp <= 0.0 && params.spec.crater_mean <= 0.0 {
+        return None;
+    }
+    Some(Arc::new(OverzoomLayer { spec: params.spec }))
 }

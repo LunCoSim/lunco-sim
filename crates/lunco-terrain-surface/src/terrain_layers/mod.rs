@@ -37,9 +37,10 @@ use lunco_obstacle_field::field::HeightGrid;
 
 use crate::stream_viz::DemHeightField;
 
-pub use craters::{crater_layer, make_crater_layer};
+pub use craters::{crater_layer, make_crater_layer, read_crater_layer, CraterLayerParams};
 pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
-pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
+pub use overzoom::{read_overzoom_layer, OverzoomLayerParams};
+pub use rocks::{read_rock_layer, rock_instance_layer, rock_layer, RockLayerParams, TerrainRock};
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
 /// (the Inspector's editable model), preserving every other layer (the surface

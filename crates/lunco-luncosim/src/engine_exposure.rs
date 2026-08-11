@@ -847,7 +847,7 @@ pub(crate) fn publish_exposure(
         seminar.last_soc_pct = None;
         ui.visible(false);
         drop(ui);
-        let schema_visible = publish_lunica_schema_exposure(
+        publish_lunica_schema_exposure(
             &mut runtime.exposures,
             &runtime.selected,
             &queries.usd_paths,
@@ -860,13 +860,13 @@ pub(crate) fn publish_exposure(
             &queries.callsign,
             &queries.sim,
             &queries.parents,
+            &queries.grids,
             &queries.velocity,
             &runtime.angular_velocity,
             &runtime.rotation,
             &queries.spatial,
             &queries.usd_paths,
             &runtime.canonical,
-            schema_visible,
         );
         publish_celestial_capability(
             &mut runtime.exposures,
@@ -961,7 +961,7 @@ pub(crate) fn publish_exposure(
     ui.visible(true);
     publish_vessel_values(&mut ui, &vessel, autopilot);
     drop(ui);
-    let schema_visible = publish_lunica_schema_exposure(
+    publish_lunica_schema_exposure(
         &mut runtime.exposures,
         &runtime.selected,
         &queries.usd_paths,
@@ -974,13 +974,13 @@ pub(crate) fn publish_exposure(
         &queries.callsign,
         &queries.sim,
         &queries.parents,
+        &queries.grids,
         &queries.velocity,
         &runtime.angular_velocity,
         &runtime.rotation,
         &queries.spatial,
         &queries.usd_paths,
         &runtime.canonical,
-        schema_visible,
     );
     publish_celestial_capability(
         &mut runtime.exposures,
@@ -1194,13 +1194,13 @@ fn publish_control_exposures(
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
     q_angvel: &Query<&AngularVelocity>,
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     canonical: &CanonicalStages,
-    schema_visible: bool,
 ) {
     let mut roots = authored_control_roots(q_paths, canonical);
     if roots.is_empty() {
@@ -1216,13 +1216,13 @@ fn publish_control_exposures(
         q_callsign,
         q_sim,
         q_parents,
+        q_grids,
         q_vel,
         q_angvel,
         q_rotation,
         q_spatial,
         q_paths,
         canonical,
-        schema_visible,
     );
     publish_selected_control_exposure(
         exposures,
@@ -1232,13 +1232,13 @@ fn publish_control_exposures(
         q_callsign,
         q_sim,
         q_parents,
+        q_grids,
         q_vel,
         q_angvel,
         q_rotation,
         q_spatial,
         q_paths,
         canonical,
-        schema_visible,
     );
 }
 
@@ -1272,15 +1272,18 @@ fn authored_control_roots(
     roots
 }
 
-/// Resolve the displayed miss distance from the authored target connection and
-/// the live projected transforms.  This keeps the HUD honest even when the
-/// generated GNC model does not expose its internal estimator error channels.
-fn target_offset_from_authored_scene(
+/// Resolve the authored target and both entities' absolute positions. This keeps
+/// the HUD honest across BigSpace cells, parent hierarchies, and floating-origin
+/// recentering even when the generated GNC model does not expose estimator error
+/// channels.
+fn authored_target_positions(
     root: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     canonical: &CanonicalStages,
-) -> Option<(f32, f32)> {
+) -> Option<(lunco_core::coords::GridPos, lunco_core::coords::GridPos)> {
     let (_, root_path) = q_paths.get(root).ok()?;
     let stage = canonical.get(root_path.stage_handle.id())?;
     let view = stage.view();
@@ -1289,30 +1292,52 @@ fn target_offset_from_authored_scene(
     // The guidance boundary is selected by its authored schema column. Its
     // target is then read from the real USD connection, so neither a vehicle
     // path nor a target name is embedded in the producer.
-    let guidance = view.prim_paths().into_iter().find(|path| {
-        let path_text = path.to_string();
-        path_text.starts_with(&root_prefix)
-            && view.is_active(path)
-            && view.scalar::<bool>(path, "lunco:ui:schemaNode") == Some(true)
-            && view.scalar::<i32>(path, "lunco:ui:schemaColumn") == Some(0)
-    })?;
+    let mut guidance_paths: Vec<_> = view
+        .prim_paths()
+        .into_iter()
+        .filter(|path| {
+            let path_text = path.to_string();
+            path_text.starts_with(&root_prefix)
+                && view.is_active(path)
+                && view.scalar::<bool>(path, "lunco:ui:schemaNode") == Some(true)
+                && view.scalar::<i32>(path, "lunco:ui:schemaColumn") == Some(0)
+        })
+        .collect();
+    guidance_paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    let guidance = match guidance_paths.as_slice() {
+        [guidance] => guidance,
+        [] => return None,
+        _ => {
+            warn!(
+                "[control-hud] multiple schema column-0 guidance nodes under {}; target is ambiguous",
+                root_path.path
+            );
+            return None;
+        }
+    };
     let target_source = view
         .connections(&guidance, "inputs:target_x")
         .into_iter()
         .next()?;
     let (target_path, _) = target_source.rsplit_once('.')?;
-    let target_entity = q_paths.iter().find_map(|(entity, prim_path)| {
+    let mut target_entities = q_paths.iter().filter_map(|(entity, prim_path)| {
         (prim_path.stage_handle.id() == root_path.stage_handle.id()
             && prim_path.path == target_path)
             .then_some(entity)
-    })?;
+    });
+    let target_entity = target_entities.next()?;
+    if target_entities.next().is_some() {
+        warn!(
+            "[control-hud] multiple ECS entities represent target {}; target is ambiguous",
+            target_path
+        );
+        return None;
+    }
 
-    let root_position = q_spatial.get(root).ok()?.1.translation;
-    let target_position = q_spatial.get(target_entity).ok()?.1.translation;
-    Some((
-        root_position.x - target_position.x,
-        root_position.z - target_position.z,
-    ))
+    let root_position = lunco_core::coords::world_position(root, q_parents, q_grids, q_spatial)?;
+    let target_position =
+        lunco_core::coords::world_position(target_entity, q_parents, q_grids, q_spatial)?;
+    Some((root_position, target_position))
 }
 
 fn publish_selected_control_exposure(
@@ -1323,13 +1348,13 @@ fn publish_selected_control_exposure(
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
     q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
     q_angvel: &Query<&AngularVelocity>,
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     canonical: &CanonicalStages,
-    hide_when_schema_visible: bool,
 ) {
     let mut ui = exposures.writer(namespace);
     ui.visible(false);
@@ -1446,7 +1471,12 @@ fn publish_selected_control_exposure(
         .copied()
         .zip(outputs.get("range_confidence").copied())
         .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
-    let target_offset_xy = target_offset_from_authored_scene(root, q_spatial, q_paths, canonical);
+    let target_positions =
+        authored_target_positions(root, q_parents, q_grids, q_spatial, q_paths, canonical);
+    let target_offset_xy = target_positions.map(|(root_position, target_position)| {
+        let offset = root_position.0 - target_position.0;
+        (offset.x, offset.z)
+    });
     let target_offset = target_offset_xy.map_or_else(
         || "—".to_owned(),
         |(x, z)| format!("X {x:+.1} · Z {z:+.1} m"),
@@ -1455,12 +1485,11 @@ fn publish_selected_control_exposure(
         outputs.get("predicted_landing_x"),
         outputs.get("predicted_landing_z"),
         outputs.get("predicted_landing_time"),
-        target_offset_xy,
-        q_spatial.get(root).ok(),
+        target_positions,
     ) {
-        (Some(&x), Some(&z), Some(&time), Some((offset_x, offset_z)), Some((_, transform))) => {
-            let target_x = f64::from(transform.translation.x - offset_x);
-            let target_z = f64::from(transform.translation.z - offset_z);
+        (Some(&x), Some(&z), Some(&time), Some((_, target_position))) => {
+            let target_x = target_position.0.x;
+            let target_z = target_position.0.z;
             format!(
                 "X {:+.1} · Z {:+.1} m / {time:.1}s",
                 x - target_x,
@@ -1475,10 +1504,6 @@ fn publish_selected_control_exposure(
         .copied()
         .map(|value| value.clamp(0.0, 1.0));
 
-    // The explanatory schema is a separate surface. Keep the flight card
-    // mounted while it appears so a shot boundary never causes a large HUD
-    // pop-in or removes the horizontal-speed readout.
-    let _ = hide_when_schema_visible;
     ui.visible(true);
     ui.property("vehicle", vehicle);
     ui.property("status", status.0);

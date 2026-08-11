@@ -107,6 +107,21 @@ impl Default for TelemetryEvent {
     }
 }
 
+/// Emit an error-severity event onto the shared script/status telemetry bus.
+///
+/// Context-heavy callers still own their domain-specific logging and mnemonic;
+/// this helper owns the repeated event construction so UI adapters cannot drift
+/// in severity, source, or timestamp semantics.
+pub fn trigger_error(commands: &mut Commands, name: impl Into<String>, message: impl Into<String>) {
+    commands.trigger(TelemetryEvent {
+        name: name.into(),
+        source: 0,
+        severity: Severity::Error,
+        data: TelemetryValue::String(message.into()),
+        timestamp: 0.0,
+    });
+}
+
 /// Where a telemetry channel reads its value from.
 ///
 /// Two address spaces, deliberately not collapsed into one — they are genuinely

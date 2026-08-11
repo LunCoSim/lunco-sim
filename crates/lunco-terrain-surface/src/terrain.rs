@@ -2309,10 +2309,9 @@ pub struct RegenerateTerrainLayers;
 /// rock layers are USD-authored (`lunco:layer` prims) and owned by the projection, so
 /// mutating the stack directly would (a) fight the next USD re-projection and (b) run
 /// a full re-stamp of a possibly huge terrain (e.g. the ±4 km moonbase — 10 M verts)
-/// on every slider tick. Tuning a doc-backed terrain's craters must author to its USD
-/// crater prim instead (SetAttribute → project → bounded re-stamp), the same
-/// authoring tier the edit commands use — TODO, and it needs bounded re-bake to be
-/// cheap on large terrains.
+/// on every slider tick. The `lunco-usd-terrain` projection owns doc-backed tuning:
+/// it authors typed `SetAttribute` ops, re-projects the composed layer, and lets the
+/// normal bounded restamp path consume the changed stack.
 fn on_obstacle_spec_rebuild_layers(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
     mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,

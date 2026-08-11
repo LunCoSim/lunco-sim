@@ -43,13 +43,7 @@ const PATH_SAMPLES: usize = 96;
 fn report_capture_failure(commands: &mut Commands, message: impl Into<String>) {
     let message = message.into();
     warn!("[cinematic] {message}");
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: "camera-capture-failed".to_string(),
-        source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(message),
-        timestamp: 0.0,
-    });
+    lunco_core::trigger_error(commands, "camera-capture-failed", message);
 }
 
 /// The camera path the panel's transport drives.

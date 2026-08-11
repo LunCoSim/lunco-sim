@@ -302,22 +302,6 @@ impl Plugin for SandboxEditUiPlugin {
                     has_tour: false,
                 },
             )
-            .register_perspective(SchemaPerspective)
-            .register_perspective_help(
-                PerspectiveId("lunica_schema"),
-                lunco_workbench::PerspectiveHelp {
-                    title: "🔗 Connections",
-                    description: "Full-window view of the composed USD connection graph. Nodes and wires are derived from the live stage's typed properties and authored connections.",
-                    shortcuts: vec![
-                        HelpShortcut { keys: "F", description: "Fit the complete graph" },
-                    ],
-                    mouse: vec![
-                        HelpMouse { interaction: "Pan / zoom", description: "Navigate the graph canvas" },
-                        HelpMouse { interaction: "Drag a node", description: "Inspect or reposition a graph node" },
-                    ],
-                    has_tour: false,
-                },
-            )
             .register_perspective(BuildPerspective)
             .register_perspective_help(
                 PerspectiveId("rover_build"),
@@ -719,36 +703,6 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Full-window Lunica schema mode — the live composed USD connection graph.
-///
-/// This is a real workbench perspective rather than a runtime panel insertion
-/// into View. View deliberately has no egui centre so the Bevy camera receives
-/// direct pointer input; inserting a canvas there leaves the dock parked and
-/// produces a blank presentation surface. Giving the canvas its own centre
-/// slot makes the authored `ActivatePerspective` command deterministic and
-/// lets the canvas fit the complete graph to its actual widget rectangle.
-pub struct SchemaPerspective;
-
-impl Perspective for SchemaPerspective {
-    fn id(&self) -> PerspectiveId {
-        PerspectiveId("lunica_schema")
-    }
-    fn title(&self) -> String {
-        "🔗 Connections".into()
-    }
-    fn restores_cached_layout(&self) -> bool {
-        false
-    }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_activity_bar(false);
-        layout.set_side_browser(None);
-        layout.set_right_inspector(None);
-        layout.set_bottom(None);
-        layout.set_center(vec![connection_canvas::USD_CANVAS_PANEL_ID]);
-        layout.set_active_center_panel(connection_canvas::USD_CANVAS_PANEL_ID);
-    }
-}
-
 /// Build mode — structure + telemetry left, 3D centre, Inspector/spawn right,
 /// and graph instances below.
 ///
@@ -785,8 +739,9 @@ impl Perspective for BuildPerspective {
 /// The panels are the proven ones (tree / palette / viewport / inspector); this is
 /// the workspace that arranges them for building rather than observing.
 ///
-/// The connection canvas and rhai editor that will also live here are separate,
-/// larger additions; this establishes the perspective they dock into.
+/// The Rhai editor lives beside this build surface. The USD connection canvas
+/// is opened from the Connections entry in the Lunica/Twin navigation so the
+/// graph has one discoverable home instead of another top-level perspective.
 pub struct ObjectBuilderPerspective;
 
 impl Perspective for ObjectBuilderPerspective {
@@ -807,17 +762,10 @@ impl Perspective for ObjectBuilderPerspective {
             PanelId("entity_list"),
             PanelId("spawn_palette"),
         ]);
-        // Three central tabs: the 3D build view, the connection canvas, and the
-        // Rhai behaviour editor. The canvas rewires co-sim connections and joints;
-        // the editor edits the selected prim's script; the 3D view places and
-        // transforms parts. Viewport first so it's the default tab (its 3D renders
-        // through the empty tab). `rhai_editor` is registered by the luncosim binary
-        // (the workbench filters the id in apps that don't register it).
-        layout.set_center(vec![
-            VIEWPORT_PANEL_ID,
-            connection_canvas::USD_CANVAS_PANEL_ID,
-            PanelId("rhai_editor"),
-        ]);
+        // Central tabs: the 3D build view and the Rhai behaviour editor. The
+        // USD connection graph is opened from the Connections entry in the
+        // Lunica/Twin navigation, so it is not a second Build workflow.
+        layout.set_center(vec![VIEWPORT_PANEL_ID, PanelId("rhai_editor")]);
         // The Inspector alone on the right — parameter editing is the point here.
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),

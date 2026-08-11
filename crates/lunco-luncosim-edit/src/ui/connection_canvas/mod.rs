@@ -51,7 +51,7 @@ use projection::{
     UsdWireData, Wire, WireKind, EDGE_KIND, NODE_KIND,
 };
 
-pub const USD_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canvas");
+pub use lunco_usd::ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;
 
 /// Build the visual registry for the USD canvas — one node kind, one edge kind.
 fn build_registry() -> VisualRegistry {
@@ -213,7 +213,7 @@ pub fn produce_usd_canvas(
         .filter(|root| roots.contains(root))
         .cloned()
         .or_else(|| roots.first().cloned());
-    // The Connections perspective is an explicit authored boundary projection. The
+    // The Connections view is an explicit authored boundary projection. The
     // collector above remains complete so the same USD topology stays
     // available to simulation, diagnostics, and future full-graph views.
     let (nodes, wires) = active_root

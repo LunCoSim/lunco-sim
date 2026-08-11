@@ -101,9 +101,10 @@ pub use terrain::{
     RemoveTerrainLayer, SpawnDemTerrain, TerrainGenPhase, TerrainGenStatus,
 };
 pub use terrain_layers::{
-    edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer, EditKind, EditsLayer,
-    LayerAttrSource, LayerEntry, LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt,
-    TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied,
-    TerrainRock, TerrainScatterEntity, EDITS_LAYER_ID,
+    edit_attr_writes, make_crater_layer, parse_edit, read_crater_layer, read_overzoom_layer,
+    read_rock_layer, rock_instance_layer, CraterLayerParams, EditKind, EditsLayer, LayerAttrSource,
+    LayerEntry, LayerId, LayerScatterCx, OverzoomLayerParams, RockLayerParams, TerrainLayer,
+    TerrainLayerAppExt, TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack,
+    TerrainLayersApplied, TerrainRock, TerrainScatterEntity, EDITS_LAYER_ID,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

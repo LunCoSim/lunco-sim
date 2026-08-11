@@ -248,6 +248,13 @@ pub enum BrowserAction {
         /// The document to close.
         doc: lunco_doc::DocumentId,
     },
+    /// User selected a navigation entry that opens or foregrounds a
+    /// registered singleton panel. The workbench owns the dock mutation so
+    /// domain sections do not reach into layout state directly.
+    OpenPanel {
+        /// Stable panel id string of the panel to open.
+        id: String,
+    },
 }
 
 /// Frame-scoped outbox of actions emitted by sections during render.
