@@ -1,13 +1,5 @@
 @import "ui/runtime_fonts.css";
-
-:root {
-  --panel-background: rgba(12, 17, 31, 0.96);
-  --panel-border: rgba(166, 173, 200, 0.42);
-  --text-color: rgba(225, 231, 247, 1);
-  --muted-color: rgba(166, 173, 200, 1);
-  --accent-color: rgba(127, 212, 255, 1);
-  --ok-color: rgba(166, 227, 161, 1);
-}
+@import "ui/runtime_theme.css";
 
 #lunica-schema-root {
   display: flex;
@@ -50,7 +42,7 @@
 #schema-column-3-title,
 #lunica-schema-flow-title {
   color: var(--muted-color);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.8px;
 }
@@ -109,7 +101,7 @@
 #schema-slot-3-0-title,
 #schema-slot-3-1-title {
   color: var(--ok-color);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -122,7 +114,7 @@
 #schema-slot-3-0-role,
 #schema-slot-3-1-role {
   color: var(--muted-color);
-  font-size: 7px;
+  font-size: 12px;
 }
 
 #schema-arrow-0,
@@ -158,5 +150,5 @@
 #schema-wire-6,
 #schema-wire-7 {
   color: var(--text-color);
-  font-size: 7px;
+  font-size: 12px;
 }

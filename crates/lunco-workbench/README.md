@@ -132,9 +132,8 @@ cargo run --bin lunica      # Modelica workbench
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /
   Observe) — host apps define them as they migrate panels.
-- **Command palette** — `Ctrl+P` unbound.
-- **`PanelSlot::Floating`** — placeholder; egui_dock's window support
-  is there but not wired to our `Panel` registration yet.
+- **Command palette** — planned; `Ctrl+P` is intentionally unbound.
+- **Detached panel windows** — planned; the current panel contract is dock-only.
 
 ## Design rationale
 

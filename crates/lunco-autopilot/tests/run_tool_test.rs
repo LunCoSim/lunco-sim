@@ -126,7 +126,7 @@ fn parked_patrol_fires_once_not_every_tick() {
     // `Repeat::forever` resets the lap — so a rover parked inside the waypoint
     // radius completes a lap EVERY tick (drive_to succeeds immediately), which
     // re-armed `RunToolNode`'s latch and queued the tool at tick rate. One
-    // Ctrl+LMB checkpoint (a one-waypoint patrol, default dwell 0) is exactly
+    // A PlaceWaypoint checkpoint (a one-waypoint patrol, default dwell 0) is exactly
     // this shape: it fired ~60 screenshots/second. The arrival latch fixes it —
     // the tool re-arms only after the rover actually LEAVES the radius.
     //

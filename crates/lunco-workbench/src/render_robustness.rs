@@ -308,18 +308,24 @@ pub(crate) fn draw_render_recovery_banner(
     mut egui_ctx: EguiContexts,
     warning: Option<Res<RenderWarning>>,
     gave_up: Option<Res<RenderGaveUp>>,
+    theme: Option<Res<lunco_theme::Theme>>,
 ) {
-    let (title, message, color) = if let Some(gave_up) = gave_up {
+    let theme = theme
+        .map(|theme| theme.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
+    let (title, message, color, fill) = if let Some(gave_up) = gave_up {
         (
             "⚠  PRESENTATION STOPPED",
             gave_up.reason.clone(),
-            egui::Color32::from_rgb(255, 120, 120),
+            theme.tokens.error,
+            theme.tokens.alert_backdrop,
         )
     } else if let Some(warning) = warning {
         (
             "⚠  RENDERING DEGRADED",
             warning.message.clone(),
-            egui::Color32::from_rgb(255, 210, 110),
+            theme.tokens.warning,
+            theme.tokens.overlay_backdrop,
         )
     } else {
         return;
@@ -333,7 +339,7 @@ pub(crate) fn draw_render_recovery_banner(
         .fixed_pos(egui::pos2(screen.center().x - 210.0, screen.top() + 12.0))
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(42, 24, 18, 238))
+                .fill(fill)
                 .corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, color.linear_multiply(0.75)))
                 .inner_margin(egui::Margin::symmetric(12, 8))
@@ -341,7 +347,7 @@ pub(crate) fn draw_render_recovery_banner(
                     ui.set_max_width(420.0);
                     ui.vertical_centered(|ui| {
                         ui.label(egui::RichText::new(title).color(color).strong());
-                        ui.label(egui::RichText::new(message).color(egui::Color32::WHITE));
+                        ui.label(egui::RichText::new(message).color(theme.tokens.text));
                     });
                 });
         });

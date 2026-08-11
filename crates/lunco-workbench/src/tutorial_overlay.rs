@@ -197,12 +197,6 @@ register_commands!(
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
-// TODO(theme): migrate to lunco-theme once the token set covers this.
-// The tutorial-chrome accent (HUD keyline, spotlight ring, callout border). A
-// bright blue, whereas `tokens.accent` is mauve — picking between the two is a
-// design decision, not a mechanical substitution.
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(90, 170, 255);
-
 /// Draw the persistent objectives/hint card, top-left, below the menu bar.
 /// Non-interactive (foreground layer) so it never eats clicks.
 fn draw_tutorial_hud(
@@ -220,6 +214,7 @@ fn draw_tutorial_hud(
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
+    let accent = theme.tokens.accent;
 
     egui::Area::new(egui::Id::new("lunco_tutorial_hud"))
         .order(egui::Order::Background)
@@ -230,13 +225,13 @@ fn draw_tutorial_hud(
             egui::Frame::new()
                 .fill(theme.tokens.overlay_backdrop)
                 .corner_radius(10.0)
-                .stroke(egui::Stroke::new(1.0, ACCENT.linear_multiply(0.6)))
+                .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.6)))
                 .inner_margin(egui::Margin::symmetric(12, 10))
                 .show(ui, |ui| {
                     if !hud.objectives.is_empty() {
                         ui.label(
                             egui::RichText::new("OBJECTIVES")
-                                .color(ACCENT)
+                                .color(accent)
                                 .small()
                                 .strong(),
                         );
@@ -323,7 +318,14 @@ fn draw_spotlight(
             .interactable(false)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
-                paint_scrim(ui.painter(), ctx, screen, target, theme.tokens.scrim)
+                paint_scrim(
+                    ui.painter(),
+                    ctx,
+                    screen,
+                    target,
+                    theme.tokens.scrim,
+                    theme.tokens.accent,
+                )
             });
     }
 
@@ -355,7 +357,7 @@ fn draw_spotlight(
             egui::Frame::new()
                 .fill(theme.tokens.overlay_backdrop)
                 .corner_radius(12.0)
-                .stroke(egui::Stroke::new(1.5, ACCENT))
+                .stroke(egui::Stroke::new(1.5, theme.tokens.accent))
                 .inner_margin(egui::Margin::symmetric(14, 12))
                 .show(ui, |ui| {
                     ui.label(
@@ -378,6 +380,7 @@ fn paint_scrim(
     // only published by the Modelica canvas, so everywhere else it silently
     // returns `Theme::dark()` (see the note in `lib.rs`).
     scrim: egui::Color32,
+    accent: egui::Color32,
 ) {
     let Some(t) = target else {
         painter.rect_filled(screen, 0.0, scrim);
@@ -411,9 +414,9 @@ fn paint_scrim(
     );
     let phase = (ctx.input(|i| i.time).sin() as f32 * 0.5 + 0.5) * 0.55 + 0.45;
     let ring = egui::Color32::from_rgba_unmultiplied(
-        ACCENT.r(),
-        ACCENT.g(),
-        ACCENT.b(),
+        accent.r(),
+        accent.g(),
+        accent.b(),
         (255.0 * phase) as u8,
     );
     painter.rect_stroke(
@@ -576,7 +579,7 @@ fn draw_tour(
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let painter = ui.painter();
-                paint_scrim(painter, ctx, screen, target, theme.tokens.scrim);
+                paint_scrim(painter, ctx, screen, target, theme.tokens.scrim, accent);
                 if let Some(t) = target {
                     let card_rect =
                         egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));

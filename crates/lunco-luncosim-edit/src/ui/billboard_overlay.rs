@@ -198,10 +198,16 @@ pub fn draw_billboard_overlay(
         let size = galley.size();
         let top_left = d.screen - egui::vec2(size.x * 0.5, size.y + 8.0);
         let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(5.0, 3.0));
+        let backdrop = theme.tokens.overlay_backdrop;
         painter.rect_filled(
             bg,
             3.0,
-            egui::Color32::from_black_alpha((170.0 * fade) as u8),
+            egui::Color32::from_rgba_unmultiplied(
+                backdrop.r(),
+                backdrop.g(),
+                backdrop.b(),
+                (f32::from(backdrop.a()) * fade) as u8,
+            ),
         );
         painter.galley(top_left, galley, color);
     }

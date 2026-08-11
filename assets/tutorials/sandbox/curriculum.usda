@@ -49,6 +49,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Sandbox Intro"
         string lunco:tutorial:blurb = "An optional guided coach-mark tour of the workspace — viewport, browser, inspector and console."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
     }
 
     def Scope "FirstDrive" (
@@ -60,6 +61,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "First Drive"
         string lunco:tutorial:blurb = "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Basic/MoonDrivingBasics>
     }
 
@@ -72,6 +74,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Lander & Rover Mission"
         string lunco:tutorial:blurb = "Watch a powered descent land a rover, then drive the deployed rover through a course."
         uniform token lunco:tutorial:difficulty = "intermediate"
+        uniform token lunco:tutorial:format = "exercise"
     }
 
     def Scope "BuildScene" (
@@ -83,6 +86,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Build a Scene"
         string lunco:tutorial:blurb = "Compose the 3D world — the spawn palette, the gizmo, the inspector, and the USD underneath."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/BuildBase>
     }
 
@@ -95,6 +99,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Build a Lunar Base"
         string lunco:tutorial:blurb = "Compose a surface base from the moonbase Structures kit — solar/fission power, a crew habitat, a comms mast, an ISRU plant and a landing pad."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Sandbox/ScriptARover>
     }
 
@@ -107,6 +112,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Script a Rover"
         string lunco:tutorial:blurb = "What a rhai scenario is and how to attach one — lifecycle hooks, prelude verbs, hot-reload."
         uniform token lunco:tutorial:difficulty = "intermediate"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/RhaiRepl>
     }
 
@@ -119,6 +125,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Rhai Editor & REPL"
         string lunco:tutorial:blurb = "Learn how to write scripts in the in-app editor, run commands in the live REPL, and use parameter hints."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/InspectSim>
     }
 
@@ -131,6 +138,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Inspect the Simulation"
         string lunco:tutorial:blurb = "Read live state — selection, telemetry ports and plots, and reading it all back over the API."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/Cosim>
     }
 
@@ -143,5 +151,6 @@ def Scope "Sandbox" (
         string lunco:tutorial:title = "Cosim — Model meets Physics"
         string lunco:tutorial:blurb = "How a Modelica model flies a physics body: the model, the SimConnection wire, Modelica events, and verifying the result."
         uniform token lunco:tutorial:difficulty = "intermediate"
+        uniform token lunco:tutorial:format = "tour"
     }
 }

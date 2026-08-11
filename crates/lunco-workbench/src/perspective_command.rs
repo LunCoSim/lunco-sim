@@ -17,7 +17,7 @@ use lunco_core::{on_command, register_commands, Command};
 
 /// Activate a registered [`Perspective`](crate::Perspective) by its
 /// `PerspectiveId` string. The luncosim ships `sandbox_view`, `rover_build`,
-/// and `modelica_analyze`. Unknown ids are a logged no-op.
+/// and `modelica_analyze`. Unknown ids produce a user-visible status error.
 #[Command(default)]
 pub struct ActivatePerspective {
     /// The id string of a registered perspective (e.g. `"rover_build"`).
@@ -29,6 +29,7 @@ fn on_activate_perspective(
     trigger: On<ActivatePerspective>,
     layout: Option<ResMut<WorkbenchLayout>>,
     pending: Option<ResMut<crate::PendingLayoutRequests>>,
+    mut commands: Commands,
 ) {
     let id = trigger.event().id.clone();
     let Some(mut layout) = layout else {
@@ -43,7 +44,20 @@ fn on_activate_perspective(
         info!("[ActivatePerspective] activated `{id}`");
     } else {
         warn!("[ActivatePerspective] no registered perspective with id `{id}`");
+        report_unknown_perspective(&mut commands, &id);
     }
+}
+
+pub(crate) fn report_unknown_perspective(commands: &mut Commands, id: &str) {
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "perspective-activation-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(format!(
+            "No workbench perspective named `{id}` is registered"
+        )),
+        timestamp: 0.0,
+    });
 }
 
 /// Reset the dock layout to the active perspective's clean preset — the

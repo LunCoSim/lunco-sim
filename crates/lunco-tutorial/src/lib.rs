@@ -65,6 +65,8 @@ pub struct TutorialMeta {
     pub app: String,
     /// Difficulty tag (`"beginner"` / `"intermediate"` / …) shown as a chip.
     pub difficulty: String,
+    /// Whether this is guided reference content or a simulator-verified exercise.
+    pub format: curriculum::LessonFormat,
     /// The orchestrator, as an authored asset path (`lunco://…`, `twin://…`) —
     /// resolved at launch by [`CurriculumRoot::read`].
     pub script: String,
@@ -280,6 +282,7 @@ impl CurriculumRoot {
                 title: lesson.title,
                 blurb: lesson.blurb,
                 difficulty: lesson.difficulty,
+                format: lesson.format,
                 script: lesson.script,
                 world: lesson.world,
                 first_start: lesson.first_start,
@@ -1058,6 +1061,7 @@ fn draw_advance_prompt(
     mut pending: ResMut<PendingAdvance>,
     mut progress: ResMut<TutorialProgress>,
     registry: Res<TutorialRegistry>,
+    theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
 ) {
     let Some(next) = pending.0.clone() else {
@@ -1067,6 +1071,9 @@ fn draw_advance_prompt(
         return;
     };
     let next_title = pretty_tutorial(&registry, &next);
+    let theme = theme
+        .map(|theme| theme.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
 
     let mut proceed = false;
     let mut dismiss = false;
@@ -1077,13 +1084,7 @@ fn draw_advance_prompt(
         .fixed_pos(screen.min)
         .interactable(true)
         .show(ctx, |ui| {
-            // TODO(theme): migrate to lunco-theme once the token set covers this.
-            // Full-screen dim behind the "advance" prompt -> `tokens.scrim`.
-            // BLOCKED: `lunco-tutorial` has no `[features]` section, so there is
-            // nowhere safe to hang an optional `lunco-theme` dep (it pulls
-            // bevy_egui -> bevy_render -> wgpu). See lunco-theme's crate docs.
-            ui.painter()
-                .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+            ui.painter().rect_filled(screen, 0.0, theme.tokens.scrim);
             ui.allocate_rect(screen, egui::Sense::click());
         });
     egui::Area::new(egui::Id::new("tutorial_advance_prompt"))
@@ -1341,7 +1342,7 @@ fn register_tutorials_menu(world: &mut World) {
             return;
         }
         ui.label(
-            egui::RichText::new("Interactive, scripted lessons · ✓ completed · 🎓 not completed")
+            egui::RichText::new("▶ tours · 🎯 simulator exercises · ✓ completed")
                 .weak()
                 .small(),
         );
@@ -1384,11 +1385,22 @@ fn register_tutorials_menu(world: &mut World) {
                     .show(ui, |ui| {
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
-                            let glyph = if done { "✓" } else { "🎓" };
+                            let glyph = if done {
+                                "✓"
+                            } else if meta.format == curriculum::LessonFormat::Tour {
+                                "▶"
+                            } else {
+                                "🎯"
+                            };
                             if ui
                                 .add_sized(
                                     [ui.available_width(), 0.0],
-                                    egui::Button::new(format!("{glyph}  {}", meta.title)).wrap(),
+                                    egui::Button::new(format!(
+                                        "{glyph}  {}  · {}",
+                                        meta.title,
+                                        meta.format.label()
+                                    ))
+                                    .wrap(),
                                 )
                                 .on_hover_text(meta.blurb.as_str())
                                 .clicked()
@@ -1455,13 +1467,19 @@ impl Panel for TutorialsPanel {
             .resource::<TutorialProgress>()
             .cloned()
             .unwrap_or_default();
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
 
         ui.add_space(4.0);
         ui.heading("🎓 Tutorials");
         ui.label(
-            egui::RichText::new("Interactive, scripted lessons · ✓ completed · 🎓 not completed.")
-                .weak()
-                .small(),
+            egui::RichText::new(
+                "Tours explain the UI · exercises require simulator evidence · ✓ completed.",
+            )
+            .weak()
+            .small(),
         );
         if !progress.completed.is_empty() && ui.button("Reset completion history").clicked() {
             ctx.trigger(ResetTutorialProgress {});
@@ -1488,12 +1506,8 @@ impl Panel for TutorialsPanel {
                 .map(|m| m.title.to_string())
                 .unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
-                // TODO(theme): migrate to lunco-theme once the token set covers this.
-                // "Currently running" accent for the launcher row. Blocked on the
-                // dep, as above.
                 ui.label(
-                    egui::RichText::new(format!("▶ Running: {title}"))
-                        .color(egui::Color32::from_rgb(120, 200, 255)),
+                    egui::RichText::new(format!("▶ Running: {title}")).color(theme.tokens.accent),
                 );
                 if ui.small_button("Stop").clicked() {
                     ctx.trigger(SkipTutorial {});
@@ -1508,15 +1522,14 @@ impl Panel for TutorialsPanel {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if done {
-                            // TODO(theme): migrate to lunco-theme once the token set covers this.
-                            // Completed-tutorial tick -> `tokens.success`. Blocked on the dep.
                             ui.label(
                                 egui::RichText::new("✓")
-                                    .color(egui::Color32::from_rgb(120, 210, 140))
+                                    .color(theme.tokens.success)
                                     .strong(),
                             );
                         }
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());
+                        ui.label(egui::RichText::new(meta.format.label()).weak().small());
                         ui.label(egui::RichText::new(meta.difficulty.as_str()).weak().small());
                     });
                     ui.label(egui::RichText::new(meta.blurb.as_str()).small());
@@ -1652,6 +1665,7 @@ mod tests {
             blurb: String::new(),
             app: "/Test".into(),
             difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
             // A real shipped script, so it resolves through the EMBEDDED copy
             // wherever this runs from. No world: a lesson may decline one.
             script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
@@ -1733,6 +1747,7 @@ mod tests {
             blurb: String::new(),
             app: "/Test".into(),
             difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
             script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
             world: Some("lunco://tutorials/sandbox/first_drive.usda".into()),
             first_start: false,
@@ -1805,6 +1820,7 @@ mod tests {
                 blurb: String::new(),
                 app: "/Test".into(),
                 difficulty: String::new(),
+                format: curriculum::LessonFormat::Exercise,
                 script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
                 world: Some("lunco://tutorials/sandbox/first_drive.usda".into()),
                 first_start: false,

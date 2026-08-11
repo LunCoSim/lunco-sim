@@ -204,7 +204,7 @@ pub(crate) fn collect_graph(
     (nodes, wires)
 }
 
-/// Select the authored system boundaries for the Lunica Schema perspective.
+/// Select the authored system boundaries for the Connections perspective.
 ///
 /// This is intentionally separate from [`collect_graph`]. The canonical USD
 /// graph must remain complete for simulation, editing, diagnostics, and any
@@ -212,37 +212,33 @@ pub(crate) fn collect_graph(
 /// view: `lunco:ui:schemaRoot` scopes one instance and
 /// `lunco:ui:schemaNode` marks the blocks that should be shown. Both are typed
 /// USD properties; no path/name classification is performed here.
-pub(crate) fn project_schema(
-    mut nodes: Vec<PrimNode>,
-    mut wires: Vec<Wire>,
-) -> (Vec<PrimNode>, Vec<Wire>) {
-    let schema_roots: BTreeSet<String> = nodes
+pub(crate) fn schema_roots(nodes: &[PrimNode]) -> Vec<String> {
+    nodes
         .iter()
         .filter(|node| node.schema_root)
         .map(|node| node.path.clone())
-        .collect();
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+pub(crate) fn project_schema(
+    mut nodes: Vec<PrimNode>,
+    mut wires: Vec<Wire>,
+    schema_root: &str,
+) -> (Vec<PrimNode>, Vec<Wire>) {
     let marked: BTreeSet<String> = nodes
         .iter()
         .filter(|node| {
             node.schema_node
-                && (schema_roots.is_empty()
-                    || schema_roots.iter().any(|root| {
-                        node.path == *root
-                            || node
-                                .path
-                                .strip_prefix(root)
-                                .is_some_and(|rest| rest.starts_with('/'))
-                    }))
+                && (node.path == schema_root
+                    || node
+                        .path
+                        .strip_prefix(schema_root)
+                        .is_some_and(|rest| rest.starts_with('/')))
         })
         .map(|node| node.path.clone())
         .collect();
-
-    // If a scene has not authored a schema, preserve the generic complete
-    // graph. This keeps the collector useful for ordinary USD scenes and makes
-    // the schema perspective opt-in rather than an implicit global filter.
-    if marked.is_empty() {
-        return (nodes, wires);
-    }
 
     nodes.retain(|node| marked.contains(&node.path));
     wires.retain(|wire| {
@@ -816,7 +812,7 @@ mod tests {
             dataflow("/Lander", "state", "/Lander", "state"),
         ];
 
-        let (nodes, wires) = project_schema(vec![root, controller, internal], wires);
+        let (nodes, wires) = project_schema(vec![root, controller, internal], wires, "/Lander");
         assert_eq!(
             nodes
                 .iter()
@@ -827,5 +823,49 @@ mod tests {
         assert_eq!(wires.len(), 1);
         assert_eq!(wires[0].source_path, "/Lander");
         assert_eq!(wires[0].target_path, "/Lander/GNC");
+    }
+
+    #[test]
+    fn schema_projection_never_falls_back_to_generic_topology() {
+        let nodes = vec![
+            prim("/Generic/Controller", &["in"], &["out"], false),
+            prim("/Generic/Plant", &["out"], &["in"], false),
+        ];
+        let wires = vec![dataflow(
+            "/Generic/Controller",
+            "out",
+            "/Generic/Plant",
+            "out",
+        )];
+
+        assert!(schema_roots(&nodes).is_empty());
+        let (projected, projected_wires) = project_schema(nodes, wires, "");
+        assert!(projected.is_empty());
+        assert!(projected_wires.is_empty());
+    }
+
+    #[test]
+    fn schema_projection_selects_exactly_one_authored_root() {
+        let mut first_root = prim("/First", &[], &["out"], false);
+        first_root.schema_root = true;
+        first_root.schema_node = true;
+        let mut first_child = prim("/First/Plant", &["in"], &[], false);
+        first_child.schema_node = true;
+        let mut second_root = prim("/Second", &[], &["out"], false);
+        second_root.schema_root = true;
+        second_root.schema_node = true;
+        let mut second_child = prim("/Second/Plant", &["in"], &[], false);
+        second_child.schema_node = true;
+
+        let nodes = vec![first_root, first_child, second_root, second_child];
+        assert_eq!(schema_roots(&nodes), vec!["/First", "/Second"]);
+        let (projected, _) = project_schema(nodes, Vec::new(), "/Second");
+        assert_eq!(
+            projected
+                .iter()
+                .map(|node| node.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/Second", "/Second/Plant"]
+        );
     }
 }

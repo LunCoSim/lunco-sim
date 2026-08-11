@@ -40,6 +40,18 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 /// interpolation between them.
 const PATH_SAMPLES: usize = 96;
 
+fn report_capture_failure(commands: &mut Commands, message: impl Into<String>) {
+    let message = message.into();
+    warn!("[cinematic] {message}");
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "camera-capture-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(message),
+        timestamp: 0.0,
+    });
+}
+
 /// The camera path the panel's transport drives.
 ///
 /// A path owns a per-object driven clock, so the shared `AnimationPreview`
@@ -217,7 +229,7 @@ fn on_add_camera_here(
         .iter()
         .find(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
     else {
-        warn!("[cinematic] no active window camera to capture");
+        report_capture_failure(&mut commands, "No active window camera to capture");
         return;
     };
 
@@ -229,7 +241,10 @@ fn on_add_camera_here(
         lunco_core::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
             .map(|(p, r)| (p.0, r.0))
     else {
-        warn!("[cinematic] camera {cam_entity:?} has no resolvable grid pose");
+        report_capture_failure(
+            &mut commands,
+            format!("Camera {cam_entity:?} has no resolvable grid pose"),
+        );
         return;
     };
 
@@ -237,11 +252,14 @@ fn on_add_camera_here(
         .and_then(|w| w.0.active_document)
         .or_else(|| usd_registry.ids().next())
     else {
-        warn!("[cinematic] no active USD document to author into");
+        report_capture_failure(&mut commands, "No active USD document to author into");
         return;
     };
     let Some(host) = usd_registry.host(doc) else {
-        warn!("[cinematic] no USD host for document {doc:?}");
+        report_capture_failure(
+            &mut commands,
+            format!("No USD authoring host for document {doc:?}"),
+        );
         return;
     };
 
@@ -262,7 +280,10 @@ fn on_add_camera_here(
                 }
                 n += 1;
                 if n > 999 {
-                    warn!("[cinematic] giving up naming a camera after 999 tries");
+                    report_capture_failure(
+                        &mut commands,
+                        "Could not find a free camera name after 999 attempts",
+                    );
                     return;
                 }
             }
@@ -270,7 +291,10 @@ fn on_add_camera_here(
     };
     let path = join(&root, &name);
     if prim_exists(host, &path) {
-        warn!("[cinematic] prim already exists at {path} — not overwriting");
+        report_capture_failure(
+            &mut commands,
+            format!("A prim already exists at {path}; camera was not overwritten"),
+        );
         return;
     }
 

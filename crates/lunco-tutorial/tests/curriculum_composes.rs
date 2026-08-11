@@ -145,3 +145,44 @@ fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
         }
     }
 }
+
+/// A tour may finish when the learner advances through its reference cards; an
+/// exercise may not. Exercises complete only after the runtime emits the
+/// objective verdict, so a content edit cannot quietly turn a simulator test
+/// into a Next-button slideshow.
+#[test]
+fn exercises_cannot_complete_from_tour_navigation() {
+    let stage = lunco_usd_compose::compose_file_to_stage(&repo("assets/tutorials/luncosim.usda"))
+        .expect("compose luncosim curriculum");
+    let c = curriculum::project(&stage);
+    assert!(
+        c.failures.is_empty(),
+        "curriculum failures: {:?}",
+        c.failures
+    );
+
+    let mut tours = 0;
+    let mut exercises = 0;
+    for lesson in &c.lessons {
+        match lesson.format {
+            curriculum::LessonFormat::Tour => tours += 1,
+            curriculum::LessonFormat::Exercise => {
+                exercises += 1;
+                let path = resolve(&lesson.script).expect("bundled tutorial script");
+                let script = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+                assert!(
+                    !script.contains("cmd:TutorialNext"),
+                    "exercise {} completes through tour navigation",
+                    lesson.path
+                );
+                assert!(
+                    script.contains("MISSION_COMPLETE"),
+                    "exercise {} has no runtime completion verdict",
+                    lesson.path
+                );
+            }
+        }
+    }
+    assert!(tours > 0 && exercises > 0, "expected both lesson formats");
+}

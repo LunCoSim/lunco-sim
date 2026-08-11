@@ -1024,7 +1024,7 @@ fn publish_celestial_capability(
     ui.property("active_body_id", f64::from(active_body.unwrap_or_default()));
 }
 
-/// Publish the authored Lunica boundary graph for a selected schema root.
+/// Publish the authored flight-control summary for a selected schema root.
 ///
 /// This is the recorder-safe counterpart of the workbench connection canvas.
 /// It reads the composed stage, honours only typed schemaNode/schemaColumn/
@@ -1039,7 +1039,7 @@ fn publish_lunica_schema_exposure(
 ) -> bool {
     let mut ui = exposures.writer("lunica-schema");
     ui.visible(false);
-    ui.property("title", "LUNICA / FLIGHT CONTROL");
+    ui.property("title", "FLIGHT CONTROL / CONNECTIONS");
     ui.property("scope", "Select an authored schema root");
     ui.property("count", "0 authored blocks");
     ui.property("note", "Typed USD nodes and their authored connections");

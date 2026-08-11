@@ -83,11 +83,7 @@ fn draw_control_blackout(
         .show(ctx, |ui| {
             ui.set_max_width(300.0);
             egui::Frame::new()
-                // TODO(theme): migrate to lunco-theme once the token set covers this.
-                // Error-tinted backdrop for a HUD panel that is itself the alarm —
-                // `overlay_backdrop` is neutral and `error_subdued` is a chip fill,
-                // so neither is right; this wants an alert-backdrop token.
-                .fill(egui::Color32::from_rgba_unmultiplied(46, 18, 22, 235))
+                .fill(theme.tokens.alert_backdrop)
                 .corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, alert.linear_multiply(0.7)))
                 .inner_margin(egui::Margin::symmetric(12, 8))

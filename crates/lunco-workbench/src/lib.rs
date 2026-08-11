@@ -385,6 +385,7 @@ fn drain_pending_tab_requests(
 fn drain_pending_layout_requests(
     layout: Option<ResMut<WorkbenchLayout>>,
     mut pending: ResMut<PendingLayoutRequests>,
+    mut commands: Commands,
 ) {
     let Some(mut layout) = layout else {
         return;
@@ -395,7 +396,9 @@ fn drain_pending_layout_requests(
             LayoutRequest::Reset => layout.reset_to_default_layout(),
             LayoutRequest::SetActivityBar(visible) => layout.activity_bar = visible,
             LayoutRequest::ActivatePerspective(id) => {
-                layout.activate_perspective_by_str(&id);
+                if !layout.activate_perspective_by_str(&id) {
+                    perspective_command::report_unknown_perspective(&mut commands, &id);
+                }
             }
             LayoutRequest::AddSingleton { id, slot } => {
                 if !layout.panels.contains_key(&id) {
@@ -429,8 +432,8 @@ fn drain_pending_layout_requests(
                             layout.bottom.push(id);
                         }
                     }
-                    PanelSlot::Floating => {
-                        unreachable!("floating panels are normalized before queueing")
+                    PanelSlot::Hidden => {
+                        unreachable!("hidden panels are normalized before queueing")
                     }
                 }
                 layout.insert_panel_into_dock(id, slot);
@@ -514,9 +517,8 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
     } else {
         // A tutorial's named anchor is an actionable request, not a promise
         // that the user already opened the panel. Mount the registered panel
-        // in its authored default slot, then foreground it. Floating panels
-        // have no rendered host in v0.1, so they use the side browser until
-        // detached-window support exists.
+        // in its authored default slot, then foreground it. Panels omitted
+        // from presets use the side browser when explicitly opened.
         let Some((pid, authored_slot)) = layout
             .panels
             .iter()
@@ -527,7 +529,7 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
             return;
         };
         let slot = match authored_slot {
-            PanelSlot::Floating => PanelSlot::SideBrowser,
+            PanelSlot::Hidden => PanelSlot::SideBrowser,
             slot => slot,
         };
         match slot {
@@ -539,7 +541,7 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
                 layout.right_inspector.push(pid)
             }
             PanelSlot::Bottom if !layout.bottom.contains(&pid) => layout.bottom.push(pid),
-            PanelSlot::Floating => unreachable!("floating panels are normalized above"),
+            PanelSlot::Hidden => unreachable!("hidden panels are normalized above"),
             _ => {}
         }
         let inserted = layout.insert_panel_into_dock(pid, slot);
@@ -1101,7 +1103,7 @@ impl WorkbenchLayout {
                     self.bottom.push(id);
                 }
             }
-            PanelSlot::Floating => { /* not yet rendered */ }
+            PanelSlot::Hidden => { /* registered, intentionally not docked */ }
         }
         self.panels.insert(id, Box::new(panel));
         self.rebuild_dock();
@@ -2147,7 +2149,7 @@ impl WorkbenchLayout {
             PanelSlot::Center => self.center.first().copied(),
             PanelSlot::RightInspector => self.right_inspector.first().copied(),
             PanelSlot::Bottom => self.bottom.first().copied(),
-            PanelSlot::Floating => None,
+            PanelSlot::Hidden => None,
         };
         let target_node: Option<NodeIndex> = neighbour.and_then(|nid| {
             let target_tab = TabId::Singleton(nid);
@@ -3673,13 +3675,11 @@ fn render_layout(
                             // — rebuild_dock would wipe instance tabs
                             // (model views) the user has open.
                             //
-                            // A `Floating` default slot has no slot list and no
-                            // dock region, so ticking such a panel used to drop
-                            // it into an arbitrary leaf and lose it on the next
-                            // Reset Layout — a checkbox that did nothing you
-                            // could find. Dock those in the side browser.
+                            // A hidden default slot has no preset dock region;
+                            // opening it explicitly gives it a stable side-browser
+                            // home until Reset Layout.
                             let slot = match slot {
-                                PanelSlot::Floating => PanelSlot::SideBrowser,
+                                PanelSlot::Hidden => PanelSlot::SideBrowser,
                                 other => other,
                             };
                             world

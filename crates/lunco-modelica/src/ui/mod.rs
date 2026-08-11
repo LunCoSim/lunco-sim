@@ -575,44 +575,12 @@ impl Perspective for AnalyzePerspective {
         } else {
             layout.set_center(vec![]);
         }
-        // Right dock — Telemetry (parameters, inputs, variable
-        // toggles), Inspector (selected node's modifications), and
-        // Component Palette (MSL instantiation). The Telemetry panel
-        // is registered under the historical id `modelica_inspector`
-        // for layout-stability reasons; the new selection-driven
-        // Inspector uses `modelica_diagram_inspector`.
-        layout.set_right_inspector_tabs(vec![
-            PanelId("modelica_inspector"),
-            PanelId("modelica_diagram_inspector"),
-            PanelId("modelica_component_palette"),
-        ]);
-        // Bottom dock: Graphs first so it's the default active tab —
-        // the simulation plot is what a user running a model wants
-        // to see on landing, not the log stream. Console stays one
-        // click away for compile / save / error output (VS Code's
-        // Terminal/Output/Problems pattern, just with a different
-        // default active tab).
-        // Modelica plot is now a multi-instance kind; the first
-        // instance is opened here, pinned to the well-known
-        // `DEFAULT_MODELICA_GRAPH` VizId, and lands in the Bottom
-        // slot alongside these singletons. Telemetry-panel checkboxes
-        // bind to that same default VizId, preserving the historical
-        // behaviour of "tick a variable → it appears in the Graphs tab".
-        layout.set_bottom_tabs(vec![
-            PanelId("modelica_experiments"),
-            PanelId("modelica_diagnostics"),
-            PanelId("modelica_console"),
-            PanelId("modelica_journal"),
-        ]);
-        layout.open_instance(
-            crate::ui::panels::graphs::MODELICA_PLOT_KIND,
-            crate::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-        );
-        // Graphs is the most-used bottom tab — pin it leftmost.
-        layout.move_instance_to_front(
-            crate::ui::panels::graphs::MODELICA_PLOT_KIND,
-            crate::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-        );
+        // Start with the browse-and-open task only. Context panels and output
+        // docks are opened by the operation that has content for them, or from
+        // View; empty telemetry, inspector, plots, and log tabs should not take
+        // half of a fresh workbench.
+        layout.set_right_inspector(None);
+        layout.set_bottom(None);
     }
 }
 

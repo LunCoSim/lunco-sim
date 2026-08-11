@@ -10,7 +10,8 @@
 //! - **Behaviour / route** — reads the vessel's `AutopilotBehaviorSpec`, which is
 //!   DERIVED from its BT.CPP mission + the waypoint prims it references. The route
 //!   readout is therefore strictly read-only: a waypoint is edited in the scene (drag
-//!   the pin, press Delete), not from a list here. Authoring is Ctrl+LMB in the
+//!   the pin, press Delete), not from a list here. Authoring is the
+//!   PlaceWaypoint intent + LMB (Alt+LMB in the bundled keymap) in the
 //!   viewport, Groot2, or the `.usda` directly. The full mission topology is
 //!   available in the `Autopilot graph` canvas.
 //!

@@ -1,0 +1,20 @@
+/*
+ * Semantic defaults for retained runtime surfaces. The runtime bridge writes
+ * these same properties from lunco-theme whenever the application theme
+ * changes; these values cover the stylesheet before its retained root mounts.
+ */
+:root {
+  --panel-background: rgba(24, 24, 37, 0.94);
+  --panel-border: rgba(127, 212, 255, 0.55);
+  --panel-inner: rgba(17, 17, 27, 0.9);
+  --button-background: rgba(49, 50, 68, 0.94);
+  --button-border: rgba(166, 173, 200, 0.28);
+  --text-color: rgba(205, 214, 244, 1);
+  --muted-color: rgba(166, 173, 200, 1);
+  --accent-color: rgba(203, 166, 247, 1);
+  --active-text-color: rgba(17, 17, 27, 1);
+  --ok-color: rgba(166, 227, 161, 1);
+  --caution-color: rgba(249, 226, 175, 1);
+  --warm-color: rgba(249, 226, 175, 1);
+  --danger-color: rgba(243, 139, 168, 1);
+}

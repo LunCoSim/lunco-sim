@@ -17,8 +17,8 @@ use velopack::sources::GithubSource;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager};
 
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
-/// The public GitHub repository containing the platform/architecture-specific nightly feeds.
-pub(crate) const UPDATE_REPOSITORY: &str = "https://github.com/LunCoSim/lunco-sim";
+/// Public machine-only repository containing immutable update releases.
+pub(crate) const UPDATE_REPOSITORY: &str = "https://github.com/LunCoSim/lunco-sim-updates";
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const UPDATE_CHANNEL: &str = "win-x64";
 #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
@@ -159,7 +159,7 @@ fn register_update_settings_menu(world: &mut World) {
             crate::GIT_SHA
         ));
         ui.label(format!(
-            "GitHub: LunCoSim/lunco-sim · {} channel",
+            "LunCoSim nightly updates · {} channel",
             UPDATE_CHANNEL
         ));
         ui.add_space(6.0);

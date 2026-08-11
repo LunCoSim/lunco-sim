@@ -247,6 +247,8 @@ pub struct DesignTokens {
     /// and it must therefore stay dark enough to carry [`Self::text`] over
     /// arbitrary scene content — including a blown-out lunar surface.
     pub overlay_backdrop: egui::Color32,
+    /// Error-tinted backdrop for a blocking HUD alert.
+    pub alert_backdrop: egui::Color32,
     /// Border/keyline for a floating HUD panel. Pairs with
     /// [`Self::overlay_backdrop`].
     pub overlay_border: egui::Color32,
@@ -318,6 +320,10 @@ impl DesignTokens {
             overlay_backdrop: match mode {
                 ThemeMode::Dark => p.mantle.alpha(235),
                 ThemeMode::Light => p.crust.alpha(235),
+            },
+            alert_backdrop: match mode {
+                ThemeMode::Dark => p.crust.lerp_to_gamma(p.red, 0.18).alpha(235),
+                ThemeMode::Light => p.mantle.lerp_to_gamma(p.red, 0.12).alpha(242),
             },
             overlay_border: p.overlay0,
             inactive: p.overlay1,

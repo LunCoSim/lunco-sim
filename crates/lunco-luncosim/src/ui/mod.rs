@@ -245,21 +245,13 @@ impl Plugin for SandboxUiPlugin {
                 app.add_observer(models_palette::on_scene_click_attach);
                 app.add_systems(Update, models_palette::attach_escape_system);
             })
-            // Build is the default simulation workbench: viewport, inspector,
-            // telemetry catalog, and the default Graphs instance are ready on
-            // launch. View remains the intentionally uncluttered observer mode.
+            // Build is the default simulation workbench. It opens only the
+            // structure browser, viewport, and Inspector; task-specific tools
+            // remain discoverable in View without consuming an empty dock.
             .add_systems(
                 Startup,
                 |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
                     layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
-                    layout.open_instance(
-                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
-                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-                    );
-                    layout.move_instance_to_front(
-                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
-                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-                    );
                 },
             )
             .add_systems(
@@ -267,6 +259,7 @@ impl Plugin for SandboxUiPlugin {
                 (
                     init_current_scene_path,
                     register_sandbox_scenarios_menu,
+                    register_camera_menu,
                     register_downloadable_assets_settings,
                     register_graphics_settings,
                 ),
@@ -432,10 +425,17 @@ fn on_runtime_ui_action(
             }
         }
         runtime_exposure::RuntimeUiActionKind::ViewBodyMoon => {
-            runtime_focus_body(301, &q_bodies, &mut commands)
+            if !runtime_focus_body(301, &q_bodies, &mut commands) {
+                report_runtime_ui_failure(&mut commands, "Moon is not present in the loaded scene");
+            }
         }
         runtime_exposure::RuntimeUiActionKind::ViewBodyEarth => {
-            runtime_focus_body(399, &q_bodies, &mut commands)
+            if !runtime_focus_body(399, &q_bodies, &mut commands) {
+                report_runtime_ui_failure(
+                    &mut commands,
+                    "Earth is not present in the loaded scene",
+                );
+            }
         }
         runtime_exposure::RuntimeUiActionKind::DismissTerrainOverlay => {
             commands.trigger(DismissTerrainOverlay)
@@ -447,7 +447,7 @@ fn runtime_focus_body(
     ephemeris_id: i32,
     q_bodies: &Query<(Entity, &lunco_core::CelestialBody)>,
     commands: &mut Commands,
-) {
+) -> bool {
     if let Some((target, _)) = q_bodies
         .iter()
         .find(|(_, body)| body.ephemeris_id == ephemeris_id)
@@ -456,7 +456,55 @@ fn runtime_focus_body(
             avatar: None,
             target,
         });
+        true
+    } else {
+        false
     }
+}
+
+fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "runtime-ui-action-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(message.to_string()),
+        timestamp: 0.0,
+    });
+}
+
+/// Register an egui-hosted, keyboard-accessible route to the same semantic
+/// camera actions used by the retained 3D overlay. HUI remains the compact
+/// in-viewport presentation; it is not the sole way to operate an essential
+/// camera mode because retained HTML currently exposes no accessibility tree.
+fn register_camera_menu(world: &mut World) {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_custom_menu("Camera", |ui, ctx| {
+        let actions = [
+            (
+                "Surface view",
+                runtime_exposure::RuntimeUiActionKind::ViewSurface,
+            ),
+            (
+                "Orbit Moon",
+                runtime_exposure::RuntimeUiActionKind::ViewBodyMoon,
+            ),
+            (
+                "Orbit Earth",
+                runtime_exposure::RuntimeUiActionKind::ViewBodyEarth,
+            ),
+        ];
+        for (label, action) in actions {
+            if ui.button(label).clicked() {
+                ctx.trigger(runtime_exposure::RuntimeUiAction {
+                    action,
+                    source: None,
+                });
+                ui.close();
+            }
+        }
+    });
 }
 
 fn on_dismiss_terrain_overlay(

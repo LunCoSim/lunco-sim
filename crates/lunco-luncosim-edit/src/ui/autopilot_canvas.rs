@@ -3,8 +3,8 @@
 //! This is a projector over [`BehaviorSpec`], not a second behaviour format.  The
 //! spec is derived from the selected vessel's authored BT.CPP mission, so every
 //! sequence, selector, decorator and leaf shown here is exactly what the rover
-//! will execute.  The canvas is deliberately read-only: its source is the
-//! mission's `info:sourceCode` / `info:sourceAsset`, not canvas layout state.
+//! will execute. Edits author that same mission through typed USD operations;
+//! canvas layout state is presentation-only and never becomes a second source.
 
 use std::sync::Arc;
 
@@ -41,6 +41,30 @@ pub(crate) struct CreateMissionRequested {
     vessel: Entity,
 }
 
+fn report_world_error(world: &mut World, message: impl Into<String>) {
+    let message = message.into();
+    bevy::log::warn!("[autopilot-canvas] {message}");
+    world.trigger(lunco_core::TelemetryEvent {
+        name: "autopilot-edit-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(message),
+        timestamp: 0.0,
+    });
+}
+
+fn report_panel_error(ctx: &mut PanelCtx, message: impl Into<String>) {
+    let message = message.into();
+    bevy::log::warn!("[autopilot-canvas] {message}");
+    ctx.trigger(lunco_core::TelemetryEvent {
+        name: "autopilot-edit-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(message),
+        timestamp: 0.0,
+    });
+}
+
 pub(crate) fn on_write_mission_requested(
     trigger: On<WriteMissionRequested>,
     mut commands: Commands,
@@ -50,17 +74,21 @@ pub(crate) fn on_write_mission_requested(
         let Some(doc) =
             lunco_scene_commands::doc_resolve::resolve_doc_for_entity(world, request.vessel)
         else {
-            bevy::log::warn!("[autopilot-canvas] selected vessel is not document-backed");
+            report_world_error(world, "Selected vessel is not document-backed");
             return;
         };
-        let Some(prim) = world.get::<UsdPrimPath>(request.vessel) else {
+        let Some(prim_path) = world
+            .get::<UsdPrimPath>(request.vessel)
+            .map(|prim| prim.path.clone())
+        else {
+            report_world_error(world, "Selected vessel has no USD prim path");
             return;
         };
         world.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetAttribute {
-                edit_target: LayerId::runtime(),
-                path: format!("{}/Mission", prim.path),
+                edit_target: LayerId::root(),
+                path: format!("{prim_path}/Mission"),
                 name: "info:sourceCode".to_string(),
                 type_name: "string".to_string(),
                 value: request.xml,
@@ -78,35 +106,43 @@ pub(crate) fn on_create_mission_requested(
         let vessel = request.vessel;
         let Some(doc) = lunco_scene_commands::doc_resolve::resolve_doc_for_entity(world, vessel)
         else {
-            bevy::log::warn!("[autopilot-canvas] selected vessel is not document-backed");
+            report_world_error(world, "Selected vessel is not document-backed");
             return;
         };
-        let Some(prim) = world.get::<UsdPrimPath>(vessel) else {
+        let Some(prim_path) = world
+            .get::<UsdPrimPath>(vessel)
+            .map(|prim| prim.path.clone())
+        else {
+            report_world_error(world, "Selected vessel has no USD prim path");
             return;
         };
         let value = serde_json::json!({"kind":"sequence", "children":[]});
-        let Ok(xml) = lunco_autopilot::btcpp_xml::value_to_xml(&value) else {
-            return;
+        let xml = match lunco_autopilot::btcpp_xml::value_to_xml(&value) {
+            Ok(xml) => xml,
+            Err(error) => {
+                report_world_error(world, format!("Could not create mission XML: {error}"));
+                return;
+            }
         };
-        let mission = format!("{}/Mission", prim.path);
+        let mission = format!("{prim_path}/Mission");
         world.trigger(ApplyUsdOps {
             doc,
             label: "Create autopilot program".to_string(),
             ops: vec![
                 UsdOp::AddPrim {
-                    edit_target: LayerId::runtime(),
-                    parent_path: prim.path.clone(),
+                    edit_target: LayerId::root(),
+                    parent_path: prim_path,
                     name: "Mission".to_string(),
                     type_name: Some("Scope".to_string()),
                     reference: None,
                 },
                 UsdOp::SetApiSchemas {
-                    edit_target: LayerId::runtime(),
+                    edit_target: LayerId::root(),
                     path: mission.clone(),
                     schemas: vec!["LunCoProgramAPI".to_string()],
                 },
                 UsdOp::SetAttribute {
-                    edit_target: LayerId::runtime(),
+                    edit_target: LayerId::root(),
                     path: mission,
                     name: "info:sourceCode".to_string(),
                     type_name: "string".to_string(),
@@ -659,7 +695,7 @@ fn apply_editor_action(
     };
     match edit_spec_json(source, path, action) {
         Ok(json) => write_mission_xml(ctx, vessel, json),
-        Err(err) => bevy::log::warn!("[autopilot-canvas] {err}"),
+        Err(err) => report_panel_error(ctx, err),
     }
 }
 
@@ -719,7 +755,7 @@ fn apply_drive_to_fields(
     };
     match edit_drive_to_json(source, path, fields) {
         Ok(json) => write_mission_xml(ctx, vessel, json),
-        Err(err) => bevy::log::warn!("[autopilot-canvas] {err}"),
+        Err(err) => report_panel_error(ctx, err),
     }
 }
 
@@ -731,7 +767,7 @@ fn write_mission_xml(ctx: &mut PanelCtx, vessel: Entity, json: String) {
     ) {
         Ok(xml) => xml,
         Err(err) => {
-            bevy::log::warn!("[autopilot-canvas] cannot write mission: {err}");
+            report_panel_error(ctx, format!("Cannot write mission: {err}"));
             return;
         }
     };
@@ -864,6 +900,7 @@ impl Panel for AutopilotCanvasPanel {
                     ] {
                         if ui
                             .add_enabled(enabled, egui::Button::new(template.label()))
+                            .on_disabled_hover_text("Select a composite node first")
                             .clicked()
                         {
                             apply_editor_action(
@@ -879,6 +916,7 @@ impl Panel for AutopilotCanvasPanel {
                 });
                 if ui
                     .add_enabled(enabled, egui::Button::new("Add Drive to"))
+                    .on_disabled_hover_text("Select a composite node first")
                     .clicked()
                 {
                     apply_editor_action(
@@ -891,6 +929,7 @@ impl Panel for AutopilotCanvasPanel {
                 }
                 if ui
                     .add_enabled(enabled, egui::Button::new("Add Sequence"))
+                    .on_disabled_hover_text("Select a composite node first")
                     .clicked()
                 {
                     apply_editor_action(
@@ -903,6 +942,7 @@ impl Panel for AutopilotCanvasPanel {
                 }
                 if ui
                     .add_enabled(enabled, egui::Button::new("Replace with brake"))
+                    .on_disabled_hover_text("Select a node first")
                     .clicked()
                 {
                     apply_editor_action(

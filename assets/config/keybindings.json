@@ -12,5 +12,6 @@
   "switch_mode": ["KeyV"],
   "pause":      ["KeyP"],
   "cancel":     ["Backspace", "Escape"],
-  "place_waypoint": ["AltLeft"]
+  "place_waypoint": ["AltLeft"],
+  "delete_selection": ["Delete"]
 }

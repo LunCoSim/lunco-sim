@@ -1,14 +1,7 @@
 @import "ui/runtime_fonts.css";
+@import "ui/runtime_theme.css";
 
 :root {
-  --panel-background: rgba(7, 13, 24, 0.97);
-  --panel-border: rgba(127, 212, 255, 0.58);
-  --panel-inner: rgba(20, 35, 53, 0.82);
-  --text-color: rgba(236, 241, 252, 1);
-  --muted-color: rgba(169, 181, 205, 1);
-  --accent-color: rgba(127, 212, 255, 1);
-  --ok-color: rgba(166, 227, 161, 1);
-  --warm-color: rgba(255, 194, 112, 1);
   --ui-status-color: var(--accent-color);
 }
 
@@ -51,7 +44,7 @@
 #compact-ground-label,
 #compact-altitude-label {
   color: var(--muted-color);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -84,7 +77,7 @@
 
 #compact-control-status {
   color: var(--ui-status-color);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -123,7 +116,7 @@
 
 #compact-vertical-primary-direction {
   color: var(--text-color);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.6px;
 }
@@ -161,7 +154,7 @@
 
 #compact-target-offset {
   color: var(--muted-color);
-  font-size: 6px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.2px;
 }
@@ -178,7 +171,7 @@
 #compact-rcs-value,
 #compact-engine-value {
   color: var(--accent-color);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 700;
 }
 

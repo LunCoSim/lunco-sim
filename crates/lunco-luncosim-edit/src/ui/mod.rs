@@ -180,7 +180,7 @@ fn refresh_view_help_controls(
     let global_rows = global_rows.get_or_insert_with(|| {
         lunco_controller::default_key_bindings()
             .into_iter()
-            .map(|(intent, keys)| (lunco_controller::key_label(&keys), format!("{intent:?}")))
+            .map(|(intent, keys)| (lunco_controller::key_label(&keys), intent.to_string()))
             .collect()
     });
     let mut sections = vec![LiveHelpSection {
@@ -223,7 +223,8 @@ fn refresh_view_help_controls(
         });
     }
 
-    help.set(PerspectiveId("sandbox_view"), sections);
+    help.set(PerspectiveId("sandbox_view"), sections.clone());
+    help.set(PerspectiveId("rover_build"), sections);
     *last_target = target;
     *published = true;
 }
@@ -291,10 +292,7 @@ impl Plugin for SandboxEditUiPlugin {
                                   camera around the scene and claim an endpoint's \
                                   public input ports. The live sections below show \
                                   the global key map and the controlled endpoint's map.",
-                    shortcuts: vec![
-                        HelpShortcut { keys: "Shift", description: "Camera speed boost" },
-                        HelpShortcut { keys: "+ / −", description: "Zoom in / out" },
-                    ],
+                    shortcuts: vec![],
                     mouse: vec![
                         HelpMouse { interaction: "Left-Click input endpoint", description: "Claim control; static objects do nothing" },
                         HelpMouse { interaction: "Shift+Left-Click", description: "Select for inspection/gizmo in Build mode" },
@@ -308,7 +306,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("lunica_schema"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "🔗 Lunica Schema",
+                    title: "🔗 Connections",
                     description: "Full-window view of the composed USD connection graph. Nodes and wires are derived from the live stage's typed properties and authored connections.",
                     shortcuts: vec![
                         HelpShortcut { keys: "F", description: "Fit the complete graph" },
@@ -328,16 +326,12 @@ impl Plugin for SandboxEditUiPlugin {
                     description: "3D scene editor. Spawn objects from the palette, \
                                   select and transform them, and assemble the scene.",
                     shortcuts: vec![
-                        HelpShortcut { keys: "W / A / S / D", description: "Move camera" },
-                        HelpShortcut { keys: "Q / E", description: "Move camera down / up" },
                         HelpShortcut { keys: "Shift", description: "Hold to place multiple (sticky spawn)" },
-                        HelpShortcut { keys: "Delete", description: "Delete the selected object" },
                         HelpShortcut { keys: "Ctrl+Z", description: "Undo" },
-                        HelpShortcut { keys: "Esc", description: "Cancel placement · clear selection / gizmo" },
                     ],
                     mouse: vec![
                         HelpMouse { interaction: "Left-Click", description: "Select object · confirm placement" },
-                        HelpMouse { interaction: "Alt+Left-Click", description: "Select + transform gizmo (drag to move)" },
+                        HelpMouse { interaction: "Shift+Left-Click", description: "Select + transform gizmo (drag to move)" },
                         HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
                         HelpMouse { interaction: "Scroll", description: "Zoom in / out" },
                     ],
@@ -389,7 +383,7 @@ impl Plugin for SandboxEditUiPlugin {
                     ],
                     mouse: vec![
                         HelpMouse { interaction: "Click a tree node", description: "Select a part to inspect / edit" },
-                        HelpMouse { interaction: "Alt+Left-Click", description: "Select + transform gizmo (drag to move)" },
+                        HelpMouse { interaction: "Shift+Left-Click", description: "Select + transform gizmo (drag to move)" },
                         HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
                     ],
                     has_tour: false,
@@ -521,7 +515,8 @@ impl Plugin for SandboxEditUiPlugin {
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
 
-        // Ctrl+LMB drops a mission waypoint by AUTHORING A USD PRIM (`ApplyUsdOp`) —
+        // PlaceWaypoint + LMB (Alt+LMB in the bundled keymap) drops a mission
+        // waypoint by AUTHORING A USD PRIM (`ApplyUsdOp`) —
         // no checkpoint command, no checkpoint domain. Moving, deleting, undoing and
         // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
         app.init_resource::<checkpoint_click::WaypointContextMenuState>()
@@ -593,7 +588,8 @@ impl Plugin for SandboxEditUiPlugin {
                     // The route line is real 3D geometry, not an egui overlay stroke.
                     checkpoint_click::sync_waypoint_path_mesh,
                     checkpoint_click::sync_waypoint_marker_visuals,
-                    checkpoint_click::handle_autopilot_toggle_hotkey,
+                    checkpoint_click::handle_autopilot_toggle_intent,
+                    inspector::delete_selected_on_intent,
                     // Grabbing the controls takes the vessel back from its autopilot.
                     checkpoint_click::manual_input_disengages_autopilot,
                     // Mirrors an armed placement into the shared tool gate so
@@ -738,7 +734,7 @@ impl Perspective for SchemaPerspective {
         PerspectiveId("lunica_schema")
     }
     fn title(&self) -> String {
-        "🔗 Lunica Schema".into()
+        "🔗 Connections".into()
     }
     fn restores_cached_layout(&self) -> bool {
         false
@@ -774,19 +770,7 @@ impl Perspective for BuildPerspective {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![PanelId("entity_list"), PanelId("telemetry_browser")]);
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
-        layout.set_right_inspector_tabs(vec![
-            PanelId("sandbox_inspector"),
-            PanelId("command_deck"),
-            PanelId("sandbox_environment"),
-            // Optional — only renders if the host binary registers a
-            // panel with this id (the rover binary does, modelica
-            // workbench doesn't). The workbench filters unknown ids.
-            PanelId("rover_code"),
-            PanelId("spawn_palette"),
-        ]);
-        // The default Graphs instance is opened by the host after this
-        // perspective activates. Its own `PanelSlot::Bottom` creates the sole
-        // bottom dock without duplicating a singleton panel.
+        layout.set_right_inspector_tabs(vec![PanelId("sandbox_inspector")]);
         layout.set_bottom(None);
     }
 }

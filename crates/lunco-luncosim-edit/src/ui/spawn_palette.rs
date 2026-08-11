@@ -164,10 +164,5 @@ fn spawn_palette_content(
     ui.separator();
     ui.small("Click to select, then click in scene to place.");
     ui.small("Or drag an item from here, then click in scene to place.");
-    ui.small("Press Escape to cancel.");
-
-    // Escape key handling
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && is_selecting {
-        ctx.trigger(SpawnStateRequested(SpawnState::Idle));
-    }
+    ui.small("Use Cancel to back out (Escape / Backspace by default).");
 }

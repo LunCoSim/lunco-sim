@@ -77,9 +77,9 @@ pub enum PanelSlot {
     /// Bottom dock, toggleable.
     /// Typical: Console, Plots, Timeline, Spawn Palette.
     Bottom,
-    /// Detached into its own OS window.
-    /// Not rendered by v0.1 — placeholder for the multi-viewport story.
-    Floating,
+    /// Registered and discoverable, but not docked by a perspective preset.
+    /// Opening it from View places it in the side browser.
+    Hidden,
 }
 
 /// A dockable unit of UI rendered by [`crate::WorkbenchPlugin`].

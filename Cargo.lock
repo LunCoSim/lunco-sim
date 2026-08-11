@@ -7976,6 +7976,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-theme",
  "lunco-usd-compose",
  "lunco-workbench",
  "lunco-workspace",

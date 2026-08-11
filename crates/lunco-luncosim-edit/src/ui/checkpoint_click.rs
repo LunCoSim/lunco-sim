@@ -53,6 +53,18 @@ use serde_json::Value;
 use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
 use lunco_scene_commands::SelectedEntities;
 
+fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) {
+    let message = message.into();
+    warn!("[waypoint] {message}");
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "waypoint-edit-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(message),
+        timestamp: 0.0,
+    });
+}
+
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
 pub struct WaypointContextMenuState {
@@ -401,9 +413,9 @@ pub fn on_scene_click_checkpoint(
     }
 
     let Ok(vessel_prim) = vessels.q_prim.get(vessel) else {
-        warn!(
-            "[waypoint] target vessel {:?} is not a USD prim; cannot author a mission for it",
-            vessel
+        report_waypoint_failure(
+            &mut commands,
+            format!("Target vessel {vessel:?} is not a USD prim; its mission cannot be authored"),
         );
         return;
     };
@@ -472,7 +484,7 @@ pub fn on_scene_click_checkpoint(
     let xml = match append_waypoint_leaf(current, &wp_coord_str) {
         Ok(xml) => xml,
         Err(err) => {
-            warn!("[waypoint] not adding a checkpoint: {err}");
+            report_waypoint_failure(&mut commands, format!("Could not add waypoint: {err}"));
             return;
         }
     };
@@ -630,9 +642,9 @@ pub fn on_scene_click_place_waypoint(
     // from the route that names this waypoint, rather than from an entity captured
     // when the menu was open.
     let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
-        warn!(
-            "[waypoint] placement failed: no vessel's mission names '{}'",
-            pending.coord_key
+        report_waypoint_failure(
+            &mut commands,
+            format!("No vessel mission refers to '{}'", pending.coord_key),
         );
         return;
     };
@@ -643,7 +655,10 @@ pub fn on_scene_click_place_waypoint(
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
     let Some(host) = doc_ctx.usd_registry.host(doc) else {
-        warn!("[waypoint] placement failed: no USD host for document {doc:?}");
+        report_waypoint_failure(
+            &mut commands,
+            format!("No USD authoring host exists for document {doc:?}"),
+        );
         return;
     };
     let (new_target, mut ops) = author_marker_ops(host, &root, world, &canonical, vessel_prim);
@@ -666,7 +681,7 @@ pub fn on_scene_click_place_waypoint(
                 ops,
             });
         }
-        Err(err) => warn!("[waypoint] placement failed: {err}"),
+        Err(err) => report_waypoint_failure(&mut commands, format!("Placement failed: {err}")),
     }
 }
 
@@ -792,7 +807,9 @@ pub fn draw_waypoint_context_menu(
                             // nothing".
                             deleted_marker = Some(marker_target.clone());
                         }
-                        Err(err) => warn!("[waypoint] delete failed: {err}"),
+                        Err(err) => {
+                            report_waypoint_failure(&mut commands, format!("Delete failed: {err}"))
+                        }
                     }
                     open = false;
                 }
@@ -809,7 +826,10 @@ pub fn draw_waypoint_context_menu(
                     if resp.changed() {
                         match set_waypoint_dwell(&xml.0, &marker_target, dwell) {
                             Ok(new_xml) => edited = Some(new_xml),
-                            Err(err) => warn!("[waypoint] dwell failed: {err}"),
+                            Err(err) => report_waypoint_failure(
+                                &mut commands,
+                                format!("Dwell update failed: {err}"),
+                            ),
                         }
                     }
                 })
@@ -827,7 +847,10 @@ pub fn draw_waypoint_context_menu(
                 {
                     match set_route_smooth(&xml.0, smooth) {
                         Ok(new_xml) => edited = Some(new_xml),
-                        Err(err) => warn!("[waypoint] smooth toggle failed: {err}"),
+                        Err(err) => report_waypoint_failure(
+                            &mut commands,
+                            format!("Path smoothing update failed: {err}"),
+                        ),
                     }
                 }
             });
@@ -1175,15 +1198,6 @@ pub fn draw_waypoint_overlay(
         let is_selected = Some(vessel) == primary_selected;
         let focused = is_possessed || is_selected;
 
-        // TODO(theme): migrate to lunco-theme once the token set covers this.
-        // Route-line colour, selected vs unselected vessel. Currently dead (the
-        // path is 3D geometry now — see the NOTE below), so the selected/dimmed
-        // pair wants deciding alongside whatever replaces it.
-        let line_color = if is_selected {
-            egui::Color32::from_rgb(51, 242, 128) // bright green
-        } else {
-            egui::Color32::from_rgb(102, 128, 102) // dim green
-        };
         let label_color = theme.tokens.text;
 
         let targets = route_targets(xml, spec);
@@ -1247,8 +1261,6 @@ pub fn draw_waypoint_overlay(
         // as a buggy, overlapping gizmo. The path is real 3D geometry instead — see
         // `sync_waypoint_path_mesh`, which builds a ground-hugging ribbon that occludes
         // correctly. Only the NUMBER labels stay in egui, where screen-space is right.
-        let _ = line_color;
-
         // Draw labels above each waypoint.
         for wp in &wp_screens {
             let scale = (30.0 / wp.distance.max(1.0) as f32).clamp(0.4, 2.5);
@@ -1269,26 +1281,28 @@ pub fn draw_waypoint_overlay(
                 format!("{}", wp.index + 1)
             };
             let font = egui::FontId::proportional(font_size);
-            let tc = egui::Color32::from_rgba_unmultiplied(
-                if wp.visited { 80 } else { label_color.r() },
-                if wp.visited { 240 } else { label_color.g() },
-                if wp.visited { 140 } else { label_color.b() },
-                alpha,
-            );
+            let label = if wp.visited {
+                theme.tokens.success
+            } else {
+                label_color
+            };
+            let tc = egui::Color32::from_rgba_unmultiplied(label.r(), label.g(), label.b(), alpha);
 
             let galley = painter.layout_no_wrap(text, font, tc);
             let size = galley.size();
             let top_left = wp.screen - egui::vec2(size.x * 0.5, size.y + 8.0);
 
             let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
-            // TODO(theme): migrate to lunco-theme once the token set covers this.
-            // Distance-faded chip behind a waypoint number over the 3D scene.
-            // `overlay_backdrop` is the nearest token but carries its own fixed
-            // alpha, which this needs to modulate per-waypoint.
+            let backdrop = theme.tokens.overlay_backdrop;
             painter.rect_filled(
                 bg,
                 3.0,
-                egui::Color32::from_black_alpha((180.0 * fade) as u8),
+                egui::Color32::from_rgba_unmultiplied(
+                    backdrop.r(),
+                    backdrop.g(),
+                    backdrop.b(),
+                    (f32::from(backdrop.a()) * fade) as u8,
+                ),
             );
             painter.galley(top_left, galley, tc);
         }
@@ -1499,7 +1513,7 @@ fn composed_prim_exists(
 /// yields and the player's input is silently swallowed — the rover just keeps driving
 /// its route while you press the keys. Taking the wheel is the universal expectation
 /// for an autopilot, so it is an implicit disengage rather than a separate hotkey
-/// (KeyF still toggles explicitly).
+/// (the canonical Action intent still toggles explicitly).
 ///
 /// Keyed off the vessel's `ActionState<UserIntent>` — the DATA keymap
 /// (`assets/config/keybindings.json`) — not hardcoded WASD, so a rebound control
@@ -1540,7 +1554,7 @@ pub fn manual_input_disengages_autopilot(
         }
         info!("[autopilot] manual drive input — disengaging and handing control back");
         commands.trigger(lunco_autopilot::DisengageAutopilot { vessel });
-        // Reclaim ownership for the player, exactly as the KeyF toggle does —
+        // Reclaim ownership for the player, exactly as the Action intent does —
         // otherwise the vessel is left unowned and the input still goes nowhere.
         if let Ok(gid) = q_gid.get(vessel) {
             let _ = registry.claim(SessionId::LOCAL, gid.get());
@@ -1548,23 +1562,26 @@ pub fn manual_input_disengages_autopilot(
     }
 }
 
-/// System that toggles autopilot driving state for the possessed vessel on KeyF press.
-pub fn handle_autopilot_toggle_hotkey(
-    keys: Res<ButtonInput<KeyCode>>,
+/// Toggle autopilot for the possessed vessel through the canonical Action
+/// intent. The configured F and Space defaults therefore behave identically,
+/// and rebinding `action` requires no editor-side code change.
+pub fn handle_autopilot_toggle_intent(
     egui_focus: Res<EguiFocus>,
-    avatars: Query<Entity, With<Avatar>>,
+    avatars: Query<(Entity, &IntentState), With<Avatar>>,
     q_link: Query<&ControllerLink>,
     mut commands: Commands,
 ) {
     if egui_focus.wants_keyboard {
         return;
     }
-    if keys.just_pressed(KeyCode::KeyF) {
-        if let Some(av) = avatars.iter().next() {
-            if let Ok(link) = q_link.get(av) {
-                let vessel = link.vessel_entity;
-                commands.trigger(ToggleAutopilot { vessel });
-            }
+    if let Some((avatar, _)) = avatars
+        .iter()
+        .find(|(_, intent)| intent.just_pressed(&UserIntent::Action))
+    {
+        if let Ok(link) = q_link.get(avatar) {
+            commands.trigger(ToggleAutopilot {
+                vessel: link.vessel_entity,
+            });
         }
     }
 }

@@ -19,6 +19,36 @@
 use bevy::prelude::*;
 use openusd::{sdf, usd};
 
+/// Pedagogical contract authored by the lesson.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LessonFormat {
+    Tour,
+    Exercise,
+}
+
+impl LessonFormat {
+    fn read(prim: &usd::Prim, path: &str, failures: &mut Vec<String>) -> Option<Self> {
+        match text(prim, "lunco:tutorial:format").as_deref() {
+            Some("tour") => Some(Self::Tour),
+            Some("exercise") => Some(Self::Exercise),
+            Some(other) => {
+                failures.push(format!(
+                    "lesson '{path}' has unknown tutorial format '{other}'"
+                ));
+                None
+            }
+            None => Some(Self::Exercise),
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Tour => "tour",
+            Self::Exercise => "exercise",
+        }
+    }
+}
+
 /// One lesson, as composed.
 #[derive(Clone, Debug)]
 pub struct Lesson {
@@ -31,6 +61,7 @@ pub struct Lesson {
     pub title: String,
     pub blurb: String,
     pub difficulty: String,
+    pub format: LessonFormat,
     /// `info:sourceAsset` — the `.rhai`, as an asset path (`lunco://…`, `twin://…`).
     pub script: String,
     /// The `payload` arc's asset path, or `None` when the lesson DECLARES it has
@@ -151,6 +182,9 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
                     payloads.len()
                 ));
             }
+            let Some(format) = LessonFormat::read(&prim, &path, &mut out.failures) else {
+                continue;
+            };
             out.lessons.push(Lesson {
                 world: payloads.into_iter().next(),
                 next: prim
@@ -161,6 +195,7 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
                 title: text(&prim, "lunco:tutorial:title").unwrap_or_else(|| path.clone()),
                 blurb: text(&prim, "lunco:tutorial:blurb").unwrap_or_default(),
                 difficulty: text(&prim, "lunco:tutorial:difficulty").unwrap_or_default(),
+                format,
                 first_start: flag(&prim, "lunco:tutorial:firstStart"),
                 track: track_path.clone(),
                 path,

@@ -97,6 +97,32 @@ pub enum UserIntent {
     /// lives in the same input map so the binding is data-driven and rebinding
     /// does not leave the waypoint tool with a private raw-key path.
     PlaceWaypoint,
+    /// Delete the current editor selection. This is an editor intent so the
+    /// shortcut is rebindable and panels do not inspect raw keyboard state.
+    DeleteSelection,
+}
+
+impl std::fmt::Display for UserIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::MoveForward => "Move forward",
+            Self::MoveBackward => "Move backward",
+            Self::MoveLeft => "Move left",
+            Self::MoveRight => "Move right",
+            Self::MoveUp => "Move up",
+            Self::MoveDown => "Move down",
+            Self::Look => "Look",
+            Self::Zoom => "Zoom",
+            Self::Action => "Primary action",
+            Self::Release => "Release coupling",
+            Self::SwitchMode => "Switch camera mode",
+            Self::Pause => "Pause simulation",
+            Self::Cancel => "Cancel current tool",
+            Self::PlaceWaypoint => "Place waypoint",
+            Self::DeleteSelection => "Delete selection",
+        };
+        f.write_str(label)
+    }
 }
 
 /// Alias for the leafwing ActionState using our [UserIntent] enum.
@@ -169,6 +195,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "pause" => Some(UserIntent::Pause),
         "cancel" => Some(UserIntent::Cancel),
         "place_waypoint" => Some(UserIntent::PlaceWaypoint),
+        "delete_selection" => Some(UserIntent::DeleteSelection),
         _ => None,
     }
 }
@@ -661,6 +688,8 @@ mod tests {
             ("switch_mode", UserIntent::SwitchMode),
             ("pause", UserIntent::Pause),
             ("cancel", UserIntent::Cancel),
+            ("place_waypoint", UserIntent::PlaceWaypoint),
+            ("delete_selection", UserIntent::DeleteSelection),
         ] {
             assert_eq!(parse_user_intent(name), Some(expected), "{name}");
         }

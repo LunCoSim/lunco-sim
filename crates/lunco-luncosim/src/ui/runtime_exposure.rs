@@ -52,7 +52,7 @@ pub(crate) struct RuntimeUiAction {
     /// Closed semantic action authored by the surface adapter.
     pub action: RuntimeUiActionKind,
     /// The retained HTML entity that emitted the action.
-    pub source: Entity,
+    pub source: Option<Entity>,
 }
 
 /// Bind one HUI callback name to a semantic runtime action.
@@ -64,7 +64,10 @@ pub(crate) fn register_action(
     functions.register(
         callback,
         move |In(source): In<Entity>, mut commands: Commands| {
-            commands.trigger(RuntimeUiAction { action, source });
+            commands.trigger(RuntimeUiAction {
+                action,
+                source: Some(source),
+            });
         },
     );
 }
@@ -863,6 +866,7 @@ pub(crate) fn apply_runtime_ui_exposures(
     gates: Option<Res<RuntimeUiGates>>,
     rects: Option<Res<PanelRects>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    theme: Option<Res<lunco_theme::Theme>>,
     mut roots: Query<(
         Entity,
         &mut RuntimeUiSurface,
@@ -884,6 +888,7 @@ pub(crate) fn apply_runtime_ui_exposures(
 
     let layout_changed = layout.as_ref().is_some_and(|layout| layout.is_changed());
     let gates_changed = gates.as_ref().is_some_and(|gates| gates.is_changed());
+    let theme_changed = theme.as_ref().is_some_and(|theme| theme.is_changed());
     let window = windows.iter().next();
 
     for (entity, mut surface, mut node, mut visibility, properties, existing_style, target) in
@@ -894,6 +899,7 @@ pub(crate) fn apply_runtime_ui_exposures(
         if surface.applied_revision == exposures.revision
             && !layout_changed
             && !gates_changed
+            && !theme_changed
             && !placement_changed
         {
             continue;
@@ -951,6 +957,14 @@ pub(crate) fn apply_runtime_ui_exposures(
         let mut properties_changed = false;
         let mut style = existing_style.cloned().unwrap_or_default();
         let mut style_changed = false;
+        let default_theme;
+        let theme = if let Some(theme) = theme.as_deref() {
+            theme
+        } else {
+            default_theme = lunco_theme::Theme::dark();
+            &default_theme
+        };
+        apply_runtime_theme(theme, &mut style, &mut style_changed);
         if surface.bindings.is_empty() {
             for (name, value) in &exposure.properties {
                 apply_runtime_ui_property(
@@ -995,6 +1009,41 @@ pub(crate) fn apply_runtime_ui_exposures(
         }
         surface.applied_revision = exposures.revision;
     }
+}
+
+fn apply_runtime_theme(theme: &lunco_theme::Theme, style: &mut InlineStyle, changed: &mut bool) {
+    let tokens = &theme.tokens;
+    let values = [
+        ("--panel-background", css_color(tokens.overlay_backdrop)),
+        ("--panel-border", css_color(tokens.overlay_border)),
+        ("--panel-inner", css_color(tokens.surface_sunken)),
+        ("--button-background", css_color(tokens.surface_raised)),
+        ("--button-border", css_color(tokens.surface_raised_border)),
+        ("--text-color", css_color(tokens.text)),
+        ("--muted-color", css_color(tokens.text_subdued)),
+        ("--accent-color", css_color(tokens.accent)),
+        ("--active-text-color", css_color(tokens.surface_sunken)),
+        ("--ok-color", css_color(tokens.success)),
+        ("--caution-color", css_color(tokens.warning)),
+        ("--warm-color", css_color(tokens.warning)),
+        ("--danger-color", css_color(tokens.error)),
+    ];
+    for (name, value) in values {
+        if style.get(name) != Some(value.as_str()) {
+            style.set(name, value);
+            *changed = true;
+        }
+    }
+}
+
+fn css_color(color: egui::Color32) -> String {
+    format!(
+        "rgba({}, {}, {}, {:.3})",
+        color.r(),
+        color.g(),
+        color.b(),
+        f32::from(color.a()) / 255.0
+    )
 }
 
 /// Apply the manifest rectangle after HUI has finished replacing the template
@@ -1144,7 +1193,11 @@ fn resolve_placement(
             width,
             height,
         } => {
-            let size = Vec2::new(width.max(1.0), height.max(1.0));
+            // A manifest window is a preferred logical size, not permission to
+            // escape the render target. Shrink it to the live target and clamp
+            // its anchored origin so every authored control remains reachable
+            // after a resize, on a small display, or under a larger DPI scale.
+            let size = Vec2::new(width.max(1.0), height.max(1.0)).min(window_size);
             let base = match anchor {
                 RuntimeUiWindowAnchor::TopLeft => Vec2::ZERO,
                 RuntimeUiWindowAnchor::TopCenter => Vec2::new((window_size.x - size.x) * 0.5, 0.0),
@@ -1157,8 +1210,10 @@ fn resolve_placement(
                     Vec2::new(window_size.x - size.x, window_size.y - size.y)
                 }
             };
+            let max_origin = (window_size - size).max(Vec2::ZERO);
+            let origin = (base + *offset).clamp(Vec2::ZERO, max_origin);
             Some(ResolvedRuntimeUiPlacement {
-                rect: egui::Rect::from_min_size(egui_pos2(base + *offset), egui_vec2(size)),
+                rect: egui::Rect::from_min_size(egui_pos2(origin), egui_vec2(size)),
             })
         }
     }
@@ -1274,6 +1329,46 @@ mod tests {
 
         assert_eq!(resolved.rect.min, egui::pos2(465.0, 50.0));
         assert_eq!(resolved.rect.size(), egui::vec2(350.0, 58.0));
+    }
+
+    #[test]
+    fn oversized_window_surface_is_shrunk_and_kept_reachable() {
+        let window = Window {
+            resolution: bevy::window::WindowResolution::new(320, 180),
+            ..Default::default()
+        };
+        let placement = RuntimeUiPlacement::Window {
+            anchor: RuntimeUiWindowAnchor::TopCenter,
+            offset: Vec2::new(0.0, 34.0),
+            width: 900.0,
+            height: 232.0,
+        };
+        let resolved = resolve_placement(&placement, None, None, Some(&window)).unwrap();
+
+        assert_eq!(
+            resolved.rect,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(320.0, 180.0))
+        );
+    }
+
+    #[test]
+    fn authored_window_offset_cannot_push_surface_offscreen() {
+        let window = Window {
+            resolution: bevy::window::WindowResolution::new(320, 180),
+            ..Default::default()
+        };
+        let placement = RuntimeUiPlacement::Window {
+            anchor: RuntimeUiWindowAnchor::BottomRight,
+            offset: Vec2::new(400.0, -400.0),
+            width: 120.0,
+            height: 80.0,
+        };
+        let resolved = resolve_placement(&placement, None, None, Some(&window)).unwrap();
+
+        assert!(resolved.rect.min.x >= 0.0);
+        assert!(resolved.rect.min.y >= 0.0);
+        assert!(resolved.rect.max.x <= 320.0);
+        assert!(resolved.rect.max.y <= 180.0);
     }
 
     #[test]

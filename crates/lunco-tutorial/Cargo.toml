@@ -14,6 +14,7 @@ lunco-core = { path = "../lunco-core" }
 # `Panel` / `PanelCtx` / `WorkbenchAppExt::register_panel` for the launcher,
 # and `TutorialHud` to clear the HUD on skip.
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
 # `ApiCommandEvent` — the fidelity toggle & notifications dispatch generically.
 # `default-features = false` is LOAD-BEARING — lunco-api's defaults include its
 # `render` feature (→ bevy_render → wgpu/naga), and cargo unifies features across
@@ -45,7 +46,7 @@ serde_json = { workspace = true }
 default = ["ui"]
 # The launcher menu, panel, HUD cleanup, and confirmation popup.  Lesson
 # execution itself remains available to headless simulation hosts.
-ui = ["dep:bevy_egui", "dep:lunco-workbench"]
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme"]
 
 [lints]
 workspace = true

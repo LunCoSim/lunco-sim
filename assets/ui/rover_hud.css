@@ -4,16 +4,9 @@
  * BackgroundColor, or TextColor after the template is built.
  */
 @import "ui/runtime_fonts.css";
+@import "ui/runtime_theme.css";
 
 :root {
-  --panel-background: rgba(24, 24, 37, 0.92);
-  --panel-border: rgba(127, 212, 255, 0.55);
-  --text-color: rgba(205, 214, 244, 1);
-  --muted-color: rgba(166, 173, 200, 1);
-  --accent-color: rgba(127, 212, 255, 1);
-  --ok-color: rgba(166, 227, 161, 1);
-  --caution-color: rgba(249, 226, 175, 1);
-  --danger-color: rgba(243, 139, 168, 1);
   --ui-tilt-color: var(--ok-color);
   --ui-comms-color: var(--muted-color);
   --ui-power-color: var(--ok-color);
@@ -73,7 +66,7 @@
 #rover-hud-power-label,
 #rover-hud-thermal-label {
   color: var(--muted-color);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 #rover-hud-label {
@@ -115,7 +108,7 @@
 #rover-hud-power-value,
 #rover-hud-thermal-value {
   color: var(--ui-tilt-color);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -124,7 +117,7 @@
 #rover-hud-power-detail,
 #rover-hud-thermal-detail {
   color: var(--muted-color);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 #rover-hud-tilt-track {
@@ -181,13 +174,13 @@
 #rover-hud-power-detail,
 #rover-hud-thermal-detail {
   color: var(--text-color);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 #rover-hud-autopilot {
   display: var(--ui-autopilot-display);
   color: var(--ok-color);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 

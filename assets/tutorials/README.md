@@ -52,6 +52,7 @@ own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
        string lunco:tutorial:title = "My Lesson"
        string lunco:tutorial:blurb = "…"
        uniform token lunco:tutorial:difficulty = "beginner"
+       uniform token lunco:tutorial:format = "exercise" # or "tour"
        uniform bool lunco:tutorial:firstStart = false   # true = onboarding entry
        rel lunco:tutorial:next = </Sandbox/NextLesson>  # omit to end the chain
    }

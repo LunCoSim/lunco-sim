@@ -26,6 +26,7 @@ def Scope "LunCoSim" (
         string lunco:tutorial:title = "01 · Read the Sim UI"
         string lunco:tutorial:blurb = "Review the scene, entity, telemetry, inspector, command and time controls before touching the simulation."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         uniform bool lunco:tutorial:firstStart = true
         rel lunco:tutorial:next = </LunCoSim/Controls>
     }
@@ -39,6 +40,7 @@ def Scope "LunCoSim" (
         string lunco:tutorial:title = "02 · Authority Handoff"
         string lunco:tutorial:blurb = "Take control of a rover through the Command Deck, verify the live state, then release it back to the simulation."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Basic/MoonDrivingBasics>
     }
 }

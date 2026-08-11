@@ -1,14 +1,7 @@
 @import "ui/runtime_fonts.css";
+@import "ui/runtime_theme.css";
 
 :root {
-  --panel-background: rgba(18, 22, 36, 0.97);
-  --panel-border: rgba(127, 212, 255, 0.72);
-  --text-color: rgba(224, 230, 250, 1);
-  --muted-color: rgba(166, 173, 200, 1);
-  --accent-color: rgba(127, 212, 255, 1);
-  --active-text-color: rgba(18, 22, 36, 1);
-  --button-background: rgba(49, 57, 83, 0.94);
-  --button-border: rgba(166, 173, 200, 0.28);
   --ui-surface-background: var(--button-background);
   --ui-surface-color: var(--muted-color);
   --ui-moon-display: none;
@@ -64,7 +57,7 @@
   border-radius: 7px;
   color: var(--muted-color);
   background-color: var(--button-background);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 

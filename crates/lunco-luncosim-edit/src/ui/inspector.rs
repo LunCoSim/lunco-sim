@@ -33,6 +33,18 @@ use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 
+fn report_inspector_error(world: &mut World, message: impl Into<String>) {
+    let message = message.into();
+    warn!("[inspector] {message}");
+    world.trigger(lunco_core::TelemetryEvent {
+        name: "inspector-edit-failed".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(message),
+        timestamp: 0.0,
+    });
+}
+
 #[derive(Event, Clone, Copy, Debug)]
 pub(crate) enum InspectorComponentEdit {
     Mass {
@@ -1039,22 +1051,27 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 // the selection), so it was a second delete path that the command bus — and hence the
 // API, the journal and networked peers — never saw. The Inspector triggers the command.
 
-fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    // Delete hotkey
-    if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-        let primary = ctx.resource::<SelectedEntities>().and_then(|s| s.primary());
-        if let Some(entity) = primary {
-            // The typed verb — despawns, drops the selection, AND authors the
-            // `RemovePrim`, so the delete persists, journals, replicates, and
-            // undoes (Ctrl+Z).
-            ctx.trigger(crate::commands::DeleteEntity {
-                target: entity,
-                intent: lunco_core::EditIntent::Persistent,
-            });
-            return;
-        }
+/// Delete the selected entity through the same typed command as the Inspector
+/// button. The shortcut comes from `UserIntent::DeleteSelection`, so it remains
+/// rebindable and never fires while an egui field or cursor tool owns input.
+pub fn delete_selected_on_intent(
+    delete: lunco_core::DeleteSelectionIntent,
+    cursor_mode: lunco_core::CursorModeActive,
+    selected: Res<SelectedEntities>,
+    mut commands: Commands,
+) {
+    if !delete.just_pressed() || cursor_mode.any() {
+        return;
     }
+    if let Some(target) = selected.primary() {
+        commands.trigger(crate::commands::DeleteEntity {
+            target,
+            intent: lunco_core::EditIntent::Persistent,
+        });
+    }
+}
 
+fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
     // system (the single mutation path), not here.
 
@@ -1138,6 +1155,16 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         let Some(gid) = ctx.get::<lunco_core::GlobalEntityId>(entity).copied()
                         else {
                             warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
+                            ctx.trigger(lunco_core::TelemetryEvent {
+                                name: "inspector-move-failed".to_string(),
+                                source: 0,
+                                severity: lunco_core::Severity::Error,
+                                data: lunco_core::TelemetryValue::String(
+                                    "The selected object has no stable entity identity and cannot be moved"
+                                        .to_string(),
+                                ),
+                                timestamp: 0.0,
+                            });
                             return;
                         };
                         ctx.trigger(crate::commands::MoveEntity {
@@ -1577,7 +1604,9 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                     (Some(part), Some(leaf), Some(placement), Some(rotate)) => {
                         ui.horizontal(|ui| {
                             let btn = egui::Button::new(format!("⟳ Snap {leaf}"));
-                            let resp = ui.add_enabled(!item.aligned, btn);
+                            let resp = ui.add_enabled(!item.aligned, btn).on_disabled_hover_text(
+                                "This part is already aligned to its socket",
+                            );
                             if resp.clicked() {
                                 snap = Some((
                                     part.clone(),
@@ -1669,17 +1698,24 @@ fn attach_component_at_socket(
         .cloned()
         .unwrap_or_default();
     let Some(fs_path) = schemes.local_path(&asset) else {
-        bevy::log::warn!("[mount] `{asset}` resolves to no local file; attach skipped");
+        report_inspector_error(
+            world,
+            format!("Mount asset `{asset}` resolves to no local file; attach was skipped"),
+        );
         return;
     };
     let Some(plug) = lunco_usd_bevy::mount::read_asset_plug_frame(&fs_path) else {
-        bevy::log::warn!(
-            "[mount] no plug frame in asset `{asset}` ({}); attach skipped",
-            fs_path.display()
+        report_inspector_error(
+            world,
+            format!(
+                "Mount asset `{asset}` ({}) has no plug frame; attach was skipped",
+                fs_path.display()
+            ),
         );
         return;
     };
     let Some(doc) = resolve_doc_for_entity(world, entity) else {
+        report_inspector_error(world, "Selected mount host is not document-backed");
         return;
     };
     let spec = AttachSpec::from_mount(
@@ -2052,7 +2088,9 @@ fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             }
             draw_slope_legend(ui, p.safe_deg, p.cliff_deg);
         }
-    });
+    })
+    .response
+    .on_disabled_hover_text("Enable Analysis overlay to edit its visualization");
     if p != cur {
         ctx.resource_scope(|_c, r: &mut TerrainOverlayParams| *r = p);
     }
@@ -2093,13 +2131,16 @@ fn draw_slope_legend(ui: &mut egui::Ui, safe_deg: f32, cliff_deg: f32) {
     // Tick marks at the two critical angles.
     for deg in [safe_deg, cliff_deg] {
         let x = rect.left() + rect.width() * (deg / MAX_DEG).clamp(0.0, 1.0);
+        let sample = hazard.sample(deg.to_radians());
+        let luminance = 0.2126 * sample[0] + 0.7152 * sample[1] + 0.0722 * sample[2];
+        let tick = if luminance > 0.45 {
+            egui::Color32::BLACK
+        } else {
+            egui::Color32::WHITE
+        };
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            // TODO(theme): migrate to lunco-theme once the token set covers this.
-            // Tick mark drawn ON TOP of the data-derived hazard gradient, so it
-            // must contrast with an arbitrary sampled colour rather than with a
-            // theme surface — `tokens.text` is not automatically safe here.
-            egui::Stroke::new(1.0, egui::Color32::WHITE),
+            egui::Stroke::new(1.0, tick),
         );
     }
     ui.horizontal(|ui| {
@@ -2465,6 +2506,17 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
 /// already had (the render binder swaps the material). Runs in the typed
 /// request observer after the egui pass.
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
+    let Some(shader_prim) = bound_shader_prim_path(world, part) else {
+        report_inspector_error(
+            world,
+            "This prim has no bound Material with a Shader child; the shader was not changed",
+        );
+        return;
+    };
+    let Some(doc) = resolve_doc_for_entity(world, part) else {
+        report_inspector_error(world, "Selected shader target is not document-backed");
+        return;
+    };
     let mut look = world.get::<ShaderLook>(part).cloned().unwrap_or_default();
     look.shader = path.to_string();
     world
@@ -2486,22 +2538,16 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     // The TYPE is the schema's, and writer and reader must agree on it, not just on the
     // name: an `asset` reads back as `Value::AssetPath`, and a loader asking for a
     // `String` gets `None`.
-    if let Some(shader_prim) = bound_shader_prim_path(world, part) {
-        apply_usd_path_attribute_change(
-            world,
-            part,
-            shader_prim,
-            "info:wgsl:sourceAsset",
-            "asset",
-            format!("@{}@", path),
-        );
-    } else {
-        warn!(
-            "[inspector] this prim is bound to no material, so there is no shader to \
-             repoint. Bind it to a `Material` (with a `Shader` child) and the picker \
-             will edit that."
-        );
-    }
+    world.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: shader_prim,
+            name: "info:wgsl:sourceAsset".to_string(),
+            type_name: "asset".to_string(),
+            value: format!("@{}@", path),
+        },
+    });
 }
 
 /// The USD path of the `Shader` prim behind `part`'s bound material, if it has one:
@@ -2579,6 +2625,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     !st.name.trim().is_empty(),
                     egui::Button::new("Create & apply"),
                 )
+                .on_disabled_hover_text("Enter a shader name first")
                 .clicked()
             {
                 let name = st.name.clone();
@@ -2604,6 +2651,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     !st.import.trim().is_empty(),
                     egui::Button::new("Import & apply"),
                 )
+                .on_disabled_hover_text("Enter the path of a .wgsl file first")
                 .clicked()
             {
                 let src = st.import.trim().to_string();

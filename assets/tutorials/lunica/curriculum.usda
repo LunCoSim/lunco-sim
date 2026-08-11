@@ -30,6 +30,7 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "Lunica Overview"
         string lunco:tutorial:blurb = "A 90-second guided tour of the whole workbench — start here."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         uniform bool lunco:tutorial:firstStart = true
         rel lunco:tutorial:next = </Lunica/Workspace>
     }
@@ -42,6 +43,7 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "1 · Your Workspace"
         string lunco:tutorial:blurb = "Twins, the browser, read-only libraries, and learning paths."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Model>
     }
 
@@ -53,6 +55,7 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "2 · Open & View a Model"
         string lunco:tutorial:blurb = "The four views (Text/Diagram/Icon/Docs) + graphical composition."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Run>
     }
 
@@ -64,6 +67,7 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "3 · Compile & Run"
         string lunco:tutorial:blurb = "Interactive vs Fast Run, and driving inputs live."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Experiments>
     }
 
@@ -75,6 +79,7 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "4 · Experiments & Sweeps"
         string lunco:tutorial:blurb = "Override parameters and sweep them without editing source."
         uniform token lunco:tutorial:difficulty = "intermediate"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Plots>
     }
 
@@ -86,6 +91,7 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "5 · Plots & Results"
         string lunco:tutorial:blurb = "Reading a run: graphs, diagnostics, and the console."
         uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Scripting>
     }
 
@@ -97,5 +103,6 @@ def Scope "Lunica" (
         string lunco:tutorial:title = "6 · Automate (API + MCP)"
         string lunco:tutorial:blurb = "Drive the workbench from scripts, the HTTP API, and MCP."
         uniform token lunco:tutorial:difficulty = "intermediate"
+        uniform token lunco:tutorial:format = "tour"
     }
 }

@@ -719,6 +719,28 @@ impl CancelIntent<'_, '_> {
     }
 }
 
+/// "Delete the current selection" — the rebindable
+/// [`UserIntent::DeleteSelection`] editor intent.
+///
+/// Like [`CancelIntent`], it stands down while egui owns keyboard focus so a
+/// focused text editor receives Delete normally.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct DeleteSelectionIntent<'w, 's> {
+    avatars: Query<'w, 's, &'static IntentState, With<Avatar>>,
+    egui_focus: Res<'w, EguiFocus>,
+}
+
+impl DeleteSelectionIntent<'_, '_> {
+    /// True on the frame the user requested deletion.
+    pub fn just_pressed(&self) -> bool {
+        !self.egui_focus.wants_keyboard
+            && self
+                .avatars
+                .iter()
+                .any(|intent| intent.just_pressed(&UserIntent::DeleteSelection))
+    }
+}
+
 /// True while a waypoint's right-click context menu is open.
 ///
 /// Read by avatar mouse-look to hold the camera still while the pointer is

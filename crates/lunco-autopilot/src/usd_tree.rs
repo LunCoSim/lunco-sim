@@ -1230,7 +1230,7 @@ mod editor_tests {
         }
     }
 
-    /// Pure appends are the case the editor creates (Ctrl+LMB while the rover
+    /// Pure appends are the case the editor creates (PlaceWaypoint + LMB while the rover
     /// runs) — the tree must rebuild and RESUME, not reset and not ignore.
     #[test]
     fn append_only_detects_new_legs_at_the_end() {

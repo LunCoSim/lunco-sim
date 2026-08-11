@@ -47,8 +47,8 @@ use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
 use projection::{
-    build_scene, collect_graph, project_schema, UsdPrimNodeData, UsdWireData, WireKind, EDGE_KIND,
-    NODE_KIND,
+    build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,
+    UsdWireData, Wire, WireKind, EDGE_KIND, NODE_KIND,
 };
 
 pub const USD_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canvas");
@@ -95,6 +95,12 @@ pub struct UsdCanvasState {
     /// the panel's first render, which alone knows the real widget size (the
     /// producer only has a nominal guess).
     needs_fit: bool,
+    /// Complete collected topology retained so changing the active authored
+    /// schema root is a presentation operation, not a stage reload.
+    source_nodes: Vec<PrimNode>,
+    source_wires: Vec<Wire>,
+    schema_roots: Vec<String>,
+    active_schema_root: Option<String>,
 }
 
 impl Default for UsdCanvasState {
@@ -113,6 +119,10 @@ impl Default for UsdCanvasState {
             topo_hash: 0,
             built: false,
             needs_fit: false,
+            source_nodes: Vec::new(),
+            source_wires: Vec::new(),
+            schema_roots: Vec::new(),
+            active_schema_root: None,
         }
     }
 }
@@ -195,14 +205,31 @@ pub fn produce_usd_canvas(
         .map(|p| p.path.clone())
         .collect();
     let view = cs.view();
-    let (nodes, wires) = collect_graph(&view, &prim_paths);
-    // The Schema perspective is an explicit authored boundary projection. The
+    let (source_nodes, source_wires) = collect_graph(&view, &prim_paths);
+    let roots = schema_roots(&source_nodes);
+    let active_root = state
+        .active_schema_root
+        .as_ref()
+        .filter(|root| roots.contains(root))
+        .cloned()
+        .or_else(|| roots.first().cloned());
+    // The Connections perspective is an explicit authored boundary projection. The
     // collector above remains complete so the same USD topology stays
     // available to simulation, diagnostics, and future full-graph views.
-    let (nodes, wires) = project_schema(nodes, wires);
+    let (nodes, wires) = active_root
+        .as_deref()
+        .map(|root| project_schema(source_nodes.clone(), source_wires.clone(), root))
+        .unwrap_or_default();
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
+        // The selected projection is unchanged, but another authored schema
+        // root may have changed on this same stage revision. Retain the fresh
+        // complete topology so switching systems never reveals stale data.
+        state.source_nodes = source_nodes;
+        state.source_wires = source_wires;
+        state.schema_roots = roots;
+        state.active_schema_root = active_root;
         return;
     }
 
@@ -219,6 +246,10 @@ pub fn produce_usd_canvas(
     // Stale NodeId/EdgeId references would point at unrelated prims in the fresh
     // scene (ids restart at 0), so drop the selection on a structural rebuild.
     state.canvas.selection.clear();
+    state.source_nodes = source_nodes;
+    state.source_wires = source_wires;
+    state.schema_roots = roots;
+    state.active_schema_root = active_root;
     state.topo_hash = hash;
     state.stage_id = Some(stage_id);
     state.built = true;
@@ -410,6 +441,61 @@ impl Panel for UsdCanvasPanel {
                 return;
             }
 
+            if state.schema_roots.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("No authored connection schema");
+                        ui.label(
+                            "This scene has no prim marked lunco:ui:schemaRoot. Connections does not substitute the complete runtime topology.",
+                        );
+                    });
+                });
+                return;
+            }
+
+            let mut requested_root = state.active_schema_root.clone().unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.label("System:");
+                egui::ComboBox::from_id_salt("usd_schema_root")
+                    .selected_text(
+                        requested_root
+                            .rsplit('/')
+                            .next()
+                            .filter(|leaf| !leaf.is_empty())
+                            .unwrap_or("Select a schema"),
+                    )
+                    .show_ui(ui, |ui| {
+                        for root in &state.schema_roots {
+                            let label = root
+                                .rsplit('/')
+                                .next()
+                                .filter(|leaf| !leaf.is_empty())
+                                .unwrap_or(root);
+                            ui.selectable_value(&mut requested_root, root.clone(), label)
+                                .on_hover_text(root);
+                        }
+                    });
+            });
+            if state.active_schema_root.as_deref() != Some(requested_root.as_str()) {
+                let (nodes, wires) = project_schema(
+                    state.source_nodes.clone(),
+                    state.source_wires.clone(),
+                    &requested_root,
+                );
+                state.canvas.scene = build_scene(nodes.clone(), wires.clone());
+                state.canvas.selection.clear();
+                state.topo_hash = topology_hash(&nodes, &wires);
+                state.active_schema_root = Some(requested_root);
+                state.needs_fit = state.canvas.scene.bounds().is_some();
+            }
+
+            if state.canvas.scene.node_count() == 0 {
+                ui.centered_and_justified(|ui| {
+                    ui.label("The selected schema root has no authored schema nodes or connections.");
+                });
+                return;
+            }
+
             // Snapshot origins + sinks BEFORE `ui` mutates the scene, so deleted
             // nodes/edges can still be resolved for their write-back op.
             let node_origin: HashMap<NodeId, String> = state
@@ -470,6 +556,16 @@ impl Panel for UsdCanvasPanel {
                         "[usd-canvas] {} edit(s) ignored — scene is not document-backed",
                         ops.len()
                     );
+                    ctx.trigger(lunco_core::TelemetryEvent {
+                        name: "usd-connection-edit-failed".to_string(),
+                        source: 0,
+                        severity: lunco_core::Severity::Error,
+                        data: lunco_core::TelemetryValue::String(
+                            "Connections cannot be edited because this scene has no authoring document"
+                                .to_string(),
+                        ),
+                        timestamp: 0.0,
+                    });
                 }
             }
         });

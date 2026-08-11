@@ -73,7 +73,7 @@ fn bad_json_is_a_clean_error() {
 fn run_tool_spec_round_trips() {
     // `run_tool` is the leaf a patrol sequence uses to fire a tool call
     // ("take photo at waypoint N"). It must round-trip through JSON so the
-    // rhai prelude / Ctrl+LMB authoring paths and `build_tree` all agree.
+    // Rhai prelude / PlaceWaypoint authoring paths and `build_tree` all agree.
     let json = r#"{"kind":"run_tool","tool":"science::take_photo","args":"{}"}"#;
     let spec = AutopilotBehaviorSpec::from_json(json).expect("run_tool spec parses");
     let out = spec.to_json().expect("serialize");

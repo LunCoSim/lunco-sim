@@ -1230,6 +1230,10 @@ class "LunCoTutorialAPI" (
         doc = "Difficulty chip. A closed set, hence `token`."
         allowedTokens = ["beginner", "intermediate", "advanced"]
     )
+    uniform token lunco:tutorial:format = "exercise" (
+        doc = "Lesson contract: `tour` is guided reference content; `exercise` completes only from observed simulator objectives."
+        allowedTokens = ["tour", "exercise"]
+    )
     uniform bool lunco:tutorial:firstStart = false (
         doc = """Whether this lesson is a track's onboarding entry, offered once
         on a user's first run. At most one lesson per track should set it."""

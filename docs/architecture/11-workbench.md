@@ -3,7 +3,8 @@
 > Status: Active · Audience: contributors building UI panels & perspectives
 >
 > How LunCoSim's user interface is organized: the workbench shell,
-> perspectives, panels, viewport, command palette, detachable windows.
+> perspectives, panels, and viewport. Command-palette and detachable-window
+> sections below are explicit future design, not current behavior.
 > Establishes the framework on top of which all domain-specific UI
 > lives.
 >
@@ -40,7 +41,8 @@
 
 A **workbench** is the application shell of a LunCoSim app — the chrome around
 the 3D world. It owns the root window layout, the perspective switcher, the
-panel registry, the command palette, keybinds, and detachable window support.
+panel registry and keybind integration. A command palette and detachable-window
+host remain planned capabilities (§7–8).
 
 Terminology mapping:
 
@@ -354,8 +356,9 @@ read it; the panel system re-renders on change.
 
 ## 7. Command palette
 
-Keyboard-invoked (Ctrl+P on Linux/Windows, Cmd+P on macOS), always
-available. Fuzzy-search across:
+**Status: planned, not implemented.** Ctrl+P/Cmd+P is intentionally unbound;
+the current discoverability surface is the menu bar, including the grouped
+View panel list and perspective switcher. The planned palette will fuzzy-search:
 
 - Actions (workspaces, menu items, panel show/hide)
 - Entities (navigate to Space System by name)
@@ -367,11 +370,12 @@ Integrates with the ontology's command schema pattern — the reflected metadata
 
 ## 8. Detachable windows
 
-Any panel can be torn out of the main window into its own OS-native
-window via drag-tab-to-outside-window (standard IDE gesture) or a tab
-context-menu "Detach" action.
+**Status: planned, not implemented.** Panels currently remain in the main
+workbench dock. There is no placeholder `PanelSlot` or compatibility path that
+pretends a panel is detached; registered panels omitted from a preset use
+`PanelSlot::Hidden` and open in the side browser through View.
 
-Implementation: **egui multi-viewport**. Each detached panel becomes a
+The intended implementation is **egui multi-viewport**. Each detached panel becomes a
 deferred viewport; the panel's `render()` runs in that viewport's egui
 context rather than the main window's. Detachment is stored in the
 layout persistence, so reopening the app restores the detach state.
