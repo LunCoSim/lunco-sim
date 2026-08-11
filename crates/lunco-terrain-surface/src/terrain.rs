@@ -2098,7 +2098,14 @@ pub(crate) fn finish_dem_restamp(
         &crate::terrain_layers::TerrainLayerStack,
         Option<&crate::terrain_layers::ScatteredContent>,
     )>,
-    scattered: Query<(Entity, &ChildOf), With<crate::terrain_layers::TerrainScatterEntity>>,
+    scattered: Query<
+        (
+            Entity,
+            &ChildOf,
+            Option<&crate::terrain_layers::ProceduralRock>,
+        ),
+        With<crate::terrain_layers::TerrainScatterEntity>,
+    >,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
 ) {
@@ -2163,9 +2170,18 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, parent) in &scattered {
+            for (scatter_entity, parent, procedural) in &scattered {
                 if parent.parent() == entity {
-                    commands.entity(scatter_entity).try_despawn();
+                    if procedural.is_some() {
+                        commands
+                            .entity(scatter_entity)
+                            .try_insert(Visibility::Hidden);
+                        commands
+                            .entity(scatter_entity)
+                            .try_remove::<(Collider, RigidBody)>();
+                    } else {
+                        commands.entity(scatter_entity).try_despawn();
+                    }
                 }
             }
             if was_pending {
@@ -2269,9 +2285,18 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, parent) in &scattered {
+            for (scatter_entity, parent, procedural) in &scattered {
                 if parent.parent() == entity {
-                    commands.entity(scatter_entity).try_despawn();
+                    if procedural.is_some() {
+                        commands
+                            .entity(scatter_entity)
+                            .try_insert(Visibility::Hidden);
+                        commands
+                            .entity(scatter_entity)
+                            .try_remove::<(Collider, RigidBody)>();
+                    } else {
+                        commands.entity(scatter_entity).try_despawn();
+                    }
                 }
             }
         }

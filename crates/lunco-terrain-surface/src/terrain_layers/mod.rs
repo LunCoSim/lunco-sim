@@ -32,6 +32,7 @@ mod shader;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use avian3d::prelude::Collider;
 use bevy::prelude::*;
 use lunco_obstacle_field::field::HeightGrid;
 
@@ -39,6 +40,7 @@ use crate::stream_viz::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
+pub(crate) use rocks::ProceduralRock;
 pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
@@ -310,6 +312,10 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     /// Boulder meshes shared across ALL rock layers on ALL terrains — a handful of
     /// meshes instead of one per placed rock. See [`SharedRockAssets`].
     pub rock_assets: &'a mut SharedRockAssets,
+    /// Reusable generated-rock entities owned by this terrain. Authored/placed
+    /// rocks never enter this pool; their entity identity is part of the authored
+    /// scene and must keep the normal rebuild lifecycle.
+    pub(crate) rock_pool: &'a mut Vec<Entity>,
 }
 
 /// The shared boulder assets every rock layer draws with.
@@ -489,19 +495,36 @@ pub(crate) fn scatter_terrain_layers(
         (Entity, &DemHeightField, &TerrainLayerStack),
         Or<(Without<TerrainLayersApplied>, With<TerrainScatterRefresh>)>,
     >,
-    scattered: Query<(Entity, &ChildOf), With<TerrainScatterEntity>>,
+    scattered: Query<(Entity, &ChildOf, Option<&ProceduralRock>), With<TerrainScatterEntity>>,
 ) {
     if q.is_empty() {
         return;
     }
     let mut meshes = meshes;
     for (entity, dem, stack) in &q {
-        // A scatter refresh deliberately keeps the height products alive. Only
-        // generated children owned by this terrain are replaced; authored scene
-        // children remain untouched because they do not carry the marker.
-        for (scatter_entity, parent) in &scattered {
+        // A scatter refresh deliberately keeps the height products alive. Generated
+        // rocks are recycled in-place; authored scene children remain untouched
+        // because they do not carry the runtime scatter marker.
+        let mut rock_pool = Vec::new();
+        for (scatter_entity, parent, procedural) in &scattered {
             if parent.parent() == entity {
-                commands.entity(scatter_entity).try_despawn();
+                if procedural.is_some() {
+                    rock_pool.push(scatter_entity);
+                    // A pooled rock must leave both render visibility and the
+                    // physics broad phase while it is unused. The scatter layer
+                    // inserts Visibility::Inherited and Collider again when it
+                    // reuses the entity.
+                    commands
+                        .entity(scatter_entity)
+                        .try_insert(Visibility::Hidden);
+                    commands
+                        .entity(scatter_entity)
+                        .try_remove::<(Collider, avian3d::prelude::RigidBody)>();
+                } else {
+                    // Placed rocks and future authored scatter retain their normal
+                    // lifecycle; pooling them would make authored identity ambiguous.
+                    commands.entity(scatter_entity).try_despawn();
+                }
             }
         }
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
@@ -526,6 +549,7 @@ pub(crate) fn scatter_terrain_layers(
             meshes: meshes.as_deref_mut(),
             asset_server: &asset_server,
             rock_assets: &mut rock_assets,
+            rock_pool: &mut rock_pool,
         };
         for entry in &stack.0 {
             entry.layer.scatter(&mut cx);
