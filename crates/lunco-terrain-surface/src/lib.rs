@@ -104,6 +104,6 @@ pub use terrain_layers::{
     edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer, EditKind, EditsLayer,
     LayerAttrSource, LayerEntry, LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt,
     TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied,
-    TerrainRock, TerrainScatterEntity, EDITS_LAYER_ID,
+    TerrainRock, TerrainScatterEntity, TerrainScatterOwner, EDITS_LAYER_ID,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

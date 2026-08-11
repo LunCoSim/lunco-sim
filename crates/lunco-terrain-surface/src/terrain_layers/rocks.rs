@@ -9,11 +9,13 @@ use avian3d::prelude::{Collider, RigidBody};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use lunco_obstacle_field::rock::faceted_rock_mesh;
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_obstacle_field::sampler::{salt, sample_layer, Placement};
 use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
 use super::{
     LayerAttrSource, LayerScatterCx, SharedRockAssets, TerrainLayer, TerrainScatterEntity,
+    TerrainScatterOwner,
 };
 
 /// One scattered rock (kept distinct from [`TerrainScatterEntity`] for selection).
@@ -27,17 +29,21 @@ pub struct TerrainRock;
 pub(crate) struct ProceduralRock;
 
 /// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
+#[cfg(not(target_arch = "wasm32"))]
 const ROCK_BUCKETS: usize = 6;
 /// Hard cap on scattered rock ENTITIES regardless of density × area. Scattering at a
 /// real per-hectare density across a 16 km DEM would be hundreds of thousands of
 /// bodies; cap the total and spread it over the whole map (LOD-culled near the
 /// camera). Camera-following rock streaming is the real fix for uniform full-map
 /// density at high counts; this gives full-map coverage cheaply meanwhile.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_ROCKS: usize = 6000;
 /// Bound the in-memory placement cache while still covering normal inspector
 /// tuning. The cache stores only XZ/size/yaw data, never ECS entities or meshes.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CACHED_ROCK_FIELDS: usize = 32;
 /// Bump when the deterministic sampler or placement interpretation changes.
+#[cfg(not(target_arch = "wasm32"))]
 const ROCK_SCATTER_CACHE_VERSION: u64 = 1;
 /// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
 /// Rocks are scattered only in a near-origin region (`region_half_extent`, ~±300 m),
@@ -129,21 +135,49 @@ struct RockScatterLayer {
     seed: u64,
 }
 
+fn hash_size_dist(h: &mut lunco_precompute::Fnv1a, size: SizeDist) {
+    h.write_u64(size.min.to_bits() as u64);
+    h.write_u64(size.mode.to_bits() as u64);
+    h.write_u64(size.max.to_bits() as u64);
+    h.write_u64(size.sigma.to_bits() as u64);
+}
+
+fn hash_pattern(h: &mut lunco_precompute::Fnv1a, pattern: Pattern) {
+    match pattern {
+        Pattern::Uniform => {
+            h.write_u64(0);
+        }
+        Pattern::PoissonDisk { min_spacing } => {
+            h.write_u64(1);
+            h.write_u64(min_spacing.to_bits() as u64);
+        }
+        Pattern::Clustered { clusters, spread } => {
+            h.write_u64(2);
+            h.write_u64(clusters as u64);
+            h.write_u64(spread.to_bits() as u64);
+        }
+    }
+}
+
+fn hash_rock_layer(h: &mut lunco_precompute::Fnv1a, rocks: RockLayer) {
+    h.write_u64(rocks.enabled as u64);
+    h.write_u64(rocks.density.to_bits() as u64);
+    hash_size_dist(h, rocks.size);
+    h.write_u64(rocks.dynamic_fraction.to_bits() as u64);
+}
+
 impl TerrainLayer for RockScatterLayer {
     fn id(&self) -> &'static str {
         "rocks"
     }
 
     fn scatter_fingerprint(&self) -> Option<u64> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        // Debug covers every nested field (RockLayer / SizeDist / Pattern), so a
-        // future param can't be silently missed. Runtime-only — never persisted.
-        format!(
-            "{:?}|{:?}|{}|{}",
-            self.rocks, self.pattern, self.region_half_extent, self.seed
-        )
-        .hash(&mut h);
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64(1); // fingerprint layout version
+        hash_rock_layer(&mut h, self.rocks);
+        hash_pattern(&mut h, self.pattern);
+        h.write_u64(self.region_half_extent.to_bits() as u64);
+        h.write_u64(self.seed);
         Some(h.finish())
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
@@ -262,15 +296,18 @@ impl TerrainLayer for RockScatterLayer {
                     entity
                 } else {
                     spawned += 1;
-                    let entity = cx.commands.spawn_empty().id();
-                    cx.commands.entity(entity).insert(ChildOf(cx.terrain));
-                    entity
+                    cx.commands.spawn_empty().id()
                 };
                 let mut rock = cx.commands.entity(entity);
-                rock.insert((
+                // Reassert ownership on reuse as well as on first spawn. Presentation
+                // and selection are allowed to reparent entities; a pooled rock must
+                // always return to the terrain that owns its local X/Z coordinates.
+                rock.try_insert(ChildOf(cx.terrain));
+                rock.try_insert((
                     TerrainRock,
                     ProceduralRock,
                     TerrainScatterEntity,
+                    TerrainScatterOwner(cx.terrain),
                     Name::new("TerrainRock"),
                     // Procedural scatter, re-spawned as the field restreams — runtime
                     // detail, not authored content. (The *placed* rock below is
@@ -341,15 +378,12 @@ impl TerrainLayer for RockInstanceLayer {
     }
 
     fn scatter_fingerprint(&self) -> Option<u64> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (
-            self.position[0].to_bits(),
-            self.position[1].to_bits(),
-            self.size.to_bits(),
-            self.seed,
-        )
-            .hash(&mut h);
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64(1); // fingerprint layout version
+        h.write_u64(self.position[0].to_bits());
+        h.write_u64(self.position[1].to_bits());
+        h.write_u64(self.size.to_bits() as u64);
+        h.write_u64(self.seed);
         Some(h.finish())
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
@@ -380,6 +414,7 @@ impl TerrainLayer for RockInstanceLayer {
             let mut rock = parent.spawn((
                 TerrainRock,
                 TerrainScatterEntity,
+                TerrainScatterOwner(cx.terrain),
                 Name::new("TerrainRock (placed)"),
                 Transform::from_xyz(
                     self.position[0] as f32,
@@ -460,7 +495,9 @@ pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn Terrai
     }
     let mode = a.get_f32("sizeMode").unwrap_or(0.6);
     let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
-    let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
+    let size_max = a
+        .get_f32("sizeMax")
+        .unwrap_or_else(|| (mode * 4.0).max(2.5));
     let rocks = RockLayer {
         enabled: true,
         density,

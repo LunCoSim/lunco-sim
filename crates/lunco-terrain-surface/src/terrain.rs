@@ -1592,7 +1592,10 @@ fn finish_dem_worker(
         Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<Mesh3d>,
     )>,
-    scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
+    scattered: Query<
+        (Entity, &crate::terrain_layers::TerrainScatterOwner),
+        With<crate::terrain_layers::TerrainScatterEntity>,
+    >,
     // The authored layer stack per terrain — its analytic crater/edit modifiers are
     // re-composed onto the worker's bare grid so web keeps full analytic realism.
     stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
@@ -1621,6 +1624,7 @@ fn finish_dem_worker(
     }
 
     let mut any_full = false;
+    let mut full_terrain_entities = Vec::new();
     let replies = lunco_terrain_bake::worker_client::drain_replies();
     if replies.is_empty() {
         return;
@@ -1711,6 +1715,7 @@ fn finish_dem_worker(
                         meshes.as_deref_mut(),
                     );
                     any_full = true;
+                    full_terrain_entities.push(entity);
                 } else {
                     // The coarse reply landed THIS frame too, so its `DemHeightField`
                     // insert hasn't flushed yet and there's nothing to swap — assemble
@@ -1740,6 +1745,8 @@ fn finish_dem_worker(
                         built,
                         meshes.as_deref_mut(),
                     );
+                    any_full = true;
+                    full_terrain_entities.push(entity);
                 }
                 commands.entity(entity).remove::<DemWorkerJob>();
             }
@@ -1772,10 +1779,15 @@ fn finish_dem_worker(
     }
     if any_full {
         // Cached tile meshes are stale now → drop so re-baked tiles pick up the new
-        // heights; despawn old scatter (rocks/overlays) so they re-scatter.
+        // heights; despawn only each completed terrain's scatter so another
+        // concurrent worker terrain is not accidentally cleared.
         commands.insert_resource(crate::stream_viz::LodMeshCache::default());
-        for e in &scattered {
-            commands.entity(e).try_despawn();
+        for terrain in full_terrain_entities {
+            for (scatter_entity, owner) in &scattered {
+                if owner.0 == terrain {
+                    commands.entity(scatter_entity).try_despawn();
+                }
+            }
         }
     }
 }
@@ -2052,7 +2064,7 @@ pub(crate) fn start_dem_restamp(
         ) == Some(height_field.0.surface_key())
         {
             let scatter_key = stack.scatter_fingerprint();
-            let scatter_changed = scattered_content.map_or(true, |c| c.0 != scatter_key);
+            let scatter_changed = scattered_content.is_none_or(|c| c.0 != scatter_key);
             if scatter_changed || rescatter {
                 commands
                     .entity(entity)
@@ -2082,6 +2094,54 @@ pub(crate) fn start_dem_restamp(
 /// trigger a **progressive** visual refresh — bump the streaming generation so live
 /// tiles go stale and re-bake near-camera-first (covering the surface meanwhile)
 /// rather than all being despawned at once. Rocks/overlays re-scatter next frame.
+#[inline]
+fn scatter_y_after_height_change(old_y: f32, old_surface_y: f64, new_surface_y: f64) -> f32 {
+    old_y + (new_surface_y - old_surface_y) as f32
+}
+
+/// Move retained scatter instances inside a bounded height edit by the exact
+/// oracle delta at their local X/Z. Their colliders live on the same entity, so
+/// one transform update keeps render and physics together without respawning the
+/// entire scatter field.
+fn refresh_scatter_heights(
+    scattered: &mut Query<
+        (
+            Entity,
+            &crate::terrain_layers::TerrainScatterOwner,
+            Option<&crate::terrain_layers::ProceduralRock>,
+            Option<&mut Transform>,
+        ),
+        With<crate::terrain_layers::TerrainScatterEntity>,
+    >,
+    terrain: Entity,
+    old_oracle: &crate::oracle::SurfaceOracle,
+    new_oracle: &crate::oracle::SurfaceOracle,
+    bounds: Option<[f64; 4]>,
+) {
+    use lunco_terrain_core::HeightSource;
+
+    let Some([min_x, min_z, max_x, max_z]) = bounds else {
+        return;
+    };
+    for (_, owner, _, transform) in scattered.iter_mut() {
+        if owner.0 != terrain {
+            continue;
+        }
+        let Some(mut transform) = transform else {
+            continue;
+        };
+        let x = transform.translation.x as f64;
+        let z = transform.translation.z as f64;
+        if x < min_x || x > max_x || z < min_z || z > max_z {
+            continue;
+        }
+        let old_surface_y = old_oracle.height_at(x, z);
+        let new_surface_y = new_oracle.height_at(x, z);
+        transform.translation.y =
+            scatter_y_after_height_change(transform.translation.y, old_surface_y, new_surface_y);
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub(crate) fn finish_dem_restamp(
     mut commands: Commands,
@@ -2098,11 +2158,12 @@ pub(crate) fn finish_dem_restamp(
         &crate::terrain_layers::TerrainLayerStack,
         Option<&crate::terrain_layers::ScatteredContent>,
     )>,
-    scattered: Query<
+    mut scattered: Query<
         (
             Entity,
-            &ChildOf,
+            &crate::terrain_layers::TerrainScatterOwner,
             Option<&crate::terrain_layers::ProceduralRock>,
+            Option<&mut Transform>,
         ),
         With<crate::terrain_layers::TerrainScatterEntity>,
     >,
@@ -2170,18 +2231,14 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, parent, procedural) in &scattered {
-                if parent.parent() == entity {
-                    if procedural.is_some() {
-                        commands
-                            .entity(scatter_entity)
-                            .try_insert(Visibility::Hidden);
-                        commands
-                            .entity(scatter_entity)
-                            .try_remove::<(Collider, RigidBody)>();
-                    } else {
-                        commands.entity(scatter_entity).try_despawn();
-                    }
+            for (scatter_entity, owner, procedural, _) in &mut scattered {
+                if owner.0 == entity {
+                    crate::terrain_layers::retire_scatter_entity(
+                        &mut commands,
+                        scatter_entity,
+                        procedural.is_some(),
+                        None,
+                    );
                 }
             }
             if was_pending {
@@ -2251,6 +2308,12 @@ pub(crate) fn finish_dem_restamp(
         commands
             .entity(entity)
             .try_insert(crate::derived_layers::DerivedDirtyRegion { bounded: scoped });
+        // A bounded height edit does not rebuild scatter. Move the retained
+        // entities by the exact surface delta so their visual sink and collider
+        // remain attached to the edited surface.
+        if scoped && !rescatter {
+            refresh_scatter_heights(&mut scattered, entity, &hf.0, &oracle, dirty_bounds);
+        }
         // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
         *hf = crate::stream_viz::DemHeightField(oracle);
 
@@ -2285,18 +2348,14 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, parent, procedural) in &scattered {
-                if parent.parent() == entity {
-                    if procedural.is_some() {
-                        commands
-                            .entity(scatter_entity)
-                            .try_insert(Visibility::Hidden);
-                        commands
-                            .entity(scatter_entity)
-                            .try_remove::<(Collider, RigidBody)>();
-                    } else {
-                        commands.entity(scatter_entity).try_despawn();
-                    }
+            for (scatter_entity, owner, procedural, _) in &mut scattered {
+                if owner.0 == entity {
+                    crate::terrain_layers::retire_scatter_entity(
+                        &mut commands,
+                        scatter_entity,
+                        procedural.is_some(),
+                        None,
+                    );
                 }
             }
         }
@@ -2674,5 +2733,10 @@ mod visual_product_tests {
         assert_eq!(mesh.indices.len(), 24);
         assert_eq!(oracle.materialize().res, native.res);
         assert_eq!(oracle.materialize().heights, native.heights);
+    }
+
+    #[test]
+    fn bounded_height_refresh_preserves_scatter_sink_offset() {
+        assert_eq!(scatter_y_after_height_change(-0.25, 10.0, 12.5), 2.25);
     }
 }

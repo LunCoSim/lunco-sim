@@ -32,7 +32,7 @@ mod shader;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use avian3d::prelude::Collider;
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 use lunco_obstacle_field::field::HeightGrid;
 
@@ -155,12 +155,14 @@ impl TerrainLayerStack {
     ///
     /// [`scatter_fingerprint`]: TerrainLayer::scatter_fingerprint
     pub fn scatter_fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = lunco_precompute::Fnv1a::new();
         for e in &self.0 {
             if let Some(f) = e.layer.scatter_fingerprint() {
-                e.id.0.hash(&mut h);
-                f.hash(&mut h);
+                h.write_bytes(e.id.0.as_bytes());
+                // Keep adjacent (id, fingerprint) pairs unambiguous when one
+                // layer id is a prefix of another.
+                h.write_u64(0);
+                h.write_u64(f);
             }
         }
         h.finish()
@@ -274,6 +276,39 @@ pub(crate) struct TerrainScatterRefresh;
 #[derive(Component)]
 pub struct TerrainScatterEntity;
 
+/// Authoritative terrain owner for an entity spawned by a scatter layer.
+///
+/// Scatter entities may be reparented by presentation or selection systems, so
+/// hierarchy is not an ownership contract. Native cleanup and pooling use this
+/// component instead. Every layer that inserts [`TerrainScatterEntity`] must
+/// insert this component with the terrain entity that owns the scatter.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainScatterOwner(pub Entity);
+
+/// Retire one scatter entity before a layer refresh.
+///
+/// Procedural rocks remain as inert pooled entities; authored scatter keeps its
+/// normal despawn lifecycle. Keeping this transition in one function prevents
+/// the fast refresh and full re-stamp paths from drifting apart.
+pub(crate) fn retire_scatter_entity(
+    commands: &mut Commands,
+    entity: Entity,
+    procedural: bool,
+    mut rock_pool: Option<&mut Vec<Entity>>,
+) {
+    if procedural {
+        if let Some(pool) = rock_pool.take() {
+            pool.push(entity);
+        }
+        commands.entity(entity).try_insert(Visibility::Hidden);
+        commands
+            .entity(entity)
+            .try_remove::<(Collider, RigidBody)>();
+    } else {
+        commands.entity(entity).try_despawn();
+    }
+}
+
 /// USD-free attribute getter handed to a layer parser. The USD bridge implements this
 /// over a prim reader so layer parsers (and 3rd-party ones) need no USD dependency.
 pub trait LayerAttrSource {
@@ -315,6 +350,7 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     /// Reusable generated-rock entities owned by this terrain. Authored/placed
     /// rocks never enter this pool; their entity identity is part of the authored
     /// scene and must keep the normal rebuild lifecycle.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) rock_pool: &'a mut Vec<Entity>,
 }
 
@@ -495,7 +531,10 @@ pub(crate) fn scatter_terrain_layers(
         (Entity, &DemHeightField, &TerrainLayerStack),
         Or<(Without<TerrainLayersApplied>, With<TerrainScatterRefresh>)>,
     >,
-    scattered: Query<(Entity, &ChildOf, Option<&ProceduralRock>), With<TerrainScatterEntity>>,
+    scattered: Query<
+        (Entity, &TerrainScatterOwner, Option<&ProceduralRock>),
+        With<TerrainScatterEntity>,
+    >,
 ) {
     if q.is_empty() {
         return;
@@ -503,28 +542,18 @@ pub(crate) fn scatter_terrain_layers(
     let mut meshes = meshes;
     for (entity, dem, stack) in &q {
         // A scatter refresh deliberately keeps the height products alive. Generated
-        // rocks are recycled in-place; authored scene children remain untouched
-        // because they do not carry the runtime scatter marker.
+        // Procedural rocks are recycled in-place; authored scene children remain
+        // untouched because they do not carry the runtime scatter marker. Authored
+        // layer instances carry the marker and retain their normal despawn lifecycle.
         let mut rock_pool = Vec::new();
-        for (scatter_entity, parent, procedural) in &scattered {
-            if parent.parent() == entity {
-                if procedural.is_some() {
-                    rock_pool.push(scatter_entity);
-                    // A pooled rock must leave both render visibility and the
-                    // physics broad phase while it is unused. The scatter layer
-                    // inserts Visibility::Inherited and Collider again when it
-                    // reuses the entity.
-                    commands
-                        .entity(scatter_entity)
-                        .try_insert(Visibility::Hidden);
-                    commands
-                        .entity(scatter_entity)
-                        .try_remove::<(Collider, avian3d::prelude::RigidBody)>();
-                } else {
-                    // Placed rocks and future authored scatter retain their normal
-                    // lifecycle; pooling them would make authored identity ambiguous.
-                    commands.entity(scatter_entity).try_despawn();
-                }
+        for (scatter_entity, owner, procedural) in &scattered {
+            if owner.0 == entity {
+                retire_scatter_entity(
+                    &mut commands,
+                    scatter_entity,
+                    procedural.is_some(),
+                    Some(&mut rock_pool),
+                );
             }
         }
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
@@ -549,6 +578,7 @@ pub(crate) fn scatter_terrain_layers(
             meshes: meshes.as_deref_mut(),
             asset_server: &asset_server,
             rock_assets: &mut rock_assets,
+            #[cfg(not(target_arch = "wasm32"))]
             rock_pool: &mut rock_pool,
         };
         for entry in &stack.0 {
