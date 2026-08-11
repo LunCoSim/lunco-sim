@@ -238,10 +238,17 @@ impl TerrainLayer for CraterFieldLayer {
     }
 }
 
-/// Parse a `lunco:layer = "craters"` prim: `density` (per ha, required > 0),
-/// `sizeMode` (modal rim radius m), `sizeMin`/`sizeMax` (radius band m),
-/// `depthRatio`, `rimRatio`, `seed`.
+/// Parse a `lunco:layer = "craters"` prim: `enabled` (explicit visibility,
+/// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal rim
+/// radius m), `sizeMin`/`sizeMax` (radius band m), `depthRatio`, `rimRatio`, and
+/// `seed`.
 pub(super) fn parse_crater_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    // Keep the authored density and shape parameters intact while the layer is
+    // disabled. This is the USD source-of-truth toggle; using density=0 as a
+    // visibility flag discarded the user's authored density on the next reload.
+    if a.get_bool("enabled") == Some(false) {
+        return None;
+    }
     let density = a.get_f32("density").unwrap_or(0.0);
     if density <= 0.0 {
         return None;

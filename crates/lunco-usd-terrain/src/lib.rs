@@ -277,6 +277,7 @@ fn sync_obstacle_spec_from_usd(
     use lunco_obstacle_field::spec::SizeDist;
     use lunco_terrain_surface::LayerAttrSource;
     let mut has_crater_layer = false;
+    let mut has_rocks_layer = false;
     let mut has_enabled_overzoom = false;
     for child in reader.children(terrain) {
         // Read through the SAME adapter the layer parsers use, so the `lunco:layer:`
@@ -292,7 +293,7 @@ fn sync_obstacle_spec_from_usd(
                 let density = a.get_f32("density").unwrap_or(0.0);
                 let mode = a.get_f32("sizeMode").unwrap_or(22.0);
                 has_crater_layer = true;
-                spec.craters.enabled = density > 0.0;
+                spec.craters.enabled = a.get_bool("enabled") != Some(false) && density > 0.0;
                 spec.craters.density = density;
                 spec.craters.depth_ratio = a.get_f32("depthRatio").unwrap_or(0.4);
                 spec.craters.rim_height_ratio = a.get_f32("rimRatio").unwrap_or(0.18);
@@ -311,9 +312,10 @@ fn sync_obstacle_spec_from_usd(
                 has_enabled_overzoom |= enabled;
             }
             Some("rocks") => {
+                has_rocks_layer = true;
                 let density = a.get_f32("density").unwrap_or(0.0);
                 let mode = a.get_f32("sizeMode").unwrap_or(0.6);
-                spec.rocks.enabled = density > 0.0;
+                spec.rocks.enabled = a.get_bool("enabled") != Some(false) && density > 0.0;
                 spec.rocks.density = density;
                 let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
                 let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
@@ -331,6 +333,11 @@ fn sync_obstacle_spec_from_usd(
         spec.craters.enabled = has_enabled_overzoom;
     } else {
         spec.craters.enabled |= has_enabled_overzoom;
+    }
+    if !has_rocks_layer {
+        // An absent generic layer is an explicit off state for the Inspector.
+        // The user can turn it on, which authors the layer prim on demand.
+        spec.rocks.enabled = false;
     }
 }
 
@@ -909,7 +916,23 @@ fn refresh_docbacked_terrain_from_doc(
     }
 }
 
-/// Author one attribute onto a prim's **runtime** layer (non-destructive override).
+/// Build one namespaced attribute opinion for a terrain layer's runtime overlay.
+fn layer_attr_op(
+    path: &str,
+    name: &str,
+    type_name: &str,
+    value: impl Into<String>,
+) -> lunco_usd::UsdOp {
+    lunco_usd::UsdOp::SetAttribute {
+        edit_target: lunco_usd::LayerId::runtime(),
+        path: path.to_string(),
+        name: ns_attr(NS_LAYER, name),
+        type_name: type_name.to_string(),
+        value: value.into(),
+    }
+}
+
+/// Author one attribute onto a prim's runtime layer.
 fn author_layer_attr(
     registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
@@ -918,19 +941,87 @@ fn author_layer_attr(
     type_name: &str,
     value: String,
 ) {
-    let name = ns_attr(NS_LAYER, name);
-    if let Err(error) = registry.apply(
-        doc,
-        lunco_usd::UsdOp::SetAttribute {
-            edit_target: lunco_usd::LayerId::runtime(),
-            path: path.to_string(),
-            name: name.clone(),
-            type_name: type_name.to_string(),
-            value,
-        },
-    ) {
-        warn!("[obstacle-usd] failed to author {path}.{name} in document {doc}: {error}");
+    let op = layer_attr_op(path, name, type_name, value);
+    if let Err(error) = registry.apply(doc, op) {
+        warn!(
+            "[obstacle-usd] failed to author {path}.{} in document {doc}: {error}",
+            ns_attr(NS_LAYER, name)
+        );
     }
+}
+
+/// Find an already composed terrain layer in the document authoring view.
+/// This also sees a runtime AddPrim immediately, before the canonical stage has
+/// had a chance to recompose, so repeated UI edits cannot queue a duplicate.
+fn document_layer_path(
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    terrain_path: &str,
+    layer_type: &str,
+) -> Option<String> {
+    let host = registry.host(doc)?;
+    let terrain = openusd::sdf::Path::new(terrain_path).ok()?;
+    let composed = host.document().composed_arc();
+    composed
+        .prim_children(&terrain)
+        .into_iter()
+        .find_map(|child| {
+            let kind = composed
+                .prim_attribute_value::<openusd::tf::Token>(&child, "lunco:layer")
+                .map(|token| token.to_string())
+                .or_else(|| composed.prim_attribute_value::<String>(&child, "lunco:layer"));
+            (kind.as_deref() == Some(layer_type)).then(|| child.as_str().to_string())
+        })
+}
+
+/// Pick a deterministic free child name for a newly authored generic layer.
+/// Both the live composed stage and the document authoring view are checked:
+/// the former includes referenced children and the latter includes runtime-only
+/// children that have not reached the stage yet.
+fn next_layer_name(
+    reader: &StageView<'_>,
+    terrain: &openusd::sdf::Path,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    base: &str,
+) -> String {
+    let stage_names: Vec<String> = reader
+        .children(terrain)
+        .into_iter()
+        .filter_map(|child| child.as_str().rsplit('/').next().map(str::to_owned))
+        .collect();
+    let document_names: Vec<String> = registry
+        .host(doc)
+        .map(|host| {
+            let composed = host.document().composed_arc();
+            composed
+                .prim_children(terrain)
+                .into_iter()
+                .map(|child| {
+                    child
+                        .as_str()
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    (0..)
+        .map(|suffix| {
+            if suffix == 0 {
+                base.to_string()
+            } else {
+                format!("{base}_{suffix}")
+            }
+        })
+        .find(|name| {
+            !stage_names.iter().any(|existing| existing == name)
+                && !document_names.iter().any(|existing| existing == name)
+        })
+        .expect("an unbounded layer name search always finds a free name")
 }
 
 /// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
@@ -951,34 +1042,23 @@ fn on_obstacle_spec_authored(
     >,
     stages: NonSend<lunco_usd_bevy::CanonicalStages>,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     let Some(mut registry) = registry else {
         debug!("[obstacle-usd] spec update ignored: USD document registry is unavailable");
         return;
     };
     let spec = &trigger.event().spec;
+    use lunco_terrain_surface::LayerAttrSource;
     debug!(
         "[obstacle-usd] spec update received: {} terrain(s), {} canonical stage(s), {} document(s)",
         terrains.iter().count(),
         stages.len(),
         registry.ids().count(),
     );
-    // The USD crater/rock layer parsers use `density > 0` as the on/off signal
-    // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
-    // Inspector's `enabled` checkbox must fold into the authored density here. The
-    // overzoom parser has an explicit `enabled` attribute because zeroing its
-    // amplitude/density would destroy authored detail settings. The live in-memory
-    // spec keeps the real values, so re-checking restores them in the same session.
-    let crater_density = if spec.craters.enabled {
-        spec.craters.density
-    } else {
-        0.0
-    };
-    let rock_density = if spec.rocks.enabled {
-        spec.rocks.density
-    } else {
-        0.0
-    };
+    // Generic layer visibility is authored as an explicit enabled attribute.
+    // Density and shape values remain untouched while a layer is off, so the
+    // same settings survive a reload and can be enabled again in a later session.
     for (prim_path, td) in &terrains {
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
             continue;
@@ -993,7 +1073,7 @@ fn on_obstacle_spec_authored(
             continue;
         };
         let reader = stage.view();
-        let layers: Vec<(String, String)> = reader
+        let mut layers: Vec<(String, String)> = reader
             .children(&sdf)
             .into_iter()
             .filter_map(|child| {
@@ -1002,138 +1082,232 @@ fn on_obstacle_spec_authored(
                     .map(|ty| (child.as_str().to_string(), ty))
             })
             .collect();
+        let has_crater_layer = layers.iter().any(|(_, ty)| ty == "craters");
+        let has_enabled_overzoom_layer = layers.iter().any(|(path, ty)| {
+            if ty != "overzoom" {
+                return false;
+            }
+            let Ok(layer_path) = openusd::sdf::Path::new(path) else {
+                return false;
+            };
+            let attrs = UsdLayerAttrs {
+                reader: &reader,
+                sdf: layer_path,
+                ns: NS_LAYER,
+            };
+            attrs.get_bool("enabled") != Some(false)
+                && (attrs.get_f32("amplitude").unwrap_or(0.08) > 0.0
+                    || attrs.get_f32("density").unwrap_or(0.9) > 0.0)
+        });
+        let has_rock_layer = layers.iter().any(|(_, ty)| ty == "rocks");
+
+        // A Twin need not pre-author either generic layer. Enabling the relevant
+        // Inspector switch creates the missing prim in the runtime overlay. A
+        // A Twin that already has enabled overzoom uses that prim for the
+        // Craters master switch. An authored-but-disabled overzoom layer does
+        // not block adding the regular crater layer when the user enables it.
+        for (kind, base_name, should_add) in [
+            (
+                "craters",
+                "Craters",
+                !has_crater_layer && !has_enabled_overzoom_layer && spec.craters.enabled,
+            ),
+            ("rocks", "Rocks", !has_rock_layer && spec.rocks.enabled),
+        ] {
+            if layers.iter().any(|(_, ty)| ty == kind) {
+                continue;
+            }
+            if let Some(path) = document_layer_path(&registry, doc, &prim_path.path, kind) {
+                layers.push((path, kind.to_string()));
+            } else if should_add {
+                let name = next_layer_name(&reader, &sdf, &registry, doc, base_name);
+                let path = format!("{}/{}", prim_path.path.trim_end_matches('/'), name);
+                if let Err(error) = registry.apply(
+                    doc,
+                    lunco_usd::UsdOp::AddPrim {
+                        edit_target: lunco_usd::LayerId::runtime(),
+                        parent_path: prim_path.path.clone(),
+                        name,
+                        type_name: Some("Xform".to_string()),
+                        reference: None,
+                    },
+                ) {
+                    warn!("[obstacle-usd] failed to add {kind} layer {path} in document {doc}: {error}");
+                    continue;
+                }
+                if let Err(error) = registry.apply(
+                    doc,
+                    lunco_usd::UsdOp::SetAttribute {
+                        edit_target: lunco_usd::LayerId::runtime(),
+                        path: path.clone(),
+                        name: "lunco:layer".to_string(),
+                        type_name: "token".to_string(),
+                        value: format!("\"{kind}\""),
+                    },
+                ) {
+                    warn!("[obstacle-usd] failed to classify {path} as {kind} in document {doc}: {error}");
+                    continue;
+                }
+                layers.push((path, kind.to_string()));
+            }
+        }
         debug!(
             "[obstacle-usd] discovered {} composed layer child(ren) for {}",
             layers.len(),
             prim_path.path
         );
-        for (path, layer_type) in layers {
-            match layer_type.as_str() {
-                "craters" => {
-                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, spec.seed, td.doc);
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "density",
-                        "float",
-                        crater_density.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "sizeMode",
-                        "float",
-                        spec.craters.size.mode.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "sizeMin",
-                        "float",
-                        spec.craters.size.min.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "sizeMax",
-                        "float",
-                        spec.craters.size.max.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "depthRatio",
-                        "float",
-                        spec.craters.depth_ratio.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "rimRatio",
-                        "float",
-                        spec.craters.rim_height_ratio.to_string(),
-                    );
-                    // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
-                    // (`s as u64`), so the full Reseed range round-trips. Without this attr
-                    // every doc-driven re-parse falls back to the parser default and the
-                    // crater layout silently flips between the resource seed and 0xC0FFEE.
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "seed",
-                        "int64",
-                        (spec.seed as i64).to_string(),
-                    );
+        let author_layers = || {
+            for (path, layer_type) in layers {
+                match layer_type.as_str() {
+                    "craters" => {
+                        info!("[obstacle-usd] authoring craters enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.density, spec.craters.size.mode, spec.seed, td.doc);
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "enabled",
+                            "bool",
+                            spec.craters.enabled.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "density",
+                            "float",
+                            spec.craters.density.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "sizeMode",
+                            "float",
+                            spec.craters.size.mode.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "sizeMin",
+                            "float",
+                            spec.craters.size.min.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "sizeMax",
+                            "float",
+                            spec.craters.size.max.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "depthRatio",
+                            "float",
+                            spec.craters.depth_ratio.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "rimRatio",
+                            "float",
+                            spec.craters.rim_height_ratio.to_string(),
+                        );
+                        // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
+                        // (`s as u64`), so the full Reseed range round-trips. Without this attr
+                        // every doc-driven re-parse falls back to the parser default and the
+                        // crater layout silently flips between the resource seed and 0xC0FFEE.
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "seed",
+                            "int64",
+                            (spec.seed as i64).to_string(),
+                        );
+                    }
+                    "overzoom" => {
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "enabled",
+                            "bool",
+                            spec.craters.enabled.to_string(),
+                        );
+                    }
+                    "rocks" => {
+                        info!("[obstacle-usd] authoring rocks enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.rocks.enabled, spec.rocks.density, spec.rocks.size.mode, spec.seed, td.doc);
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "enabled",
+                            "bool",
+                            spec.rocks.enabled.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "density",
+                            "float",
+                            spec.rocks.density.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "sizeMode",
+                            "float",
+                            spec.rocks.size.mode.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "sizeMin",
+                            "float",
+                            spec.rocks.size.min.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "sizeMax",
+                            "float",
+                            spec.rocks.size.max.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "dynamicFrac",
+                            "float",
+                            spec.rocks.dynamic_fraction.to_string(),
+                        );
+                        author_layer_attr(
+                            &mut registry,
+                            doc,
+                            &path,
+                            "seed",
+                            "int64",
+                            (spec.seed as i64).to_string(),
+                        );
+                    }
+                    _ => {}
                 }
-                "overzoom" => {
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "enabled",
-                        "bool",
-                        spec.craters.enabled.to_string(),
-                    );
-                }
-                "rocks" => {
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "density",
-                        "float",
-                        rock_density.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "sizeMode",
-                        "float",
-                        spec.rocks.size.mode.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "sizeMin",
-                        "float",
-                        spec.rocks.size.min.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "sizeMax",
-                        "float",
-                        spec.rocks.size.max.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "dynamicFrac",
-                        "float",
-                        spec.rocks.dynamic_fraction.to_string(),
-                    );
-                    author_layer_attr(
-                        &mut registry,
-                        doc,
-                        &path,
-                        "seed",
-                        "int64",
-                        (spec.seed as i64).to_string(),
-                    );
-                }
-                _ => {}
             }
+        };
+        match journal.as_deref() {
+            Some(journal) => {
+                journal.change_set("Update terrain obstacle layers", author_layers);
+            }
+            None => author_layers(),
         }
     }
 }
@@ -1668,6 +1842,60 @@ mod dem_bridge_tests {
                 .all(|entry| !entry.id.as_str().ends_with("Detail")),
             "disabled overzoom must not contribute a height layer"
         );
+    }
+
+    #[test]
+    fn generic_layers_can_be_disabled_without_losing_authored_density() {
+        let scene = dem_scene(
+            "    def Xform \"Craters\"\n    {\n\
+             \x20       token lunco:layer = \"craters\"\n\
+             \x20       bool lunco:layer:enabled = false\n\
+             \x20       float lunco:layer:density = 4.5\n\
+             \x20       float lunco:layer:sizeMode = 18.0\n\
+             \x20   }\n\
+             \x20   def Xform \"Rocks\"\n    {\n\
+             \x20       token lunco:layer = \"rocks\"\n\
+             \x20       bool lunco:layer:enabled = false\n\
+             \x20       float lunco:layer:density = 32.0\n\
+             \x20   }\n",
+            "",
+        );
+        let (world, entity, spec) = bridge_with_spec(&scene);
+        assert!(!spec.craters.enabled);
+        assert_eq!(spec.craters.density, 4.5);
+        assert!(!spec.rocks.enabled);
+        assert_eq!(spec.rocks.density, 32.0);
+        let stack = world
+            .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
+            .expect("terrain layer stack attached");
+        assert!(
+            stack.0.iter().all(|entry| {
+                !entry.id.as_str().ends_with("Craters") && !entry.id.as_str().ends_with("Rocks")
+            }),
+            "disabled generic layers must not contribute runtime layers"
+        );
+    }
+
+    #[test]
+    fn generic_layers_without_enabled_default_to_on() {
+        let scene = dem_scene(
+            "    def Xform \"Craters\"\n    {\n\
+             \x20       token lunco:layer = \"craters\"\n\
+             \x20       float lunco:layer:density = 4.5\n\
+             \x20   }\n\
+             \x20   def Xform \"Rocks\"\n    {\n\
+             \x20       token lunco:layer = \"rocks\"\n\
+             \x20       float lunco:layer:density = 32.0\n\
+             \x20   }\n",
+            "",
+        );
+        let (world, entity, spec) = bridge_with_spec(&scene);
+        assert!(spec.craters.enabled);
+        assert!(spec.rocks.enabled);
+        let stack = world
+            .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
+            .expect("terrain layer stack attached");
+        assert_eq!(stack.0.len(), 2);
     }
 
     #[test]

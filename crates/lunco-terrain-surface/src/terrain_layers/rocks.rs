@@ -401,10 +401,16 @@ mod tests {
     }
 }
 
-/// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
-/// (modal radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`,
-/// `regionM` (near-field scatter half-extent), `seed`.
+/// Parse a `lunco:layer = "rocks"` prim: `enabled` (explicit visibility,
+/// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
+/// radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`, `regionM`
+/// (near-field scatter half-extent), and `seed`.
 pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    // Visibility is independent from density. Keeping density authored makes a
+    // disable/enable cycle survive a document reload and a new session.
+    if a.get_bool("enabled") == Some(false) {
+        return None;
+    }
     let density = a.get_f32("density").unwrap_or(0.0);
     if density <= 0.0 {
         return None;
