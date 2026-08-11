@@ -1035,6 +1035,50 @@ fn next_layer_name(
         .expect("an unbounded layer name search always finds a free name")
 }
 
+/// Return the minimal runtime-overlay `AddPrim` operations needed to author below
+/// a referenced parent. A Twin wrapper can compose `/Traverse/Terrain` while its
+/// authored layer contains none of `/Traverse` or `/Traverse/Terrain`; adding a
+/// child directly then fails because USD requires every authored parent spec.
+///
+/// The operations are returned to the caller's existing `ApplyUsdOps` change set,
+/// preserving its all-or-nothing validation and one undo/journal unit.
+fn ensure_document_parent_chain_ops(
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    parent_path: &str,
+) -> Option<Vec<lunco_usd::UsdOp>> {
+    let segments: Vec<&str> = parent_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let mut current = String::new();
+    let mut ops = Vec::new();
+    for segment in segments {
+        let path = format!("{current}/{segment}");
+        let sdf = openusd::sdf::Path::new(&path).ok()?;
+        let exists = registry.host(doc).is_some_and(|host| {
+            host.document().data().spec(&sdf).is_some()
+                || host.document().runtime_data().spec(&sdf).is_some()
+        });
+        if !exists {
+            ops.push(lunco_usd::UsdOp::AddPrim {
+                edit_target: lunco_usd::LayerId::runtime(),
+                parent_path: if current.is_empty() {
+                    "/".to_string()
+                } else {
+                    current.clone()
+                },
+                name: segment.to_string(),
+                type_name: Some("Xform".to_string()),
+                reference: None,
+            });
+        }
+        current = path;
+    }
+    Some(ops)
+}
+
 fn author_crater_layer_attrs(
     ops: &mut Vec<lunco_usd::UsdOp>,
     path: &str,
@@ -1205,6 +1249,7 @@ fn on_obstacle_spec_authored(
             .filter(|(_, ty)| ty == "overzoom")
             .any(|(path, _)| overzoom_layer_is_enabled(&reader, path));
         let has_rock_layer = layers.iter().any(|(_, ty)| ty == "rocks");
+        let mut parent_chain_added = false;
 
         // A Twin need not pre-author either generic layer. Enabling the relevant
         // Inspector switch creates the missing prim in the runtime overlay. A
@@ -1225,6 +1270,19 @@ fn on_obstacle_spec_authored(
             if let Some(path) = document_layer_path(&registry, doc, &prim_path.path, kind) {
                 layers.push((path, kind.to_string()));
             } else if should_add {
+                if !parent_chain_added {
+                    let Some(parent_ops) =
+                        ensure_document_parent_chain_ops(&registry, doc, &prim_path.path)
+                    else {
+                        warn!(
+                            "[obstacle-usd] invalid terrain parent path {} in document {doc}",
+                            prim_path.path
+                        );
+                        continue;
+                    };
+                    ops.extend(parent_ops);
+                    parent_chain_added = true;
+                }
                 let name = next_layer_name(&reader, &sdf, &registry, doc, base_name);
                 let path = format!("{}/{}", prim_path.path.trim_end_matches('/'), name);
                 ops.push(lunco_usd::UsdOp::AddPrim {
@@ -1614,9 +1672,11 @@ mod dem_bridge_tests {
     //! real `World`, and the assertions read back the components the projection
     //! actually attached — not intermediate parse values.
 
-    use super::{bridge_dem_prim_read, push_layer_attr};
+    use super::{bridge_dem_prim_read, ensure_document_parent_chain_ops, push_layer_attr};
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
+    use lunco_doc_bevy::DocumentRegistry;
+    use lunco_usd::document::UsdDocument;
     use lunco_usd_bevy::{CanonicalStage, StageRecipe};
     use openusd::sdf::Path as SdfPath;
 
@@ -1651,6 +1711,31 @@ mod dem_bridge_tests {
             panic!("terrain authoring must lower to SetAttribute");
         };
         assert_eq!(name, "lunco:layer:density");
+    }
+
+    #[test]
+    fn referenced_terrain_parent_chain_is_lowered_before_layer_creation() {
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let (doc, _) = registry.open_file(
+            "parent-chain-test.usda",
+            "#usda 1.0\n(
+    defaultPrim = \"Traverse\"
+)
+def Xform \"Traverse\"\n{\n}\n"
+                .to_owned(),
+        );
+        let ops = ensure_document_parent_chain_ops(&registry, doc, "/Traverse/Terrain")
+            .expect("valid parent path");
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            &ops[0],
+            lunco_usd::UsdOp::AddPrim {
+                parent_path,
+                name,
+                type_name: Some(type_name),
+                ..
+            } if parent_path == "/Traverse" && name == "Terrain" && type_name == "Xform"
+        ));
     }
 
     #[test]
