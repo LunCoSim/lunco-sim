@@ -14,6 +14,7 @@ use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
 use super::{
     LayerAttrSource, LayerScatterCx, SharedRockAssets, TerrainLayer, TerrainScatterEntity,
+    TerrainScatterOwner,
 };
 
 /// One scattered rock (kept distinct from [`TerrainScatterEntity`] for selection).
@@ -68,6 +69,37 @@ fn size_bucket(r: f32) -> u32 {
 /// The representative radius of a bucket (the inverse of [`size_bucket`]).
 fn bucket_radius_of(bucket: u32) -> f32 {
     ((bucket as f32 - 64.0) / 8.0).exp()
+}
+
+fn hash_size_dist(h: &mut lunco_precompute::Fnv1a, size: SizeDist) {
+    h.write_u64(size.min.to_bits() as u64);
+    h.write_u64(size.mode.to_bits() as u64);
+    h.write_u64(size.max.to_bits() as u64);
+    h.write_u64(size.sigma.to_bits() as u64);
+}
+
+fn hash_pattern(h: &mut lunco_precompute::Fnv1a, pattern: Pattern) {
+    match pattern {
+        Pattern::Uniform => {
+            h.write_u64(0);
+        }
+        Pattern::PoissonDisk { min_spacing } => {
+            h.write_u64(1);
+            h.write_u64(min_spacing.to_bits() as u64);
+        }
+        Pattern::Clustered { clusters, spread } => {
+            h.write_u64(2);
+            h.write_u64(clusters as u64);
+            h.write_u64(spread.to_bits() as u64);
+        }
+    }
+}
+
+fn hash_rock_layer(h: &mut lunco_precompute::Fnv1a, rocks: RockLayer) {
+    h.write_u64(rocks.enabled as u64);
+    h.write_u64(rocks.density.to_bits() as u64);
+    hash_size_dist(h, rocks.size);
+    h.write_u64(rocks.dynamic_fraction.to_bits() as u64);
 }
 
 /// The ONE boulder look every rock — procedural or hand-placed — draws with.
@@ -133,15 +165,14 @@ impl TerrainLayer for RockScatterLayer {
     }
 
     fn scatter_fingerprint(&self) -> Option<u64> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        // Debug covers every nested field (RockLayer / SizeDist / Pattern), so a
-        // future param can't be silently missed. Runtime-only — never persisted.
-        format!(
-            "{:?}|{:?}|{}|{}",
-            self.rocks, self.pattern, self.region_half_extent, self.seed
-        )
-        .hash(&mut h);
+        let mut h = lunco_precompute::Fnv1a::new();
+        // Explicit fields make the key stable across Debug-format changes and
+        // avoid allocating a transient string on every stack fingerprint.
+        h.write_u64(1); // fingerprint layout version
+        hash_rock_layer(&mut h, self.rocks);
+        hash_pattern(&mut h, self.pattern);
+        h.write_u64(self.region_half_extent.to_bits() as u64);
+        h.write_u64(self.seed);
         Some(h.finish())
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
@@ -238,6 +269,7 @@ impl TerrainLayer for RockScatterLayer {
                     let mut rock = parent.spawn((
                         TerrainRock,
                         TerrainScatterEntity,
+                        TerrainScatterOwner(cx.terrain),
                         Name::new("TerrainRock"),
                         // Procedural scatter, re-spawned as the field restreams — runtime
                         // detail, not authored content. (The *placed* rock below is
@@ -307,15 +339,12 @@ impl TerrainLayer for RockInstanceLayer {
     }
 
     fn scatter_fingerprint(&self) -> Option<u64> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (
-            self.position[0].to_bits(),
-            self.position[1].to_bits(),
-            self.size.to_bits(),
-            self.seed,
-        )
-            .hash(&mut h);
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64(1); // fingerprint layout version
+        h.write_u64(self.position[0].to_bits());
+        h.write_u64(self.position[1].to_bits());
+        h.write_u64(self.size.to_bits() as u64);
+        h.write_u64(self.seed);
         Some(h.finish())
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
@@ -346,6 +375,7 @@ impl TerrainLayer for RockInstanceLayer {
             let mut rock = parent.spawn((
                 TerrainRock,
                 TerrainScatterEntity,
+                TerrainScatterOwner(cx.terrain),
                 Name::new("TerrainRock (placed)"),
                 Transform::from_xyz(
                     self.position[0] as f32,

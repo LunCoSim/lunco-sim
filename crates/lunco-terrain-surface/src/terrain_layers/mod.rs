@@ -154,12 +154,14 @@ impl TerrainLayerStack {
     ///
     /// [`scatter_fingerprint`]: TerrainLayer::scatter_fingerprint
     pub fn scatter_fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = lunco_precompute::Fnv1a::new();
         for e in &self.0 {
             if let Some(f) = e.layer.scatter_fingerprint() {
-                e.id.0.hash(&mut h);
-                f.hash(&mut h);
+                h.write_bytes(e.id.0.as_bytes());
+                // Keep adjacent `(id, fingerprint)` pairs unambiguous when a
+                // layer id happens to be a prefix of another id.
+                h.write_u64(0);
+                h.write_u64(f);
             }
         }
         h.finish()
@@ -225,6 +227,16 @@ pub struct ScatteredContent(pub u64);
 /// whole set generically (independent of which layer produced it).
 #[derive(Component)]
 pub struct TerrainScatterEntity;
+
+/// Authoritative terrain owner for an entity spawned by a scatter layer.
+///
+/// Scatter entities are often children of the terrain today, but parentage is
+/// presentation structure rather than ownership: a layer may put an entity in
+/// another hierarchy or spawn it after the terrain has been re-composed. Native
+/// cleanup and bounded-height refreshes therefore use this explicit owner.
+/// Scatter implementations must insert this alongside [`TerrainScatterEntity`].
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainScatterOwner(pub Entity);
 
 /// USD-free attribute getter handed to a layer parser. The USD bridge implements this
 /// over a prim reader so layer parsers (and 3rd-party ones) need no USD dependency.

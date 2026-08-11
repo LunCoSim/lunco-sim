@@ -1774,6 +1774,9 @@ fn finish_dem_worker(
         // Cached tile meshes are stale now → drop so re-baked tiles pick up the new
         // heights; despawn old scatter (rocks/overlays) so they re-scatter.
         commands.insert_resource(crate::stream_viz::LodMeshCache::default());
+        // TODO(wasm): scope this cleanup by `TerrainScatterOwner` once the worker
+        // reply carries the terrain entity. The current web reply has no owner
+        // context, so the global cleanup is intentionally retained for now.
         for e in &scattered {
             commands.entity(e).try_despawn();
         }
@@ -2056,7 +2059,14 @@ pub(crate) fn finish_dem_restamp(
         &crate::terrain_layers::TerrainLayerStack,
         Option<&crate::terrain_layers::ScatteredContent>,
     )>,
-    scattered: Query<(Entity, &ChildOf), With<crate::terrain_layers::TerrainScatterEntity>>,
+    mut scattered: Query<
+        (
+            Entity,
+            &crate::terrain_layers::TerrainScatterOwner,
+            &mut Transform,
+        ),
+        With<crate::terrain_layers::TerrainScatterEntity>,
+    >,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
 ) {
@@ -2121,8 +2131,8 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, parent) in &scattered {
-                if parent.parent() == entity {
+            for (scatter_entity, owner, _) in &mut scattered {
+                if owner.0 == entity {
                     commands.entity(scatter_entity).try_despawn();
                 }
             }
@@ -2193,6 +2203,14 @@ pub(crate) fn finish_dem_restamp(
         commands
             .entity(entity)
             .try_insert(crate::derived_layers::DerivedDirtyRegion { bounded: scoped });
+
+        // Height-only bounded edits keep the scatter set and its colliders. Move
+        // each owned instance by the oracle delta at its X/Z instead of leaving
+        // rocks at their pre-edit Y. Whole-terrain and explicit scatter changes
+        // still use the normal despawn/re-scatter path below.
+        if scoped && !rescatter {
+            refresh_scatter_heights(&mut scattered, entity, &hf.0, &oracle, dirty_bounds);
+        }
         // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
         *hf = crate::stream_viz::DemHeightField(oracle);
 
@@ -2227,8 +2245,8 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, parent) in &scattered {
-                if parent.parent() == entity {
+            for (scatter_entity, owner, _) in &mut scattered {
+                if owner.0 == entity {
                     commands.entity(scatter_entity).try_despawn();
                 }
             }
@@ -2246,6 +2264,52 @@ pub(crate) fn finish_dem_restamp(
                 )));
         }
         debug!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
+    }
+}
+
+/// Preserve a scatter instance's authored sink/orientation offset while moving
+/// it with a changed surface height.
+#[inline]
+fn scatter_y_after_height_change(old_y: f32, old_surface_y: f64, new_surface_y: f64) -> f32 {
+    old_y + (new_surface_y - old_surface_y) as f32
+}
+
+/// Move native scatter instances inside a bounded height edit by the exact
+/// oracle delta at their local X/Z. Their colliders live on the same entity, so
+/// changing `Transform` updates render and physics together without respawning
+/// the whole scatter set.
+fn refresh_scatter_heights(
+    scattered: &mut Query<
+        (
+            Entity,
+            &crate::terrain_layers::TerrainScatterOwner,
+            &mut Transform,
+        ),
+        With<crate::terrain_layers::TerrainScatterEntity>,
+    >,
+    terrain: Entity,
+    old_oracle: &crate::oracle::SurfaceOracle,
+    new_oracle: &crate::oracle::SurfaceOracle,
+    bounds: Option<[f64; 4]>,
+) {
+    use lunco_terrain_core::HeightSource;
+
+    let Some([min_x, min_z, max_x, max_z]) = bounds else {
+        return;
+    };
+    for (_, owner, mut transform) in scattered.iter_mut() {
+        if owner.0 != terrain {
+            continue;
+        }
+        let x = transform.translation.x as f64;
+        let z = transform.translation.z as f64;
+        if x < min_x || x > max_x || z < min_z || z > max_z {
+            continue;
+        }
+        let old_surface_y = old_oracle.height_at(x, z);
+        let new_surface_y = new_oracle.height_at(x, z);
+        transform.translation.y =
+            scatter_y_after_height_change(transform.translation.y, old_surface_y, new_surface_y);
     }
 }
 
@@ -2606,5 +2670,10 @@ mod visual_product_tests {
         assert_eq!(mesh.indices.len(), 24);
         assert_eq!(oracle.materialize().res, native.res);
         assert_eq!(oracle.materialize().heights, native.heights);
+    }
+
+    #[test]
+    fn bounded_height_refresh_preserves_scatter_sink_offset() {
+        assert_eq!(scatter_y_after_height_change(-0.25, 10.0, 12.5), 2.25);
     }
 }

@@ -278,6 +278,28 @@ fn parse_terrain_layer_stack(
 /// re-stamp — the terrain already built from the same USD stack).
 ///
 /// [`ObstacleFieldSpec`]: lunco_obstacle_field::spec::ObstacleFieldSpec
+fn first_layer_path(layers: &[(String, String)], layer_type: &str) -> Option<String> {
+    layers
+        .iter()
+        .find(|(_, ty)| ty == layer_type)
+        .map(|(path, _)| path.clone())
+}
+
+/// The one enabled-state predicate for overzoom. Keep the parser's semantic
+/// defaults authoritative; the bridge must not repeat their numeric defaults.
+fn overzoom_layer_is_enabled(reader: &StageView<'_>, path: &str) -> bool {
+    let Ok(layer_path) = openusd::sdf::Path::new(path) else {
+        return false;
+    };
+    let attrs = UsdLayerAttrs {
+        reader,
+        sdf: layer_path,
+        ns: NS_LAYER,
+    };
+    let params = lunco_terrain_surface::read_overzoom_layer(&attrs);
+    params.enabled && (params.spec.relief_amp > 0.0 || params.spec.crater_mean > 0.0)
+}
+
 fn sync_obstacle_spec_from_usd(
     reader: &StageView<'_>,
     terrain: &openusd::sdf::Path,
@@ -296,22 +318,29 @@ fn sync_obstacle_spec_from_usd(
             ns: NS_LAYER,
         };
         match reader.text(&child, "lunco:layer").as_deref() {
-            Some("craters") => {
+            // The Inspector owns one generic crater projection. Read the first
+            // deterministic layer only; later same-kind layers remain independent
+            // authored stack entries instead of clobbering the projection.
+            Some("craters") if !has_crater_layer => {
                 let params = lunco_terrain_surface::read_crater_layer(&a);
                 has_crater_layer = true;
                 spec.craters = params.layer;
                 spec.seed = params.seed;
             }
             Some("overzoom") => {
-                let params = lunco_terrain_surface::read_overzoom_layer(&a);
-                let enabled = params.enabled
-                    && (params.spec.relief_amp > 0.0 || params.spec.crater_mean > 0.0);
-                has_enabled_overzoom |= enabled;
+                has_enabled_overzoom |= overzoom_layer_is_enabled(reader, child.as_str());
             }
-            Some("rocks") => {
+            // As with craters, preserve the first rock layer's projection. A
+            // rock-only document still seeds the shared Inspector resource from
+            // its authored seed; when craters exist, the crater seed remains the
+            // master resource seed and the rock seed stays layer-local in USD.
+            Some("rocks") if !has_rocks_layer => {
                 has_rocks_layer = true;
                 let params = lunco_terrain_surface::read_rock_layer(&a);
                 spec.rocks = params.layer;
+                if !has_crater_layer {
+                    spec.seed = params.seed;
+                }
             }
             _ => {}
         }
@@ -795,6 +824,7 @@ fn refresh_docbacked_terrain_from_doc(
     // composed document that twin_projection updates for every authored op.
     stages: NonSend<lunco_usd_bevy::CanonicalStages>,
     parser: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
+    mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
     mut terrains: Query<
         (
             Entity,
@@ -900,7 +930,14 @@ fn refresh_docbacked_terrain_from_doc(
         let Some(cs) = stages.get(prim_path.stage_handle.id()) else {
             continue;
         };
-        let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &parser);
+        let reader = cs.view();
+        // The initial bridge seeds the Inspector resource from the base stage.
+        // This path is the authority for runtime overlays and later document
+        // edits, so keep the projection synchronized with the same composed view
+        // that produces the new terrain stack. Bypass change detection: this is a
+        // document projection, not a new local spec edit.
+        sync_obstacle_spec_from_usd(&reader, &sdf, obstacle_spec.bypass_change_detection());
+        let stack = parse_terrain_layer_stack(&reader, &sdf, &parser);
         // Despawn-safe: a scene reload can despawn this terrain between queue
         // time and apply_deferred — no-op instead of panicking.
         commands.entity(entity).try_insert(stack);
@@ -998,6 +1035,113 @@ fn next_layer_name(
         .expect("an unbounded layer name search always finds a free name")
 }
 
+fn author_crater_layer_attrs(
+    ops: &mut Vec<lunco_usd::UsdOp>,
+    path: &str,
+    spec: &lunco_obstacle_field::spec::ObstacleFieldSpec,
+) {
+    push_layer_attr(
+        ops,
+        path,
+        "enabled",
+        "bool",
+        spec.craters.enabled.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "density",
+        "float",
+        spec.craters.density.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "sizeMode",
+        "float",
+        spec.craters.size.mode.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "sizeMin",
+        "float",
+        spec.craters.size.min.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "sizeMax",
+        "float",
+        spec.craters.size.max.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "depthRatio",
+        "float",
+        spec.craters.depth_ratio.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "rimRatio",
+        "float",
+        spec.craters.rim_height_ratio.to_string(),
+    );
+    // The u64 seed bit-casts through int64; the parser casts it back, so the
+    // full Reseed range survives a composed-document round trip.
+    push_layer_attr(ops, path, "seed", "int64", (spec.seed as i64).to_string());
+}
+
+fn author_rock_layer_attrs(
+    ops: &mut Vec<lunco_usd::UsdOp>,
+    path: &str,
+    spec: &lunco_obstacle_field::spec::ObstacleFieldSpec,
+    seed: u64,
+) {
+    push_layer_attr(ops, path, "enabled", "bool", spec.rocks.enabled.to_string());
+    push_layer_attr(
+        ops,
+        path,
+        "density",
+        "float",
+        spec.rocks.density.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "sizeMode",
+        "float",
+        spec.rocks.size.mode.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "sizeMin",
+        "float",
+        spec.rocks.size.min.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "sizeMax",
+        "float",
+        spec.rocks.size.max.to_string(),
+    );
+    push_layer_attr(
+        ops,
+        path,
+        "dynamicFrac",
+        "float",
+        spec.rocks.dynamic_fraction.to_string(),
+    );
+    // Rock layers have their own authored seed. Preserve it when the singleton
+    // Inspector resource is seeded from a crater layer, rather than silently
+    // changing an unrelated rock layout on the next UI edit.
+    push_layer_attr(ops, path, "seed", "int64", (seed as i64).to_string());
+}
+
 /// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
 /// onto its USD `craters`/`overzoom`/`rocks` layer prims (runtime layer) rather than mutating the
 /// `TerrainLayerStack` directly. The USD mutation then drives everything automatically
@@ -1056,22 +1200,10 @@ fn on_obstacle_spec_authored(
             .collect();
         let mut ops = Vec::new();
         let has_crater_layer = layers.iter().any(|(_, ty)| ty == "craters");
-        let has_enabled_overzoom_layer = layers.iter().any(|(path, ty)| {
-            if ty != "overzoom" {
-                return false;
-            }
-            let Ok(layer_path) = openusd::sdf::Path::new(path) else {
-                return false;
-            };
-            let attrs = UsdLayerAttrs {
-                reader: &reader,
-                sdf: layer_path,
-                ns: NS_LAYER,
-            };
-            attrs.get_bool("enabled") != Some(false)
-                && (attrs.get_f32("amplitude").unwrap_or(0.08) > 0.0
-                    || attrs.get_f32("density").unwrap_or(0.9) > 0.0)
-        });
+        let has_enabled_overzoom_layer = layers
+            .iter()
+            .filter(|(_, ty)| ty == "overzoom")
+            .any(|(path, _)| overzoom_layer_is_enabled(&reader, path));
         let has_rock_layer = layers.iter().any(|(_, ty)| ty == "rocks");
 
         // A Twin need not pre-author either generic layer. Enabling the relevant
@@ -1117,70 +1249,26 @@ fn on_obstacle_spec_authored(
             layers.len(),
             prim_path.path
         );
+        // A singleton Inspector spec can edit one canonical generic layer per
+        // kind. Keep all additional same-kind prims intact; they remain distinct
+        // stack entries with their own authored parameters and identities.
+        let canonical_craters = first_layer_path(&layers, "craters");
+        let canonical_overzoom = first_layer_path(&layers, "overzoom");
+        let canonical_rocks = first_layer_path(&layers, "rocks");
         for (path, layer_type) in layers {
+            let is_canonical = match layer_type.as_str() {
+                "craters" => canonical_craters.as_deref() == Some(path.as_str()),
+                "overzoom" => canonical_overzoom.as_deref() == Some(path.as_str()),
+                "rocks" => canonical_rocks.as_deref() == Some(path.as_str()),
+                _ => false,
+            };
+            if !is_canonical {
+                continue;
+            }
             match layer_type.as_str() {
                 "craters" => {
                     info!("[obstacle-usd] authoring craters enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.density, spec.craters.size.mode, spec.seed, td.doc);
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "enabled",
-                        "bool",
-                        spec.craters.enabled.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "density",
-                        "float",
-                        spec.craters.density.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "sizeMode",
-                        "float",
-                        spec.craters.size.mode.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "sizeMin",
-                        "float",
-                        spec.craters.size.min.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "sizeMax",
-                        "float",
-                        spec.craters.size.max.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "depthRatio",
-                        "float",
-                        spec.craters.depth_ratio.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "rimRatio",
-                        "float",
-                        spec.craters.rim_height_ratio.to_string(),
-                    );
-                    // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
-                    // (`s as u64`), so the full Reseed range round-trips. Without this attr
-                    // every doc-driven re-parse falls back to the parser default and the
-                    // crater layout silently flips between the resource seed and 0xC0FFEE.
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "seed",
-                        "int64",
-                        (spec.seed as i64).to_string(),
-                    );
+                    author_crater_layer_attrs(&mut ops, &path, spec);
                 }
                 "overzoom" => {
                     push_layer_attr(
@@ -1192,56 +1280,18 @@ fn on_obstacle_spec_authored(
                     );
                 }
                 "rocks" => {
-                    info!("[obstacle-usd] authoring rocks enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.rocks.enabled, spec.rocks.density, spec.rocks.size.mode, spec.seed, td.doc);
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "enabled",
-                        "bool",
-                        spec.rocks.enabled.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "density",
-                        "float",
-                        spec.rocks.density.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "sizeMode",
-                        "float",
-                        spec.rocks.size.mode.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "sizeMin",
-                        "float",
-                        spec.rocks.size.min.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "sizeMax",
-                        "float",
-                        spec.rocks.size.max.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "dynamicFrac",
-                        "float",
-                        spec.rocks.dynamic_fraction.to_string(),
-                    );
-                    push_layer_attr(
-                        &mut ops,
-                        &path,
-                        "seed",
-                        "int64",
-                        (spec.seed as i64).to_string(),
-                    );
+                    let rock_seed = openusd::sdf::Path::new(&path)
+                        .ok()
+                        .map(|layer_path| UsdLayerAttrs {
+                            reader: &reader,
+                            sdf: layer_path,
+                            ns: NS_LAYER,
+                        })
+                        .and_then(|attrs| attrs.get_i64("seed"))
+                        .map(|seed| seed as u64)
+                        .unwrap_or(spec.seed);
+                    info!("[obstacle-usd] authoring rocks enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.rocks.enabled, spec.rocks.density, spec.rocks.size.mode, rock_seed, td.doc);
+                    author_rock_layer_attrs(&mut ops, &path, spec, rock_seed);
                 }
                 _ => {}
             }
@@ -1601,6 +1651,77 @@ mod dem_bridge_tests {
             panic!("terrain authoring must lower to SetAttribute");
         };
         assert_eq!(name, "lunco:layer:density");
+    }
+
+    #[test]
+    fn same_kind_layers_keep_the_first_projection_without_clobbering_the_stack() {
+        let scene = dem_scene(
+            "    def Xform \"CratersA\"\n    {\n\
+             \x20       token lunco:layer = \"craters\"\n\
+             \x20       float lunco:layer:density = 1.0\n\
+             \x20       int64 lunco:layer:seed = 11\n\
+             \x20   }\n\
+             \x20   def Xform \"CratersB\"\n    {\n\
+             \x20       token lunco:layer = \"craters\"\n\
+             \x20       float lunco:layer:density = 2.0\n\
+             \x20       int64 lunco:layer:seed = 22\n\
+             \x20   }\n\
+             \x20   def Xform \"RocksA\"\n    {\n\
+             \x20       token lunco:layer = \"rocks\"\n\
+             \x20       float lunco:layer:density = 3.0\n\
+             \x20       int64 lunco:layer:seed = 33\n\
+             \x20   }\n\
+             \x20   def Xform \"RocksB\"\n    {\n\
+             \x20       token lunco:layer = \"rocks\"\n\
+             \x20       float lunco:layer:density = 4.0\n\
+             \x20       int64 lunco:layer:seed = 44\n\
+             \x20   }\n",
+            "",
+        );
+        let (world, entity, spec) = bridge_with_spec(&scene);
+        assert_eq!(
+            spec.seed, 11,
+            "the deterministic first crater layer seeds the projection"
+        );
+        assert_eq!(spec.craters.density, 1.0);
+        assert_eq!(spec.rocks.density, 3.0);
+        let stack = world
+            .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
+            .expect("terrain layer stack attached");
+        assert_eq!(
+            stack.0.len(),
+            4,
+            "same-kind layers remain separate stack entries"
+        );
+    }
+
+    #[test]
+    fn rock_only_documents_seed_the_inspector_from_the_authored_rock_layer() {
+        let scene = dem_scene(
+            "    def Xform \"Rocks\"\n    {\n\
+             \x20       token lunco:layer = \"rocks\"\n\
+             \x20       float lunco:layer:density = 3.0\n\
+             \x20       int64 lunco:layer:seed = 1234\n\
+             \x20   }\n",
+            "",
+        );
+        let (_, _, spec) = bridge_with_spec(&scene);
+        assert_eq!(spec.seed, 1234);
+    }
+
+    #[test]
+    fn rock_authoring_preserves_a_layer_local_seed() {
+        let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
+        spec.seed = 99;
+        let mut ops = Vec::new();
+        super::author_rock_layer_attrs(&mut ops, "/Terrain/Rocks", &spec, 1234);
+        let seed = ops.iter().find_map(|op| match op {
+            lunco_usd::UsdOp::SetAttribute { name, value, .. } if name == "lunco:layer:seed" => {
+                Some(value.as_str())
+            }
+            _ => None,
+        });
+        assert_eq!(seed, Some("1234"));
     }
 
     #[test]
