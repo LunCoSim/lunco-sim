@@ -1024,6 +1024,56 @@ fn next_layer_name(
         .expect("an unbounded layer name search always finds a free name")
 }
 
+/// Add only the missing prim specs needed to author below a referenced parent.
+/// A Twin wrapper commonly authors /Traverse and references the actual scene,
+/// so /Traverse/Terrain exists in the composed stage but not in the wrapper's
+/// authored layer. AddPrim rejects a missing parent; a minimal runtime overlay
+/// for each missing ancestor makes the child layer addressable without
+/// flattening or copying the referenced scene.
+fn ensure_document_parent_chain(
+    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    parent_path: &str,
+) -> bool {
+    let segments: Vec<&str> = parent_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let mut current = String::new();
+    for segment in segments {
+        let path = format!("{current}/{segment}");
+        let Ok(sdf) = openusd::sdf::Path::new(&path) else {
+            return false;
+        };
+        let exists = registry.host(doc).is_some_and(|host| {
+            host.document().data().spec(&sdf).is_some()
+                || host.document().runtime_data().spec(&sdf).is_some()
+        });
+        if !exists {
+            if let Err(error) = registry.apply(
+                doc,
+                lunco_usd::UsdOp::AddPrim {
+                    edit_target: lunco_usd::LayerId::runtime(),
+                    parent_path: if current.is_empty() {
+                        "/".to_string()
+                    } else {
+                        current.clone()
+                    },
+                    name: segment.to_string(),
+                    type_name: Some("Xform".to_string()),
+                    reference: None,
+                },
+            ) {
+                warn!("[obstacle-usd] failed to overlay terrain parent {path} in document {doc}: {error}");
+                return false;
+            }
+        }
+        current = path;
+    }
+    true
+}
+
 /// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
 /// onto its USD `craters`/`overzoom`/`rocks` layer prims (runtime layer) rather than mutating the
 /// `TerrainLayerStack` directly. The USD mutation then drives everything automatically
@@ -1101,62 +1151,65 @@ fn on_obstacle_spec_authored(
         });
         let has_rock_layer = layers.iter().any(|(_, ty)| ty == "rocks");
 
-        // A Twin need not pre-author either generic layer. Enabling the relevant
-        // Inspector switch creates the missing prim in the runtime overlay. A
-        // A Twin that already has enabled overzoom uses that prim for the
-        // Craters master switch. An authored-but-disabled overzoom layer does
-        // not block adding the regular crater layer when the user enables it.
-        for (kind, base_name, should_add) in [
-            (
-                "craters",
-                "Craters",
-                !has_crater_layer && !has_enabled_overzoom_layer && spec.craters.enabled,
-            ),
-            ("rocks", "Rocks", !has_rock_layer && spec.rocks.enabled),
-        ] {
-            if layers.iter().any(|(_, ty)| ty == kind) {
-                continue;
-            }
-            if let Some(path) = document_layer_path(&registry, doc, &prim_path.path, kind) {
-                layers.push((path, kind.to_string()));
-            } else if should_add {
-                let name = next_layer_name(&reader, &sdf, &registry, doc, base_name);
-                let path = format!("{}/{}", prim_path.path.trim_end_matches('/'), name);
-                if let Err(error) = registry.apply(
-                    doc,
-                    lunco_usd::UsdOp::AddPrim {
-                        edit_target: lunco_usd::LayerId::runtime(),
-                        parent_path: prim_path.path.clone(),
-                        name,
-                        type_name: Some("Xform".to_string()),
-                        reference: None,
-                    },
-                ) {
-                    warn!("[obstacle-usd] failed to add {kind} layer {path} in document {doc}: {error}");
-                    continue;
-                }
-                if let Err(error) = registry.apply(
-                    doc,
-                    lunco_usd::UsdOp::SetAttribute {
-                        edit_target: lunco_usd::LayerId::runtime(),
-                        path: path.clone(),
-                        name: "lunco:layer".to_string(),
-                        type_name: "token".to_string(),
-                        value: format!("\"{kind}\""),
-                    },
-                ) {
-                    warn!("[obstacle-usd] failed to classify {path} as {kind} in document {doc}: {error}");
-                    continue;
-                }
-                layers.push((path, kind.to_string()));
-            }
-        }
-        debug!(
-            "[obstacle-usd] discovered {} composed layer child(ren) for {}",
-            layers.len(),
-            prim_path.path
-        );
         let author_layers = || {
+            // A Twin need not pre-author either generic layer. Enabling the relevant
+            // Inspector switch creates the missing prim in the runtime overlay. A
+            // Twin that already has enabled overzoom uses that prim for the Craters
+            // master switch. An authored-but-disabled overzoom layer does not block
+            // adding the regular crater layer when the user enables it.
+            for (kind, base_name, should_add) in [
+                (
+                    "craters",
+                    "Craters",
+                    !has_crater_layer && !has_enabled_overzoom_layer && spec.craters.enabled,
+                ),
+                ("rocks", "Rocks", !has_rock_layer && spec.rocks.enabled),
+            ] {
+                if layers.iter().any(|(_, ty)| ty == kind) {
+                    continue;
+                }
+                if let Some(path) = document_layer_path(&registry, doc, &prim_path.path, kind) {
+                    layers.push((path, kind.to_string()));
+                } else if should_add {
+                    if !ensure_document_parent_chain(&mut registry, doc, &prim_path.path) {
+                        continue;
+                    }
+                    let name = next_layer_name(&reader, &sdf, &registry, doc, base_name);
+                    let path = format!("{}/{}", prim_path.path.trim_end_matches('/'), name);
+                    if let Err(error) = registry.apply(
+                        doc,
+                        lunco_usd::UsdOp::AddPrim {
+                            edit_target: lunco_usd::LayerId::runtime(),
+                            parent_path: prim_path.path.clone(),
+                            name,
+                            type_name: Some("Xform".to_string()),
+                            reference: None,
+                        },
+                    ) {
+                        warn!("[obstacle-usd] failed to add {kind} layer {path} in document {doc}: {error}");
+                        continue;
+                    }
+                    if let Err(error) = registry.apply(
+                        doc,
+                        lunco_usd::UsdOp::SetAttribute {
+                            edit_target: lunco_usd::LayerId::runtime(),
+                            path: path.clone(),
+                            name: "lunco:layer".to_string(),
+                            type_name: "token".to_string(),
+                            value: format!("\"{kind}\""),
+                        },
+                    ) {
+                        warn!("[obstacle-usd] failed to classify {path} as {kind} in document {doc}: {error}");
+                        continue;
+                    }
+                    layers.push((path, kind.to_string()));
+                }
+            }
+            debug!(
+                "[obstacle-usd] discovered {} composed layer child(ren) for {}",
+                layers.len(),
+                prim_path.path
+            );
             for (path, layer_type) in layers {
                 match layer_type.as_str() {
                     "craters" => {
