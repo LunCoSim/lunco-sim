@@ -896,6 +896,10 @@ pub fn on_compile_model(
     };
     // Find or spawn the entity linked to this document.
     let linked = registry.entities_linked_to(doc);
+    let source_uri = registry
+        .host(doc)
+        .map(|host| host.document().origin().session_uri())
+        .unwrap_or_default();
 
     // Idempotency gate: a Compile on a model that is already compiled,
     // clean (same document generation as the last successful compile),
@@ -939,6 +943,7 @@ pub fn on_compile_model(
             // `compiled_generation` by the post-compile success handler.
             model.pending_generation = doc_generation;
             model.model_name = model_name.clone();
+            model.source_uri = source_uri.clone();
             model.parameters = params;
             model.inputs.clear();
             for (name, val) in &inputs_with_defaults {
@@ -989,6 +994,7 @@ pub fn on_compile_model(
                 Name::new(model_name.clone()),
                 ModelicaModel {
                     model_name: model_name.clone(),
+                    source_uri: source_uri.clone(),
                     current_time: 0.0,
                     // The world clock this model is coupled to starts with it
                     // (A3 — the macro-step target, advanced one fixed-tick delta

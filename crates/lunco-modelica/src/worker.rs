@@ -3077,6 +3077,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 #[reflect(Component)]
 pub struct ModelicaModel {
     pub model_name: String,
+    /// Canonical source asset/document URI used for user-facing readiness
+    /// notifications. Empty for generated or manually constructed models.
+    #[reflect(ignore)]
+    pub source_uri: String,
     /// The model's OWN clock — `stepper.time()` as of the last result that
     /// landed. Lags [`Self::target_time`] by at least the in-flight macro step.
     pub current_time: f64,

@@ -937,6 +937,11 @@ fn on_obstacle_spec_authored(
     mut commands: Commands,
 ) {
     let spec = &trigger.event().spec;
+    debug!(
+        "[obstacle-usd] spec update received: {} terrain(s), {} canonical stage(s)",
+        terrains.iter().count(),
+        stages.len(),
+    );
     // The USD crater/rock layer parsers use `density > 0` as the on/off signal
     // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
     // Inspector's `enabled` checkbox must fold into the authored density here. The
