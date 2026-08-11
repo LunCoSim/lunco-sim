@@ -21,6 +21,12 @@ use super::{
 #[derive(Component)]
 pub struct TerrainRock;
 
+/// Marks a rock whose entity is owned by the procedural scatterer and may be
+/// recycled on the next refresh. Hand-placed rocks intentionally do not carry
+/// this marker: their identity belongs to the authored layer instance.
+#[derive(Component)]
+pub(crate) struct ProceduralRock;
+
 /// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
 const ROCK_BUCKETS: usize = 6;
 /// Hard cap on scattered rock ENTITIES regardless of density × area. Scattering at a
@@ -282,46 +288,60 @@ impl TerrainLayer for RockScatterLayer {
                 bucket_radius_of(size_bucket(r))
             };
 
+            let mut reused = 0usize;
             let mut spawned = 0usize;
-            cx.commands.entity(cx.terrain).with_children(|parent| {
-                for p in placements.iter() {
-                    let y = lunco_terrain_core::HeightSource::height_at(
-                        oracle,
-                        p.pos.x as f64,
-                        p.pos.y as f64,
-                    ) as f32;
-                    let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
-                    let mut rock = parent.spawn((
-                        TerrainRock,
-                        TerrainScatterEntity,
-                        TerrainScatterOwner(cx.terrain),
-                        Name::new("TerrainRock"),
-                        // Procedural scatter, re-spawned as the field restreams — runtime
-                        // detail, not authored content. (The *placed* rock below is
-                        // authored and stays visible.)
-                        lunco_core::SystemManaged,
-                        Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
-                            .with_rotation(Quat::from_rotation_y(p.yaw)),
-                        Visibility::Inherited,
-                        RigidBody::Static,
-                        Collider::sphere((r_vis * 0.6) as f64),
-                    ));
-                    if let Some(handles) = &bucket_handles {
-                        // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
-                        // `NotShadowCaster` for it. Cloning the look does NOT clone a
-                        // material: every clone keys to the same cached one.
-                        rock.try_insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
-                        // Distance LOD cull — native only (see `rock_visibility_range`).
-                        #[cfg(not(target_arch = "wasm32"))]
-                        rock.try_insert(rock_visibility_range());
-                    }
+            for p in placements.iter() {
+                let y = lunco_terrain_core::HeightSource::height_at(
+                    oracle,
+                    p.pos.x as f64,
+                    p.pos.y as f64,
+                ) as f32;
+                let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
+                let entity = if let Some(entity) = cx.rock_pool.pop() {
+                    reused += 1;
+                    entity
+                } else {
                     spawned += 1;
+                    let entity = cx.commands.spawn_empty().id();
+                    cx.commands
+                        .entity(entity)
+                        .insert((ChildOf(cx.terrain), TerrainScatterOwner(cx.terrain)));
+                    entity
+                };
+                let mut rock = cx.commands.entity(entity);
+                rock.insert((
+                    TerrainRock,
+                    ProceduralRock,
+                    TerrainScatterEntity,
+                    TerrainScatterOwner(cx.terrain),
+                    Name::new("TerrainRock"),
+                    // Procedural scatter, re-spawned as the field restreams — runtime
+                    // detail, not authored content. (The *placed* rock below is
+                    // authored and stays visible.)
+                    lunco_core::SystemManaged,
+                    Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
+                        .with_rotation(Quat::from_rotation_y(p.yaw)),
+                    Visibility::Inherited,
+                    RigidBody::Static,
+                    Collider::sphere((r_vis * 0.6) as f64),
+                ));
+                if let Some(handles) = &bucket_handles {
+                    // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
+                    // `NotShadowCaster` for it. Cloning the look does NOT clone a
+                    // material: every clone keys to the same cached one.
+                    rock.try_insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
+                    // Distance LOD cull — native only (see `rock_visibility_range`).
+                    #[cfg(not(target_arch = "wasm32"))]
+                    rock.try_insert(rock_visibility_range());
                 }
-            });
+            }
 
             debug!(
-                "[terrain-layer/rocks] scattered {spawned} rock(s) (±{:.0} m region, density {}/ha)",
-                half, self.rocks.density
+                "[terrain-layer/rocks] scattered {} rock(s), reused {reused}, spawned {spawned} \
+                 (±{:.0} m region, density {}/ha)",
+                reused + spawned,
+                half,
+                self.rocks.density
             );
         }
     }

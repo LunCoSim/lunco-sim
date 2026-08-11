@@ -2106,6 +2106,7 @@ pub(crate) fn finish_dem_restamp(
             Entity,
             &crate::terrain_layers::TerrainScatterOwner,
             &mut Transform,
+            Option<&crate::terrain_layers::ProceduralRock>,
         ),
         With<crate::terrain_layers::TerrainScatterEntity>,
     >,
@@ -2173,9 +2174,18 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, owner, _) in &mut scattered {
+            for (scatter_entity, owner, _, procedural) in &mut scattered {
                 if owner.0 == entity {
-                    commands.entity(scatter_entity).try_despawn();
+                    if procedural.is_some() {
+                        commands
+                            .entity(scatter_entity)
+                            .try_insert(Visibility::Hidden);
+                        commands
+                            .entity(scatter_entity)
+                            .try_remove::<(Collider, RigidBody)>();
+                    } else {
+                        commands.entity(scatter_entity).try_despawn();
+                    }
                 }
             }
             if was_pending {
@@ -2287,9 +2297,18 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            for (scatter_entity, owner, _) in &mut scattered {
+            for (scatter_entity, owner, _, procedural) in &mut scattered {
                 if owner.0 == entity {
-                    commands.entity(scatter_entity).try_despawn();
+                    if procedural.is_some() {
+                        commands
+                            .entity(scatter_entity)
+                            .try_insert(Visibility::Hidden);
+                        commands
+                            .entity(scatter_entity)
+                            .try_remove::<(Collider, RigidBody)>();
+                    } else {
+                        commands.entity(scatter_entity).try_despawn();
+                    }
                 }
             }
         }
@@ -2326,6 +2345,7 @@ fn refresh_scatter_heights(
             Entity,
             &crate::terrain_layers::TerrainScatterOwner,
             &mut Transform,
+            Option<&crate::terrain_layers::ProceduralRock>,
         ),
         With<crate::terrain_layers::TerrainScatterEntity>,
     >,
@@ -2339,7 +2359,7 @@ fn refresh_scatter_heights(
     let Some([min_x, min_z, max_x, max_z]) = bounds else {
         return;
     };
-    for (_, owner, mut transform) in scattered.iter_mut() {
+    for (_, owner, mut transform, _) in scattered.iter_mut() {
         if owner.0 != terrain {
             continue;
         }
