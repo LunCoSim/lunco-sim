@@ -965,6 +965,23 @@ impl UsdDocument {
         }
     }
 
+    /// A referenced or payloaded subtree is present in the composed stage but
+    /// deliberately absent from this document's authored `sdf::Data`. A runtime
+    /// attribute override on such a path is valid USD: the edit layer first
+    /// defines a local over opinion, then authors the attribute on it.
+    fn path_is_under_composed_arc(&self, path: &SdfPath) -> bool {
+        let mut ancestor = Some(path.clone());
+        while let Some(path) = ancestor {
+            if self.base.spec(&path).is_some_and(|spec| {
+                spec.get("references").is_some() || spec.get("payload").is_some()
+            }) {
+                return true;
+            }
+            ancestor = path.parent();
+        }
+        false
+    }
+
     /// Validate that `path` names a prim authored in **this specific layer** —
     /// you can only remove/move from a layer what that layer holds — and not one
     /// whose ONLY spec in the layer lives inside a variant selection. A namespace
@@ -1448,7 +1465,16 @@ impl Document for UsdDocument {
                 value,
                 ..
             } => {
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let (prim_sdf, define_local_over) = match self.require_prim_anywhere(&path) {
+                    Ok(prim) => (prim, false),
+                    Err(error) => {
+                        let prim = parse_prim_path(&path)?;
+                        if !self.path_is_under_composed_arc(&prim) {
+                            return Err(error);
+                        }
+                        (prim, true)
+                    }
+                };
 
                 // The single place attribute values are turned into USD values, so
                 // NO call site ever hand-escapes. Two rules by type:
@@ -1562,6 +1588,11 @@ impl Document for UsdDocument {
                 // authored, because nothing knew better) or to omit `custom` on a
                 // per-model `lunco:` param that no schema declares.
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if define_local_over {
+                    stage
+                        .define_prim(prim_sdf.as_str())
+                        .map_err(author_err)?;
+                }
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
                     .map_err(author_err)?
@@ -3880,6 +3911,41 @@ mod tests {
             doc.composed_source().contains("density = 4"),
             "composed USDA source must carry the override:\n{}",
             doc.composed_source()
+        );
+    }
+
+    #[test]
+    fn runtime_set_attribute_can_override_a_referenced_prim() {
+        // A wrapper document owns only /Traverse; the terrain children arrive
+        // through its reference and therefore do not occur in the authored data.
+        // A runtime over opinion must still be able to control one of those
+        // composed children without flattening the referenced scene.
+        let base = "#usda 1.0\n\
+def Xform \"Traverse\" (\n\
+    prepend references = @./traverse.usda@</Traverse>\n\
+)\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(42),
+            base,
+            DocumentOrigin::writable_file("/tmp/referenced-wrapper.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: "/Traverse/Terrain/Overzoom".into(),
+            name: "lunco:layer:enabled".into(),
+            type_name: "bool".into(),
+            value: "false".into(),
+        })
+        .expect("runtime over opinion on a referenced child is valid");
+        let path = SdfPath::new("/Traverse/Terrain/Overzoom").unwrap();
+        assert_eq!(
+            doc.runtime_data().prim_attribute_value::<bool>(&path, "lunco:layer:enabled"),
+            Some(false),
+            "the override must be authored in the runtime layer"
+        );
+        assert!(
+            doc.source().contains("references"),
+            "the base wrapper must remain referenced rather than flattened"
         );
     }
 
