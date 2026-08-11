@@ -9,7 +9,7 @@ use avian3d::prelude::{Collider, RigidBody};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use lunco_obstacle_field::rock::faceted_rock_mesh;
-use lunco_obstacle_field::sampler::{salt, sample_layer};
+use lunco_obstacle_field::sampler::{salt, sample_layer, Placement};
 use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
 use super::{
@@ -28,6 +28,11 @@ const ROCK_BUCKETS: usize = 6;
 /// camera). Camera-following rock streaming is the real fix for uniform full-map
 /// density at high counts; this gives full-map coverage cheaply meanwhile.
 const MAX_ROCKS: usize = 6000;
+/// Bound the in-memory placement cache while still covering normal inspector
+/// tuning. The cache stores only XZ/size/yaw data, never ECS entities or meshes.
+const MAX_CACHED_ROCK_FIELDS: usize = 32;
+/// Bump when the deterministic sampler or placement interpretation changes.
+const ROCK_SCATTER_CACHE_VERSION: u64 = 1;
 /// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
 /// Rocks are scattered only in a near-origin region (`region_half_extent`, ~±300 m),
 /// and unlike craters they have NO coarse always-on fallback — once culled they
@@ -171,31 +176,49 @@ impl TerrainLayer for RockScatterLayer {
                 );
             }
 
-            let placements = sample_layer(
-                self.seed,
-                salt::ROCKS,
-                self.pattern,
-                half,
-                count,
-                self.rocks.size,
-                self.rocks.dynamic_fraction,
-            );
+            let mut cache_key = lunco_precompute::Fnv1a::new();
+            cache_key.write_u64(ROCK_SCATTER_CACHE_VERSION);
+            cache_key.write_u64(self.scatter_fingerprint().unwrap_or_default());
+            cache_key.write_u64(half.to_bits() as u64);
+            cache_key.write_u64(count as u64);
+            let cache_key = cache_key.finish();
+            let placements: Arc<[Placement]> =
+                if let Some(cached) = cx.rock_assets.placements.get(&cache_key) {
+                    cached.clone()
+                } else {
+                    let generated: Arc<[Placement]> = Arc::from(
+                        sample_layer(
+                            self.seed,
+                            salt::ROCKS,
+                            self.pattern,
+                            half,
+                            count,
+                            self.rocks.size,
+                            self.rocks.dynamic_fraction,
+                        )
+                        .into_boxed_slice(),
+                    );
+                    if cx.rock_assets.placements.len() >= MAX_CACHED_ROCK_FIELDS {
+                        cx.rock_assets.placements.clear();
+                    }
+                    cx.rock_assets
+                        .placements
+                        .insert(cache_key, generated.clone());
+                    generated
+                };
 
             let size = self.rocks.size;
             let span = (size.max - size.min).max(1e-3);
 
             // Build shared visual meshes per size bucket (client only). Done BEFORE the
             // spawn loop so the `cx.meshes` borrow is released before `cx.commands` is.
+            let rock_assets = &mut *cx.rock_assets;
             let bucket_handles: Option<Vec<Handle<Mesh>>> =
                 cx.meshes.as_deref_mut().map(|meshes| {
                     (0..ROCK_BUCKETS)
                         .map(|b| {
                             let r = size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32);
-                            meshes.add(faceted_rock_mesh(
-                                self.seed ^ (0xB0 + b as u64),
-                                4,
-                                r.max(0.05),
-                            ))
+                            shared_rock_mesh(rock_assets, meshes, size_bucket(r))
                         })
                         .collect()
                 });
@@ -214,12 +237,14 @@ impl TerrainLayer for RockScatterLayer {
             // or the wheel stops on an invisible shell up to a metre before the
             // visible rock: THE "rover hits an invisible wall" report. 0.6·r sunk
             // 0.25·r keeps the collider inside the visual mass.
-            let bucket_radius =
-                |b: usize| -> f32 { size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32) };
+            let bucket_radius = |b: usize| -> f32 {
+                let r = size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32);
+                bucket_radius_of(size_bucket(r))
+            };
 
             let mut spawned = 0usize;
             cx.commands.entity(cx.terrain).with_children(|parent| {
-                for p in &placements {
+                for p in placements.iter() {
                     let y = lunco_terrain_core::HeightSource::height_at(
                         oracle,
                         p.pos.x as f64,

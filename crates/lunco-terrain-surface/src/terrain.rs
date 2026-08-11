@@ -810,7 +810,7 @@ struct DemBuild {
 }
 
 #[derive(Component, Clone, Copy)]
-struct DemVisualTargetRes(usize);
+pub(crate) struct DemVisualTargetRes(usize);
 
 /// Build the optional static visual product from the composed oracle. The
 /// collider and retained base never pass through this function: `targetRes` is
@@ -1894,7 +1894,7 @@ pub(crate) struct DemRestampPending;
 /// drag's many changes into ONE trailing re-stamp is what keeps live tuning from
 /// piling up back-to-back full re-bakes (the "it stuck" when changing repeatedly).
 #[derive(Component)]
-struct DemRestampDebounce(Timer);
+pub(crate) struct DemRestampDebounce(Timer);
 
 /// Settle delay before a layer edit triggers the off-thread re-stamp. Long enough to
 /// swallow a continuous slider drag, short enough to feel responsive on release.
@@ -1972,7 +1972,7 @@ fn spawn_restamp_task(
 /// the retained [`DemBaseGrid`]. The expensive work runs OFF-THREAD ([`spawn_restamp_task`])
 /// so the edit never freezes the frame; [`finish_dem_restamp`] swaps the result in.
 #[allow(clippy::type_complexity)]
-fn start_dem_restamp(
+pub(crate) fn start_dem_restamp(
     mut events: MessageReader<RegenerateTerrainLayers>,
     time: Res<Time>,
     mut commands: Commands,
@@ -1984,6 +1984,9 @@ fn start_dem_restamp(
         Option<&mut DemRestampDebounce>,
         Has<Mesh3d>,
         Option<&DemVisualTargetRes>,
+        &crate::stream_viz::DemHeightField,
+        Option<&crate::terrain_layers::ScatteredContent>,
+        Has<TerrainRescatter>,
     )>,
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
@@ -1993,7 +1996,19 @@ fn start_dem_restamp(
     // command-ordering races a one-shot message would have), or when forced.
     let forced = !events.is_empty();
     events.clear();
-    for (entity, base, stack, busy, debounce, has_static_mesh, visual_target) in &mut q {
+    for (
+        entity,
+        base,
+        stack,
+        busy,
+        debounce,
+        has_static_mesh,
+        visual_target,
+        height_field,
+        scattered_content,
+        rescatter,
+    ) in &mut q
+    {
         if forced || stack.is_changed() {
             // (Re)arm the debounce on every change so a continuous drag keeps
             // pushing the deadline out → exactly one re-stamp once the drag stops.
@@ -2022,6 +2037,33 @@ fn start_dem_restamp(
         if busy {
             // A re-stamp is still running → mark for one coalesced trailing run.
             commands.entity(entity).try_insert(DemRestampPending);
+            continue;
+        }
+
+        // Classify analytic stacks before creating an oracle. A rocks-only toggle
+        // leaves the composed height key unchanged, so rebuilding an oracle here
+        // would only discover at finish time what we can prove from layer keys now.
+        // Raster-stamp stacks return `None` and take the normal worker path.
+        if stack.analytic_surface_key(
+            base.1,
+            base.0.half_extent,
+            base.0.border_datum(),
+            curvature_radius,
+        ) == Some(height_field.0.surface_key())
+        {
+            let scatter_key = stack.scatter_fingerprint();
+            let scatter_changed = scattered_content.map_or(true, |c| c.0 != scatter_key);
+            if scatter_changed || rescatter {
+                commands
+                    .entity(entity)
+                    .try_insert(crate::terrain_layers::TerrainScatterRefresh);
+                commands.entity(entity).try_remove::<TerrainRescatter>();
+                debug!(
+                    "[dem-terrain] scatter-only change; skipped oracle, tile and collider rebuild"
+                );
+            } else {
+                debug!("[dem-terrain] analytic recompose unchanged — skipped terrain rebuild");
+            }
             continue;
         }
         spawn_restamp_task(
