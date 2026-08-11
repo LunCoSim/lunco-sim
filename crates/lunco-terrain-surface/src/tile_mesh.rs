@@ -435,8 +435,8 @@ mod tests {
         );
         assert_eq!(
             interior.positions.len(),
-            res * res + 4 * res,
-            "interior tiles retain all four seam skirts"
+            res * res + 2 * res,
+            "interior tiles retain only edges with a measured morph gap"
         );
 
         let corner = bake_tile_mesh(
@@ -453,7 +453,7 @@ mod tests {
         );
         assert_eq!(
             corner.positions.len(),
-            res * res + 2 * res,
+            res * res + res,
             "outer DEM edges must not grow fabricated vertical walls"
         );
     }

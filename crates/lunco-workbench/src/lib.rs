@@ -4483,8 +4483,6 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         let response = ui
             .scope(|ui| {
                 ui.set_height(18.0);
-                ui.set_min_width(status_width);
-                ui.set_width(status_width);
                 ui.set_max_width(status_width);
                 if let Some(l) = latest.as_ref() {
                     let dot_color = match l.level {
@@ -4500,10 +4498,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                     ui.label(egui::RichText::new(l.source).small().strong());
-                    let progress_width = l.progress_pct.map(|_| 128.0).unwrap_or(0.0);
-                    let text_width = (ui.available_width() - progress_width).max(40.0);
                     let text = egui::RichText::new(&l.message).small();
-                    ui.add_sized(egui::vec2(text_width, 18.0), egui::Label::new(text).wrap());
+                    ui.add(egui::Label::new(text).truncate());
                     if let Some(pct) = l.progress_pct {
                         ui.add(
                             egui::ProgressBar::new((pct as f32) / 100.0)
