@@ -502,7 +502,7 @@ pub(crate) fn scatter_terrain_layers(
         (Entity, &DemHeightField, &TerrainLayerStack),
         Or<(Without<TerrainLayersApplied>, With<TerrainScatterRefresh>)>,
     >,
-    scattered: Query<(Entity, &ChildOf), With<TerrainScatterEntity>>,
+    scattered: Query<(Entity, &TerrainScatterOwner), With<TerrainScatterEntity>>,
 ) {
     if q.is_empty() {
         return;
@@ -512,8 +512,8 @@ pub(crate) fn scatter_terrain_layers(
         // A scatter refresh deliberately keeps the height products alive. Only
         // generated children owned by this terrain are replaced; authored scene
         // children remain untouched because they do not carry the marker.
-        for (scatter_entity, parent) in &scattered {
-            if parent.parent() == entity {
+        for (scatter_entity, owner) in &scattered {
+            if owner.0 == entity {
                 commands.entity(scatter_entity).try_despawn();
             }
         }
