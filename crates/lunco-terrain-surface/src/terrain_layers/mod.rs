@@ -167,6 +167,48 @@ impl TerrainLayerStack {
         h.finish()
     }
 
+    /// Predict the composed surface key without constructing a [`SurfaceOracle`].
+    ///
+    /// This is the cheap classification path used by live layer edits. A stack
+    /// containing a raster stamp returns `None`: a stamp changes the retained
+    /// raster base and therefore must go through the normal off-thread compose.
+    /// Analytic layers already expose the same content keys consumed by
+    /// `SurfaceOracle::surface_key`, so a rocks-only edit can be identified before
+    /// any oracle, tile, mesh, or collider work starts.
+    pub fn analytic_surface_key(
+        &self,
+        base_key: u64,
+        half_extent: f32,
+        base_datum: f64,
+        curvature_radius: Option<f64>,
+    ) -> Option<u64> {
+        let mut content = lunco_precompute::Fnv1a::new();
+        let mut has_contributions = false;
+        for entry in &self.0 {
+            if entry.layer.stamps() {
+                return None;
+            }
+            if let Some(contribution) = entry.layer.height_modifier(half_extent) {
+                content.write_u64(contribution.content_key);
+                has_contributions = true;
+            }
+        }
+        if let Some(radius) = curvature_radius {
+            content
+                .write_u64(crate::oracle::curvature_contribution(radius, base_datum).content_key);
+            has_contributions = true;
+        }
+        let content_key = if has_contributions {
+            content.finish()
+        } else {
+            0
+        };
+        let mut surface = lunco_precompute::Fnv1a::new();
+        surface.write_u64(base_key);
+        surface.write_u64(content_key);
+        Some(surface.finish())
+    }
+
     /// The current consolidated edits layer (a clone), or an empty one.
     fn edits_layer(&self) -> edits::EditsLayer {
         self.0
@@ -222,6 +264,11 @@ pub struct TerrainLayersApplied;
 /// by `finish_dem_restamp` to no-op recomposes that change nothing.
 #[derive(Component)]
 pub struct ScatteredContent(pub u64);
+
+/// Requests a scatter refresh while retaining the current terrain oracle and all
+/// derived height products. This is the fast path for a scatter-only USD/spec edit.
+#[derive(Component)]
+pub(crate) struct TerrainScatterRefresh;
 
 /// Marker on every entity a scatter layer spawns, so a regenerate can despawn the
 /// whole set generically (independent of which layer produced it).
@@ -294,6 +341,11 @@ pub struct SharedRockAssets {
     /// Bucketed boulder meshes, keyed by the quantised radius bucket (see
     /// `rocks::size_bucket`).
     pub meshes: std::collections::HashMap<u32, Handle<Mesh>>,
+    /// Deterministic CPU placements, keyed by the complete rock-field content
+    /// key. Keeping placements separate from ECS entities lets an off/on toggle
+    /// reuse the same field without rerunning the sampler.
+    pub placements:
+        std::collections::HashMap<u64, std::sync::Arc<[lunco_obstacle_field::sampler::Placement]>>,
 }
 
 /// A geometry/material layer on a DEM terrain. Implement + register a parser (in its
@@ -441,18 +493,30 @@ impl TerrainLayerAppExt for App {
 /// field is built but not yet applied. Colliders spawn always (headless physics
 /// parity); visual meshes only when render assets exist.
 #[allow(clippy::too_many_arguments)]
-pub fn scatter_terrain_layers(
+pub(crate) fn scatter_terrain_layers(
     mut commands: Commands,
     meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Res<AssetServer>,
     mut rock_assets: ResMut<SharedRockAssets>,
-    q: Query<(Entity, &DemHeightField, &TerrainLayerStack), Without<TerrainLayersApplied>>,
+    q: Query<
+        (Entity, &DemHeightField, &TerrainLayerStack),
+        Or<(Without<TerrainLayersApplied>, With<TerrainScatterRefresh>)>,
+    >,
+    scattered: Query<(Entity, &ChildOf), With<TerrainScatterEntity>>,
 ) {
     if q.is_empty() {
         return;
     }
     let mut meshes = meshes;
     for (entity, dem, stack) in &q {
+        // A scatter refresh deliberately keeps the height products alive. Only
+        // generated children owned by this terrain are replaced; authored scene
+        // children remain untouched because they do not carry the marker.
+        for (scatter_entity, parent) in &scattered {
+            if parent.parent() == entity {
+                commands.entity(scatter_entity).try_despawn();
+            }
+        }
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
         // these deferred commands apply — skip silently rather than panic.
@@ -460,6 +524,9 @@ pub fn scatter_terrain_layers(
             TerrainLayersApplied,
             ScatteredContent(stack.scatter_fingerprint()),
         ));
+        commands
+            .entity(entity)
+            .try_remove::<TerrainScatterRefresh>();
         // Material/shader layers configure the terrain entity first…
         for entry in &stack.0 {
             entry.layer.configure(entity, &mut commands);
@@ -476,5 +543,46 @@ pub fn scatter_terrain_layers(
         for entry in &stack.0 {
             entry.layer.scatter(&mut cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analytic_surface_key_matches_composed_oracle() {
+        let base = Arc::new(HeightGrid {
+            res: 9,
+            half_extent: 32.0,
+            heights: vec![0.0; 81],
+        });
+        let base_key = crate::oracle::grid_key(&base);
+        let mut stack = TerrainLayerStack::default();
+        stack.push_layer(
+            "craters",
+            crater_layer(
+                lunco_obstacle_field::spec::CraterLayer {
+                    enabled: true,
+                    density: 100.0,
+                    size: lunco_obstacle_field::spec::SizeDist::new(2.0, 4.0, 8.0, 0.7),
+                    depth_ratio: 0.3,
+                    rim_height_ratio: 0.18,
+                },
+                42,
+            ),
+        );
+        let contributions: Vec<_> = stack
+            .0
+            .iter()
+            .filter_map(|entry| entry.layer.height_modifier(base.half_extent))
+            .collect();
+        let oracle =
+            crate::oracle::SurfaceOracle::new_with_base_key(base.clone(), contributions, base_key);
+
+        assert_eq!(
+            stack.analytic_surface_key(base_key, base.half_extent, base.border_datum(), None,),
+            Some(oracle.surface_key())
+        );
     }
 }

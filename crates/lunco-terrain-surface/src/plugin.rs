@@ -120,7 +120,12 @@ impl Plugin for TerrainSurfacePlugin {
         // (procedural scatter AND `PlaceRock`) so rocks batch instead of each one
         // adding a draw call + a bind group.
         app.init_resource::<crate::terrain_layers::SharedRockAssets>();
-        app.add_systems(Update, crate::terrain_layers::scatter_terrain_layers);
+        app.add_systems(
+            Update,
+            crate::terrain_layers::scatter_terrain_layers
+                .after(crate::terrain::start_dem_restamp)
+                .after(crate::terrain::finish_dem_restamp),
+        );
         // The frame contract the whole analytic surface rests on: a DEM terrain
         // is grid-direct at the origin cell, so oracle coordinates ARE world-grid
         // coordinates (`crate::surface_query`). Checked when a terrain appears,
