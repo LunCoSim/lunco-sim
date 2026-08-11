@@ -4625,14 +4625,20 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                                 .small()
                                 .color(theme.tokens.text_subdued),
                         };
-                        ui.horizontal_wrapped(|ui| {
+                        ui.horizontal(|ui| {
+                            // Reserve the whole row so the message gets the
+                            // remaining width and wraps within the popup,
+                            // rather than making the row only as wide as its
+                            // contents.
+                            ui.set_width(ui.available_width());
                             ui.label(level_tag.monospace());
                             ui.label(
                                 egui::RichText::new(format!("[{}]", ev.source))
                                     .small()
                                     .strong(),
                             );
-                            ui.add(
+                            ui.add_sized(
+                                [ui.available_width(), 0.0],
                                 egui::Label::new(egui::RichText::new(&ev.message).small()).wrap(),
                             );
                         });

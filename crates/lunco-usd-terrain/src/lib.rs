@@ -918,16 +918,19 @@ fn author_layer_attr(
     type_name: &str,
     value: String,
 ) {
-    let _ = registry.apply(
+    let name = ns_attr(NS_LAYER, name);
+    if let Err(error) = registry.apply(
         doc,
         lunco_usd::UsdOp::SetAttribute {
             edit_target: lunco_usd::LayerId::runtime(),
             path: path.to_string(),
-            name: name.to_string(),
+            name: name.clone(),
             type_name: type_name.to_string(),
             value,
         },
-    );
+    ) {
+        warn!("[obstacle-usd] failed to author {path}.{name} in document {doc}: {error}");
+    }
 }
 
 /// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
@@ -949,8 +952,17 @@ fn on_obstacle_spec_authored(
     stages: NonSend<lunco_usd_bevy::CanonicalStages>,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
 ) {
-    let Some(mut registry) = registry else { return };
+    let Some(mut registry) = registry else {
+        debug!("[obstacle-usd] spec update ignored: USD document registry is unavailable");
+        return;
+    };
     let spec = &trigger.event().spec;
+    debug!(
+        "[obstacle-usd] spec update received: {} terrain(s), {} canonical stage(s), {} document(s)",
+        terrains.iter().count(),
+        stages.len(),
+        registry.ids().count(),
+    );
     // The USD crater/rock layer parsers use `density > 0` as the on/off signal
     // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
     // Inspector's `enabled` checkbox must fold into the authored density here. The
@@ -990,6 +1002,11 @@ fn on_obstacle_spec_authored(
                     .map(|ty| (child.as_str().to_string(), ty))
             })
             .collect();
+        debug!(
+            "[obstacle-usd] discovered {} composed layer child(ren) for {}",
+            layers.len(),
+            prim_path.path
+        );
         for (path, layer_type) in layers {
             match layer_type.as_str() {
                 "craters" => {
@@ -1461,11 +1478,7 @@ mod dem_bridge_tests {
 
     fn bridge_with_spec(
         scene: &str,
-    ) -> (
-        World,
-        Entity,
-        lunco_obstacle_field::spec::ObstacleFieldSpec,
-    ) {
+    ) -> (World, Entity, lunco_obstacle_field::spec::ObstacleFieldSpec) {
         let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", scene))
             .expect("stage builds");
         let view = cs.view();
@@ -1621,7 +1634,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
             .expect("terrain layer stack attached");
         assert!(
-            stack.0.iter().any(|entry| entry.id.as_str().ends_with("Detail")),
+            stack
+                .0
+                .iter()
+                .any(|entry| entry.id.as_str().ends_with("Detail")),
             "enabled overzoom must remain in the composed stack"
         );
     }
@@ -1646,7 +1662,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
             .expect("terrain layer stack attached");
         assert!(
-            stack.0.iter().all(|entry| !entry.id.as_str().ends_with("Detail")),
+            stack
+                .0
+                .iter()
+                .all(|entry| !entry.id.as_str().ends_with("Detail")),
             "disabled overzoom must not contribute a height layer"
         );
     }

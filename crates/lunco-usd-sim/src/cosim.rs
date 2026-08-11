@@ -1146,6 +1146,7 @@ pub fn dispatch_loaded_modelica_sources(
         component.inputs = inputs.clone();
         commands.entity(entity).try_insert(ModelicaModel {
             model_name: model_name.clone(),
+            source_uri: pending.asset_path.clone(),
             parameters,
             inputs,
             // Durable verdict: `modelica_status` reads this first, so the

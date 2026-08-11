@@ -3294,8 +3294,12 @@ fn report_dome_environment_status(
 #[cfg(feature = "ui")]
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
-    models: Query<&lunco_modelica::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
+    models: Query<
+        (Entity, &lunco_modelica::ModelicaModel),
+        With<lunco_usd_sim::cosim::UsdSourcedCosim>,
+    >,
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut last_ready: Local<std::collections::HashMap<Entity, bool>>,
 ) {
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
@@ -3308,10 +3312,27 @@ fn report_modelica_status(
     // the first tick that would make the participant Running can never happen.
     // The authoritative source lifecycle is the Modelica model itself; the
     // solver's first-step hold remains owned by the readiness subsystem.
-    let compiling = models
-        .iter()
-        .filter(|model| model.is_compiling || !model.is_compiled)
-        .count();
+    let mut live_entities = std::collections::HashSet::new();
+    let mut compiling = 0;
+    for (entity, model) in &models {
+        live_entities.insert(entity);
+        let ready = model.is_compiled && !model.is_compiling && model.last_error.is_none();
+        if ready && !last_ready.get(&entity).copied().unwrap_or(false) {
+            bus.push(
+                SOURCE,
+                lunco_workbench::status_bus::StatusLevel::Info,
+                format!(
+                    "Modelica ready: {}",
+                    modelica_source_label(&model.source_uri, &model.model_name),
+                ),
+            );
+        }
+        last_ready.insert(entity, ready);
+        if !ready && model.last_error.is_none() {
+            compiling += 1;
+        }
+    }
+    last_ready.retain(|entity, _| live_entities.contains(entity));
 
     if pending > 0 {
         bus.set_progress(
@@ -3329,6 +3350,50 @@ fn report_modelica_status(
         );
     } else {
         bus.remove_progress(SOURCE);
+    }
+}
+
+fn modelica_source_label(source_uri: &str, model_name: &str) -> String {
+    source_uri
+        .rsplit(['/', '\\'])
+        .find(|name| !name.is_empty())
+        .filter(|name| *name != source_uri)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            if source_uri.is_empty() {
+                model_name.to_owned()
+            } else {
+                source_uri.to_owned()
+            }
+        })
+}
+
+#[cfg(test)]
+mod modelica_status_tests {
+    use super::modelica_source_label;
+
+    #[test]
+    fn readiness_label_prefers_source_file_name() {
+        assert_eq!(
+            modelica_source_label("lunco://models/lander.mo", "Lander"),
+            "lander.mo"
+        );
+    }
+
+    #[test]
+    fn readiness_label_falls_back_to_model_name_for_generated_models() {
+        assert_eq!(
+            modelica_source_label("", "GeneratedNetwork"),
+            "GeneratedNetwork"
+        );
+    }
+
+    #[test]
+    fn readiness_label_handles_windows_separators() {
+        assert_eq!(
+            modelica_source_label(r"C:\\models\\lander.mo", "Lander"),
+            "lander.mo"
+        );
     }
 }
 
