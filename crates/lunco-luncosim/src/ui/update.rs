@@ -90,6 +90,10 @@ pub(crate) struct UpdateState {
     pub(crate) available: Option<UpdateInfo>,
     pub(crate) ready: Option<UpdateInfo>,
     pub(crate) error: Option<String>,
+    /// Unix time when the current process last attempted a check, including a
+    /// manual check. This is separate from the persisted automatic-check
+    /// throttle so the UI remains truthful after a successful no-update result.
+    pub(crate) last_check_unix: Option<u64>,
 }
 
 impl Default for UpdateState {
@@ -99,6 +103,7 @@ impl Default for UpdateState {
             available: None,
             ready: None,
             error: None,
+            last_check_unix: None,
         }
     }
 }
@@ -178,7 +183,7 @@ fn register_update_settings_menu(world: &mut World) {
         egui::CollapsingHeader::new("How automatic updates work")
             .default_open(false)
             .show(ui, |ui| {
-                ui.label("LunCoSim checks once per day when this GUI starts.");
+                ui.label("LunCoSim checks at most once per 24 hours when this GUI starts.");
                 ui.label(
                     "A check never installs anything by itself: choose Download update, then Install and restart.",
                 );
@@ -195,7 +200,10 @@ fn register_update_settings_menu(world: &mut World) {
             return;
         };
         let original_settings = settings.clone();
-        ui.checkbox(&mut settings.auto_check, "Check once per day at startup");
+        ui.checkbox(
+            &mut settings.auto_check,
+            "Check for updates at startup (at most once per day)",
+        );
         if settings != original_settings {
             ctx.set_resource(settings);
         }
@@ -203,9 +211,14 @@ fn register_update_settings_menu(world: &mut World) {
         let Some(state) = ctx.resource::<UpdateState>().cloned() else {
             return;
         };
+        if let Some(last_check_unix) = state.last_check_unix {
+            ui.label(format_last_check(last_check_unix));
+        } else {
+            ui.label("No update check has run in this process.");
+        }
         match state.status {
             UpdateStatus::Idle => {
-                ui.label("No update check has run yet.");
+                ui.label("No update is available.");
             }
             UpdateStatus::Checking => {
                 ui.label("Checking GitHub for a newer release…");
@@ -233,23 +246,26 @@ fn register_update_settings_menu(world: &mut World) {
                 if let Some(error) = state.error.as_deref() {
                     ui.label(egui::RichText::new(error).color(egui::Color32::RED));
                 }
+                if state.ready.is_some() {
+                    ui.label("The downloaded update is still ready to install.");
+                }
             }
         }
 
         let mut actions = ctx.resource::<UpdateActions>().copied().unwrap_or_default();
         let original_actions = actions;
+        let can_check = matches!(
+            state.status,
+            UpdateStatus::Idle | UpdateStatus::NotInstalled | UpdateStatus::Error
+        ) && state.ready.is_none();
         ui.horizontal(|ui| {
-            if state.status != UpdateStatus::Checking && state.status != UpdateStatus::Downloading {
-                if ui.button("Check now").clicked() {
-                    actions.check_requested = true;
-                }
+            if can_check && ui.button("Check now").clicked() {
+                actions.check_requested = true;
             }
             if state.status == UpdateStatus::Available && ui.button("Download update").clicked() {
                 actions.download_requested = true;
             }
-            if state.status == UpdateStatus::ReadyToRestart
-                && ui.button("Install and restart").clicked()
-            {
+            if state.ready.is_some() && ui.button("Install and restart").clicked() {
                 actions.apply_requested = true;
             }
         });
@@ -267,25 +283,50 @@ fn schedule_automatic_check(
     let Some(mut settings) = settings else {
         return;
     };
-    if !settings.auto_check || state.status != UpdateStatus::Idle || actions.check_requested {
-        return;
-    }
     let now = unix_now();
-    if now.saturating_sub(settings.last_check_unix) < UPDATE_CHECK_INTERVAL_SECS {
+    if !automatic_check_due(&settings, &state, &actions, now) {
         return;
     }
     settings.last_check_unix = now;
     actions.check_requested = true;
 }
 
+fn automatic_check_due(
+    settings: &UpdateSettings,
+    state: &UpdateState,
+    actions: &UpdateActions,
+    now: u64,
+) -> bool {
+    settings.auto_check
+        && state.status == UpdateStatus::Idle
+        && !actions.check_requested
+        && now.saturating_sub(settings.last_check_unix) >= UPDATE_CHECK_INTERVAL_SECS
+}
+
 fn process_update_actions(
     mut actions: ResMut<UpdateActions>,
     mut state: ResMut<UpdateState>,
     mut tasks: ResMut<UpdateTasks>,
+    settings: Option<ResMut<UpdateSettings>>,
 ) {
     if actions.check_requested {
         actions.check_requested = false;
-        if tasks.check.is_none() && tasks.download.is_none() {
+        let can_start_check = matches!(
+            state.status,
+            UpdateStatus::Idle
+                | UpdateStatus::Available
+                | UpdateStatus::NotInstalled
+                | UpdateStatus::Error
+        ) && state.ready.is_none();
+        if can_start_check && tasks.check.is_none() && tasks.download.is_none() {
+            let now = unix_now();
+            if let Some(mut settings) = settings {
+                // A manual check also satisfies the automatic-check throttle;
+                // otherwise a manual check made after the 24-hour boundary
+                // would immediately run a duplicate automatic check next frame.
+                settings.last_check_unix = now;
+            }
+            state.last_check_unix = Some(now);
             state.status = UpdateStatus::Checking;
             state.available = None;
             state.ready = None;
@@ -413,4 +454,66 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+fn format_last_check(timestamp: u64) -> String {
+    let elapsed = unix_now().saturating_sub(timestamp);
+    let age = match elapsed {
+        0..=4 => "just now".to_string(),
+        5..=59 => format!("{elapsed} seconds ago"),
+        60..=3599 => format!("{} minutes ago", elapsed / 60),
+        3600..=86_399 => format!("{} hours ago", elapsed / 3600),
+        _ => format!("{} days ago", elapsed / 86_400),
+    };
+    format!("Last checked: {age}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_check_is_throttled() {
+        let mut settings = UpdateSettings::default();
+        settings.last_check_unix = 100;
+        let state = UpdateState::default();
+        let actions = UpdateActions::default();
+
+        assert!(!automatic_check_due(
+            &settings,
+            &state,
+            &actions,
+            100 + UPDATE_CHECK_INTERVAL_SECS - 1
+        ));
+        assert!(automatic_check_due(
+            &settings,
+            &state,
+            &actions,
+            100 + UPDATE_CHECK_INTERVAL_SECS
+        ));
+    }
+
+    #[test]
+    fn automatic_check_does_not_duplicate_pending_or_disabled_checks() {
+        let mut settings = UpdateSettings::default();
+        let state = UpdateState::default();
+        let mut actions = UpdateActions::default();
+
+        actions.check_requested = true;
+        assert!(!automatic_check_due(
+            &settings,
+            &state,
+            &actions,
+            UPDATE_CHECK_INTERVAL_SECS + 1
+        ));
+
+        actions.check_requested = false;
+        settings.auto_check = false;
+        assert!(!automatic_check_due(
+            &settings,
+            &state,
+            &actions,
+            UPDATE_CHECK_INTERVAL_SECS + 1
+        ));
+    }
 }
