@@ -46,20 +46,30 @@ The luncosim has two workspaces, switched via the tabs at the top of the window:
   plus the bundled models in `assets/models/` (`Lander.mo`, `Battery.mo`,
   `QuarterCar.mo`, …). Open `Lander.mo` here to see the law the lander flies.
 
-### Linux desktop updates
+### Desktop updates
 
-The official Linux download is a Velopack `.AppImage`. Make it executable and
-launch that same file from a writable location. LunCoSim checks the
-`linux-x64` update feed once per day at GUI startup; it does not download or
-restart unexpectedly. When an update is found, open **Settings → Updates**,
-choose **Download update**, then **Install and restart**. Velopack replaces the
-running AppImage in place and the next launch uses the new complete package.
+The official installers are platform-specific:
 
-This does not apply to `target/debug/luncosim`, a source build, or a normal
-`.tar.gz` archive. Those are portable development packages and have no
-update-managed installation metadata. Updates are read from the machine-only
-`LunCoSim/lunco-sim-updates` GitHub release feed; human-facing installers remain
-in the dated LunCoSim release.
+| Platform | Download | Launch after installation |
+|---|---|---|
+| Windows x86_64 | `LunCoSim-Windows-x86_64-Setup.exe` | The installed Start-menu or desktop shortcut |
+| macOS Apple Silicon | `LunCoSim-macOS-Apple-Silicon.pkg` | The installed `LunCoSim.app` |
+| macOS Intel | `LunCoSim-macOS-Intel.pkg` | The installed `LunCoSim.app` |
+| Linux x86_64 | `LunCoSim-Linux-x86_64.AppImage` | The same AppImage from a writable location |
+
+LunCoSim checks the matching runtime feed once per day when the GUI starts. A
+check never installs or restarts anything by itself. When an update is found,
+open **Settings → Updates**, choose **Download update**, then **Install and restart**.
+
+Windows updates replace the installed application managed by Velopack. macOS
+updates replace the installed `.app` bundle. Linux updates replace the same
+writable AppImage. Always launch the installed package or same AppImage rather
+than `Setup.exe`, a copied `.app` binary, `target/debug/luncosim`, a source
+build, or an ordinary archive; those development/portable forms are not
+update-managed.
+
+The application reads the machine-only `LunCoSim/lunco-sim-updates` GitHub feed;
+human-facing installers remain in the dated LunCoSim release.
 
 ## CLI Usage
 

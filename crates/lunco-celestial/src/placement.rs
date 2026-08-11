@@ -708,7 +708,9 @@ pub fn sync_terrain_body_curvature(
         .collect();
     if candidates.len() > 1 {
         warn_once!(
-            "{} built DEM terrains author body {}; one globe handoff is available, +             so the largest footprint is selected and equal footprints use source content +             identity",
+            "{} built DEM terrains author body {}; one globe handoff is available, \
+             so the largest footprint is selected and equal footprints use source content \
+             identity",
             candidates.len(),
             body
         );

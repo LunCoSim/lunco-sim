@@ -35,7 +35,13 @@ const UPDATE_CHANNEL: &str = "linux-arm64";
 #[cfg(target_os = "linux")]
 const UPDATE_PACKAGE_GUIDANCE: &str =
     "On Linux, run the official Velopack .AppImage from a writable location and keep launching that same file; the update replaces it in place.";
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+const UPDATE_PACKAGE_GUIDANCE: &str =
+    "On Windows, install the official Setup.exe and launch the installed LunCoSim shortcut; updates replace the installed application and restart it.";
+#[cfg(target_os = "macos")]
+const UPDATE_PACKAGE_GUIDANCE: &str =
+    "On macOS, install the official .pkg for your CPU and launch the installed LunCoSim.app; updates replace the app bundle and restart it.";
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 const UPDATE_PACKAGE_GUIDANCE: &str =
     "Run the official Velopack package from its installed location; source builds and ordinary archives are not update-managed.";
 

@@ -301,14 +301,18 @@ jobs:
 
           cat >> release_notes.md <<'EOF'
 
-          ### Updating the Linux AppImage
+          ### Updating the desktop installers
 
-          Download `LunCoSim-Linux-x86_64.AppImage`, make it executable, and
-          launch that same file from a writable location. LunCoSim checks for
-          updates once per day at startup. In **Settings → Updates**, choose
-          **Download update**, then **Install and restart**; Velopack replaces
-          the AppImage in place. Source builds and ordinary source archives do
-          not participate in this update flow.
+          Download exactly one installer matching your platform:
+          `LunCoSim-Windows-x86_64-Setup.exe`,
+          `LunCoSim-macOS-Apple-Silicon.pkg`,
+          `LunCoSim-macOS-Intel.pkg`, or
+          `LunCoSim-Linux-x86_64.AppImage`. LunCoSim checks the matching update
+          feed once per day at startup. In **Settings → Updates**, choose
+          **Download update**, then **Install and restart**. Launch Windows
+          from its installed shortcut, macOS from the installed `.app`, and
+          Linux from the same writable AppImage. Source builds and ordinary
+          source archives do not participate in this update flow.
 
           See the [repository README](${{ github.server_url }}/${{ github.repository }}) for source builds and
           [report issues](${{ github.server_url }}/${{ github.repository }}/issues) for problems.
