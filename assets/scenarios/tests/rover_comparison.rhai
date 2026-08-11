@@ -67,7 +67,6 @@ const TRAVERSE_THROTTLE = 0.32;
 const LANE_HALF_WIDTH = 5.0;
 
 fn on_start(me) {
-    cmd("ToggleJointViz", #{ show_joints: false, show_wheel_forces: false });
     this.t = 0.0;
     this.settle_s = 4.0;
     // The course parent carries a uniform Y/Z compression for this bounded

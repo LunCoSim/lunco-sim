@@ -257,14 +257,16 @@ fn parse_terrain_layer_stack(
     stack
 }
 
-/// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`rocks` child
-/// layer prims so the Inspector's "Craters & Rocks" panel opens showing the scene's
-/// ACTUAL values (density, size, ratios) instead of the resource defaults. Mirrors the
-/// `SizeDist` the layer parsers build — `sizeMin`/`sizeMax` attrs with the parsers'
-/// defaults (`craters` → 2/60, `rocks` → 0.2/(mode*4).max(2.5)) and the same
-/// min ≤ mode ≤ max clamp — so a subsequent panel edit starts from the authored
-/// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
-/// no re-stamp — the terrain already built from the same USD stack).
+/// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`overzoom`/
+/// `rocks` child layer prims so the Inspector's "Craters & Rocks" panel opens showing
+/// the scene's actual values instead of the resource defaults. `overzoom` is the
+/// Twin's close-range crater-detail layer, so it participates in the Craters master
+/// switch even though it is a different analytic layer from full-size craters.
+/// Mirrors the `SizeDist` the layer parsers build — `sizeMin`/`sizeMax` attrs with the
+/// parsers' defaults (`craters` → 2/60, `rocks` → 0.2/(mode*4).max(2.5)) and the same
+/// min ≤ mode ≤ max clamp — so a subsequent panel edit starts from the authored look
+/// rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`, no
+/// re-stamp — the terrain already built from the same USD stack).
 ///
 /// [`ObstacleFieldSpec`]: lunco_obstacle_field::spec::ObstacleFieldSpec
 fn sync_obstacle_spec_from_usd(
@@ -274,6 +276,8 @@ fn sync_obstacle_spec_from_usd(
 ) {
     use lunco_obstacle_field::spec::SizeDist;
     use lunco_terrain_surface::LayerAttrSource;
+    let mut has_crater_layer = false;
+    let mut has_enabled_overzoom = false;
     for child in reader.children(terrain) {
         // Read through the SAME adapter the layer parsers use, so the `lunco:layer:`
         // namespace is applied in one place ([`ns_attr`]) and this panel cannot
@@ -287,6 +291,7 @@ fn sync_obstacle_spec_from_usd(
             Some("craters") => {
                 let density = a.get_f32("density").unwrap_or(0.0);
                 let mode = a.get_f32("sizeMode").unwrap_or(22.0);
+                has_crater_layer = true;
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
                 spec.craters.depth_ratio = a.get_f32("depthRatio").unwrap_or(0.4);
@@ -298,6 +303,12 @@ fn sync_obstacle_spec_from_usd(
                 if let Some(seed) = a.get_i64("seed") {
                     spec.seed = seed as u64;
                 }
+            }
+            Some("overzoom") => {
+                let enabled = a.get_bool("enabled") != Some(false)
+                    && (a.get_f32("amplitude").unwrap_or(0.08) > 0.0
+                        || a.get_f32("density").unwrap_or(0.9) > 0.0);
+                has_enabled_overzoom |= enabled;
             }
             Some("rocks") => {
                 let density = a.get_f32("density").unwrap_or(0.0);
@@ -311,6 +322,15 @@ fn sync_obstacle_spec_from_usd(
             }
             _ => {}
         }
+    }
+    if !has_crater_layer {
+        // The panel's Craters checkbox is the master switch for both full-size
+        // craters and the Twin's synthetic craterlets. Keep the typed spec's
+        // traditional crater parameters untouched; only derive its visibility
+        // from the authored overzoom layer when no traditional layer exists.
+        spec.craters.enabled = has_enabled_overzoom;
+    } else {
+        spec.craters.enabled |= has_enabled_overzoom;
     }
 }
 
@@ -911,7 +931,7 @@ fn author_layer_attr(
 }
 
 /// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
-/// onto its USD `craters`/`rocks` layer prims (runtime layer) rather than mutating the
+/// onto its USD `craters`/`overzoom`/`rocks` layer prims (runtime layer) rather than mutating the
 /// `TerrainLayerStack` directly. The USD mutation then drives everything automatically
 /// — the registry document's generation advances → `refresh_docbacked_terrain_from_doc`
 /// re-parses the stack from the composed (`base ⊕ runtime`) doc → `start_dem_restamp`
@@ -926,16 +946,17 @@ fn on_obstacle_spec_authored(
         (&lunco_usd::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
+    stages: NonSend<lunco_usd_bevy::CanonicalStages>,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
 ) {
     let Some(mut registry) = registry else { return };
     let spec = &trigger.event().spec;
     // The USD crater/rock layer parsers use `density > 0` as the on/off signal
     // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
-    // Inspector's `enabled` checkbox must fold into the authored density here — else an
-    // unchecked-but-nonzero layer re-parses as still-on and stays visible. Author the
-    // EFFECTIVE density (0 when disabled); the live in-memory spec keeps the real value,
-    // so re-checking restores it within the session.
+    // Inspector's `enabled` checkbox must fold into the authored density here. The
+    // overzoom parser has an explicit `enabled` attribute because zeroing its
+    // amplitude/density would destroy authored detail settings. The live in-memory
+    // spec keeps the real values, so re-checking restores them in the same session.
     let crater_density = if spec.craters.enabled {
         spec.craters.density
     } else {
@@ -951,18 +972,21 @@ fn on_obstacle_spec_authored(
             continue;
         };
         let doc = lunco_doc::DocumentId::new(td.doc);
-        // Enumerate the terrain's child layer prims from the composed
-        // (base ⊕ runtime) document. `composed()` is owned, so the registry
-        // borrow ends here and `author_layer_attr` below can take it mutably.
-        let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else {
+        // The backing document intentionally retains references instead of
+        // flattening them. Its `sdf::Data` therefore cannot enumerate the
+        // referenced terrain children. Discover layer paths on the canonical
+        // composed stage (the same runtime read surface that built the stack),
+        // then author the override into this document's runtime layer.
+        let Some(stage) = stages.get(prim_path.stage_handle.id()) else {
             continue;
         };
-        let layers: Vec<(String, String)> = composed
-            .prim_children(&sdf)
+        let reader = stage.view();
+        let layers: Vec<(String, String)> = reader
+            .children(&sdf)
             .into_iter()
             .filter_map(|child| {
-                composed
-                    .prim_attribute_value::<String>(&child, "lunco:layer")
+                reader
+                    .text(&child, "lunco:layer")
                     .map(|ty| (child.as_str().to_string(), ty))
             })
             .collect();
@@ -1029,6 +1053,16 @@ fn on_obstacle_spec_authored(
                         "seed",
                         "int64",
                         (spec.seed as i64).to_string(),
+                    );
+                }
+                "overzoom" => {
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "enabled",
+                        "bool",
+                        spec.craters.enabled.to_string(),
                     );
                 }
                 "rocks" => {
@@ -1421,6 +1455,17 @@ mod dem_bridge_tests {
     /// Run the real bridge body for `/Terrain` on a fresh world; returns the
     /// world + entity so each test reads back exactly the components it pins.
     fn bridge(scene: &str) -> (World, Entity) {
+        let (world, entity, _) = bridge_with_spec(scene);
+        (world, entity)
+    }
+
+    fn bridge_with_spec(
+        scene: &str,
+    ) -> (
+        World,
+        Entity,
+        lunco_obstacle_field::spec::ObstacleFieldSpec,
+    ) {
         let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", scene))
             .expect("stage builds");
         let view = cs.view();
@@ -1448,7 +1493,7 @@ mod dem_bridge_tests {
             );
         }
         queue.apply(&mut world);
-        (world, entity)
+        (world, entity, spec)
     }
 
     #[test]
@@ -1558,11 +1603,66 @@ mod dem_bridge_tests {
     }
 
     #[test]
+    fn overzoom_is_part_of_the_craters_master_switch() {
+        let scene = dem_scene(
+            "    def Xform \"Detail\"\n    {\n\
+             \x20       token lunco:layer = \"overzoom\"\n\
+             \x20       float lunco:layer:amplitude = 0.08\n\
+             \x20       float lunco:layer:density = 0.25\n\
+             \x20   }\n",
+            "",
+        );
+        let (world, entity, spec) = bridge_with_spec(&scene);
+        assert!(
+            spec.craters.enabled,
+            "an enabled overzoom layer must make the Craters panel switch on"
+        );
+        let stack = world
+            .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
+            .expect("terrain layer stack attached");
+        assert!(
+            stack.0.iter().any(|entry| entry.id.as_str().ends_with("Detail")),
+            "enabled overzoom must remain in the composed stack"
+        );
+    }
+
+    #[test]
+    fn overzoom_enabled_false_preserves_authored_detail_but_removes_layer() {
+        let scene = dem_scene(
+            "    def Xform \"Detail\"\n    {\n\
+             \x20       token lunco:layer = \"overzoom\"\n\
+             \x20       bool lunco:layer:enabled = false\n\
+             \x20       float lunco:layer:amplitude = 0.42\n\
+             \x20       float lunco:layer:density = 0.25\n\
+             \x20   }\n",
+            "",
+        );
+        let (world, entity, spec) = bridge_with_spec(&scene);
+        assert!(
+            !spec.craters.enabled,
+            "an explicitly disabled overzoom layer must turn the Craters switch off"
+        );
+        let stack = world
+            .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
+            .expect("terrain layer stack attached");
+        assert!(
+            stack.0.iter().all(|entry| !entry.id.as_str().ends_with("Detail")),
+            "disabled overzoom must not contribute a height layer"
+        );
+    }
+
+    #[test]
     fn streaming_terrain_with_height_layers_forces_collider_ring() {
         // The Nyquist rule: lodViz + any analytic height layer (the default
         // overzoom counts) ⇒ the ring is FORCED even if the author says no —
         // a static full-DEM collider cannot represent sub-DEM height layers.
-        let scene = dem_scene("", "        bool lunco:layer:colliderRing = false\n");
+        let scene = dem_scene(
+            "    def Xform \"Detail\"\n    {\n\
+             \x20       token lunco:layer = \"overzoom\"\n\
+             \x20       float lunco:layer:amplitude = 0.08\n\
+             \x20   }\n",
+            "        bool lunco:layer:colliderRing = false\n",
+        );
         let (world, e) = bridge(&scene);
         let req = world
             .get::<lunco_terrain_surface::DemTerrainRequest>(e)

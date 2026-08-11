@@ -2249,7 +2249,10 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .default_open(true)
             .show(ui, |ui| {
                 let s = &mut *spec;
-                if ui.checkbox(&mut s.craters.enabled, "Enabled").changed() {
+                if ui
+                    .checkbox(&mut s.craters.enabled, "Enabled (including crater detail)")
+                    .changed()
+                {
                     regen = true;
                 }
                 for (val, range, label) in [

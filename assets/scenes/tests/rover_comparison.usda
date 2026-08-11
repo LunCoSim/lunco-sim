@@ -372,6 +372,23 @@ def Xform "RoverComparison" (
     {
         double3 xformOp:translate = (-10, 1.6, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        # This is a local mobility comparison; the shared communications
+        # mechanism is scenery and must not request an absent Earth frame.
+        over "Antenna"
+        {
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (active = false) { }
+            over "YawJoint" (active = false) { }
+            over "ElevationJoint" (active = false) { }
+        }
     }
     def Xform "Medium" (
         prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
@@ -379,6 +396,21 @@ def Xform "RoverComparison" (
     {
         double3 xformOp:translate = (0, 1.6, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Antenna"
+        {
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (active = false) { }
+            over "YawJoint" (active = false) { }
+            over "ElevationJoint" (active = false) { }
+        }
     }
     def Xform "Awful" (
         prepend references = @lunco://vessels/rovers/variants/rover_awful.usda@</RoverAwful>
@@ -386,6 +418,21 @@ def Xform "RoverComparison" (
     {
         double3 xformOp:translate = (10, 1.6, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Antenna"
+        {
+            over "YawHead"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                }
+            }
+            over "EarthTrackerController" (active = false) { }
+            over "YawJoint" (active = false) { }
+            over "ElevationJoint" (active = false) { }
+        }
     }
 
     def Scope "Scenario"

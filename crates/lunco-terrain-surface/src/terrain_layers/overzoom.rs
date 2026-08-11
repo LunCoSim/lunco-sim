@@ -48,15 +48,19 @@ impl TerrainLayer for OverzoomLayer {
 }
 
 /// Parse a `lunco:layer = "overzoom"` prim:
+/// - `enabled` — explicit layer visibility, defaulting to true;
 /// - `amplitude` — micro-relief amplitude (m), default 0.08; `0` disables relief;
 /// - `reliefScale` — coarsest relief wavelength (m), default 14;
 /// - `maxFeature` / `minFeature` — synthetic craterlet radius range (m), default 6 / 0.4;
 /// - `density` — mean craterlets per band cell, default 0.9; `0` disables craterlets;
 /// - `seed` — determinism seed.
 ///
-/// Returns `None` (layer disabled) when both channels are zeroed.
+/// Returns `None` when the layer is explicitly disabled or both channels are zeroed.
 pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
     let defaults = Overzoom::default();
+    if a.get_bool("enabled") == Some(false) {
+        return None;
+    }
     let relief_amp = a
         .get_f32("amplitude")
         .map(f64::from)

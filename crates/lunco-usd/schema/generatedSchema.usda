@@ -191,6 +191,9 @@ class "LunCoTerrainLayerAPI" (
     float lunco:layer:sizeMode = 0 (
         doc = "Mode of the scattered size distribution."
     )
+    bool lunco:layer:enabled = true (
+        doc = "Whether this authored terrain layer contributes to the composed surface."
+    )
     float lunco:layer:amplitude = 0 (
         doc = "Noise amplitude, metres."
     )
