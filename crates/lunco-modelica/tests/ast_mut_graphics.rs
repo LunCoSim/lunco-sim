@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
-use lunco_modelica::ast_mut::{self, AstMutError};
 use lunco_modelica::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 use lunco_modelica::pretty::{FillPattern, GraphicSpec, LinePattern, LunCoPlotNodeSpec};
 use rumoca_compile::parsing::ast::Expression;

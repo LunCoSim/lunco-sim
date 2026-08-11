@@ -1620,11 +1620,11 @@ fn finish_dem_worker(
         }
     }
 
+    let mut any_full = false;
     let replies = lunco_terrain_bake::worker_client::drain_replies();
     if replies.is_empty() {
         return;
     }
-    let mut any_full = false;
     for reply in replies {
         let Some((entity, job)) = jobs.iter().find(|(_, j)| j.id == reply.id) else {
             continue;
@@ -2056,14 +2056,11 @@ pub(crate) fn finish_dem_restamp(
         &crate::terrain_layers::TerrainLayerStack,
         Option<&crate::terrain_layers::ScatteredContent>,
     )>,
-    scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
+    scattered: Query<(Entity, &ChildOf), With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
 ) {
     use bevy::tasks::futures_lite::future;
-    // Whether ANY terrain did a WHOLE-terrain re-bake this pass (spec change / load) —
-    // only then do the (global) scatter entities need dropping + rebuilding.
-    let mut any_full = false;
     for (
         entity,
         mut task,
@@ -2111,6 +2108,34 @@ pub(crate) fn finish_dem_restamp(
                     )));
             }
             debug!("[dem-terrain] recompose produced identical content — no-op");
+            continue;
+        }
+
+        // A generic rocks toggle changes only scatter content. Do not swap the
+        // unchanged oracle, invalidate every streamed tile, or rebuild the
+        // collider ring/static collider. The old path treated every obstacle
+        // spec edit as a whole terrain edit, making a rocks checkbox look like
+        // a slow DEM reload.
+        if same_heights && (!same_scatter || rescatter) {
+            commands
+                .entity(entity)
+                .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            commands.entity(entity).try_remove::<TerrainRescatter>();
+            for (scatter_entity, parent) in &scattered {
+                if parent.parent() == entity {
+                    commands.entity(scatter_entity).try_despawn();
+                }
+            }
+            if was_pending {
+                commands.entity(entity).try_remove::<DemRestampPending>();
+                commands
+                    .entity(entity)
+                    .try_insert(DemRestampDebounce(Timer::from_seconds(
+                        RESTAMP_DEBOUNCE_SECS,
+                        TimerMode::Once,
+                    )));
+            }
+            debug!("[dem-terrain] scatter-only layer change; retained terrain tiles and collider");
             continue;
         }
 
@@ -2202,7 +2227,11 @@ pub(crate) fn finish_dem_restamp(
                 .entity(entity)
                 .try_remove::<crate::terrain_layers::TerrainLayersApplied>();
             commands.entity(entity).try_remove::<TerrainRescatter>();
-            any_full = true;
+            for (scatter_entity, parent) in &scattered {
+                if parent.parent() == entity {
+                    commands.entity(scatter_entity).try_despawn();
+                }
+            }
         }
 
         // Coalesced trailing re-bake (a change arrived mid-task): re-arm the debounce
@@ -2217,15 +2246,6 @@ pub(crate) fn finish_dem_restamp(
                 )));
         }
         debug!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
-    }
-
-    if any_full {
-        // A whole-terrain re-bake happened (spec change / load): every scatter entity
-        // (rocks, crater overlays) may have moved, so drop them and let the scatter
-        // layers rebuild. Bounded edits skip this entirely (rocks are unchanged).
-        for e in &scattered {
-            commands.entity(e).try_despawn();
-        }
     }
 }
 

@@ -410,9 +410,10 @@ mod tests {
     }
 }
 
-/// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
-/// (modal radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`,
-/// `regionM` (near-field scatter half-extent), `seed`.
+/// Parse a `lunco:layer = "rocks"` prim: `enabled` (explicit visibility,
+/// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
+/// radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`, `regionM`
+/// (near-field scatter half-extent), and `seed`.
 pub fn read_rock_layer(a: &dyn LayerAttrSource) -> RockLayerParams {
     let density = a.get_f32("density").unwrap_or(0.0);
     let mode = a.get_f32("sizeMode").unwrap_or(0.6);
@@ -420,7 +421,9 @@ pub fn read_rock_layer(a: &dyn LayerAttrSource) -> RockLayerParams {
     let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
     RockLayerParams {
         layer: RockLayer {
-            enabled: density > 0.0,
+            // Visibility is independent from density. Keeping density authored
+            // makes a disable/enable cycle survive reload and a new session.
+            enabled: a.get_bool("enabled") != Some(false) && density > 0.0,
             density,
             // min ≤ mode ≤ max — same validity guard as the Inspector sliders.
             size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
