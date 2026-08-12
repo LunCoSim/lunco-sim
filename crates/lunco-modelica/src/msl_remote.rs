@@ -173,7 +173,7 @@ pub(crate) fn write_parsed_bundle(
     let mut encoder =
         zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), PARSED_BUNDLE_ZSTD_LEVEL)?;
     bincode::serde::encode_into_std_write(docs, &mut encoder, bincode::config::standard())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     encoder.finish()?;
     Ok(())
 }
@@ -750,7 +750,7 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
     use lunco_assets::download::AssetManifest;
 
     let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    let cancel_for_task = cancel.clone();
+    let cancel_for_indexer = cancel.clone();
     pool.spawn(async move {
         // Parse the bundled Assets.toml to recover the `[msl]` entry.
         let Some(manifest_text) = assets_manifest_text() else {
@@ -818,7 +818,7 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
                     });
                 }
             })),
-            cancel: Some(cancel_for_task.clone()),
+            cancel: Some(cancel),
         };
         if let Err(e) =
             // `None` = cache-relative: the MSL bundle lands under the asset cache
@@ -865,7 +865,7 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
 
         // The same indexer repairs both generated artifacts and flips the chip
         // to Ready only after the editor metadata has been validated.
-        spawn_native_index(slot, cancel_for_task, root);
+        spawn_native_index(slot, cancel_for_indexer, root);
     })
     .detach();
 }

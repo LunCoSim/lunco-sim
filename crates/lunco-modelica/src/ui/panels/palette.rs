@@ -404,7 +404,6 @@ impl Panel for ComponentPalettePanel {
         let mut scored: Vec<(&crate::index::ClassEntry, f32)> = lib
             .iter()
             .filter_map(|c| {
-                let c: &crate::index::ClassEntry = *c;
                 if let Some(cat) = selected_category {
                     if category_of(&c.name) != cat {
                         return None;
@@ -416,7 +415,7 @@ impl Panel for ComponentPalettePanel {
                     score_component(c, &query_lc)
                 };
                 if query_lc.is_empty() || score > 0.0 {
-                    Some((c, score))
+                    Some((*c, score))
                 } else {
                     None
                 }
@@ -426,7 +425,7 @@ impl Panel for ComponentPalettePanel {
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.short_name().cmp(&b.0.short_name()))
+                .then_with(|| a.0.short_name().cmp(b.0.short_name()))
         });
 
         let shown_cap = 100;
@@ -648,7 +647,7 @@ pub(crate) fn place_component(
     // Synthesise a unique-ish instance name. Modelica allows letters,
     // digits, underscore — start lower-case. The user can rename via
     // the inspector after placement.
-    let short = def.name.split('.').last().unwrap_or(&def.name);
+    let short = def.name.split('.').next_back().unwrap_or(&def.name);
     let mut base = String::with_capacity(short.len());
     for (i, ch) in short.chars().enumerate() {
         if i == 0 {

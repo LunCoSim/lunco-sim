@@ -1248,7 +1248,7 @@ fn apply_wheel_steering(
             Some(b) => b.0,
             None => {
                 let b = transform.rotation;
-                commands.entity(entity).insert(SteerBaseRotation(b));
+                commands.entity(entity).try_insert(SteerBaseRotation(b));
                 b
             }
         };
@@ -1469,7 +1469,7 @@ fn solve_differential_gear(
         let least_dominance = dominances.into_iter().min().unwrap_or_default();
         for (inverse_inertia, dominance) in inv_inertias.iter_mut().zip(dominances) {
             if dominance > least_dominance {
-                *inverse_inertia = *inverse_inertia * 0.0;
+                *inverse_inertia *= 0.0;
             }
         }
         let inverse_mass: f64 = gradients
@@ -2444,9 +2444,9 @@ mod suspension_visuals_tests {
             ))
             .id();
 
-        app.world_mut().entity_mut(wheel).add_child(visual);
-        app.world_mut().entity_mut(wheel).add_child(piston);
-        app.world_mut().entity_mut(wheel).add_child(spring);
+        app.world_mut().entity_mut(visual).insert(ChildOf(wheel));
+        app.world_mut().entity_mut(piston).insert(ChildOf(wheel));
+        app.world_mut().entity_mut(spring).insert(ChildOf(wheel));
 
         app.add_systems(
             Update,

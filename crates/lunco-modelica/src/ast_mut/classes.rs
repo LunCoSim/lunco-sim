@@ -73,7 +73,7 @@ fn insert_class(
             .values()
             .filter_map(|c| text::class_extent(edit.source(), c).map(|r| r.end))
             .max()
-            .unwrap_or(edit.source().len());
+            .unwrap_or_else(|| edit.source().len());
         // A top-level rendered class carries the pretty indent; strip it.
         let body = rendered.trim_start_matches([' ', '\t']);
         edit.insert(at, format!("\n\n{}", body.trim_end_matches('\n')));
@@ -88,11 +88,7 @@ fn insert_class(
             name: name.to_string(),
         });
     }
-    let at = nested_class_insert_point(edit.source(), parent_class).ok_or_else(|| {
-        AstMutError::AnchorNotFound {
-            what: format!("body of class `{parent}`"),
-        }
-    })?;
+    let at = nested_class_insert_point(edit.source(), parent_class);
     edit.insert(at, format!("\n{}", rendered.trim_end_matches('\n')));
     parent_class.classes.insert(name.to_string(), new_class);
     Ok(())
@@ -100,14 +96,14 @@ fn insert_class(
 
 /// Where a nested class goes: after the last nested class, else after the last
 /// component, else at the top of the parent's body.
-fn nested_class_insert_point(source: &str, parent: &ClassDef) -> Option<usize> {
+fn nested_class_insert_point(source: &str, parent: &ClassDef) -> usize {
     if let Some(end) = parent
         .classes
         .values()
         .filter_map(|c| text::class_extent(source, c).map(|r| r.end))
         .max()
     {
-        return Some(end);
+        return end;
     }
     text::component_insert_point(source, parent)
 }

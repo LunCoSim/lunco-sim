@@ -580,17 +580,19 @@ fn tessellate_polygon_evenodd(pts: &[egui::Pos2], color: egui::Color32) -> Optio
         return None;
     }
 
-    let mut mesh = egui::Mesh::default();
-    mesh.vertices = buffers
-        .vertices
-        .iter()
-        .map(|v| egui::epaint::Vertex {
-            pos: egui::pos2(v.x, v.y),
-            uv: egui::epaint::WHITE_UV,
-            color,
-        })
-        .collect();
-    mesh.indices = buffers.indices.clone();
+    let mesh = egui::Mesh {
+        vertices: buffers
+            .vertices
+            .iter()
+            .map(|v| egui::epaint::Vertex {
+                pos: egui::pos2(v.x, v.y),
+                uv: egui::epaint::WHITE_UV,
+                color,
+            })
+            .collect(),
+        indices: buffers.indices.clone(),
+        ..Default::default()
+    };
     Some(mesh)
 }
 
@@ -848,8 +850,8 @@ fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
         return;
     }
 
-    let start_rad = (e.start_angle as f64).to_radians();
-    let end_rad = (e.end_angle as f64).to_radians();
+    let start_rad = e.start_angle.to_radians();
+    let end_rad = e.end_angle.to_radians();
     let span_deg = (e.end_angle - e.start_angle).abs();
     let is_full = span_deg >= 359.999 || span_deg <= 0.001;
 

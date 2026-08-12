@@ -305,7 +305,7 @@ fn find_selectable(
     hit: Entity,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: &Query<&ChildOf>,
-) -> Option<Entity> {
+) -> Entity {
     // Deep enough to climb an imported glTF node tree (scene→node→…→mesh) up to
     // the SelectableRoot prim that wraps it — an 8-level cap left tall glb
     // hierarchies resolving to the clicked leaf instead of the model root.
@@ -317,7 +317,7 @@ fn find_selectable(
         // A `SelectableRoot` ancestor wins — clicking a rover wheel selects the
         // rover root, not the wheel mesh.
         if q_selectable.get(entity).is_ok() {
-            return Some(entity);
+            return entity;
         }
 
         // Walk up one parent level
@@ -335,7 +335,7 @@ fn find_selectable(
 
     // No `SelectableRoot` in the chain (ground, terrain, a plain prop) — select
     // the clicked entity itself so it's still editable.
-    Some(hit)
+    hit
 }
 
 /// The nearest PRIM-BACKED entity on the chain from `hit` up to (excluding)
@@ -456,9 +456,7 @@ pub fn on_scene_click_select(
 
     // Resolve the picked mesh to its selectable (nearest `SelectableRoot`
     // ancestor, or the hit entity itself for ground/props).
-    let Some(entity) = find_selectable(hit_entity, &q_selectable, &q_parents) else {
-        return;
-    };
+    let entity = find_selectable(hit_entity, &q_selectable, &q_parents);
 
     // DRILL: **Alt+Shift+click** on a sub-part of the ALREADY-selected primary
     // aims the Inspector at that part. Its own modifier, NOT plain Shift+click:
@@ -524,10 +522,10 @@ pub fn handle_deselect_keys(
 /// **Subtree Filtering**:
 /// To prevent non-body utility subtrees (such as orbital trajectory lines, RF link
 /// beams, or nested spatial grids) from corrupting the selection box:
-/// 1. `q_aabb` filters for entities with `Mesh3d`, excluding `TrajectoryMeshMarker` lines
-///    and program-driven beam markers (`ProgramDriverId`).
-/// 2. `q_skip_tree` prevents `queue` from stepping into child grids, trajectory paths, or
-///    program drivers during hierarchy traversal.
+/// The `q_aabb` query filters for entities with `Mesh3d`, excluding
+/// `TrajectoryMeshMarker` lines and program-driven beam markers
+/// (`ProgramDriverId`). The `q_skip_tree` query prevents `queue` from stepping
+/// into child grids, trajectory paths, or program drivers during traversal.
 /// Computes the body-frame bounding box (min, max) for an editable entity tree,
 /// excluding non-body subtrees (link beams, trajectory lines, sub-grids, program drivers).
 ///
@@ -745,9 +743,6 @@ mod tests {
             ))
             .id();
 
-        app.world_mut().entity_mut(rover).add_child(chassis);
-        app.world_mut().entity_mut(rover).add_child(beam);
-
         let mut q = app.world_mut().query_filtered::<Entity, (
             With<Mesh3d>,
             Without<lunco_celestial::TrajectoryMeshMarker>,
@@ -768,7 +763,7 @@ mod tests {
             .world_mut()
             .spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY))
             .id();
-        let chassis = app
+        let _chassis = app
             .world_mut()
             .spawn((
                 Mesh3d(Handle::default()),
@@ -782,7 +777,7 @@ mod tests {
             ))
             .id();
 
-        let beam = app
+        let _beam = app
             .world_mut()
             .spawn((
                 Mesh3d(Handle::default()),
@@ -796,9 +791,6 @@ mod tests {
                 ChildOf(rover),
             ))
             .id();
-
-        app.world_mut().entity_mut(rover).add_child(chassis);
-        app.world_mut().entity_mut(rover).add_child(beam);
 
         let mut state_aabb = app
             .world_mut()
@@ -847,7 +839,7 @@ mod tests {
 
         // The mesh is two metres along the body's local +X.  Its render-world
         // position is therefore along -Z after the body rotation.
-        let chassis = app
+        let _chassis = app
             .world_mut()
             .spawn((
                 Mesh3d(Handle::default()),
@@ -862,8 +854,6 @@ mod tests {
                 ChildOf(rover),
             ))
             .id();
-        app.world_mut().entity_mut(rover).add_child(chassis);
-
         let mut state_aabb = app
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (

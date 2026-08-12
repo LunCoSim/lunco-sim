@@ -577,7 +577,7 @@ pub fn on_duplicate_model_from_read_only(
     let name_for_task = name.clone();
     let origin_fqn_for_task = origin_fqn;
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let class_src: &str = &*source_full;
+        let class_src: &str = &source_full;
         let imports = origin_fqn_for_task
             .as_deref()
             .and_then(crate::library_fs::resolve_class_path_indexed)

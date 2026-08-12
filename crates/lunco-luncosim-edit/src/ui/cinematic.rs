@@ -297,7 +297,7 @@ fn on_add_camera_here(
         op: UsdOp::AddPrim {
             edit_target: LayerId::root(),
             parent_path: root,
-            name: name.clone(),
+            name,
             type_name: Some("Camera".to_string()),
             reference: None,
         },

@@ -68,6 +68,10 @@ impl VisualizationRegistry {
     pub fn len(&self) -> usize {
         self.instances.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
 }
 
 /// One-shot "please auto-fit on next render" requests, keyed by

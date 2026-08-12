@@ -593,12 +593,13 @@ fn attach_joint_before_contact_never_forms_a_pair() {
 /// island down through one recursive `try_despawn` + flush and stays GREEN under
 /// the feature. So did each variant, and each was MEASURED rather than assumed
 /// (`probe_island_shape_before_despawn`):
-///   - flat despawn (every body directly, one queue) — green;
-///   - recursive despawn of a scene root — green;
-///   - ASLEEP (probe: `asleep=4/4` at 180 steps) — green;
-///   - AWAKE (probe: `asleep=0/4` at 30 steps; the live app tears down a jittering
-///     scene, so awake is the honest shape) — green;
-///   - with joints in the island, bodies + joints under one root — green.
+/// - flat despawn (every body directly, one queue) — green;
+/// - recursive despawn of a scene root — green;
+/// - ASLEEP (probe: `asleep=4/4` at 180 steps) — green;
+/// - AWAKE (probe: `asleep=0/4` at 30 steps; the live app tears down a jittering
+///   scene, so awake is the honest shape) — green;
+/// - with joints in the island, bodies + joints under one root — green.
+///
 /// In every case the probe confirms the precondition actually held: one shared
 /// `IslandId(0)`, 7 touching pairs. The theory predicts a panic in all of them.
 /// It does not happen.
@@ -607,9 +608,10 @@ fn attach_joint_before_contact_never_forms_a_pair() {
 /// by a repro. Something in the live teardown is still unmodelled.
 ///
 /// What is established is narrow, and worth stating exactly:
-///   - the panicking frame is avian's, validate-gated, with no lunco code in the
-///     unwind path;
-///   - without `validate`, the same teardown is clean.
+/// - the panicking frame is avian's, validate-gated, with no lunco code in the
+///   unwind path;
+/// - without `validate`, the same teardown is clean.
+///
 /// That is NOT proof our teardown is correct — only that this panic is not
 /// evidence against it. Do not upgrade this to "pure instrumentation, our side is
 /// fine" without a repro that actually fires.
@@ -644,11 +646,11 @@ fn pure_avian_recursive_despawn_of_one_island() {
                     RigidBody::Dynamic,
                     Collider::cuboid(1.0, 1.0, 1.0),
                     Transform::from_xyz(0.0, 0.5 + i as f32 * 1.0, 0.0),
+                    ChildOf(root),
                 ))
                 .id();
             prev_ids.push(body);
             let _ = prev;
-            world.entity_mut(root).add_child(body);
             prev = Some(body);
         }
         // The live scene tears down bodies AND joints together — DiffRigTest is
@@ -659,10 +661,7 @@ fn pure_avian_recursive_despawn_of_one_island() {
         let mut last: Option<Entity> = None;
         for &b in chain.by_ref() {
             if let Some(a) = last {
-                let j = world
-                    .spawn(joint_bundle_local(RevoluteJoint::new(a, b)))
-                    .id();
-                world.entity_mut(root).add_child(j);
+                world.spawn((joint_bundle_local(RevoluteJoint::new(a, b)), ChildOf(root)));
             }
             last = Some(b);
         }
@@ -716,9 +715,9 @@ fn probe_island_shape_before_despawn() {
                     RigidBody::Dynamic,
                     Collider::cuboid(1.0, 1.0, 1.0),
                     Transform::from_xyz(0.0, 0.5 + i as f32 * 1.0, 0.0),
+                    ChildOf(root),
                 ))
                 .id();
-            world.entity_mut(root).add_child(b);
             v.push(b);
         }
         v

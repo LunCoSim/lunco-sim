@@ -107,7 +107,7 @@ pub fn produce_usd_variant_view(
         // The composed selection is selectable even if no layer spelled it out
         // (a fallback, or a variant whose block authors nothing) — otherwise
         // the picker could show a state it cannot return to.
-        if !selection.is_empty() && !options.iter().any(|o| *o == selection) {
+        if !selection.is_empty() && !options.contains(&selection) {
             options.push(selection.clone());
             options.sort();
         }

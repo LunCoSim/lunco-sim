@@ -334,7 +334,7 @@ pub(crate) fn drain_pending_twin_docs(
             None => continue,
         };
         twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()));
-        backed.map.entry(doc).or_insert(TwinSceneRef {
+        backed.map.entry(doc).or_insert_with(|| TwinSceneRef {
             name: item.name.clone(),
             rel: item.rel.clone(),
             synced_generation: Some(cur_gen),
@@ -856,7 +856,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                     let source = world
                         .get_non_send::<lunco_usd_bevy::CanonicalStages>()
                         .and_then(|stages| stages.get(scene_id))
-                        .and_then(|stage| {
+                        .map(|stage| {
                             let view = stage.view();
                             let xml = view
                                 .scalar::<String>(&sp, "info:sourceCode")
@@ -866,7 +866,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                                     .filter(|source| {
                                         lunco_core::programs::is_behavior_tree_asset(source)
                                     });
-                            Some((xml, asset))
+                            (xml, asset)
                         });
                     if let Some(owner) = behavior_owner_entity(world, scene_id, &sp) {
                         let mut entity = world.entity_mut(owner);
@@ -1286,8 +1286,15 @@ fn author_structural_edit(
 /// whole-scene rebuild.
 pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
     let roots: Vec<Entity> = {
-        let mut q = world
-            .query_filtered::<(Entity, &UsdPrimPath), With<lunco_usd_sim::cosim::UsdSceneRoot>>();
+        // A live simulation is rooted by `UsdSceneRoot`; the editor's shared
+        // offscreen viewport is rooted by `UsdPreviewOnly`. Both are stage
+        // ownership roots and must survive a visual refresh. Restricting this
+        // to `UsdSceneRoot` silently despawned the preview subtree, leaving no
+        // entity to re-instantiate after a material edit.
+        let mut q = world.query_filtered::<(Entity, &UsdPrimPath), Or<(
+            With<lunco_usd_sim::cosim::UsdSceneRoot>,
+            With<lunco_usd_bevy::UsdPreviewOnly>,
+        )>>();
         q.iter(world)
             .filter(|(_, upp)| upp.stage_handle.id() == scene_id)
             .map(|(entity, _)| entity)
@@ -1476,7 +1483,7 @@ fn reconcile_full_to_composed(
     // Removals first (deepest paths first so children go before parents), then
     // additions (shallowest first so a parent exists before its child spawns).
     let mut removed: Vec<&String> = live_authored.difference(&composed_prims).collect();
-    removed.sort_by(|a, b| b.len().cmp(&a.len()));
+    removed.sort_by_key(|p| std::cmp::Reverse(p.len()));
     for path in removed {
         author_structural_edit(world, scene_id, path, composed);
     }
@@ -1489,8 +1496,8 @@ fn reconcile_full_to_composed(
 
 /// Complete referenced spawns whose asset closure has finished loading: inject
 /// the fetched layer bytes into the scene stage's resolver, then author the prim
-/// + `references` arc so the openusd sink fires and `project_stage_changes`
-/// instantiates the composed subtree. Spawns whose closure hasn't landed yet are
+/// and its `references` arc so the openusd sink fires and `project_stage_changes`
+/// instantiates the composed subtree. Spawns whose closure has not landed yet are
 /// retried next frame. Exclusive: authors onto the `!Send` `CanonicalStage`.
 pub(crate) fn drain_ref_spawns(world: &mut World) {
     use lunco_usd_bevy::CanonicalStages;

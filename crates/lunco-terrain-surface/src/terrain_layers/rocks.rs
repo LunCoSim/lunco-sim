@@ -9,6 +9,7 @@ use avian3d::prelude::{Collider, RigidBody};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use lunco_obstacle_field::rock::faceted_rock_mesh;
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_obstacle_field::sampler::{salt, sample_layer, Placement};
 use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
@@ -28,17 +29,21 @@ pub struct TerrainRock;
 pub(crate) struct ProceduralRock;
 
 /// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
+#[cfg(not(target_arch = "wasm32"))]
 const ROCK_BUCKETS: usize = 6;
 /// Hard cap on scattered rock ENTITIES regardless of density × area. Scattering at a
 /// real per-hectare density across a 16 km DEM would be hundreds of thousands of
 /// bodies; cap the total and spread it over the whole map (LOD-culled near the
 /// camera). Camera-following rock streaming is the real fix for uniform full-map
 /// density at high counts; this gives full-map coverage cheaply meanwhile.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_ROCKS: usize = 6000;
 /// Bound the in-memory placement cache while still covering normal inspector
 /// tuning. The cache stores only XZ/size/yaw data, never ECS entities or meshes.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CACHED_ROCK_FIELDS: usize = 32;
 /// Bump when the deterministic sampler or placement interpretation changes.
+#[cfg(not(target_arch = "wasm32"))]
 const ROCK_SCATTER_CACHE_VERSION: u64 = 1;
 /// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
 /// Rocks are scattered only in a near-origin region (`region_half_extent`, ~±300 m),
@@ -80,37 +85,6 @@ fn size_bucket(r: f32) -> u32 {
 /// The representative radius of a bucket (the inverse of [`size_bucket`]).
 fn bucket_radius_of(bucket: u32) -> f32 {
     ((bucket as f32 - 64.0) / 8.0).exp()
-}
-
-fn hash_size_dist(h: &mut lunco_precompute::Fnv1a, size: SizeDist) {
-    h.write_u64(size.min.to_bits() as u64);
-    h.write_u64(size.mode.to_bits() as u64);
-    h.write_u64(size.max.to_bits() as u64);
-    h.write_u64(size.sigma.to_bits() as u64);
-}
-
-fn hash_pattern(h: &mut lunco_precompute::Fnv1a, pattern: Pattern) {
-    match pattern {
-        Pattern::Uniform => {
-            h.write_u64(0);
-        }
-        Pattern::PoissonDisk { min_spacing } => {
-            h.write_u64(1);
-            h.write_u64(min_spacing.to_bits() as u64);
-        }
-        Pattern::Clustered { clusters, spread } => {
-            h.write_u64(2);
-            h.write_u64(clusters as u64);
-            h.write_u64(spread.to_bits() as u64);
-        }
-    }
-}
-
-fn hash_rock_layer(h: &mut lunco_precompute::Fnv1a, rocks: RockLayer) {
-    h.write_u64(rocks.enabled as u64);
-    h.write_u64(rocks.density.to_bits() as u64);
-    hash_size_dist(h, rocks.size);
-    h.write_u64(rocks.dynamic_fraction.to_bits() as u64);
 }
 
 /// The ONE boulder look every rock — procedural or hand-placed — draws with.
@@ -161,13 +135,35 @@ struct RockScatterLayer {
     seed: u64,
 }
 
-/// The typed values read from one authored scattered-rock layer.
-#[derive(Clone, Copy, Debug)]
-pub struct RockLayerParams {
-    pub layer: RockLayer,
-    pub region_half_extent: f32,
-    pub pattern: Pattern,
-    pub seed: u64,
+fn hash_size_dist(h: &mut lunco_precompute::Fnv1a, size: SizeDist) {
+    h.write_u64(size.min.to_bits() as u64);
+    h.write_u64(size.mode.to_bits() as u64);
+    h.write_u64(size.max.to_bits() as u64);
+    h.write_u64(size.sigma.to_bits() as u64);
+}
+
+fn hash_pattern(h: &mut lunco_precompute::Fnv1a, pattern: Pattern) {
+    match pattern {
+        Pattern::Uniform => {
+            h.write_u64(0);
+        }
+        Pattern::PoissonDisk { min_spacing } => {
+            h.write_u64(1);
+            h.write_u64(min_spacing.to_bits() as u64);
+        }
+        Pattern::Clustered { clusters, spread } => {
+            h.write_u64(2);
+            h.write_u64(clusters as u64);
+            h.write_u64(spread.to_bits() as u64);
+        }
+    }
+}
+
+fn hash_rock_layer(h: &mut lunco_precompute::Fnv1a, rocks: RockLayer) {
+    h.write_u64(rocks.enabled as u64);
+    h.write_u64(rocks.density.to_bits() as u64);
+    hash_size_dist(h, rocks.size);
+    h.write_u64(rocks.dynamic_fraction.to_bits() as u64);
 }
 
 impl TerrainLayer for RockScatterLayer {
@@ -177,8 +173,6 @@ impl TerrainLayer for RockScatterLayer {
 
     fn scatter_fingerprint(&self) -> Option<u64> {
         let mut h = lunco_precompute::Fnv1a::new();
-        // Explicit fields make the key stable across Debug-format changes and
-        // avoid allocating a transient string on every stack fingerprint.
         h.write_u64(1); // fingerprint layout version
         hash_rock_layer(&mut h, self.rocks);
         hash_pattern(&mut h, self.pattern);
@@ -302,14 +296,14 @@ impl TerrainLayer for RockScatterLayer {
                     entity
                 } else {
                     spawned += 1;
-                    let entity = cx.commands.spawn_empty().id();
-                    cx.commands
-                        .entity(entity)
-                        .insert((ChildOf(cx.terrain), TerrainScatterOwner(cx.terrain)));
-                    entity
+                    cx.commands.spawn_empty().id()
                 };
                 let mut rock = cx.commands.entity(entity);
-                rock.insert((
+                // Reassert ownership on reuse as well as on first spawn. Presentation
+                // and selection are allowed to reparent entities; a pooled rock must
+                // always return to the terrain that owns its local X/Z coordinates.
+                rock.try_insert(ChildOf(cx.terrain));
+                rock.try_insert((
                     TerrainRock,
                     ProceduralRock,
                     TerrainScatterEntity,
@@ -460,6 +454,44 @@ pub(super) fn parse_rock_instance(a: &dyn LayerAttrSource) -> Option<Arc<dyn Ter
     }))
 }
 
+/// Parse a `lunco:layer = "rocks"` prim: `enabled` (explicit visibility,
+/// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
+/// radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`, `regionM`
+/// (near-field scatter half-extent), and `seed`.
+pub(super) fn params(a: &dyn LayerAttrSource) -> (RockLayer, f32, u64) {
+    // Visibility is independent from density. Keeping density authored makes a
+    // disable/enable cycle survive a document reload and a new session.
+    let density = a.get_f32("density").unwrap_or(0.0);
+    let mode = a.get_f32("sizeMode").unwrap_or(0.6);
+    let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
+    let size_max = a
+        .get_f32("sizeMax")
+        .unwrap_or_else(|| (mode * 4.0).max(2.5));
+    let rocks = RockLayer {
+        enabled: a.get_bool("enabled") != Some(false) && density > 0.0,
+        density,
+        // min ≤ mode ≤ max — same validity guard as the Inspector sliders.
+        size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
+        dynamic_fraction: a.get_f32("dynamicFrac").unwrap_or(0.0),
+    };
+    let region_half_extent = a.get_f32("regionM").unwrap_or(300.0);
+    let seed = a.get_i64("seed").map(|s| s as u64).unwrap_or(0xB0A1);
+    (rocks, region_half_extent, seed)
+}
+
+pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    let (rocks, region_half_extent, seed) = params(a);
+    if !rocks.enabled {
+        return None;
+    }
+    Some(Arc::new(RockScatterLayer {
+        rocks,
+        region_half_extent,
+        pattern: Pattern::Uniform,
+        seed,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,41 +515,4 @@ mod tests {
         // Genuinely different sizes do not.
         assert_ne!(size_bucket(0.6), size_bucket(2.0));
     }
-}
-
-/// Parse a `lunco:layer = "rocks"` prim: `enabled` (explicit visibility,
-/// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
-/// radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`, `regionM`
-/// (near-field scatter half-extent), and `seed`.
-pub fn read_rock_layer(a: &dyn LayerAttrSource) -> RockLayerParams {
-    let density = a.get_f32("density").unwrap_or(0.0);
-    let mode = a.get_f32("sizeMode").unwrap_or(0.6);
-    let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
-    let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
-    RockLayerParams {
-        layer: RockLayer {
-            // Visibility is independent from density. Keeping density authored
-            // makes a disable/enable cycle survive reload and a new session.
-            enabled: a.get_bool("enabled") != Some(false) && density > 0.0,
-            density,
-            // min ≤ mode ≤ max — same validity guard as the Inspector sliders.
-            size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
-            dynamic_fraction: a.get_f32("dynamicFrac").unwrap_or(0.0),
-        },
-        region_half_extent: a.get_f32("regionM").unwrap_or(300.0),
-        pattern: Pattern::Uniform,
-        seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0xB0A1),
-    }
-}
-
-pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
-    let params = read_rock_layer(a);
-    params.layer.enabled.then(|| {
-        Arc::new(RockScatterLayer {
-            rocks: params.layer,
-            region_half_extent: params.region_half_extent,
-            pattern: params.pattern,
-            seed: params.seed,
-        }) as _
-    })
 }

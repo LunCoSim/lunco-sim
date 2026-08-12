@@ -808,7 +808,6 @@ pub fn instance_key(
 /// by independent material plugins in `lunco-materials` that observe
 /// the `UsdVisualSynced` insertion.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn instantiate_usd_prim(
     entity: Entity,
     prim_path: &UsdPrimPath,
@@ -1388,7 +1387,7 @@ fn instantiate_usd_prim_from_stage(
                         .entity(entity)
                         .try_insert(WorldAssetRoot(scene_h))
                         .try_insert(GlbPlaceholder)
-                        .try_insert(PlaceholderAssetUri(path.clone()));
+                        .try_insert(PlaceholderAssetUri(path));
                 }
             }
         }
@@ -1436,7 +1435,7 @@ fn instantiate_usd_prim_from_stage(
             let conv = stage_convention(reader);
             let q_axis = conv.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
             if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
-                transform.rotation = transform.rotation * q_axis;
+                transform.rotation *= q_axis;
             }
             info!(
                 "[usd-bevy] {} {} axis={} rot={:?}",
@@ -1693,15 +1692,15 @@ fn on_usd_prim_added(
         || q_child_of
             .get(entity)
             .ok()
-            .map_or(false, |c| q_high_precision.contains(c.parent()));
+            .is_some_and(|c| q_high_precision.contains(c.parent()));
     let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
     let requested_quality = quality
         .as_deref()
         .map_or(lunco_render::RenderingQuality::Auto, |settings| {
             settings.quality
         });
-    let budget_bytes = shadow_budget.as_deref().map_or(
-        lunco_render::GpuShadowBudget::default().limit_bytes,
+    let budget_bytes = shadow_budget.as_deref().map_or_else(
+        || lunco_render::GpuShadowBudget::default().limit_bytes,
         |budget| budget.limit_bytes,
     );
 
@@ -1803,8 +1802,8 @@ pub fn sync_usd_visuals(
         .map_or(lunco_render::RenderingQuality::Auto, |settings| {
             settings.quality
         });
-    let budget_bytes = shadow_budget.as_deref().map_or(
-        lunco_render::GpuShadowBudget::default().limit_bytes,
+    let budget_bytes = shadow_budget.as_deref().map_or_else(
+        || lunco_render::GpuShadowBudget::default().limit_bytes,
         |budget| budget.limit_bytes,
     );
 
@@ -1815,7 +1814,7 @@ pub fn sync_usd_visuals(
                 || q_child_of
                     .get(entity)
                     .ok()
-                    .map_or(false, |c| q_high_precision.contains(c.parent()));
+                    .is_some_and(|c| q_high_precision.contains(c.parent()));
             let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
 
             instantiate_usd_prim(
@@ -1956,12 +1955,12 @@ fn resolve_texture_path(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
-) -> Option<String> {
+) -> String {
     use lunco_assets::asset_path::{anchor_of, canonicalize, canonicalize_root};
-    Some(match asset_server.get_path(stage_id) {
+    match asset_server.get_path(stage_id) {
         Some(stage_path) => canonicalize(asset_path, &anchor_of(&stage_path)),
         None => canonicalize_root(asset_path),
-    })
+    }
 }
 
 /// Extractor for parent prim path from property connection target (e.g. `/World/Material/Shader.output` -> `/World/Material/Shader`)
@@ -2158,7 +2157,7 @@ fn apply_standard_material(
             let conn = reader.connection_source(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
             let asset_path = reader.asset(&texture_path, "inputs:file")?;
-            let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
+            let resolved = resolve_texture_path(asset_server, stage_id, &asset_path);
 
             let is_srgb = match reader
                 .text(&texture_path, "inputs:sourceColorSpace")
@@ -2242,7 +2241,7 @@ fn apply_standard_material(
         {
             metallic = 0.0;
             if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
-                specular_tint = LinearRgba::rgb(c[0] as f32, c[1] as f32, c[2] as f32);
+                specular_tint = LinearRgba::rgb(c[0], c[1], c[2]);
             }
         }
 
@@ -2532,17 +2531,15 @@ pub fn read_rel_target(reader: &UsdData, prim_path: &SdfPath, rel_name: &str) ->
         return None;
     };
     for field in &["targetPaths", "connectionPaths"] {
-        if let Some(val) = reader.field(&rel_sdf, field) {
-            if let Value::PathListOp(op) = val {
-                if let Some(target) = op
-                    .explicit_items
-                    .first()
-                    .or_else(|| op.prepended_items.first())
-                    .or_else(|| op.appended_items.first())
-                    .or_else(|| op.added_items.first())
-                {
-                    return Some(target.as_str().to_string());
-                }
+        if let Some(Value::PathListOp(op)) = reader.field(&rel_sdf, field) {
+            if let Some(target) = op
+                .explicit_items
+                .first()
+                .or_else(|| op.prepended_items.first())
+                .or_else(|| op.appended_items.first())
+                .or_else(|| op.added_items.first())
+            {
+                return Some(target.as_str().to_string());
             }
         }
     }
@@ -2937,7 +2934,7 @@ pub fn plan_usd_animation(
         let opacity = shader
             .as_ref()
             .is_some_and(|s| attr_has_time_samples(reader, s, "inputs:opacity"));
-        let material = (diffuse || geom_color || opacity).then(|| MaterialPlan {
+        let material = (diffuse || geom_color || opacity).then_some(MaterialPlan {
             shader,
             diffuse,
             geom_color,
@@ -3016,7 +3013,7 @@ pub fn sample_usd_animation(
         let conv = stage_convention(reader);
         match &plan.xform {
             XformDrive::OpOrder => {
-                if let Some(m) = compose_xform_order_at(reader, &sdf_path, t) {
+                if let Some(m) = compose_xform_order_at(reader, sdf_path, t) {
                     let m = conv.local_transform(m);
                     tf.translation = m.translation;
                     tf.rotation = m.rotation;
@@ -3030,7 +3027,7 @@ pub fn sample_usd_animation(
         // else → `Inherited`. Skipped entirely unless the plan flags it, so a prim
         // animated only in xform/material never churns visibility change-detection.
         if plan.visibility {
-            if let Some(tok) = read_token_at(reader, &sdf_path, "visibility", t) {
+            if let Some(tok) = read_token_at(reader, sdf_path, "visibility", t) {
                 let want = if tok == "invisible" {
                     Visibility::Hidden
                 } else {
@@ -3629,7 +3626,7 @@ fn detach_reset_xform_stack_prims(
         );
         commands
             .entity(entity)
-            .insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
+            .try_insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
     }
 }
 
@@ -5252,19 +5249,17 @@ pub fn reveal_placeholder_on_failure(
                 let reader = &view;
 
                 // Navigate up from the current prim to its parent to find the sibling "Placeholder"
-                let parent_path = prim_path.path.rsplitn(2, '/').nth(1).unwrap_or("");
+                let parent_path = prim_path.path.rsplit_once('/').map(|x| x.0).unwrap_or("");
                 let sibling_placeholder_path = format!("{}/Placeholder", parent_path);
 
                 // Helper to check attributes
                 let check_path = |path: &str| -> Option<Vec3> {
                     if let Ok(sdf_path) = SdfPath::new(path) {
-                        if let Some(s) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
-                            Some(s)
-                        } else if let Some(size) = reader.real(&sdf_path, "size") {
-                            Some(Vec3::splat(size as f32))
-                        } else {
-                            None
-                        }
+                        get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale").or_else(|| {
+                            reader
+                                .real(&sdf_path, "size")
+                                .map(|size| Vec3::splat(size as f32))
+                        })
                     } else {
                         None
                     }

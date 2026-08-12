@@ -2,14 +2,14 @@
 //!
 //! A real `ScriptedModel { language: Rhai }` runs a scenario against a live
 //! `World`. We assert the scenario actually drove the simulation:
-//!   - P2: `on_start`/`on_tick` ran on the host entity.
-//!   - P1: `cmd("SetPorts", …)` dispatched by NAME through `ApiCommandEvent`
-//!         → reflect dispatch → the real `SetPorts` observer fired, with the
-//!         `target` gid resolved back to the host `Entity`.
-//!   - P3: `world_pos`/`world_forward` reads fed the pure-rhai `nav_to`
-//!         steering, and `emit(...)` produced a `TelemetryEvent`.
-//!   - P4: the declarative `run_plan` executor advanced objectives and emitted
-//!         `OBJECTIVE_COMPLETE` / `PLAN_COMPLETE`.
+//! - P2: `on_start`/`on_tick` ran on the host entity.
+//! - P1: `cmd("SetPorts", …)` dispatched by NAME through `ApiCommandEvent`
+//!   → reflect dispatch → the real `SetPorts` observer fired, with the
+//!   `target` gid resolved back to the host `Entity`.
+//! - P3: `world_pos`/`world_forward` reads fed the pure-rhai `nav_to`
+//!   steering, and `emit(...)` produced a `TelemetryEvent`.
+//! - P4: the declarative `run_plan` executor advanced objectives and emitted
+//!   `OBJECTIVE_COMPLETE` / `PLAN_COMPLETE`.
 //!
 //! Spy `#[on_command]` handlers stand in for the real mobility/physics stack
 //! (which lives in other crates) — the bridge dispatches to whatever `SetPorts`
@@ -1097,16 +1097,13 @@ fn timeline_storage_register_discover_and_run() {
         ApiResponse::Ok { data, .. } => data.expect("ListTimelines data"),
         other => panic!("ListTimelines returned {other:?}"),
     };
-    let names: Vec<&str> = list["timelines"]
+    let has_approach = list["timelines"]
         .as_array()
         .expect("timelines array")
         .iter()
         .filter_map(|v| v.as_str())
-        .collect();
-    assert!(
-        names.contains(&"approach"),
-        "ListTimelines should include it; got {list}"
-    );
+        .any(|name| name == "approach");
+    assert!(has_approach, "ListTimelines should include it; got {list}");
 
     let provider = app
         .world()

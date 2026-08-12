@@ -487,7 +487,7 @@ pub fn place_celestial_bound_entities(
     *last_jd = jd;
 
     for (entity, anchor, orbit, visibility) in q_bound.iter_mut() {
-        let body = anchor.map(|a| a.body).or(orbit.map(|o| o.body));
+        let body = anchor.map(|a| a.body).or_else(|| orbit.map(|o| o.body));
         let Some(body) = body else { continue };
         let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == body) else {
             continue;

@@ -155,10 +155,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         selected: bool,
     ) {
         let palette = modelica_icon_palette_from_ctx(ctx.ui.ctx());
-        let mapped = palette
-            .as_ref()
-            .map(|p| p.remap(self.color))
-            .unwrap_or(self.color);
+        let mapped = palette.remap(self.color);
         let col = if selected { brighten(mapped) } else { mapped };
         let base_width = if selected {
             if self.is_causal {

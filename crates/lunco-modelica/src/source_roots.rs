@@ -350,6 +350,7 @@ fn is_builtin_root(root: &str) -> bool {
 ///   compile path will surface the missing-type error from rumoca
 ///   the same way it did before PR-C. Adding support for these is
 ///   the work of a follow-up PR.
+///
 /// Source tag used for [`lunco_workbench::status_bus::StatusBus`]
 /// progress entries during source-root loads.
 pub const STATUS_BUS_SOURCE: &str = "source-roots";

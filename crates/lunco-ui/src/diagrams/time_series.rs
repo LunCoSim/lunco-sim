@@ -105,7 +105,7 @@ pub fn time_series_plot(ui: &mut egui::Ui, plot_id: &str, series: &[ChartSeries]
             }
             let dt = s.dt.unwrap_or(1.0);
             let x0 = s.t0;
-            let points = if n == 1 || !(dt > 0.0) {
+            let points = if n == 1 || dt.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
                 // A single sample (or degenerate dt) can't span an X
                 // range — the generator's spacing would divide by
                 // zero. One owned point is fine.

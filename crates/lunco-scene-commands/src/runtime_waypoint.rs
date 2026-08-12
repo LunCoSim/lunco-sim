@@ -134,7 +134,7 @@ fn spawn_runtime_waypoint_marker(
     );
     commands
         .entity(marker.root_entity)
-        .insert(RuntimeWaypointBinding { vessel, index });
+        .try_insert(RuntimeWaypointBinding { vessel, index });
     Ok(())
 }
 
@@ -403,7 +403,7 @@ pub fn mark_reached_waypoints_on_enter(
         }
         commands
             .entity(vessel)
-            .insert(ReachedWaypoints(set.clone()));
+            .try_insert(ReachedWaypoints(set.clone()));
         info!("[waypoint] reached {key} (sensor enter)");
         commands.trigger(TelemetryEvent {
             name: "waypoint.reached".to_string(),

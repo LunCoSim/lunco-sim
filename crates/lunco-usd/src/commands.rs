@@ -341,14 +341,9 @@ fn open_usd_docs_on_twin_added(
                     twin.root.display()
                 );
                 let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(
-                    lunco_assets::twin_uri(&twin_name, &scene),
+                    lunco_assets::twin_uri(&twin_name, scene),
                 );
-                pending_twin.push(
-                    handle,
-                    twin_name.clone(),
-                    scene.to_string(),
-                    twin.root.join(scene),
-                );
+                pending_twin.push(handle, twin_name, scene.to_string(), twin.root.join(scene));
             } else {
                 info!(
                     "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
@@ -357,7 +352,7 @@ fn open_usd_docs_on_twin_added(
                     twin.root.display()
                 );
                 commands.trigger(LoadScene {
-                    path: lunco_assets::twin_uri(&twin_name, &scene),
+                    path: lunco_assets::twin_uri(&twin_name, scene),
                     root_prim: String::new(),
                 });
             }
@@ -730,9 +725,9 @@ fn on_restart_scene_refresh_active_document(
         return;
     };
     let (_, outcome) = if trigger.event().reset_document {
-        registry.reset_file(path, source.clone())
+        registry.reset_file(path, source)
     } else {
-        registry.open_file(path, source.clone())
+        registry.open_file(path, source)
     };
     match outcome {
         OpenOutcome::Refreshed => {
@@ -1021,7 +1016,7 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
                 return;
             }
         };
-        let source = doc.source().to_string();
+        let source = doc.source();
         // Route through the storage abstraction instead of a direct
         // `std::fs::write` (clippy-banned in domain crates, wasm-broken).
         // `write_sync` blocks on `FileStorage`'s write future, which wraps

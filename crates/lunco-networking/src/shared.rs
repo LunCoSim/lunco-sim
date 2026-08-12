@@ -91,29 +91,6 @@ pub(crate) fn is_dev_netcode_key(key: &[u8; 32]) -> bool {
     key == &DEV_NETCODE_KEY
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn development_key_is_nonzero_and_marked() {
-        assert_ne!(DEV_NETCODE_KEY, [0; 32]);
-        assert!(is_dev_netcode_key(&DEV_NETCODE_KEY));
-    }
-
-    #[test]
-    fn key_parser_rejects_zero_and_wrong_length() {
-        assert!(parse_netcode_key(&"00".repeat(32)).is_err());
-        assert!(parse_netcode_key("deadbeef").is_err());
-    }
-
-    #[test]
-    fn key_parser_accepts_32_bytes_of_hex() {
-        let key = parse_netcode_key(&"ab".repeat(32)).expect("valid key");
-        assert_eq!(key, [0xab; 32]);
-    }
-}
-
 // Wire envelope codec = **bincode** (binary, positional — no field names). This is
 // the hot 20 Hz snapshot path; JSON here roughly doubled the byte count. The inner
 // Reflect command payload (`SyncCommand.data`) still uses serde_json — bincode just
@@ -322,4 +299,27 @@ fn add_protocol(app: &mut App) {
     // `UpdateObstacleFieldSpec` no longer rides the command bus — it is journaled
     // (`DomainKind::ObstacleField`) and syncs via the journal plane instead. See
     // the note where `sync_obstacle_field_spec` used to live.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_key_is_nonzero_and_marked() {
+        assert_ne!(DEV_NETCODE_KEY, [0; 32]);
+        assert!(is_dev_netcode_key(&DEV_NETCODE_KEY));
+    }
+
+    #[test]
+    fn key_parser_rejects_zero_and_wrong_length() {
+        assert!(parse_netcode_key(&"00".repeat(32)).is_err());
+        assert!(parse_netcode_key("deadbeef").is_err());
+    }
+
+    #[test]
+    fn key_parser_accepts_32_bytes_of_hex() {
+        let key = parse_netcode_key(&"ab".repeat(32)).expect("valid key");
+        assert_eq!(key, [0xab; 32]);
+    }
 }

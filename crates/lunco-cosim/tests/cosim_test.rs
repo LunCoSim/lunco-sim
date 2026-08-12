@@ -384,26 +384,26 @@ fn test_suggestions_for_balloon_model() {
     );
 
     // Should suggest force connections for netForce, buoyancy
-    let force_suggestions: Vec<_> = suggestions
+    let force_suggestions = suggestions
         .iter()
         .filter(|s| s.end_connector == "force_y")
-        .collect();
-    assert!(force_suggestions.len() >= 2);
+        .count();
+    assert!(force_suggestions >= 2);
 
     // Should suggest collider for volume
-    let collider_suggestions: Vec<_> = suggestions
+    let collider_suggestions = suggestions
         .iter()
         .filter(|s| s.end_connector == "collider")
-        .collect();
-    assert_eq!(collider_suggestions.len(), 1);
+        .count();
+    assert_eq!(collider_suggestions, 1);
 
     // Should suggest gravity for g — sourced from the local-gravity output
     // (populated by lunco-environment), not a hardcoded constant.
-    let gravity_suggestions: Vec<_> = suggestions
+    let gravity_suggestions = suggestions
         .iter()
         .filter(|s| s.start_connector == lunco_cosim::GRAVITY_SOURCE_CONNECTOR)
-        .collect();
-    assert_eq!(gravity_suggestions.len(), 1);
+        .count();
+    assert_eq!(gravity_suggestions, 1);
 }
 
 #[test]

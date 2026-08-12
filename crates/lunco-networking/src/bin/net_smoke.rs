@@ -486,7 +486,7 @@ fn test_apply_snapshots(
     if snaps.0.is_empty() {
         return;
     }
-    for s in snaps.0.drain(..).collect::<Vec<_>>() {
+    for s in snaps.0.drain(..) {
         if let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(s.gid)) {
             if let Ok(mut tf) = q.get_mut(e) {
                 tf.translation = Vec3::from(s.t);

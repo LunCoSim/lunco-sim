@@ -125,7 +125,6 @@ fn payload_assets(prim: &usd::Prim) -> Vec<String> {
         .ok()
         .unwrap_or_default()
         .into_iter()
-        .map(|p| p.to_string())
         .collect()
 }
 

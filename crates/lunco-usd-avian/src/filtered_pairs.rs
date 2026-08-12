@@ -332,7 +332,7 @@ pub fn enable_shared_tire_contact_hooks(
         let current = hooks.copied().unwrap_or_default();
         commands
             .entity(entity)
-            .insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
+            .try_insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
     }
 }
 

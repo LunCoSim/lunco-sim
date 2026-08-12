@@ -81,10 +81,12 @@ mod tests {
 
     #[test]
     fn set_spec_round_trips_through_json() {
-        let mut spec = ObstacleFieldSpec::default();
-        spec.seed = 0xABCD;
-        spec.region_half_extent = 123.0;
-        let op = ObstacleFieldOp::SetSpec { spec: spec };
+        let spec = ObstacleFieldSpec {
+            seed: 0xABCD,
+            region_half_extent: 123.0,
+            ..Default::default()
+        };
+        let op = ObstacleFieldOp::SetSpec { spec };
         assert_eq!(op.domain(), DomainKind::ObstacleField);
         let json = serde_json::to_value(&op).unwrap();
         let back = replay_spec(&json).expect("decodes");

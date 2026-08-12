@@ -634,8 +634,8 @@ mod tests {
             .build();
 
         let b = graph.find_node("B").unwrap();
-        let edges: Vec<_> = graph.edges_for_node(b.id).collect();
-        assert_eq!(edges.len(), 2); // one incoming, one outgoing
+        let edges = graph.edges_for_node(b.id);
+        assert_eq!(edges.count(), 2); // one incoming, one outgoing
     }
 
     #[test]
@@ -667,7 +667,7 @@ mod tests {
         for (i, kind) in kinds.iter().enumerate() {
             let b = graph.add_node(
                 NodeKind::Component,
-                &format!("b{i}"),
+                format!("b{i}"),
                 vec![ComponentPort::input("y")],
             );
             graph.connect(a, 0, b, 0, *kind);

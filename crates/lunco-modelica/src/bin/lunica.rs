@@ -197,7 +197,7 @@ fn main() {
     if headless {
         app.add_plugins(lunco_modelica::ModelicaCorePlugin);
         app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ as f64),
+            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
         ));
         info!("[lunica] running HEADLESS: Modelica compile core + API, no window/egui");
     }

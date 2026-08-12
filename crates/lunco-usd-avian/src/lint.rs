@@ -312,11 +312,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 }
             })
             .collect();
-        let missing: Vec<String> = targets
+        let missing = targets
             .iter()
             .filter(|t| !bodies.contains(*t) && host_body(&bodies, t).is_none())
-            .cloned()
-            .collect();
+            .cloned();
         // The RESOLVED endpoints, so `jointed` answers "is this body held" rather
         // than "was this body's path typed into a joint".
         attached.extend(resolved);
@@ -328,12 +327,9 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ),
             (
                 "bodies",
-                H::Array(targets.into_iter().map(H::str).collect()),
+                H::Array(targets.iter().cloned().map(H::str).collect()),
             ),
-            (
-                "missing",
-                H::Array(missing.into_iter().map(H::str).collect()),
-            ),
+            ("missing", H::Array(missing.map(H::str).collect())),
         ]));
     }
 
@@ -363,27 +359,17 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .map(|t| t.to_string())
             .filter(|t| !t.is_empty())
             .collect();
-        let missing: Vec<String> = targets
-            .iter()
-            .filter(|t| !known.contains(*t))
-            .cloned()
-            .collect();
-        let owners: Vec<String> = targets.iter().map(|t| owner_of(t)).collect();
+        let missing = targets.iter().filter(|t| !known.contains(*t)).cloned();
+        let owners = targets.iter().map(|t| owner_of(t));
         filtered_pairs.push(H::map([
             ("path", H::str(path.clone())),
             ("owner", H::str(owner_of(&path))),
             (
                 "targets",
-                H::Array(targets.into_iter().map(H::str).collect()),
+                H::Array(targets.iter().cloned().map(H::str).collect()),
             ),
-            (
-                "target_owners",
-                H::Array(owners.into_iter().map(H::str).collect()),
-            ),
-            (
-                "missing",
-                H::Array(missing.into_iter().map(H::str).collect()),
-            ),
+            ("target_owners", H::Array(owners.map(H::str).collect())),
+            ("missing", H::Array(missing.map(H::str).collect())),
         ]));
     }
 
@@ -414,20 +400,18 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .collect();
         // An include is a SUBTREE root, so "exists" means some prim is it or under
         // it — an include naming a prim that was renamed matches nothing at all.
-        let missing_includes: Vec<String> = includes
+        let missing_includes = includes
             .iter()
             .filter(|t| {
                 !known
                     .iter()
                     .any(|k| k == *t || k.starts_with(&format!("{t}/")))
             })
-            .cloned()
-            .collect();
-        let missing_filtered: Vec<String> = filtered
+            .cloned();
+        let missing_filtered = filtered
             .iter()
             .filter(|t| !group_paths.contains(*t))
-            .cloned()
-            .collect();
+            .cloned();
         collision_groups.push(H::map([
             ("path", H::str(path)),
             (
@@ -444,19 +428,19 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ),
             (
                 "includes",
-                H::Array(includes.into_iter().map(H::str).collect()),
+                H::Array(includes.iter().cloned().map(H::str).collect()),
             ),
             (
                 "filtered",
-                H::Array(filtered.into_iter().map(H::str).collect()),
+                H::Array(filtered.iter().cloned().map(H::str).collect()),
             ),
             (
                 "missing_includes",
-                H::Array(missing_includes.into_iter().map(H::str).collect()),
+                H::Array(missing_includes.map(H::str).collect()),
             ),
             (
                 "missing_filtered",
-                H::Array(missing_filtered.into_iter().map(H::str).collect()),
+                H::Array(missing_filtered.map(H::str).collect()),
             ),
         ]));
     }
@@ -568,14 +552,14 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     }
                 }
             }
-            let ambiguous_boundary_sources: Vec<String> = boundary_sources
-                .into_iter()
-                .filter_map(|(source, boundaries)| {
-                    (boundaries.len() > 1).then(|| {
-                        format!("{} inputs {} resolve to {source}", p, boundaries.join(", "))
-                    })
-                })
-                .collect();
+            let ambiguous_boundary_sources =
+                boundary_sources
+                    .into_iter()
+                    .filter_map(|(source, boundaries)| {
+                        (boundaries.len() > 1).then(|| {
+                            format!("{} inputs {} resolve to {source}", p, boundaries.join(", "))
+                        })
+                    });
             for member in &members {
                 if !reader.has_api_schema(member, "LunCoProgramAPI") {
                     continue;
@@ -722,7 +706,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 ),
                 (
                     "ambiguous_boundary_sources",
-                    H::Array(ambiguous_boundary_sources.into_iter().map(H::str).collect()),
+                    H::Array(ambiguous_boundary_sources.map(H::str).collect()),
                 ),
             ]));
         }
@@ -805,11 +789,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         }
         let parent = p.parent().map(|x| x.to_string()).unwrap_or_default();
         let attributes = reader.attr_names(p);
-        let connected_attributes: Vec<String> = attributes
+        let connected_attributes = attributes
             .iter()
             .filter(|name| !reader.connections(p, name).is_empty())
-            .cloned()
-            .collect();
+            .cloned();
         prims.push(H::map([
             ("path", H::str(p.to_string())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
@@ -820,11 +803,11 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ),
             (
                 "attributes",
-                H::Array(attributes.into_iter().map(H::str).collect()),
+                H::Array(attributes.iter().cloned().map(H::str).collect()),
             ),
             (
                 "connected_attributes",
-                H::Array(connected_attributes.into_iter().map(H::str).collect()),
+                H::Array(connected_attributes.map(H::str).collect()),
             ),
         ]));
     }

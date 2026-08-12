@@ -74,7 +74,7 @@ pub fn update_wifi_links(
         if let Ok(mut state) = q_states.get_mut(entity) {
             state.peers = peers;
         } else {
-            commands.entity(entity).insert(WifiState { peers });
+            commands.entity(entity).try_insert(WifiState { peers });
         }
     }
 }

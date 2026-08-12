@@ -141,7 +141,7 @@ pub fn despawn_gizmo_proxies(
 ) {
     for (proxy, link) in &q_proxies {
         if q_selected.get(link.target).is_err() {
-            commands.entity(proxy).despawn();
+            commands.entity(proxy).try_despawn();
             commands.entity(link.target).try_remove::<HasGizmoProxy>();
         }
     }

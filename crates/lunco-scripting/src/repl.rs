@@ -36,11 +36,9 @@ pub fn spawn_repl_thread() -> ReplResource {
     std::thread::spawn(move || {
         let stdin = io::stdin();
         println!(">>> LunCo REPL Ready ({lang}) — snippets run against the live sim");
-        for line in stdin.lock().lines() {
-            if let Ok(cmd) = line {
-                if !cmd.trim().is_empty() {
-                    let _ = tx.send(cmd);
-                }
+        for cmd in stdin.lock().lines().map_while(Result::ok) {
+            if !cmd.trim().is_empty() {
+                let _ = tx.send(cmd);
             }
         }
     });

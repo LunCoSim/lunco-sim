@@ -140,7 +140,7 @@ pub fn reconcile_frozen_subtrees(
             if joints.contains(entity) {
                 commands
                     .entity(entity)
-                    .insert((JointDisabled, FrozenJointForReadiness { owner: root }));
+                    .try_insert((JointDisabled, FrozenJointForReadiness { owner: root }));
             }
 
             let body = bodies.contains(entity);

@@ -472,10 +472,7 @@ fn eval_visibility_falsy(expr: &Expression, falsy_params: &HashSet<String>) -> b
             .first()
             .map(|p| falsy_params.contains(p.ident.text.as_ref()))
             .unwrap_or(false),
-        Expression::Unary { op, .. } => match op {
-            OpUnary::Not => false,
-            _ => false,
-        },
+        Expression::Unary { .. } => false,
         Expression::Parenthesized { inner, .. } => eval_visibility_falsy(inner, falsy_params),
         _ => false,
     }
@@ -853,10 +850,12 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
                 .join(".");
             Some(DynExpr::Var(s))
         }
-        Expression::Unary { op, rhs, .. } => match op {
-            OpUnary::Minus => expr_to_dyn(rhs).map(|e| DynExpr::Neg(Box::new(e))),
-            _ => None,
-        },
+        Expression::Unary {
+            op: OpUnary::Minus,
+            rhs,
+            ..
+        } => expr_to_dyn(rhs).map(|e| DynExpr::Neg(Box::new(e))),
+        Expression::Unary { .. } => None,
         Expression::Binary { op, lhs, rhs, .. } => {
             let l = expr_to_dyn(lhs)?;
             let r = expr_to_dyn(rhs)?;

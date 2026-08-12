@@ -814,7 +814,7 @@ fn register_graphics_settings(world: &mut World) {
             ui.label(egui::RichText::new("(local-light policy unavailable)").weak());
             return;
         };
-        let mut settings = current.clone();
+        let mut settings = *current;
         egui::ComboBox::from_id_salt("graphics.local_light_shadows")
             .selected_text(match settings.local_lights {
                 LocalLightShadows::Off => "Off",

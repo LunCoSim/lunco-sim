@@ -164,7 +164,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
             let pairs = if std::env::var_os("LUNCO_NO_PARSE").is_some() {
                 None
             } else {
-                rumoca_compile::parsing::parse_files_parallel(&[pkg.clone()]).ok()
+                rumoca_compile::parsing::parse_files_parallel(std::slice::from_ref(&pkg)).ok()
             };
             if let Some(mut pairs) = pairs {
                 // Re-read source so we can slice each import's location
@@ -212,7 +212,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
                 // Level is the outer-relative-to-previous step. Prepend
                 // so the final chain is outer-first, inner-last.
                 let mut merged = level;
-                merged.extend(chain.drain(..));
+                merged.append(&mut chain);
                 chain = merged;
             }
             dir = d.parent();

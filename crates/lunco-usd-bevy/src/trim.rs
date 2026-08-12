@@ -90,7 +90,7 @@ fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Op
     // Clamp into the valid span range: [knots[degree], knots[n]].
     let lo = knots[degree];
     let hi = knots[n];
-    if !(hi > lo) {
+    if hi.partial_cmp(&lo) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     let t = t.clamp(lo, hi);
@@ -117,8 +117,11 @@ fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Op
             } else {
                 (t - knots[i]) / den
             };
-            for c in 0..3 {
-                d[j][c] = (1.0 - a) * d[j - 1][c] + a * d[j][c];
+            let previous = d[j - 1];
+            let current = d[j];
+            for (dst, (previous, current)) in d[j].iter_mut().zip(previous.into_iter().zip(current))
+            {
+                *dst = (1.0 - a) * previous + a * current;
             }
         }
     }
@@ -164,7 +167,7 @@ fn tessellate_curve(
 ) -> Vec<[f64; 2]> {
     let steps = steps.max(2);
     let (t0, t1) = (range[0], range[1]);
-    if !(t1 > t0) {
+    if t1.partial_cmp(&t0) != Some(std::cmp::Ordering::Greater) {
         return Vec::new();
     }
 
@@ -418,7 +421,7 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
                 crossings += 1;
             }
         }
-        if crossings % 2 == 0 {
+        if crossings.is_multiple_of(2) {
             continue;
         }
 

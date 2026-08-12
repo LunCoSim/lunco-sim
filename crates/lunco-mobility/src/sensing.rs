@@ -285,9 +285,9 @@ fn bridge_collision_events(
             ev.body1,
             ev.collider2,
             ev.body2,
-            &zone_name,
+            zone_name,
             &registry,
-            &is_moving_body,
+            is_moving_body,
         ) {
             fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
@@ -307,9 +307,9 @@ fn bridge_collision_events(
             ev.body1,
             ev.collider2,
             ev.body2,
-            &zone_name,
+            zone_name,
             &registry,
-            &is_moving_body,
+            is_moving_body,
         ) {
             fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
@@ -395,26 +395,24 @@ mod tests {
         // rover (side 1) enters pad (side 2, the named sensor) → "enter:pad_2"
         // with the entrant (rover, 42) as payload, and pad (7) as zone.
         assert_eq!(
-            zone_events("enter", rover, None, pad, None, &zone_name, &reg, |_| true),
+            zone_events("enter", rover, None, pad, None, zone_name, &reg, |_| true),
             vec![("enter:pad_2".to_string(), 42, 7)]
         );
         // Order-independent: the named side can be side 1.
         assert_eq!(
-            zone_events("exit", pad, None, rover, None, &zone_name, &reg, |_| true),
+            zone_events("exit", pad, None, rover, None, zone_name, &reg, |_| true),
             vec![("exit:pad_2".to_string(), 42, 7)]
         );
         // A contact with no named sensor produces no zone events.
         assert!(
-            zone_events("enter", rover, None, plain, None, &zone_name, &reg, |_| {
+            zone_events("enter", rover, None, plain, None, zone_name, &reg, |_| {
                 true
             })
             .is_empty()
         );
         // An unregistered entrant cannot be a script-addressable arrival.
         let ghost = world.spawn_empty().id();
-        assert!(
-            zone_events("enter", pad, None, ghost, None, &zone_name, &reg, |_| true).is_empty()
-        );
+        assert!(zone_events("enter", pad, None, ghost, None, zone_name, &reg, |_| true).is_empty());
 
         // A static terrain/body contact is not a vehicle arrival, even when the
         // zone side is named. The bridge supplies this predicate from Avian's
@@ -425,7 +423,7 @@ mod tests {
             None,
             ghost,
             Some(ghost),
-            &zone_name,
+            zone_name,
             &reg,
             |body| body == Some(rover),
         )

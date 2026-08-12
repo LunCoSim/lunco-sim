@@ -557,7 +557,7 @@ pub fn xml_to_value(xml: &str) -> Result<Value, String> {
 /// node that attaches to its parent (or, unwrapped, is a tree in its own right).
 fn close(
     f: Frame,
-    stack: &mut Vec<Frame>,
+    stack: &mut [Frame],
     trees: &mut Vec<(String, Value)>,
     main: &mut Option<String>,
 ) -> Result<(), String> {

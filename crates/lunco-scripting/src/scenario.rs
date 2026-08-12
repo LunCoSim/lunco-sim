@@ -106,7 +106,7 @@ pub fn open_scenarios_when_scene_ready(
 
 /// Run condition for scenario lifecycle systems.
 pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
-    gate.map_or(true, |gate| gate.enabled)
+    gate.is_none_or(|gate| gate.enabled)
 }
 
 #[cfg(test)]
@@ -597,7 +597,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     let needs_recompile = world
                         .get_resource::<ScenarioDriver<R>>()
                         .and_then(|d| d.fsm.get(&entity))
-                        .map_or(true, |st| st.attempted_generation != Some(generation));
+                        .is_none_or(|st| st.attempted_generation != Some(generation));
                     let maybe_src = needs_recompile
                         .then(|| (doc.source.clone(), doc.params.clone(), doc.asset_id.clone()));
                     (generation, maybe_src)

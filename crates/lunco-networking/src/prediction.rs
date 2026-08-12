@@ -283,7 +283,7 @@ fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(GridPos, Quat, 
     match (a, b) {
         (Some(a), Some(b)) => {
             let span = (b.gen_t - a.gen_t).max(1e-5);
-            let s = (((t - a.gen_t) / span).clamp(0.0, 1.0)) as f64;
+            let s = ((t - a.gen_t) / span).clamp(0.0, 1.0);
             // Cubic Hermite. Tangents are velocity·span (curve param is s∈[0,1],
             // ds = dt/span, so dp/ds = v·span). lv is units/sec.
             let p0 = a.pos_world.0;
@@ -1180,7 +1180,7 @@ pub fn record_predicted_state(
 /// path stays the current reconcile, so this cannot regress anything until chosen.
 fn rollback_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("LUNCO_ROLLBACK").map_or(false, |v| v == "1" || v == "true"))
+    *ON.get_or_init(|| std::env::var("LUNCO_ROLLBACK").is_ok_and(|v| v == "1" || v == "true"))
 }
 
 /// Don't rollback for noise. Below this the prediction already matches authority,
@@ -1587,9 +1587,10 @@ fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
 
 /// Client predict-own reconciliation (input-replay model, D2). GENERAL over any
 /// owned, locally-predicted moving body — it keys off [`lunco_core::OwnedLocally`]
-/// + gid and corrects an arbitrary dynamic body's Transform/Position/velocity; it
-/// assumes nothing about "rover". (Only the *input* that drives the body, e.g.
-/// a `SetPorts` throttle/steer write, is domain-specific — the predict-and-reconcile substrate is not.)
+/// and its gid, and corrects an arbitrary dynamic body's
+/// Transform/Position/velocity. It assumes nothing about "rover". Only the
+/// input that drives the body, such as a `SetPorts` throttle/steer write, is
+/// domain-specific; the predict-and-reconcile substrate is not.
 ///
 /// On each snapshot that acks a NEW input `seq` for an owned body, compare what we
 /// predicted at that seq (`PredictedStateLog`) to the authoritative state. **If
@@ -2956,10 +2957,10 @@ mod pose_write_tests {
     /// the PREVIOUS owner's input ack — in flight, or already sitting in
     /// `InterpBuffers`, when we took possession — must not be latched as
     /// `last_reconciled`. If it is, every ack from OUR seq stream (which restarts at
-    /// 1) is `<=` it and this system early-returns forever: the rover we are driving
-    /// is never reconciled again, and drifts without bound. The host resets the
-    /// watermark on the handover; this guard covers the in-flight window between the
-    /// two, and is what keeps a `Snap` reachable at all.
+    /// is less than or equal to it, and this system early-returns forever. The rover
+    /// we are driving is never reconciled again and drifts without bound. The host
+    /// resets the watermark on handover; this guard covers the in-flight window
+    /// between the two and keeps a `Snap` reachable.
     #[test]
     fn stale_ack_from_a_previous_owner_does_not_kill_reconciliation() {
         let mut world = World::new();

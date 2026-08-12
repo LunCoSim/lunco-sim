@@ -4,11 +4,11 @@
 //!
 //! # Why a shared helper
 //!
-//! Multiple views used to each do their own `Rect::from_center_size`
-//! + `new_child` layout. Small diffs between them meant the Icon
-//! fallback looked noticeably off-centre compared to the Diagram
-//! empty-state card. Consolidating here keeps visual parity and
-//! stops the centering from drifting apart as features get added.
+//! Multiple views used to each do their own `Rect::from_center_size` and
+//! `new_child` layout. Small diffs between them meant the Icon fallback
+//! looked noticeably off-centre compared to the Diagram empty-state card.
+//! Consolidating here keeps visual parity and stops the centering from
+//! drifting apart as features get added.
 //!
 //! # Contract
 //!

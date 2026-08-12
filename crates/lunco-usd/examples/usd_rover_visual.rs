@@ -1,6 +1,5 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lunco_mobility::*;
 use lunco_usd::*;
 
 fn main() {

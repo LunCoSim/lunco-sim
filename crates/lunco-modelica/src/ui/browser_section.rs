@@ -428,11 +428,10 @@ fn render_workspace_doc_row(
             }
             RenameTarget::UntitledOrigin => {
                 if !new_name.is_empty() {
-                    let new_name = new_name.clone();
                     let _ = ctx.resource_scope::<ModelicaDocumentRegistry, _>(|_, registry| {
                         if let Some(host) = registry.host_mut(doc_id) {
                             host.document_mut()
-                                .set_origin(lunco_doc::DocumentOrigin::untitled(new_name.clone()));
+                                .set_origin(lunco_doc::DocumentOrigin::untitled(new_name));
                         }
                     });
                 }

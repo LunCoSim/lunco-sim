@@ -588,10 +588,7 @@ mod tests {
 
         let port = app
             .world_mut()
-            .spawn(lunco_core::architecture::Port {
-                value: 1.0,
-                ..default()
-            })
+            .spawn(lunco_core::architecture::Port { value: 1.0 })
             .id();
         let chassis = app
             .world_mut()

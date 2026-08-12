@@ -977,7 +977,6 @@ impl Panel for AutopilotCanvasPanel {
             let (response, _events) = state.canvas.ui(ui);
             let vessel = state.selected;
             let source = state.signature.clone();
-            let selected_path = selected_path.clone();
             response.context_menu(|ui| {
                 let Some(path) = selected_path.as_deref() else {
                     ui.label("Select a composite node first.");

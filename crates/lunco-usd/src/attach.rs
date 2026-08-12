@@ -266,7 +266,7 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
             2,
             UsdOp::SetRotate {
                 edit_target: et.clone(),
-                path: child.clone(),
+                path: child,
                 value: spec.rotate_deg,
             },
         );

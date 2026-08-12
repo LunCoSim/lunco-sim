@@ -1402,7 +1402,7 @@ mod tests {
         };
         assert_ne!(empty.fingerprint(), one.fingerprint());
         assert_ne!(one.fingerprint(), two.fingerprint());
-        assert_eq!(one.fingerprint(), one.clone().fingerprint());
+        assert_eq!(one.fingerprint(), one.fingerprint());
     }
 
     #[test]

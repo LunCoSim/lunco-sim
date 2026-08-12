@@ -710,7 +710,7 @@ impl CanonicalStages {
             .iter_mut()
             .filter_map(|(id, cs)| {
                 let changes = cs.drain_changes();
-                (!changes.is_empty()).then(|| (*id, changes))
+                (!changes.is_empty()).then_some((*id, changes))
             })
             .collect()
     }
@@ -759,14 +759,14 @@ impl CanonicalStages {
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
         recipe: &crate::StageRecipe,
     ) -> Option<&CanonicalStage> {
-        if !self.by_asset.contains_key(&asset) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.by_asset.entry(asset) {
             match CanonicalStage::from_recipe(recipe) {
                 Ok(cs) => {
                     bevy::log::debug!(
                         "[canonical] on-demand built CanonicalStage for {asset:?} ({} prims)",
                         cs.view().prim_paths().len()
                     );
-                    self.by_asset.insert(asset, cs);
+                    entry.insert(cs);
                 }
                 Err(e) => {
                     bevy::log::warn!("[canonical] on-demand from_recipe failed for {asset:?}: {e}");

@@ -380,21 +380,12 @@ fn check_tutorial_keyboard_progress(
 
     let mut done = false;
     match require.as_str() {
-        "cycle" => {
-            if keys.just_pressed(KeyCode::KeyC) {
-                done = true;
-            }
-        }
+        "cycle" => done = keys.just_pressed(KeyCode::KeyC),
         "fly" => {
-            if keys.any_just_pressed([KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]) {
-                done = true;
-            }
+            done =
+                keys.any_just_pressed([KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]);
         }
-        "release" => {
-            if keys.just_pressed(KeyCode::Backspace) {
-                done = true;
-            }
-        }
+        "release" => done = keys.just_pressed(KeyCode::Backspace),
         _ => {}
     }
 

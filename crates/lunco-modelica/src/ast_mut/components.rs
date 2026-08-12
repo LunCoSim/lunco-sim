@@ -123,7 +123,7 @@ pub fn add_component(
         });
     }
     let new_component = parse_component_fragment(decl)?;
-    insert_declaration(class, edit, &pretty::component_decl(decl))?;
+    insert_declaration(class, edit, &pretty::component_decl(decl));
     class.components.insert(decl.name.clone(), new_component);
     Ok(())
 }
@@ -154,25 +154,16 @@ pub fn add_variable(
         .ok_or_else(|| AstMutError::ValueParseFailed {
             value: body.clone(),
         })?;
-    insert_declaration(class, edit, &body)?;
+    insert_declaration(class, edit, &body);
     class.components.insert(decl.name.clone(), new_component);
     Ok(())
 }
 
 /// Splice a rendered declaration in after the last existing component (or at the
 /// top of the class body). `rendered` carries its own indent and trailing `;\n`.
-fn insert_declaration(
-    class: &ClassDef,
-    edit: &mut Edit<'_>,
-    rendered: &str,
-) -> Result<(), AstMutError> {
-    let at = text::component_insert_point(edit.source(), class).ok_or_else(|| {
-        AstMutError::AnchorNotFound {
-            what: format!("component insertion point in class `{}`", class.name.text),
-        }
-    })?;
+fn insert_declaration(class: &ClassDef, edit: &mut Edit<'_>, rendered: &str) {
+    let at = text::component_insert_point(edit.source(), class);
     edit.insert(at, format!("\n{}", rendered.trim_end_matches('\n')));
-    Ok(())
 }
 
 /// Remove a component by name.

@@ -252,11 +252,10 @@ pub fn apply_gravity_to_rigid_bodies(
     }
 }
 
-/// Feeds each body's authoritative [`LocalGravity`] into its
-/// Modelica sensor conversions consume the same `LocalGravity` vector through
-/// the environment-probe output ports. Avian's own `Gravity` resource is zero
-/// here — gravity is applied as an explicit force — so the environment bridge
-/// publishes both magnitude and vector components through ordinary wires.
+// Modelica sensor conversions consume the same `LocalGravity` vector through
+// the environment-probe output ports. Avian's own `Gravity` resource is zero
+// here — gravity is applied as an explicit force — so the environment bridge
+// publishes both magnitude and vector components through ordinary wires.
 // ─────────────────────────────────────────────────────────────────────────────
 // Consumer: feed local gravity into the co-simulation graph
 // ─────────────────────────────────────────────────────────────────────────────

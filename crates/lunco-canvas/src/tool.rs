@@ -1045,13 +1045,13 @@ impl DefaultTool {
                                     for w in &other.waypoints {
                                         let dx_to = (w.x - sx).abs();
                                         if dx_to < ALIGN_TOL
-                                            && best_dx.map_or(true, |(d, _)| dx_to < d)
+                                            && best_dx.is_none_or(|(d, _)| dx_to < d)
                                         {
                                             best_dx = Some((dx_to, w.x));
                                         }
                                         let dy_to = (w.y - sy).abs();
                                         if dy_to < ALIGN_TOL
-                                            && best_dy.map_or(true, |(d, _)| dy_to < d)
+                                            && best_dy.is_none_or(|(d, _)| dy_to < d)
                                         {
                                             best_dy = Some((dy_to, w.y));
                                         }
@@ -1079,13 +1079,7 @@ impl DefaultTool {
                         } else {
                             new_pts[*i - 1]
                         };
-                        let post = if *i + 1 > n {
-                            *to_world
-                        } else if *i == n {
-                            *to_world
-                        } else {
-                            new_pts[*i]
-                        };
+                        let post = if *i + 1 >= n { *to_world } else { new_pts[*i] };
                         // Dymola: slide the segment perpendicular to
                         // its own axis. If the segment is horizontal
                         // (|sx| > |sy|), apply Δy to both endpoints;
@@ -1342,9 +1336,7 @@ impl DefaultTool {
                     .scene
                     .edges()
                     .filter_map(|(eid, e)| {
-                        let Some((from, to)) = ops.scene.edge_endpoint_positions(e) else {
-                            return None;
-                        };
+                        let (from, to) = ops.scene.edge_endpoint_positions(e)?;
                         let any_in = |p: Pos| -> bool { band.contains(p) };
                         if any_in(from) || any_in(to) || e.waypoints.iter().any(|w| any_in(*w)) {
                             return Some(*eid);
@@ -1459,7 +1451,7 @@ fn nearest_port_on_node(
         let dx = world_pos.x - anchor.x;
         let dy = world_pos.y - anchor.y;
         let d2 = dx * dx + dy * dy;
-        if best.as_ref().map_or(true, |(bd, _)| d2 < *bd) {
+        if best.as_ref().is_none_or(|(bd, _)| d2 < *bd) {
             best = Some((d2, port.id.clone()));
         }
     }

@@ -271,7 +271,7 @@ impl AssetLoader for RuntimeUiManifestLoader {
         reader
             .read_to_end(&mut bytes)
             .await
-            .map_err(|error| serde_json::Error::io(error))?;
+            .map_err(serde_json::Error::io)?;
         let manifest: RuntimeUiManifest = serde_json::from_slice(&bytes)?;
         manifest.validate().map_err(|error| {
             serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, error))
@@ -699,7 +699,7 @@ pub(crate) fn sync_runtime_ui_manifest(
 
     for root in &roots {
         commands.entity(root).despawn_related::<Children>();
-        commands.entity(root).despawn();
+        commands.entity(root).try_despawn();
     }
     for definition in &manifest.surfaces {
         let template: Handle<HtmlTemplate> = server.load(definition.template.clone());
@@ -752,7 +752,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
             continue;
         }
 
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             HtmlNode(surface.template.clone()),
             Styled::new(surface.stylesheet.clone()),
             InlineStyle::default(),
@@ -805,7 +805,7 @@ pub(crate) fn bind_runtime_ui_to_camera(
 
     for (entity, target) in &roots {
         if target.is_none_or(|target| target.entity() != camera) {
-            commands.entity(entity).insert(UiTargetCamera(camera));
+            commands.entity(entity).try_insert(UiTargetCamera(camera));
         }
     }
 }
@@ -817,7 +817,9 @@ pub(crate) fn attach_runtime_ui_names(
     ids: Query<(Entity, &UiId), (With<Node>, Or<(Added<UiId>, Changed<UiId>)>)>,
 ) {
     for (entity, id) in &ids {
-        commands.entity(entity).insert(Name::new(id.id().clone()));
+        commands
+            .entity(entity)
+            .try_insert(Name::new(id.id().clone()));
     }
 }
 
@@ -997,7 +999,7 @@ pub(crate) fn apply_runtime_ui_exposures(
         }
 
         if style_changed {
-            commands.entity(entity).insert(style);
+            commands.entity(entity).try_insert(style);
         }
         if properties_changed {
             commands.trigger(CompileContextEvent { entity });

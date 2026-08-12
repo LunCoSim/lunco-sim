@@ -1258,7 +1258,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 pub fn rng_begin(gid: u64, tick: u64, salt: u64) {
     let seed = gid.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ tick.wrapping_mul(0xD1B5_4A32_D192_ED03)
-        ^ salt.wrapping_mul(0xA0761_D6478_BD642F);
+        ^ salt.wrapping_mul(0xA076_1D64_78BD_642F);
     RNG_STATE.with(|c| c.set(seed));
     CURRENT_SELF.with(|c| c.set(gid));
 }

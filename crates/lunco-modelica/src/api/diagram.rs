@@ -49,7 +49,7 @@ pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Comma
             doc,
             ModelicaOp::AddConnection {
                 class: ev.class.clone(),
-                eq: eq.clone(),
+                eq,
             },
             lunco_twin_journal::AuthorTag::for_tool("api"),
         ) {

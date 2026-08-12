@@ -115,9 +115,7 @@ fn projected_behavior_owner(
     path: &str,
 ) -> Option<Entity> {
     world.iter_entities().find_map(|entity| {
-        let Some(prim) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
-            return None;
-        };
+        let prim = entity.get::<lunco_usd_bevy::UsdPrimPath>()?;
         (prim.stage_handle.id() == stage_id
             && entity
                 .get::<BehaviorProgramSource>()
@@ -166,7 +164,7 @@ fn behavior_owner_entity(
 /// OpenUSD may include the referenced vessel's resync path in that notice;
 /// passing it into the generic structural bridge makes an XML-only edit look
 /// like a vehicle refresh.
-
+///
 /// Projection bridge (Step 1): drain every live [`CanonicalStage`]'s change-sink
 /// inbox and reconcile the ECS scene off the **live composed stage** — the read
 /// counterpart to authoring onto the stage. This is what turns the openusd
@@ -408,7 +406,7 @@ mod translate_seat_tests {
             ))
             .id();
         // What the gizmo would author for this prim: cell × edge + local.
-        let authored = Vec3::new(1.0 * EDGE + 10.0, 2.0 * EDGE - 53.0, -1.0 * EDGE + 4.0);
+        let authored = Vec3::new(1.0 * EDGE + 10.0, 2.0 * EDGE - 53.0, -EDGE + 4.0);
 
         seat_authored_translate(&mut world, prim, authored);
 
@@ -884,7 +882,7 @@ mod tests {
             .world_mut()
             .spawn((
                 UsdPrimPath {
-                    stage_handle: handle.clone(),
+                    stage_handle: handle,
                     path: "/World/Pin".into(),
                 },
                 Transform::from_translation(Vec3::new(1.0, 0.0, 2.0)),
@@ -1024,7 +1022,7 @@ mod tests {
         app.world_mut().spawn((
             Name::new("/World"),
             UsdPrimPath {
-                stage_handle: handle.clone(),
+                stage_handle: handle,
                 path: "/World".into(),
             },
             Transform::default(),

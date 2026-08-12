@@ -977,11 +977,11 @@ impl Document for ModelicaDocument {
             super::apply::op_to_patch(&self.source, &self.syntax, &self.syntax.ast, op)?;
 
         debug_assert!(
-            match (&fresh_ast, kind) {
-                (FreshAst::Mutated(_), super::ops::OpKind::Structured) => true,
-                (FreshAst::TextEdit, super::ops::OpKind::Text) => true,
-                _ => false,
-            },
+            matches!(
+                (&fresh_ast, kind),
+                (FreshAst::Mutated(_), super::ops::OpKind::Structured)
+                    | (FreshAst::TextEdit, super::ops::OpKind::Text)
+            ),
             "ModelicaOp classification mismatch with FreshAst variant"
         );
         self.apply_patch(range, replacement, change, fresh_ast)

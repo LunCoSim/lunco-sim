@@ -1000,7 +1000,7 @@ const MIN_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * 0.5;
 /// model's clock centred on the world's: a residual of at most half a micro-step
 /// is carried into the next tick's deficit and cancels there.
 fn micro_steps_for(dt: f64) -> u32 {
-    if !(dt > 0.0) {
+    if dt.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return 0;
     }
     let n = (dt / LIVE_MICRO_DT).round();
@@ -2129,10 +2129,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                         *val,
                                                     );
                                                 }
-                                                steppers.insert(
-                                                    entity,
-                                                    (session_id, model_name.clone(), s),
-                                                );
+                                                steppers
+                                                    .insert(entity, (session_id, model_name, s));
                                             }
                                             Err(e) => {
                                                 let mut r = result_ok(entity, session_id);
@@ -2312,7 +2310,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                 log::debug!("[worker] end: {} took {:?}", cmd_label, elapsed);
             }
 
-            if let Err(_) = result {
+            if result.is_err() {
                 let _ = tx.send(ModelicaResult {
                     entity: Entity::PLACEHOLDER,
                     session_id: 0,

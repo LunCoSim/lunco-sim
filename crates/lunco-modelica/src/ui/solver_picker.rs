@@ -27,11 +27,10 @@ pub fn solver_picker(
     // exist" rather than "nothing registered yet".
     crate::solver_backends::ensure_builtin_solvers();
 
-    let current = selection.clone();
-    let selected_text = current
+    let selected_text = selection
         .as_ref()
         .and_then(solver::get)
-        .map_or_else(|| "Auto".to_string(), |spec| spec.label.clone());
+        .map_or_else(|| "Auto".to_string(), |spec| spec.label);
 
     let mut changed = false;
     egui::ComboBox::from_id_salt(id_salt)
@@ -39,7 +38,7 @@ pub fn solver_picker(
         .width(width)
         .show_ui(ui, |ui| {
             if ui
-                .selectable_label(current.is_none(), "Auto")
+                .selectable_label(selection.is_none(), "Auto")
                 .on_hover_text(
                     "Let the resolver pick the highest-ranked solver that can \
                      serve this run.",
@@ -51,7 +50,7 @@ pub fn solver_picker(
             }
             for spec in solver::registered() {
                 if ui
-                    .selectable_label(current.as_ref() == Some(&spec.id), &spec.label)
+                    .selectable_label(selection.as_ref() == Some(&spec.id), &spec.label)
                     .clicked()
                 {
                     *selection = Some(spec.id.clone());

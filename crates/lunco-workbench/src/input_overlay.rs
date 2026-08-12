@@ -142,7 +142,7 @@ fn emit_injected_pointer(
                     state,
                     window,
                 };
-                window_events.write(bevy::window::WindowEvent::MouseButtonInput(input.clone()));
+                window_events.write(bevy::window::WindowEvent::MouseButtonInput(input));
                 mouse_button_input.write(input);
             }
         }

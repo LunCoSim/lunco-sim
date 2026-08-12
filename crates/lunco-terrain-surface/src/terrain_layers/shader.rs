@@ -27,11 +27,11 @@ impl TerrainLayer for ShaderLayer {
 
 /// Parse a `lunco:layer = "shader"` prim: `mode` = `lit` (regolith, default) |
 /// `plain` (flat grey) | `debug` (per-LOD colours).
-pub(super) fn parse_shader_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+pub(super) fn parse_shader_layer(a: &dyn LayerAttrSource) -> Arc<dyn TerrainLayer> {
     let mode = match a.get_string("mode").as_deref() {
         Some("debug") | Some("debuglod") | Some("debug_lod") => TerrainShaderMode::DebugLod,
         Some("plain") => TerrainShaderMode::Plain,
         _ => TerrainShaderMode::Lit,
     };
-    Some(Arc::new(ShaderLayer { mode }))
+    Arc::new(ShaderLayer { mode })
 }

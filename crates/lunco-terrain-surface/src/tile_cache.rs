@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(m, r);
         // Truncated / padded blobs are rejected (→ rebake), never mis-parsed.
         assert!(tile_mesh_from_bytes(&b[..b.len() - 1]).is_none());
-        let mut padded = b.clone();
+        let mut padded = b;
         padded.push(0);
         assert!(tile_mesh_from_bytes(&padded).is_none());
     }

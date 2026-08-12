@@ -95,11 +95,11 @@ pub fn extract_points_named_argument(annotation: &[Expression]) -> Option<Expres
 /// Match a parsed `ComponentReference` against a `pretty::PortRef`.
 pub fn matches_port_ref(cref: &ComponentReference, port: &pretty::PortRef) -> bool {
     if port.port.is_empty() {
-        cref.parts.len() == 1 && &*cref.parts[0].ident.text == port.component
+        cref.parts.len() == 1 && cref.parts[0].ident.text.as_ref() == port.component.as_str()
     } else {
         cref.parts.len() == 2
-            && &*cref.parts[0].ident.text == port.component
-            && &*cref.parts[1].ident.text == port.port
+            && cref.parts[0].ident.text.as_ref() == port.component.as_str()
+            && cref.parts[1].ident.text.as_ref() == port.port.as_str()
     }
 }
 
@@ -169,11 +169,11 @@ pub fn point_pair(e: &Expression) -> Option<(f32, f32)> {
 pub fn number_literal_value(e: &Expression) -> Option<f64> {
     match e {
         Expression::Terminal { token, .. } => token.text.parse::<f64>().ok(),
-        Expression::Unary { op, rhs, .. }
-            if matches!(op, rumoca_compile::parsing::ir_core::OpUnary::Minus) =>
-        {
-            number_literal_value(rhs).map(|v| -v)
-        }
+        Expression::Unary {
+            op: rumoca_compile::parsing::ir_core::OpUnary::Minus,
+            rhs,
+            ..
+        } => number_literal_value(rhs).map(|v| -v),
         _ => None,
     }
 }
@@ -195,22 +195,19 @@ pub fn read_text_spec(expr: &Expression) -> TextSpec {
         y2: 0.0,
         text: String::new(),
     };
-    if let Some(v) = graphic_entry_arg(expr, "extent") {
-        if let Expression::Array {
+    match graphic_entry_arg(expr, "extent") {
+        Some(Expression::Array {
             elements: outer, ..
-        } = v
-        {
-            if outer.len() == 2 {
-                if let (Some((x1, y1)), Some((x2, y2))) =
-                    (point_pair(&outer[0]), point_pair(&outer[1]))
-                {
-                    spec.x1 = x1;
-                    spec.y1 = y1;
-                    spec.x2 = x2;
-                    spec.y2 = y2;
-                }
+        }) if outer.len() == 2 => {
+            if let (Some((x1, y1)), Some((x2, y2))) = (point_pair(&outer[0]), point_pair(&outer[1]))
+            {
+                spec.x1 = x1;
+                spec.y1 = y1;
+                spec.x2 = x2;
+                spec.y2 = y2;
             }
         }
+        _ => {}
     }
     if let Some(v) = graphic_entry_arg(expr, "textString") {
         if let Some(s) = string_literal_value(v) {

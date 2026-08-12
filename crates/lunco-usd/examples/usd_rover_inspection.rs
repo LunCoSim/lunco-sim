@@ -75,7 +75,7 @@ fn main() {
 
         let mut report = format!("Entity: {:<15}", name);
 
-        if let Some(_) = rb {
+        if rb.is_some() {
             let m = mass.map(|m| m.0).unwrap_or(0.0);
             report.push_str(&format!(" | [Avian] RigidBody (Mass: {}kg)", m));
         }

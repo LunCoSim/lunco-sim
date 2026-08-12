@@ -1154,7 +1154,7 @@ fn escalate_render_recovery(
             let mut n = 0;
             for (entity, mut l, suppressed) in &mut dir {
                 if suppressed.is_none() {
-                    commands.entity(entity).insert(ShadowMapSuppressed {
+                    commands.entity(entity).try_insert(ShadowMapSuppressed {
                         was_enabled: l.shadow_maps_enabled,
                     });
                 }
@@ -1163,7 +1163,7 @@ fn escalate_render_recovery(
             }
             for (entity, mut l, suppressed) in &mut point {
                 if suppressed.is_none() {
-                    commands.entity(entity).insert(ShadowMapSuppressed {
+                    commands.entity(entity).try_insert(ShadowMapSuppressed {
                         was_enabled: l.shadow_maps_enabled,
                     });
                 }
@@ -1172,7 +1172,7 @@ fn escalate_render_recovery(
             }
             for (entity, mut l, suppressed) in &mut spot {
                 if suppressed.is_none() {
-                    commands.entity(entity).insert(ShadowMapSuppressed {
+                    commands.entity(entity).try_insert(ShadowMapSuppressed {
                         was_enabled: l.shadow_maps_enabled,
                     });
                 }
@@ -1420,7 +1420,7 @@ mod tests {
         let world = app.world_mut();
         let mut query = world.query::<&bevy::light::PointLight>();
         let enabled = query
-            .iter(&world)
+            .iter(world)
             .filter(|light| light.shadow_maps_enabled)
             .count();
         assert_eq!(enabled, INTEGRATED_POINT_CASTERS);

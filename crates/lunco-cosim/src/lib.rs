@@ -394,8 +394,10 @@ mod binding_lifecycle_tests {
         source_component.inputs.insert("sun_mount_x".into(), 0.0);
         let source = app.world_mut().spawn(source_component).id();
 
-        let mut target_component = SimComponent::default();
-        target_component.status = SimStatus::Compiling;
+        let mut target_component = SimComponent {
+            status: SimStatus::Compiling,
+            ..Default::default()
+        };
         target_component.inputs.insert("sun_mount_x".into(), 0.0);
         let target = app.world_mut().spawn(target_component).id();
 

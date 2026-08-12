@@ -195,7 +195,6 @@ impl Panel for CommandDeck {
 
         // ── Possession / release ──────────────────────────────────────────
         ui.horizontal(|ui| {
-            let vessel = vessel;
             if view.driving {
                 if ui.button("Release control").clicked() {
                     let v = vessel;
@@ -220,7 +219,7 @@ impl Panel for CommandDeck {
         if view.is_patrol {
             ui.label(format!("Patrol — {} checkpoint(s)", view.patrol.len()));
         } else if !view.behaviour_kind.is_empty() {
-            ui.label(format!("{}", view.behaviour_kind));
+            ui.label(view.behaviour_kind.to_string());
         } else {
             // The bundled keymap binds PlaceWaypoint to AltLeft. The handler reads
             // that semantic intent, so this hint describes the default binding

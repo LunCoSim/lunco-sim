@@ -793,9 +793,11 @@ fn on_set_mission_epoch(
         if let Ok(mut domain) = q.get_mut(clocks.celestial) {
             // The sim/epoch roots restart at zero at this tick; only a sky
             // detached onto the wall root has a non-zero new source time.
-            let source_t = (domain.parent == Some(clocks.real))
-                .then(|| real.elapsed_secs_f64())
-                .unwrap_or(0.0);
+            let source_t = if domain.parent == Some(clocks.real) {
+                real.elapsed_secs_f64()
+            } else {
+                0.0
+            };
             domain.offset = -domain.scale * source_t;
         }
     }
@@ -1299,10 +1301,7 @@ mod tests {
         );
         assert!(pb.looping);
         // ...and it reaches the stepper: past `end` wraps instead of clamping.
-        let wrapped = Playback {
-            head: 9.0,
-            ..pb.clone()
-        };
+        let wrapped = Playback { head: 9.0, ..pb };
         assert!((step_playhead(&wrapped, 2.0) - 1.0).abs() < EPS);
         apply_control_animation(
             &mut pb,
@@ -1311,10 +1310,7 @@ mod tests {
                 ..default()
             },
         );
-        let clamped = Playback {
-            head: 9.0,
-            ..pb.clone()
-        };
+        let clamped = Playback { head: 9.0, ..pb };
         assert!((step_playhead(&clamped, 2.0) - 10.0).abs() < EPS);
 
         // Restart = seek-to-start + play in ONE verb (the HUD's ⏮ button).

@@ -91,16 +91,22 @@ fn r1_is_gesture_active_default_is_idle() {
 #[test]
 fn r1_is_gesture_active_any_is_or_of_sources() {
     // Each source independently activates the gate.
-    let mut g = IsGestureActive::default();
-    g.canvas = true;
+    let g = IsGestureActive {
+        canvas: true,
+        ..Default::default()
+    };
     assert!(g.any());
 
-    let mut g = IsGestureActive::default();
-    g.text = true;
+    let g = IsGestureActive {
+        text: true,
+        ..Default::default()
+    };
     assert!(g.any());
 
-    let mut g = IsGestureActive::default();
-    g.modal = true;
+    let g = IsGestureActive {
+        modal: true,
+        ..Default::default()
+    };
     assert!(g.any());
 }
 
@@ -138,9 +144,11 @@ fn r1_is_gesture_active_independent_sources() {
     // Two sources active at once; clearing one alone doesn't open
     // the gate. Pins the regression class where canvas-release
     // would re-enable autosave while a modal is still open.
-    let mut g = IsGestureActive::default();
-    g.canvas = true;
-    g.modal = true;
+    let mut g = IsGestureActive {
+        canvas: true,
+        modal: true,
+        ..Default::default()
+    };
     assert!(g.any());
     g.canvas = false;
     assert!(g.any(), "modal still active — gate stays closed");

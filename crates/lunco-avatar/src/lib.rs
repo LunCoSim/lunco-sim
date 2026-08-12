@@ -852,7 +852,7 @@ fn sync_avatar_easing(
             (false, false) => {
                 commands
                     .entity(entity)
-                    .insert(lunco_time::InteractionEased::default());
+                    .try_insert(lunco_time::InteractionEased::default());
             }
             _ => {}
         }

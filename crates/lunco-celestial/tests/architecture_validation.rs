@@ -183,13 +183,6 @@ fn test_nested_grid_rotation() {
 
     app.update();
 
-    // Record tile position before child Grid rotation
-    let tile_pos_before = app
-        .world()
-        .get::<GlobalTransform>(tile)
-        .unwrap()
-        .translation();
-
     // Rotate child Grid 90° around Y (like Moon rotating)
     let child_rot: Quat = DQuat::from_axis_angle(DVec3::Y, std::f64::consts::PI / 2.0).as_quat();
     app.world_mut()

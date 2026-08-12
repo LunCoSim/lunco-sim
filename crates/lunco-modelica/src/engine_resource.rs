@@ -168,7 +168,7 @@ impl ModelicaEngineHandle {
             let t_total = web_time::Instant::now();
             // Lenient parser: always produces a usable tree.
             let t_parse = web_time::Instant::now();
-            let recovery = rumoca_phase_parse::parse_to_syntax(&*source, &uri);
+            let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
             let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
             let has_errors = recovery.has_errors();
             // Resolve the lenient parser's structured errors into located
@@ -178,7 +178,7 @@ impl ModelicaEngineHandle {
             let diags: Vec<lunco_doc::Diagnostic> = recovery
                 .parse_errors()
                 .iter()
-                .map(|e| crate::document::parse_diag_from_error(e, &*source))
+                .map(|e| crate::document::parse_diag_from_error(e, &source))
                 .collect();
             let ast = recovery.best_effort().clone();
             let t_install = web_time::Instant::now();

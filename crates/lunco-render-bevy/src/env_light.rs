@@ -49,7 +49,7 @@ fn on_set_environment_light_bloom(
         let low_frequency_boost = cam
             .bloom
             .map(|b| b.low_frequency_boost)
-            .unwrap_or(BloomLook::default().low_frequency_boost);
+            .unwrap_or_else(|| BloomLook::default().low_frequency_boost);
         let next = BloomLook {
             intensity,
             low_frequency_boost,

@@ -253,7 +253,7 @@ impl NodeVisual for IconNodeVisual {
                 orientation,
                 Some(&sub),
                 Some(resolver_ref),
-                palette.as_ref(),
+                Some(&palette),
                 &icon.graphics,
             );
             drew_icon = true;
@@ -457,7 +457,7 @@ impl NodeVisual for IconNodeVisual {
                         port_orientation,
                         None,
                         None,
-                        palette.as_ref(),
+                        Some(&palette),
                         &icon.graphics,
                     );
                     painted_authored = true;

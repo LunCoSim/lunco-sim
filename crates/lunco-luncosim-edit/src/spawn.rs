@@ -379,7 +379,7 @@ pub fn update_spawn_ghost(
     // stage finishes loading the fallback default is used, then the ghost
     // snaps to the real slope-fit once available.
     let fp = ensure_footprint(
-        &mut *footprint_cache,
+        footprint_cache.as_mut(),
         &catalog,
         &asset_server,
         &stages,
@@ -738,12 +738,6 @@ mod tests {
 
         state = SpawnState::Idle;
         assert!(matches!(state, SpawnState::Idle));
-    }
-
-    #[test]
-    fn test_cursor_ray_returns_none_for_invalid_cursor() {
-        // Basic sanity check for the function signature
-        assert!(true);
     }
 
     #[test]

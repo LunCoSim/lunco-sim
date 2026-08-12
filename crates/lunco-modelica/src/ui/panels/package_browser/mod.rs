@@ -158,25 +158,23 @@ fn find_and_update_node(
     children: Vec<PackageNode>,
 ) -> bool {
     for node in nodes {
-        match node {
-            PackageNode::Category {
-                id,
-                children: node_children,
-                is_loading,
-                ..
-            } => {
-                if id == parent_id {
-                    *node_children = Some(children);
-                    *is_loading = false;
+        if let PackageNode::Category {
+            id,
+            children: node_children,
+            is_loading,
+            ..
+        } = node
+        {
+            if id == parent_id {
+                *node_children = Some(children);
+                *is_loading = false;
+                return true;
+            }
+            if let Some(ref mut sub_children) = node_children {
+                if find_and_update_node(sub_children, parent_id, children.clone()) {
                     return true;
                 }
-                if let Some(ref mut sub_children) = node_children {
-                    if find_and_update_node(sub_children, parent_id, children.clone()) {
-                        return true;
-                    }
-                }
             }
-            _ => {}
         }
     }
     false
@@ -401,12 +399,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         Some(stem) => format!("{stem}.mo"),
         None => return, // Library root click — no class to open.
     };
-    let drilled = class.qualified();
-    let drilled_for_tab = if class.path.len() > 1 {
-        Some(drilled.clone())
-    } else {
-        None
-    };
+    let drilled_for_tab = (class.path.len() > 1).then(|| class.qualified());
 
     // Dedup: same bundled file already loaded → reuse the doc, just
     // ensure a tab keyed on the new drill target.
@@ -416,7 +409,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
     if let Some(doc) = already_open {
         let tab_id = world
             .resource_mut::<crate::model_tabs::ModelTabs>()
-            .ensure_for(doc, drilled_for_tab.clone());
+            .ensure_for(doc, drilled_for_tab);
         world.commands().trigger(lunco_workbench::OpenTab {
             kind: MODEL_VIEW_KIND,
             instance: tab_id,
@@ -429,18 +422,18 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         .reserve_id();
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
-        .ensure_for(reserved_doc_id, drilled_for_tab.clone());
+        .ensure_for(reserved_doc_id, drilled_for_tab);
     world.commands().trigger(lunco_workbench::OpenTab {
         kind: MODEL_VIEW_KIND,
         instance: tab_id,
     });
 
     let display_name = class.short_name().to_string();
-    let origin = lunco_doc::DocumentOrigin::Bundled {
-        filename: filename.clone(),
-    };
-    let filename_for_task = filename.clone();
+    let filename_for_task = filename;
     let task = AsyncComputeTaskPool::get().spawn(async move {
+        let origin = lunco_doc::DocumentOrigin::Bundled {
+            filename: filename_for_task.clone(),
+        };
         let result = match crate::models::get_model(&filename_for_task) {
             Some(source_text) => Ok(crate::document::ModelicaDocument::with_origin(
                 reserved_doc_id,
@@ -546,7 +539,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         }
         let tab_id = world
             .resource_mut::<crate::model_tabs::ModelTabs>()
-            .ensure_for(doc, drilled.clone());
+            .ensure_for(doc, drilled);
         if let Some(mode) = initial_mode {
             world
                 .resource_mut::<crate::model_tabs::ModelTabs>()
@@ -564,7 +557,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         .reserve_id();
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
-        .ensure_for(reserved_doc_id, drilled.clone());
+        .ensure_for(reserved_doc_id, drilled);
     if let Some(mode) = initial_mode {
         world
             .resource_mut::<crate::model_tabs::ModelTabs>()
@@ -580,12 +573,12 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         .and_then(|s| s.to_str())
         .unwrap_or("Opened")
         .to_string();
-    let origin = lunco_doc::DocumentOrigin::File {
-        path: path.clone(),
-        writable: !read_only_library,
-    };
-    let path_for_task = path.clone();
+    let path_for_task = path;
     let task = AsyncComputeTaskPool::get().spawn(async move {
+        let origin = lunco_doc::DocumentOrigin::File {
+            path: path_for_task.clone(),
+            writable: !read_only_library,
+        };
         // `lunco-storage`, not `std::fs`: on wasm the picked file's text is in
         // browser storage, and this is the same call site on both targets.
         let result = crate::source_asset::read_text_sync(&path_for_task)

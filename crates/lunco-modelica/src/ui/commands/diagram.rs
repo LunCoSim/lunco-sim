@@ -71,7 +71,7 @@ pub fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
                 .unwrap_or((20.0, 20.0))
         };
         let op = ModelicaOp::SetPlacement {
-            class: class,
+            class,
             name: ev.name.clone(),
             placement: Placement {
                 x: ev.x,

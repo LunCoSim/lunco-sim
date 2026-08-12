@@ -96,7 +96,7 @@ impl Plugin for LuncoVizPlugin {
         .init_resource::<VizKindCatalog>()
         .init_resource::<VizFitRequests>()
         .register_visualization::<LinePlot>()
-        .register_instance_panel(VizPanel::default())
+        .register_instance_panel(VizPanel)
         .register_panel(TelemetryBrowserPanel::default())
         .add_observer(kinds::line_plot::on_line_plot_edit_requested)
         .add_observer(kinds::line_plot::on_line_plot_fit_requested)

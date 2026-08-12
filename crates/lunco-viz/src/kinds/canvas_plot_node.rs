@@ -884,7 +884,7 @@ fn format_axis_value(v: f64) -> String {
     }
     let av = v.abs();
     // Out of engineering range — fall back to compact scientific.
-    if av >= 1.0e15 || av < 1.0e-9 {
+    if !(1.0e-9..1.0e15).contains(&av) {
         return format!("{:.1e}", v);
     }
     let (scale, suffix) = if av >= 1.0e12 {

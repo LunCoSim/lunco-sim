@@ -112,11 +112,13 @@ pub fn ensure_acceleration_samples(
     >,
 ) {
     for (entity, velocity) in &query {
-        commands.entity(entity).insert(SolvedLinearAcceleration {
-            previous_velocity: velocity.0,
-            value: DVec3::ZERO,
-            valid: false,
-        });
+        commands
+            .entity(entity)
+            .try_insert(SolvedLinearAcceleration {
+                previous_velocity: velocity.0,
+                value: DVec3::ZERO,
+                valid: false,
+            });
     }
 }
 
@@ -367,7 +369,7 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
         name: "force_command",
         dir: PortDirection::In,
         read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
-        write: Some(|w, e, value| with_pending_actuator_command(w, e, value)),
+        write: Some(with_pending_actuator_command),
     }],
 };
 
@@ -379,7 +381,7 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
         name: "torque_command",
         dir: PortDirection::In,
         read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
-        write: Some(|w, e, value| with_pending_actuator_command(w, e, value)),
+        write: Some(with_pending_actuator_command),
     }],
 };
 

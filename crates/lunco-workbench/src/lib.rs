@@ -4822,7 +4822,7 @@ fn register_graphics_settings_menu(world: &mut World) {
     layout.register_settings_submenu("Graphics", |ui, ctx| {
         ui.label(egui::RichText::new("Rendering").weak().small());
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
-            let mut settings = current.clone();
+            let mut settings = *current;
             egui::ComboBox::from_id_salt("graphics.rendering_quality")
                 .selected_text(settings.quality.label())
                 .show_ui(ui, |ui| {

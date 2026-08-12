@@ -222,6 +222,7 @@ const DEFAULT_WARM_EXAMPLES: &[&str] = &[
 ///   - causal `output` connectors sit at (+100..110, ~0)  → right side
 ///   - acausal connectors in `extends OnePort` / `TwoPort` follow the same
 ///     left/right pattern: `p` left, `n` right
+///
 /// This is **not a standard** — it is an observed pattern that produces
 /// sensible schematics for the vast majority of library components.
 ///
@@ -238,10 +239,10 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
     }
 }
 
-/// The indexer emits the canonical [`crate::index::ClassEntry`] and
-/// [`crate::visual_diagram::{PortDef, ParamDef}`] directly — `msl_index.json`
-/// deserialises straight back into those types at runtime, so there is no
-/// indexer-local mirror to keep field-aligned by hand.
+// The indexer emits the canonical [`crate::index::ClassEntry`] and
+// [`crate::visual_diagram::{PortDef, ParamDef}`] directly — `msl_index.json`
+// deserialises straight back into those types at runtime, so there is no
+// indexer-local mirror to keep field-aligned by hand.
 
 /// True when the top-level class `name` is actually the package
 /// declared by the containing folder — i.e. the `package.mo` file
@@ -536,7 +537,7 @@ impl MSLIndexer {
                         format!("{}.{}", package_prefix, folder_name)
                     };
                     self.scan_dir(&path, &new_prefix);
-                } else if path.extension().map_or(false, |ext| ext == "mo") {
+                } else if path.extension().is_some_and(|ext| ext == "mo") {
                     if let Ok(source) = fs::read_to_string(&path) {
                         self.files_scanned += 1;
                         self.bytes_scanned += source.len();
@@ -716,46 +717,46 @@ impl MSLIndexer {
 
             // 2. Add local components
             for comp in class.components.values() {
-                if matches!(comp.variability, Variability::Parameter(_)) {
-                    if !params.iter().any(|p| p.name == comp.name) {
-                        // Format the default value for `%paramName`
-                        // text substitution at render time. Prefer
-                        // the explicit binding (`= expr`); fall back
-                        // to `start=` modification (`parameter Real
-                        // R(start=1)`) when no binding is present.
-                        // Numeric and string literals show as-written;
-                        // enum refs collapse to the leaf name (matches
-                        // OMEdit); array literals render `{a,b,c}`.
-                        let default = comp
-                            .binding
-                            .as_ref()
-                            .map(format_default_expr)
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| {
-                                // `comp.start: Expression` — Empty when no
-                                // explicit start was given. format_default_expr
-                                // returns "" for `Empty` so this is safe.
-                                format_default_expr(&comp.start)
-                            });
-                        // TODO: resolve `unit` from the type definition.
-                        // For `parameter SI.Torque tau_constant` the
-                        // authoritative unit lives on `Modelica.Units.SI.Torque`
-                        // as `type Torque = Real(unit="N.m")`. Resolve
-                        // `comp.type_name` through the scope chain +
-                        // imports, walk the `extends Real(unit=...)`
-                        // modification, and store the result here so
-                        // the canvas substitution (currently using a
-                        // hand-maintained table in
-                        // `canvas_diagram::si_unit_suffix`) can read
-                        // `p.unit` directly. Until then `unit` is None
-                        // and user-defined SI types lose their suffix.
-                        params.push(crate::visual_diagram::ParamDef {
-                            name: comp.name.clone(),
-                            param_type: comp.type_name.to_string(),
-                            default,
-                            unit: None,
+                if matches!(comp.variability, Variability::Parameter(_))
+                    && !params.iter().any(|p| p.name == comp.name)
+                {
+                    // Format the default value for `%paramName`
+                    // text substitution at render time. Prefer
+                    // the explicit binding (`= expr`); fall back
+                    // to `start=` modification (`parameter Real
+                    // R(start=1)`) when no binding is present.
+                    // Numeric and string literals show as-written;
+                    // enum refs collapse to the leaf name (matches
+                    // OMEdit); array literals render `{a,b,c}`.
+                    let default = comp
+                        .binding
+                        .as_ref()
+                        .map(format_default_expr)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| {
+                            // `comp.start: Expression` — Empty when no
+                            // explicit start was given. format_default_expr
+                            // returns "" for `Empty` so this is safe.
+                            format_default_expr(&comp.start)
                         });
-                    }
+                    // TODO: resolve `unit` from the type definition.
+                    // For `parameter SI.Torque tau_constant` the
+                    // authoritative unit lives on `Modelica.Units.SI.Torque`
+                    // as `type Torque = Real(unit="N.m")`. Resolve
+                    // `comp.type_name` through the scope chain +
+                    // imports, walk the `extends Real(unit=...)`
+                    // modification, and store the result here so
+                    // the canvas substitution (currently using a
+                    // hand-maintained table in
+                    // `canvas_diagram::si_unit_suffix`) can read
+                    // `p.unit` directly. Until then `unit` is None
+                    // and user-defined SI types lose their suffix.
+                    params.push(crate::visual_diagram::ParamDef {
+                        name: comp.name.clone(),
+                        param_type: comp.type_name.to_string(),
+                        default,
+                        unit: None,
+                    });
                 }
 
                 let type_str = comp.type_name.to_string();
@@ -1055,7 +1056,8 @@ pub(crate) fn native_msl_roots(
     }
     // Companion package shipped beside `Modelica/` — device animation,
     // file IO and event-logger services several MSL examples extend.
-    for sibling_dir in ["ModelicaServices"] {
+    {
+        let sibling_dir = "ModelicaServices";
         let p = msl_root.join(sibling_dir);
         if p.exists() {
             dirs.push((p, sibling_dir.to_string()));
@@ -1063,7 +1065,8 @@ pub(crate) fn native_msl_roots(
     }
     // Companion flat file: `operator record Complex`, referenced by
     // Modelica.Fluid media and Modelica.ComplexBlocks.
-    for sibling_file in ["Complex.mo"] {
+    {
+        let sibling_file = "Complex.mo";
         let p = msl_root.join(sibling_file);
         if p.exists() {
             files.push(p);
@@ -1496,7 +1499,7 @@ fn warm_compile_pass(opts: &Options) {
                 if let Ok(entries) = std::fs::read_dir(&path) {
                     for entry in entries.flatten() {
                         let p = entry.path();
-                        if p.extension().map_or(false, |e| e == "mo") {
+                        if p.extension().is_some_and(|e| e == "mo") {
                             push_file_units(&p, &mut units);
                         }
                     }

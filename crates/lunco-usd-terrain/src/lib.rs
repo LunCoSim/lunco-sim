@@ -296,8 +296,12 @@ fn overzoom_layer_is_enabled(reader: &StageView<'_>, path: &str) -> bool {
         sdf: layer_path,
         ns: NS_LAYER,
     };
-    let params = lunco_terrain_surface::read_overzoom_layer(&attrs);
-    params.enabled && (params.spec.relief_amp > 0.0 || params.spec.crater_mean > 0.0)
+    let Some(lunco_terrain_surface::TerrainLayerParams::Overzoom { enabled, spec }) =
+        lunco_terrain_surface::terrain_layer_params("overzoom", &attrs)
+    else {
+        return false;
+    };
+    enabled && (spec.relief_amp > 0.0 || spec.crater_mean > 0.0)
 }
 
 fn sync_obstacle_spec_from_usd(
@@ -322,10 +326,13 @@ fn sync_obstacle_spec_from_usd(
             // deterministic layer only; later same-kind layers remain independent
             // authored stack entries instead of clobbering the projection.
             Some("craters") if !has_crater_layer => {
-                let params = lunco_terrain_surface::read_crater_layer(&a);
-                has_crater_layer = true;
-                spec.craters = params.layer;
-                spec.seed = params.seed;
+                if let Some(lunco_terrain_surface::TerrainLayerParams::Craters { layer, seed }) =
+                    lunco_terrain_surface::terrain_layer_params("craters", &a)
+                {
+                    has_crater_layer = true;
+                    spec.craters = layer;
+                    spec.seed = seed;
+                }
             }
             Some("overzoom") => {
                 has_enabled_overzoom |= overzoom_layer_is_enabled(reader, child.as_str());
@@ -335,11 +342,15 @@ fn sync_obstacle_spec_from_usd(
             // its authored seed; when craters exist, the crater seed remains the
             // master resource seed and the rock seed stays layer-local in USD.
             Some("rocks") if !has_rocks_layer => {
-                has_rocks_layer = true;
-                let params = lunco_terrain_surface::read_rock_layer(&a);
-                spec.rocks = params.layer;
-                if !has_crater_layer {
-                    spec.seed = params.seed;
+                if let Some(lunco_terrain_surface::TerrainLayerParams::Rocks {
+                    layer, seed, ..
+                }) = lunco_terrain_surface::terrain_layer_params("rocks", &a)
+                {
+                    has_rocks_layer = true;
+                    spec.rocks = layer;
+                    if !has_crater_layer {
+                        spec.seed = seed;
+                    }
                 }
             }
             _ => {}

@@ -589,7 +589,7 @@ impl Prepared {
     /// In-reach only: the caller rejects outside.
     #[inline]
     fn delta_at(&self, d2: f64) -> f64 {
-        if !(self.fade > 0.0) {
+        if self.fade.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
             return 0.0;
         }
         let d = d2.sqrt() / self.radius;
@@ -692,7 +692,7 @@ impl Craters {
     pub fn band_limited(&self, min_wavelength: f64) -> Craters {
         // No gate → nothing is zeroed, so nothing may be dropped (and the
         // ungated index is the one we already hold).
-        if !(min_wavelength > 0.0) {
+        if min_wavelength.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
             return Craters {
                 index: self.index.clone(),
                 min_wavelength: 0.0,
@@ -1265,7 +1265,7 @@ mod tests {
     #[test]
     fn band_limited_prune_is_bitwise_identical_to_the_unpruned_gate() {
         let craters = population(600, 900.0);
-        let full = Craters::new(craters.clone());
+        let full = Craters::new(craters);
         for &wl in &[0.5, 4.0, 20.0, 96.0] {
             let pruned = full.band_limited(wl);
             // Reference: same placements, NOT pruned, same gate.
@@ -1298,7 +1298,7 @@ mod tests {
     #[test]
     fn for_region_matches_the_full_field_inside_the_box() {
         let craters = population(600, 900.0);
-        let full = Craters::new(craters.clone());
+        let full = Craters::new(craters);
         let (min, max) = ([-120.0, 40.0], [30.0, 210.0]);
         for &wl in &[0.0, 3.0, 15.0] {
             let scoped = full.for_region(min, max, wl);

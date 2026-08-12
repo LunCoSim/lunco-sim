@@ -74,7 +74,7 @@ def Xform "World"
         .spawn((
             Name::new("MeshWithMaterial"),
             UsdPrimPath {
-                stage_handle: stage_handle.clone(),
+                stage_handle,
                 path: "/World/MeshWithMaterial".to_string(),
             },
         ))
@@ -282,7 +282,7 @@ fn material_for(usda: &str, prim_path: &str) -> PbrLook {
         .spawn((
             Name::new("Bound"),
             UsdPrimPath {
-                stage_handle: stage_handle.clone(),
+                stage_handle,
                 path: prim_path.to_string(),
             },
         ))

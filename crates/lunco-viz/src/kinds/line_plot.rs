@@ -137,7 +137,7 @@ fn binding_label(wb: &PanelCtx, binding: &SignalBinding, meta: Option<&SignalMet
     let unit = meta
         .and_then(|m| m.unit.as_deref())
         .filter(|unit| !unit.is_empty() && *unit != "1");
-    unit.map_or(label.clone(), |unit| format!("{label} [{unit}]"))
+    unit.map_or_else(|| label.clone(), |unit| format!("{label} [{unit}]"))
 }
 
 /// Human-facing metadata shown wherever a signal can be selected.  Keep the
@@ -318,7 +318,7 @@ impl Visualization for LinePlot {
                     .wb
                     .resource::<SignalRegistry>()
                     .and_then(|r| r.meta(&b.source));
-                binding_label(&ctx.wb, b, meta)
+                binding_label(ctx.wb, b, meta)
             })
             .collect();
 
@@ -417,7 +417,7 @@ impl Visualization for LinePlot {
                 // Entity identity is part of the visible label: four physical
                 // wheels may all expose `axle_torque` at once.
                 let meta = registry.meta(&b.source);
-                let label = binding_label(&ctx.wb, b, meta);
+                let label = binding_label(ctx.wb, b, meta);
                 let color = b
                     .color
                     .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
@@ -507,7 +507,7 @@ impl Visualization for LinePlot {
                     .wb
                     .resource::<SignalRegistry>()
                     .and_then(|r| r.meta(&y_bindings[0].source));
-                binding_label(&ctx.wb, y_bindings[0], meta)
+                binding_label(ctx.wb, y_bindings[0], meta)
             } else {
                 "(see legend)".to_string()
             }
@@ -580,7 +580,8 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         let available: Vec<SignalRef> = registry
             .map(|r| {
                 r.iter_signals()
-                    .filter_map(|(s, t)| (t == SignalType::Scalar).then(|| s.clone()))
+                    .filter(|&(_, t)| t == SignalType::Scalar)
+                    .map(|(s, _)| s.clone())
                     .collect()
             })
             .unwrap_or_default();
@@ -656,7 +657,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
                     let meta = meta_of(&b.source);
                     let chip = ui
-                        .small_button(format!("{} ✕", binding_label(&ctx.wb, b, meta)))
+                        .small_button(format!("{} ✕", binding_label(ctx.wb, b, meta)))
                         .on_hover_text("Remove from this plot");
                     let chip = if let Some(hint) = signal_hint(meta) {
                         chip.on_hover_text(hint)
@@ -683,7 +684,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 .show_ui(ui, |ui| {
                     for sig in addables {
                         let meta = meta_of(sig);
-                        let button = ui.button(component_parameter_label(&ctx.wb, sig));
+                        let button = ui.button(component_parameter_label(ctx.wb, sig));
                         let button = if let Some(hint) = signal_hint(meta) {
                             button.on_hover_text(hint)
                         } else {
@@ -839,7 +840,7 @@ mod tests {
         let mut cfg = VisualizationConfig {
             id: VizId(42),
             title: "t".into(),
-            kind: LINE_PLOT_KIND.clone(),
+            kind: LINE_PLOT_KIND,
             view: crate::view::ViewTarget::Panel2D,
             inputs: vec![],
             style: serde_json::Value::Null,

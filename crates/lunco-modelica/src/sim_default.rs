@@ -76,6 +76,7 @@ pub fn drilled_class_for_doc_in<R: ResourceRead>(ctx: &R, doc: DocumentId) -> Op
 ///      `experiment(...)`-annotated, non-partial class sorts first. This is
 ///      NOT arbitrary `HashMap` order: a package whose only annotated model
 ///      is `RoverThermalSystem` must not default to e.g. `LunarEnvironment`.
+///
 /// Returns `None` when the doc has no host or no simulatable candidate.
 ///
 /// Single source of truth for "which class does a simulation surface default

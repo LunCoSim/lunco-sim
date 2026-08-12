@@ -46,16 +46,6 @@ struct CraterFieldLayer {
     seed: u64,
 }
 
-/// The typed values read from one authored crater layer.
-///
-/// Keeping the defaults and validity rules beside the runtime parser means every
-/// consumer of a USD-free [`LayerAttrSource`] sees the same crater contract.
-#[derive(Clone, Copy, Debug)]
-pub struct CraterLayerParams {
-    pub layer: CraterLayer,
-    pub seed: u64,
-}
-
 impl TerrainLayer for CraterFieldLayer {
     fn id(&self) -> &'static str {
         "craters"
@@ -252,35 +242,33 @@ impl TerrainLayer for CraterFieldLayer {
 /// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
 /// rim radius m), `sizeMin`/`sizeMax` (radius band m), `depthRatio`, `rimRatio`,
 /// and `seed`.
-pub fn read_crater_layer(a: &dyn LayerAttrSource) -> CraterLayerParams {
+pub(super) fn params(a: &dyn LayerAttrSource) -> (CraterLayer, u64) {
     let density = a.get_f32("density").unwrap_or(0.0);
     let mode = a.get_f32("sizeMode").unwrap_or(22.0);
     let size_min = a.get_f32("sizeMin").unwrap_or(2.0);
     let size_max = a.get_f32("sizeMax").unwrap_or(60.0);
-    CraterLayerParams {
-        layer: CraterLayer {
-            // Visibility is independent from density. Keeping density authored
-            // makes a disable/enable cycle survive reload and a new session.
-            enabled: a.get_bool("enabled") != Some(false) && density > 0.0,
-            density,
-            // min ≤ mode ≤ max — an inverted band makes the log-normal sampler
-            // clamp every crater to one end (same guard as the Inspector sliders).
-            size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7),
-            depth_ratio: a.get_f32("depthRatio").unwrap_or(0.4),
-            rim_height_ratio: a.get_f32("rimRatio").unwrap_or(0.18),
-        },
-        seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0xC0FFEE),
-    }
+    let layer = CraterLayer {
+        // Visibility is independent from density. Keeping density authored
+        // makes a disable/enable cycle survive reload and a new session.
+        enabled: a.get_bool("enabled") != Some(false) && density > 0.0,
+        density,
+        // min ≤ mode ≤ max — an inverted band makes the log-normal sampler
+        // clamp every crater to one end (same guard as the Inspector sliders).
+        size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7),
+        depth_ratio: a.get_f32("depthRatio").unwrap_or(0.4),
+        rim_height_ratio: a.get_f32("rimRatio").unwrap_or(0.18),
+    };
+    (
+        layer,
+        a.get_i64("seed").map(|s| s as u64).unwrap_or(0xC0FFEE),
+    )
 }
 
 pub(super) fn parse_crater_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
-    let params = read_crater_layer(a);
-    params.layer.enabled.then(|| {
-        Arc::new(CraterFieldLayer {
-            craters: params.layer,
-            seed: params.seed,
-        }) as _
-    })
+    let (craters, seed) = params(a);
+    craters
+        .enabled
+        .then(|| Arc::new(CraterFieldLayer { craters, seed }) as _)
 }
 
 /// Build a crater layer from a typed [`CraterLayer`] (e.g. the Inspector's

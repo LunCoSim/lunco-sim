@@ -182,7 +182,7 @@ pub fn read_dome_environment(
     let texture_path = reader
         .asset(sdf_path, "inputs:texture:file")
         .filter(|p| !p.is_empty())
-        .and_then(|p| crate::resolve_texture_path(asset_server, stage_id, &p))?;
+        .map(|p| crate::resolve_texture_path(asset_server, stage_id, &p))?;
 
     // `automatic` (USD's default) means "infer from the file". We infer from the
     // *decoded* image in `project_dome_textures` rather than the extension, so

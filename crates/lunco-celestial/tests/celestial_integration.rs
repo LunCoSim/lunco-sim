@@ -36,7 +36,7 @@ impl EphemerisProvider for StubEphemeris {
 fn celestial_test_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::input::InputPlugin::default());
+    app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(bevy::transform::TransformPlugin);
     let _ = lunco_assets::register_lunco_asset_sources(&mut app);
     app.add_plugins(bevy::asset::AssetPlugin::default());
@@ -340,7 +340,7 @@ fn test_celestial_startup_and_movement() {
 
     // Minimum plugins for headless simulation
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::input::InputPlugin::default());
+    app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(bevy::transform::TransformPlugin);
     // `setup_big_space_hierarchy` loads `cached_textures://earth.png` at Startup.
     // The source must be registered *before* `AssetPlugin`, else bevy 0.18 panics

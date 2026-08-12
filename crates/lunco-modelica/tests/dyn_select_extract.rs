@@ -8,8 +8,8 @@ fn src() -> &'static str {
         .expect("bundled AnnotatedRocketStage.mo")
 }
 
-fn class_annotations<'a>(
-    classes: &'a rumoca_compile::parsing::ast::AstIndexMap<
+fn class_annotations(
+    classes: &rumoca_compile::parsing::ast::AstIndexMap<
         String,
         rumoca_compile::parsing::ast::ClassDef,
     >,

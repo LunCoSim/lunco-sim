@@ -101,19 +101,11 @@ pub mod kinds {
 ///
 /// This is a default, not the final authority: the Rhai readiness policy sees
 /// both this choice and its resulting action and may override it for a scene.
-#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ReadinessSettings {
     /// Continue physics after a Modelica failure. Off by default: a failed
     /// controller or generated island makes the assembly invalid.
     pub ignore_failed_models: bool,
-}
-
-impl Default for ReadinessSettings {
-    fn default() -> Self {
-        Self {
-            ignore_failed_models: false,
-        }
-    }
 }
 
 impl SettingsSection for ReadinessSettings {

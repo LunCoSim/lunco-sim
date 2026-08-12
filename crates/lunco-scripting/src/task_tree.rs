@@ -47,10 +47,13 @@ pub trait TaskCtx {
     fn resolve(&mut self, path: &str) -> i64;
     /// Call an action closure with the host gid. Errors are recorded by the
     /// impl (surfaced as a script diagnostic after the tick).
-    fn call_action(&mut self, f: &FnPtr) -> Result<(), ()>;
+    fn call_action(&mut self, f: &FnPtr) -> Result<(), TaskCallbackError>;
     /// Call a predicate closure with the host gid; must return a bool.
-    fn call_pred(&mut self, f: &FnPtr) -> Result<bool, ()>;
+    fn call_pred(&mut self, f: &FnPtr) -> Result<bool, TaskCallbackError>;
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct TaskCallbackError;
 
 /// A compiled task tree plus its completion latch. The kernel's `Sequence`
 /// resets itself on terminal (so it re-runs under `Repeat`), which means the
@@ -124,14 +127,14 @@ impl Node<dyn TaskCtx> for Leaf {
             return match ctx.call_pred(check) {
                 Ok(true) => Status::Success,
                 Ok(false) => Status::Failure,
-                Err(()) => Status::Running,
+                Err(TaskCallbackError) => Status::Running,
             };
         }
         if let Some(done) = &self.done {
             return match ctx.call_pred(done) {
                 Ok(true) => Status::Success,
                 Ok(false) => Status::Running,
-                Err(()) => Status::Running,
+                Err(TaskCallbackError) => Status::Running,
             };
         }
         if let Some(secs) = self.secs {
@@ -301,10 +304,10 @@ mod tests {
         fn resolve(&mut self, _path: &str) -> i64 {
             42
         }
-        fn call_action(&mut self, _f: &FnPtr) -> Result<(), ()> {
+        fn call_action(&mut self, _f: &FnPtr) -> Result<(), TaskCallbackError> {
             Ok(())
         }
-        fn call_pred(&mut self, _f: &FnPtr) -> Result<bool, ()> {
+        fn call_pred(&mut self, _f: &FnPtr) -> Result<bool, TaskCallbackError> {
             Ok(true)
         }
     }

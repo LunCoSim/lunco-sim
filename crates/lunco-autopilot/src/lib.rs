@@ -208,6 +208,16 @@ pub struct DriveCtx {
 // depend on the driver.
 use lunco_core::tools::{ToolFired, ToolInvocation};
 
+/// One stop on a [`BehaviorSpec::Patrol`] loop. Carries a world position plus
+/// optional per-waypoint tuning (dwell) and **arrival actions** — the tools to
+/// fire when the vessel reaches this waypoint (e.g. `take_photo`).
+///
+/// This is the declarative home for "fire a tool at a patrol waypoint": instead
+/// of authoring a hand-composed `sequence[arrived, run_tool]` tree in rhai, a
+/// mission just lists `on_arrival` actions on the waypoint and the patrol
+/// engine injects them into the compiled tree (see `build_patrol`). rhai/JSON
+/// authors *data*, not trees.
+///
 /// Data description of an autopilot behaviour tree — authored as rhai/JSON DATA
 /// (the glue), compiled by [`build_tree`] into a [`lunco_behavior`] tree whose
 /// leaves are this crate's Rust primitives. Being data, it is dynamic: swap it (via
@@ -223,17 +233,6 @@ use lunco_core::tools::{ToolFired, ToolInvocation};
 ///
 /// `Serialize` so the UI can round-trip a spec (read → append a checkpoint →
 /// re-emit via `SetAutopilotBehavior`) without a separate JSON mirror.
-
-/// One stop on a [`BehaviorSpec::Patrol`] loop. Carries a world position plus
-/// optional per-waypoint tuning (dwell) and **arrival actions** — the tools to
-/// fire when the vessel reaches this waypoint (e.g. `take_photo`).
-///
-/// This is the declarative home for "fire a tool at a patrol waypoint": instead
-/// of authoring a hand-composed `sequence[arrived, run_tool]` tree in rhai, a
-/// mission just lists `on_arrival` actions on the waypoint and the patrol
-/// engine injects them into the compiled tree (see `build_patrol`). rhai/JSON
-/// authors *data*, not trees.
-///
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PatrolWaypoint {
     /// World-space position `[x, y, z]`.
@@ -1241,7 +1240,7 @@ impl Node<DriveCtx> for RunToolNode {
             let armed = self
                 .arm
                 .as_ref()
-                .map_or(true, |a| a.swap(false, Ordering::Relaxed));
+                .is_none_or(|a| a.swap(false, Ordering::Relaxed));
             if armed {
                 ctx.fired.push(ToolInvocation {
                     tool: self.tool.clone(),
@@ -1792,7 +1791,7 @@ pub fn drive_autopilots(
                         let mut state = AutopilotExecutionState::Running;
                         tree.tick_hosted(&mut state, &mut ctx);
                         if state.terminal() {
-                            commands.entity(actor).insert(state);
+                            commands.entity(actor).try_insert(state);
                         }
                     }
                     (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)

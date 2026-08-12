@@ -32,15 +32,6 @@ use lunco_usd_bevy::{
     collision_aabb, CanonicalStages, UsdPrimPath, UsdStageAsset, SPAWN_GROUND_CLEARANCE,
 };
 
-/// Spawn an entity from the catalog at a given world position.
-///
-/// The TYPE lives in `lunco_core::commands` (review A6): the networking crate
-/// declares this command's wire channel and needs nothing but the type, so keeping
-/// the definition in core is what let `lunco-networking` drop its dependency on
-/// this crate. The HANDLER (`on_spawn_entity_command`) stays here, with the
-/// catalog it spawns from. Callers use the command type from `lunco-core`
-/// directly.
-
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
 pub struct DetachJoint {
@@ -465,9 +456,8 @@ pub fn on_spawn_entity_command(
     // authored `lunco:spawnLift` only when the composed geometry isn't available
     // yet or the asset is pure-visual.
     let mut position = cmd.position;
-    // Reborrow the resource params through Deref/DerefMut to the plain refs the
-    // helper takes (`&mut *canonical` = `&mut CanonicalStages`).
-    let rest_depth = match spawn_rest_depth(&asset_server, &stages, &mut *canonical, entry) {
+    // Reborrow the non-send resource as the plain mutable type the helper takes.
+    let rest_depth = match spawn_rest_depth(&asset_server, &stages, canonical.as_mut(), entry) {
         RestDepth::Ready(d) => d + SPAWN_GROUND_CLEARANCE,
         RestDepth::NoCollision => entry.spawn_lift as f64,
         // Placing now would use a lift of ~0 and bury the asset in the ground.
@@ -1746,7 +1736,7 @@ pub fn persist_environment_light_to_runtime_layer(
                 doc,
                 op: UsdOp::AddPrim {
                     edit_target: LayerId::runtime(),
-                    parent_path: env_path.clone(),
+                    parent_path: env_path,
                     name: "AmbientFill".to_string(),
                     type_name: Some("DomeLight".to_string()),
                     reference: None,
@@ -2845,7 +2835,7 @@ pub fn on_set_shader_source(
     // wire (`SyncApplyGuard` set): the originating peer already journaled it, and
     // the journal replay leg applies + hot-reloads it here — re-recording would
     // duplicate the entry.
-    if guard.map_or(true, |g| g.0.is_none()) {
+    if guard.is_none_or(|g| g.0.is_none()) {
         registry.apply_source(&ev.path, ev.source.clone());
     }
     // Hot-reload: `load` returns the handle every material already holds, so

@@ -152,7 +152,8 @@ fn main() {
             if let Some(g) = group {
                 download::list_group(g).map_err(|e| e.to_string())
             } else {
-                list_all_groups()
+                list_all_groups();
+                Ok(())
             }
         }
         _ => unreachable!(),
@@ -253,14 +254,13 @@ fn process_all_groups() -> Result<(), String> {
 }
 
 /// List every engine manifest group.
-fn list_all_groups() -> Result<(), String> {
+fn list_all_groups() {
     for (group, _) in lunco_assets::engine_manifests() {
         println!();
         if let Err(e) = download::list_group(&group) {
             eprintln!("  Error: {}", e);
         }
     }
-    Ok(())
 }
 
 /// Process a Twin folder's `[*.process]` entries: sources + twin-targeted

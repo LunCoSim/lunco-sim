@@ -390,17 +390,9 @@ struct RetainedSignalMeta {
 /// Bounded discovery cadence. Port values sample at the fixed telemetry rate;
 /// topology need only be rediscovered shortly after a spawn/despawn, not every
 /// fixed step. At 64 Hz this is a quarter-second maximum attach delay.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct RuntimePortDiscovery {
     ticks_until_scan: u8,
-}
-
-impl Default for RuntimePortDiscovery {
-    fn default() -> Self {
-        Self {
-            ticks_until_scan: 0,
-        }
-    }
 }
 
 /// Discover every currently readable public output and materialize its sampling
@@ -498,7 +490,7 @@ fn despawn_runtime_channels_for_removed_source(
 ) {
     for (channel, parameter) in &channels {
         if parameter.target == Some(trigger.entity) {
-            commands.entity(channel).despawn();
+            commands.entity(channel).try_despawn();
         }
     }
 }

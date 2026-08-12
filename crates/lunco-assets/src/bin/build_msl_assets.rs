@@ -172,7 +172,7 @@ fn main() {
     // empty on wasm.
     let index_path = msl_root.join("msl_index.json");
     if index_path.is_file() {
-        entries.push((msl_root.clone(), index_path));
+        entries.push((msl_root, index_path));
     } else {
         eprintln!(
             "warning: {} not present — palette will be empty on web. \
@@ -183,7 +183,7 @@ fn main() {
     // Deterministic tar order → reproducible hash. Sort by the root-relative
     // key (NOT absolute path): extra roots live at machine-specific absolute
     // paths, but their relative keys are stable.
-    entries.sort_by(|(ra, pa), (rb, pb)| rel_key(ra, pa).cmp(&rel_key(rb, pb)));
+    entries.sort_by_key(|(root, path)| rel_key(root, path));
     // Guard against two roots claiming the same relative key (e.g. an extra
     // root that also ships a `Modelica/` tree) — last-writer-wins in the tar
     // is silent corruption, so drop dups loudly.
@@ -310,7 +310,7 @@ fn pre_parse(entries: &[(PathBuf, PathBuf)]) -> Vec<(String, rumoca_ir_ast::Stor
         .map(|(root, path)| {
             let uri = rel_key(root, path);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 500 == 0 || n == total {
+            if n.is_multiple_of(500) || n == total {
                 eprintln!("  parsed {n} / {total}");
             }
             let source = match fs::read_to_string(path) {

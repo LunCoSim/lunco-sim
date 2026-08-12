@@ -1046,11 +1046,10 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 /// private history), then performs the live despawn for immediate feedback and
 /// drops it from the selection. A non-document entity (a palette spawn the doc
 /// doesn't own) simply isn't authored — it just despawns.
-// NOTE: there is no local `delete_entity` helper any more. It did the same three things
-// the typed `commands::DeleteEntity` verb does (author the `RemovePrim`, despawn, drop
-// the selection), so it was a second delete path that the command bus — and hence the
-// API, the journal and networked peers — never saw. The Inspector triggers the command.
-
+/// NOTE: there is no local `delete_entity` helper any more. It did the same three things
+/// the typed `commands::DeleteEntity` verb does (author the `RemovePrim`, despawn, drop
+/// the selection), so it was a second delete path that the command bus — and hence the
+/// API, the journal and networked peers — never saw. The Inspector triggers the command.
 /// Delete the selected entity through the same typed command as the Inspector
 /// button. The shortcut comes from `UserIntent::DeleteSelection`, so it remains
 /// rebindable and never fires while an egui field or cursor tool owns input.
@@ -1562,13 +1561,14 @@ fn attach_joint_from(joint: &str, axis: Option<&str>) -> lunco_usd::attach::Atta
 
 /// The 🔩 Mount section — one row per socket the selected host advertises.
 ///
-/// - A socket **holding a part** offers **⟳ Snap**: re-author that part's transform
-///   + joint anchor from the mount frames (`realign_component_ops`) so both follow
-///   the socket. All frames are on the live stage.
-/// - An **empty socket** that names a default asset (`lunco:mount:asset`) offers
-///   **⊕ Attach**: the *new-attach* flow — compose the not-yet-loaded asset, read its
-///   plug frame, `from_mount` it onto the socket, and reference + joint it in via
-///   `AttachComponent`.
+/// A socket **holding a part** offers **⟳ Snap**: re-author that part's transform
+/// and joint anchor from the mount frames (`realign_component_ops`) so both follow
+/// the socket. All frames are on the live stage.
+///
+/// An **empty socket** that names a default asset (`lunco:mount:asset`) offers
+/// **⊕ Attach**: the *new-attach* flow — compose the not-yet-loaded asset, read its
+/// plug frame, `from_mount` it onto the socket, and reference + joint it in via
+/// `AttachComponent`.
 ///
 /// Reads the pre-resolved [`UsdMountView`](crate::ui::usd_mount::UsdMountView) (the
 /// socket frame math ran in the producer; it needs the `!Send` stage).
@@ -2885,10 +2885,7 @@ fn shader_schema_of(
         cache.map.insert(id, (key, schema.clone()));
         schema
     });
-    match cached {
-        Some(schema) => schema,
-        None => None,
-    }
+    cached.unwrap_or_default()
 }
 
 /// Render named, range-bounded controls for the selected entity's [`ShaderLook`]

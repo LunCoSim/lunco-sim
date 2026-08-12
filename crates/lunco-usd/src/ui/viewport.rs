@@ -592,14 +592,15 @@ fn on_doc_changed_for_viewport(_trigger: On<DocumentChanged>) {
 fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let mut state = world.resource_mut::<UsdViewportState>();
-        if state.active_doc != Some(doc) {
-            return;
-        }
-        state.active_doc = None;
-        state.current_handle = None;
-        let scene_root = state.scene_root;
-        drop(state);
+        let scene_root = {
+            let mut state = world.resource_mut::<UsdViewportState>();
+            if state.active_doc != Some(doc) {
+                return;
+            }
+            state.active_doc = None;
+            state.current_handle = None;
+            state.scene_root
+        };
         if let Some(root) = scene_root {
             if let Ok(mut entity) = world.get_entity_mut(root) {
                 entity.remove::<UsdPrimPath>();

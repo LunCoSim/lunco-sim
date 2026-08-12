@@ -166,7 +166,8 @@ pub fn set_connection_line(
     points: &[(f32, f32)],
 ) -> Result<(), AstMutError> {
     let (_, stmt) = find_connect(class, edit.source(), from, to)?;
-    set_line_fields(edit, stmt, &[("points", pretty::fmt_points(points))])
+    set_line_fields(edit, stmt, &[("points", pretty::fmt_points(points))]);
+    Ok(())
 }
 
 /// Set individual `Line(...)` style fields on a `connect(...)` equation.
@@ -192,20 +193,17 @@ pub fn set_connection_line_style(
         let value = if s { "Smooth.Bezier" } else { "Smooth.None" };
         fields.push(("smooth", value.to_string()));
     }
-    set_line_fields(edit, stmt, &fields)
+    set_line_fields(edit, stmt, &fields);
+    Ok(())
 }
 
 /// Upsert `name=value` fields inside the `annotation(Line(...))` of a connect
 /// statement, creating the `Line(...)` — and the `annotation(...)` around it —
 /// when the connection has none yet. Fields the caller didn't name are left
 /// exactly as authored.
-fn set_line_fields(
-    edit: &mut Edit<'_>,
-    stmt: Range<usize>,
-    fields: &[(&str, String)],
-) -> Result<(), AstMutError> {
+fn set_line_fields(edit: &mut Edit<'_>, stmt: Range<usize>, fields: &[(&str, String)]) {
     if fields.is_empty() {
-        return Ok(());
+        return;
     }
     let source = edit.source();
     let line_group = text::annotation_clause(source, stmt.clone()).and_then(|(_, group)| {
@@ -241,5 +239,4 @@ fn set_line_fields(
             }
         }
     }
-    Ok(())
 }

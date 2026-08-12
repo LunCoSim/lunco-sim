@@ -247,7 +247,7 @@ impl Viewport {
         // correctly. The `min(1.0)` guards absurdly long frames.
         let alpha = 1.0 - (1.0 - self.config.ease).powf(dt * 60.0);
         let alpha = alpha.min(1.0);
-        let moved = {
+        {
             let dx = self.target_center.x - self.center.x;
             let dy = self.target_center.y - self.center.y;
             let dz = self.target_zoom - self.zoom;
@@ -256,8 +256,7 @@ impl Viewport {
             self.center.y += dy * alpha;
             self.zoom += dz * alpha;
             moved
-        };
-        moved
+        }
     }
 
     /// Pan by a world-space delta. Instant (no animation) — this is

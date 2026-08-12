@@ -187,9 +187,9 @@ pub fn user_config_subdir(name: &str) -> PathBuf {
 ///
 /// 1. `LUNCOSIM_CACHE` env override (CI, moving GBs to another disk).
 /// 2. OS-conventional cache dir:
-///      Linux:   `~/.cache/lunco/`
-///      macOS:   `~/Library/Caches/lunco/`
-///      Windows: `%LOCALAPPDATA%\lunco\`
+///    Linux:   `~/.cache/lunco/`
+///    macOS:   `~/Library/Caches/lunco/`
+///    Windows: `%LOCALAPPDATA%\lunco\`
 /// 3. CWD-relative `.cache/` as a last resort (no resolvable OS dir).
 ///
 /// There is deliberately NO per-worktree cache: an earlier dev-mode walk

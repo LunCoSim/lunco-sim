@@ -455,10 +455,9 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
         finish_run(&state, run_id);
         return;
     }
-    let state_for_thread = state.clone();
     std::thread::spawn(move || {
         run_inner(
-            state_for_thread.clone(),
+            state.clone(),
             model_ref,
             overrides,
             inputs,
@@ -466,7 +465,7 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
             cancel,
             tx,
         );
-        finish_run(&state_for_thread, run_id);
+        finish_run(&state, run_id);
     });
 }
 
@@ -770,8 +769,7 @@ fn run_inner(
                 Ok(d) => {
                     let dae = d.dae.clone();
                     if let Ok(mut s) = state.lock() {
-                        let ident: ModelIdent =
-                            (source.model_name.clone(), source.filename.clone());
+                        let ident: ModelIdent = (source.model_name, source.filename);
                         s.dae_cache.insert(key, (ident, dae.clone()));
                     }
                     dae
@@ -879,7 +877,7 @@ pub fn drive_run(
             // free-steps regardless, so a coarse output grid doesn't constrain
             // it (and `run_batch_sim` decimates the event-flooded result back
             // to that grid).
-            let mut batch_opts = stepper_opts.clone();
+            let mut batch_opts = stepper_opts;
             let output_dt = crate::sim_target::resolve_step_dt(
                 bounds.t_start,
                 bounds.t_end,
@@ -1045,11 +1043,11 @@ fn batch_keep_indices(
     dt: Option<f64>,
 ) -> Option<Vec<usize>> {
     let dt = dt?;
-    if !(dt > 0.0) || times.len() < 2 {
+    if dt.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || times.len() < 2 {
         return None;
     }
     let span = (t_end - t_start).abs();
-    if !(span > 0.0) {
+    if span.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     // +1 for the inclusive endpoint; small slack so we never over-decimate a
@@ -1138,6 +1136,7 @@ impl RunSink for ChannelSink {
 ///     models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34) hit
 ///     "nonlinear solver failures (50)" within the first lunar hour on the same
 ///     models. BDF is the robust default again; the SDIRK tableaus stay opt-in.)
+///
 /// Background: docs/numeric-experiments/README.md § Known working solver configurations
 ///
 /// The worker's live interactive sim (`worker::build_stepper`) previously had

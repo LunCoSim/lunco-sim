@@ -234,7 +234,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
             Transform::from_xyz(0.0, 15.0, 0.0),
             Position::from_xyz(0.0, 15.0, 0.0),
             RigidBody::Dynamic,
-            BalloonModelMarker::default(),
+            BalloonModelMarker,
         ))
         .id();
 

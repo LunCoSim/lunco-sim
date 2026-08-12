@@ -253,8 +253,6 @@ fn test_grid_visible_from_surface_camera() {
     let look_dir = -cam_pos.normalize();
     let surface_point = cam_pos + look_dir * 50.0; // 50m below camera, on surface
 
-    let mask = compute_grid_mask(surface_point, 1000.0, 500.0, 0.75, 0.4, 0.3);
-
     // Also check surrounding area (FOV simulation)
     let mut max_mask = 0.0f32;
     for dx in -20..=20i32 {
@@ -301,9 +299,9 @@ fn test_grid_orientation_consistent_across_tile_boundary() {
             let idx = y as usize * (res as usize + 1) + res as usize;
             let v = pos_a[idx];
             Vec3::new(
-                v.x as f32 + tc_a.x as f32,
-                v.y as f32 + tc_a.y as f32,
-                v.z as f32 + tc_a.z as f32,
+                v.x + tc_a.x as f32,
+                v.y + tc_a.y as f32,
+                v.z + tc_a.z as f32,
             )
         })
         .collect();
@@ -313,9 +311,9 @@ fn test_grid_orientation_consistent_across_tile_boundary() {
             let idx = y as usize * (res as usize + 1);
             let v = pos_b[idx];
             Vec3::new(
-                v.x as f32 + tc_b.x as f32,
-                v.y as f32 + tc_b.y as f32,
-                v.z as f32 + tc_b.z as f32,
+                v.x + tc_b.x as f32,
+                v.y + tc_b.y as f32,
+                v.z + tc_b.z as f32,
             )
         })
         .collect();

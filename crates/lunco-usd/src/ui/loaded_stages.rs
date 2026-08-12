@@ -289,11 +289,7 @@ impl LoadedStage for WorkspaceStage {
         let (source, generation, name) = {
             let host = registry.host(self.doc_id)?;
             let doc = host.document();
-            (
-                doc.source().to_string(),
-                doc.generation(),
-                doc.origin().display_name(),
-            )
+            (doc.source(), doc.generation(), doc.origin().display_name())
         };
 
         self.ensure_parsed(&source, generation);

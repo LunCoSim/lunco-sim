@@ -7,7 +7,6 @@
 //! `project_stage_changes`) now drive incremental structural edits.
 
 use bevy::prelude::*;
-use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::{

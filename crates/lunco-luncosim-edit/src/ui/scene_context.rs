@@ -32,7 +32,7 @@ pub fn apply_pointer_policies(
     q_policy: Query<(Entity, &ScenePointerPolicy), Added<ScenePointerPolicy>>,
 ) {
     for (entity, policy) in q_policy.iter() {
-        commands.entity(entity).insert(Pickable {
+        commands.entity(entity).try_insert(Pickable {
             should_block_lower: policy.left != PointerInteraction::PassThrough,
             is_hoverable: true,
         });

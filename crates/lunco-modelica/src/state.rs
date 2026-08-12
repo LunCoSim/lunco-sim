@@ -115,7 +115,7 @@ pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
 /// `plot_auto_fit`) used to live here and moved to `lunco-viz`
 /// (`SignalRegistry`, `VisualizationConfig.inputs`, `VizFitRequests`)
 /// when the Graphs panel migrated.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct WorkbenchState {
     /// Current Modelica source code in the editor. Mirror of the
     /// active document's source, kept here because egui's `TextEdit`
@@ -666,15 +666,6 @@ impl ModelicaDocumentRegistry {
     }
 }
 
-impl Default for WorkbenchState {
-    fn default() -> Self {
-        Self {
-            editor_buffer: String::new(),
-            selected_entity: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,7 +900,7 @@ mod tests {
             reg.link(*e, doc);
         }
 
-        let mut expected = entities.clone();
+        let mut expected = entities;
         expected.sort_unstable();
 
         assert_eq!(

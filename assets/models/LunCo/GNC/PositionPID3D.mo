@@ -157,6 +157,7 @@ model PositionPID3D
   Real descent_rate_schedule_magnitude;
   Real flare_descent_rate_magnitude;
   Real landing_flare_gate;
+  Real landing_zone_transition_width;
   Real vertical_limiter_output;
   Real throttle_command_value;
   Real pitch_command_value;
@@ -223,10 +224,17 @@ equation
   // measured vehicle is inside the authored landing radius, contact may hand
   // flight authority to the gear; outside it, four feet touching flat terrain
   // must not declare success.
-  target_zone_gate = noEvent(if horizontal_target_error
-      <= max(0.0, landing_zone_radius_m) then 1.0 else 0.0);
-  landing_handoff = noEvent(if target_zone_gate >= 0.5
-      and max(touchdown, landing_contact) >= 0.5 then 1.0 else 0.0);
+  // Keep the mission gate branch-free.  The small transition band preserves
+  // the authored radius as the 0.5 crossing while giving the continuous DAE a
+  // bounded product gate instead of an algebraic if-expression.
+  landing_zone_transition_width = max(
+    1.0e-6, max(0.0, landing_zone_radius_m) * 1.0e-3);
+  target_zone_gate = noEvent(max(0.0, min(1.0,
+    (max(0.0, landing_zone_radius_m) + landing_zone_transition_width
+      - horizontal_target_error)
+      / (2.0 * landing_zone_transition_width))));
+  landing_handoff = noEvent(target_zone_gate
+    * max(0.0, min(1.0, 2.0 * max(touchdown, landing_contact))));
   // Terminal descent is a separate flight phase. As the measured altitude
   // enters the flare envelope, progressively remove lateral acceleration so
   // the attitude loop returns the thrust axis upright before the feet reach

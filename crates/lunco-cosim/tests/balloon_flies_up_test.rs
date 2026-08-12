@@ -231,7 +231,7 @@ fn balloon_flies_up_under_buoyancy() {
             RigidBody::Dynamic,
             Collider::sphere(1.0),
             Mass(4.5),
-            BalloonModelMarker::default(),
+            BalloonModelMarker,
         ))
         .id();
 
@@ -375,7 +375,7 @@ fn balloon_flies_up_with_flat_gravity() {
             RigidBody::Dynamic,
             Collider::sphere(1.0),
             Mass(4.5),
-            BalloonModelMarker::default(),
+            BalloonModelMarker,
         ))
         .id();
 

@@ -125,7 +125,7 @@ fn main() {
                 if hz > sun_el - 2.0 || slope(x, z) > 6.0 {
                     continue;
                 }
-                if best.map_or(true, |b| d < b.0) {
+                if best.is_none_or(|b| d < b.0) {
                     best = Some((d, x, z, at(x, z), hz));
                 }
             }

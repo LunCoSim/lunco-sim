@@ -840,19 +840,19 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
     numeric_of(expr)
 }
 
-/// Walk the component tree of a chosen root class (depth-first
-/// through nested instance components) and emit instance-qualified
-/// variable names — `tank.m`, `engine.thrust`, … — matching what the
-/// simulator publishes once compiled. Pre-compile, this lets the
-/// Variables list show "where" each value lives instead of a flat
-/// list of leaf identifiers that collide across components.
-///
-/// Stops recursing when a component's declared type isn't an AST
-/// class in this `StoredDefinition` (i.e. resolves to an MSL or
-/// user library that we'd need rumoca's resolver to walk). Those
-/// components are emitted as leaves under their qualified path —
-/// good enough for the common authored-domain models where Tank /
-/// Engine / Valve sit in the same file as RocketStage.
+// Walk the component tree of a chosen root class (depth-first
+// through nested instance components) and emit instance-qualified
+// variable names — `tank.m`, `engine.thrust`, … — matching what the
+// simulator publishes once compiled. Pre-compile, this lets the
+// Variables list show "where" each value lives instead of a flat
+// list of leaf identifiers that collide across components.
+//
+// Stops recursing when a component's declared type isn't an AST
+// class in this `StoredDefinition` (i.e. resolves to an MSL or
+// user library that we'd need rumoca's resolver to walk). Those
+// components are emitted as leaves under their qualified path —
+// good enough for the common authored-domain models where Tank /
+// Engine / Valve sit in the same file as RocketStage.
 
 /// Parse a numeric literal expression (including a leading `-` unary
 /// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
@@ -862,18 +862,16 @@ pub(crate) fn numeric_of(expr: &Expression) -> Option<f64> {
     use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
         Expression::Terminal {
-            terminal_type,
+            terminal_type: TerminalType::UnsignedReal | TerminalType::UnsignedInteger,
             token,
             ..
-        } => match terminal_type {
-            TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
-                token.text.parse::<f64>().ok()
-            }
-            _ => None,
-        },
-        Expression::Unary { op, rhs, .. } if matches!(op, OpUnary::Minus) => {
-            numeric_of(rhs).map(|v| -v)
-        }
+        } => token.text.parse::<f64>().ok(),
+        Expression::Terminal { .. } => None,
+        Expression::Unary {
+            op: OpUnary::Minus,
+            rhs,
+            ..
+        } => numeric_of(rhs).map(|v| -v),
         _ => None,
     }
 }

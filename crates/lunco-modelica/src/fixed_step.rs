@@ -266,7 +266,7 @@ impl FixedStepSession {
             .iter_mut()
             .zip(k1.iter().zip(&k2).zip(&k3).zip(&k4))
         {
-            *state = *state + (h / 6.0) * (*a + 2.0 * *b + 2.0 * *c + *d);
+            *state += (h / 6.0) * (*a + 2.0 * *b + 2.0 * *c + *d);
             if !state.is_finite() {
                 return Err(SimulationDiagnosticError::Solver(
                     "fixed-rk4 produced a non-finite state".into(),

@@ -93,7 +93,7 @@ const NODE_ERROR_PROBE_RES: usize = 9;
 /// Marks a perspective camera as a visual terrain-detail authority.
 ///
 /// Every active marked camera contributes one stable, camera-centred detail cover.
-#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[derive(Component, Reflect, Debug, Clone, Copy, Default)]
 #[reflect(Component)]
 pub struct TerrainVisualFocus {
     /// Optional per-camera override for the radius around the camera guaranteed
@@ -107,15 +107,6 @@ pub struct TerrainVisualFocus {
     /// near-field tile remains selected after the camera moves away. `None` uses
     /// [`lunco_settings::TerrainSettings::visual_detail_hysteresis_m`].
     pub near_detail_hysteresis_m: Option<f64>,
-}
-
-impl Default for TerrainVisualFocus {
-    fn default() -> Self {
-        Self {
-            near_detail_radius_m: None,
-            near_detail_hysteresis_m: None,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -454,7 +445,7 @@ fn edge_neighbours(c: QuadCoord) -> impl Iterator<Item = QuadCoord> {
         .filter_map(move |(dx, dz)| {
             let x = c.x as i64 + dx;
             let z = c.z as i64 + dz;
-            (x >= 0 && z >= 0 && x < side && z < side).then(|| QuadCoord {
+            (x >= 0 && z >= 0 && x < side && z < side).then_some(QuadCoord {
                 depth: c.depth,
                 x: x as u32,
                 z: z as u32,
@@ -685,8 +676,7 @@ fn evolve_cover_for_foci_with_retention(
 
     // 1. Voluntary merges — the node is genuinely past the hysteresis band
     //    (the sorted prefix holds exactly those, farthest first).
-    for i in 0..band {
-        let (_, p) = merges[i];
+    for &(_, p) in merges.iter().take(band) {
         if edits >= MAX_COVER_EDITS {
             break;
         }
@@ -1449,9 +1439,9 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
 ///   there would only blur real relief).
 /// - `weight_ao` / `weight_tone` stay partially on everywhere (bowls genuinely
 ///   receive less sky light at any range) and saturate on coarse tiles.
-/// The weights THEMSELVES are no longer computed here — `map_weights` in
-/// `lunco::terrain` derives them from this ratio per fragment, so they can follow
-/// the CDLOD morph instead of stepping at the tile edge.
+///   The weights THEMSELVES are no longer computed here — `map_weights` in
+///   `lunco::terrain` derives them from this ratio per fragment, so they can follow
+///   the CDLOD morph instead of stepping at the tile edge.
 fn tile_map_ratio(depth: u32, map_res: usize, tile_res: usize) -> f32 {
     map_res as f32 / (((1u32 << depth.min(24)) * (tile_res as u32 - 1)) as f32)
 }
@@ -1688,13 +1678,13 @@ fn required_focus_depth(
 }
 
 fn near_field_error_floor(region: Square, tile_res: usize, demands: &[TerrainVisualDemand]) -> f64 {
-    demands
-        .iter()
-        .any(|focus| {
-            focus.required && region.distance_to(focus.focus) <= focus.near_detail_radius_m
-        })
-        .then(|| region.side() / (tile_res - 1) as f64)
-        .unwrap_or(0.0)
+    if demands.iter().any(|focus| {
+        focus.required && region.distance_to(focus.focus) <= focus.near_detail_radius_m
+    }) {
+        region.side() / (tile_res - 1) as f64
+    } else {
+        0.0
+    }
 }
 
 fn near_field_retains_refinement(region: Square, demands: &[TerrainVisualDemand]) -> bool {
@@ -2341,7 +2331,7 @@ pub fn update_lod_tiles(
                 && (wanted.contains(coord)
                     || parent_fallbacks.contains(coord)
                     || *coord == QuadCoord::ROOT
-                    || (!urgent_missing && coord.depth <= ROOT_FALLBACK_DEPTH))
+                    || (!urgent_missing && coord.depth == ROOT_FALLBACK_DEPTH))
         });
         stream_status.stale_cancelled += pending_before - pending.0.len();
         // Intelligent baking, two phases:
@@ -2695,7 +2685,7 @@ pub fn update_lod_tiles(
         // while it is wanted, is a direct hidden fallback for a wanted child, or
         // actively draws as a stand-in.
         tiles.tiles.retain(|coord, slot| {
-            let keep = coord.depth <= ROOT_FALLBACK_DEPTH
+            let keep = coord.depth == ROOT_FALLBACK_DEPTH
                 || wanted.contains(coord)
                 || parent_fallbacks.contains(coord)
                 || draw.contains(coord);
@@ -2798,7 +2788,7 @@ pub fn update_lod_tiles(
                 *e == terrain
                     && (wanted.contains(c)
                         || parent_fallbacks.contains(c)
-                        || c.depth <= ROOT_FALLBACK_DEPTH)
+                        || c.depth == ROOT_FALLBACK_DEPTH)
             },
         );
     }
@@ -3051,7 +3041,7 @@ mod draw_partition_tests {
     fn nothing_ready_leaves_the_area_uncovered_rather_than_wrong() {
         // Before the coarse base lands there is genuinely nothing to draw. It must degrade
         // to "no tile" — never to a bogus one — and must not panic walking off the root.
-        let sel = vec![c(3, 5, 2)];
+        let sel = [c(3, 5, 2)];
         let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
         build_draw_partition(sel.iter().copied(), |_| false, &mut draw, &mut scratch);
         assert!(draw.is_empty());

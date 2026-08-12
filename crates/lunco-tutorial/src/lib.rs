@@ -596,7 +596,7 @@ fn start_tutorial_scenario(
     #[cfg(feature = "ui")]
     if let Some(meta) = world.resource::<TutorialRegistry>().get(&id) {
         if let Some(mut hud) = world.get_resource_mut::<TutorialHud>() {
-            hud.title = meta.title.clone();
+            hud.title = meta.title;
         }
     }
     info!("[tutorial] starting '{}'", id);
@@ -672,10 +672,6 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             });
 
         clear_tutorial_hud(world);
-        #[cfg(feature = "ui")]
-        if let Some(mut hud) = world.get_resource_mut::<TutorialHud>() {
-            hud.title = meta.title.clone();
-        }
         world.resource_mut::<PendingAdvance>().0 = None;
         stop_tutorial_host(world);
         world.resource_mut::<TutorialProgress>().current = None;
@@ -686,7 +682,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             info!("[tutorial] '{}' declares world {}", meta.title, scene);
             let clear_before_load = outgoing_world.is_some();
             world.resource_mut::<PendingTutorialStart>().0 = Some(PendingTutorial {
-                id: id.clone(),
+                id,
                 source,
                 world: scene.clone(),
                 clear_before_load,
@@ -705,6 +701,10 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 world.trigger(lunco_core::SceneTransitionIntent::clear());
             }
             start_tutorial_scenario(world, id, source, None);
+        }
+        #[cfg(feature = "ui")]
+        if let Some(mut hud) = world.get_resource_mut::<TutorialHud>() {
+            hud.title = meta.title;
         }
     });
 }
@@ -809,12 +809,10 @@ fn on_mission_complete(
     };
     if progress.autoproceed {
         info!("[tutorial] auto-advancing → '{next}'");
-        commands.trigger(StartTutorial {
-            id: next.to_string(),
-        });
+        commands.trigger(StartTutorial { id: next });
     } else {
         info!("[tutorial] complete — awaiting confirm to advance → '{next}'");
-        pending.0 = Some(next.to_string());
+        pending.0 = Some(next);
     }
 }
 
@@ -1048,7 +1046,7 @@ fn on_scene_transition_failed(
 fn pretty_tutorial(registry: &TutorialRegistry, id: &str) -> String {
     registry
         .get(id)
-        .map(|m| m.title.to_string())
+        .map(|m| m.title)
         .unwrap_or_else(|| id.to_string())
 }
 
@@ -1147,7 +1145,7 @@ fn resolve_show_tutorial_intent(
         .or_else(|| registry.tutorials.first())
         .map(|t| t.id.clone());
     if let Some(id) = id {
-        commands.trigger(StartTutorial { id: id.to_string() });
+        commands.trigger(StartTutorial { id });
     }
 }
 
@@ -1171,7 +1169,7 @@ fn consume_tour_request(
         .map(|t| t.id.clone());
     if let Some(id) = id {
         req.0 = None;
-        commands.trigger(StartTutorial { id: id.to_string() });
+        commands.trigger(StartTutorial { id });
     }
 }
 
@@ -1503,7 +1501,7 @@ impl Panel for TutorialsPanel {
         if let Some(cur) = &progress.current {
             let title = registry
                 .get(cur)
-                .map(|m| m.title.to_string())
+                .map(|m| m.title)
                 .unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
                 ui.label(

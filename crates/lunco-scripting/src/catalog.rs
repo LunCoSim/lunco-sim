@@ -323,19 +323,23 @@ mod tests {
 
         // Verbs include the three core channels.
         let verbs = data["verbs"].as_array().unwrap();
-        let verb_names: Vec<&str> = verbs.iter().filter_map(|v| v["name"].as_str()).collect();
         for v in ["cmd", "get", "query", "world_pos", "emit"] {
-            assert!(verb_names.contains(&v), "missing verb {v}");
+            assert!(
+                verbs
+                    .iter()
+                    .filter_map(|verb| verb["name"].as_str())
+                    .any(|name| name == v),
+                "missing verb {v}"
+            );
         }
 
         // Hooks present.
-        let hook_names: Vec<&str> = data["hooks"]
+        assert!(data["hooks"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|h| h["name"].as_str())
-            .collect();
-        assert!(hook_names.contains(&"on_tick"));
+            .any(|name| name == "on_tick"));
 
         // Prelude introspected (the embedded prelude defines helpers).
         assert!(

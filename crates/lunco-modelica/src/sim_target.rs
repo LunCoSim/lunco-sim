@@ -186,13 +186,10 @@ pub fn resolve_requested_class(
     //    Examples;` prefix isn't folded into the index's qualified names).
     //    Compiling the under-qualified candidate would fail "model not found".
     if req.contains('.') {
-        let suffix_hits: Vec<&String> = candidates
-            .iter()
-            .filter(|c| {
-                c.rsplit('.').next() == req.rsplit('.').next() && req.ends_with(&format!(".{c}"))
-            })
-            .collect();
-        if suffix_hits.len() == 1 {
+        let mut suffix_hits = candidates.iter().filter(|c| {
+            c.rsplit('.').next() == req.rsplit('.').next() && req.ends_with(&format!(".{c}"))
+        });
+        if suffix_hits.next().is_some() && suffix_hits.next().is_none() {
             return Ok(req.to_string());
         }
     }

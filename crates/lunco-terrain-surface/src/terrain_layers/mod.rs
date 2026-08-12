@@ -32,17 +32,39 @@ mod shader;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use avian3d::prelude::Collider;
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 use lunco_obstacle_field::field::HeightGrid;
+use lunco_obstacle_field::spec::{CraterLayer, RockLayer};
+use lunco_terrain_core::Overzoom;
 
 use crate::stream_viz::DemHeightField;
 
-pub use craters::{crater_layer, make_crater_layer, read_crater_layer, CraterLayerParams};
+pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
-pub use overzoom::{read_overzoom_layer, OverzoomLayerParams};
 pub(crate) use rocks::ProceduralRock;
-pub use rocks::{read_rock_layer, rock_instance_layer, rock_layer, RockLayerParams, TerrainRock};
+pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
+
+/// Parameters decoded from one built-in USD-free terrain layer.
+///
+/// Disabled layers are still represented so an editor can preserve their
+/// authored settings while toggling visibility; the runtime parser decides
+/// whether the decoded layer contributes.
+pub enum TerrainLayerParams {
+    Craters {
+        layer: CraterLayer,
+        seed: u64,
+    },
+    Overzoom {
+        enabled: bool,
+        spec: Overzoom,
+    },
+    Rocks {
+        layer: RockLayer,
+        region_half_extent: f32,
+        seed: u64,
+    },
+}
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
 /// (the Inspector's editable model), preserving every other layer (the surface
@@ -160,8 +182,8 @@ impl TerrainLayerStack {
         for e in &self.0 {
             if let Some(f) = e.layer.scatter_fingerprint() {
                 h.write_bytes(e.id.0.as_bytes());
-                // Keep adjacent `(id, fingerprint)` pairs unambiguous when a
-                // layer id happens to be a prefix of another id.
+                // Keep adjacent (id, fingerprint) pairs unambiguous when one
+                // layer id is a prefix of another.
                 h.write_u64(0);
                 h.write_u64(f);
             }
@@ -279,13 +301,36 @@ pub struct TerrainScatterEntity;
 
 /// Authoritative terrain owner for an entity spawned by a scatter layer.
 ///
-/// Scatter entities are often children of the terrain today, but parentage is
-/// presentation structure rather than ownership: a layer may put an entity in
-/// another hierarchy or spawn it after the terrain has been re-composed. Native
-/// cleanup and bounded-height refreshes therefore use this explicit owner.
-/// Scatter implementations must insert this alongside [`TerrainScatterEntity`].
+/// Scatter entities may be reparented by presentation or selection systems, so
+/// hierarchy is not an ownership contract. Native cleanup and pooling use this
+/// component instead. Every layer that inserts [`TerrainScatterEntity`] must
+/// insert this component with the terrain entity that owns the scatter.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerrainScatterOwner(pub Entity);
+
+/// Retire one scatter entity before a layer refresh.
+///
+/// Procedural rocks remain as inert pooled entities; authored scatter keeps its
+/// normal despawn lifecycle. Keeping this transition in one function prevents
+/// the fast refresh and full re-stamp paths from drifting apart.
+pub(crate) fn retire_scatter_entity(
+    commands: &mut Commands,
+    entity: Entity,
+    procedural: bool,
+    mut rock_pool: Option<&mut Vec<Entity>>,
+) {
+    if procedural {
+        if let Some(pool) = rock_pool.take() {
+            pool.push(entity);
+        }
+        commands.entity(entity).try_insert(Visibility::Hidden);
+        commands
+            .entity(entity)
+            .try_remove::<(Collider, RigidBody)>();
+    } else {
+        commands.entity(entity).try_despawn();
+    }
+}
 
 /// USD-free attribute getter handed to a layer parser. The USD bridge implements this
 /// over a prim reader so layer parsers (and 3rd-party ones) need no USD dependency.
@@ -328,6 +373,7 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     /// Reusable generated-rock entities owned by this terrain. Authored/placed
     /// rocks never enter this pool; their entity identity is part of the authored
     /// scene and must keep the normal rebuild lifecycle.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) rock_pool: &'a mut Vec<Entity>,
 }
 
@@ -427,6 +473,37 @@ pub trait TerrainLayer: Send + Sync + 'static {
 /// disables the layer (e.g. density 0). USD-free via [`LayerAttrSource`].
 pub type TerrainLayerParser = fn(&dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>>;
 
+/// Decode parameters for a built-in terrain layer.
+///
+/// The decoder owns the built-in defaults and validity rules. Callers that need
+/// a runtime layer should use [`TerrainLayerParserRegistry::parse`]; callers
+/// that need authored values (for example an Inspector projection) use this API
+/// instead of duplicating the layer parsers' defaults.
+pub fn terrain_layer_params(
+    layer_type: &str,
+    attrs: &dyn LayerAttrSource,
+) -> Option<TerrainLayerParams> {
+    match layer_type {
+        "craters" => {
+            let (layer, seed) = craters::params(attrs);
+            Some(TerrainLayerParams::Craters { layer, seed })
+        }
+        "overzoom" => {
+            let (enabled, spec) = overzoom::params(attrs);
+            Some(TerrainLayerParams::Overzoom { enabled, spec })
+        }
+        "rocks" => {
+            let (layer, region_half_extent, seed) = rocks::params(attrs);
+            Some(TerrainLayerParams::Rocks {
+                layer,
+                region_half_extent,
+                seed,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Maps a `lunco:layer` type string → its parser. The USD bridge looks up each child
 /// layer prim's type here. Defaults to the built-ins (`craters`, `rocks`, `shader`);
 /// register more with [`TerrainLayerAppExt::add_terrain_layer`].
@@ -454,10 +531,9 @@ impl Default for TerrainLayerParserRegistry {
             "rock".to_string(),
             rocks::parse_rock_instance as TerrainLayerParser,
         );
-        parsers.insert(
-            "shader".to_string(),
-            shader::parse_shader_layer as TerrainLayerParser,
-        );
+        parsers.insert("shader".to_string(), |attrs| {
+            Some(shader::parse_shader_layer(attrs))
+        });
         Self { parsers }
     }
 }
@@ -519,28 +595,18 @@ pub(crate) fn scatter_terrain_layers(
     let mut meshes = meshes;
     for (entity, dem, stack) in &q {
         // A scatter refresh deliberately keeps the height products alive. Generated
-        // rocks are recycled in-place; authored scene children remain untouched
-        // because they do not carry the runtime scatter marker.
+        // Procedural rocks are recycled in-place; authored scene children remain
+        // untouched because they do not carry the runtime scatter marker. Authored
+        // layer instances carry the marker and retain their normal despawn lifecycle.
         let mut rock_pool = Vec::new();
         for (scatter_entity, owner, procedural) in &scattered {
             if owner.0 == entity {
-                if procedural.is_some() {
-                    rock_pool.push(scatter_entity);
-                    // A pooled rock must leave both render visibility and the
-                    // physics broad phase while it is unused. The scatter layer
-                    // inserts Visibility::Inherited and Collider again when it
-                    // reuses the entity.
-                    commands
-                        .entity(scatter_entity)
-                        .try_insert(Visibility::Hidden);
-                    commands
-                        .entity(scatter_entity)
-                        .try_remove::<(Collider, avian3d::prelude::RigidBody)>();
-                } else {
-                    // Placed rocks and future authored scatter retain their normal
-                    // lifecycle; pooling them would make authored identity ambiguous.
-                    commands.entity(scatter_entity).try_despawn();
-                }
+                retire_scatter_entity(
+                    &mut commands,
+                    scatter_entity,
+                    procedural.is_some(),
+                    Some(&mut rock_pool),
+                );
             }
         }
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
@@ -565,6 +631,7 @@ pub(crate) fn scatter_terrain_layers(
             meshes: meshes.as_deref_mut(),
             asset_server: &asset_server,
             rock_assets: &mut rock_assets,
+            #[cfg(not(target_arch = "wasm32"))]
             rock_pool: &mut rock_pool,
         };
         for entry in &stack.0 {

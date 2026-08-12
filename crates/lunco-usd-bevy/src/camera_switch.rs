@@ -138,7 +138,7 @@ pub fn on_activate_camera(
 ) {
     let target = trigger.event().0;
     match q_cams.get(target) {
-        Ok((t, path)) if matches!(t, RenderTarget::Window(_)) => {
+        Ok((RenderTarget::Window(_), path)) => {
             vp.active_camera = Some(target);
             selection.requested = path.map(|path| UsdCameraKey {
                 stage: path.stage_handle.id(),
@@ -231,7 +231,7 @@ pub fn reconcile_scene_viewport(
                        e: Entity|
      -> bool {
         q.get(e)
-            .map_or(false, |(_, _, t, _, has_proj, _)| is_window(t) && has_proj)
+            .is_ok_and(|(_, _, t, _, has_proj, _)| is_window(t) && has_proj)
     };
 
     // ── Resolve the bound camera (revalidate + default) ──────────────────

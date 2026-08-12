@@ -16,7 +16,7 @@
 //!
 //! [`produce_usd_prim_tree`] is the view-model producer: it runs on the main
 //! thread (the stage is `!Send`), reads the composed stage for each prim's type
-//! + body flag, and rebuilds the [`UsdPrimTreeView`] only when the set of prim
+//! and body flag, and rebuilds the [`UsdPrimTreeView`] only when the set of prim
 //! paths changes (hash-gated). The panel is pure paint over that resource.
 
 use std::collections::{BTreeSet, HashMap};
@@ -78,7 +78,7 @@ pub fn produce_usd_prim_tree(
     for (_, p) in q.iter() {
         counts
             .entry(p.stage_handle.id())
-            .or_insert((0, p.stage_handle.clone()))
+            .or_insert_with(|| (0, p.stage_handle.clone()))
             .0 += 1;
     }
     let Some((stage_id, handle)) = counts
