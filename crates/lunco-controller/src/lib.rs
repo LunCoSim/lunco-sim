@@ -239,7 +239,11 @@ impl Plugin for LunCoControllerPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
-        app.add_systems(lunco_time::InteractionSchedule, drive_self_drivers);
+        app.configure_sets(lunco_time::InteractionSchedule, InteractionControlSet);
+        app.add_systems(
+            lunco_time::InteractionSchedule,
+            drive_self_drivers.in_set(InteractionControlSet),
+        );
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the
@@ -263,6 +267,15 @@ pub struct ControllerLink {
 /// [`UserIntent`]. This crate only provides the SYSTEM that consumes it
 /// ([`drive_from_bindings`]).
 pub use lunco_core::ControlBinding;
+
+/// Interaction-schedule boundary for the avatar's command producer.
+///
+/// The free avatar consumes its command ports in `lunco-avatar` on the same
+/// unpausable cadence. Keeping the producer in a named set lets that consumer
+/// establish a real dependency, which also gives Bevy an `ApplyDeferred` sync
+/// point for the `SetPorts` observer before movement reads the ports.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct InteractionControlSet;
 
 /// Cap on the unacked input ring (~2 s at 60 Hz). The reconcile normally drains
 /// it to the acked `seq` each snapshot; this only bounds a stalled/disconnected
@@ -921,6 +934,17 @@ mod tests {
     use super::*;
     use lunco_core::UserIntent;
 
+    #[derive(Resource, Default)]
+    struct InteractionObserved(Option<(f64, f64)>);
+
+    fn observe_interaction_ports(
+        q: Query<&lunco_core::InputPorts>,
+        mut observed: ResMut<InteractionObserved>,
+    ) {
+        let inputs = q.single().expect("the free avatar input surface");
+        observed.0 = Some((inputs.cmd("forward"), inputs.cmd("up")));
+    }
+
     /// The configured pointer button is part of the same semantic `Look`
     /// binding as the mouse axis. This prevents camera code from silently
     /// reintroducing a raw secondary-button assumption.
@@ -1020,6 +1044,108 @@ mod tests {
         // Builder runs end-to-end (also adds the mouse axes) without panicking.
         let _ = get_avatar_input_map();
         let _ = UserIntent::MoveForward;
+    }
+
+    /// Opposing movement axes must be independent when held together.  In
+    /// particular, Q+W is a valid down/forward diagonal just like Q+S and
+    /// W+E; a regression in the key-to-intent layer must not drop the forward
+    /// intent merely because the vertical key is pressed at the same time.
+    #[test]
+    fn diagonal_keyboard_intents_keep_both_axes_active() {
+        use bevy::input::InputPlugin;
+        use leafwing_input_manager::prelude::InputManagerPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((ActionState::<UserIntent>::default(), get_avatar_input_map()))
+            .id();
+
+        for key in [KeyCode::KeyQ, KeyCode::KeyW] {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
+        }
+        app.update();
+
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("input manager action state");
+        assert!(state.pressed(&UserIntent::MoveDown));
+        assert!(state.pressed(&UserIntent::MoveForward));
+
+        // Check the other diagonal with the same vertical direction.  This
+        // catches an axis implementation that accidentally treats forward as
+        // mutually exclusive with one of the elevation signs.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::KeyW);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyS);
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("input manager action state");
+        assert!(state.pressed(&UserIntent::MoveDown));
+        assert!(state.pressed(&UserIntent::MoveBackward));
+    }
+
+    /// The self-driver and the free-avatar movement consumer share the
+    /// interaction schedule.  Both components of a diagonal must be visible
+    /// to the consumer in the same step; a one-step-late deferred `SetPorts`
+    /// application is not sufficient for movement.
+    #[test]
+    fn interaction_control_flushes_diagonal_ports_before_the_consumer() {
+        use lunco_time::InteractionSchedule;
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            lunco_time::TimePlugin,
+            lunco_cosim::CoSimPlugin,
+        ));
+        app.configure_sets(InteractionSchedule, InteractionControlSet);
+        app.add_systems(
+            InteractionSchedule,
+            drive_self_drivers.in_set(InteractionControlSet),
+        );
+        app.add_systems(
+            InteractionSchedule,
+            observe_interaction_ports.after(InteractionControlSet),
+        );
+        app.init_resource::<InteractionObserved>();
+
+        let mut state = ActionState::<UserIntent>::default();
+        state.press(&UserIntent::MoveDown);
+        state.press(&UserIntent::MoveForward);
+        app.world_mut().spawn((
+            state,
+            lunco_core::InputPorts::new(&["forward", "up"]),
+            ControlBinding {
+                binds: vec![
+                    (UserIntent::MoveForward, "forward".into(), 1.0),
+                    (UserIntent::MoveDown, "up".into(), -1.0),
+                ],
+            },
+        ));
+
+        app.world_mut().run_schedule(InteractionSchedule);
+
+        assert_eq!(
+            app.world().resource::<InteractionObserved>().0,
+            Some((1.0, -1.0)),
+            "the consumer must see both Q and W in the same interaction step"
+        );
     }
 
     /// Pausing the SIM must not paralyse the USER: the free avatar's self-drive rides
