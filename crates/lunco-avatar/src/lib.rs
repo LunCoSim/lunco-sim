@@ -15,6 +15,7 @@
 //!
 //! Transitions use `FrameBlend` with pre-computed endpoints for smooth "frame handoffs."
 
+use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -322,6 +323,71 @@ pub struct FreeFlightCamera {
     pub damping: Option<f32>,
 }
 
+// Camera behavior components are an exclusive sum type at the ECS boundary:
+// an avatar may have one active behavior, never two. The mode systems also
+// express this with `Without<…>` filters, so enforcing it when a component is
+// added keeps every current and future transition on the same single-writer
+// contract. The hook queues structural removals; they are applied with the
+// normal Bevy command flush before camera systems run.
+fn freeflight_camera_added(mut world: DeferredWorld, context: HookContext) {
+    let entity = context.entity;
+    world.commands().queue(move |world: &mut World| {
+        if world.get::<FreeFlightCamera>(entity).is_some() {
+            world
+                .entity_mut(entity)
+                .remove::<(SurfaceCamera, SpringArmCamera, OrbitCamera)>();
+        }
+    });
+}
+
+fn surface_camera_added(mut world: DeferredWorld, context: HookContext) {
+    let entity = context.entity;
+    world.commands().queue(move |world: &mut World| {
+        if world.get::<SurfaceCamera>(entity).is_some() {
+            world
+                .entity_mut(entity)
+                .remove::<(FreeFlightCamera, SpringArmCamera, OrbitCamera)>();
+        }
+    });
+}
+
+fn spring_arm_camera_added(mut world: DeferredWorld, context: HookContext) {
+    let entity = context.entity;
+    world.commands().queue(move |world: &mut World| {
+        if world.get::<SpringArmCamera>(entity).is_some() {
+            world
+                .entity_mut(entity)
+                .remove::<(FreeFlightCamera, SurfaceCamera, OrbitCamera)>();
+        }
+    });
+}
+
+fn orbit_camera_added(mut world: DeferredWorld, context: HookContext) {
+    let entity = context.entity;
+    world.commands().queue(move |world: &mut World| {
+        if world.get::<OrbitCamera>(entity).is_some() {
+            world
+                .entity_mut(entity)
+                .remove::<(FreeFlightCamera, SurfaceCamera, SpringArmCamera)>();
+        }
+    });
+}
+
+fn register_camera_mode_hooks(app: &mut App) {
+    app.world_mut()
+        .register_component_hooks::<FreeFlightCamera>()
+        .on_insert(freeflight_camera_added);
+    app.world_mut()
+        .register_component_hooks::<SurfaceCamera>()
+        .on_insert(surface_camera_added);
+    app.world_mut()
+        .register_component_hooks::<SpringArmCamera>()
+        .on_insert(spring_arm_camera_added);
+    app.world_mut()
+        .register_component_hooks::<OrbitCamera>()
+        .on_insert(orbit_camera_added);
+}
+
 /// Surface camera: heading + pitch relative to the local surface normal.
 ///
 /// Unlike `FreeFlightCamera` which accumulates incremental rotations (prone to
@@ -570,6 +636,7 @@ fn enforce_ownership(
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
+        register_camera_mode_hooks(app);
         app.init_resource::<MouseSensitivity>()
             .init_resource::<CameraDefaults>()
             .init_resource::<SurfaceModeThreshold>();
@@ -2790,8 +2857,8 @@ fn capture_avatar_intent(
     // A waypoint context menu counts too, and needs its own flag: `wants_pointer` only
     // goes true once the cursor is already ON the menu, so the camera would spin all
     // the way there and the menu could never be reached comfortably.
-    let waypoint_menu_is_open = waypoint_menu_open.as_ref().map(|m| m.0).unwrap_or(false);
-    let pointer_captured = egui_focus.wants_pointer || waypoint_menu_is_open;
+    let pointer_captured =
+        egui_focus.wants_pointer || waypoint_menu_open.map(|m| m.0).unwrap_or(false);
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
@@ -4710,6 +4777,49 @@ mod tests {
             app.world().get::<FreeFlightCamera>(avatar).is_none(),
             "camera initialization must not create two mutually-exclusive modes"
         );
+    }
+
+    #[test]
+    fn camera_mode_additions_remove_all_other_modes() {
+        let mut app = App::new();
+        register_camera_mode_hooks(&mut app);
+
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                FreeFlightCamera {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                },
+                SurfaceCamera {
+                    heading: 0.0,
+                    pitch: 0.0,
+                },
+                OrbitCamera {
+                    target: Entity::PLACEHOLDER,
+                    distance: 1.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                    vertical_offset: 0.0,
+                },
+            ))
+            .id();
+        app.world_mut().flush();
+
+        let world = app.world();
+        let mode_count = [
+            world.get::<FreeFlightCamera>(avatar).is_some(),
+            world.get::<SurfaceCamera>(avatar).is_some(),
+            world.get::<SpringArmCamera>(avatar).is_some(),
+            world.get::<OrbitCamera>(avatar).is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        assert_eq!(mode_count, 1);
     }
 
     #[test]

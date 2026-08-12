@@ -3238,7 +3238,7 @@ fn render_layout(
             .max_rect(ctx.viewport_rect()),
     );
 
-    let menu_bar = egui::Panel::top("lunco_workbench_menu_bar")
+    egui::Panel::top("lunco_workbench_menu_bar")
         // Match the dock tab-bar height so the merged title-bar
         // doesn't read as a thin sliver above thicker rows below.
         // 30px is roughly egui_dock's default tab strip height with
@@ -4161,30 +4161,19 @@ fn render_layout(
                 }
             }
         });
-        });
-
-    // Use egui's measured panel footprint as the ownership boundary. The
-    // root background Ui covers the whole window, so Context-level egui
-    // pointer flags cannot distinguish this bar from the scene behind it.
-    if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
-        gate.record_chrome_rect(menu_bar.response.rect);
-    }
+    });
 
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
-    let status_bar =
-        egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
-            ui.style_mut().visuals = theme.to_visuals();
-            render_status_bar_inner(ui, world, theme);
-        });
-    if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
-        gate.record_chrome_rect(status_bar.response.rect);
-    }
+    egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
+        ui.style_mut().visuals = theme.to_visuals();
+        render_status_bar_inner(ui, world, theme);
+    });
 
     // ── Activity bar ────────────────────────────────────────────────
     if layout.activity_bar {
-        let activity_bar = egui::Panel::left("lunco_workbench_activity_bar")
+        egui::Panel::left("lunco_workbench_activity_bar")
             .resizable(false)
             .exact_size(40.0)
             .show(&mut viewport_ui, |ui| {
@@ -4197,9 +4186,6 @@ fn render_layout(
                     }
                 });
             });
-        if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
-            gate.record_chrome_rect(activity_bar.response.rect);
-        }
     }
 
     // ── Dock area / side panels ─────────────────────────────────────
@@ -4353,7 +4339,6 @@ fn render_layout(
             if let Some(mut g) = world.get_resource_mut::<viewport::ScenePickGate>() {
                 g.set_dock_rect(dock_rect);
                 g.set_scene_viewport_rect(scene_vp_rect);
-                g.set_full_window_scene(false);
             }
         }
     } else {
@@ -4386,9 +4371,6 @@ fn render_layout(
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.side_browser", r.response.rect);
             }
-            if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
-                gate.record_chrome_rect(r.response.rect);
-            }
         }
         if let Some(id) = layout.right_inspector.first().copied() {
             let r = egui::Panel::right("lunco_workbench_side_panel_right")
@@ -4403,9 +4385,6 @@ fn render_layout(
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.right_inspector", r.response.rect);
             }
-            if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
-                gate.record_chrome_rect(r.response.rect);
-            }
         }
         if let Some(id) = layout.bottom.first().copied() {
             let r = egui::Panel::bottom("lunco_workbench_bottom_panel")
@@ -4419,9 +4398,6 @@ fn render_layout(
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.bottom", r.response.rect);
             }
-            if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
-                gate.record_chrome_rect(r.response.rect);
-            }
         }
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
@@ -4429,14 +4405,6 @@ fn render_layout(
         // Scene-vs-chrome picking is handled by bevy_picking (egui occlusion via
         // bevy_egui's picking backend), so there's no pointer gate to compute
         // here anymore.
-        // View mode has no scene leaf. Publish that explicit perspective fact
-        // after the chrome panels have recorded their blocked regions so the
-        // shared pick gate resolves the remaining window surface to the scene.
-        if viewport::layout_is_empty(layout) {
-            if let Some(mut g) = world.get_resource_mut::<viewport::ScenePickGate>() {
-                g.set_full_window_scene(true);
-            }
-        }
     }
 
     // ── Empty-viewport placeholder ──────────────────────────────────

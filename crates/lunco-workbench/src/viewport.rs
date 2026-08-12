@@ -204,10 +204,6 @@ pub struct ScenePickGate {
     /// shows in this rect and must stay clickable. `None` outside dock mode / when
     /// the viewport isn't in the tree.
     scene_viewport_rect: Option<egui::Rect>,
-    /// View mode has no scene leaf: the active scene camera owns the window's
-    /// central surface directly. This is an explicit perspective fact, not a
-    /// synthetic rectangle or a raw mouse-button exception.
-    full_window_scene: bool,
     /// Resolved scene under the pointer — the single source of truth read by
     /// [`egui_viewport_aware_picking`] and [`track_egui_focus`]. `None` = chrome.
     resolved: Option<SceneTarget>,
@@ -275,15 +271,8 @@ impl PanelRects {
     /// (1.5, 1.25, …); round-half-away-from-zero could leave a 1-px gap between
     /// the camera viewport and the panel edge.
     pub fn panel_rect_from_ui(ui: &egui::Ui) -> PanelRect {
-        Self::panel_rect_from_egui_rect(ui.ctx(), ui.available_rect_before_wrap())
-    }
-
-    /// Compute the physical footprint of an already allocated egui rectangle.
-    /// Callers that reserve a leaf with `allocate_space` must use the returned
-    /// rectangle; the UI's `available_rect_before_wrap()` describes the cursor
-    /// *after* that allocation and is no longer the leaf that was reserved.
-    pub fn panel_rect_from_egui_rect(ctx: &egui::Context, rect: egui::Rect) -> PanelRect {
-        let ppp = ctx.pixels_per_point();
+        let rect = ui.available_rect_before_wrap();
+        let ppp = ui.ctx().pixels_per_point();
         let origin = UVec2::new(
             (rect.min.x.max(0.0) * ppp).floor() as u32,
             (rect.min.y.max(0.0) * ppp).floor() as u32,
@@ -350,12 +339,6 @@ impl ScenePickGate {
         ui.rect_contains_pointer(ui.available_rect_before_wrap())
     }
 
-    /// Occlusion-aware hit test for a rectangle that was explicitly allocated
-    /// during this panel pass.
-    pub fn scene_pointer_from_rect(ui: &egui::Ui, rect: egui::Rect) -> bool {
-        ui.rect_contains_pointer(rect)
-    }
-
     /// Record that the pointer is inside `target`'s scene leaf this frame. Called
     /// from each scene-hosting panel's typed measurement observer. Leaves are
     /// disjoint, so at most one call per frame passes `true`.
@@ -373,11 +356,6 @@ impl ScenePickGate {
         self.chrome_cards.push((body, card));
     }
 
-    /// Record a chrome surface whose whole measured rectangle is blocked.
-    pub fn record_chrome_rect(&mut self, rect: egui::Rect) {
-        self.record_chrome_panel(rect, rect);
-    }
-
     /// Record the DockArea's extent this frame (egui points). Called by
     /// `render_layout` with the rect it hands to `DockArea::show_inside`.
     pub fn set_dock_rect(&mut self, rect: egui::Rect) {
@@ -389,12 +367,6 @@ impl ScenePickGate {
     /// [`scene_viewport_rect`](Self::scene_viewport_rect).
     pub fn set_scene_viewport_rect(&mut self, rect: Option<egui::Rect>) {
         self.scene_viewport_rect = rect;
-    }
-
-    /// Mark the viewport-only View perspective as the owner of the window's
-    /// non-chrome surface. The render/layout owner sets this once per egui pass.
-    pub fn set_full_window_scene(&mut self, enabled: bool) {
-        self.full_window_scene = enabled;
     }
 
     /// Mark that the egui pass ran this frame (so the gate's inputs are real).
@@ -409,7 +381,6 @@ impl ScenePickGate {
         self.chrome_cards.clear();
         self.dock_rect = None;
         self.scene_viewport_rect = None;
-        self.full_window_scene = false;
     }
 
     /// The scene the pointer is over right now, or `None` for chrome. The single
@@ -436,17 +407,13 @@ impl ScenePickGate {
             // output back in as an input). Hold the last real answer instead.
             return;
         }
-        let candidate = if self.full_window_scene {
-            resolve_full_window_scene(egui_state, &self.chrome_cards)
-        } else {
-            resolve_scene_target(
-                egui_state,
-                self.scene_leaf,
-                &self.chrome_cards,
-                self.dock_rect,
-                self.scene_viewport_rect,
-            )
-        };
+        let candidate = resolve_scene_target(
+            egui_state,
+            self.scene_leaf,
+            &self.chrome_cards,
+            self.dock_rect,
+            self.scene_viewport_rect,
+        );
         let latch = PressLatch {
             held: self.latched,
             owner: self.resolved,
@@ -526,6 +493,9 @@ pub(crate) fn resolve_scene_target(
     dock_rect: Option<egui::Rect>,
     scene_viewport_rect: Option<egui::Rect>,
 ) -> Option<SceneTarget> {
+    if egui_state.using_pointer {
+        return None;
+    }
     let pos = egui_state.hover_pos?;
     // A scene-hosting leaf that RENDERED under the pointer wins: an offscreen
     // preview records BOTH its own target and an opaque chrome card (it must block
@@ -533,15 +503,6 @@ pub(crate) fn resolve_scene_target(
     // scene". The main viewport records its target here too when its panel renders.
     if let Some(target) = scene_leaf {
         return Some(target);
-    }
-    // Only apply egui's active-widget capture after the scene leaf has had the
-    // opportunity to claim the pointer. `egui_is_using_pointer()` is deliberately
-    // broad: egui-dock and other containers may keep it set while the pointer is
-    // over their background, even though the transparent viewport leaf is the
-    // occlusion-aware owner of that position. The press latch below still keeps a
-    // drag that began on a real egui widget in chrome for its entire lifetime.
-    if egui_state.using_pointer {
-        return None;
     }
     // The transparent viewport leaf is itself an egui-dock background layer, so
     // `is_pointer_over_egui` can be true over the live 3D view. The leaf hit-test
@@ -572,31 +533,6 @@ pub(crate) fn resolve_scene_target(
         return Some(SceneTarget::MainViewport);
     }
     if dock_rect.is_some_and(|r| r.contains(pos)) {
-        return None;
-    }
-    Some(SceneTarget::MainViewport)
-}
-
-/// Resolve the viewport-only View perspective. It has no `ViewportPanel` leaf,
-/// so the scene owns every pointer position except actual egui chrome. Keeping
-/// this branch in the same target/latch workflow preserves widget drag capture
-/// without making the camera depend on a raw mouse button or a fake leaf.
-fn resolve_full_window_scene(
-    egui_state: EguiPointerState,
-    chrome_cards: &[(egui::Rect, egui::Rect)],
-) -> Option<SceneTarget> {
-    let pos = egui_state.hover_pos?;
-    // `over_egui` is intentionally ignored here. The workbench owns a
-    // full-window Background layer even in View mode, so that broad flag does
-    // not describe an input surface. The measured chrome rectangles are the
-    // authoritative ownership boundary. Do not use `using_pointer` here:
-    // egui reports a secondary-button drag as "using the pointer" even when
-    // it starts on the transparent 3D background. Treating that transient
-    // button state as chrome prevents the semantic Look intent from ever
-    // acquiring the press latch. A drag that starts on an actual widget is
-    // already excluded by its measured rectangle, and the latch keeps that
-    // ownership for the rest of the drag.
-    if chrome_cards.iter().any(|(_, card)| card.contains(pos)) {
         return None;
     }
     Some(SceneTarget::MainViewport)
@@ -690,18 +626,14 @@ impl Panel for ViewportPanel {
         //
         // Measure the rect now (needs `ui`), then emit a typed measurement
         // intent — render has no mutable world access.
+        let rect = PanelRects::panel_rect_from_ui(ui);
+        // Authoritative scene-vs-chrome signal — egui's own occlusion-aware hit
+        // test, measured now (needs `ui`), folded after the paint.
+        let over_scene = ScenePickGate::scene_pointer_from_ui(ui);
+        ctx.trigger(ViewportPanelMeasured { rect, over_scene });
         // Reserve the panel's space so egui_dock's layout accounts for
         // it; no widgets are drawn — the 3D camera paints here.
-        let (_, leaf_rect) = ui.allocate_space(ui.available_size());
-        // Use the rectangle returned by the allocation. Reading
-        // `available_rect_before_wrap()` after this point describes the cursor
-        // after the leaf, not the leaf itself, so the viewport could otherwise
-        // report no scene owner and suppress the semantic Look axis.
-        let rect = PanelRects::panel_rect_from_egui_rect(ui.ctx(), leaf_rect);
-        // Authoritative scene-vs-chrome signal — egui's own occlusion-aware hit
-        // test against the allocated leaf, folded after the paint.
-        let over_scene = ScenePickGate::scene_pointer_from_rect(ui, leaf_rect);
-        ctx.trigger(ViewportPanelMeasured { rect, over_scene });
+        ui.allocate_space(ui.available_size());
     }
 }
 
@@ -1322,33 +1254,8 @@ mod tests {
     /// surface is the main scene.
     #[test]
     fn full_window_mode_is_all_scene() {
-        let out = resolve_full_window_scene(hovering((400.0, 300.0)), &[]);
+        let out = resolve_scene_target(hovering((400.0, 300.0)), None, &[], None, None);
         assert_eq!(out, Some(SceneTarget::MainViewport));
-    }
-
-    /// The root egui background is not an ownership surface in View mode. Only
-    /// the measured chrome rectangles block the full-window scene.
-    #[test]
-    fn full_window_mode_ignores_root_egui_background() {
-        let mut state = hovering((400.0, 300.0));
-        state.over_egui = true;
-        assert_eq!(
-            resolve_full_window_scene(state, &[]),
-            Some(SceneTarget::MainViewport)
-        );
-    }
-
-    #[test]
-    fn full_window_mode_blocks_measured_chrome() {
-        let menu = rect((0.0, 0.0), (800.0, 30.0));
-        assert_eq!(
-            resolve_full_window_scene(hovering((400.0, 15.0)), &[(menu, menu)]),
-            None
-        );
-        assert_eq!(
-            resolve_full_window_scene(hovering((400.0, 300.0)), &[(menu, menu)]),
-            Some(SceneTarget::MainViewport)
-        );
     }
 
     /// 6c — an OPAQUE panel records `card == body`, so its empty lower half is
@@ -1404,23 +1311,6 @@ mod tests {
             Some(SceneTarget::MainViewport),
             &[],
             Some(dock),
-            None,
-        );
-        assert_eq!(out, Some(SceneTarget::MainViewport));
-    }
-
-    /// egui's broad active-pointer flag must not suppress the transparent
-    /// viewport leaf. A right-button look drag can make egui report an active
-    /// pointer while the scene leaf remains the authoritative owner.
-    #[test]
-    fn scene_leaf_wins_over_egui_active_pointer() {
-        let mut state = hovering((400.0, 200.0));
-        state.using_pointer = true;
-        let out = resolve_scene_target(
-            state,
-            Some(SceneTarget::MainViewport),
-            &[],
-            Some(rect((0.0, 30.0), (800.0, 400.0))),
             None,
         );
         assert_eq!(out, Some(SceneTarget::MainViewport));
