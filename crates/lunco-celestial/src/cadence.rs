@@ -139,9 +139,12 @@ pub fn bump_celestial_inputs_revision(
     site_moved: Query<(), Changed<crate::geo::GeodeticAnchor>>,
     decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
     grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
+    site_aligned_added: Query<(), Added<crate::big_space_setup::SiteAligned>>,
+    directional_light_added: Query<(), Added<bevy::light::DirectionalLight>>,
     mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
-    // [frames, bumps, site_added, site_moved, decl_added, grid_added, removed]
-    mut stats: Local<[u32; 7]>,
+    // [frames, bumps, site_added, site_moved, decl_added, grid_added,
+    //  site_aligned_added, directional_light_added, removed]
+    mut stats: Local<[u32; 9]>,
 ) {
     // `removed.read()` must be DRAINED — an unread reader keeps redelivering, so
     // the revision would go on bumping for frames after the fact. `.count()`
@@ -151,8 +154,15 @@ pub fn bump_celestial_inputs_revision(
     let removed = decl_removed.read().count();
     let (site_a, site_m) = (!site_added.is_empty(), !site_moved.is_empty());
     let (decl_a, grid_a) = (!decl_added.is_empty(), !grid_added.is_empty());
+    // These are structural edges produced by the projections themselves. The
+    // first valid site frame and the first USD light can arrive after the input
+    // revision was already committed, so they must reopen the solve gate.
+    let (aligned_a, light_a) = (
+        !site_aligned_added.is_empty(),
+        !directional_light_added.is_empty(),
+    );
 
-    let bumped = removed > 0 || site_a || site_m || decl_a || grid_a;
+    let bumped = removed > 0 || site_a || site_m || decl_a || grid_a || aligned_a || light_a;
     if bumped {
         rev.0 = rev.0.wrapping_add(1);
     }
@@ -169,17 +179,27 @@ pub fn bump_celestial_inputs_revision(
     stats[3] += u32::from(site_m);
     stats[4] += u32::from(decl_a);
     stats[5] += u32::from(grid_a);
-    stats[6] += u32::from(removed > 0);
+    stats[6] += u32::from(aligned_a);
+    stats[7] += u32::from(light_a);
+    stats[8] += u32::from(removed > 0);
     if stats[0] >= WINDOW {
         if stats[1] * 2 > WINDOW {
             info!(
                 "[celestial] inputs revision bumped on {}/{} frames — \
                  site_added={} site_moved={} decl_added={} grid_added={} \
-                 decl_removed={}",
-                stats[1], stats[0], stats[2], stats[3], stats[4], stats[5], stats[6],
+                 site_aligned_added={} directional_light_added={} decl_removed={}",
+                stats[1],
+                stats[0],
+                stats[2],
+                stats[3],
+                stats[4],
+                stats[5],
+                stats[6],
+                stats[7],
+                stats[8],
             );
         }
-        *stats = [0; 7];
+        *stats = [0; 9];
     }
 }
 

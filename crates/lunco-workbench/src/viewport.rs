@@ -493,7 +493,7 @@ pub(crate) fn resolve_scene_target(
     dock_rect: Option<egui::Rect>,
     scene_viewport_rect: Option<egui::Rect>,
 ) -> Option<SceneTarget> {
-    if egui_state.using_pointer || egui_state.over_egui {
+    if egui_state.using_pointer {
         return None;
     }
     let pos = egui_state.hover_pos?;
@@ -503,6 +503,15 @@ pub(crate) fn resolve_scene_target(
     // scene". The main viewport records its target here too when its panel renders.
     if let Some(target) = scene_leaf {
         return Some(target);
+    }
+    // The transparent viewport leaf is itself an egui-dock background layer, so
+    // `is_pointer_over_egui` can be true over the live 3D view. The leaf hit-test
+    // above is the occlusion-aware authority for that region; only apply the
+    // broad egui result when no scene leaf claimed the pointer. Otherwise the
+    // viewport is reported as chrome every frame and the configured right-button
+    // look axis is discarded with the rest of the scene input.
+    if egui_state.over_egui {
+        return None;
     }
     let over_card = chrome_cards.iter().any(|(_, card)| card.contains(pos));
     if over_card {
@@ -1293,8 +1302,12 @@ mod tests {
     #[test]
     fn scene_leaf_wins() {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
+        let mut state = hovering((400.0, 200.0));
+        // egui-dock can report its background layer as egui even though the
+        // transparent viewport leaf is the occlusion-aware scene owner.
+        state.over_egui = true;
         let out = resolve_scene_target(
-            hovering((400.0, 200.0)),
+            state,
             Some(SceneTarget::MainViewport),
             &[],
             Some(dock),

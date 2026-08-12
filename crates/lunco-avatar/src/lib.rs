@@ -697,7 +697,11 @@ impl Plugin for LunCoAvatarPlugin {
         // pointer), NOT on keyboard focus, so typing never freezes the camera.
         app.add_systems(
             Update,
-            (capture_avatar_intent, avatar_behavior_input_system),
+            // The second system consumes the analog state written by the first.
+            // Keep this explicit: Bevy otherwise treats the tuple as unordered,
+            // which makes a right-drag intermittently apply one frame late or not
+            // at all when the camera system samples the old zero delta.
+            (capture_avatar_intent, avatar_behavior_input_system).chain(),
         );
 
         // Headless drag simulator: `LUNCO_AUTO_ORBIT=<rad/s>`.

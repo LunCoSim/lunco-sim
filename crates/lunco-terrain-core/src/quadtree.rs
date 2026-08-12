@@ -169,10 +169,10 @@ impl Quadtree {
         }
     }
 
-    /// Construct deriving `range_factor` from a **canonical** screen metric, so the
-    /// selected set is independent of any actual client viewport. `target_pixel_error`
-    /// is the on-screen error (px) at which a node refines; `screen_height_px` /
-    /// `fov_y_rad` are the fixed canonical viewport. Matches the 3D-Tiles SSE formula
+    /// Construct deriving `range_factor` from the rendered camera's screen metric.
+    /// `target_pixel_error` is the on-screen error (px) at which a node refines;
+    /// `screen_height_px` and `fov_y_rad` are supplied by that camera. Matches the
+    /// 3D-Tiles SSE formula
     /// `sse = error · screenHeight / (distance · 2·tan(fov/2))` solved for the
     /// distance where `sse = target_pixel_error`.
     pub fn from_screen_metric(

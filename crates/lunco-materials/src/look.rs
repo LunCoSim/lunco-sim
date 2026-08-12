@@ -201,6 +201,16 @@ pub struct ShaderLook {
     pub double_sided: bool,
 }
 
+/// Main-world proof that [`ShaderLook`] has been resolved to a concrete mesh
+/// material by the render binder.
+///
+/// Domain systems may use this marker to gate visibility without depending on
+/// `bevy_pbr` or on the render world. It is inserted in the same deferred
+/// command that installs the concrete material, so it cannot get ahead of the
+/// material component it describes.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ShaderLookBound;
+
 impl ShaderLook {
     /// A look for `shader` (an asset path) with no parameters set — every value
     /// falls back to the shader's own declared default.

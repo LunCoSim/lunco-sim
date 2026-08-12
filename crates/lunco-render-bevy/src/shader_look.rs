@@ -38,7 +38,7 @@ use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::shader::Shader;
-use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
+use lunco_materials::{ShaderLook, ShaderLookBound, ShaderLookKey, TextureLayer};
 use lunco_render::SurfaceAlpha;
 
 /// The small set of blend-state variants the fast custom-shader fallback needs.
@@ -139,7 +139,7 @@ fn bind_fast_shader_look(
     commands
         .entity(entity)
         .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-        .try_insert(MeshMaterial3d(handle));
+        .try_insert((MeshMaterial3d(handle), ShaderLookBound));
     apply_shadow_intent(&mut commands, entity, look);
 }
 
@@ -154,7 +154,7 @@ fn rebind_changed_fast_shader_look(
         commands
             .entity(entity)
             .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-            .try_insert(MeshMaterial3d(handle));
+            .try_insert((MeshMaterial3d(handle), ShaderLookBound));
         apply_shadow_intent(&mut commands, entity, look);
     }
 }
@@ -274,7 +274,7 @@ fn bind_shader_look(
     commands
         .entity(e)
         .try_remove::<MeshMaterial3d<StandardMaterial>>()
-        .try_insert(MeshMaterial3d(handle));
+        .try_insert((MeshMaterial3d(handle), ShaderLookBound));
     apply_shadow_intent(&mut commands, e, look);
 }
 
@@ -387,7 +387,7 @@ fn rebind_changed_shader_look(
         commands
             .entity(e)
             .try_remove::<MeshMaterial3d<StandardMaterial>>()
-            .try_insert(MeshMaterial3d(handle.clone()));
+            .try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only
         // `live` params moved (they are outside the key). Write them into that
