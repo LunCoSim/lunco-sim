@@ -2790,8 +2790,8 @@ fn capture_avatar_intent(
     // A waypoint context menu counts too, and needs its own flag: `wants_pointer` only
     // goes true once the cursor is already ON the menu, so the camera would spin all
     // the way there and the menu could never be reached comfortably.
-    let pointer_captured =
-        egui_focus.wants_pointer || waypoint_menu_open.map(|m| m.0).unwrap_or(false);
+    let waypoint_menu_is_open = waypoint_menu_open.as_ref().map(|m| m.0).unwrap_or(false);
+    let pointer_captured = egui_focus.wants_pointer || waypoint_menu_is_open;
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
@@ -3339,6 +3339,12 @@ fn on_release_command(
         .remove::<ControllerLink>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
+        // Release is a mode transition. Clear both stepped camera modes before
+        // installing the one selected below; otherwise a stale mode can
+        // survive the transition and make both mode systems exclude each
+        // other from their queries.
+        .remove::<FreeFlightCamera>()
+        .remove::<SurfaceCamera>()
         .remove::<OrbitFrameSample>()
         .remove::<SunlitArrival>()
         .remove::<RadialArrival>()
@@ -3917,6 +3923,10 @@ fn avatar_init_system(
             Without<SpringArmCamera>,
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
+            // SurfaceCamera is a complete interactive mode, not an absent
+            // behavior component. Without this guard init would reinsert
+            // FreeFlightCamera over it on the next Update tick.
+            Without<SurfaceCamera>,
             Without<FrameBlend>,
             Without<lunco_core::CinematicCameraLock>,
         ),
@@ -4674,6 +4684,32 @@ mod tests {
         let freeflight = app.world().get::<FreeFlightCamera>(avatar).unwrap();
         assert!((freeflight.yaw - 1.2).abs() < 1e-5);
         assert!((freeflight.pitch + 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn avatar_init_does_not_reinsert_freeflight_over_surface_camera() {
+        let mut app = App::new();
+        app.add_systems(Update, avatar_init_system);
+
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                Transform::default(),
+                SurfaceCamera {
+                    heading: 0.0,
+                    pitch: -0.2,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get::<SurfaceCamera>(avatar).is_some());
+        assert!(
+            app.world().get::<FreeFlightCamera>(avatar).is_none(),
+            "camera initialization must not create two mutually-exclusive modes"
+        );
     }
 
     #[test]
