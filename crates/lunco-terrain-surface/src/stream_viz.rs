@@ -33,13 +33,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use bevy::camera::Viewport;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::{
-    ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+    ParamValue, ShaderLook, ShaderLookBound, TextureLayer, ATTRIBUTE_MORPH_NORMAL,
+    ATTRIBUTE_MORPH_TARGET,
 };
 use lunco_obstacle_field::grid_mesh;
 use lunco_terrain_core::{measure_node_error, HeightSource, REFINE_HYSTERESIS};
@@ -75,16 +77,13 @@ const CINEMATIC_TILE_RES: usize = 2049;
 /// at full amplitude by depth 8 for any authored `lunco:layer:maxFeature` — where
 /// detail dies is a property of the layer parameters, not of this cap.
 const MAX_DEPTH: u8 = 8;
-/// On-screen error (px, at the canonical viewport) at which a node refines —
-/// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer, and
+/// On-screen error (px) at which a node refines — the ONE detail-vs-cost knob of
+/// the error-driven metric. The camera's actual viewport and projection supply
+/// the other terms of the screen-space-error calculation. Smaller = finer, and
 /// refine ranges scale as its inverse, so it also sets how far out craters
 /// resolve before the camera reaches them. Cost is bounded by `tile_budget` +
 /// nearest-first splits.
 const TARGET_PIXEL_ERROR: f64 = 2.0;
-/// Canonical viewport for the screen metric (fixed → selection is independent of
-/// any client's real resolution/FOV; peers select identically).
-const CANON_SCREEN_H_PX: f64 = 1080.0;
-const CANON_FOV_Y_RAD: f64 = std::f64::consts::FRAC_PI_4; // 45°
 /// Probe mesh resolution for [`measure_node_error`] — coarse on purpose: the
 /// measurement senses "is there detail here worth refining toward," it does not
 /// need the tile's full 49² fidelity. ~657 oracle samples per (memoized) node.
@@ -122,6 +121,10 @@ impl Default for TerrainVisualFocus {
 struct VisualDemand {
     position: DVec3,
     forward: DVec3,
+    /// Physical height of the camera's rendered viewport, in pixels.
+    screen_height_px: f64,
+    /// Vertical perspective field of view used by that camera, in radians.
+    fov_y_rad: f64,
     near_detail_radius_m: f64,
     near_detail_hysteresis_m: f64,
 }
@@ -131,6 +134,8 @@ struct TerrainVisualDemand {
     focus: [f64; 2],
     eye_height: f64,
     heading: Option<bevy::math::DVec2>,
+    screen_height_px: f64,
+    fov_y_rad: f64,
     /// The camera's actual ground position.
     required: bool,
     near_detail_radius_m: f64,
@@ -148,13 +153,15 @@ impl TerrainDetailDemands {
     /// visual terrain cover. This is deliberately a read-only diagnostic seam:
     /// it lets API/UI tooling inspect the same inputs the selector consumes,
     /// without manufacturing a second camera-coordinate calculation.
-    pub(crate) fn visual_focus_snapshot(&self) -> Vec<([f64; 3], [f64; 3])> {
+    pub(crate) fn visual_focus_snapshot(&self) -> Vec<([f64; 3], [f64; 3], f64, f64)> {
         self.visual
             .iter()
             .map(|demand| {
                 (
                     [demand.position.x, demand.position.y, demand.position.z],
                     [demand.forward.x, demand.forward.y, demand.forward.z],
+                    demand.screen_height_px,
+                    demand.fov_y_rad,
                 )
             })
             .collect()
@@ -220,7 +227,23 @@ pub(crate) fn collect_terrain_detail_demands(
                     && camera.is_active
                     && matches!(projection, Projection::Perspective(_))
             })
-            .filter_map(|(entity, _, _, focus, _)| {
+            .filter_map(|(entity, camera, projection, focus, _)| {
+                let (screen_height_px, fov_y_rad) = match projection {
+                    Projection::Perspective(perspective) => {
+                        let viewport = camera.physical_viewport_size()?;
+                        let screen_height_px = viewport.y as f64;
+                        let fov_y_rad = perspective.fov as f64;
+                        if screen_height_px <= 0.0
+                            || !screen_height_px.is_finite()
+                            || !(0.0 < fov_y_rad && fov_y_rad < std::f64::consts::PI)
+                            || !fov_y_rad.is_finite()
+                        {
+                            return None;
+                        }
+                        (screen_height_px, fov_y_rad)
+                    }
+                    Projection::Orthographic(_) | Projection::Custom(_) => return None,
+                };
                 // A scene camera is often below a rover/avatar/mount hierarchy.
                 // Its local Transform is then only an offset in that rig, not a
                 // terrain-space pose. CDLOD's focus and bake-priority heading
@@ -232,6 +255,8 @@ pub(crate) fn collect_terrain_detail_demands(
                 Some(VisualDemand {
                     position: position.0,
                     forward: rotation.0 * DVec3::NEG_Z,
+                    screen_height_px,
+                    fov_y_rad,
                     near_detail_radius_m: focus
                         .near_detail_radius_m
                         .unwrap_or(defaults.visual_detail_radius_m)
@@ -348,8 +373,9 @@ struct TileSlot {
     /// that should cover its area is not ready yet. Tracked so the `Visibility`
     /// command is issued on a flip, not every frame.
     drawn: bool,
-    /// A new entity stays hidden for one complete ECS turn so the render binder
-    /// can attach its shader material before the draw partition exposes it.
+    /// A new entity stays hidden until the render binder has attached its concrete
+    /// material. This is a domain/render boundary contract, not an ECS-timing
+    /// guess: the binder inserts [`ShaderLookBound`] with the material itself.
     ready: bool,
 }
 
@@ -1075,8 +1101,8 @@ fn snap_band(morph_end: f32) -> (f32, f32, u32) {
 #[derive(Resource, Clone, Copy, Reflect, PartialEq)]
 #[reflect(Resource)]
 pub struct TerrainLodConfig {
-    /// Screen-metric refinement threshold (px at the canonical viewport): a node
-    /// refines while its MEASURED surface error subtends more than this. Smaller
+    /// Screen-metric refinement threshold (px in the active camera viewport): a
+    /// node refines while its MEASURED surface error subtends more than this. Smaller
     /// = finer everywhere; detail lands where the surface earns it (rims, peaks),
     /// not uniformly by distance.
     pub pixel_error: f64,
@@ -1909,6 +1935,7 @@ pub fn update_lod_tiles(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
+    material_bound: Query<(), With<ShaderLookBound>>,
     mut scratch: Local<StreamScratch>,
 ) {
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
@@ -1990,12 +2017,13 @@ pub fn update_lod_tiles(
             continue;
         };
 
-        // A tile spawned on the previous update has now had one complete ECS turn
-        // for `ShaderLook` → render-material binding. Only now may the draw
-        // partition expose it; until then its ready ancestor remains visible.
+        // A tile is drawable only after the render binder has installed its
+        // concrete material. Checking the marker avoids exposing a spawned mesh
+        // merely because one ECS turn happened to elapse; deferred command order
+        // is not a material-readiness contract.
         let mut promoted_tiles = false;
         for slot in tiles.tiles.values_mut() {
-            if !slot.ready {
+            if !slot.ready && material_bound.get(slot.entity).is_ok() {
                 slot.ready = true;
                 promoted_tiles = true;
             }
@@ -2072,18 +2100,42 @@ pub fn update_lod_tiles(
                 focus: here,
                 eye_height: (terrain_local.y - ground).max(0.0),
                 heading,
+                screen_height_px: demand.screen_height_px,
+                fov_y_rad: demand.fov_y_rad,
                 required: true,
                 near_detail_radius_m: demand.near_detail_radius_m,
                 near_detail_hysteresis_m: demand.near_detail_hysteresis_m,
             });
         }
+        // The cover is shared by all active visual cameras. Use the actual
+        // camera with the greatest angular pixel density, i.e. the one that can
+        // see the most terrain detail. This is conservative for split views and
+        // remains derived solely from the cameras that really render this frame.
+        let Some((screen_height_px, fov_y_rad)) = visual_foci
+            .iter()
+            .filter(|demand| {
+                demand.screen_height_px.is_finite()
+                    && demand.screen_height_px > 0.0
+                    && demand.fov_y_rad.is_finite()
+                    && demand.fov_y_rad > 0.0
+            })
+            .max_by(|a, b| {
+                let density = |demand: &TerrainVisualDemand| {
+                    demand.screen_height_px / (2.0 * (demand.fov_y_rad * 0.5).tan())
+                };
+                density(a).total_cmp(&density(b))
+            })
+            .map(|demand| (demand.screen_height_px, demand.fov_y_rad))
+        else {
+            continue;
+        };
         let quadtree_for = |px: f64| {
             Quadtree::from_screen_metric(
                 h,
                 cfg.max_depth.max(1),
                 h,
-                CANON_SCREEN_H_PX,
-                CANON_FOV_Y_RAD,
+                screen_height_px,
+                fov_y_rad,
                 px,
             )
         };
@@ -2109,6 +2161,8 @@ pub fn update_lod_tiles(
                 sig.write_u64(q(visual.focus[0]));
                 sig.write_u64(q(visual.focus[1]));
                 sig.write_u64(q(visual.eye_height));
+                sig.write_u64(visual.screen_height_px.to_bits());
+                sig.write_u64(visual.fov_y_rad.to_bits());
                 // Heading feeds `benefit()` (bake priority): panning in place
                 // re-ranks which pending tile should bake first, so it must
                 // re-run the body — omitting it left the priority stale.
@@ -2164,8 +2218,9 @@ pub fn update_lod_tiles(
         }
         // Runtime LOD knobs (Inspector) drive detail-vs-cost live; tile_res stays
         // per-terrain (changing it would invalidate the mesh cache). The range
-        // factor derives from the CANONICAL screen metric (fixed viewport + the
-        // pixel_error knob) so selection stays view-independent + peer-identical.
+        // factor derives from the rendered camera metric plus the pixel_error
+        // knob, so selection follows the actual viewport rather than stale
+        // display assumptions.
         // FIXED metric. `pixel_error` is a pure quality knob again — it is never
         // moved to chase the tile budget, so every refine distance (and therefore
         // every tile's `morph_end` and material band bucket) is stable frame to
@@ -3139,14 +3194,16 @@ mod draw_partition_tests {
             1000.0,
             6,
             1000.0,
-            CANON_SCREEN_H_PX,
-            CANON_FOV_Y_RAD,
+            1080.0,
+            std::f64::consts::FRAC_PI_4,
             TARGET_PIXEL_ERROR,
         );
         let actual = TerrainVisualDemand {
             focus: [0.0, 0.0],
             eye_height: 3.0,
             heading: None,
+            screen_height_px: 1080.0,
+            fov_y_rad: std::f64::consts::FRAC_PI_4,
             required: true,
             near_detail_radius_m: 30.0,
             near_detail_hysteresis_m: 12.0,
@@ -3206,6 +3263,8 @@ mod draw_partition_tests {
             focus: [0.0, 0.0],
             eye_height: 3.0,
             heading: None,
+            screen_height_px: 1080.0,
+            fov_y_rad: std::f64::consts::FRAC_PI_4,
             required: true,
             near_detail_radius_m: 30.0,
             near_detail_hysteresis_m: 12.0,
@@ -3478,6 +3537,10 @@ mod draw_partition_tests {
             .spawn((
                 Camera {
                     is_active: true,
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(1920, 1080),
+                        ..default()
+                    }),
                     ..default()
                 },
                 CellCoord::default(),
@@ -3523,6 +3586,10 @@ mod draw_partition_tests {
             .spawn((
                 Camera {
                     is_active: true,
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(1920, 1080),
+                        ..default()
+                    }),
                     ..default()
                 },
                 Camera3d::default(),
@@ -3537,6 +3604,10 @@ mod draw_partition_tests {
             .spawn((
                 Camera {
                     is_active: false,
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(1920, 1080),
+                        ..default()
+                    }),
                     ..default()
                 },
                 Camera3d::default(),
@@ -3565,6 +3636,10 @@ mod draw_partition_tests {
         app.world_mut().spawn((
             Camera {
                 is_active: true,
+                viewport: Some(Viewport {
+                    physical_size: UVec2::new(1920, 1080),
+                    ..default()
+                }),
                 ..default()
             },
             Projection::Perspective(default()),
@@ -3606,6 +3681,10 @@ mod draw_partition_tests {
             .spawn((
                 Camera {
                     is_active: true,
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(1920, 1080),
+                        ..default()
+                    }),
                     ..default()
                 },
                 Camera3d::default(),

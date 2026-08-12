@@ -276,7 +276,7 @@ pub fn update_sun_light_system(
     // carries `Earthshine`; the scene's key light is not. See
     // `lunco_environment::horizon::SunQuery` for the same filter render-side.
     mut q_light: Query<
-        (&mut Transform, &mut DirectionalLight),
+        (Entity, &mut Transform, &mut DirectionalLight, Option<&Name>),
         Without<lunco_environment::Earthshine>,
     >,
     // The site-ENU alignment lives on the Site Align Grid (the Solar Grid's
@@ -426,7 +426,8 @@ pub fn update_sun_light_system(
     // scene had two suns, and with equal illuminance it picked by archetype
     // iteration order. That guess is exactly how an engine-spawned duplicate
     // came to take the ephemeris aim while the scene's own sun stayed frozen.
-    if let Some((mut light_tf, mut light)) = q_light.iter_mut().next() {
+    if let Some((light_entity, mut light_tf, mut light, light_name)) = q_light.iter_mut().next() {
+        debug!("[celestial] selected scene sun entity={light_entity:?} name={light_name:?}");
         // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
         // from a direction that steps in f32-quat ULPs (the site pin's
         // `align` is recomputed per frame) — continuous sub-texel

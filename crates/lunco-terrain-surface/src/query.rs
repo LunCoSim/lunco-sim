@@ -415,10 +415,12 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
         let visual_foci = demands
             .visual_focus_snapshot()
             .into_iter()
-            .map(|(position, forward)| {
+            .map(|(position, forward, screen_height_px, fov_y_rad)| {
                 serde_json::json!({
                     "position": position,
                     "forward": forward,
+                    "screen_height_px": screen_height_px,
+                    "fov_y_rad": fov_y_rad,
                 })
             })
             .collect::<Vec<_>>();
