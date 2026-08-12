@@ -480,6 +480,9 @@ impl StatusBus {
         let Some(ev) = self.active_progress.get_mut(&(scope, source)) else {
             return;
         };
+        if ev.progress == Some((done, total)) {
+            return;
+        }
         ev.progress = Some((done, total));
         self.seq = self.seq.wrapping_add(1);
     }
@@ -491,7 +494,11 @@ impl StatusBus {
         let Some(ev) = self.active_progress.get_mut(&(scope, source)) else {
             return;
         };
-        ev.message = label.into();
+        let label = label.into();
+        if ev.message == label {
+            return;
+        }
+        ev.message = label;
         self.seq = self.seq.wrapping_add(1);
     }
 
@@ -925,5 +932,21 @@ mod tests {
         bus.with_progress(&h, 3, 10);
         let ev = bus.longest_in(BusyScope::Global).expect("entry");
         assert_eq!(ev.progress, Some((3, 10)));
+    }
+
+    #[test]
+    fn identical_mirrored_progress_is_idempotent() {
+        let mut bus = StatusBus::default();
+        bus.set_progress("terrain", "streaming", 3, 10);
+        let seq = bus.seq;
+
+        bus.set_progress("terrain", "streaming", 3, 10);
+        assert_eq!(
+            bus.seq, seq,
+            "unchanged progress must not invalidate renderers"
+        );
+
+        bus.remove_progress("missing");
+        assert_eq!(bus.seq, seq, "removing absent progress must be a no-op");
     }
 }

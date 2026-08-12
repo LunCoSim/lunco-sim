@@ -64,7 +64,8 @@ use std::sync::{Arc, OnceLock};
 
 use lunco_materials::dyn_params::{self, ParamSchema, ParamType, ParamValue};
 use lunco_materials::{
-    to_snake_case, ShaderCatalog, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+    to_snake_case, ShaderCatalog, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL,
+    ATTRIBUTE_MORPH_TARGET,
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each
@@ -389,6 +390,7 @@ impl Material for ShaderMaterial {
                         Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
                         ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
                         ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
+                        ATTRIBUTE_MORPH_EDGE.at_shader_location(10),
                     ])?;
                     descriptor.vertex.buffers = vec![vertex_layout];
                 }

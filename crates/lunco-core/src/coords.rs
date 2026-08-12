@@ -260,6 +260,74 @@ pub fn world_pose<F: QueryFilter>(
     Some((GridPos(pos), GridRot(rot)))
 }
 
+/// Compose `entity`'s pose in the coordinate frame of its ancestor `target_grid`.
+///
+/// This is deliberately different from [`world_pose`]. It stops at the target
+/// grid and never visits the solar/world ancestors above it. A surface camera,
+/// terrain owner, and streamed tile that share a body grid must be compared and
+/// placed in this common local frame; composing both through a distant root and
+/// subtracting the resulting large coordinates loses precision when that root is
+/// re-pinned or rotated.
+///
+/// The returned translation is the target grid's grid-absolute local translation
+/// (cell edge plus local offset), and the rotation maps entity-local axes into
+/// target-grid axes. The target grid's own `CellCoord` and `Transform` are not part
+/// of the result. Returns `None` when the target is not an ancestor or a spatial
+/// component in the path is unavailable.
+pub fn grid_relative_pose<F: QueryFilter>(
+    entity: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    if entity == target_grid {
+        return Some((DVec3::ZERO, DQuat::IDENTITY));
+    }
+
+    let (cell, transform) = q_spatial.get(entity).ok()?;
+    let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
+    let mut current = entity;
+    let mut current_cell = cell.copied().unwrap_or_default();
+    let mut current_transform = *transform;
+
+    for _ in 0..32 {
+        let parent = q_parents.get(current).ok()?.parent();
+        let edge = q_grids
+            .get(parent)
+            .ok()
+            .map(|grid| grid.cell_edge_length() as f64);
+        let cell_offset = edge.map_or(DVec3::ZERO, |edge| {
+            DVec3::new(
+                current_cell.x as f64 * edge,
+                current_cell.y as f64 * edge,
+                current_cell.z as f64 * edge,
+            )
+        });
+        chain.push((
+            cell_offset + current_transform.translation.as_dvec3(),
+            current_transform.rotation,
+        ));
+
+        if parent == target_grid {
+            let mut position = DVec3::ZERO;
+            let mut rotation = DQuat::IDENTITY;
+            for (offset, local_rotation) in chain.iter().rev() {
+                position += rotation * offset;
+                rotation *= local_rotation.as_dquat();
+            }
+            return Some((position, rotation));
+        }
+
+        current = parent;
+        let (next_cell, next_transform) = q_spatial.get(current).ok()?;
+        current_cell = next_cell.copied().unwrap_or_default();
+        current_transform = *next_transform;
+    }
+
+    None
+}
+
 /// Position of `entity` in its parent Grid's frame: `cell × edge + local`.
 ///
 /// This is the frame **USD authors in**. A grid-direct prim's
@@ -774,6 +842,70 @@ mod tests {
             "world_position ignored parent grid rotation: got {pos:?}, expected {expected:?} \
              (90° +Y should map child +X(100) to -Z(100))"
         );
+    }
+
+    #[test]
+    fn grid_relative_pose_ignores_distant_root_motion() {
+        let mut world = World::new();
+        let root = world
+            .spawn((
+                grid(),
+                CellCoord::ZERO,
+                Transform::from_translation(Vec3::new(1.0e6, 0.0, -2.0e6)),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let target_grid = world
+            .spawn((
+                grid(),
+                CellCoord::ZERO,
+                Transform::from_rotation(Quat::from_rotation_y(0.3)),
+                GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let scene = world
+            .spawn((
+                Transform::from_xyz(10.0, 0.0, 20.0)
+                    .with_rotation(Quat::from_rotation_y(core::f32::consts::FRAC_PI_2)),
+                GlobalTransform::default(),
+                ChildOf(target_grid),
+            ))
+            .id();
+        let camera = world
+            .spawn((
+                Transform::from_xyz(3.0, 2.0, 4.0),
+                GlobalTransform::default(),
+                ChildOf(scene),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let first = {
+            let (q_parents, q_grids, q_spatial) = state
+                .get(&world)
+                .expect("read-only queries always validate");
+            grid_relative_pose(camera, target_grid, &q_parents, &q_grids, &q_spatial)
+                .expect("camera is under target grid")
+        };
+
+        world
+            .entity_mut(root)
+            .insert(Transform::from_translation(Vec3::new(-9.0e11, 0.0, 7.0e11)));
+        let second = {
+            let (q_parents, q_grids, q_spatial) = state
+                .get(&world)
+                .expect("read-only queries always validate");
+            grid_relative_pose(camera, target_grid, &q_parents, &q_grids, &q_spatial)
+                .expect("camera is under target grid")
+        };
+
+        assert!((first.0 - second.0).length() < 1e-9);
+        assert!(first.1.abs_diff_eq(second.1, 1e-9));
     }
 
     #[test]

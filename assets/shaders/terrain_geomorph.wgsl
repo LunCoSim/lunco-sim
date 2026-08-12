@@ -20,7 +20,8 @@
 //! Driven by `ShaderMaterial` (NOT a bespoke material): `m.shader` and
 //! `m.vertex_shader` both point here; `m.vertex_shader = Some` makes
 //! `ShaderMaterial::specialize` swap the vertex stage and bind
-//! `ATTRIBUTE_MORPH_TARGET` at `@location(8)`. Params are reflected from
+//! `ATTRIBUTE_MORPH_TARGET` at `@location(8)`, `ATTRIBUTE_MORPH_NORMAL` at
+//! `@location(9)`, and `ATTRIBUTE_MORPH_EDGE` at `@location(10)`. Params are reflected from
 //! `struct Material` like any self-describing shader.
 
 #import bevy_pbr::{
@@ -79,6 +80,7 @@
 //!@engine  csm_far
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
+//!@default stitch_edges 0,0,0,0
 //!@default overlay_mode      0
 //!@default overlay_opacity   0
 //!@default overlay_safe_rad  0
@@ -104,6 +106,7 @@ struct Material {
     csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
+    stitch_edges:      vec4<f32>, // [top,bottom,left,right] coarser-neighbour mask
     overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard, 2 = LOD depth
     overlay_opacity:   f32,  // blend weight of the overlay colour over the lit surface
     overlay_safe_rad:  f32,  // slope (rad) at/below which ground is green (safe)
@@ -194,6 +197,7 @@ struct GeoVertex {
     @location(2) uv: vec2<f32>,
     @location(8) morph_target: vec3<f32>,
     @location(9) morph_normal: vec3<f32>,
+    @location(10) edge_mask: vec4<f32>,
 };
 
 @vertex
@@ -215,7 +219,15 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     // `morph` alone — deliberately. A per-tile term here (the old `reveal` settle)
     // makes two neighbours at the same depth and distance disagree at their shared
     // edge, cracking the seam. Keep this a pure function of world position.
-    let m = morph;
+    // Restricted quadtree selection guarantees that a resident neighbour is
+    // either the same depth or one level coarser. On the latter boundary the
+    // fine edge uses its parent lattice immediately, the exact surface sampled
+    // by the coarser tile. Same-depth edges remain untouched.
+    let edge_stitch = max(max(vertex.edge_mask.x * mat.stitch_edges.x,
+                              vertex.edge_mask.y * mat.stitch_edges.y),
+                          max(vertex.edge_mask.z * mat.stitch_edges.z,
+                              vertex.edge_mask.w * mat.stitch_edges.w));
+    let m = max(morph, edge_stitch);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     // Shade the surface we actually DRAW: the position lerps toward the parent
     // lattice, so the normal must lerp with it. Leaving the fine normal here made

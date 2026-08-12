@@ -36,3 +36,12 @@ pub const ATTRIBUTE_MORPH_TARGET: MeshVertexAttribute =
 /// Shader side: `@location(9)`.
 pub const ATTRIBUTE_MORPH_NORMAL: MeshVertexAttribute =
     MeshVertexAttribute::new("Lunco_MorphNormal", 0x4d_4f_52_51, VertexFormat::Float32x3);
+
+/// Custom vertex attribute: membership of the four tile perimeter edges in the
+/// order `[top, bottom, left, right]`.  The terrain streamer supplies a
+/// per-tile `stitch_edges` uniform; the vertex shader forces only the vertices
+/// on an edge adjacent to a coarser draw tile onto the shared parent lattice.
+/// This is deterministic CDLOD edge stitching, not a visual seam overlay.
+/// Shader side: `@location(10)`.
+pub const ATTRIBUTE_MORPH_EDGE: MeshVertexAttribute =
+    MeshVertexAttribute::new("Lunco_MorphEdge", 0x4d_4f_52_52, VertexFormat::Float32x4);

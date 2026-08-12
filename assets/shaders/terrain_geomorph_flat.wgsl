@@ -24,13 +24,13 @@
 //!@default roughness   1.0
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
-//!@default reveal       1.0
+//!@default stitch_edges 0,0,0,0
 struct Material {
     base_color:  vec3<f32>,
     roughness:   f32,
     morph_start: f32,
     morph_end:   f32,
-    reveal:      f32,  // 1 = own geometry; <1 = settling in from the parent lattice
+    stitch_edges: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -41,6 +41,7 @@ struct GeoVertex {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(8) morph_target: vec3<f32>,
+    @location(10) edge_mask: vec4<f32>,
 };
 
 @vertex
@@ -53,8 +54,11 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     if (mat.morph_end > mat.morph_start) {
         morph = smoothstep(mat.morph_start, mat.morph_end, dist);
     }
-    // Reveal "settle" (see terrain_geomorph.wgsl): grow in from the parent lattice.
-    let m = max(morph, 1.0 - mat.reveal);
+    let edge_stitch = max(max(vertex.edge_mask.x * mat.stitch_edges.x,
+                              vertex.edge_mask.y * mat.stitch_edges.y),
+                          max(vertex.edge_mask.z * mat.stitch_edges.z,
+                              vertex.edge_mask.w * mat.stitch_edges.w));
+    let m = max(morph, edge_stitch);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local_pos, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);

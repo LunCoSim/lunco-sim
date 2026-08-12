@@ -1987,6 +1987,10 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         );
     ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
         .on_hover_text("Deepest refinement = closest-up detail.");
+    ui.add(egui::Slider::new(&mut cfg.coarse_depth, 0u8..=cfg.max_depth).text("Coarse cover depth"))
+        .on_hover_text(
+            "Always-resident DEM cover used while finer tiles bake. Higher = sharper startup and more resident memory.",
+        );
     ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
         .on_hover_text(
             "1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.",
@@ -2001,6 +2005,7 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ctx.trigger(SetTerrainLod {
             pixel_error: (cfg.pixel_error != before.pixel_error).then_some(cfg.pixel_error),
             max_depth: (cfg.max_depth != before.max_depth).then_some(cfg.max_depth),
+            coarse_depth: (cfg.coarse_depth != before.coarse_depth).then_some(cfg.coarse_depth),
             bakes_per_frame: (cfg.bakes_per_frame != before.bakes_per_frame)
                 .then_some(cfg.bakes_per_frame),
             tile_budget: (cfg.tile_budget != before.tile_budget).then_some(cfg.tile_budget),

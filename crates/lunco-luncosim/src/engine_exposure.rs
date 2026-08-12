@@ -855,7 +855,6 @@ pub(crate) fn publish_exposure(
         );
         publish_control_exposures(
             &mut runtime.exposures,
-            &runtime.selected,
             &queries.name,
             &queries.callsign,
             &queries.sim,
@@ -969,7 +968,6 @@ pub(crate) fn publish_exposure(
     );
     publish_control_exposures(
         &mut runtime.exposures,
-        &runtime.selected,
         &queries.name,
         &queries.callsign,
         &queries.sim,
@@ -1177,13 +1175,13 @@ fn publish_lunica_schema_exposure(
     true
 }
 
-/// Publish the selected simulation's control response for authored runtime
-/// surfaces. Selection is the scope; the values are the model's real public
-/// outputs and the actuator network's real valve outputs. Nothing here knows a
-/// film, a lander path, or a widget implementation.
+/// Publish control responses for explicitly authored runtime surfaces.
+///
+/// A selected entity is not enough to opt into the compact lander card: the
+/// surface is a scene-authored presentation contract. This keeps a rover
+/// selection from accidentally publishing a lander-specific HUD.
 fn publish_control_exposures(
     exposures: &mut EngineExposures,
-    selected: &SelectedEntities,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
@@ -1197,9 +1195,6 @@ fn publish_control_exposures(
     canonical: &CanonicalStages,
 ) {
     let mut roots = authored_control_roots(q_paths, canonical);
-    if roots.is_empty() {
-        roots.push((selected.primary(), 0));
-    }
     roots.sort_by_key(|(_, column)| *column);
 
     publish_selected_control_exposure(
