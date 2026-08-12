@@ -3,19 +3,21 @@
 
 :root {
   --ui-status-color: var(--accent-color);
+  --ui-main-engine-width: 0%;
+  --ui-main-engine-color: var(--muted-color);
 }
 
 #compact-control-root {
   display: flex;
   flex-direction: column;
-  row-gap: 4px;
+  row-gap: 5px;
   width: 100%;
   height: 100%;
-  padding: 8px 11px;
+  padding: 8px 10px;
   box-sizing: border-box;
   border-width: 1px;
   border-color: var(--panel-border);
-  border-radius: 10px;
+  border-radius: 8px;
   background-color: var(--panel-background);
   color: var(--text-color);
   font-family: "LunCo UI";
@@ -26,32 +28,23 @@
   align-items: center;
   justify-content: space-between;
   column-gap: 8px;
-  min-height: 20px;
-  padding-bottom: 4px;
+  min-height: 17px;
+  padding-bottom: 3px;
   border-bottom-width: 1px;
   border-bottom-color: rgba(169, 181, 205, 0.28);
 }
 
-#compact-control-title {
-  display: flex;
-  flex-direction: column;
-  row-gap: 1px;
-  min-width: 0px;
-}
-
-#compact-control-kicker,
-#compact-vertical-primary-label,
 #compact-ground-label,
 #compact-altitude-label {
   color: var(--muted-color);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 1px;
+  letter-spacing: 0.8px;
 }
 
 #compact-control-vehicle {
   color: var(--text-color);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -60,11 +53,7 @@
   align-items: center;
   column-gap: 4px;
   flex-shrink: 0;
-  padding: 3px 5px;
-  border-width: 1px;
-  border-color: rgba(127, 212, 255, 0.3);
-  border-radius: 5px;
-  background-color: rgba(127, 212, 255, 0.08);
+  padding: 0px;
 }
 
 #compact-control-status-marker {
@@ -77,66 +66,39 @@
 
 #compact-control-status {
   color: var(--ui-status-color);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-}
-
-#compact-control-motion {
-  display: flex;
-  flex-direction: column;
-  row-gap: 4px;
-  padding: 5px 8px 4px;
-  border-width: 1px;
-  border-color: rgba(127, 212, 255, 0.27);
-  border-radius: 7px;
-  background-color: var(--panel-inner);
 }
 
 #compact-vertical-primary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  column-gap: 8px;
-  min-height: 29px;
-  padding-bottom: 4px;
-  border-bottom-width: 1px;
-  border-bottom-color: rgba(255, 194, 112, 0.35);
-}
-
-#compact-vertical-primary-copy {
-  display: flex;
-  flex-direction: column;
-  row-gap: 2px;
-  min-width: 0px;
-}
-
-#compact-vertical-primary-label {
-  color: var(--warm-color);
+  column-gap: 7px;
+  min-height: 24px;
 }
 
 #compact-vertical-primary-direction {
-  color: var(--text-color);
-  font-size: 12px;
+  color: var(--warm-color);
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.6px;
 }
 
 #compact-vertical-primary-value {
-  color: var(--warm-color);
-  font-size: 20px;
+  color: var(--text-color);
+  font-size: 18px;
   font-weight: 700;
 }
 
 #compact-control-motion-grid {
   display: flex;
-  column-gap: 10px;
+  column-gap: 14px;
 }
 
 #compact-ground,
 #compact-altitude {
   display: flex;
-  flex-direction: column;
-  row-gap: 2px;
+  align-items: baseline;
+  column-gap: 5px;
   width: 50%;
   min-width: 0px;
 }
@@ -144,19 +106,12 @@
 #compact-ground-value,
 #compact-altitude-value {
   color: var(--accent-color);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 #compact-altitude-value {
   color: var(--ok-color);
-}
-
-#compact-target-offset {
-  color: var(--muted-color);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
 }
 
 #compact-control-bottom {
@@ -165,16 +120,40 @@
   justify-content: space-between;
   column-gap: 8px;
   min-width: 0px;
-  padding-top: 1px;
+  padding-top: 4px;
+  border-top-width: 1px;
+  border-top-color: rgba(169, 181, 205, 0.22);
 }
 
 #compact-rcs-value,
-#compact-engine-value {
+#compact-engine-label {
   color: var(--accent-color);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
 }
 
-#compact-engine-value {
-  color: var(--ok-color);
+#compact-engine-status {
+  display: flex;
+  align-items: center;
+  column-gap: 5px;
+  min-width: 72px;
+}
+
+#compact-engine-label {
+  color: var(--muted-color);
+}
+
+#compact-engine-meter {
+  width: 40px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background-color: rgba(169, 181, 205, 0.18);
+}
+
+#compact-engine-fill {
+  width: var(--ui-main-engine-width);
+  height: 100%;
+  border-radius: 2px;
+  background-color: var(--warm-color);
 }

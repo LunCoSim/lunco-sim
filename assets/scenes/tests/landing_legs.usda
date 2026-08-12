@@ -8,12 +8,13 @@
 # The landing gear on its own: one airframe, four sprung legs, flat ground.
 #
 # No guidance, no rover, no mission — a lander dropped from 3 m so the legs take
-# the vehicle's weight within the first second and the run is over in two. What
+# the vehicle's weight within the first two seconds and the run observes the full
+# eight-second ring-down. What
 # it pins down is the LEG MECHANISM: that the raked prismatic joints and the pad
 # child-pad colliders start satisfied, that the struts stroke and settle instead of diverging,
 # and that the hull ends the drop level and at ride height.
 #
-#   scene_test --scene scenes/tests/landing_legs.usda --max-ticks 240
+#   target/debug/luncosim test --scene assets/scenes/tests/landing_legs.usda
 
 def Xform "LandingLegsTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
@@ -72,6 +73,14 @@ def Xform "LandingLegsTest" (
     {
         double3 xformOp:translate = (0, 8.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Exercise the passive gear by itself. The reusable vehicle normally
+        # stabilises attitude even with no mission guidance; that would fire
+        # physical RCS jets after an asymmetric pad strike and turn this into a
+        # coupled flight-control test. Zeroing the documented airframe gain here
+        # leaves every actuator demand at zero without disabling or replacing
+        # any physics component.
+        float inputs:attitude_hold = 0.0
     }
 
     def Scope "Scenario"

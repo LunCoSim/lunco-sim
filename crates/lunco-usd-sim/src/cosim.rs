@@ -609,6 +609,11 @@ fn process_usd_cosim_prim_read(
             latched: reader
                 .scalar::<bool>(sdf_path, "lunco:event:latched")
                 .unwrap_or(false),
+            qualification_time_s: reader
+                .scalar::<f64>(sdf_path, "lunco:event:qualificationTime")
+                .unwrap_or(0.0)
+                .max(0.0),
+            qualified_for_s: 0.0,
             armed: true,
         });
         return;
@@ -1476,6 +1481,8 @@ pub struct EventBinding {
     name: String,
     severity: lunco_core::Severity,
     latched: bool,
+    qualification_time_s: f64,
+    qualified_for_s: f64,
     armed: bool,
 }
 
@@ -1489,15 +1496,30 @@ fn parse_event_severity(value: &str) -> lunco_core::Severity {
     }
 }
 
-fn event_rising_edge(armed: &mut bool, latched: bool, value: f64) -> bool {
+fn event_rising_edge(
+    armed: &mut bool,
+    qualified_for_s: &mut f64,
+    qualification_time_s: f64,
+    latched: bool,
+    value: f64,
+    delta_s: f64,
+) -> bool {
     let active = value >= 0.5;
-    if active && *armed {
+    if !active {
+        *qualified_for_s = 0.0;
+        if !latched {
+            *armed = true;
+        }
+        return false;
+    }
+    if !*armed {
+        return false;
+    }
+    *qualified_for_s += delta_s.max(0.0);
+    if *qualified_for_s >= qualification_time_s.max(0.0) {
         *armed = false;
         true
     } else {
-        if !active && !latched {
-            *armed = true;
-        }
         false
     }
 }
@@ -1514,6 +1536,7 @@ pub fn fire_connected_events(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    fixed_time: Res<Time<Fixed>>,
     mut commands: Commands,
 ) {
     // Nothing is listening: don't index the scene. This runs every FixedUpdate
@@ -1544,7 +1567,21 @@ pub fn fire_connected_events(
             continue;
         };
         let latched = binding.latched;
-        if event_rising_edge(&mut binding.armed, latched, value) {
+        let qualification_time_s = binding.qualification_time_s;
+        let delta_s = fixed_time.delta_secs_f64();
+        let EventBinding {
+            armed,
+            qualified_for_s,
+            ..
+        } = &mut *binding;
+        if event_rising_edge(
+            armed,
+            qualified_for_s,
+            qualification_time_s,
+            latched,
+            value,
+            delta_s,
+        ) {
             commands.trigger(lunco_core::TelemetryEvent {
                 name: binding.name.clone(),
                 source,
@@ -4305,20 +4342,132 @@ mod tests {
     #[test]
     fn connected_event_fires_once_per_rising_edge_and_rearms_by_default() {
         let mut armed = true;
-        assert!(!event_rising_edge(&mut armed, false, 0.0));
-        assert!(event_rising_edge(&mut armed, false, 0.5));
-        assert!(!event_rising_edge(&mut armed, false, 1.0));
-        assert!(!event_rising_edge(&mut armed, false, 0.49));
-        assert!(event_rising_edge(&mut armed, false, 1.0));
+        let mut qualified = 0.0;
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            false,
+            0.0,
+            1.0
+        ));
+        assert!(event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            false,
+            0.5,
+            1.0
+        ));
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            false,
+            1.0,
+            1.0
+        ));
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            false,
+            0.49,
+            1.0
+        ));
+        assert!(event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            false,
+            1.0,
+            1.0
+        ));
     }
 
     #[test]
     fn latched_event_ignores_contact_chatter_after_first_rising_edge() {
         let mut armed = true;
-        assert!(!event_rising_edge(&mut armed, true, 0.0));
-        assert!(event_rising_edge(&mut armed, true, 0.5));
-        assert!(!event_rising_edge(&mut armed, true, 0.49));
-        assert!(!event_rising_edge(&mut armed, true, 1.0));
+        let mut qualified = 0.0;
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            true,
+            0.0,
+            1.0
+        ));
+        assert!(event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            true,
+            0.5,
+            1.0
+        ));
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            true,
+            0.49,
+            1.0
+        ));
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.0,
+            true,
+            1.0,
+            1.0
+        ));
+    }
+
+    #[test]
+    fn event_qualification_requires_contiguous_active_time() {
+        let mut armed = true;
+        let mut qualified = 0.0;
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.5,
+            true,
+            1.0,
+            0.2
+        ));
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.5,
+            true,
+            0.0,
+            0.2
+        ));
+        assert_eq!(qualified, 0.0);
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.5,
+            true,
+            1.0,
+            0.2
+        ));
+        assert!(!event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.5,
+            true,
+            1.0,
+            0.2
+        ));
+        assert!(event_rising_edge(
+            &mut armed,
+            &mut qualified,
+            0.5,
+            true,
+            1.0,
+            0.1
+        ));
     }
 
     #[test]

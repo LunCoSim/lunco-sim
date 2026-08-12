@@ -72,6 +72,7 @@ pub struct AvianGroup {
 /// ports share one computation (`crate::avian::contact_of`).
 pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
+    crate::avian::KINEMATIC_POSITION_GROUP,
     crate::avian::FORCE_ACTUATOR_GROUP,
     crate::avian::TORQUE_ACTUATOR_GROUP,
     crate::avian::COLLIDER_CONTACT_GROUP,

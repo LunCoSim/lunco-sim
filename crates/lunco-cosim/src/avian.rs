@@ -6,7 +6,8 @@
 //! mirror component per kind. A rigid body publishes its full kinematic state —
 //! position, linear velocity, attitude (`quat_*` + `yaw`/`pitch`/`roll`), and
 //! body rates (`angvel_*`) — as read-only outputs, and accepts world/body-frame
-//! forces and torques as inputs. All address avian's own `Position` /
+//! forces and torques as inputs. Authored kinematic bodies additionally accept
+//! position inputs; dynamic bodies never do. All address avian's own `Position` /
 //! `Rotation` / `LinearVelocity` / `AngularVelocity` / `Forces` directly, with
 //! no `HashMap` mirror and no per-tick sync system to keep a copy in step.
 //!
@@ -693,6 +694,63 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
     ],
 };
 
+/// Position inputs for an authored kinematic body.
+///
+/// The gate uses [`lunco_core::Mobility::Kinematic`], the stable projection of
+/// `physics:kinematicEnabled = true`, rather than Avian's transient
+/// [`RigidBody::Kinematic`] component. Dynamic USD bodies deliberately wear that
+/// Avian variant while their joints are admitted, and must never become
+/// position-commandable during that setup phase.
+///
+/// This gives signal networks a generic way to pose a non-integrated marker or
+/// mechanism through ordinary USD connections. It is not a teleport escape hatch
+/// for simulated vehicles: a dynamic body's authored mobility does not satisfy
+/// this group, so resolving the input fails closed.
+pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| {
+        w.get::<lunco_core::Mobility>(e)
+            .is_some_and(|mobility| *mobility == lunco_core::Mobility::Kinematic)
+    },
+    ports: &[
+        AvianPort {
+            name: "position_x",
+            dir: PortDirection::In,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.x)),
+            write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 0)),
+        },
+        AvianPort {
+            name: "position_y",
+            dir: PortDirection::In,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
+            write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 1)),
+        },
+        AvianPort {
+            name: "position_z",
+            dir: PortDirection::In,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.z)),
+            write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 2)),
+        },
+    ],
+};
+
+fn write_kinematic_position_axis(
+    world: &mut World,
+    entity: Entity,
+    value: f64,
+    axis: usize,
+) -> bool {
+    if !value.is_finite()
+        || world.get::<lunco_core::Mobility>(entity) != Some(&lunco_core::Mobility::Kinematic)
+    {
+        return world.get::<lunco_core::Mobility>(entity) == Some(&lunco_core::Mobility::Kinematic);
+    }
+    let Some(mut position) = world.get_mut::<Position>(entity) else {
+        return false;
+    };
+    position.0[axis] = value;
+    true
+}
+
 // ── Mass-property read/write helpers ────────────────────────────────────────
 //
 // Avian splits user *overrides* (`Mass`/`AngularInertia`/`CenterOfMass`) from the
@@ -730,7 +788,11 @@ fn write_mass(w: &mut World, e: Entity, v: f64) -> bool {
     if w.get::<RigidBody>(e).is_none() {
         return false;
     }
-    w.entity_mut(e).insert((Mass(v as f32), NoAutoMass));
+    let mass = Mass(v as f32);
+    if w.get::<Mass>(e) == Some(&mass) && w.get::<NoAutoMass>(e).is_some() {
+        return true;
+    }
+    w.entity_mut(e).insert((mass, NoAutoMass));
     true
 }
 
@@ -757,13 +819,14 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
         1 => principal.y = v as f32,
         _ => principal.z = v as f32,
     }
-    w.entity_mut(e).insert((
-        AngularInertia {
-            principal,
-            local_frame,
-        },
-        NoAutoAngularInertia,
-    ));
+    let inertia = AngularInertia {
+        principal,
+        local_frame,
+    };
+    if w.get::<AngularInertia>(e) == Some(&inertia) && w.get::<NoAutoAngularInertia>(e).is_some() {
+        return true;
+    }
+    w.entity_mut(e).insert((inertia, NoAutoAngularInertia));
     true
 }
 
@@ -784,8 +847,11 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
         1 => c.y = v as f32,
         _ => c.z = v as f32,
     }
-    w.entity_mut(e)
-        .insert((CenterOfMass(c), NoAutoCenterOfMass));
+    let center = CenterOfMass(c);
+    if w.get::<CenterOfMass>(e) == Some(&center) && w.get::<NoAutoCenterOfMass>(e).is_some() {
+        return true;
+    }
+    w.entity_mut(e).insert((center, NoAutoCenterOfMass));
     true
 }
 
@@ -994,4 +1060,37 @@ fn nearest_rigid_body(
         current = parents.get(current).ok()?.parent();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_mass_property_writes_do_not_dirty_avian_state() {
+        let mut world = World::new();
+        let body = world.spawn(RigidBody::Dynamic).id();
+
+        assert!(write_mass(&mut world, body, 4000.0));
+        assert!(write_inertia_axis(&mut world, body, 0, 4625.0));
+        assert!(write_inertia_axis(&mut world, body, 1, 6250.0));
+        assert!(write_inertia_axis(&mut world, body, 2, 4625.0));
+        assert!(write_com_axis(&mut world, body, 0, 0.0));
+        assert!(write_com_axis(&mut world, body, 1, 0.4));
+        assert!(write_com_axis(&mut world, body, 2, 0.0));
+        world.clear_trackers();
+
+        assert!(write_mass(&mut world, body, 4000.0));
+        assert!(write_inertia_axis(&mut world, body, 0, 4625.0));
+        assert!(write_inertia_axis(&mut world, body, 1, 6250.0));
+        assert!(write_inertia_axis(&mut world, body, 2, 4625.0));
+        assert!(write_com_axis(&mut world, body, 0, 0.0));
+        assert!(write_com_axis(&mut world, body, 1, 0.4));
+        assert!(write_com_axis(&mut world, body, 2, 0.0));
+
+        let body_ref = world.entity(body);
+        assert!(!body_ref.get_ref::<Mass>().unwrap().is_changed());
+        assert!(!body_ref.get_ref::<AngularInertia>().unwrap().is_changed());
+        assert!(!body_ref.get_ref::<CenterOfMass>().unwrap().is_changed());
+    }
 }

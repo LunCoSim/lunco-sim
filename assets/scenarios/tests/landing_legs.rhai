@@ -1,7 +1,7 @@
 // ── Landing-gear test — the sprung legs take the vehicle's weight ───────────
 //
 // TEST-ONLY. Runs against `scenes/tests/landing_legs.usda`: one airframe,
-// four raked prismatic legs with fixed child footpads, flat ground, 3 m drop. No
+// four raked prismatic legs with ball-jointed footpads, flat ground, 3 m drop. No
 // guidance, no rover, no mission — so anything this test sees is the LEG
 // MECHANISM and nothing else.
 //
@@ -9,12 +9,13 @@
 // authored rake.
 // Both halves of each prismatic joint frame (`physics:localRot0` on the hull,
 // `localRot1` on the leg) use the same 180° basis, so travel points hull→ground
-// while the rotational lock keeps the leg straight. Each pad is a child collider
-// of that leg body, so it has no independent foot rotational DOF.
+// while the rotational lock keeps the primary strut straight. Each pad is a
+// separate body on a spherical joint, matching the flight-hardware ball fitting
+// without adding a bending DOF to the strut.
 //
 // So the assertions are about the vehicle STILL BEING A VEHICLE after the drop:
 // bodies at finite, bounded positions, the hull level and at rest, all four
-// struts sharing the load, and the fixed foot mounts keeping every pad level. A
+// struts sharing the load, and the ball mounts letting every pad settle level. A
 // silent frame regression fails every one of them.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
@@ -53,9 +54,12 @@ fn ys(ids) {
 
 fn on_start(me) {
     this.t = 0.0;
-    this.settle_s = 6.0;    // drop + stroke + ring-down
+    this.settle_s = 8.0;    // drop + crush + planted-gear ring-down
     this.sample_s = 0.5;
     this.next_sample = 0.0;
+    this.ring_start_s = 6.0;
+    this.stroke_min = [1000000.0, 1000000.0, 1000000.0, 1000000.0];
+    this.stroke_max = [-1000000.0, -1000000.0, -1000000.0, -1000000.0];
 
     this.hull = find("/LandingLegsTest/Lander");
     this.legs = [
@@ -130,8 +134,8 @@ fn frame_errors(hull, legs) {
     out
 }
 
-/// Each footpad's tilt from level, in degrees. A fixed foot mount should keep
-/// this at the solver's small numerical residual, not allow a contact gimbal.
+/// Each footpad's tilt from level, in degrees. On this flat test surface a
+/// working ball mount should let the contact disc settle level.
 fn pad_tilts(pads) {
     let out = [];
     for i in pads { out.push(r2(tilt_deg(i))); }
@@ -155,6 +159,18 @@ fn on_tick(me) {
     let tilt = tilt_deg(this.hull);
     let f = strut_forces(this.springs);
     let x = strut_strokes(this.springs);
+
+    // A constraint solver's instantaneous velocity contains substep contact
+    // chatter; visible suspension jitter is displacement exchanged over time.
+    // Measure the full final two-second stroke envelope, not one phase sample.
+    if this.t >= this.ring_start_s {
+        for i in 0..4 {
+            if x[i] != () {
+                if x[i] < this.stroke_min[i] { this.stroke_min[i] = x[i]; }
+                if x[i] > this.stroke_max[i] { this.stroke_max[i] = x[i]; }
+            }
+        }
+    }
 
     let y = ();
     if pos != () { y = pos[1]; }
@@ -196,6 +212,20 @@ fn on_tick(me) {
             ],
             frame_err: frame_errors(this.hull, this.legs),
             pad_tilt: pad_tilts(this.pads),
+            hull_velocity: [
+                get(this.hull, "velocity_x"), get(this.hull, "velocity_y"),
+                get(this.hull, "velocity_z"),
+            ],
+            hull_angular_velocity: [
+                get(this.hull, "angvel_x"), get(this.hull, "angvel_y"),
+                get(this.hull, "angvel_z"),
+            ],
+            strut_velocity: [
+                get(this.springs[0], "velocity"), get(this.springs[1], "velocity"),
+                get(this.springs[2], "velocity"), get(this.springs[3], "velocity"),
+            ],
+            stroke_min: this.stroke_min,
+            stroke_max: this.stroke_max,
         });
     }
 }
@@ -269,8 +299,8 @@ fn verdict(s) {
     //
     // SHARING IS JUDGED ON STROKE, NOT ON `force`, and that is not a softer test —
     // it is the right instrument. The load a spring carries is `k*x`. The port
-    // reports the whole drive law, `k*x + c*v`, and with c = 3600 N·s/m a few tenths
-    // of a m/s of contact jitter swings it by ±600 N against a ~280 N carried load.
+    // reports the whole material law, `k*x + c*v`, and the planted-gear damping
+    // deliberately makes even a small residual rate visible in that force.
     // Comparing legs on that compares rate noise. Stroke is the state, is what the
     // load actually is, and still fails hard for a leg carrying nothing — a dead
     // strut reads ~0 and is caught by the same assertion.
@@ -300,16 +330,35 @@ fn verdict(s) {
     // assertions above already test the half that carries the information.
     // Asserting an angle here would be asserting the load, in the wrong units.
 
-    // The footpads are child colliders in the prismatic bodies. The zero-
-    // compliance angular lock leaves a small finite-iteration XPBD residual at
-    // the contact impulse; 0.75° is the measured upper bound for that solver
-    // residual, while a freely rotating foot quickly exceeds it.
+    // The pads are separate bodies on spherical joints. On flat ground
+    // their contact faces should settle level; a missing joint or wrong anchor
+    // leaves a tilted, drifting pad even while the hull itself looks plausible.
     for i in 0..4 {
         let a = s.pad_tilt[i];
         if a >= 0.0 {
             f.push(t_range(a, 0.0, 0.75,
-                "pad " + names[i] + " tilt (deg) — fixed child pad rotated"));
+                "pad " + names[i] + " tilt (deg) — ball-jointed pad did not settle"));
         }
+    }
+
+    // Pose alone can pass while the landed mechanism is still exchanging energy
+    // between its four struts. Prove the actual state has rung down: the hull is
+    // neither translating nor yawing, and each strut remains inside a 5 mm
+    // peak-to-peak envelope throughout the final two seconds. That window is the
+    // visible mechanism state; one instantaneous XPBD velocity sample contains
+    // contact-iteration chatter even when its integrated travel is microscopic.
+    let hull_speed = vlen(s.hull_velocity);
+    let hull_rate = vlen(s.hull_angular_velocity);
+    f.push(t_range(hull_speed, 0.0, 0.03,
+        "hull speed after planted-gear ring-down (m/s)"));
+    f.push(t_range(hull_rate, 0.0, 0.01,
+        "hull angular speed after planted-gear ring-down (rad/s)"));
+    let stroke_span = [];
+    for i in 0..4 {
+        let span = s.stroke_max[i] - s.stroke_min[i];
+        stroke_span.push(span);
+        f.push(t_range(span, 0.0, 0.005,
+            "strut " + names[i] + " final two-second travel envelope (m)"));
     }
 
     print("[legs] ── results ──────────────────────────────────────────");
@@ -319,6 +368,12 @@ fn verdict(s) {
     print("[legs]   strut stroke " + s.strokes);
     print("[legs]   frame err   " + s.frame_err + " deg");
     print("[legs]   pad tilt    " + s.pad_tilt + " deg");
+    print("[legs]   hull speed  " + r4(vlen(s.hull_velocity)) + " m/s");
+    print("[legs]   hull vel    " + s.hull_velocity + " m/s");
+    print("[legs]   hull rate   " + r4(vlen(s.hull_angular_velocity)) + " rad/s");
+    print("[legs]   hull omega  " + s.hull_angular_velocity + " rad/s");
+    print("[legs]   strut rate  " + s.strut_velocity + " m/s");
+    print("[legs]   stroke span " + stroke_span + " m over final 2 s");
     print("[legs]   peak strut  " + r2(s.peak_force) + " N");
 
     report_verdict(f, "LANDING LEGS", "LANDING_LEGS");

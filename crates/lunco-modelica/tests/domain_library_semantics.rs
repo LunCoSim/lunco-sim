@@ -43,9 +43,17 @@ fn lander_owns_touchdown_continuity_and_controller_inertia_inputs() {
     assert!(source.contains("output Real desired_tilt_x"));
     assert!(source.contains("output Real desired_tilt_z"));
     assert!(source.contains("output Real landing_contact"));
-    assert!(source.contains("touchdown_ground_speed_mps = 0.5"));
-    assert!(source.contains("settled_touchdown_target = all_legs_contact"));
-    assert!(source.contains("ground_speed_gate * descent_speed_gate"));
+    assert!(source.contains("output Real engine_cutoff_contact"));
+    assert!(source.contains("touchdown_ground_speed_mps = 0.05"));
+    assert!(source.contains("touchdown_angular_speed_rad_s = 0.005"));
+    assert!(source.contains("engine_cutoff_ground_speed_mps = 0.08"));
+    assert!(source.contains("touchdown_min_upright_axis_y = 0.9"));
+    assert!(source.contains("all_legs_contact = noEvent(if leg_contact_px >= 0.5"));
+    assert!(source.contains("minimum_leg_compression = min("));
+    assert!(!source.contains("touchdown_min_compression_m"));
+    assert!(source.contains("suspension_rate_gate = noEvent(if maximum_leg_speed"));
+    assert!(source.contains("engine_cutoff_contact = pad_contact_phase * angular_speed_gate"));
+    assert!(source.contains("settled_touchdown_target = landing_contact"));
     assert!(source.contains("navigation_velocity_x"));
     assert!(!source.contains("AboveThreshold"));
 }

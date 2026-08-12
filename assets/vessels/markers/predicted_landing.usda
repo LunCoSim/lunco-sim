@@ -1,0 +1,88 @@
+#usda 1.0
+(
+    defaultPrim = "PredictedLandingMarker"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Live predicted-touchdown marker. The root is an authored kinematic body, so
+# ordinary co-simulation connections may drive its generic position_x/z inputs.
+# It has no collider and never participates in vehicle physics.
+def Xform "PredictedLandingMarker" (
+    doc = "Kinematic, non-colliding marker for a guidance system's predicted touchdown point."
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
+    kind = "component"
+)
+{
+    uniform bool lunco:spawnable = true
+    bool physics:rigidBodyEnabled = true
+    bool physics:kinematicEnabled = true
+    custom string lunco:interaction:left = "pass_through"
+    custom string lunco:interaction:right = "pass_through"
+
+    # These are the generic Avian kinematic-position ports. A dynamic body's
+    # authored mobility does not expose matching inputs.
+    custom float inputs:position_x = 0.0
+    custom float inputs:position_y = 0.08
+    custom float inputs:position_z = 0.0
+
+    def Scope "Looks"
+    {
+        def Material "Marker_Mat"
+        {
+            token outputs:surface.connect = </PredictedLandingMarker/Looks/Marker_Mat/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:emissiveColor = (0.08, 2.4, 4.0)
+                token outputs:surface
+            }
+        }
+    }
+
+    # Four corner brackets make the predicted point legible from an oblique
+    # landing camera without covering the actual touchdown pad.
+    def Xform "Brackets"
+    {
+        def Cube "PX" {
+            double size = 1
+            double3 xformOp:translate = (1.25, 0, 0)
+            double3 xformOp:scale = (0.38, 0.05, 0.10)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool physics:collisionEnabled = false
+        }
+        def Cube "NX" {
+            double size = 1
+            double3 xformOp:translate = (-1.25, 0, 0)
+            double3 xformOp:scale = (0.38, 0.05, 0.10)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool physics:collisionEnabled = false
+        }
+        def Cube "PZ" {
+            double size = 1
+            double3 xformOp:translate = (0, 0, 1.25)
+            double3 xformOp:scale = (0.10, 0.05, 0.38)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool physics:collisionEnabled = false
+        }
+        def Cube "NZ" {
+            double size = 1
+            double3 xformOp:translate = (0, 0, -1.25)
+            double3 xformOp:scale = (0.10, 0.05, 0.38)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool physics:collisionEnabled = false
+        }
+        def Cylinder "Center"
+        {
+            uniform token axis = "Y"
+            double radius = 0.12
+            double height = 0.12
+            rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool physics:collisionEnabled = false
+        }
+    }
+}

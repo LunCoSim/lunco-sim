@@ -70,6 +70,9 @@ fn position_pid3d_compiles_with_live_actuator_outputs() {
         "roll_cmd",
         "yaw_cmd",
         "descent_rate_command",
+        "landing_engine_cutoff",
+        "landing_engine_cutoff_request",
+        "landing_handoff_request",
     ] {
         assert!(
             outputs
@@ -79,8 +82,17 @@ fn position_pid3d_compiles_with_live_actuator_outputs() {
         );
     }
     assert!(
-        position_pid_source().contains("max(touchdown, landing_contact)"),
-        "guidance must relinquish flight authority on physical contact"
+        position_pid_source()
+            .contains("landing_handoff = max(0.0, min(1.0, landing_handoff_latched))"),
+        "only the qualified supervisor latch may relinquish flight authority"
+    );
+    assert!(
+        position_pid_source().contains("landing_handoff_request = noEvent(if"),
+        "measured target-qualified contact must remain a distinct event request"
+    );
+    assert!(
+        position_pid_source().contains("landing_engine_cutoff_latched"),
+        "target-qualified engine cutoff must survive suspension rebound"
     );
 
     let mut stepper = SimulationSession::new(

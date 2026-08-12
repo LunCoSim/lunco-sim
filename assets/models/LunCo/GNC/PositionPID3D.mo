@@ -91,8 +91,16 @@ model PositionPID3D
     "Touchdown state; guidance is removed as the vehicle settles on its legs";
   input Real landing_contact = 0.0
     "Physical four-leg contact; remove flight authority before settled touchdown";
+  input Real engine_cutoff_contact = 0.0
+    "Qualified low-speed pad contact; close propulsion before the gear absorbs touchdown";
   input Real landing_zone_radius_m = 4.0
     "Horizontal target radius required before contact may hand off flight authority (m)";
+  input Real landing_handoff_position_radius_m = 0.75
+    "Final horizontal error required for the contact handoff (m)";
+  input Real landing_handoff_latched = 0.0
+    "Latched mission handoff written by the typed touchdown event (0 or 1)";
+  input Real landing_engine_cutoff_latched = 0.0
+    "Latched target-qualified engine cutoff written by the typed gear-load event (0 or 1)";
   output Real vertical_accel(unit = "m/s2") = vertical_limiter_output
     "Gravity-compensated Y acceleration";
   output Real throttle_cmd "Main-engine command, 0..1";
@@ -110,8 +118,20 @@ model PositionPID3D
   output Real position_error_z(unit = "m") "Z position error";
   output Real target_zone_gate
     "Target-proximity gate for the physical contact handoff";
+  output Real target_recovery_gate
+    "Go-around gate while low and outside the final landing qualification";
+  output Real flight_authority_gate
+    "Measured guidance authority after pilot and landing handoff gates";
+  output Real engine_alignment_gate_output
+    "Measured main-engine alignment authority gate";
   output Real landing_handoff
-    "Contact handoff permitted only when the vehicle is over its target";
+    "Accepted contact handoff mode, latched by the mission event supervisor";
+  output Real landing_handoff_request
+    "Measured target-qualified contact request for event qualification";
+  output Real landing_engine_cutoff
+    "Accepted main-engine cutoff mode, latched by the mission event supervisor";
+  output Real landing_engine_cutoff_request
+    "Measured target-qualified engine-cutoff request for event qualification";
   output Real predicted_landing_x(unit = "m")
     "Ballistic projected impact X from the current navigation state";
   output Real predicted_landing_z(unit = "m")
@@ -149,15 +169,20 @@ model PositionPID3D
   Real bounded_lateral_accel_z;
   Real thrust_vertical_projection;
   Real engine_alignment_gate;
+  Real engine_full_alignment;
   Real pid_y_command;
   Real altitude_above_target;
   Real lateral_landing_gate;
   Real horizontal_target_error;
+  Real landing_handoff_position_gate;
+  Real contact_recovery_gate;
+  Real missed_target_recovery_gate;
+  Real target_contact_engine_gate;
+  Real recovery_vertical_command;
   Real projected_time_to_target;
   Real descent_rate_schedule_magnitude;
   Real flare_descent_rate_magnitude;
   Real landing_flare_gate;
-  Real landing_zone_transition_width;
   Real vertical_limiter_output;
   Real throttle_command_value;
   Real pitch_command_value;
@@ -220,31 +245,57 @@ equation
   // from a presentation timer.
   horizontal_target_error = sqrt(
     pid_x.error * pid_x.error + pid_z.error * pid_z.error);
-  // The zone is a mission event, not a proportional throttle fade. Once the
-  // measured vehicle is inside the authored landing radius, contact may hand
-  // flight authority to the gear; outside it, four feet touching flat terrain
-  // must not declare success.
-  // Keep the mission gate branch-free.  The small transition band preserves
-  // the authored radius as the 0.5 crossing while giving the continuous DAE a
-  // bounded product gate instead of an algebraic if-expression.
-  landing_zone_transition_width = max(
-    1.0e-6, max(0.0, landing_zone_radius_m) * 1.0e-3);
-  target_zone_gate = noEvent(max(0.0, min(1.0,
-    (max(0.0, landing_zone_radius_m) + landing_zone_transition_width
-      - horizontal_target_error)
-      / (2.0 * landing_zone_transition_width))));
-  landing_handoff = noEvent(target_zone_gate
-    * max(0.0, min(1.0, 2.0 * max(touchdown, landing_contact))));
-  // Terminal descent is a separate flight phase. As the measured altitude
-  // enters the flare envelope, progressively remove lateral acceleration so
-  // the attitude loop returns the thrust axis upright before the feet reach
-  // the surface. Keeping full lateral position authority until first contact
-  // makes the four legs arrive at different times and asks the suspension to
-  // correct a controller command; fading it from the reusable altitude law
-  // gives the native contact solver a level, low-rate vehicle to receive.
+  // The broad zone is a mission event, not a proportional throttle fade. It
+  // remains deliberately separate from the final handoff gate below: being
+  // close enough to start the terminal approach is not the same as being
+  // settled on the marked pad.
+  target_zone_gate = noEvent(if horizontal_target_error
+      <= max(0.0, landing_zone_radius_m) then 1.0 else 0.0);
+  landing_handoff_position_gate = noEvent(if horizontal_target_error
+      <= max(0.0, landing_handoff_position_radius_m) then 1.0 else 0.0);
+  // The continuous flight law publishes a measured transition REQUEST. The
+  // event supervisor qualifies that exact predicate for contiguous time and
+  // writes the accepted mode back through the typed latch input. Keeping the
+  // request separate from the accepted mode prevents one quiet solver sample
+  // from permanently releasing flight control.
+  landing_handoff_request = noEvent(if max(landing_handoff_position_gate,
+      landing_engine_cutoff_latched) >= 0.5
+    and landing_contact >= 0.5 then 1.0 else 0.0);
+  landing_handoff = max(0.0, min(1.0, landing_handoff_latched));
+  // Keep lateral PID authority live until the target-qualified handoff. The
+  // position loop itself brings the vehicle to zero lateral error; an altitude
+  // fade here would remove that authority before touchdown and let residual
+  // drift carry the vehicle away from the mark.
+  // First-pad engine cutoff is also the end of translational guidance. With no
+  // main-engine thrust, a requested tilt cannot create lateral acceleration;
+  // keeping that request alive would ask the RCS to lean a grounded vehicle.
+  // The airframe enters rate-only damping at first low-speed pad contact and
+  // closes RCS together with the main engine once the cutoff event is accepted.
+  // The later four-pad handoff records that the passive gear has settled.
   lateral_landing_gate = max(0.0, min(1.0,
-    altitude_above_target / max(1.0e-9, landing_flare_range_m)))
-    * max(0.0, min(1.0, 1.0 - landing_handoff));
+    1.0 - max(landing_handoff, landing_engine_cutoff)));
+  // A vehicle that has physically settled outside the final target must command
+  // a real go-around. A low-speed pad contact is already the physical phase
+  // transition that authorizes recovery; waiting for the final quiet four-pad
+  // state is circular because hover thrust unloads the gear and
+  // prevents that state from ever becoming true.
+  contact_recovery_gate = max(0.0, min(1.0,
+    max(engine_cutoff_contact, max(touchdown, landing_contact))));
+  missed_target_recovery_gate = max(0.0, min(1.0,
+    (1.0 - landing_engine_cutoff)
+      * (1.0 - landing_handoff_position_gate) * contact_recovery_gate));
+  target_recovery_gate = missed_target_recovery_gate;
+  recovery_vertical_command = missed_target_recovery_gate * 2.5 * g;
+  // Target-qualified low-speed four-pad contact requests engine cutoff so the
+  // vehicle's weight can transfer from propulsion into the shock absorbers.
+  // The event layer requires this exact predicate to remain true continuously;
+  // a one-frame contact is not accepted. Flight handoff remains a later phase,
+  // after four-pad contact and measured suspension rates prove the gear has settled.
+  landing_engine_cutoff_request = noEvent(if landing_handoff_position_gate >= 0.5
+    and engine_cutoff_contact >= 0.5 then 1.0 else 0.0);
+  landing_engine_cutoff = max(0.0, min(1.0, landing_engine_cutoff_latched));
+  target_contact_engine_gate = noEvent(if landing_handoff >= 0.5
+      or landing_engine_cutoff >= 0.5 then 0.0 else 1.0);
   // A speed cap by itself would still command the cap at the surface and
   // leave the suspension to remove the vehicle's descent energy.
   flare_descent_rate_magnitude = max(0.0, descent_speed_limit_mps)
@@ -300,9 +351,11 @@ equation
       altitude_above_target
         / max(1.0e-9, landing_flare_range_m)));
   vertical_limiter.command = max(
-    g + pid_y_command,
+    target_contact_engine_gate * (g + pid_y_command),
     landing_flare_gate
-      * g * (1.0 - landing_handoff));
+      * g * landing_handoff_position_gate * (1.0 - landing_handoff)
+      * target_contact_engine_gate,
+    recovery_vertical_command);
   vertical_limiter.lower_limit = 0.0;
   vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;
@@ -340,9 +393,16 @@ equation
   // spends horizontal fuel before the guidance vector is physically useful.
   // This is a reusable flight-computer safety boundary, expressed from the
   // measured attitude, not a scene timer or a scripted trajectory.
+  // The normal commanded tilt envelope is not an unsafe alignment error. Reach
+  // full engine authority once the measured axis is inside that envelope, and
+  // use the narrow band down to minimum_engine_alignment only as the recovery
+  // ramp. Otherwise the more active lateral PID is silently given less vertical
+  // thrust, so two vehicles with the same descent law fall at different rates.
+  engine_full_alignment = max(minimum_engine_alignment + 1.0e-6,
+    cos(max(0.0, command_tilt_limit_rad)));
   engine_alignment_gate = noEvent(max(0.0, min(1.0,
     (thrust_vertical_projection - minimum_engine_alignment)
-      / max(1.0e-9, 1.0 - minimum_engine_alignment))));
+      / max(1.0e-9, engine_full_alignment - minimum_engine_alignment))));
 
   // Body +Y is the engine axis. A requested lateral acceleration is physically
   // achievable only when the available vertical thrust can support the
@@ -381,8 +441,14 @@ equation
   // repositioning manoeuvre using the same thrust and sensor loops.
   flight_command_gain = engage * (1.0 - piloted)
     * max(0.0, min(1.0, 1.0 - landing_handoff));
+  flight_authority_gate = flight_command_gain;
+  engine_alignment_gate_output = engine_alignment_gate;
+  // `unsaturated_throttle` is already the magnitude of the requested navigation
+  // acceleration vector. When the body axis tracks that vector, multiplying by
+  // its vertical projection again applies cos(tilt) twice and under-throttles
+  // lateral manoeuvres. The real thrust projection remains in the physics; this
+  // command supplies the vector magnitude once, with only the safety gate above.
   throttle_command_value = flight_command_gain * engine_alignment_gate
-    * thrust_vertical_projection
     * max(0.0, min(1.0, unsaturated_throttle));
   // Throttle is gated by the measured +Y thrust projection because a sideways
   // engine cannot provide useful upward force. Attitude commands are not gated:
