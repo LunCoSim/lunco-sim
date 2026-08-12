@@ -449,13 +449,13 @@ fn drain_pending_layout_requests(
     }
 }
 
-/// Bring a registered singleton panel forward in the dock.
+/// Bring a registered singleton panel forward in the dock, mounting it in its
+/// authored default slot when it is currently closed.
 ///
 /// `id` is matched against [`Panel::id`]'s static string (e.g.
-/// `"modelica_experiments"`, `"modelica_telemetry"`). No-op when the
-/// panel isn't currently in the dock — callers that need to *open*
-/// a closed panel should use the View-menu route or fire the
-/// existing perspective preset.
+/// `"modelica_experiments"`, `"modelica_telemetry"`). An unregistered panel
+/// is a no-op; a registered closed panel is opened in its authored default
+/// slot.
 ///
 /// Exposed as a typed command so HTTP automation can deterministically
 /// reach a tab before screenshotting / driving it.
@@ -4930,7 +4930,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_panel_does_not_mount_a_closed_panel_into_the_focused_leaf() {
+    fn focus_panel_mounts_a_registered_closed_panel_in_its_authored_slot() {
         let mut layout = WorkbenchLayout::default();
         layout.register(FocusPanelFixture);
         // Simulate the viewport-only perspective: the panel remains registered
@@ -4943,10 +4943,11 @@ mod tests {
 
         focus_panel_now(&mut layout, "focus_fixture");
 
-        assert!(!layout
+        assert!(layout
             .dock
             .iter_all_tabs()
             .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
+        assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
     }
 
     struct TestPerspective {

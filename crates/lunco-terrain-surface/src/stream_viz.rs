@@ -33,6 +33,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(test)]
 use bevy::camera::Viewport;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
